@@ -21,7 +21,7 @@ class SECConfig:
     user_agent: str = field(
         default_factory=lambda: os.getenv(
             "SEC_USER_AGENT",
-            "StockDataCollector user@example.com"
+            "StockDataCollector vorarak.mua@gmail.com"
         )
     )
     # SEC allows max 10 requests/second
