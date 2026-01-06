@@ -1,0 +1,14 @@
+# Stock Data Collection System - Dependencies
+
+# Core data fetching
+yfinance>=0.2.36
+requests>=2.31.0
+
+# Data processing
+pandas>=2.1.0
+
+# Configuration
+python-dotenv>=1.0.0
+
+# Type hints (Python 3.8+)
+typing-extensions>=4.8.0

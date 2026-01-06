@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:www.sec.gov)",
+      "Bash(pip install:*)",
+      "Bash(python -m src.main:*)",
+      "Bash(cat:*)",
+      "Bash(python -c \"\nimport json\nwith open\\(''data/output/json/AAPL.json''\\) as f:\n    d = json.load\\(f\\)\n    print\\(''JSON Structure:''\\)\n    for k,v in d.items\\(\\):\n        if isinstance\\(v, dict\\):\n            print\\(f''  {k}: {len\\(v\\)} keys''\\)\n        elif isinstance\\(v, list\\):\n            print\\(f''  {k}: {len\\(v\\)} items''\\)\n        else:\n            print\\(f''  {k}: {repr\\(v\\)[:60]}''\\)\n\")"
+    ]
+  }
+}
