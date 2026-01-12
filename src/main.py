@@ -82,8 +82,8 @@ Examples:
     parser.add_argument(
         "--years",
         type=int,
-        default=5,
-        help="Years of historical financial data (default: 5)"
+        default=10,
+        help="Years of historical financial data (default: 10, max available from SEC)"
     )
 
     parser.add_argument(

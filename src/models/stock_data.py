@@ -48,6 +48,21 @@ class StockData:
     # Insider transactions (from SEC Form 4)
     insider_transactions: List[Dict[str, Any]] = field(default_factory=list)
 
+    # Historical price data and statistics (from Yahoo)
+    price_history: Dict[str, Any] = field(default_factory=dict)
+
+    # Analyst estimates and recommendations (from Yahoo)
+    analyst_estimates: Dict[str, Any] = field(default_factory=dict)
+
+    # Dividend payment history (from Yahoo)
+    dividend_history: Dict[str, Any] = field(default_factory=dict)
+
+    # Calculated metrics for DCF modeling (FCF, EBITDA, ROIC, etc.)
+    calculated_metrics: Dict[str, Any] = field(default_factory=dict)
+
+    # Risk-free rate and market data for WACC calculation (from FRED)
+    risk_free_rate: Dict[str, Any] = field(default_factory=dict)
+
     # Data quality metadata
     data_sources: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
@@ -142,13 +157,36 @@ class StockData:
             years = sorted(self.financials_annual.keys(), reverse=True)
             if years:
                 latest = self.financials_annual[years[0]]
-                summary["sec_revenue"] = latest.get("Revenue")
+                summary["sec_revenue"] = latest.get("Revenue") or latest.get("Net Revenue")
                 summary["sec_net_income"] = latest.get("Net Income")
                 summary["sec_total_assets"] = latest.get("Total Assets")
                 summary["sec_total_liabilities"] = latest.get("Total Liabilities")
                 summary["sec_stockholders_equity"] = latest.get("Total Stockholders Equity")
                 summary["sec_operating_cash_flow"] = latest.get("Operating Cash Flow")
                 summary["sec_fiscal_year"] = latest.get("fiscal_year")
+
+        # Price history statistics
+        if self.price_history:
+            summary["cagr_5y"] = self.price_history.get("cagr")
+            summary["annual_volatility"] = self.price_history.get("annual_volatility")
+            summary["max_drawdown"] = self.price_history.get("max_drawdown")
+            summary["sharpe_ratio"] = self.price_history.get("sharpe_ratio_estimate")
+            summary["total_return_5y"] = self.price_history.get("total_return")
+
+        # Calculated metrics for DCF
+        if self.calculated_metrics:
+            summary["calc_ebitda"] = self.calculated_metrics.get("ebitda")
+            summary["calc_fcf"] = self.calculated_metrics.get("free_cash_flow")
+            summary["calc_roic"] = self.calculated_metrics.get("roic")
+            summary["calc_net_debt"] = self.calculated_metrics.get("net_debt")
+            summary["calc_interest_coverage"] = self.calculated_metrics.get("interest_coverage")
+            summary["calc_ev"] = self.calculated_metrics.get("enterprise_value")
+            summary["calc_ev_to_ebitda"] = self.calculated_metrics.get("ev_to_ebitda")
+
+        # Risk-free rate for WACC
+        if self.risk_free_rate:
+            summary["risk_free_rate_10y"] = self.risk_free_rate.get("risk_free_rate")
+            summary["treasury_yield_source"] = self.risk_free_rate.get("source")
 
         # Data quality
         summary["data_sources"] = ", ".join(self.data_sources)
@@ -205,6 +243,18 @@ class StockData:
         if "financials" in yahoo_data:
             self.yahoo_financials = yahoo_data["financials"]
 
+        # Price history with statistics
+        if "price_history" in yahoo_data:
+            self.price_history = yahoo_data["price_history"]
+
+        # Analyst estimates and recommendations
+        if "analyst_estimates" in yahoo_data:
+            self.analyst_estimates = yahoo_data["analyst_estimates"]
+
+        # Dividend payment history
+        if "dividend_history" in yahoo_data:
+            self.dividend_history = yahoo_data["dividend_history"]
+
     def merge_sec_data(self, sec_data: Dict[str, Any]) -> None:
         """
         Merge data from SEC EDGAR.
@@ -254,3 +304,27 @@ class StockData:
             transactions: List of insider transactions
         """
         self.insider_transactions = transactions
+
+    def merge_calculated_metrics(self, metrics: Dict[str, Any]) -> None:
+        """
+        Merge calculated financial metrics.
+
+        Args:
+            metrics: Dictionary of calculated metrics (FCF, EBITDA, ROIC, etc.)
+        """
+        if metrics:
+            self.calculated_metrics = metrics
+            self.add_source("calculated_metrics")
+
+    def merge_risk_free_rate(self, rate_data: Dict[str, Any]) -> None:
+        """
+        Merge risk-free rate data from FRED or fallback source.
+
+        Args:
+            rate_data: Dictionary with risk-free rate and source info
+        """
+        if rate_data:
+            self.risk_free_rate = rate_data
+            source = rate_data.get("source", "unknown")
+            if source != "unknown":
+                self.add_source(f"fred_{source}")

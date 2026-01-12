@@ -6,7 +6,13 @@
       "Bash(pip install:*)",
       "Bash(python -m src.main:*)",
       "Bash(cat:*)",
-      "Bash(python -c \"\nimport json\nwith open\\(''data/output/json/AAPL.json''\\) as f:\n    d = json.load\\(f\\)\n    print\\(''JSON Structure:''\\)\n    for k,v in d.items\\(\\):\n        if isinstance\\(v, dict\\):\n            print\\(f''  {k}: {len\\(v\\)} keys''\\)\n        elif isinstance\\(v, list\\):\n            print\\(f''  {k}: {len\\(v\\)} items''\\)\n        else:\n            print\\(f''  {k}: {repr\\(v\\)[:60]}''\\)\n\")"
+      "Bash(python -c \"\nimport json\nwith open\\(''data/output/json/AAPL.json''\\) as f:\n    d = json.load\\(f\\)\n    print\\(''JSON Structure:''\\)\n    for k,v in d.items\\(\\):\n        if isinstance\\(v, dict\\):\n            print\\(f''  {k}: {len\\(v\\)} keys''\\)\n        elif isinstance\\(v, list\\):\n            print\\(f''  {k}: {len\\(v\\)} items''\\)\n        else:\n            print\\(f''  {k}: {repr\\(v\\)[:60]}''\\)\n\")",
+      "Bash(python:*)",
+      "WebFetch(domain:companiesmarketcap.com)",
+      "Bash(dir /B:*)",
+      "Bash(powershell -Command \"\\(Get-ChildItem data\\\\output\\\\json\\\\*.json\\).Count\")",
+      "Bash(powershell -Command \"Get-ChildItem data\\\\output\\\\json\\\\*.json | Select-Object -ExpandProperty Name\")",
+      "Bash(powershell:*)"
     ]
   }
 }

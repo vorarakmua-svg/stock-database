@@ -1,6 +1,7 @@
 """Main orchestrator for stock data collection."""
 
 import logging
+import os
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -8,10 +9,12 @@ from datetime import datetime
 from ..config import AppConfig, default_config
 from ..models.stock_data import StockData
 from ..parsers.xbrl_parser import XBRLParser
+from ..parsers.calculated_metrics import CalculatedMetrics
 from ..exporters.json_exporter import JSONExporter
 from ..exporters.csv_exporter import CSVExporter
 from .yahoo_handler import YahooHandler
 from .sec_handler import SECHandler
+from .fred_handler import FREDHandler
 
 
 class StockDataFetcher:
@@ -50,8 +53,15 @@ class StockDataFetcher:
             logger=self.logger
         )
 
-        # Initialize parser
+        # Initialize parsers
         self.xbrl_parser = XBRLParser(logger=self.logger)
+        self.metrics_calculator = CalculatedMetrics(logger=self.logger)
+
+        # Initialize FRED handler for risk-free rate
+        self.fred_handler = FREDHandler(
+            api_key=os.getenv("FRED_API_KEY"),
+            logger=self.logger
+        )
 
         # Initialize exporters
         self.json_exporter = JSONExporter(
@@ -126,6 +136,48 @@ class StockDataFetcher:
             except Exception as e:
                 self.logger.error(f"SEC EDGAR error for {ticker}: {e}")
                 stock.add_error(f"SEC EDGAR: {str(e)}")
+
+        # Fetch risk-free rate from FRED (for WACC calculation)
+        try:
+            risk_free = self.fred_handler.get_risk_free_rate(maturity="10y")
+            market_premium = self.fred_handler.get_market_risk_premium()
+
+            rate_data = {
+                "risk_free_rate": risk_free,
+                "risk_free_rate_10y": risk_free,
+                "market_risk_premium": market_premium.get("current_estimate"),
+                "source": "fred" if self.fred_handler.api_key else "fallback",
+            }
+            stock.merge_risk_free_rate(rate_data)
+        except Exception as e:
+            self.logger.warning(f"FRED data error for {ticker}: {e}")
+            stock.add_warning(f"FRED: {str(e)}")
+
+        # Calculate derived metrics (FCF, EBITDA, ROIC, etc.)
+        if stock.financials_annual:
+            try:
+                # Get the most recent year's financials
+                years = sorted(stock.financials_annual.keys(), reverse=True)
+                if years:
+                    latest_financials = stock.financials_annual[years[0]]
+
+                    # Calculate metrics
+                    metrics = self.metrics_calculator.calculate_all(
+                        financials=latest_financials,
+                        market_data=stock.market_data,
+                        valuation=stock.valuation
+                    )
+
+                    # Add historical metrics for all years
+                    metrics["historical"] = self.metrics_calculator.calculate_historical(
+                        stock.financials_annual
+                    )
+
+                    stock.merge_calculated_metrics(metrics)
+
+            except Exception as e:
+                self.logger.warning(f"Metrics calculation error for {ticker}: {e}")
+                stock.add_warning(f"Calculated metrics: {str(e)}")
 
         self.logger.info(
             f"Completed {ticker}: sources={stock.data_sources}, "
@@ -273,6 +325,7 @@ class StockDataFetcher:
     def close(self) -> None:
         """Close handlers and release resources."""
         self.sec_handler.close()
+        self.fred_handler.close()
 
     def __enter__(self):
         return self

@@ -66,6 +66,13 @@ class SECHandler:
         # CIK mapping cache
         self._cik_mapping: Optional[Dict[str, str]] = None
 
+        # Fallback mappings for tickers missing from SEC's company_tickers.json
+        # These are common stocks where only preferred tickers are listed
+        self._fallback_cik_mapping = {
+            "BAC": "70858",      # Bank of America Corp
+            "PLD": "1045609",    # Prologis, Inc.
+        }
+
     def _get_headers(self) -> Dict[str, str]:
         """Get required headers for SEC API requests."""
         return {
@@ -142,6 +149,12 @@ class SECHandler:
         cik = self._cik_mapping.get(ticker)
         if cik:
             return str(cik).zfill(10)
+
+        # Check fallback mappings for known missing tickers
+        fallback_cik = self._fallback_cik_mapping.get(ticker)
+        if fallback_cik:
+            return str(fallback_cik).zfill(10)
+
         return None
 
     def _load_cik_mapping(self) -> None:

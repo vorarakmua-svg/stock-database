@@ -62,6 +62,9 @@ class YahooHandler:
                 "valuation": self._get_valuation_metrics(stock),
                 "shareholders": self._get_shareholders(stock),
                 "financials": self._get_financials(stock),
+                "price_history": self._get_price_history(stock),
+                "analyst_estimates": self._get_analyst_estimates(stock),
+                "dividend_history": self._get_dividend_history(stock),
                 "fetched_at": datetime.now().isoformat(),
                 "source": "yahoo_finance",
             }
@@ -362,3 +365,301 @@ class YahooHandler:
             return str(ts)
         except Exception:
             return None
+
+    def _get_price_history(
+        self,
+        stock: yf.Ticker,
+        period: str = "10y"
+    ) -> Dict[str, Any]:
+        """
+        Get historical price data for returns and volatility calculations.
+
+        Args:
+            stock: yfinance Ticker object
+            period: Historical period (1y, 2y, 5y, 10y, max)
+
+        Returns:
+            Dictionary with price history summary and statistics
+        """
+        try:
+            hist = stock.history(period=period)
+
+            if hist.empty:
+                return {}
+
+            close_prices = hist['Close']
+            volume = hist['Volume']
+
+            # Calculate returns
+            daily_returns = close_prices.pct_change().dropna()
+            annual_returns = close_prices.resample('YE').last().pct_change().dropna()
+
+            # Calculate statistics
+            result = {
+                "period": period,
+                "start_date": hist.index[0].isoformat() if len(hist) > 0 else None,
+                "end_date": hist.index[-1].isoformat() if len(hist) > 0 else None,
+                "trading_days": len(hist),
+
+                # Price summary
+                "latest_close": float(close_prices.iloc[-1]) if len(close_prices) > 0 else None,
+                "period_high": float(close_prices.max()),
+                "period_low": float(close_prices.min()),
+                "period_avg": float(close_prices.mean()),
+
+                # Returns
+                "total_return": float((close_prices.iloc[-1] / close_prices.iloc[0] - 1)) if len(close_prices) > 1 else None,
+                "cagr": self._calculate_cagr(close_prices),
+
+                # Volatility
+                "daily_volatility": float(daily_returns.std()) if len(daily_returns) > 0 else None,
+                "annual_volatility": float(daily_returns.std() * (252 ** 0.5)) if len(daily_returns) > 0 else None,
+
+                # Risk metrics
+                "max_drawdown": self._calculate_max_drawdown(close_prices),
+                "sharpe_ratio_estimate": self._calculate_sharpe_estimate(daily_returns),
+
+                # Volume
+                "avg_volume": float(volume.mean()) if len(volume) > 0 else None,
+                "volume_volatility": float(volume.std()) if len(volume) > 0 else None,
+
+                # Annual returns (for historical analysis)
+                "annual_returns": {
+                    str(idx.year): float(ret)
+                    for idx, ret in annual_returns.items()
+                } if len(annual_returns) > 0 else {},
+            }
+
+            return result
+
+        except Exception as e:
+            self.logger.warning(f"Error getting price history: {e}")
+            return {}
+
+    def _calculate_cagr(self, prices: pd.Series) -> Optional[float]:
+        """Calculate Compound Annual Growth Rate."""
+        try:
+            if len(prices) < 2:
+                return None
+
+            start_price = prices.iloc[0]
+            end_price = prices.iloc[-1]
+            years = len(prices) / 252  # Approximate trading days per year
+
+            if years <= 0 or start_price <= 0:
+                return None
+
+            cagr = (end_price / start_price) ** (1 / years) - 1
+            return float(cagr)
+        except Exception:
+            return None
+
+    def _calculate_max_drawdown(self, prices: pd.Series) -> Optional[float]:
+        """Calculate maximum drawdown from peak."""
+        try:
+            if len(prices) < 2:
+                return None
+
+            rolling_max = prices.expanding().max()
+            drawdowns = prices / rolling_max - 1
+            max_drawdown = drawdowns.min()
+            return float(max_drawdown)
+        except Exception:
+            return None
+
+    def _calculate_sharpe_estimate(
+        self,
+        returns: pd.Series,
+        risk_free_rate: float = 0.04
+    ) -> Optional[float]:
+        """
+        Estimate Sharpe ratio (using assumed risk-free rate).
+
+        Note: For accurate Sharpe ratio, use actual risk-free rate from FRED.
+        """
+        try:
+            if len(returns) < 30:  # Need enough data
+                return None
+
+            # Annualize
+            annual_return = returns.mean() * 252
+            annual_vol = returns.std() * (252 ** 0.5)
+
+            if annual_vol == 0:
+                return None
+
+            sharpe = (annual_return - risk_free_rate) / annual_vol
+            return float(sharpe)
+        except Exception:
+            return None
+
+    def get_detailed_history(
+        self,
+        ticker: str,
+        period: str = "5y",
+        interval: str = "1d"
+    ) -> pd.DataFrame:
+        """
+        Get detailed price history as DataFrame.
+
+        Args:
+            ticker: Stock ticker symbol
+            period: Historical period
+            interval: Data interval (1d, 1wk, 1mo)
+
+        Returns:
+            DataFrame with OHLCV data
+        """
+        try:
+            self.rate_limiter.wait()
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period=period, interval=interval)
+            return hist
+        except Exception as e:
+            self.logger.error(f"Error getting detailed history: {e}")
+            return pd.DataFrame()
+
+    def _get_analyst_estimates(self, stock: yf.Ticker) -> Dict[str, Any]:
+        """
+        Get analyst estimates and recommendations.
+
+        Includes target prices, buy/sell ratings, and earnings estimates.
+        Useful for DCF terminal value and sentiment analysis.
+        """
+        try:
+            info = stock.info
+
+            estimates = {
+                # Price targets
+                "target_price_low": info.get("targetLowPrice"),
+                "target_price_mean": info.get("targetMeanPrice"),
+                "target_price_median": info.get("targetMedianPrice"),
+                "target_price_high": info.get("targetHighPrice"),
+                "current_price": info.get("currentPrice"),
+
+                # Analyst ratings
+                "recommendation": info.get("recommendationKey"),  # buy, hold, sell
+                "recommendation_mean": info.get("recommendationMean"),  # 1=Strong Buy, 5=Sell
+                "number_of_analysts": info.get("numberOfAnalystOpinions"),
+
+                # Growth estimates
+                "earnings_growth": info.get("earningsGrowth"),
+                "revenue_growth": info.get("revenueGrowth"),
+                "earnings_quarterly_growth": info.get("earningsQuarterlyGrowth"),
+
+                # Forward estimates
+                "forward_eps": info.get("forwardEps"),
+                "forward_pe": info.get("forwardPE"),
+
+                # Trailing data for comparison
+                "trailing_eps": info.get("trailingEps"),
+                "trailing_pe": info.get("trailingPE"),
+            }
+
+            # Calculate upside/downside potential
+            current = estimates.get("current_price")
+            target = estimates.get("target_price_mean")
+            if current and target:
+                estimates["upside_potential"] = (target - current) / current
+
+            # Try to get earnings calendar
+            try:
+                calendar = stock.calendar
+                if calendar is not None and not calendar.empty:
+                    if isinstance(calendar, pd.DataFrame):
+                        estimates["earnings_date"] = str(calendar.iloc[0, 0]) if len(calendar) > 0 else None
+                    elif isinstance(calendar, dict):
+                        estimates["earnings_date"] = str(calendar.get("Earnings Date", [None])[0])
+            except Exception:
+                pass
+
+            # Try to get analyst recommendations history
+            try:
+                recs = stock.recommendations
+                if recs is not None and not recs.empty:
+                    recent_recs = recs.tail(10)
+                    estimates["recent_recommendations"] = recent_recs.to_dict('records')
+            except Exception:
+                pass
+
+            return estimates
+
+        except Exception as e:
+            self.logger.debug(f"Error getting analyst estimates: {e}")
+            return {}
+
+    def _get_dividend_history(self, stock: yf.Ticker) -> Dict[str, Any]:
+        """
+        Get complete dividend payment history.
+
+        Useful for:
+        - Dividend growth rate calculation (Peter Lynch)
+        - Dividend consistency (Buffett quality indicator)
+        - Dividend yield analysis
+        """
+        try:
+            info = stock.info
+            dividends = stock.dividends
+
+            result = {
+                # Current dividend info
+                "dividend_rate": info.get("dividendRate"),  # Annual dividend per share
+                "dividend_yield": info.get("dividendYield"),
+                "payout_ratio": info.get("payoutRatio"),
+                "ex_dividend_date": self._safe_timestamp(info.get("exDividendDate")),
+                "last_dividend_date": info.get("lastDividendDate"),
+                "last_dividend_value": info.get("lastDividendValue"),
+
+                # 5-year dividend yield
+                "five_year_avg_dividend_yield": info.get("fiveYearAvgDividendYield"),
+            }
+
+            # Process dividend history
+            if dividends is not None and not dividends.empty:
+                # Convert to list of records
+                div_records = []
+                for date, amount in dividends.items():
+                    div_records.append({
+                        "date": date.strftime("%Y-%m-%d"),
+                        "amount": float(amount)
+                    })
+
+                result["dividend_payments"] = div_records
+                result["total_payments"] = len(div_records)
+                result["years_of_data"] = (dividends.index[-1] - dividends.index[0]).days / 365.25 if len(dividends) > 1 else 0
+
+                # Calculate annual dividends
+                annual_dividends = dividends.resample('YE').sum()
+                result["annual_dividends"] = {
+                    str(date.year): float(amount)
+                    for date, amount in annual_dividends.items()
+                    if amount > 0
+                }
+
+                # Calculate dividend growth rate (CAGR)
+                if len(annual_dividends) >= 2:
+                    first_year = annual_dividends[annual_dividends > 0].iloc[0]
+                    last_year = annual_dividends[annual_dividends > 0].iloc[-1]
+                    years = len(annual_dividends) - 1
+                    if first_year > 0 and years > 0:
+                        cagr = (last_year / first_year) ** (1 / years) - 1
+                        result["dividend_cagr"] = float(cagr)
+
+                # Check dividend consistency (years without cut)
+                if len(annual_dividends) >= 2:
+                    annual_list = annual_dividends[annual_dividends > 0].tolist()
+                    increases = sum(1 for i in range(1, len(annual_list)) if annual_list[i] >= annual_list[i-1])
+                    result["dividend_increases"] = increases
+                    result["dividend_consistency"] = increases / (len(annual_list) - 1) if len(annual_list) > 1 else None
+
+            else:
+                result["dividend_payments"] = []
+                result["total_payments"] = 0
+                result["years_of_data"] = 0
+                result["note"] = "No dividend history (non-dividend paying stock)"
+
+            return result
+
+        except Exception as e:
+            self.logger.debug(f"Error getting dividend history: {e}")
+            return {"error": str(e)}

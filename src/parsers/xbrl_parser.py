@@ -98,7 +98,8 @@ class XBRLParser:
     def extract_annual_financials(
         self,
         facts: Dict[str, Any],
-        years_back: int = 5
+        years_back: int = 5,
+        extract_all: bool = True
     ) -> Dict[str, Dict[str, Any]]:
         """
         Extract annual financial statements from company facts.
@@ -106,6 +107,7 @@ class XBRLParser:
         Args:
             facts: Raw company facts
             years_back: Number of fiscal years to extract
+            extract_all: If True, extract ALL tags (not just mapped ones)
 
         Returns:
             Dictionary organized by fiscal year
@@ -117,7 +119,10 @@ class XBRLParser:
         # Collect all 10-K data points
         annual_data = {}
 
-        for tag in PRIORITY_TAGS:
+        # Determine which tags to extract
+        tags_to_extract = us_gaap.keys() if extract_all else PRIORITY_TAGS
+
+        for tag in tags_to_extract:
             tag_data = us_gaap.get(tag, {})
             if not tag_data:
                 continue
@@ -144,9 +149,12 @@ class XBRLParser:
                         "form": form,
                     }
 
-                # Add the metric
+                # Add the metric with simple name if mapped, otherwise use raw tag
                 simple_name = self.simple_mapping.get(tag, tag)
-                annual_data[fy][simple_name] = entry.get("val")
+
+                # Only add if not already present (first value wins for same field)
+                if simple_name not in annual_data[fy]:
+                    annual_data[fy][simple_name] = entry.get("val")
 
         # Sort and limit years
         sorted_years = sorted(annual_data.keys(), reverse=True)[:years_back]
@@ -155,7 +163,8 @@ class XBRLParser:
     def extract_quarterly_financials(
         self,
         facts: Dict[str, Any],
-        quarters_back: int = 12
+        quarters_back: int = 12,
+        extract_all: bool = True
     ) -> Dict[str, Dict[str, Any]]:
         """
         Extract quarterly financial statements from company facts.
@@ -163,6 +172,7 @@ class XBRLParser:
         Args:
             facts: Raw company facts
             quarters_back: Number of quarters to extract
+            extract_all: If True, extract ALL tags (not just mapped ones)
 
         Returns:
             Dictionary organized by period end date
@@ -173,7 +183,10 @@ class XBRLParser:
 
         quarterly_data = {}
 
-        for tag in PRIORITY_TAGS:
+        # Determine which tags to extract
+        tags_to_extract = us_gaap.keys() if extract_all else PRIORITY_TAGS
+
+        for tag in tags_to_extract:
             tag_data = us_gaap.get(tag, {})
             if not tag_data:
                 continue
@@ -200,7 +213,9 @@ class XBRLParser:
                     }
 
                 simple_name = self.simple_mapping.get(tag, tag)
-                quarterly_data[period_end][simple_name] = entry.get("val")
+                # Only add if not already present
+                if simple_name not in quarterly_data[period_end]:
+                    quarterly_data[period_end][simple_name] = entry.get("val")
 
         # Sort and limit
         sorted_periods = sorted(quarterly_data.keys(), reverse=True)[:quarters_back]
