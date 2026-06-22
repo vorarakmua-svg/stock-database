@@ -6,7 +6,28 @@ import logging
 from functools import wraps
 from typing import Callable, TypeVar, Optional
 
+import requests
+
 T = TypeVar('T')
+
+# HTTP status codes worth retrying: rate limiting and transient server errors.
+# 404 (not found) and 403 (auth) are deliberately excluded — retrying won't help.
+RETRYABLE_STATUS_CODES = frozenset({429, 502, 503, 504})
+
+
+def is_transient_error(exc: BaseException) -> bool:
+    """Return True if an exception represents a transient, retry-worthy failure.
+
+    Network timeouts and connection errors are always transient. HTTP errors are
+    transient only for the status codes in :data:`RETRYABLE_STATUS_CODES`.
+    """
+    if isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
+        return True
+    if isinstance(exc, requests.exceptions.HTTPError):
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        return status in RETRYABLE_STATUS_CODES
+    return False
 
 
 class RateLimiter:
@@ -135,15 +156,67 @@ class RetryHandler:
         self.exponential_base = exponential_base
         self.logger = logger or logging.getLogger(__name__)
 
-    def with_backoff(
+    def run(
         self,
-        retryable_exceptions: tuple = (Exception,)
-    ) -> Callable[[Callable[..., T]], Callable[..., T]]:
+        func: Callable[..., T],
+        *args,
+        retryable_exceptions: tuple = (Exception,),
+        should_retry: Optional[Callable[[BaseException], bool]] = None,
+        **kwargs
+    ) -> T:
         """
-        Decorator for retry logic with exponential backoff.
+        Call ``func`` with retries and exponential backoff.
 
         Args:
-            retryable_exceptions: Tuple of exceptions that trigger retry
+            func: The callable to invoke.
+            retryable_exceptions: Exception types that may trigger a retry.
+            should_retry: Optional predicate; when provided, a caught exception is
+                only retried if ``should_retry(exc)`` is True, otherwise it is
+                re-raised immediately. Use this to retry transient HTTP errors
+                (429/503/...) but fail fast on 404/403.
+            *args, **kwargs: Forwarded to ``func``.
+
+        Returns:
+            The return value of ``func``.
+        """
+        last_exception: Optional[BaseException] = None
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                return func(*args, **kwargs)
+            except retryable_exceptions as e:
+                if should_retry is not None and not should_retry(e):
+                    raise
+                last_exception = e
+
+                if attempt == self.max_retries:
+                    break
+
+                delay = min(
+                    self.base_delay * (self.exponential_base ** attempt),
+                    self.max_delay
+                )
+
+                self.logger.warning(
+                    f"Attempt {attempt + 1}/{self.max_retries + 1} failed: {e}. "
+                    f"Retrying in {delay:.1f}s..."
+                )
+
+                time.sleep(delay)
+
+        raise last_exception
+
+    def with_backoff(
+        self,
+        retryable_exceptions: tuple = (Exception,),
+        should_retry: Optional[Callable[[BaseException], bool]] = None,
+    ) -> Callable[[Callable[..., T]], Callable[..., T]]:
+        """
+        Decorator form of :meth:`run` for retry logic with exponential backoff.
+
+        Args:
+            retryable_exceptions: Tuple of exceptions that trigger retry.
+            should_retry: Optional predicate (see :meth:`run`).
 
         Returns:
             Decorator function
@@ -151,30 +224,13 @@ class RetryHandler:
         def decorator(func: Callable[..., T]) -> Callable[..., T]:
             @wraps(func)
             def wrapper(*args, **kwargs) -> T:
-                last_exception = None
-
-                for attempt in range(self.max_retries + 1):
-                    try:
-                        return func(*args, **kwargs)
-                    except retryable_exceptions as e:
-                        last_exception = e
-
-                        if attempt == self.max_retries:
-                            break
-
-                        delay = min(
-                            self.base_delay * (self.exponential_base ** attempt),
-                            self.max_delay
-                        )
-
-                        self.logger.warning(
-                            f"Attempt {attempt + 1}/{self.max_retries} failed: {e}. "
-                            f"Retrying in {delay:.1f}s..."
-                        )
-
-                        time.sleep(delay)
-
-                raise last_exception
+                return self.run(
+                    func,
+                    *args,
+                    retryable_exceptions=retryable_exceptions,
+                    should_retry=should_retry,
+                    **kwargs
+                )
 
             return wrapper
         return decorator

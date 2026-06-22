@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stock-database"
+version = "0.1.0"
+description = "Collect US stock fundamentals from free sources (Yahoo Finance, SEC EDGAR, FRED) for valuation modeling."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+authors = [{ name = "vorarakmua-svg" }]
+keywords = ["stocks", "finance", "sec-edgar", "valuation", "dcf"]
+
+dependencies = [
+    "yfinance>=0.2.36",
+    "requests>=2.31.0",
+    "pandas>=2.1.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+stock-data = "src.main:main"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::pytest.PytestDeprecationWarning",
+]

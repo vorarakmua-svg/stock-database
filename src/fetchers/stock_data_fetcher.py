@@ -50,7 +50,10 @@ class StockDataFetcher:
             user_agent=self.config.sec.user_agent,
             rate_limit_delay=self.config.sec.rate_limit_delay,
             cache_dir=self.config.storage.cache_dir,
-            logger=self.logger
+            logger=self.logger,
+            max_retries=self.config.retry.max_retries,
+            base_delay=self.config.retry.base_delay,
+            max_delay=self.config.retry.max_delay,
         )
 
         # Initialize parsers
@@ -60,7 +63,10 @@ class StockDataFetcher:
         # Initialize FRED handler for risk-free rate
         self.fred_handler = FREDHandler(
             api_key=os.getenv("FRED_API_KEY"),
-            logger=self.logger
+            logger=self.logger,
+            max_retries=self.config.retry.max_retries,
+            base_delay=self.config.retry.base_delay,
+            max_delay=self.config.retry.max_delay,
         )
 
         # Initialize exporters
@@ -79,7 +85,7 @@ class StockDataFetcher:
         ticker: str,
         include_yahoo: bool = True,
         include_sec: bool = True,
-        years_back: int = 5
+        years_back: int = 10
     ) -> StockData:
         """
         Fetch all available data for a single ticker.
@@ -191,7 +197,7 @@ class StockDataFetcher:
         tickers: List[str],
         include_yahoo: bool = True,
         include_sec: bool = True,
-        years_back: int = 5
+        years_back: int = 10
     ) -> List[StockData]:
         """
         Fetch data for multiple tickers.
@@ -270,7 +276,7 @@ class StockDataFetcher:
         tickers: List[str],
         include_yahoo: bool = True,
         include_sec: bool = True,
-        years_back: int = 5,
+        years_back: int = 10,
         formats: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """

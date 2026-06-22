@@ -37,6 +37,9 @@ cd stock-database
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Or install as a package (provides the `stock-data` command)
+pip install -e .
 ```
 
 ### Requirements
@@ -76,7 +79,7 @@ python -m src.main AAPL -v
 | `--years` | Years of historical data | `10` |
 | `--no-yahoo` | Skip Yahoo Finance data | `false` |
 | `--no-sec` | Skip SEC EDGAR data | `false` |
-| `--sec-user-agent` | SEC API User-Agent header | `StockDataCollector user@example.com` |
+| `--sec-user-agent` | SEC API User-Agent header | `StockDataCollector admin@example.com` |
 | `--verbose`, `-v` | Enable debug logging | `false` |
 
 ### Examples
@@ -328,6 +331,20 @@ SEC EDGAR requires a valid User-Agent header. Update the default in production:
 ```bash
 python -m src.main AAPL --sec-user-agent "YourCompany your@email.com"
 ```
+
+## Development
+
+Install with the dev extras and run the test suite (no network access required —
+all external APIs are mocked):
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+The tests cover the financial-metric calculations, XBRL fiscal-year extraction,
+the data model's serialization round-trips, JSON merge semantics, and the
+rate-limiter/retry logic.
 
 ## Limitations
 

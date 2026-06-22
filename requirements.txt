@@ -9,6 +9,3 @@ pandas>=2.1.0
 
 # Configuration
 python-dotenv>=1.0.0
-
-# Type hints (Python 3.8+)
-typing-extensions>=4.8.0
