@@ -8,7 +8,7 @@ from pathlib import Path
 
 import requests
 
-from .rate_limiter import RateLimiter, RetryHandler
+from .rate_limiter import RateLimiter, RetryHandler, is_transient_error
 
 
 class SECHandler:
@@ -30,10 +30,13 @@ class SECHandler:
 
     def __init__(
         self,
-        user_agent: str = "StockDataCollector user@example.com",
+        user_agent: str = "StockDataCollector admin@example.com",
         rate_limit_delay: float = 0.12,
         cache_dir: Optional[Path] = None,
-        logger: Optional[logging.Logger] = None
+        logger: Optional[logging.Logger] = None,
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+        max_delay: float = 60.0,
     ):
         """
         Initialize SEC EDGAR handler.
@@ -43,6 +46,9 @@ class SECHandler:
             rate_limit_delay: Minimum seconds between requests (SEC allows 10/sec)
             cache_dir: Optional directory for caching CIK mapping
             logger: Optional logger instance
+            max_retries: Max retry attempts for transient network failures
+            base_delay: Initial backoff delay in seconds
+            max_delay: Maximum backoff delay cap in seconds
         """
         self.user_agent = user_agent
         self.cache_dir = cache_dir or Path("data/cache")
@@ -54,8 +60,9 @@ class SECHandler:
         )
 
         self.retry_handler = RetryHandler(
-            max_retries=3,
-            base_delay=1.0,
+            max_retries=max_retries,
+            base_delay=base_delay,
+            max_delay=max_delay,
             logger=self.logger
         )
 
@@ -79,6 +86,29 @@ class SECHandler:
             "User-Agent": self.user_agent,
             "Accept": "application/json",
         }
+
+    def _request(self, url: str, timeout: int = 30) -> requests.Response:
+        """Perform a rate-limited GET with retries on transient failures.
+
+        Retries timeouts, connection errors, and retryable HTTP statuses
+        (429/502/503/504); non-retryable responses (incl. 404/403) are returned
+        as-is for the caller to interpret. Raises ``RequestException`` only when
+        transient retries are exhausted.
+        """
+        def do_get() -> requests.Response:
+            self.rate_limiter.wait()
+            response = self.session.get(url, timeout=timeout)
+            # Trigger a retry for transient HTTP statuses; leave other statuses
+            # (200, 404, 403, ...) for the caller to handle.
+            if response.status_code in (429, 502, 503, 504):
+                response.raise_for_status()
+            return response
+
+        return self.retry_handler.run(
+            do_get,
+            retryable_exceptions=(requests.exceptions.RequestException,),
+            should_retry=is_transient_error,
+        )
 
     def fetch_all(self, ticker: str) -> Dict[str, Any]:
         """
@@ -146,7 +176,9 @@ class SECHandler:
         if self._cik_mapping is None:
             self._load_cik_mapping()
 
-        cik = self._cik_mapping.get(ticker)
+        # _load_cik_mapping leaves the mapping None if the fetch failed; treat as
+        # empty for this lookup (the next call will retry the load).
+        cik = (self._cik_mapping or {}).get(ticker)
         if cik:
             return str(cik).zfill(10)
 
@@ -177,8 +209,7 @@ class SECHandler:
         self.logger.info("Fetching CIK mapping from SEC...")
 
         try:
-            self.rate_limiter.wait()
-            response = self.session.get(url, timeout=30)
+            response = self._request(url, timeout=30)
             response.raise_for_status()
 
             data = response.json()
@@ -192,8 +223,10 @@ class SECHandler:
             self.logger.info(f"Loaded {len(self._cik_mapping)} ticker mappings")
 
         except Exception as e:
+            # Leave the mapping as None (not {}) so a later ticker can retry the
+            # fetch within the same run instead of being permanently disabled.
             self.logger.error(f"Error fetching CIK mapping: {e}")
-            self._cik_mapping = {}
+            self._cik_mapping = None
 
     def _parse_tickers_json(self, data: Dict) -> Dict[str, str]:
         """Parse SEC company_tickers.json format."""
@@ -222,20 +255,18 @@ class SECHandler:
 
         self.logger.debug(f"Fetching company facts from {url}")
 
-        try:
-            self.rate_limiter.wait()
-            response = self.session.get(url, timeout=60)
+        response = self._request(url, timeout=60)
 
-            if response.status_code == 404:
-                self.logger.warning(f"No XBRL data found for CIK {cik}")
-                return None
-
-            response.raise_for_status()
-            return response.json()
-
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Error fetching company facts: {e}")
+        # 404 is a genuine "this company has no XBRL data" — distinct from an error.
+        if response.status_code == 404:
+            self.logger.warning(f"No XBRL data found for CIK {cik}")
             return None
+
+        # Any other non-2xx (e.g. 403 blocked User-Agent) is surfaced, not silently
+        # swallowed as "no data". raise_for_status() propagates to fetch_all, which
+        # records it as company_facts_error.
+        response.raise_for_status()
+        return response.json()
 
     def get_submissions(self, cik: str) -> Optional[Dict[str, Any]]:
         """
@@ -252,39 +283,33 @@ class SECHandler:
 
         self.logger.debug(f"Fetching submissions from {url}")
 
-        try:
-            self.rate_limiter.wait()
-            response = self.session.get(url, timeout=30)
+        response = self._request(url, timeout=30)
 
-            if response.status_code == 404:
-                self.logger.warning(f"No submissions found for CIK {cik}")
-                return None
-
-            response.raise_for_status()
-            data = response.json()
-
-            # Extract relevant fields
-            return {
-                "entity_type": data.get("entityType"),
-                "sic": data.get("sic"),
-                "sic_description": data.get("sicDescription"),
-                "name": data.get("name"),
-                "tickers": data.get("tickers", []),
-                "exchanges": data.get("exchanges", []),
-                "ein": data.get("ein"),
-                "description": data.get("description"),
-                "category": data.get("category"),
-                "fiscal_year_end": data.get("fiscalYearEnd"),
-                "state_of_incorporation": data.get("stateOfIncorporation"),
-                "state_of_incorporation_description": data.get("stateOfIncorporationDescription"),
-                "addresses": data.get("addresses", {}),
-                "phone": data.get("phone"),
-                "filings": self._extract_recent_filings(data.get("filings", {})),
-            }
-
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Error fetching submissions: {e}")
+        if response.status_code == 404:
+            self.logger.warning(f"No submissions found for CIK {cik}")
             return None
+
+        response.raise_for_status()
+        data = response.json()
+
+        # Extract relevant fields
+        return {
+            "entity_type": data.get("entityType"),
+            "sic": data.get("sic"),
+            "sic_description": data.get("sicDescription"),
+            "name": data.get("name"),
+            "tickers": data.get("tickers", []),
+            "exchanges": data.get("exchanges", []),
+            "ein": data.get("ein"),
+            "description": data.get("description"),
+            "category": data.get("category"),
+            "fiscal_year_end": data.get("fiscalYearEnd"),
+            "state_of_incorporation": data.get("stateOfIncorporation"),
+            "state_of_incorporation_description": data.get("stateOfIncorporationDescription"),
+            "addresses": data.get("addresses", {}),
+            "phone": data.get("phone"),
+            "filings": self._extract_recent_filings(data.get("filings", {})),
+        }
 
     def _extract_recent_filings(
         self,
@@ -348,146 +373,6 @@ class SECHandler:
         ][:limit]
 
         return form4_filings
-
-    def extract_financial_metrics(
-        self,
-        facts: Dict[str, Any],
-        tags: List[str]
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        """
-        Extract specific financial metrics from company facts.
-
-        Args:
-            facts: Company facts dictionary from get_company_facts()
-            tags: List of XBRL tags to extract (without us-gaap: prefix)
-
-        Returns:
-            Dictionary mapping tags to their historical values
-        """
-        result = {}
-
-        us_gaap = facts.get("facts", {}).get("us-gaap", {})
-
-        for tag in tags:
-            tag_data = us_gaap.get(tag, {})
-            if not tag_data:
-                continue
-
-            units = tag_data.get("units", {})
-            label = tag_data.get("label", tag)
-            description = tag_data.get("description", "")
-
-            # Get USD values (most common for financial data)
-            usd_values = units.get("USD", [])
-            # Also check for shares (for share count data)
-            shares_values = units.get("shares", [])
-            # Pure numbers (for ratios like EPS)
-            pure_values = units.get("USD/shares", [])
-
-            values = usd_values or shares_values or pure_values
-
-            if values:
-                result[tag] = {
-                    "label": label,
-                    "description": description,
-                    "values": values
-                }
-
-        return result
-
-    def get_annual_financials(
-        self,
-        facts: Dict[str, Any],
-        years_back: int = 5
-    ) -> Dict[str, Any]:
-        """
-        Extract annual financial data (10-K) from company facts.
-
-        Args:
-            facts: Company facts dictionary
-            years_back: Number of years of data to extract
-
-        Returns:
-            Dictionary with annual financial data organized by fiscal year
-        """
-        from ..mappings.xbrl_tags import PRIORITY_TAGS
-
-        metrics = self.extract_financial_metrics(facts, PRIORITY_TAGS)
-
-        # Organize by fiscal year
-        by_year = {}
-
-        for tag, data in metrics.items():
-            for entry in data.get("values", []):
-                # Only get annual data (10-K filings)
-                form = entry.get("form")
-                if form not in ["10-K", "10-K/A"]:
-                    continue
-
-                fy = entry.get("fy")
-                if not fy:
-                    continue
-
-                if fy not in by_year:
-                    by_year[fy] = {
-                        "fiscal_year": fy,
-                        "filed": entry.get("filed"),
-                        "form": form,
-                    }
-
-                by_year[fy][tag] = entry.get("val")
-
-        # Sort by year and limit
-        years = sorted(by_year.keys(), reverse=True)[:years_back]
-        return {str(y): by_year[y] for y in years}
-
-    def get_quarterly_financials(
-        self,
-        facts: Dict[str, Any],
-        quarters_back: int = 12
-    ) -> Dict[str, Any]:
-        """
-        Extract quarterly financial data (10-Q) from company facts.
-
-        Args:
-            facts: Company facts dictionary
-            quarters_back: Number of quarters of data to extract
-
-        Returns:
-            Dictionary with quarterly financial data
-        """
-        from ..mappings.xbrl_tags import PRIORITY_TAGS
-
-        metrics = self.extract_financial_metrics(facts, PRIORITY_TAGS)
-
-        # Organize by period
-        by_period = {}
-
-        for tag, data in metrics.items():
-            for entry in data.get("values", []):
-                # Only get quarterly data (10-Q filings)
-                form = entry.get("form")
-                if form not in ["10-Q", "10-Q/A"]:
-                    continue
-
-                end_date = entry.get("end")
-                if not end_date:
-                    continue
-
-                if end_date not in by_period:
-                    by_period[end_date] = {
-                        "period_end": end_date,
-                        "filed": entry.get("filed"),
-                        "form": form,
-                        "fy": entry.get("fy"),
-                        "fp": entry.get("fp"),
-                    }
-
-                by_period[end_date][tag] = entry.get("val")
-
-        # Sort by date and limit
-        periods = sorted(by_period.keys(), reverse=True)[:quarters_back]
-        return {p: by_period[p] for p in periods}
 
     def close(self) -> None:
         """Close the session."""

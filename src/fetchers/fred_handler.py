@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 
 import requests
 
-from .rate_limiter import RateLimiter
+from .rate_limiter import RateLimiter, RetryHandler, is_transient_error
 
 
 class FREDHandler:
@@ -47,7 +47,10 @@ class FREDHandler:
         self,
         api_key: Optional[str] = None,
         rate_limit_delay: float = 0.5,
-        logger: Optional[logging.Logger] = None
+        logger: Optional[logging.Logger] = None,
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+        max_delay: float = 60.0,
     ):
         """
         Initialize FRED handler.
@@ -57,12 +60,21 @@ class FREDHandler:
                     Can also be set via FRED_API_KEY environment variable
             rate_limit_delay: Minimum seconds between requests
             logger: Optional logger instance
+            max_retries: Max retry attempts for transient network failures
+            base_delay: Initial backoff delay in seconds
+            max_delay: Maximum backoff delay cap in seconds
         """
         self.api_key = api_key or os.getenv("FRED_API_KEY")
         self.logger = logger or logging.getLogger(__name__)
         self.rate_limiter = RateLimiter(
             min_interval=rate_limit_delay,
             name="fred"
+        )
+        self.retry_handler = RetryHandler(
+            max_retries=max_retries,
+            base_delay=base_delay,
+            max_delay=max_delay,
+            logger=self.logger
         )
 
         self.session = requests.Session()
@@ -73,6 +85,27 @@ class FREDHandler:
                 "or pass api_key parameter. Get free key at: "
                 "https://fred.stlouisfed.org/docs/api/api_key.html"
             )
+
+    def _request(self, url: str, params: Optional[Dict[str, Any]] = None,
+                 timeout: int = 30) -> requests.Response:
+        """Perform a rate-limited GET with retries on transient failures.
+
+        Retries timeouts, connection errors, and retryable HTTP statuses; other
+        responses are returned as-is. Raises ``RequestException`` only when
+        transient retries are exhausted.
+        """
+        def do_get() -> requests.Response:
+            self.rate_limiter.wait()
+            response = self.session.get(url, params=params, timeout=timeout)
+            if response.status_code in (429, 502, 503, 504):
+                response.raise_for_status()
+            return response
+
+        return self.retry_handler.run(
+            do_get,
+            retryable_exceptions=(requests.exceptions.RequestException,),
+            should_retry=is_transient_error,
+        )
 
     def get_treasury_yields(self) -> Dict[str, Any]:
         """
@@ -150,8 +183,7 @@ class FREDHandler:
         }
 
         try:
-            self.rate_limiter.wait()
-            response = self.session.get(url, params=params, timeout=30)
+            response = self._request(url, params=params, timeout=30)
             response.raise_for_status()
 
             data = response.json()
@@ -206,8 +238,7 @@ class FREDHandler:
             params["observation_end"] = end_date
 
         try:
-            self.rate_limiter.wait()
-            response = self.session.get(url, params=params, timeout=30)
+            response = self._request(url, params=params, timeout=30)
             response.raise_for_status()
 
             data = response.json()
@@ -235,15 +266,51 @@ class FREDHandler:
         """
         self.logger.info("Using fallback Treasury yields (no FRED API key)")
 
-        # Try to fetch from Treasury.gov XML feed (no API key required)
-        try:
-            url = "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/2024/all?type=daily_treasury_yield_curve&field_tdr_date_value=2024&page&_format=csv"
+        # Try to fetch from Treasury.gov CSV feed (no API key required). The feed is
+        # organized by calendar year; try the current year, then fall back to the
+        # prior year (the current-year feed is empty in early January).
+        for year in (datetime.now().year, datetime.now().year - 1):
+            yields = self._fetch_treasury_gov_year(year)
+            if yields:
+                return yields
 
-            self.rate_limiter.wait()
-            response = self.session.get(url, timeout=30)
+        # Return typical market estimates as last resort. These are static and
+        # quickly go stale, so warn loudly — downstream WACC/DCF must know the
+        # risk-free rate is not live.
+        self.logger.warning(
+            "Falling back to static Treasury yield estimates; these are not "
+            "current. Set FRED_API_KEY for live data."
+        )
+        return {
+            "fetched_at": datetime.now().isoformat(),
+            "source": "estimate",
+            "note": "Estimated values - get FRED API key for real-time data",
+            "treasury_3m": 5.25,
+            "treasury_6m": 5.15,
+            "treasury_1y": 4.85,
+            "treasury_2y": 4.45,
+            "treasury_5y": 4.25,
+            "treasury_10y": 4.35,
+            "treasury_20y": 4.65,
+            "treasury_30y": 4.55,
+        }
+
+    def _fetch_treasury_gov_year(self, year: int) -> Optional[Dict[str, Any]]:
+        """Fetch the daily Treasury yield curve CSV for a calendar ``year``.
+
+        Returns a yields dict (latest row) or None if unavailable/empty.
+        """
+        url = (
+            "https://home.treasury.gov/resource-center/data-chart-center/"
+            f"interest-rates/daily-treasury-rates.csv/{year}/all"
+            f"?type=daily_treasury_yield_curve&field_tdr_date_value={year}"
+            "&page&_format=csv"
+        )
+
+        try:
+            response = self._request(url, timeout=30)
 
             if response.status_code == 200:
-                # Parse CSV - get latest row
                 lines = response.text.strip().split('\n')
                 if len(lines) > 1:
                     headers = lines[0].split(',')
@@ -254,7 +321,6 @@ class FREDHandler:
                         "source": "treasury_gov",
                     }
 
-                    # Map columns to our format
                     col_map = {
                         "1 Mo": "1m", "2 Mo": "2m", "3 Mo": "3m",
                         "6 Mo": "6m", "1 Yr": "1y", "2 Yr": "2y",
@@ -275,22 +341,9 @@ class FREDHandler:
                         return yields
 
         except Exception as e:
-            self.logger.debug(f"Treasury.gov fallback failed: {e}")
+            self.logger.debug(f"Treasury.gov fallback failed for {year}: {e}")
 
-        # Return typical market estimates as last resort
-        return {
-            "fetched_at": datetime.now().isoformat(),
-            "source": "estimate",
-            "note": "Estimated values - get FRED API key for real-time data",
-            "treasury_3m": 5.25,
-            "treasury_6m": 5.15,
-            "treasury_1y": 4.85,
-            "treasury_2y": 4.45,
-            "treasury_5y": 4.25,
-            "treasury_10y": 4.35,
-            "treasury_20y": 4.65,
-            "treasury_30y": 4.55,
-        }
+        return None
 
     def get_market_risk_premium(self) -> Dict[str, Any]:
         """

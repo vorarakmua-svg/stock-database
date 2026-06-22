@@ -89,7 +89,7 @@ Examples:
     parser.add_argument(
         "--sec-user-agent",
         type=str,
-        default="StockDataCollector user@example.com",
+        default="StockDataCollector admin@example.com",
         help="SEC EDGAR User-Agent (format: 'Company email@domain.com')"
     )
 

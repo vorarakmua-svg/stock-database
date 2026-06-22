@@ -291,7 +291,7 @@ class YahooHandler:
                 if income_stmt_q is not None and not income_stmt_q.empty:
                     financials["income_statement_quarterly"] = self._df_to_dict(income_stmt_q)
             except Exception as e:
-                self.logger.debug(f"Error getting income statement: {e}")
+                self.logger.warning(f"Error getting income statement: {e}")
 
             # Balance Sheet
             try:
@@ -303,7 +303,7 @@ class YahooHandler:
                 if balance_sheet_q is not None and not balance_sheet_q.empty:
                     financials["balance_sheet_quarterly"] = self._df_to_dict(balance_sheet_q)
             except Exception as e:
-                self.logger.debug(f"Error getting balance sheet: {e}")
+                self.logger.warning(f"Error getting balance sheet: {e}")
 
             # Cash Flow
             try:
@@ -315,7 +315,7 @@ class YahooHandler:
                 if cashflow_q is not None and not cashflow_q.empty:
                     financials["cash_flow_quarterly"] = self._df_to_dict(cashflow_q)
             except Exception as e:
-                self.logger.debug(f"Error getting cash flow: {e}")
+                self.logger.warning(f"Error getting cash flow: {e}")
 
             return financials
         except Exception as e:

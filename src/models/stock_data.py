@@ -1,6 +1,6 @@
 """Data models for stock data."""
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 import json
@@ -82,7 +82,17 @@ class StockData:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "StockData":
-        """Create StockData from dictionary."""
+        """Create StockData from dictionary.
+
+        Tolerates extra keys not declared on the model. The JSON exporter's
+        merge mode adds bookkeeping fields (``collection_history``,
+        ``first_collected_at``, ``price_history_snapshots``) that are not
+        dataclass fields, so we filter down to known fields before constructing.
+        """
+        # Only keep keys that correspond to declared dataclass fields
+        known = {f.name for f in fields(cls)}
+        data = {k: v for k, v in data.items() if k in known}
+
         # Convert ISO string back to datetime
         if isinstance(data.get("collected_at"), str):
             data["collected_at"] = datetime.fromisoformat(data["collected_at"])
