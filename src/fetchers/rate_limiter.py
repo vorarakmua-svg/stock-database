@@ -1,10 +1,10 @@
 """Thread-safe rate limiter for API requests."""
 
-import time
-import threading
 import logging
+import threading
+import time
 from functools import wraps
-from typing import Callable, TypeVar, Optional
+from typing import Callable, Optional, TypeVar
 
 import requests
 

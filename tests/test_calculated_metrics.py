@@ -41,10 +41,10 @@ def test_nopat_uses_effective_tax_rate(calc, sample_financials):
 def test_ebitda_fallback_from_net_income(calc):
     """No Operating Income -> EBITDA = NI + D&A + interest + taxes."""
     financials = {
-        "Net Income": 100.0,
-        "Depreciation and Amortization": 40.0,
-        "Interest Expense": 20.0,
-        "Income Tax Expense": 30.0,
+        "net_income": 100.0,
+        "depreciation_amortization": 40.0,
+        "interest_expense": 20.0,
+        "income_tax_expense": 30.0,
     }
     assert calc._calculate_ebitda(financials) == pytest.approx(190.0)
 
@@ -57,11 +57,11 @@ def test_ebitda_yahoo_fallback(calc):
 
 
 def test_fcf_without_capex_returns_ocf(calc):
-    assert calc._calculate_fcf({"Operating Cash Flow": 250.0}) == pytest.approx(250.0)
+    assert calc._calculate_fcf({"operating_cash_flow": 250.0}) == pytest.approx(250.0)
 
 
 def test_net_debt_negative_when_net_cash(calc):
-    financials = {"Long-Term Debt": 100.0, "Cash and Cash Equivalents": 500.0}
+    financials = {"long_term_debt": 100.0, "cash_and_equivalents": 500.0}
     assert calc._calculate_net_debt(financials) == pytest.approx(-400.0)
 
 

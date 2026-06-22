@@ -2,19 +2,23 @@
 
 import logging
 import os
-from pathlib import Path
-from typing import List, Dict, Any, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from ..config import AppConfig, default_config
-from ..models.stock_data import StockData
-from ..parsers.xbrl_parser import XBRLParser
-from ..parsers.calculated_metrics import CalculatedMetrics
-from ..exporters.json_exporter import JSONExporter
 from ..exporters.csv_exporter import CSVExporter
-from .yahoo_handler import YahooHandler
-from .sec_handler import SECHandler
+from ..exporters.json_exporter import JSONExporter
+from ..exporters.sqlite_store import SQLiteStore
+from ..models.canonical import validate_period
+from ..models.stock_data import StockData
+from ..parsers.calculated_metrics import CalculatedMetrics
+from ..parsers.xbrl_parser import XBRLParser
+from ..validation.quality import assess_annual
 from .fred_handler import FREDHandler
+from .sec_handler import SECHandler
+from .yahoo_handler import YahooHandler
 
 
 class StockDataFetcher:
@@ -77,6 +81,11 @@ class StockDataFetcher:
 
         self.csv_exporter = CSVExporter(
             output_dir=self.config.storage.csv_dir,
+            logger=self.logger
+        )
+
+        self.sqlite_store = SQLiteStore(
+            db_path=self.config.storage.database_path,
             logger=self.logger
         )
 
@@ -159,6 +168,14 @@ class StockDataFetcher:
             self.logger.warning(f"FRED data error for {ticker}: {e}")
             stock.add_warning(f"FRED: {str(e)}")
 
+        # Validate/coerce standardized financials and assess data quality.
+        if stock.financials_annual or stock.financials_quarterly:
+            try:
+                self._validate_and_score(stock)
+            except Exception as e:
+                self.logger.warning(f"Data-quality validation error for {ticker}: {e}")
+                stock.add_warning(f"Data quality: {str(e)}")
+
         # Calculate derived metrics (FCF, EBITDA, ROIC, etc.)
         if stock.financials_annual:
             try:
@@ -192,6 +209,27 @@ class StockDataFetcher:
 
         return stock
 
+    def _validate_and_score(self, stock: StockData) -> None:
+        """Coerce/validate canonical periods and attach a data-quality report."""
+        # Validate + coerce each period; surface validation errors as warnings.
+        for attr in ("financials_annual", "financials_quarterly"):
+            periods = getattr(stock, attr)
+            if not periods:
+                continue
+            cleaned = {}
+            for period_key, period in periods.items():
+                clean, errors = validate_period(period)
+                cleaned[period_key] = clean
+                for err in errors:
+                    stock.add_warning(f"validation {attr} {period_key}: {err}")
+            setattr(stock, attr, cleaned)
+
+        # Score annual financials and record findings.
+        report = assess_annual(stock.financials_annual)
+        stock.data_quality = report.as_dict()
+        for message in report.warning_messages():
+            stock.add_warning(message)
+
     def fetch_multiple(
         self,
         tickers: List[str],
@@ -211,28 +249,58 @@ class StockDataFetcher:
         Returns:
             List of StockData objects
         """
-        self.logger.info(f"Fetching data for {len(tickers)} tickers")
+        workers = max(1, getattr(self.config, "max_workers", 1))
+        self.logger.info(
+            f"Fetching data for {len(tickers)} tickers "
+            f"({'sequential' if workers == 1 or len(tickers) <= 1 else f'{workers} workers'})"
+        )
 
-        results = []
-        for i, ticker in enumerate(tickers, 1):
-            self.logger.info(f"Processing {i}/{len(tickers)}: {ticker}")
-            try:
-                stock = self.fetch_ticker(
-                    ticker,
-                    include_yahoo=include_yahoo,
-                    include_sec=include_sec,
-                    years_back=years_back
-                )
-                results.append(stock)
-            except Exception as e:
-                self.logger.error(f"Failed to fetch {ticker}: {e}")
-                # Create error entry
-                error_stock = StockData(ticker=ticker)
-                error_stock.add_error(f"Fetch failed: {str(e)}")
-                results.append(error_stock)
+        if workers == 1 or len(tickers) <= 1:
+            results = [
+                self._safe_fetch_ticker(t, include_yahoo, include_sec, years_back)
+                for t in tickers
+            ]
+            self.logger.info(f"Completed fetching {len(results)} tickers")
+            return results
 
-        self.logger.info(f"Completed fetching {len(results)} tickers")
-        return results
+        # Parallel fetch. Per-source RateLimiters are thread-safe and serialize each
+        # external API, so we overlap work across tickers without exceeding limits.
+        # Results are placed back in input order.
+        ordered: List[Optional[StockData]] = [None] * len(tickers)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_idx = {
+                executor.submit(
+                    self._safe_fetch_ticker, ticker, include_yahoo, include_sec, years_back
+                ): idx
+                for idx, ticker in enumerate(tickers)
+            }
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                ordered[idx] = future.result()
+
+        self.logger.info(f"Completed fetching {len(ordered)} tickers")
+        return [r for r in ordered if r is not None]
+
+    def _safe_fetch_ticker(
+        self,
+        ticker: str,
+        include_yahoo: bool,
+        include_sec: bool,
+        years_back: int,
+    ) -> StockData:
+        """Fetch one ticker, converting any failure into an error StockData."""
+        try:
+            return self.fetch_ticker(
+                ticker,
+                include_yahoo=include_yahoo,
+                include_sec=include_sec,
+                years_back=years_back,
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to fetch {ticker}: {e}")
+            error_stock = StockData(ticker=ticker)
+            error_stock.add_error(f"Fetch failed: {str(e)}")
+            return error_stock
 
     def export(
         self,
@@ -268,6 +336,11 @@ class StockDataFetcher:
             )
             if history_path:
                 results["csv"].append(history_path)
+
+        if "sqlite" in formats:
+            db_path = self.sqlite_store.export(data)
+            if db_path:
+                results["sqlite"] = [db_path]
 
         return results
 

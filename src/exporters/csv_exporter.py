@@ -4,7 +4,6 @@ import csv
 import logging
 from pathlib import Path
 from typing import List, Optional
-from datetime import datetime
 
 from ..models.stock_data import StockData
 
@@ -149,7 +148,8 @@ class CSVExporter:
                     row = {
                         "ticker": stock.ticker,
                         "fiscal_year": year,
-                        **financials
+                        # Skip internal/provenance keys (e.g. _source_tags)
+                        **{k: v for k, v in financials.items() if not k.startswith("_")}
                     }
                     rows.append(row)
 

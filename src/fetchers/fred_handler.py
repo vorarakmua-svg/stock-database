@@ -6,8 +6,8 @@ FRED API is free but requires registration at https://fred.stlouisfed.org/docs/a
 
 import logging
 import os
-from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -361,7 +361,8 @@ class FREDHandler:
             "conservative": 0.06,          # 6.0% - conservative assumption
             "aggressive": 0.045,           # 4.5% - aggressive assumption
             "source": "historical_estimate",
-            "note": "Market risk premium is typically assumed at 5-6% based on historical equity returns minus risk-free rate",
+            "note": ("Market risk premium is typically assumed at 5-6% based on "
+                     "historical equity returns minus risk-free rate"),
         }
 
     def close(self) -> None:

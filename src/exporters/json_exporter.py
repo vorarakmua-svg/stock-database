@@ -2,9 +2,9 @@
 
 import json
 import logging
-from pathlib import Path
-from typing import List, Union, Optional, Dict, Any
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 from ..models.stock_data import StockData
 
@@ -186,14 +186,19 @@ class JSONExporter:
         existing: List[Dict],
         new: List[Dict]
     ) -> List[Dict]:
-        """Merge insider transactions, removing duplicates."""
-        # Create unique key for each transaction
+        """Merge insider (Form 4) filings, removing duplicates.
+
+        Each record is a Form 4 filing as returned by
+        ``SECHandler.get_insider_transactions`` (fields from SEC submissions:
+        ``accessionNumber``, ``filingDate``, ``form``, ...). The accession number
+        uniquely identifies a filing; we fall back to (filingDate, form) when it
+        is absent.
+        """
         def tx_key(tx):
             return (
-                tx.get("transaction_date", ""),
-                tx.get("reporting_owner", ""),
-                tx.get("shares", 0),
-                tx.get("transaction_type", "")
+                tx.get("accessionNumber") or "",
+                tx.get("filingDate") or "",
+                tx.get("form") or "",
             )
 
         seen = set()
@@ -213,8 +218,8 @@ class JSONExporter:
                 seen.add(key)
                 merged.append(tx)
 
-        # Sort by date descending
-        merged.sort(key=lambda x: x.get("transaction_date", ""), reverse=True)
+        # Sort by filing date descending
+        merged.sort(key=lambda x: x.get("filingDate", ""), reverse=True)
 
         return merged
 

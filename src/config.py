@@ -1,9 +1,9 @@
 """Configuration settings for the Stock Data Collection System."""
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
-import os
+from typing import List, Optional
 
 try:
     from dotenv import load_dotenv
@@ -57,10 +57,16 @@ class YahooConfig:
 class StorageConfig:
     """Storage and output configuration."""
     base_dir: Path = field(default_factory=lambda: Path("data"))
+    # Optional explicit SQLite path; defaults to <output_dir>/stock.db
+    db_path: Optional[Path] = None
 
     @property
     def output_dir(self) -> Path:
         return self.base_dir / "output"
+
+    @property
+    def database_path(self) -> Path:
+        return self.db_path or (self.output_dir / "stock.db")
 
     @property
     def json_dir(self) -> Path:
@@ -105,8 +111,11 @@ class AppConfig:
 
     # Output formats
     output_formats: List[str] = field(
-        default_factory=lambda: ["json", "csv"]
+        default_factory=lambda: ["json", "csv", "sqlite"]
     )
+
+    # Number of tickers to fetch concurrently (1 = sequential)
+    max_workers: int = 4
 
     def __post_init__(self):
         """Ensure directories exist after initialization."""

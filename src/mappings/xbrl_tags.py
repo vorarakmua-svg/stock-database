@@ -637,12 +637,6 @@ XBRL_TAG_MAPPING = {
         "category": "income_statement",
         "subcategory": "profit",
     },
-    # EBITDA Related
-    "OperatingIncomeLoss": {
-        "simple_name": "Operating Income",
-        "category": "income_statement",
-        "subcategory": "profit",
-    },
 
     # ============== INCOME STATEMENT - PER SHARE ==============
     "EarningsPerShareBasic": {

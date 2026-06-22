@@ -17,10 +17,11 @@ dependencies = [
     "requests>=2.31.0",
     "pandas>=2.1.0",
     "python-dotenv>=1.0.0",
+    "pydantic>=2.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "ruff>=0.8", "mypy>=1.8", "types-requests"]
 
 [project.scripts]
 stock-data = "src.main:main"
@@ -35,4 +36,25 @@ addopts = "-q"
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::pytest.PytestDeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_unused_ignores = false
+# Type-check the new, fully-typed standardization/storage modules. The legacy
+# fetchers/parsers are not yet annotated; they are checked only as silent imports.
+files = [
+    "src/mappings/canonical.py",
+    "src/models/canonical.py",
+    "src/validation",
+    "src/exporters/sqlite_store.py",
 ]

@@ -15,13 +15,15 @@ def test_annual_buckets_by_period_not_filing_fy(sample_company_facts):
     annual = parser.extract_annual_financials(sample_company_facts, years_back=10)
 
     assert set(annual.keys()) == {"2024", "2023", "2022"}
-    assert annual["2024"]["Revenue"] == 400
-    assert annual["2023"]["Revenue"] == 300
-    assert annual["2022"]["Revenue"] == 200
+    assert annual["2024"]["revenue"] == 400
+    assert annual["2023"]["revenue"] == 300
+    assert annual["2022"]["revenue"] == 200
     # Instant (balance-sheet) concept buckets by end-date year too.
-    assert annual["2024"]["Total Assets"] == 70
-    assert annual["2023"]["Total Assets"] == 60
-    assert annual["2022"]["Total Assets"] == 50
+    assert annual["2024"]["total_assets"] == 70
+    assert annual["2023"]["total_assets"] == 60
+    assert annual["2022"]["total_assets"] == 50
+    # Provenance records which XBRL tag each canonical value came from.
+    assert annual["2024"]["_source_tags"]["revenue"] == "Revenues"
 
 
 def test_annual_excludes_quarterly_spans(sample_company_facts):
@@ -29,9 +31,9 @@ def test_annual_excludes_quarterly_spans(sample_company_facts):
     parser = XBRLParser()
     annual = parser.extract_annual_financials(sample_company_facts, years_back=10)
     # 120 was the Q4-only figure; the full-year value is 400.
-    assert annual["2024"]["Revenue"] == 400
+    assert annual["2024"]["revenue"] == 400
     for year in annual.values():
-        assert year["Revenue"] != 120
+        assert year["revenue"] != 120
 
 
 def test_annual_years_back_limit(sample_company_facts):
@@ -59,7 +61,7 @@ def test_most_recently_filed_value_wins():
     }
     parser = XBRLParser()
     annual = parser.extract_annual_financials(facts, years_back=5)
-    assert annual["2023"]["Total Assets"] == 62
+    assert annual["2023"]["total_assets"] == 62
 
 
 def test_quarterly_buckets_and_excludes_full_year(sample_company_facts):
@@ -69,10 +71,10 @@ def test_quarterly_buckets_and_excludes_full_year(sample_company_facts):
     # Two quarter-length NetIncomeLoss facts; the full-year span is excluded.
     assert "2024-06-29" in quarterly
     assert "2024-09-28" in quarterly
-    assert quarterly["2024-06-29"]["Net Income"] == 25
-    assert quarterly["2024-09-28"]["Net Income"] == 30
+    assert quarterly["2024-06-29"]["net_income"] == 25
+    assert quarterly["2024-09-28"]["net_income"] == 30
     for period in quarterly.values():
-        assert period.get("Net Income") != 400
+        assert period.get("net_income") != 400
 
 
 def test_empty_facts_returns_empty():

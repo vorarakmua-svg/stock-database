@@ -1,9 +1,9 @@
 """Data models for stock data."""
 
-from dataclasses import dataclass, field, asdict, fields
-from typing import Dict, Any, List, Optional
-from datetime import datetime
 import json
+from dataclasses import asdict, dataclass, field, fields
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -63,6 +63,9 @@ class StockData:
     # Risk-free rate and market data for WACC calculation (from FRED)
     risk_free_rate: Dict[str, Any] = field(default_factory=dict)
 
+    # Data-quality assessment of standardized financials (score + findings)
+    data_quality: Dict[str, Any] = field(default_factory=dict)
+
     # Data quality metadata
     data_sources: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
@@ -109,7 +112,11 @@ class StockData:
             "ticker": self.ticker,
             "cik": self.cik,
             "company_name": self.company_name,
-            "collected_at": self.collected_at.isoformat() if isinstance(self.collected_at, datetime) else self.collected_at,
+            "collected_at": (
+                self.collected_at.isoformat()
+                if isinstance(self.collected_at, datetime)
+                else self.collected_at
+            ),
         }
 
         # Company info
@@ -167,12 +174,12 @@ class StockData:
             years = sorted(self.financials_annual.keys(), reverse=True)
             if years:
                 latest = self.financials_annual[years[0]]
-                summary["sec_revenue"] = latest.get("Revenue") or latest.get("Net Revenue")
-                summary["sec_net_income"] = latest.get("Net Income")
-                summary["sec_total_assets"] = latest.get("Total Assets")
-                summary["sec_total_liabilities"] = latest.get("Total Liabilities")
-                summary["sec_stockholders_equity"] = latest.get("Total Stockholders Equity")
-                summary["sec_operating_cash_flow"] = latest.get("Operating Cash Flow")
+                summary["sec_revenue"] = latest.get("revenue")
+                summary["sec_net_income"] = latest.get("net_income")
+                summary["sec_total_assets"] = latest.get("total_assets")
+                summary["sec_total_liabilities"] = latest.get("total_liabilities")
+                summary["sec_stockholders_equity"] = latest.get("total_equity")
+                summary["sec_operating_cash_flow"] = latest.get("operating_cash_flow")
                 summary["sec_fiscal_year"] = latest.get("fiscal_year")
 
         # Price history statistics
