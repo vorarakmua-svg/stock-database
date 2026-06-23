@@ -251,6 +251,20 @@ def main():
               f"calendar_year={latest.get('calendar_year')} "
               f"(end={latest.get('period_end')}, frame={latest.get('frame')})")
 
+    # Granularity: quarterly coverage + TTM
+    fq = data.get("financials_quarterly", {})
+    if fq:
+        ends = sorted(fq.keys())
+        has_q4 = any(
+            p.get("fiscal_quarter") == 4 and isinstance(p.get("revenue"), (int, float))
+            for p in fq.values()
+        )
+        print(f"Quarters: {len(ends)} ({ends[0]} -> {ends[-1]}), "
+              f"derived Q4 revenue present: {has_q4}")
+    ttm = data.get("financials_ttm", {})
+    if ttm:
+        print(f"TTM periods: {len(ttm)}")
+
     # Data-quality report from the standardization/validation layer
     dq = data.get("data_quality") or {}
     if dq:

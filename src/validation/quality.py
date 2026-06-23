@@ -95,7 +95,8 @@ def _num(period: Dict[str, Any], key: str) -> Optional[float]:
 
 
 def assess_annual(annual: Dict[str, Dict[str, Any]],
-                  sector: Optional[str] = None) -> QualityReport:
+                  sector: Optional[str] = None,
+                  recent_years: int = 5) -> QualityReport:
     """Assess a company's canonical annual financials.
 
     Args:
@@ -103,6 +104,9 @@ def assess_annual(annual: Dict[str, Dict[str, Any]],
             ``XBRLParser.extract_annual_financials``.
         sector: Sector class (bank/insurance/reit/...) selecting which fields are
             required, so e.g. a bank isn't penalized for lacking operating_income.
+        recent_years: Score only the most recent N fiscal years. Early XBRL filings
+            (~2009-2014) are sparse and shouldn't drag down a company's current
+            data-quality score now that full history is retained.
 
     Returns:
         A :class:`QualityReport` with a 0-100 score and structured findings.
@@ -117,7 +121,8 @@ def assess_annual(annual: Dict[str, Dict[str, Any]],
         report.score = 0
         return report
 
-    for year in sorted(annual.keys(), reverse=True):
+    scored_years = sorted(annual.keys(), reverse=True)[:recent_years]
+    for year in scored_years:
         period = annual[year]
         source_tags = period.get("_source_tags", {})
 
@@ -184,8 +189,8 @@ def assess_annual(annual: Dict[str, Dict[str, Any]],
                             f"'{key}' = {eps} is outside a plausible range.", year)
                 )
 
-    # Year-over-year revenue continuity
-    years = sorted(annual.keys())
+    # Year-over-year revenue continuity (within the scored window)
+    years = sorted(scored_years)
     for prev, curr in zip(years, years[1:]):
         r0 = _num(annual[prev], "revenue")
         r1 = _num(annual[curr], "revenue")

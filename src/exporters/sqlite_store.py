@@ -97,6 +97,7 @@ class SQLiteStore:
                 period_end TEXT NOT NULL,
                 fiscal_year INTEGER,
                 fiscal_period TEXT,
+                fiscal_quarter INTEGER,
                 calendar_year INTEGER,
                 calendar_quarter INTEGER,
                 filed_date TEXT,
@@ -105,10 +106,22 @@ class SQLiteStore:
                 PRIMARY KEY (ticker, period_end)
             );
 
+            CREATE TABLE IF NOT EXISTS financials_ttm (
+                ticker TEXT NOT NULL,
+                period_end TEXT NOT NULL,
+                fiscal_year INTEGER,
+                calendar_year INTEGER,
+                calendar_quarter INTEGER,
+                {_cols_ddl(_CANONICAL_COLUMNS)},
+                PRIMARY KEY (ticker, period_end)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_fa_calendar_year
                 ON financials_annual (calendar_year);
             CREATE INDEX IF NOT EXISTS idx_fq_calendar
                 ON financials_quarterly (calendar_year, calendar_quarter);
+            CREATE INDEX IF NOT EXISTS idx_ttm_calendar
+                ON financials_ttm (ticker, calendar_year, calendar_quarter);
 
             CREATE TABLE IF NOT EXISTS metrics_annual (
                 ticker TEXT NOT NULL,
@@ -147,7 +160,11 @@ class SQLiteStore:
             "financials_annual": [("calendar_year", "INTEGER")]
             + [(c, "REAL") for c in _CANONICAL_COLUMNS],
             "financials_quarterly": [("calendar_year", "INTEGER"),
-                                     ("calendar_quarter", "INTEGER")]
+                                     ("calendar_quarter", "INTEGER"),
+                                     ("fiscal_quarter", "INTEGER")]
+            + [(c, "REAL") for c in _CANONICAL_COLUMNS],
+            "financials_ttm": [("fiscal_year", "INTEGER"), ("calendar_year", "INTEGER"),
+                               ("calendar_quarter", "INTEGER")]
             + [(c, "REAL") for c in _CANONICAL_COLUMNS],
             "metrics_annual": [(c, "REAL") for c in _METRIC_COLUMNS],
             "market_snapshots": [(c, "REAL") for c in _SNAPSHOT_COLUMNS],
@@ -255,6 +272,7 @@ class SQLiteStore:
                 "period_end": period_end,
                 "fiscal_year": period.get("fiscal_year"),
                 "fiscal_period": period.get("fiscal_period"),
+                "fiscal_quarter": period.get("fiscal_quarter"),
                 "calendar_year": period.get("calendar_year"),
                 "calendar_quarter": period.get("calendar_quarter"),
                 "filed_date": period.get("filed_date"),
@@ -262,6 +280,18 @@ class SQLiteStore:
             }
             row.update(self._canonical_values(period))
             self._upsert(conn, "financials_quarterly", ["ticker", "period_end"], row)
+
+        # financials_ttm (trailing-twelve-month series)
+        for period_end, period in (stock.financials_ttm or {}).items():
+            row = {
+                "ticker": stock.ticker,
+                "period_end": period_end,
+                "fiscal_year": period.get("fiscal_year"),
+                "calendar_year": period.get("calendar_year"),
+                "calendar_quarter": period.get("calendar_quarter"),
+            }
+            row.update(self._canonical_values(period))
+            self._upsert(conn, "financials_ttm", ["ticker", "period_end"], row)
 
         # market_snapshots (point-in-time)
         md = stock.market_data or {}

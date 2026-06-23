@@ -58,6 +58,7 @@ files = [
     "src/models/canonical.py",
     "src/validation",
     "src/parsers/derived_fields.py",
+    "src/parsers/ttm.py",
     "src/analysis",
     "src/exporters/sqlite_store.py",
 ]

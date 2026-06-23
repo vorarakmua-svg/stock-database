@@ -15,6 +15,7 @@ from ..mappings.canonical import CANONICAL_FIELDS
 _META_FIELDS: Dict[str, Any] = {
     "fiscal_year": (Optional[int], None),
     "fiscal_period": (Optional[str], None),
+    "fiscal_quarter": (Optional[int], None),
     "period_end": (Optional[str], None),
     "filed_date": (Optional[str], None),
     "form": (Optional[str], None),

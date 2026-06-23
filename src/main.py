@@ -88,8 +88,9 @@ Examples:
     parser.add_argument(
         "--years",
         type=int,
-        default=10,
-        help="Years of historical financial data (default: 10, max available from SEC)"
+        default=None,
+        help="Limit historical financial data to the most recent N years "
+             "(default: all available from SEC)"
     )
 
     parser.add_argument(
@@ -150,7 +151,7 @@ def main() -> int:
     logger.info(f"Tickers: {', '.join(tickers)}")
     logger.info(f"Output directory: {args.output_dir}")
     logger.info(f"Formats: {', '.join(args.formats)}")
-    logger.info(f"Years of data: {args.years}")
+    logger.info(f"Years of data: {args.years or 'all available'}")
     logger.info(f"Yahoo Finance: {'disabled' if args.no_yahoo else 'enabled'}")
     logger.info(f"SEC EDGAR: {'disabled' if args.no_sec else 'enabled'}")
 

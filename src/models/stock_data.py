@@ -43,6 +43,8 @@ class StockData:
     # Financial statements from SEC EDGAR (preferred source)
     financials_annual: Dict[str, Any] = field(default_factory=dict)
     financials_quarterly: Dict[str, Any] = field(default_factory=dict)
+    # Trailing-twelve-month series derived from discrete quarters
+    financials_ttm: Dict[str, Any] = field(default_factory=dict)
 
     # SEC submission data
     sec_submissions: Dict[str, Any] = field(default_factory=dict)
