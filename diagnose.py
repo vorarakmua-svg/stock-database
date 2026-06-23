@@ -238,9 +238,18 @@ def main():
     # Show basic info
     print(f"\nCompany: {data.get('company_name', 'Unknown')}")
     print(f"CIK: {data.get('cik', 'Not found')}")
+    print(f"Sector: {data.get('sector_class', 'unknown')}")
     print(f"Data Sources: {data.get('data_sources', [])}")
     print(f"Warnings: {len(data.get('warnings', []))}")
     print(f"Errors: {len(data.get('errors', []))}")
+
+    # Fiscal vs calendar-year alignment for the latest period
+    fa = data.get("financials_annual", {})
+    if fa:
+        latest = fa[sorted(fa.keys(), reverse=True)[0]]
+        print(f"Latest period: fiscal_year={latest.get('fiscal_year')} "
+              f"calendar_year={latest.get('calendar_year')} "
+              f"(end={latest.get('period_end')}, frame={latest.get('frame')})")
 
     # Data-quality report from the standardization/validation layer
     dq = data.get("data_quality") or {}

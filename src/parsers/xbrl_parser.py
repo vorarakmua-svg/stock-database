@@ -183,6 +183,9 @@ class XBRLParser:
         best: Dict[Any, tuple] = {}
         # period -> filed date of the entry that set period-level metadata.
         meta_filed: Dict[Any, str] = {}
+        # period -> set of SEC calendar `frame` strings seen across all of the
+        # period's facts (the authoritative calendar mapping; see _apply_calendar).
+        period_frames: Dict[Any, set] = {}
 
         for field in CANONICAL_FIELDS:
             unit_key = field.xbrl_unit
@@ -200,6 +203,12 @@ class XBRLParser:
                     period = period_key_fn(entry)
                     if period is None:
                         continue
+
+                    # Capture the SEC frame from every contributing fact (it may be
+                    # present only on a comparative instance, not the one that wins).
+                    frame = entry.get("frame")
+                    if frame:
+                        period_frames.setdefault(period, set()).add(frame)
 
                     filed = entry.get("filed") or ""
                     bkey = (period, field.key)
@@ -228,10 +237,11 @@ class XBRLParser:
                         period_dict["filed_date"] = entry.get("filed")
                         period_dict["period_end"] = entry.get("end")
                         period_dict["form"] = entry.get("form")
+                        period_dict["fiscal_period"] = entry.get("fp")
                         if quarterly:
                             period_dict["fiscal_year"] = entry.get("fy")
-                            period_dict["fiscal_period"] = entry.get("fp")
 
+        self._apply_calendar(data, period_frames, quarterly)
         return data
 
     @staticmethod
@@ -240,3 +250,64 @@ class XBRLParser:
         if quarterly:
             return {"period_end": period}
         return {"fiscal_year": period}
+
+    def _apply_calendar(self, data: Dict[Any, Dict[str, Any]],
+                        period_frames: Dict[Any, set], quarterly: bool) -> None:
+        """Set SEC-authoritative ``calendar_year`` (+quarter, +frame) on each period.
+
+        Uses the SEC ``frame`` when present (e.g. a June-fiscal-year-end maps to its
+        calendar year, a January FYE to the prior calendar year), falling back to the
+        period-end month rule for the rare period with no frame on any instance.
+        """
+        for period, period_dict in data.items():
+            year, quarter, chosen = self._calendar_from_frames(
+                period_frames.get(period, set()), quarterly
+            )
+            if year is None:
+                year = self._calendar_year_from_end(period_dict.get("period_end"))
+            period_dict["calendar_year"] = year
+            if chosen:
+                period_dict["frame"] = chosen
+            if quarterly:
+                period_dict["calendar_quarter"] = quarter
+
+    @staticmethod
+    def _parse_frame(frame: str):
+        """Parse an SEC frame like ``CY2024`` / ``CY2024Q4I`` -> (year, quarter|None)."""
+        match = re.match(r"^CY(\d{4})(?:Q(\d))?I?$", frame or "")
+        if not match:
+            return None, None
+        year = int(match.group(1))
+        quarter = int(match.group(2)) if match.group(2) else None
+        return year, quarter
+
+    def _calendar_from_frames(self, frames: set, quarterly: bool):
+        """Choose the best frame for a period -> (year, quarter, frame_string).
+
+        For annual periods prefer a full-year frame (``CY2024``); for quarterly prefer
+        a frame carrying a quarter (``CY2024Q4I``). Returns (None, None, None) if no
+        parseable frame is available.
+        """
+        parsed = []
+        for frame in frames:
+            year, quarter = self._parse_frame(frame)
+            if year is not None:
+                parsed.append((year, quarter, frame))
+        if not parsed:
+            return None, None, None
+        if quarterly:
+            with_q = [p for p in parsed if p[1] is not None]
+            return (with_q or parsed)[0]
+        full_year = [p for p in parsed if p[1] is None]
+        return (full_year or parsed)[0]
+
+    def _calendar_year_from_end(self, end: Optional[str]):
+        """Fallback calendar-year rule (replicates SEC's convention).
+
+        A period ending in Jun-Dec maps to its end year; Jan-May maps to the prior
+        year (i.e. the calendar year holding most of the 12-month period).
+        """
+        end_date = self._parse_iso_date(end)
+        if end_date is None:
+            return None
+        return end_date.year if end_date.month >= 6 else end_date.year - 1

@@ -18,6 +18,10 @@ _META_FIELDS: Dict[str, Any] = {
     "period_end": (Optional[str], None),
     "filed_date": (Optional[str], None),
     "form": (Optional[str], None),
+    # SEC-frame-derived calendar alignment for cross-company comparison.
+    "calendar_year": (Optional[int], None),
+    "calendar_quarter": (Optional[int], None),
+    "frame": (Optional[str], None),
 }
 
 # One Optional[float] field per canonical line item, plus the metadata fields.

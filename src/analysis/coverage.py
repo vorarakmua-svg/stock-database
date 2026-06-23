@@ -54,6 +54,7 @@ class CompanyCoverage:
     ticker: str
     sector: str
     fiscal_year: Optional[str]
+    calendar_year: Optional[int] = None
     status: Dict[str, str] = field(default_factory=dict)  # key -> reported/derived/empty
 
     def filled(self, key: str) -> bool:
@@ -69,16 +70,18 @@ def analyze(ticker: str, facts: Dict[str, Any], submissions: Optional[Dict[str, 
 
     annual = parser.extract_annual_financials(facts or {}, years_back=1)
     fiscal_year = None
+    calendar_year = None
     if annual:
         fiscal_year = sorted(annual.keys())[-1]
         period = dict(annual[fiscal_year])
         apply_derivations(period)
+        calendar_year = period.get("calendar_year")
         source_tags = period.get("_source_tags", {})
         for f in CANONICAL_FIELDS:
             if period.get(f.key) is not None:
                 status[f.key] = DERIVED if source_tags.get(f.key) == DERIVED else REPORTED
 
-    return CompanyCoverage(ticker, sector, fiscal_year, status)
+    return CompanyCoverage(ticker, sector, fiscal_year, calendar_year, status)
 
 
 @dataclass

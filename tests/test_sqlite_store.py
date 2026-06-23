@@ -80,6 +80,36 @@ def test_empty_export_returns_none(tmp_path):
     assert store.export([]) is None
 
 
+def _company_with_calendar(ticker, fiscal_year, calendar_year):
+    s = StockData(ticker=ticker, cik="000", company_name=f"{ticker} Inc.")
+    s.financials_annual = {str(fiscal_year): {
+        "fiscal_year": fiscal_year, "calendar_year": calendar_year,
+        "period_end": f"{fiscal_year}-01-31", "revenue": 100.0, "net_income": 10.0,
+        "total_assets": 200.0, "total_equity": 100.0,
+    }}
+    s.add_source("sec_edgar")
+    return s
+
+
+def test_calendar_year_screen_aligns_fiscal_calendars(tmp_path):
+    store = SQLiteStore(tmp_path / "stock.db")
+    # A January filer (fiscal 2026) and a December filer (fiscal 2025) both belong to
+    # macro calendar year 2025 and must be returned together.
+    store.export([
+        _company_with_calendar("JANCO", 2026, 2025),
+        _company_with_calendar("DECCO", 2025, 2025),
+        _company_with_calendar("OLDCO", 2024, 2024),
+    ])
+    conn = sqlite3.connect(tmp_path / "stock.db")
+    try:
+        rows = conn.execute(
+            "SELECT ticker FROM financials_annual WHERE calendar_year=2025 ORDER BY ticker"
+        ).fetchall()
+        assert [r[0] for r in rows] == ["DECCO", "JANCO"]
+    finally:
+        conn.close()
+
+
 def test_migrate_adds_missing_columns(tmp_path):
     db = tmp_path / "stock.db"
     # Simulate an old DB: a companies table without the newer sector_class column.
@@ -97,5 +127,6 @@ def test_migrate_adds_missing_columns(tmp_path):
         # And a new canonical column exists on the financials table.
         fcols = {row[1] for row in conn.execute("PRAGMA table_info(financials_annual)")}
         assert "net_interest_income" in fcols
+        assert "calendar_year" in fcols  # calendar alignment column migrated in
     finally:
         conn.close()

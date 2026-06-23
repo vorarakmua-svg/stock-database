@@ -48,8 +48,8 @@ def main() -> int:
                 continue
             cov = analyze(ticker, facts or {}, subs)
             coverages.append(cov)
-            print(f"[{i}/{len(tickers)}] {ticker:6} {cov.sector:10} FY{cov.fiscal_year}",
-                  file=sys.stderr)
+            print(f"[{i}/{len(tickers)}] {ticker:6} {cov.sector:10} "
+                  f"FY{cov.fiscal_year} -> CY{cov.calendar_year}", file=sys.stderr)
     finally:
         handler.close()
 
