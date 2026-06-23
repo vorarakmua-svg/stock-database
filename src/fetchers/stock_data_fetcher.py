@@ -16,6 +16,7 @@ from ..models.stock_data import StockData
 from ..parsers.calculated_metrics import CalculatedMetrics
 from ..parsers.derived_fields import apply_derivations
 from ..parsers.ttm import compute_ttm
+from ..parsers.unmapped import detect_unmapped
 from ..parsers.xbrl_parser import XBRLParser
 from ..validation.quality import assess_annual
 from .fred_handler import FREDHandler
@@ -143,6 +144,11 @@ class StockDataFetcher:
 
                     stock.merge_parsed_financials(annual, quarterly)
 
+                    # Capture material facts under tags we don't yet map, so
+                    # taxonomy evolution / firm tag variability never silently
+                    # drops data.
+                    stock.unmapped_facts = detect_unmapped(facts)
+
                 # Get insider transactions
                 if stock.cik:
                     transactions = self.sec_handler.get_insider_transactions(
@@ -235,6 +241,7 @@ class StockDataFetcher:
         # Score annual financials (sector-aware) and record findings.
         report = assess_annual(stock.financials_annual, sector=stock.sector_class)
         stock.data_quality = report.as_dict()
+        stock.data_quality["unmapped_tag_count"] = len(stock.unmapped_facts)
         for message in report.warning_messages():
             stock.add_warning(message)
 

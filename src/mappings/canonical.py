@@ -435,3 +435,10 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
 
 # key -> CanonicalField
 CANONICAL_BY_KEY: Dict[str, CanonicalField] = {f.key: f for f in CANONICAL_FIELDS}
+
+# Every raw XBRL tag the registry already maps to a canonical field. Authoritative
+# "what we know about" set — used to detect unmapped (new/variant) tags so taxonomy
+# evolution never silently drops data.
+ALL_MAPPED_TAGS: frozenset = frozenset(
+    tag for field in CANONICAL_FIELDS for tag in field.tags
+)

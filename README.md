@@ -414,6 +414,30 @@ FROM financials_quarterly WHERE ticker = 'AAPL' ORDER BY period_end DESC LIMIT 8
 SELECT ticker, MAX(period_end) AS asof, revenue FROM financials_ttm GROUP BY ticker;
 ```
 
+### Taxonomy evolution & tag variability
+
+The SEC US-GAAP taxonomy changes over time and filers tag identical items differently
+(`us-gaap:Revenues` vs `us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax`). The
+pipeline is designed so this never breaks ingestion or silently loses data:
+
+- **Tags are data, not schema.** Tables use canonical columns and inserts are keyed by
+  concept, never by raw tag — a taxonomy change can't break the schema or queries.
+- **Firm variability is resolved** by ordered candidate-tag lists in
+  `src/mappings/canonical.py` (both revenue tags → `revenue`).
+- **Nothing is silently dropped.** Any *material* fact under a tag not yet in the registry
+  (a new taxonomy element or an unanticipated tag) is captured in the **`unmapped_facts`**
+  table (the tag stored as a row value) — so the data is preserved and visible even before
+  it's mapped.
+- **Evidence-based maintenance loop.** `python coverage_report.py` prints the top unmapped
+  tags ranked by how many companies use them; promote frequent ones into
+  `CANONICAL_FIELDS` and re-run. `python diagnose.py TICKER` shows a company's unmapped count.
+
+```sql
+-- Tags worth mapping next (most widely used, still unmapped):
+SELECT tag, COUNT(*) AS companies, MAX(ABS(value)) AS max_value
+FROM unmapped_facts GROUP BY tag ORDER BY companies DESC, max_value DESC LIMIT 20;
+```
+
 ## Cross-Company Screening (SQLite)
 
 With `sqlite` output enabled (on by default), all tickers are written to a single

@@ -105,6 +105,25 @@ def test_quarterly_and_ttm_persist(tmp_path):
         conn.close()
 
 
+def test_unmapped_facts_persist(tmp_path):
+    s = StockData(ticker="UMC", cik="000", company_name="U Inc.")
+    s.unmapped_facts = [
+        {"tag": "NewRevenueConceptZZZ", "label": "New Revenue", "unit": "USD",
+         "period_end": "2025-09-30", "value": 5e9, "form": "10-K"},
+    ]
+    s.add_source("sec_edgar")
+    SQLiteStore(tmp_path / "stock.db").export([s])
+
+    conn = sqlite3.connect(tmp_path / "stock.db")
+    try:
+        row = conn.execute(
+            "SELECT tag, value FROM unmapped_facts WHERE ticker='UMC'"
+        ).fetchone()
+        assert row == ("NewRevenueConceptZZZ", 5e9)
+    finally:
+        conn.close()
+
+
 def test_empty_export_returns_none(tmp_path):
     store = SQLiteStore(tmp_path / "stock.db")
     assert store.export([]) is None
@@ -163,5 +182,6 @@ def test_migrate_adds_missing_columns(tmp_path):
         tables = {row[0] for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         assert "financials_ttm" in tables  # new table created on existing DB
+        assert "unmapped_facts" in tables  # tag-as-data capture table created too
     finally:
         conn.close()
