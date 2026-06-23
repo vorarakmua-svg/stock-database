@@ -12,9 +12,8 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import List
 
-from .config import AppConfig, SECConfig, YahooConfig, StorageConfig
+from .config import AppConfig, SECConfig, StorageConfig, YahooConfig
 from .fetchers.stock_data_fetcher import StockDataFetcher
 
 
@@ -74,9 +73,16 @@ Examples:
     parser.add_argument(
         "--formats", "-f",
         nargs="+",
-        choices=["json", "csv"],
-        default=["json", "csv"],
-        help="Output formats (default: json csv)"
+        choices=["json", "csv", "sqlite"],
+        default=["json", "csv", "sqlite"],
+        help="Output formats (default: json csv sqlite)"
+    )
+
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help="SQLite database path (default: <output-dir>/output/stock.db)"
     )
 
     parser.add_argument(
@@ -84,6 +90,13 @@ Examples:
         type=int,
         default=10,
         help="Years of historical financial data (default: 10, max available from SEC)"
+    )
+
+    parser.add_argument(
+        "--workers", "-w",
+        type=int,
+        default=4,
+        help="Number of tickers to fetch concurrently (default: 4, 1 = sequential)"
     )
 
     parser.add_argument(
@@ -133,7 +146,7 @@ def main() -> int:
     # Clean tickers
     tickers = [t.upper().strip() for t in args.tickers if t.strip()]
 
-    logger.info(f"Stock Data Fetcher starting")
+    logger.info("Stock Data Fetcher starting")
     logger.info(f"Tickers: {', '.join(tickers)}")
     logger.info(f"Output directory: {args.output_dir}")
     logger.info(f"Formats: {', '.join(args.formats)}")
@@ -145,8 +158,9 @@ def main() -> int:
     config = AppConfig(
         sec=SECConfig(user_agent=args.sec_user_agent),
         yahoo=YahooConfig(),
-        storage=StorageConfig(base_dir=args.output_dir),
+        storage=StorageConfig(base_dir=args.output_dir, db_path=args.db),
         output_formats=args.formats,
+        max_workers=args.workers,
     )
 
     # Run fetcher

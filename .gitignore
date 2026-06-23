@@ -41,6 +41,9 @@ Thumbs.db
 data/cache/
 data/output/json/*.json
 data/output/csv/*.csv
+data/output/*.db
+data/output/*.db-wal
+data/output/*.db-shm
 !data/output/json/.gitkeep
 !data/output/csv/.gitkeep
 

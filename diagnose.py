@@ -13,20 +13,19 @@ import json
 import sys
 from pathlib import Path
 
-
 # Critical fields for DCF modeling
 CRITICAL_FIELDS = {
     "financials": [
-        ("Net Revenue", "Revenue"),
-        ("Net Income",),
-        ("Operating Income",),
-        ("Operating Cash Flow",),
-        ("Capital Expenditures",),
-        ("Total Assets",),
-        ("Total Liabilities",),
-        ("Total Stockholders Equity",),
-        ("Long-Term Debt", "Long-Term Debt Non-Current"),
-        ("Cash and Cash Equivalents",),
+        ("revenue",),
+        ("net_income",),
+        ("operating_income",),
+        ("operating_cash_flow",),
+        ("capex",),
+        ("total_assets",),
+        ("total_liabilities",),
+        ("total_equity",),
+        ("long_term_debt",),
+        ("cash_and_equivalents",),
     ],
     "calculated": [
         "ebitda",
@@ -85,8 +84,8 @@ def check_financials(data: dict) -> list:
             issues.append({
                 "severity": "MEDIUM",
                 "field": primary,
-                "problem": f"Missing in SEC data",
-                "fix": f"Add XBRL tag alternative to src/mappings/xbrl_tags.py"
+                "problem": "Missing in SEC data",
+                "fix": "Add XBRL tag alternative to src/mappings/xbrl_tags.py"
             })
 
     return issues
@@ -215,7 +214,7 @@ def show_available_fields(data: dict):
         fields = sorted(latest.keys())
         for field in fields:
             value = latest[field]
-            if value and field not in ["fiscal_year", "period_end", "form", "filed_date"]:
+            if value and field not in ["fiscal_year", "period_end", "form", "filed_date", "_source_tags"]:
                 if isinstance(value, (int, float)) and abs(value) > 1e6:
                     print(f"  {field}: ${value/1e9:.2f}B")
                 else:
@@ -242,6 +241,17 @@ def main():
     print(f"Data Sources: {data.get('data_sources', [])}")
     print(f"Warnings: {len(data.get('warnings', []))}")
     print(f"Errors: {len(data.get('errors', []))}")
+
+    # Data-quality report from the standardization/validation layer
+    dq = data.get("data_quality") or {}
+    if dq:
+        print(f"\nData Quality Score: {dq.get('score', 'N/A')}/100")
+        findings = dq.get("findings", [])
+        if findings:
+            print(f"Quality findings ({len(findings)}):")
+            for f in findings:
+                period = f" [{f['period']}]" if f.get("period") else ""
+                print(f"  ({f['severity'].upper()}){period} {f['message']}")
 
     # Run checks
     all_issues = []

@@ -2,10 +2,10 @@
 
 import logging
 import re
-from typing import Dict, Any, Optional
 from datetime import date, datetime
+from typing import Any, Dict, Optional
 
-from ..mappings.xbrl_tags import XBRL_SIMPLE_MAPPING, PRIORITY_TAGS
+from ..mappings.canonical import CANONICAL_FIELDS, SIGN_ABS
 
 # Duration bounds (in days) used to distinguish annual vs quarterly periods.
 # A "full year" span is ~365 days; a quarter is ~91 days. Bounds are generous
@@ -33,7 +33,6 @@ class XBRLParser:
             logger: Optional logger instance
         """
         self.logger = logger or logging.getLogger(__name__)
-        self.simple_mapping = XBRL_SIMPLE_MAPPING
 
     # ========== Period helpers ==========
 
@@ -98,145 +97,142 @@ class XBRLParser:
         self,
         facts: Dict[str, Any],
         years_back: int = 5,
-        extract_all: bool = True
     ) -> Dict[str, Dict[str, Any]]:
         """
-        Extract annual financial statements from company facts.
+        Extract standardized annual (10-K) financials, keyed by fiscal year.
+
+        Each period dict uses canonical keys (see ``mappings/canonical.py``) so the
+        same concept is comparable across companies regardless of which XBRL tag a
+        filer used. A ``_source_tags`` map records the tag each value came from.
 
         Args:
             facts: Raw company facts
-            years_back: Number of fiscal years to extract
-            extract_all: If True, extract ALL tags (not just mapped ones)
+            years_back: Number of fiscal years to keep (most recent first)
 
         Returns:
-            Dictionary organized by fiscal year
+            Dictionary organized by fiscal year (string keys).
         """
         us_gaap = facts.get("facts", {}).get("us-gaap", {})
         if not us_gaap:
             return {}
 
-        # Collect all 10-K data points, keyed by the fiscal year each fact covers.
-        annual_data: Dict[int, Dict[str, Any]] = {}
-        # Track the "filed" date behind each stored value so a later (restated)
-        # filing supersedes an earlier one, per (year, field).
-        field_filed: Dict[int, Dict[str, str]] = {}
+        data = self._resolve_canonical(
+            us_gaap,
+            form_set={"10-K", "10-K/A"},
+            valid_fn=self._is_full_year,
+            period_key_fn=self._period_year,
+            quarterly=False,
+        )
 
-        # Determine which tags to extract
-        tags_to_extract = us_gaap.keys() if extract_all else PRIORITY_TAGS
-
-        for tag in tags_to_extract:
-            tag_data = us_gaap.get(tag, {})
-            if not tag_data:
-                continue
-
-            # Get USD values first, then shares, then per-share
-            units = tag_data.get("units", {})
-            values = units.get("USD", []) or units.get("shares", []) or units.get("USD/shares", [])
-
-            for entry in values:
-                form = entry.get("form", "")
-                if form not in ["10-K", "10-K/A"]:
-                    continue
-
-                # Reject quarterly sub-periods reported inside the 10-K.
-                if not self._is_full_year(entry):
-                    continue
-
-                year = self._period_year(entry)
-                if year is None:
-                    continue
-
-                # Initialize / refresh year-level metadata (latest filing wins).
-                meta = annual_data.setdefault(year, {"fiscal_year": year})
-                field_filed.setdefault(year, {})
-                filed = entry.get("filed") or ""
-                if filed >= meta.get("_meta_filed", ""):
-                    meta["_meta_filed"] = filed
-                    meta["filed_date"] = entry.get("filed")
-                    meta["period_end"] = entry.get("end")
-                    meta["form"] = form
-
-                # Add the metric with simple name if mapped, otherwise use raw tag.
-                simple_name = self.simple_mapping.get(tag, tag)
-
-                # Most-recently-filed value wins for the same (year, field).
-                if filed >= field_filed[year].get(simple_name, ""):
-                    annual_data[year][simple_name] = entry.get("val")
-                    field_filed[year][simple_name] = filed
-
-        # Drop internal bookkeeping, sort and limit years.
-        for meta in annual_data.values():
-            meta.pop("_meta_filed", None)
-        sorted_years = sorted(annual_data.keys(), reverse=True)[:years_back]
-        return {str(y): annual_data[y] for y in sorted_years}
+        sorted_years = sorted(data.keys(), reverse=True)[:years_back]
+        return {str(y): data[y] for y in sorted_years}
 
     def extract_quarterly_financials(
         self,
         facts: Dict[str, Any],
         quarters_back: int = 12,
-        extract_all: bool = True
     ) -> Dict[str, Dict[str, Any]]:
         """
-        Extract quarterly financial statements from company facts.
+        Extract standardized quarterly (10-Q) financials, keyed by period-end date.
+
+        Uses the same canonical resolution as :meth:`extract_annual_financials`.
 
         Args:
             facts: Raw company facts
-            quarters_back: Number of quarters to extract
-            extract_all: If True, extract ALL tags (not just mapped ones)
+            quarters_back: Number of quarters to keep (most recent first)
 
         Returns:
-            Dictionary organized by period end date
+            Dictionary organized by period end date.
         """
         us_gaap = facts.get("facts", {}).get("us-gaap", {})
         if not us_gaap:
             return {}
 
-        quarterly_data: Dict[str, Dict[str, Any]] = {}
-        # Track the "filed" date behind each stored value per (period, field).
-        field_filed: Dict[str, Dict[str, str]] = {}
+        data = self._resolve_canonical(
+            us_gaap,
+            form_set={"10-Q", "10-Q/A"},
+            valid_fn=self._is_quarter,
+            period_key_fn=lambda e: e.get("end"),
+            quarterly=True,
+        )
 
-        # Determine which tags to extract
-        tags_to_extract = us_gaap.keys() if extract_all else PRIORITY_TAGS
+        sorted_periods = sorted(data.keys(), reverse=True)[:quarters_back]
+        return {p: data[p] for p in sorted_periods}
 
-        for tag in tags_to_extract:
-            tag_data = us_gaap.get(tag, {})
-            if not tag_data:
-                continue
+    def _resolve_canonical(
+        self,
+        us_gaap: Dict[str, Any],
+        form_set: set,
+        valid_fn,
+        period_key_fn,
+        quarterly: bool,
+    ) -> Dict[Any, Dict[str, Any]]:
+        """Resolve every canonical field for every period from raw us-gaap facts.
 
-            units = tag_data.get("units", {})
-            values = units.get("USD", []) or units.get("shares", []) or units.get("USD/shares", [])
+        For each canonical field, candidate tags are tried in priority order; the
+        highest-priority tag with data for a period wins, and within a tag the
+        most-recently-filed value wins (so restatements supersede originals).
+        """
+        data: Dict[Any, Dict[str, Any]] = {}
+        # (period, canonical_key) -> (tag_priority, filed). Tracks the basis for the
+        # currently stored value so a better candidate can replace it.
+        best: Dict[Any, tuple] = {}
+        # period -> filed date of the entry that set period-level metadata.
+        meta_filed: Dict[Any, str] = {}
 
-            for entry in values:
-                form = entry.get("form", "")
-                if form not in ["10-Q", "10-Q/A"]:
+        for field in CANONICAL_FIELDS:
+            unit_key = field.xbrl_unit
+            for priority, tag in enumerate(field.tags):
+                tag_data = us_gaap.get(tag)
+                if not tag_data:
                     continue
 
-                # Reject full-year (or other non-quarterly) spans inside the 10-Q.
-                if not self._is_quarter(entry):
-                    continue
+                for entry in tag_data.get("units", {}).get(unit_key, []):
+                    if entry.get("form", "") not in form_set:
+                        continue
+                    if not valid_fn(entry):
+                        continue
 
-                period_end = entry.get("end")
-                if not period_end:
-                    continue
+                    period = period_key_fn(entry)
+                    if period is None:
+                        continue
 
-                meta = quarterly_data.setdefault(period_end, {"period_end": period_end})
-                field_filed.setdefault(period_end, {})
-                filed = entry.get("filed") or ""
-                if filed >= meta.get("_meta_filed", ""):
-                    meta["_meta_filed"] = filed
-                    meta["filed_date"] = entry.get("filed")
-                    meta["fiscal_year"] = entry.get("fy")
-                    meta["fiscal_period"] = entry.get("fp")
-                    meta["form"] = form
+                    filed = entry.get("filed") or ""
+                    bkey = (period, field.key)
+                    cur = best.get(bkey)
+                    # Keep the existing value unless this entry is from a
+                    # higher-priority tag, or the same tag filed at least as late.
+                    if cur is not None and not (
+                        priority < cur[0] or (priority == cur[0] and filed >= cur[1])
+                    ):
+                        continue
+                    best[bkey] = (priority, filed)
 
-                simple_name = self.simple_mapping.get(tag, tag)
-                # Most-recently-filed value wins for the same (period, field).
-                if filed >= field_filed[period_end].get(simple_name, ""):
-                    quarterly_data[period_end][simple_name] = entry.get("val")
-                    field_filed[period_end][simple_name] = filed
+                    value = entry.get("val")
+                    if field.sign == SIGN_ABS and isinstance(value, (int, float)):
+                        value = abs(value)
 
-        # Drop internal bookkeeping, sort and limit.
-        for meta in quarterly_data.values():
-            meta.pop("_meta_filed", None)
-        sorted_periods = sorted(quarterly_data.keys(), reverse=True)[:quarters_back]
-        return {p: quarterly_data[p] for p in sorted_periods}
+                    period_dict = data.setdefault(
+                        period, self._init_period_meta(period, quarterly)
+                    )
+                    period_dict[field.key] = value
+                    period_dict.setdefault("_source_tags", {})[field.key] = tag
+
+                    # Period-level metadata follows the latest-filed contributing entry.
+                    if filed >= meta_filed.get(period, ""):
+                        meta_filed[period] = filed
+                        period_dict["filed_date"] = entry.get("filed")
+                        period_dict["period_end"] = entry.get("end")
+                        period_dict["form"] = entry.get("form")
+                        if quarterly:
+                            period_dict["fiscal_year"] = entry.get("fy")
+                            period_dict["fiscal_period"] = entry.get("fp")
+
+        return data
+
+    @staticmethod
+    def _init_period_meta(period: Any, quarterly: bool) -> Dict[str, Any]:
+        """Seed a period dict with its identifying metadata."""
+        if quarterly:
+            return {"period_end": period}
+        return {"fiscal_year": period}

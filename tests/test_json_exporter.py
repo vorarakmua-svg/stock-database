@@ -37,20 +37,17 @@ def test_merge_unions_annual_years(tmp_path):
 
 def test_merge_transactions_dedup_and_sort(tmp_path):
     exporter = JSONExporter(output_dir=tmp_path)
-    existing = [{"transaction_date": "2024-01-01", "reporting_owner": "A",
-                 "shares": 10, "transaction_type": "P"}]
+    existing = [{"accessionNumber": "0001", "filingDate": "2024-01-01", "form": "4"}]
     new = [
-        {"transaction_date": "2024-02-01", "reporting_owner": "B",
-         "shares": 5, "transaction_type": "S"},
-        # duplicate of the existing one
-        {"transaction_date": "2024-01-01", "reporting_owner": "A",
-         "shares": 10, "transaction_type": "P"},
+        {"accessionNumber": "0002", "filingDate": "2024-02-01", "form": "4"},
+        # duplicate of the existing one (same accession number)
+        {"accessionNumber": "0001", "filingDate": "2024-01-01", "form": "4"},
     ]
 
     merged = exporter._merge_transactions(existing, new)
     assert len(merged) == 2  # duplicate collapsed
-    # Sorted by date descending
-    assert merged[0]["transaction_date"] == "2024-02-01"
+    # Sorted by filing date descending
+    assert merged[0]["filingDate"] == "2024-02-01"
 
 
 def test_price_history_snapshots_capped_at_10(tmp_path):

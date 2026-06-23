@@ -1,14 +1,21 @@
 """SEC EDGAR API handler for financial reports and filings."""
 
-import logging
 import json
-from typing import Dict, Any, Optional, List
+import logging
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import requests
 
 from .rate_limiter import RateLimiter, RetryHandler, is_transient_error
+
+# Default time-to-live for cached SEC payloads (companyfacts/submissions).
+# These update at most quarterly, so a week-long cache is safe and slashes
+# repeated network load when re-running over many tickers.
+_DEFAULT_CACHE_TTL_SECONDS = 7 * 24 * 3600
 
 
 class SECHandler:
@@ -37,6 +44,7 @@ class SECHandler:
         max_retries: int = 3,
         base_delay: float = 1.0,
         max_delay: float = 60.0,
+        cache_ttl_seconds: int = _DEFAULT_CACHE_TTL_SECONDS,
     ):
         """
         Initialize SEC EDGAR handler.
@@ -49,10 +57,15 @@ class SECHandler:
             max_retries: Max retry attempts for transient network failures
             base_delay: Initial backoff delay in seconds
             max_delay: Maximum backoff delay cap in seconds
+            cache_ttl_seconds: Lifetime of cached companyfacts/submissions payloads.
+                Set <= 0 to disable on-disk payload caching.
         """
         self.user_agent = user_agent
         self.cache_dir = cache_dir or Path("data/cache")
+        self.cache_ttl_seconds = cache_ttl_seconds
         self.logger = logger or logging.getLogger(__name__)
+        # Guards lazy CIK-map loading when fetching tickers concurrently.
+        self._cik_lock = threading.Lock()
 
         self.rate_limiter = RateLimiter(
             min_interval=rate_limit_delay,
@@ -109,6 +122,34 @@ class SECHandler:
             retryable_exceptions=(requests.exceptions.RequestException,),
             should_retry=is_transient_error,
         )
+
+    # ---- on-disk payload cache (companyfacts/submissions) ----------------
+
+    def _payload_cache_path(self, name: str, cik: str) -> Path:
+        return self.cache_dir / f"{name}_CIK{cik}.json"
+
+    def _read_payload_cache(self, path: Path) -> Optional[Dict[str, Any]]:
+        """Return cached JSON if present and fresher than the TTL, else None."""
+        if self.cache_ttl_seconds <= 0 or not path.exists():
+            return None
+        if (time.time() - path.stat().st_mtime) > self.cache_ttl_seconds:
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            self.logger.debug(f"Cache read failed for {path}: {e}")
+            return None
+
+    def _write_payload_cache(self, path: Path, data: Dict[str, Any]) -> None:
+        if self.cache_ttl_seconds <= 0:
+            return
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except Exception as e:
+            self.logger.debug(f"Cache write failed for {path}: {e}")
 
     def fetch_all(self, ticker: str) -> Dict[str, Any]:
         """
@@ -172,9 +213,11 @@ class SECHandler:
         """
         ticker = ticker.upper()
 
-        # Load mapping if not cached
+        # Load mapping if not cached (lock guards concurrent first-use).
         if self._cik_mapping is None:
-            self._load_cik_mapping()
+            with self._cik_lock:
+                if self._cik_mapping is None:
+                    self._load_cik_mapping()
 
         # _load_cik_mapping leaves the mapping None if the fetch failed; treat as
         # empty for this lookup (the next call will retry the load).
@@ -251,8 +294,14 @@ class SECHandler:
             Dictionary containing company facts, or None on error
         """
         cik = str(cik).zfill(10)
-        url = f"{self.SEC_BASE_URL}/api/xbrl/companyfacts/CIK{cik}.json"
 
+        cache_path = self._payload_cache_path("companyfacts", cik)
+        cached = self._read_payload_cache(cache_path)
+        if cached is not None:
+            self.logger.debug(f"companyfacts cache hit for CIK {cik}")
+            return cached
+
+        url = f"{self.SEC_BASE_URL}/api/xbrl/companyfacts/CIK{cik}.json"
         self.logger.debug(f"Fetching company facts from {url}")
 
         response = self._request(url, timeout=60)
@@ -266,7 +315,9 @@ class SECHandler:
         # swallowed as "no data". raise_for_status() propagates to fetch_all, which
         # records it as company_facts_error.
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        self._write_payload_cache(cache_path, data)
+        return data
 
     def get_submissions(self, cik: str) -> Optional[Dict[str, Any]]:
         """
@@ -279,8 +330,14 @@ class SECHandler:
             Dictionary containing submissions data, or None on error
         """
         cik = str(cik).zfill(10)
-        url = f"{self.SEC_BASE_URL}/submissions/CIK{cik}.json"
 
+        cache_path = self._payload_cache_path("submissions", cik)
+        cached = self._read_payload_cache(cache_path)
+        if cached is not None:
+            self.logger.debug(f"submissions cache hit for CIK {cik}")
+            return cached
+
+        url = f"{self.SEC_BASE_URL}/submissions/CIK{cik}.json"
         self.logger.debug(f"Fetching submissions from {url}")
 
         response = self._request(url, timeout=30)
@@ -293,7 +350,7 @@ class SECHandler:
         data = response.json()
 
         # Extract relevant fields
-        return {
+        result = {
             "entity_type": data.get("entityType"),
             "sic": data.get("sic"),
             "sic_description": data.get("sicDescription"),
@@ -310,6 +367,9 @@ class SECHandler:
             "phone": data.get("phone"),
             "filings": self._extract_recent_filings(data.get("filings", {})),
         }
+
+        self._write_payload_cache(cache_path, result)
+        return result
 
     def _extract_recent_filings(
         self,

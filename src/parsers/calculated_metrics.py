@@ -12,8 +12,8 @@ Provides automatic calculation of derived metrics from SEC/Yahoo data:
 """
 
 import logging
-from typing import Dict, Any, Optional, List
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 
 class CalculatedMetrics:
@@ -154,41 +154,16 @@ class CalculatedMetrics:
 
         Falls back to: Net Income + Interest + Taxes + D&A
         """
-        operating_income = self._get_value(financials, [
-            "Operating Income", "OperatingIncomeLoss"
-        ])
-        da = self._get_value(financials, [
-            "Depreciation and Amortization",
-            "DepreciationDepletionAndAmortization",
-            "DepreciationAndAmortization",
-            "Depreciation",
-            "DepreciationAmortizationAndAccretionNet",
-            "DepreciationAmortizationAndOther",
-        ])
-
-        # If no combined D&A, sum Depreciation + Amortization separately
-        if da is None:
-            depreciation = self._get_value(financials, [
-                "Depreciation", "DepreciationNonproduction"
-            ])
-            amortization = self._get_value(financials, [
-                "Amortization of Intangibles", "AmortizationOfIntangibleAssets"
-            ])
-            if depreciation is not None or amortization is not None:
-                da = (depreciation or 0) + (amortization or 0)
+        operating_income = self._get_value(financials, ["operating_income"])
+        da = self._get_value(financials, ["depreciation_amortization"])
 
         if operating_income is not None and da is not None:
             return operating_income + da
 
         # Fallback calculation
-        net_income = self._get_value(financials, ["Net Income", "NetIncomeLoss"])
-        interest = self._get_value(financials, [
-            "Interest Expense", "InterestExpense", "InterestExpenseDebt",
-            "Interest Paid", "InterestPaid", "InterestPaidNet"
-        ])
-        taxes = self._get_value(financials, [
-            "Income Tax Expense", "IncomeTaxExpenseBenefit"
-        ])
+        net_income = self._get_value(financials, ["net_income"])
+        interest = self._get_value(financials, ["interest_expense"])
+        taxes = self._get_value(financials, ["income_tax_expense"])
 
         if all(v is not None for v in [net_income, da]):
             result = net_income + (da or 0)
@@ -202,9 +177,7 @@ class CalculatedMetrics:
 
     def _calculate_ebit(self, financials: Dict[str, Any]) -> Optional[float]:
         """Calculate EBIT (Operating Income)."""
-        return self._get_value(financials, [
-            "Operating Income", "OperatingIncomeLoss"
-        ])
+        return self._get_value(financials, ["operating_income"])
 
     def _calculate_nopat(self, financials: Dict[str, Any]) -> Optional[float]:
         """
@@ -213,20 +186,15 @@ class CalculatedMetrics:
         NOPAT (Net Operating Profit After Tax) used in ROIC calculation.
         """
         operating_income = self._get_value(financials, [
-            "Operating Income", "OperatingIncomeLoss"
+            "operating_income"
         ])
 
         if operating_income is None:
             return None
 
         # Calculate effective tax rate
-        pretax_income = self._get_value(financials, [
-            "Pre-Tax Income", "IncomeLossFromContinuingOperationsBeforeIncomeTaxes",
-            "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"
-        ])
-        tax_expense = self._get_value(financials, [
-            "Income Tax Expense", "IncomeTaxExpenseBenefit"
-        ])
+        pretax_income = self._get_value(financials, ["pretax_income"])
+        tax_expense = self._get_value(financials, ["income_tax_expense"])
 
         if pretax_income and tax_expense and pretax_income > 0:
             tax_rate = tax_expense / pretax_income
@@ -240,14 +208,8 @@ class CalculatedMetrics:
 
     def _calculate_fcf(self, financials: Dict[str, Any]) -> Optional[float]:
         """Calculate Free Cash Flow = Operating Cash Flow - CapEx."""
-        ocf = self._get_value(financials, [
-            "Operating Cash Flow",
-            "NetCashProvidedByUsedInOperatingActivities"
-        ])
-        capex = self._get_value(financials, [
-            "Capital Expenditures",
-            "PaymentsToAcquirePropertyPlantAndEquipment"
-        ])
+        ocf = self._get_value(financials, ["operating_cash_flow"])
+        capex = self._get_value(financials, ["capex"])
 
         if ocf is not None and capex is not None:
             # CapEx is typically negative in cash flow statement
@@ -264,10 +226,7 @@ class CalculatedMetrics:
         if fcf is None:
             return None
 
-        revenue = self._get_value(financials, [
-            "Net Revenue", "Revenue", "Revenues",
-            "RevenueFromContractWithCustomerExcludingAssessedTax"
-        ])
+        revenue = self._get_value(financials, ["revenue"])
 
         if revenue and revenue > 0:
             return fcf / revenue
@@ -283,10 +242,7 @@ class CalculatedMetrics:
         if fcf is None:
             return None
 
-        interest = self._get_value(financials, [
-            "Interest Expense", "InterestExpense", "InterestExpenseDebt",
-            "InterestPaidNet", "InterestPaid"
-        ])
+        interest = self._get_value(financials, ["interest_expense"])
 
         if interest is not None:
             return fcf - abs(interest)
@@ -301,17 +257,10 @@ class CalculatedMetrics:
         Negative value means net cash position.
         """
         total_debt = self._calculate_total_debt(financials)
-        cash = self._get_value(financials, [
-            "Cash and Cash Equivalents",
-            "CashAndCashEquivalentsAtCarryingValue"
-        ])
+        cash = self._get_value(financials, ["cash_and_equivalents"])
 
         # Also include marketable securities
-        marketable = self._get_value(financials, [
-            "Marketable Securities Current",
-            "MarketableSecuritiesCurrent",
-            "ShortTermInvestments"
-        ])
+        marketable = self._get_value(financials, ["short_term_investments"])
 
         total_cash = (cash or 0) + (marketable or 0)
 
@@ -321,17 +270,9 @@ class CalculatedMetrics:
 
     def _calculate_total_debt(self, financials: Dict[str, Any]) -> Optional[float]:
         """Calculate Total Debt = Long-term Debt + Short-term Debt."""
-        long_term = self._get_value(financials, [
-            "Long-Term Debt", "LongTermDebt", "Long-Term Debt Non-Current",
-            "LongTermDebtNoncurrent"
-        ])
-        short_term = self._get_value(financials, [
-            "Short-Term Debt", "ShortTermBorrowings",
-            "DebtCurrent", "LongTermDebtCurrent"
-        ])
-        commercial_paper = self._get_value(financials, [
-            "Commercial Paper", "CommercialPaper"
-        ])
+        long_term = self._get_value(financials, ["long_term_debt"])
+        short_term = self._get_value(financials, ["short_term_debt"])
+        commercial_paper = self._get_value(financials, ["commercial_paper"])
 
         total = 0
         has_data = False
@@ -350,12 +291,8 @@ class CalculatedMetrics:
 
     def _calculate_working_capital(self, financials: Dict[str, Any]) -> Optional[float]:
         """Calculate Working Capital = Current Assets - Current Liabilities."""
-        current_assets = self._get_value(financials, [
-            "Current Assets", "AssetsCurrent"
-        ])
-        current_liabilities = self._get_value(financials, [
-            "Current Liabilities", "LiabilitiesCurrent"
-        ])
+        current_assets = self._get_value(financials, ["current_assets"])
+        current_liabilities = self._get_value(financials, ["current_liabilities"])
 
         if current_assets is not None and current_liabilities is not None:
             return current_assets - current_liabilities
@@ -367,14 +304,9 @@ class CalculatedMetrics:
 
         Or alternatively: Total Assets - Non-operating Assets - Current Liabilities (excl. debt)
         """
-        equity = self._get_value(financials, [
-            "Total Stockholders Equity", "StockholdersEquity"
-        ])
+        equity = self._get_value(financials, ["total_equity"])
         total_debt = self._calculate_total_debt(financials)
-        cash = self._get_value(financials, [
-            "Cash and Cash Equivalents",
-            "CashAndCashEquivalentsAtCarryingValue"
-        ])
+        cash = self._get_value(financials, ["cash_and_equivalents"])
 
         if equity is not None and total_debt is not None:
             invested = equity + total_debt - (cash or 0)
@@ -401,8 +333,8 @@ class CalculatedMetrics:
 
     def _calculate_roa(self, financials: Dict[str, Any]) -> Optional[float]:
         """Calculate Return on Assets = Net Income / Total Assets."""
-        net_income = self._get_value(financials, ["Net Income", "NetIncomeLoss"])
-        total_assets = self._get_value(financials, ["Total Assets", "Assets"])
+        net_income = self._get_value(financials, ["net_income"])
+        total_assets = self._get_value(financials, ["total_assets"])
 
         if net_income is not None and total_assets and total_assets > 0:
             return net_income / total_assets
@@ -410,9 +342,9 @@ class CalculatedMetrics:
 
     def _calculate_roe(self, financials: Dict[str, Any]) -> Optional[float]:
         """Calculate Return on Equity = Net Income / Stockholders Equity."""
-        net_income = self._get_value(financials, ["Net Income", "NetIncomeLoss"])
+        net_income = self._get_value(financials, ["net_income"])
         equity = self._get_value(financials, [
-            "Total Stockholders Equity", "StockholdersEquity"
+            "total_equity"
         ])
 
         if net_income is not None and equity and equity > 0:
@@ -428,14 +360,9 @@ class CalculatedMetrics:
         Higher is better; below 1.5 is concerning.
         """
         ebit = self._get_value(financials, [
-            "Operating Income", "OperatingIncomeLoss"
+            "operating_income"
         ])
-        interest = self._get_value(financials, [
-            "Interest Expense", "InterestExpense", "InterestExpenseDebt",
-            "InterestAndDebtExpense", "InterestPaidNet", "InterestPaid",
-            "Interest Paid", "Interest Paid Net",
-            "InterestExpenseNonoperating", "FinanceLeaseInterestExpense"
-        ])
+        interest = self._get_value(financials, ["interest_expense"])
 
         if ebit is not None and interest and interest > 0:
             return ebit / interest
@@ -459,11 +386,8 @@ class CalculatedMetrics:
 
     def _calculate_asset_turnover(self, financials: Dict[str, Any]) -> Optional[float]:
         """Calculate Asset Turnover = Revenue / Total Assets."""
-        revenue = self._get_value(financials, [
-            "Net Revenue", "Revenue", "Revenues",
-            "RevenueFromContractWithCustomerExcludingAssessedTax"
-        ])
-        total_assets = self._get_value(financials, ["Total Assets", "Assets"])
+        revenue = self._get_value(financials, ["revenue"])
+        total_assets = self._get_value(financials, ["total_assets"])
 
         if revenue is not None and total_assets and total_assets > 0:
             return revenue / total_assets
@@ -471,10 +395,8 @@ class CalculatedMetrics:
 
     def _calculate_inventory_turnover(self, financials: Dict[str, Any]) -> Optional[float]:
         """Calculate Inventory Turnover = COGS / Average Inventory."""
-        cogs = self._get_value(financials, [
-            "Cost of Goods Sold", "CostOfGoodsSold", "CostOfRevenue"
-        ])
-        inventory = self._get_value(financials, ["Inventory", "InventoryNet"])
+        cogs = self._get_value(financials, ["cost_of_revenue"])
+        inventory = self._get_value(financials, ["inventory"])
 
         if cogs is not None and inventory and inventory > 0:
             return cogs / inventory
@@ -482,13 +404,8 @@ class CalculatedMetrics:
 
     def _calculate_receivables_turnover(self, financials: Dict[str, Any]) -> Optional[float]:
         """Calculate Receivables Turnover = Revenue / Accounts Receivable."""
-        revenue = self._get_value(financials, [
-            "Net Revenue", "Revenue", "Revenues",
-            "RevenueFromContractWithCustomerExcludingAssessedTax"
-        ])
-        receivables = self._get_value(financials, [
-            "Accounts Receivable", "AccountsReceivableNetCurrent"
-        ])
+        revenue = self._get_value(financials, ["revenue"])
+        receivables = self._get_value(financials, ["accounts_receivable"])
 
         if revenue is not None and receivables and receivables > 0:
             return revenue / receivables
@@ -510,18 +427,12 @@ class CalculatedMetrics:
 
     def _calculate_gross_margin(self, financials: Dict[str, Any]) -> Optional[float]:
         """Calculate Gross Margin = Gross Profit / Revenue."""
-        gross_profit = self._get_value(financials, ["Gross Profit", "GrossProfit"])
-        revenue = self._get_value(financials, [
-            "Net Revenue", "Revenue", "Revenues",
-            "RevenueFromContractWithCustomerExcludingAssessedTax"
-        ])
+        gross_profit = self._get_value(financials, ["gross_profit"])
+        revenue = self._get_value(financials, ["revenue"])
 
         # If no direct Gross Profit, calculate from Revenue - Cost of Revenue
         if gross_profit is None and revenue:
-            cost_of_revenue = self._get_value(financials, [
-                "Cost of Revenue", "CostOfRevenue", "CostOfGoodsAndServicesSold",
-                "Cost of Goods Sold", "CostOfGoodsSold"
-            ])
+            cost_of_revenue = self._get_value(financials, ["cost_of_revenue"])
             if cost_of_revenue is not None:
                 gross_profit = revenue - cost_of_revenue
 
@@ -532,12 +443,9 @@ class CalculatedMetrics:
     def _calculate_operating_margin(self, financials: Dict[str, Any]) -> Optional[float]:
         """Calculate Operating Margin = Operating Income / Revenue."""
         operating_income = self._get_value(financials, [
-            "Operating Income", "OperatingIncomeLoss"
+            "operating_income"
         ])
-        revenue = self._get_value(financials, [
-            "Net Revenue", "Revenue", "Revenues",
-            "RevenueFromContractWithCustomerExcludingAssessedTax"
-        ])
+        revenue = self._get_value(financials, ["revenue"])
 
         if operating_income is not None and revenue and revenue > 0:
             return operating_income / revenue
@@ -545,11 +453,8 @@ class CalculatedMetrics:
 
     def _calculate_net_margin(self, financials: Dict[str, Any]) -> Optional[float]:
         """Calculate Net Margin = Net Income / Revenue."""
-        net_income = self._get_value(financials, ["Net Income", "NetIncomeLoss"])
-        revenue = self._get_value(financials, [
-            "Net Revenue", "Revenue", "Revenues",
-            "RevenueFromContractWithCustomerExcludingAssessedTax"
-        ])
+        net_income = self._get_value(financials, ["net_income"])
+        revenue = self._get_value(financials, ["revenue"])
 
         if net_income is not None and revenue and revenue > 0:
             return net_income / revenue
@@ -562,10 +467,7 @@ class CalculatedMetrics:
         if ebitda is None:
             return None
 
-        revenue = self._get_value(financials, [
-            "Net Revenue", "Revenue", "Revenues",
-            "RevenueFromContractWithCustomerExcludingAssessedTax"
-        ])
+        revenue = self._get_value(financials, ["revenue"])
 
         if revenue and revenue > 0:
             return ebitda / revenue
@@ -602,10 +504,7 @@ class CalculatedMetrics:
         if ev is None:
             return None
 
-        revenue = self._get_value(financials, [
-            "Net Revenue", "Revenue", "Revenues",
-            "RevenueFromContractWithCustomerExcludingAssessedTax"
-        ])
+        revenue = self._get_value(financials, ["revenue"])
 
         if revenue and revenue > 0:
             return ev / revenue

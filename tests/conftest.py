@@ -93,32 +93,33 @@ def sample_company_facts():
 
 @pytest.fixture
 def sample_financials():
-    """A single fiscal year's financials, keyed by the parser's simple names.
+    """A single fiscal year's financials, keyed by canonical field names.
 
-    Shaped the way ``CalculatedMetrics`` and ``StockData.to_summary`` consume it.
+    Shaped the way ``CalculatedMetrics`` and ``StockData.to_summary`` consume it
+    after standardization (see ``src/mappings/canonical.py``).
     """
     return {
         "fiscal_year": 2024,
-        "Revenue": 1000.0,
-        "Net Income": 150.0,
-        "Operating Income": 200.0,
-        "Gross Profit": 400.0,
-        "Operating Cash Flow": 250.0,
-        "Capital Expenditures": 50.0,
-        "Depreciation and Amortization": 40.0,
-        "Total Assets": 2000.0,
-        "Total Stockholders Equity": 800.0,
-        "Long-Term Debt": 300.0,
-        "Short-Term Debt": 100.0,
-        "Cash and Cash Equivalents": 120.0,
-        "Interest Expense": 20.0,
-        "Income Tax Expense": 50.0,
-        "Pre-Tax Income": 200.0,
-        "Current Assets": 600.0,
-        "Current Liabilities": 300.0,
-        "Accounts Receivable": 100.0,
-        "Inventory": 80.0,
-        "Cost of Goods Sold": 600.0,
+        "revenue": 1000.0,
+        "net_income": 150.0,
+        "operating_income": 200.0,
+        "gross_profit": 400.0,
+        "operating_cash_flow": 250.0,
+        "capex": 50.0,
+        "depreciation_amortization": 40.0,
+        "total_assets": 2000.0,
+        "total_equity": 800.0,
+        "long_term_debt": 300.0,
+        "short_term_debt": 100.0,
+        "cash_and_equivalents": 120.0,
+        "interest_expense": 20.0,
+        "income_tax_expense": 50.0,
+        "pretax_income": 200.0,
+        "current_assets": 600.0,
+        "current_liabilities": 300.0,
+        "accounts_receivable": 100.0,
+        "inventory": 80.0,
+        "cost_of_revenue": 600.0,
     }
 
 

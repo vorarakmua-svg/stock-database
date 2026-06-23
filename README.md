@@ -75,7 +75,9 @@ python -m src.main AAPL -v
 |--------|-------------|---------|
 | `tickers` | Stock ticker symbols (required) | - |
 | `--output-dir`, `-o` | Base output directory | `./data` |
-| `--formats`, `-f` | Output formats (`json`, `csv`) | `json csv` |
+| `--formats`, `-f` | Output formats (`json`, `csv`, `sqlite`) | `json csv sqlite` |
+| `--db` | SQLite database path | `<output-dir>/output/stock.db` |
+| `--workers`, `-w` | Tickers fetched concurrently (1 = sequential) | `4` |
 | `--years` | Years of historical data | `10` |
 | `--no-yahoo` | Skip Yahoo Finance data | `false` |
 | `--no-sec` | Skip SEC EDGAR data | `false` |
@@ -331,6 +333,41 @@ SEC EDGAR requires a valid User-Agent header. Update the default in production:
 ```bash
 python -m src.main AAPL --sec-user-agent "YourCompany your@email.com"
 ```
+
+## Data Standardization & Quality
+
+Different companies report the same concept under different US-GAAP XBRL tags
+(e.g. `Revenues` vs `RevenueFromContractWithCustomerExcludingAssessedTax` vs
+`SalesRevenueNet`). This pipeline resolves every concept to a stable **canonical
+field** (`revenue`, `net_income`, `operating_cash_flow`, …) defined in
+`src/mappings/canonical.py`, so financials are directly comparable across companies.
+Each period also carries a `_source_tags` map recording which raw tag each value
+came from.
+
+Every company is scored by a data-quality pass (`src/validation/quality.py`) that
+checks required fields, accounting identities (Assets = Liabilities + Equity,
+Gross Profit = Revenue − COGS), sign conventions, and year-over-year continuity.
+The result is stored under `data_quality` (score 0–100 + findings) and surfaced by
+`python diagnose.py TICKER`.
+
+## Cross-Company Screening (SQLite)
+
+With `sqlite` output enabled (on by default), all tickers are written to a single
+queryable database at `data/output/stock.db` with consistent, canonical columns —
+so you can screen across your whole universe:
+
+```sql
+-- High-quality compounders: strong returns, modest leverage
+SELECT f.ticker, f.fiscal_year, m.roic, m.net_margin, m.debt_to_ebitda
+FROM financials_annual f
+JOIN metrics_annual m ON f.ticker = m.ticker AND f.fiscal_year = m.fiscal_year
+WHERE m.roic > 0.15 AND m.debt_to_ebitda < 3
+ORDER BY m.roic DESC;
+```
+
+Tables: `companies`, `financials_annual`, `financials_quarterly`, `metrics_annual`,
+`market_snapshots`, `collection_runs`. All writes are idempotent upserts, so re-runs
+update in place.
 
 ## Development
 

@@ -1,11 +1,11 @@
 """Yahoo Finance data handler using yfinance library."""
 
 import logging
-from typing import Dict, Any, Optional, List
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-import yfinance as yf
 import pandas as pd
+import yfinance as yf
 
 from .rate_limiter import RateLimiter
 
@@ -408,7 +408,10 @@ class YahooHandler:
                 "period_avg": float(close_prices.mean()),
 
                 # Returns
-                "total_return": float((close_prices.iloc[-1] / close_prices.iloc[0] - 1)) if len(close_prices) > 1 else None,
+                "total_return": (
+                    float((close_prices.iloc[-1] / close_prices.iloc[0] - 1))
+                    if len(close_prices) > 1 else None
+                ),
                 "cagr": self._calculate_cagr(close_prices),
 
                 # Volatility
@@ -626,7 +629,10 @@ class YahooHandler:
 
                 result["dividend_payments"] = div_records
                 result["total_payments"] = len(div_records)
-                result["years_of_data"] = (dividends.index[-1] - dividends.index[0]).days / 365.25 if len(dividends) > 1 else 0
+                result["years_of_data"] = (
+                    (dividends.index[-1] - dividends.index[0]).days / 365.25
+                    if len(dividends) > 1 else 0
+                )
 
                 # Calculate annual dividends
                 annual_dividends = dividends.resample('YE').sum()
@@ -648,9 +654,14 @@ class YahooHandler:
                 # Check dividend consistency (years without cut)
                 if len(annual_dividends) >= 2:
                     annual_list = annual_dividends[annual_dividends > 0].tolist()
-                    increases = sum(1 for i in range(1, len(annual_list)) if annual_list[i] >= annual_list[i-1])
+                    increases = sum(
+                        1 for i in range(1, len(annual_list))
+                        if annual_list[i] >= annual_list[i - 1]
+                    )
                     result["dividend_increases"] = increases
-                    result["dividend_consistency"] = increases / (len(annual_list) - 1) if len(annual_list) > 1 else None
+                    result["dividend_consistency"] = (
+                        increases / (len(annual_list) - 1) if len(annual_list) > 1 else None
+                    )
 
             else:
                 result["dividend_payments"] = []
