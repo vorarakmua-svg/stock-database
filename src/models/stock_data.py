@@ -52,6 +52,10 @@ class StockData:
     # Insider transactions (from SEC Form 4)
     insider_transactions: List[Dict[str, Any]] = field(default_factory=list)
 
+    # Material us-gaap facts whose tag isn't yet in the canonical registry
+    # (taxonomy evolution / firm tag variability) — captured so nothing is lost.
+    unmapped_facts: List[Dict[str, Any]] = field(default_factory=list)
+
     # Historical price data and statistics (from Yahoo)
     price_history: Dict[str, Any] = field(default_factory=dict)
 

@@ -265,6 +265,16 @@ def main():
     if ttm:
         print(f"TTM periods: {len(ttm)}")
 
+    # Unmapped tags: material us-gaap facts not yet in the canonical registry
+    unmapped = data.get("unmapped_facts", [])
+    if unmapped:
+        print(f"\nUnmapped material tags: {len(unmapped)} (captured in unmapped_facts; "
+              f"promote frequent ones to src/mappings/canonical.py)")
+        for f in unmapped[:5]:
+            v = f.get("value")
+            vs = f"${v/1e9:.2f}B" if isinstance(v, (int, float)) else "?"
+            print(f"  {vs:>12}  {f.get('tag')}")
+
     # Data-quality report from the standardization/validation layer
     dq = data.get("data_quality") or {}
     if dq:

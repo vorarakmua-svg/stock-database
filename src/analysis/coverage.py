@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 from ..mappings.canonical import CANONICAL_BY_KEY, CANONICAL_FIELDS
 from ..mappings.sectors import SPECIALIZED_SECTORS, classify_submissions
 from ..parsers.derived_fields import apply_derivations
+from ..parsers.unmapped import detect_unmapped
 from ..parsers.xbrl_parser import XBRLParser
 
 # Fields every company should have regardless of sector (the comparability anchors).
@@ -56,6 +57,7 @@ class CompanyCoverage:
     fiscal_year: Optional[str]
     calendar_year: Optional[int] = None
     status: Dict[str, str] = field(default_factory=dict)  # key -> reported/derived/empty
+    unmapped: List[Dict[str, Any]] = field(default_factory=list)  # material unmapped tags
 
     def filled(self, key: str) -> bool:
         return self.status.get(key) in (REPORTED, DERIVED)
@@ -81,7 +83,8 @@ def analyze(ticker: str, facts: Dict[str, Any], submissions: Optional[Dict[str, 
             if period.get(f.key) is not None:
                 status[f.key] = DERIVED if source_tags.get(f.key) == DERIVED else REPORTED
 
-    return CompanyCoverage(ticker, sector, fiscal_year, calendar_year, status)
+    return CompanyCoverage(ticker, sector, fiscal_year, calendar_year, status,
+                           detect_unmapped(facts or {}))
 
 
 @dataclass
@@ -90,6 +93,9 @@ class CoverageSummary:
     universal_core: Dict[str, float]                 # field -> fill rate (0..1)
     sector_core: Dict[str, Dict[str, float]]         # sector -> {field -> fill rate}
     gaps: List[str]                                  # human-readable gap lines
+    # Unmapped tags ranked by how many companies use them (tag, n_companies,
+    # example_value) — an evidence-based worklist of tags to add to the registry.
+    unmapped_top: List[tuple] = field(default_factory=list)
 
 
 def _sector_core_fields(sector: str) -> List[str]:
@@ -131,7 +137,21 @@ def summarize(coverages: List[CompanyCoverage]) -> CoverageSummary:
                 parts.append(f"{c.sector}-core: {sector_missing}")
             gaps.append(f"{c.ticker} ({c.sector}, FY{c.fiscal_year}) -> " + "; ".join(parts))
 
-    return CoverageSummary(n, universal, sector_core, gaps)
+    # Aggregate unmapped tags across the universe: how many companies use each, plus
+    # an example value. Ranked by frequency = a worklist of tags to map next.
+    tag_companies: Dict[str, int] = defaultdict(int)
+    tag_example: Dict[str, Any] = {}
+    for c in coverages:
+        for fact in c.unmapped:
+            tag = fact["tag"]
+            tag_companies[tag] += 1
+            tag_example.setdefault(tag, fact.get("value"))
+    unmapped_top = sorted(
+        ((tag, cnt, tag_example.get(tag)) for tag, cnt in tag_companies.items()),
+        key=lambda x: (x[1], abs(x[2] or 0)), reverse=True,
+    )[:25]
+
+    return CoverageSummary(n, universal, sector_core, gaps, unmapped_top)
 
 
 def format_summary(summary: CoverageSummary) -> str:
@@ -156,6 +176,12 @@ def format_summary(summary: CoverageSummary) -> str:
         lines.extend(f"  - {g}" for g in summary.gaps)
     else:
         lines.append("  none — full core coverage across the universe")
+
+    if summary.unmapped_top:
+        lines.append("\nTop unmapped tags (worklist — tag: #companies, example value):")
+        for tag, cnt, example in summary.unmapped_top:
+            ex = f"{example/1e9:,.1f}B" if isinstance(example, (int, float)) else "?"
+            lines.append(f"  {cnt:>3} cos  {tag}  (e.g. {ex})")
 
     lines.append("=" * 64)
     return "\n".join(lines)

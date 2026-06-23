@@ -86,3 +86,21 @@ def test_coverage_analyze_and_summarize():
         assert summary.universal_core[key] == 1.0
     # ...so no gap line cites a missing *universal* field (sector-core may differ).
     assert all("universal:" not in g for g in summary.gaps)
+
+
+def test_coverage_aggregates_unmapped_tags():
+    # Two companies both report a material value under the same unmapped tag.
+    def co(ticker):
+        facts = _facts(
+            Revenues=_annual_usd(1000),
+            NetIncomeLoss=_annual_usd(100),
+            Assets=_instant_usd(2000),
+            StockholdersEquity=_instant_usd(800),
+            NetCashProvidedByUsedInOperatingActivities=_annual_usd(200),
+            FutureMysteryTagZZZ=_annual_usd(9_000_000_000),  # material, unmapped
+        )
+        return analyze(ticker, facts, {"sic": "3571"})
+
+    summary = summarize([co("AAA"), co("BBB")])
+    top = {tag: cnt for tag, cnt, _ex in summary.unmapped_top}
+    assert top.get("FutureMysteryTagZZZ") == 2  # used by both companies

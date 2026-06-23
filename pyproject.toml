@@ -59,6 +59,7 @@ files = [
     "src/validation",
     "src/parsers/derived_fields.py",
     "src/parsers/ttm.py",
+    "src/parsers/unmapped.py",
     "src/analysis",
     "src/exporters/sqlite_store.py",
 ]

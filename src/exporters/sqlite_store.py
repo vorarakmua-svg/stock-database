@@ -146,6 +146,23 @@ class SQLiteStore:
                 quality_score INTEGER,
                 PRIMARY KEY (ticker, collected_at)
             );
+
+            -- Material us-gaap facts under tags not yet in the canonical registry.
+            -- The tag is a row VALUE (not a column), so new taxonomy tags never
+            -- require a schema change and material data is never silently lost.
+            CREATE TABLE IF NOT EXISTS unmapped_facts (
+                ticker TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                label TEXT,
+                unit TEXT,
+                period_end TEXT,
+                value REAL,
+                form TEXT,
+                collected_at TEXT,
+                PRIMARY KEY (ticker, tag)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_unmapped_tag ON unmapped_facts (tag);
             """
         )
 
@@ -328,3 +345,16 @@ class SQLiteStore:
             "error_count": len(stock.errors),
             "quality_score": quality_score,
         })
+
+        # unmapped_facts (tags not yet in the canonical registry; tag is a row value)
+        for fact in (stock.unmapped_facts or []):
+            self._upsert(conn, "unmapped_facts", ["ticker", "tag"], {
+                "ticker": stock.ticker,
+                "tag": fact.get("tag"),
+                "label": fact.get("label"),
+                "unit": fact.get("unit"),
+                "period_end": fact.get("period_end"),
+                "value": fact.get("value"),
+                "form": fact.get("form"),
+                "collected_at": collected_at,
+            })
