@@ -19,6 +19,8 @@ class StockData:
     ticker: str
     cik: Optional[str] = None
     company_name: Optional[str] = None
+    # Sector class derived from SIC (bank/insurance/reit/utility/energy/general)
+    sector_class: Optional[str] = None
 
     # Collection metadata
     collected_at: datetime = field(default_factory=datetime.now)
@@ -295,6 +297,9 @@ class StockData:
             # Update company name from SEC if not set
             if not self.company_name and sec_data["submissions"]:
                 self.company_name = sec_data["submissions"].get("name")
+            # Classify sector from SIC for sector-aware standardization
+            from ..mappings.sectors import classify_submissions
+            self.sector_class = classify_submissions(sec_data["submissions"])
 
     def merge_parsed_financials(
         self,

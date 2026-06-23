@@ -47,23 +47,27 @@ class XBRLParser:
             return None
 
     def _period_year(self, entry: Dict[str, Any]) -> Optional[int]:
-        """Determine the fiscal year a fact *covers*.
+        """Determine the fiscal year a fact *covers*, from the period-**end** year.
 
-        In SEC ``companyfacts`` each fact carries the ``fy`` of the filing it was
-        reported in, not the period it represents - so a 10-K's comparative years
-        all share the filing's ``fy``. We therefore derive the year from the fact
-        itself: the ``frame`` (e.g. ``CY2024``) when present, otherwise the ``end``
-        date's year.
+        In SEC ``companyfacts`` each fact carries the ``fy`` of the *filing*, not the
+        period it represents, so we must derive the year from the fact itself. We use
+        the ``end`` date's year because it is consistent across income-statement
+        (duration) and balance-sheet (instant) facts of the same fiscal year — both
+        end on the fiscal-year-end date. The ``frame`` (e.g. ``CY2025``) is *not*
+        used as the primary signal: SEC assigns frames by calendar year, so a
+        non-December fiscal year (e.g. a retailer ending Jan 31) would split its
+        income statement (``CY2025``) from its balance sheet into different buckets.
+        ``frame`` is only a fallback when ``end`` is missing.
         """
+        end = self._parse_iso_date(entry.get("end"))
+        if end is not None:
+            return end.year
+
         frame = entry.get("frame")
         if frame:
             match = _FRAME_YEAR_RE.search(frame)
             if match:
                 return int(match.group(1))
-
-        end = self._parse_iso_date(entry.get("end"))
-        if end is not None:
-            return end.year
         return None
 
     def _span_days(self, entry: Dict[str, Any]) -> Optional[int]:

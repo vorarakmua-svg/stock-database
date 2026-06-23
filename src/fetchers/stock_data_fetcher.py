@@ -14,6 +14,7 @@ from ..exporters.sqlite_store import SQLiteStore
 from ..models.canonical import validate_period
 from ..models.stock_data import StockData
 from ..parsers.calculated_metrics import CalculatedMetrics
+from ..parsers.derived_fields import apply_derivations
 from ..parsers.xbrl_parser import XBRLParser
 from ..validation.quality import assess_annual
 from .fred_handler import FREDHandler
@@ -210,22 +211,24 @@ class StockDataFetcher:
         return stock
 
     def _validate_and_score(self, stock: StockData) -> None:
-        """Coerce/validate canonical periods and attach a data-quality report."""
-        # Validate + coerce each period; surface validation errors as warnings.
+        """Derive identities, validate/coerce periods, attach a data-quality report."""
+        # Derive missing fields (e.g. total_liabilities = assets - equity), then
+        # validate + coerce each period; surface validation errors as warnings.
         for attr in ("financials_annual", "financials_quarterly"):
             periods = getattr(stock, attr)
             if not periods:
                 continue
             cleaned = {}
             for period_key, period in periods.items():
+                apply_derivations(period)
                 clean, errors = validate_period(period)
                 cleaned[period_key] = clean
                 for err in errors:
                     stock.add_warning(f"validation {attr} {period_key}: {err}")
             setattr(stock, attr, cleaned)
 
-        # Score annual financials and record findings.
-        report = assess_annual(stock.financials_annual)
+        # Score annual financials (sector-aware) and record findings.
+        report = assess_annual(stock.financials_annual, sector=stock.sector_class)
         stock.data_quality = report.as_dict()
         for message in report.warning_messages():
             stock.add_warning(message)

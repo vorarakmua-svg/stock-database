@@ -83,9 +83,12 @@ def test_empty_facts_returns_empty():
     assert parser.extract_quarterly_financials({}) == {}
 
 
-def test_period_year_prefers_frame_then_end():
+def test_period_year_uses_end_then_frame():
     parser = XBRLParser()
-    assert parser._period_year({"frame": "CY2021", "end": "2021-12-31"}) == 2021
-    assert parser._period_year({"frame": "CY2020Q4I", "end": "2020-12-31"}) == 2020
+    # End year is primary and consistent across statements...
     assert parser._period_year({"end": "2019-06-30"}) == 2019
+    # ...even when SEC's calendar-year frame disagrees (non-Dec fiscal year).
+    assert parser._period_year({"frame": "CY2025", "end": "2026-01-31"}) == 2026
+    # Frame is only a fallback when end is absent.
+    assert parser._period_year({"frame": "CY2020Q4I"}) == 2020
     assert parser._period_year({}) is None

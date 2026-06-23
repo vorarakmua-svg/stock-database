@@ -344,11 +344,34 @@ field** (`revenue`, `net_income`, `operating_cash_flow`, …) defined in
 Each period also carries a `_source_tags` map recording which raw tag each value
 came from.
 
-Every company is scored by a data-quality pass (`src/validation/quality.py`) that
-checks required fields, accounting identities (Assets = Liabilities + Equity,
-Gross Profit = Revenue − COGS), sign conventions, and year-over-year continuity.
-The result is stored under `data_quality` (score 0–100 + findings) and surfaced by
-`python diagnose.py TICKER`.
+Every company is scored by a **sector-aware** data-quality pass
+(`src/validation/quality.py`) that checks required fields, accounting identities
+(Assets = Liabilities + Equity + non-controlling interest, Gross Profit = Revenue −
+COGS), sign conventions, and year-over-year continuity. The result is stored under
+`data_quality` (score 0–100 + findings) and surfaced by `python diagnose.py TICKER`.
+
+### Cross-sector coverage
+
+Banks, insurers, and REITs report fundamentally different statements, so the pipeline
+classifies each company by SIC (`src/mappings/sectors.py`) and adds dedicated line
+items per sector — banks (`net_interest_income`, `provision_for_credit_losses`,
+`total_deposits`), insurers (`premiums_earned`, `claims_reserve`), REITs
+(`real_estate_net`) — on top of the universal core. Fields that aren't directly tagged
+are filled by accounting identities (`src/parsers/derived_fields.py`): e.g.
+`total_liabilities = total_assets − total_equity`, and bank revenue from net interest +
+noninterest income.
+
+The **universal core** (`revenue`, `net_income`, `total_assets`, `total_liabilities`,
+`total_equity`, `operating_cash_flow`) resolves for **100%** of a 41-company
+cross-sector basket. Prove it yourself:
+
+```bash
+python coverage_report.py            # curated cross-sector basket
+python coverage_report.py JPM PGR PLD # specific tickers
+```
+
+This reports per-field, per-sector fill rates and surfaces any company missing a core
+field (with the raw tags it filed) so candidate-tag lists can be extended.
 
 ## Cross-Company Screening (SQLite)
 

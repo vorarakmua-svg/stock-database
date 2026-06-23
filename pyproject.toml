@@ -54,7 +54,10 @@ warn_unused_ignores = false
 # fetchers/parsers are not yet annotated; they are checked only as silent imports.
 files = [
     "src/mappings/canonical.py",
+    "src/mappings/sectors.py",
     "src/models/canonical.py",
     "src/validation",
+    "src/parsers/derived_fields.py",
+    "src/analysis",
     "src/exporters/sqlite_store.py",
 ]
