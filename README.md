@@ -373,18 +373,33 @@ python coverage_report.py JPM PGR PLD # specific tickers
 This reports per-field, per-sector fill rates and surfaces any company missing a core
 field (with the raw tags it filed) so candidate-tag lists can be extended.
 
+### Fiscal vs calendar year
+
+Companies have different fiscal year-ends (Microsoft June, Apple September, Walmart
+January), so comparing by fiscal-year number mixes different macroeconomic windows. Each
+period therefore carries two labels:
+
+- `fiscal_year` — the company's own fiscal year (deterministic, from the period-end date).
+- `calendar_year` (and `calendar_quarter`) — the macro-aligned year taken from SEC's
+  XBRL `frame` context flag (e.g. MSFT FY2025, AAPL FY2025, WMT FY2026 and every December
+  filer's FY2025 all map to `calendar_year = 2025`; NVIDIA's January "FY2022" → 2021).
+
+**Always compare across companies with `calendar_year`, not `fiscal_year`.**
+
 ## Cross-Company Screening (SQLite)
 
 With `sqlite` output enabled (on by default), all tickers are written to a single
 queryable database at `data/output/stock.db` with consistent, canonical columns —
-so you can screen across your whole universe:
+so you can screen across your whole universe (use `calendar_year` to align fiscal
+calendars):
 
 ```sql
--- High-quality compounders: strong returns, modest leverage
-SELECT f.ticker, f.fiscal_year, m.roic, m.net_margin, m.debt_to_ebitda
+-- High-quality compounders for the SAME macro year (across fiscal calendars):
+-- strong returns, modest leverage.
+SELECT f.ticker, f.fiscal_year, f.calendar_year, m.roic, m.net_margin, m.debt_to_ebitda
 FROM financials_annual f
 JOIN metrics_annual m ON f.ticker = m.ticker AND f.fiscal_year = m.fiscal_year
-WHERE m.roic > 0.15 AND m.debt_to_ebitda < 3
+WHERE f.calendar_year = 2025 AND m.roic > 0.15 AND m.debt_to_ebitda < 3
 ORDER BY m.roic DESC;
 ```
 

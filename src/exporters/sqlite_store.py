@@ -76,12 +76,14 @@ class SQLiteStore:
                 country TEXT,
                 employees INTEGER,
                 website TEXT,
+                fiscal_year_end TEXT,
                 updated_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS financials_annual (
                 ticker TEXT NOT NULL,
                 fiscal_year INTEGER NOT NULL,
+                calendar_year INTEGER,
                 period_end TEXT,
                 filed_date TEXT,
                 form TEXT,
@@ -95,11 +97,18 @@ class SQLiteStore:
                 period_end TEXT NOT NULL,
                 fiscal_year INTEGER,
                 fiscal_period TEXT,
+                calendar_year INTEGER,
+                calendar_quarter INTEGER,
                 filed_date TEXT,
                 form TEXT,
                 {_cols_ddl(_CANONICAL_COLUMNS)},
                 PRIMARY KEY (ticker, period_end)
             );
+
+            CREATE INDEX IF NOT EXISTS idx_fa_calendar_year
+                ON financials_annual (calendar_year);
+            CREATE INDEX IF NOT EXISTS idx_fq_calendar
+                ON financials_quarterly (calendar_year, calendar_quarter);
 
             CREATE TABLE IF NOT EXISTS metrics_annual (
                 ticker TEXT NOT NULL,
@@ -134,9 +143,12 @@ class SQLiteStore:
         so we reconcile each table against its current expected column set.
         """
         expected = {
-            "companies": [("sector_class", "TEXT")],
-            "financials_annual": [(c, "REAL") for c in _CANONICAL_COLUMNS],
-            "financials_quarterly": [(c, "REAL") for c in _CANONICAL_COLUMNS],
+            "companies": [("sector_class", "TEXT"), ("fiscal_year_end", "TEXT")],
+            "financials_annual": [("calendar_year", "INTEGER")]
+            + [(c, "REAL") for c in _CANONICAL_COLUMNS],
+            "financials_quarterly": [("calendar_year", "INTEGER"),
+                                     ("calendar_quarter", "INTEGER")]
+            + [(c, "REAL") for c in _CANONICAL_COLUMNS],
             "metrics_annual": [(c, "REAL") for c in _METRIC_COLUMNS],
             "market_snapshots": [(c, "REAL") for c in _SNAPSHOT_COLUMNS],
         }
@@ -210,6 +222,7 @@ class SQLiteStore:
             "country": info.get("country"),
             "employees": info.get("full_time_employees"),
             "website": info.get("website"),
+            "fiscal_year_end": (stock.sec_submissions or {}).get("fiscal_year_end"),
             "updated_at": collected_at,
         })
 
@@ -219,6 +232,7 @@ class SQLiteStore:
             row = {
                 "ticker": stock.ticker,
                 "fiscal_year": int(year) if str(year).isdigit() else None,
+                "calendar_year": period.get("calendar_year"),
                 "period_end": period.get("period_end"),
                 "filed_date": period.get("filed_date"),
                 "form": period.get("form"),
@@ -241,6 +255,8 @@ class SQLiteStore:
                 "period_end": period_end,
                 "fiscal_year": period.get("fiscal_year"),
                 "fiscal_period": period.get("fiscal_period"),
+                "calendar_year": period.get("calendar_year"),
+                "calendar_quarter": period.get("calendar_quarter"),
                 "filed_date": period.get("filed_date"),
                 "form": period.get("form"),
             }
