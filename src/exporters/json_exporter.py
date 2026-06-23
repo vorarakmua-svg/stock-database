@@ -135,6 +135,12 @@ class JSONExporter:
             merged["financials_quarterly"] = merged_quarterly
             self.logger.debug(f"Merged quarterly financials: {len(merged_quarterly)} quarters")
 
+        # Merge trailing-twelve-month series (keep all period-ends)
+        if existing.get("financials_ttm") and new.get("financials_ttm"):
+            merged_ttm = existing["financials_ttm"].copy()
+            merged_ttm.update(new["financials_ttm"])
+            merged["financials_ttm"] = merged_ttm
+
         # Merge insider transactions (deduplicate by date+name+shares)
         if existing.get("insider_transactions") and new.get("insider_transactions"):
             merged["insider_transactions"] = self._merge_transactions(

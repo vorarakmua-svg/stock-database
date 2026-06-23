@@ -75,6 +75,36 @@ def test_cross_company_screen(tmp_path):
         conn.close()
 
 
+def test_quarterly_and_ttm_persist(tmp_path):
+    s = StockData(ticker="QQQ", cik="000", company_name="Q Inc.")
+    s.financials_quarterly = {
+        "2024-09-28": {"period_end": "2024-09-28", "fiscal_year": 2024,
+                       "fiscal_quarter": 4, "calendar_year": 2024, "calendar_quarter": 3,
+                       "revenue": 95.0, "net_income": 14.0, "total_assets": 365.0},
+    }
+    s.financials_ttm = {
+        "2024-09-28": {"period_end": "2024-09-28", "fiscal_year": 2024,
+                       "calendar_year": 2024, "calendar_quarter": 3,
+                       "revenue": 391.0, "total_assets": 365.0},
+    }
+    s.add_source("sec_edgar")
+    SQLiteStore(tmp_path / "stock.db").export([s])
+
+    conn = sqlite3.connect(tmp_path / "stock.db")
+    try:
+        fq = conn.execute(
+            "SELECT fiscal_quarter, revenue FROM financials_quarterly "
+            "WHERE ticker='QQQ' AND period_end='2024-09-28'"
+        ).fetchone()
+        assert fq == (4, 95.0)
+        ttm = conn.execute(
+            "SELECT revenue FROM financials_ttm WHERE ticker='QQQ'"
+        ).fetchone()
+        assert ttm[0] == 391.0
+    finally:
+        conn.close()
+
+
 def test_empty_export_returns_none(tmp_path):
     store = SQLiteStore(tmp_path / "stock.db")
     assert store.export([]) is None
@@ -128,5 +158,10 @@ def test_migrate_adds_missing_columns(tmp_path):
         fcols = {row[1] for row in conn.execute("PRAGMA table_info(financials_annual)")}
         assert "net_interest_income" in fcols
         assert "calendar_year" in fcols  # calendar alignment column migrated in
+        qcols = {row[1] for row in conn.execute("PRAGMA table_info(financials_quarterly)")}
+        assert "fiscal_quarter" in qcols
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "financials_ttm" in tables  # new table created on existing DB
     finally:
         conn.close()

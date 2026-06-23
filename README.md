@@ -386,6 +386,34 @@ period therefore carries two labels:
 
 **Always compare across companies with `calendar_year`, not `fiscal_year`.**
 
+### Granular quarterly history
+
+The pipeline extracts the **full** available quarterly history (no year cap by default;
+limit with `--years N`) and stores true 3-month figures, not the cumulative year-to-date
+numbers SEC filings report:
+
+- **Discrete quarters via ladder differencing.** Income and cash-flow statements are
+  filed cumulative-to-date in 10-Qs (and full-year in the 10-K). We difference the
+  cumulative ladder anchored at the fiscal-year start (`discrete[k] = YTD[k] − YTD[k-1]`),
+  which recovers every quarter's standalone performance — including **Q4**, which is never
+  filed as a 10-Q (`Q4 = annual − 9-month YTD`). Derived values are tagged in
+  `_source_tags`.
+- **Balance-sheet checkpoints** at every quarter-end (instant facts), full history.
+- **`fiscal_quarter`** (1–4, company calendar) and **`calendar_quarter`** (1–4, calendar)
+  are both attached; `calendar_quarter` comes from the SEC frame and is the reliable
+  cross-company key.
+- **TTM (`financials_ttm`)** — trailing-twelve-month series (rolling 4 discrete quarters
+  for flows, balance sheet as-of) for seasonality-free, up-to-date comparison.
+
+```sql
+-- Discrete quarterly revenue trend for one company (incl. derived Q4):
+SELECT period_end, fiscal_year, fiscal_quarter, calendar_quarter, revenue, operating_cash_flow
+FROM financials_quarterly WHERE ticker = 'AAPL' ORDER BY period_end DESC LIMIT 8;
+
+-- Latest trailing-twelve-month revenue per company:
+SELECT ticker, MAX(period_end) AS asof, revenue FROM financials_ttm GROUP BY ticker;
+```
+
 ## Cross-Company Screening (SQLite)
 
 With `sqlite` output enabled (on by default), all tickers are written to a single

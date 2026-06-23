@@ -67,11 +67,16 @@ def test_june_and_sep_filers_align_to_same_calendar_year(parser):
 
 
 def test_quarterly_calendar_quarter(parser):
+    # A cumulative ladder (Q1 then H1) sharing the fiscal-year start.
     facts = {"facts": {"us-gaap": {"NetIncomeLoss": {"units": {"USD": [
         usd(25, "2025-02-01", "2025-05-01", fy=2026, fp="Q1", form="10-Q",
             filed="2025-05-20", frame="CY2025Q1"),
+        usd(55, "2025-02-01", "2025-07-31", fy=2026, fp="Q2", form="10-Q",
+            filed="2025-08-20"),
     ]}}}}}
-    q = parser.extract_quarterly_financials(facts, quarters_back=1)
-    period = q["2025-05-01"]
+    q = parser.extract_quarterly_financials(facts)
+    period = q["2025-05-01"]                 # discrete Q1
+    assert period["net_income"] == 25
     assert period["calendar_year"] == 2025
-    assert period["calendar_quarter"] == 1
+    assert period["calendar_quarter"] == 1   # from frame CY2025Q1
+    assert q["2025-07-31"]["net_income"] == 30  # 55 (H1) - 25 (Q1)

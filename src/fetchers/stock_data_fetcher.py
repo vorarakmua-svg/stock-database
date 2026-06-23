@@ -15,6 +15,7 @@ from ..models.canonical import validate_period
 from ..models.stock_data import StockData
 from ..parsers.calculated_metrics import CalculatedMetrics
 from ..parsers.derived_fields import apply_derivations
+from ..parsers.ttm import compute_ttm
 from ..parsers.xbrl_parser import XBRLParser
 from ..validation.quality import assess_annual
 from .fred_handler import FREDHandler
@@ -95,7 +96,7 @@ class StockDataFetcher:
         ticker: str,
         include_yahoo: bool = True,
         include_sec: bool = True,
-        years_back: int = 10
+        years_back: Optional[int] = None
     ) -> StockData:
         """
         Fetch all available data for a single ticker.
@@ -137,7 +138,7 @@ class StockDataFetcher:
                         facts, years_back=years_back
                     )
                     quarterly = self.xbrl_parser.extract_quarterly_financials(
-                        facts, quarters_back=years_back * 4
+                        facts, quarters_back=(years_back * 4 if years_back else None)
                     )
 
                     stock.merge_parsed_financials(annual, quarterly)
@@ -227,6 +228,10 @@ class StockDataFetcher:
                     stock.add_warning(f"validation {attr} {period_key}: {err}")
             setattr(stock, attr, cleaned)
 
+        # Trailing-twelve-month series from the (cleaned) discrete quarters.
+        if stock.financials_quarterly:
+            stock.financials_ttm = compute_ttm(stock.financials_quarterly)
+
         # Score annual financials (sector-aware) and record findings.
         report = assess_annual(stock.financials_annual, sector=stock.sector_class)
         stock.data_quality = report.as_dict()
@@ -238,7 +243,7 @@ class StockDataFetcher:
         tickers: List[str],
         include_yahoo: bool = True,
         include_sec: bool = True,
-        years_back: int = 10
+        years_back: Optional[int] = None
     ) -> List[StockData]:
         """
         Fetch data for multiple tickers.
@@ -289,7 +294,7 @@ class StockDataFetcher:
         ticker: str,
         include_yahoo: bool,
         include_sec: bool,
-        years_back: int,
+        years_back: Optional[int],
     ) -> StockData:
         """Fetch one ticker, converting any failure into an error StockData."""
         try:
@@ -352,7 +357,7 @@ class StockDataFetcher:
         tickers: List[str],
         include_yahoo: bool = True,
         include_sec: bool = True,
-        years_back: int = 10,
+        years_back: Optional[int] = None,
         formats: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
