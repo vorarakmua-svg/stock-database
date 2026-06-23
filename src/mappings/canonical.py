@@ -12,8 +12,10 @@ and how to find them in raw XBRL". The candidate tag lists are seeded from
 ``xbrl_tags.py`` (PRIORITY_TAGS / ALTERNATIVE_TAGS / XBRL_TAG_MAPPING).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Tuple
+
+from .sectors import BANK, INSURANCE, REIT
 
 # Statement groupings
 INCOME = "income"
@@ -57,6 +59,10 @@ class CanonicalField:
     tags: Tuple[str, ...]
     sign: str = SIGN_AS_REPORTED
     description: str = ""
+    # Sectors for which this field is a *core* expectation (drives quality scoring
+    # and coverage grouping). Empty = general/operating-company field. The field is
+    # always attempted for every company; this only affects what's "required".
+    sectors: Tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def xbrl_unit(self) -> str:
@@ -76,8 +82,11 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
             "RevenueFromContractWithCustomerIncludingAssessedTax",
             "SalesRevenueNet",
             "SalesRevenueGoodsNet",
+            # Banks/broker-dealers present total revenue net of interest expense.
+            "RevenuesNetOfInterestExpense",
         ),
-        description="Total net revenue / sales.",
+        description="Total net revenue / sales. For banks, derived from net interest "
+                    "income + noninterest income when no single tag is filed.",
     ),
     CanonicalField(
         "cost_of_revenue", "Cost of Revenue", INCOME, UNIT_USD, DURATION,
@@ -284,15 +293,145 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         "weighted_avg_shares_diluted", "Weighted Avg Shares (Diluted)", SHARES, UNIT_SHARES, DURATION,
         ("WeightedAverageNumberOfDilutedSharesOutstanding",),
     ),
+
+    # ---------------- Operating long-tail (general) ----------------
+    CanonicalField(
+        "interest_income", "Interest Income", INCOME, UNIT_USD, DURATION,
+        ("InterestIncomeExpenseNet", "InterestAndDividendIncomeOperating", "InterestIncomeOperating"),
+    ),
+    CanonicalField(
+        "comprehensive_income", "Comprehensive Income", INCOME, UNIT_USD, DURATION,
+        ("ComprehensiveIncomeNetOfTax",),
+    ),
+    CanonicalField(
+        "restructuring", "Restructuring Charges", INCOME, UNIT_USD, DURATION,
+        ("RestructuringCharges",),
+    ),
+    CanonicalField(
+        "impairment", "Impairment Charges", INCOME, UNIT_USD, DURATION,
+        ("ImpairmentOfLongLivedAssetsHeldForUse", "GoodwillImpairmentLoss"),
+    ),
+    CanonicalField(
+        "deferred_revenue", "Deferred Revenue (Current)", BALANCE, UNIT_USD, INSTANT,
+        ("ContractWithCustomerLiabilityCurrent", "DeferredRevenueCurrent"),
+    ),
+    CanonicalField(
+        "operating_lease_liability", "Operating Lease Liability", BALANCE, UNIT_USD, INSTANT,
+        ("OperatingLeaseLiabilityNoncurrent", "OperatingLeaseLiability"),
+    ),
+    CanonicalField(
+        "finance_lease_liability", "Finance Lease Liability", BALANCE, UNIT_USD, INSTANT,
+        ("FinanceLeaseLiabilityNoncurrent", "FinanceLeaseLiability"),
+    ),
+    CanonicalField(
+        "minority_interest", "Non-Controlling Interest", BALANCE, UNIT_USD, INSTANT,
+        ("MinorityInterest",),
+    ),
+    CanonicalField(
+        "preferred_equity", "Preferred Stock", BALANCE, UNIT_USD, INSTANT,
+        ("PreferredStockValue", "PreferredStockValueOutstanding"),
+    ),
+    CanonicalField(
+        "acquisitions", "Acquisitions (net of cash)", CASHFLOW, UNIT_USD, DURATION,
+        ("PaymentsToAcquireBusinessesNetOfCashAcquired",),
+        sign=SIGN_ABS, description="Stored as a positive magnitude (cash outflow).",
+    ),
+
+    # ---------------- Bank-specific ----------------
+    CanonicalField(
+        "net_interest_income", "Net Interest Income", INCOME, UNIT_USD, DURATION,
+        ("InterestIncomeExpenseNet", "InterestIncomeExpenseAfterProvisionForLoanLoss"),
+        sectors=(BANK,),
+    ),
+    CanonicalField(
+        "interest_income_total", "Total Interest Income", INCOME, UNIT_USD, DURATION,
+        ("InterestAndDividendIncomeOperating", "InterestAndFeeIncomeLoansAndLeases",
+         "InterestIncomeOperating"),
+        sectors=(BANK,),
+    ),
+    CanonicalField(
+        "noninterest_income", "Noninterest Income", INCOME, UNIT_USD, DURATION,
+        ("NoninterestIncome", "RevenuesNetOfInterestExpense"),
+        sectors=(BANK,),
+    ),
+    CanonicalField(
+        "noninterest_expense", "Noninterest Expense", INCOME, UNIT_USD, DURATION,
+        ("NoninterestExpense",),
+        sectors=(BANK,),
+    ),
+    CanonicalField(
+        "provision_for_credit_losses", "Provision for Credit Losses", INCOME, UNIT_USD, DURATION,
+        ("ProvisionForLoanLeaseAndOtherLosses", "ProvisionForLoanAndLeaseLosses",
+         "ProvisionForLoanLossesExpensed", "ProvisionForCreditLossExpenseReversal",
+         "ProvisionForDoubtfulAccounts"),
+        sectors=(BANK,),
+    ),
+    CanonicalField(
+        "total_deposits", "Total Deposits", BALANCE, UNIT_USD, INSTANT,
+        ("Deposits", "InterestBearingDepositLiabilities", "DepositsTotal"),
+        sectors=(BANK,),
+    ),
+    CanonicalField(
+        "total_loans", "Total Loans & Leases (Net)", BALANCE, UNIT_USD, INSTANT,
+        ("LoansAndLeasesReceivableNetReportedAmount",
+         "FinancingReceivableExcludingAccruedInterestAfterAllowanceForCreditLoss",
+         "NotesReceivableNet"),
+        sectors=(BANK,),
+    ),
+
+    # ---------------- Insurance-specific ----------------
+    CanonicalField(
+        "premiums_earned", "Premiums Earned", INCOME, UNIT_USD, DURATION,
+        ("PremiumsEarnedNet", "PremiumsEarnedNetPropertyAndCasualty",
+         "PremiumsEarnedNetLife"),
+        sectors=(INSURANCE,),
+    ),
+    CanonicalField(
+        "claims_incurred", "Claims & Benefits Incurred", INCOME, UNIT_USD, DURATION,
+        ("PolicyholderBenefitsAndClaimsIncurredNet",
+         "PolicyholderBenefitsAndClaimsIncurredGross",
+         "LiabilityForClaimsAndClaimsAdjustmentExpenseIncurredClaims1"),
+        sectors=(INSURANCE,),
+    ),
+    CanonicalField(
+        "benefits_and_expenses", "Total Benefits, Losses & Expenses", INCOME, UNIT_USD, DURATION,
+        ("BenefitsLossesAndExpenses",),
+        sectors=(INSURANCE,),
+    ),
+    CanonicalField(
+        "claims_reserve", "Loss & Claim Reserves", BALANCE, UNIT_USD, INSTANT,
+        ("LiabilityForClaimsAndClaimsAdjustmentExpense",
+         "LiabilityForFuturePolicyBenefits"),
+        sectors=(INSURANCE,),
+    ),
+    CanonicalField(
+        "deferred_acquisition_costs", "Deferred Acquisition Costs", BALANCE, UNIT_USD, INSTANT,
+        ("DeferredPolicyAcquisitionCosts", "DeferredPolicyAcquisitionCostsAndPresentValueOfFutureInsuranceProfitsNet"),
+        sectors=(INSURANCE,),
+    ),
+    CanonicalField(
+        "total_investments", "Total Investments", BALANCE, UNIT_USD, INSTANT,
+        ("Investments", "MarketableSecuritiesNoncurrent", "LongTermInvestments"),
+        sectors=(INSURANCE,),
+    ),
+
+    # ---------------- REIT-specific ----------------
+    CanonicalField(
+        "rental_revenue", "Rental Revenue", INCOME, UNIT_USD, DURATION,
+        ("OperatingLeaseLeaseIncome", "RealEstateRevenueNet", "OperatingLeasesIncomeStatementLeaseRevenue"),
+        sectors=(REIT,),
+    ),
+    CanonicalField(
+        "real_estate_net", "Real Estate (Net)", BALANCE, UNIT_USD, INSTANT,
+        ("RealEstateInvestmentPropertyNet",),
+        sectors=(REIT,),
+    ),
+    CanonicalField(
+        "real_estate_gross", "Real Estate (Gross)", BALANCE, UNIT_USD, INSTANT,
+        ("RealEstateInvestmentPropertyAtCost",),
+        sectors=(REIT,),
+    ),
 )
 
 # key -> CanonicalField
 CANONICAL_BY_KEY: Dict[str, CanonicalField] = {f.key: f for f in CANONICAL_FIELDS}
-
-# Required fields per statement, used by the data-quality layer to score
-# completeness (the core comparables an analyst expects every filer to report).
-REQUIRED_FIELDS: Dict[str, Tuple[str, ...]] = {
-    INCOME: ("revenue", "net_income", "operating_income"),
-    BALANCE: ("total_assets", "total_liabilities", "total_equity"),
-    CASHFLOW: ("operating_cash_flow",),
-}

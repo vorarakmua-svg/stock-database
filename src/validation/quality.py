@@ -10,7 +10,7 @@ used for cross-company comparison.
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from ..mappings.canonical import REQUIRED_FIELDS
+from ..mappings.sectors import BANK, GENERAL, INSURANCE, REIT
 
 # Severities and the score penalty each carries.
 HIGH = "high"
@@ -19,6 +19,32 @@ LOW = "low"
 INFO = "info"
 
 _PENALTY = {HIGH: 25, MEDIUM: 10, LOW: 3, INFO: 0}
+
+# Required canonical fields per sector — banks/insurers/REITs report different
+# statements, so they must not be penalized for missing operating-company lines.
+_GENERAL_REQUIRED = (
+    "revenue", "net_income", "operating_income",
+    "total_assets", "total_liabilities", "total_equity", "operating_cash_flow",
+)
+REQUIRED_BY_SECTOR: Dict[str, tuple] = {
+    GENERAL: _GENERAL_REQUIRED,
+    BANK: (
+        "revenue", "net_income", "net_interest_income", "noninterest_income",
+        "total_assets", "total_liabilities", "total_equity", "total_deposits",
+        "operating_cash_flow",
+    ),
+    INSURANCE: (
+        "revenue", "net_income", "premiums_earned",
+        "total_assets", "total_liabilities", "total_equity", "operating_cash_flow",
+    ),
+    # REIT sub-types tag real estate very differently (property REITs vs tower/data-
+    # center REITs that use PP&E), so beyond the universal core we only require the
+    # anchors that are genuinely universal.
+    REIT: (
+        "revenue", "net_income",
+        "total_assets", "total_liabilities", "total_equity", "operating_cash_flow",
+    ),
+}
 
 # Tolerances for accounting-identity checks (fraction of the reference figure).
 _BALANCE_TOL = 0.02
@@ -68,17 +94,21 @@ def _num(period: Dict[str, Any], key: str) -> Optional[float]:
     return val if isinstance(val, (int, float)) else None
 
 
-def assess_annual(annual: Dict[str, Dict[str, Any]]) -> QualityReport:
+def assess_annual(annual: Dict[str, Dict[str, Any]],
+                  sector: Optional[str] = None) -> QualityReport:
     """Assess a company's canonical annual financials.
 
     Args:
         annual: ``{fiscal_year: {canonical_field: value, ...}}`` as produced by
             ``XBRLParser.extract_annual_financials``.
+        sector: Sector class (bank/insurance/reit/...) selecting which fields are
+            required, so e.g. a bank isn't penalized for lacking operating_income.
 
     Returns:
         A :class:`QualityReport` with a 0-100 score and structured findings.
     """
     report = QualityReport()
+    required_fields = REQUIRED_BY_SECTOR.get(sector or GENERAL, _GENERAL_REQUIRED)
 
     if not annual:
         report.findings.append(
@@ -89,26 +119,33 @@ def assess_annual(annual: Dict[str, Dict[str, Any]]) -> QualityReport:
 
     for year in sorted(annual.keys(), reverse=True):
         period = annual[year]
+        source_tags = period.get("_source_tags", {})
 
-        # Required fields present per statement
-        for required in REQUIRED_FIELDS.values():
-            for key in required:
-                if _num(period, key) is None:
-                    report.findings.append(
-                        Finding(MEDIUM, "missing_field",
-                                f"Missing required field '{key}'.", year)
-                    )
+        # Required fields present for this sector
+        for key in required_fields:
+            if _num(period, key) is None:
+                report.findings.append(
+                    Finding(MEDIUM, "missing_field",
+                            f"Missing required field '{key}'.", year)
+                )
 
-        # Accounting identity: Assets == Liabilities + Equity
+        # Accounting identity: Assets == Liabilities + Equity + Non-controlling
+        # interest. NCI matters for REITs (operating partnerships) and any group with
+        # minority interests, since total_equity is parent-only. Only meaningful when
+        # liabilities is *reported* — when derived (A - E) it balances by construction.
         assets = _num(period, "total_assets")
         liabilities = _num(period, "total_liabilities")
         equity = _num(period, "total_equity")
-        if assets and liabilities is not None and equity is not None and assets != 0:
-            if abs(assets - (liabilities + equity)) / abs(assets) > _BALANCE_TOL:
+        nci = _num(period, "minority_interest") or 0.0
+        liabilities_reported = source_tags.get("total_liabilities") != "derived"
+        if (liabilities_reported and assets and liabilities is not None
+                and equity is not None and assets != 0):
+            right = liabilities + equity + nci
+            if abs(assets - right) / abs(assets) > _BALANCE_TOL:
                 report.findings.append(
                     Finding(MEDIUM, "balance_sheet_imbalance",
-                            f"Assets ({assets:,.0f}) != Liabilities + Equity "
-                            f"({liabilities + equity:,.0f}).", year)
+                            f"Assets ({assets:,.0f}) != Liabilities + Equity + NCI "
+                            f"({right:,.0f}).", year)
                 )
 
         # Gross profit consistency

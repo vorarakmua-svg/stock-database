@@ -67,3 +67,37 @@ def test_revenue_discontinuity_is_info():
     report = assess_annual(annual)
     codes = {f.code for f in report.findings}
     assert "revenue_discontinuity" in codes
+
+
+# ---------------- Sector-aware scoring ----------------
+
+def _bank_year():
+    return {
+        "revenue": 80.0, "net_income": 20.0,
+        "net_interest_income": 50.0, "noninterest_income": 30.0,
+        "total_assets": 1000.0, "total_liabilities": 880.0, "total_equity": 120.0,
+        "total_deposits": 900.0, "operating_cash_flow": 40.0,
+    }
+
+
+def test_bank_not_penalized_for_missing_operating_income():
+    # No operating_income / gross_profit (banks don't report them).
+    report = assess_annual({"2024": _bank_year()}, sector="bank")
+    missing = {f.message for f in report.findings if f.code == "missing_field"}
+    assert not any("operating_income" in m for m in missing)
+    assert report.score == 100
+
+
+def test_general_company_is_penalized_for_missing_operating_income():
+    year = _bank_year()  # lacks operating_income
+    report = assess_annual({"2024": year}, sector="general")
+    missing = {f.message for f in report.findings if f.code == "missing_field"}
+    assert any("operating_income" in m for m in missing)
+
+
+def test_balance_check_skipped_when_liabilities_derived():
+    year = _balanced_year(total_equity=500.0)  # 1200 + 500 != 2000 -> would flag
+    year["_source_tags"] = {"total_liabilities": "derived"}
+    report = assess_annual({"2024": year})
+    codes = {f.code for f in report.findings}
+    assert "balance_sheet_imbalance" not in codes

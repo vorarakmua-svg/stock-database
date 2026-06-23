@@ -70,6 +70,7 @@ class SQLiteStore:
                 ticker TEXT PRIMARY KEY,
                 cik TEXT,
                 company_name TEXT,
+                sector_class TEXT,
                 sector TEXT,
                 industry TEXT,
                 country TEXT,
@@ -126,6 +127,25 @@ class SQLiteStore:
             """
         )
 
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """Add any columns missing from an existing DB (registry grows over time).
+
+        ``CREATE TABLE IF NOT EXISTS`` won't add new columns to a pre-existing table,
+        so we reconcile each table against its current expected column set.
+        """
+        expected = {
+            "companies": [("sector_class", "TEXT")],
+            "financials_annual": [(c, "REAL") for c in _CANONICAL_COLUMNS],
+            "financials_quarterly": [(c, "REAL") for c in _CANONICAL_COLUMNS],
+            "metrics_annual": [(c, "REAL") for c in _METRIC_COLUMNS],
+            "market_snapshots": [(c, "REAL") for c in _SNAPSHOT_COLUMNS],
+        }
+        for table, columns in expected.items():
+            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            for name, col_type in columns:
+                if name not in existing:
+                    conn.execute(f'ALTER TABLE {table} ADD COLUMN "{name}" {col_type}')
+
     # ---- upsert helper ----------------------------------------------------
 
     @staticmethod
@@ -158,6 +178,7 @@ class SQLiteStore:
             conn = self._connect()
             try:
                 self._create_schema(conn)
+                self._migrate(conn)
                 for stock in data:
                     self._write_stock(conn, stock)
                 conn.commit()
@@ -183,6 +204,7 @@ class SQLiteStore:
             "ticker": stock.ticker,
             "cik": stock.cik,
             "company_name": stock.company_name,
+            "sector_class": stock.sector_class,
             "sector": info.get("sector"),
             "industry": info.get("industry"),
             "country": info.get("country"),

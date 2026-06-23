@@ -78,3 +78,24 @@ def test_cross_company_screen(tmp_path):
 def test_empty_export_returns_none(tmp_path):
     store = SQLiteStore(tmp_path / "stock.db")
     assert store.export([]) is None
+
+
+def test_migrate_adds_missing_columns(tmp_path):
+    db = tmp_path / "stock.db"
+    # Simulate an old DB: a companies table without the newer sector_class column.
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE companies (ticker TEXT PRIMARY KEY, cik TEXT)")
+    conn.commit()
+    conn.close()
+
+    SQLiteStore(db).export([_company("AAA", 1000.0, 0.20)])
+
+    conn = sqlite3.connect(db)
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(companies)")}
+        assert "sector_class" in cols  # migration added it
+        # And a new canonical column exists on the financials table.
+        fcols = {row[1] for row in conn.execute("PRAGMA table_info(financials_annual)")}
+        assert "net_interest_income" in fcols
+    finally:
+        conn.close()
