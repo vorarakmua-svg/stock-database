@@ -75,9 +75,15 @@ Pure functions (no network, no class state), fully unit-testable:
 ### Shared resolver refactor
 
 `CalculatedMetrics._get_value(data, keys)` body is extracted to a module-level function
-`field_value(data, keys) -> Optional[float]` in `calculated_metrics.py`. The method becomes
-a thin delegator. `sector_metrics.py` imports `field_value` so both modules resolve fields
-through one implementation (no duplication).
+`field_value(data, keys) -> Optional[float]` in a **new leaf module
+`src/parsers/metric_utils.py`**. `_get_value` becomes a thin delegator. Both
+`calculated_metrics.py` and `sector_metrics.py` import `field_value` from there.
+
+The resolver lives in its own module (not in `calculated_metrics.py`) to avoid a circular
+import: `calculate_all` imports `apply_sector` from `sector_metrics`, while `sector_metrics`
+needs the resolver — if the resolver stayed in `calculated_metrics`, the two modules would
+import each other. With `metric_utils` as a leaf, the dependency graph is a DAG
+(`metric_utils` ← `sector_metrics` ← `calculated_metrics`).
 
 ### Signature change
 
@@ -207,11 +213,13 @@ the mypy `files` list in `pyproject.toml`).
 
 ## Scope / files
 
-- **New:** `src/parsers/sector_metrics.py`, `tests/test_sector_metrics.py`.
-- **Modified:** `src/parsers/calculated_metrics.py` (extract `field_value`, add `sector`
-  param), `src/fetchers/stock_data_fetcher.py` (pass sector), `src/exporters/sqlite_store.py`
-  (columns; migration is automatic), `tests/test_sqlite_store.py` (assertions),
-  `pyproject.toml` (mypy files), `README.md` (document sector ratios + approximation basis).
+- **New:** `src/parsers/metric_utils.py` (shared resolver), `src/parsers/sector_metrics.py`,
+  `tests/test_metric_utils.py`, `tests/test_sector_metrics.py`.
+- **Modified:** `src/parsers/calculated_metrics.py` (delegate `_get_value` to `field_value`,
+  add `sector` param), `src/fetchers/stock_data_fetcher.py` (extract `_compute_metrics`, pass
+  sector), `src/exporters/sqlite_store.py` (columns; migration is automatic),
+  `tests/test_sqlite_store.py` (assertions), `pyproject.toml` (mypy files for the two new
+  modules), `README.md` (document sector ratios + approximation basis).
 - **Untouched:** canonical registry, XBRL parser, fetchers' acquisition logic.
 
 ## Future work (not in this spec)
