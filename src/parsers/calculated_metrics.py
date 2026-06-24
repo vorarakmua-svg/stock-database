@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .metric_utils import field_value
+from .sector_metrics import apply_sector
 
 
 class CalculatedMetrics:
@@ -39,7 +40,8 @@ class CalculatedMetrics:
         self,
         financials: Dict[str, Any],
         market_data: Optional[Dict[str, Any]] = None,
-        valuation: Optional[Dict[str, Any]] = None
+        valuation: Optional[Dict[str, Any]] = None,
+        sector: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Calculate all derived metrics from financial data.
@@ -121,11 +123,16 @@ class CalculatedMetrics:
                 metrics["free_cash_flow"], market_data
             )
 
+        # Sector overlay: merge bank/insurer/REIT ratios and null the generic
+        # ratios that don't apply. A None/general sector is a no-op.
+        apply_sector(metrics, financials, sector)
+
         return metrics
 
     def calculate_historical(
         self,
-        annual_financials: Dict[str, Dict[str, Any]]
+        annual_financials: Dict[str, Dict[str, Any]],
+        sector: Optional[str] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Calculate metrics for multiple years of historical data.
@@ -140,7 +147,7 @@ class CalculatedMetrics:
 
         for year, financials in annual_financials.items():
             try:
-                metrics = self.calculate_all(financials)
+                metrics = self.calculate_all(financials, sector=sector)
                 historical_metrics[year] = metrics
             except Exception as e:
                 self.logger.warning(f"Error calculating metrics for {year}: {e}")
