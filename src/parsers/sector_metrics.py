@@ -72,6 +72,41 @@ def insurer_metrics(financials: Dict[str, Any]) -> Dict[str, Optional[float]]:
     return {"loss_ratio": loss_ratio, "combined_ratio": combined_ratio}
 
 
+def reit_metrics(financials: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    """REIT ratios (proxies): FFO, AFFO, FFO/share, FFO payout.
+
+    FFO ~= net income + total D&A (a pure REIT's D&A is almost all real estate);
+    exact NAREIT FFO would also subtract gains on property sales, which the
+    registry does not split out. AFFO ~= FFO - total capex.
+    """
+    net_income = _f(financials, "net_income")
+    dna = _f(financials, "depreciation_amortization")
+    capex = _f(financials, "capex")
+    dividends_paid = _f(financials, "dividends_paid")
+    shares = _f(financials, "weighted_avg_shares_diluted")
+
+    ffo: Optional[float] = None
+    if net_income is not None and dna is not None:
+        ffo = net_income + dna
+
+    affo: Optional[float] = None
+    if ffo is not None and capex is not None:
+        affo = ffo - capex
+
+    ffo_per_share: Optional[float] = None
+    if ffo is not None and shares and shares > 0:
+        ffo_per_share = ffo / shares
+
+    ffo_payout: Optional[float] = None
+    if ffo is not None and ffo > 0 and dividends_paid is not None:
+        ffo_payout = dividends_paid / ffo
+
+    return {
+        "ffo": ffo, "affo": affo,
+        "ffo_per_share": ffo_per_share, "ffo_payout": ffo_payout,
+    }
+
+
 # Generic ratio keys to null per sector (must match keys emitted by
 # CalculatedMetrics.calculate_all).
 SUPPRESSED_BY_SECTOR: Dict[str, frozenset] = {
@@ -109,10 +144,10 @@ _BASIS: Dict[str, str] = {
     "affo": "proxy: ffo - total capex (not maintenance capex)",
 }
 
-# Registered in later tasks: REIT -> reit_metrics.
 SECTOR_EXTRAS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Optional[float]]]] = {
     BANK: bank_metrics,
     INSURANCE: insurer_metrics,
+    REIT: reit_metrics,
 }
 
 

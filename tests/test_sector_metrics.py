@@ -1,6 +1,6 @@
 """Sector-aware ratio functions and the suppression/orchestration layer."""
 
-from src.parsers.sector_metrics import apply_sector, bank_metrics, insurer_metrics
+from src.parsers.sector_metrics import apply_sector, bank_metrics, insurer_metrics, reit_metrics
 
 
 def test_bank_metrics_compute_from_canonical_fields():
@@ -73,3 +73,30 @@ def test_apply_sector_insurance_adds_and_suppresses():
     assert metrics["interest_coverage"] == 8.0   # kept for insurers
     assert metrics["loss_ratio"] == 150.0 / 200.0
     assert "combined_ratio" in metrics["_basis"]
+
+
+def test_reit_ffo_and_derivatives():
+    f = {"net_income": 100.0, "depreciation_amortization": 40.0,
+         "capex": 10.0, "dividends_paid": 84.0,
+         "weighted_avg_shares_diluted": 70.0}
+    m = reit_metrics(f)
+    assert m["ffo"] == 140.0                 # net_income + D&A
+    assert m["affo"] == 130.0                # ffo - capex
+    assert m["ffo_per_share"] == 2.0         # 140 / 70
+    assert m["ffo_payout"] == 84.0 / 140.0   # dividends / ffo
+
+
+def test_apply_sector_reit_adds_and_suppresses():
+    metrics = {"roic": 0.2, "inventory_turnover": 5.0, "ebitda": 100.0,
+               "interest_coverage": 8.0, "roe": 0.06}
+    f = {"net_income": 100.0, "depreciation_amortization": 40.0,
+         "capex": 10.0, "dividends_paid": 84.0,
+         "weighted_avg_shares_diluted": 70.0}
+    apply_sector(metrics, f, "reit")
+    assert metrics["roic"] is None
+    assert metrics["inventory_turnover"] is None
+    assert metrics["ebitda"] == 100.0          # kept for REITs
+    assert metrics["interest_coverage"] == 8.0  # kept for REITs
+    assert metrics["ffo"] == 140.0
+    assert "ffo" in metrics["_basis"]
+    assert "affo" in metrics["_basis"]
