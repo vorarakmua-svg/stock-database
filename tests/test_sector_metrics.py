@@ -1,6 +1,6 @@
 """Sector-aware ratio functions and the suppression/orchestration layer."""
 
-from src.parsers.sector_metrics import apply_sector, bank_metrics
+from src.parsers.sector_metrics import apply_sector, bank_metrics, insurer_metrics
 
 
 def test_bank_metrics_compute_from_canonical_fields():
@@ -51,9 +51,6 @@ def test_apply_sector_none_is_noop():
     metrics = {"roic": 0.2, "inventory_turnover": 5.0}
     apply_sector(metrics, {}, None)
     assert metrics == {"roic": 0.2, "inventory_turnover": 5.0}
-
-
-from src.parsers.sector_metrics import insurer_metrics
 
 
 def test_insurer_metrics_compute():
