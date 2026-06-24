@@ -183,5 +183,35 @@ def test_migrate_adds_missing_columns(tmp_path):
             "SELECT name FROM sqlite_master WHERE type='table'")}
         assert "financials_ttm" in tables  # new table created on existing DB
         assert "unmapped_facts" in tables  # tag-as-data capture table created too
+        mcols = {row[1] for row in conn.execute("PRAGMA table_info(metrics_annual)")}
+        assert "efficiency_ratio" in mcols   # sector ratio column migrated in
+        assert "ffo" in mcols
+    finally:
+        conn.close()
+
+
+def test_sector_metrics_persist_with_suppressed_nulls(tmp_path):
+    s = StockData(ticker="BNK", cik="000", company_name="Bank Inc.")
+    s.sector_class = "bank"
+    s.financials_annual = {"2024": {"fiscal_year": 2024, "net_income": 20.0,
+                                    "total_assets": 1000.0, "total_equity": 120.0}}
+    # Simulate what calculate_historical(sector="bank") produces: a bank ratio set
+    # plus the generic ratios it suppresses (stored as None).
+    s.calculated_metrics = {"historical": {"2024": {
+        "efficiency_ratio": 0.6, "loan_to_deposit": 0.67,
+        "net_interest_margin": 0.05, "roe": 0.16,
+        "roic": None, "inventory_turnover": None,
+    }}}
+    s.add_source("sec_edgar")
+    SQLiteStore(tmp_path / "stock.db").export([s])
+
+    conn = sqlite3.connect(tmp_path / "stock.db")
+    try:
+        eff, roic = conn.execute(
+            "SELECT efficiency_ratio, roic FROM metrics_annual "
+            "WHERE ticker='BNK' AND fiscal_year=2024"
+        ).fetchone()
+        assert eff == 0.6
+        assert roic is None          # suppressed -> NULL
     finally:
         conn.close()
