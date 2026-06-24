@@ -1,6 +1,10 @@
 """Integrity checks: magnitude outliers, cash reconciliation, quarterly sums, ratio bounds."""
 
-from src.validation.integrity import check_cashflow_reconciliation, check_field_outliers
+from src.validation.integrity import (
+    check_cashflow_reconciliation,
+    check_field_outliers,
+    check_quarterly_sums,
+)
 
 
 def _yr(revenue, assets):
@@ -66,3 +70,36 @@ def test_cashflow_reconcile_silent_on_missing_fields():
     annual = {"2023": {"cash_and_equivalents": 1.0e9},
               "2024": {"cash_and_equivalents": 2.0e9}}  # no flow fields
     assert check_cashflow_reconciliation(annual, {"2024", "2023"}) == []
+
+
+def _q(fy, fq, revenue):
+    return {"fiscal_year": fy, "fiscal_quarter": fq, "revenue": revenue}
+
+
+def test_quarterly_sum_mismatch_fires():
+    annual = {"2024": {"revenue": 1.0e9}}
+    quarterly = {  # quarters sum to 0.80e9, annual says 1.0e9 -> 20% off
+        "2024-03-31": _q(2024, 1, 0.20e9), "2024-06-30": _q(2024, 2, 0.20e9),
+        "2024-09-30": _q(2024, 3, 0.20e9), "2024-12-31": _q(2024, 4, 0.20e9),
+    }
+    findings = check_quarterly_sums(annual, quarterly, {"2024"})
+    assert [(f.code, f.period, f.severity) for f in findings] == [
+        ("quarterly_sum_mismatch", "2024", "medium")]
+
+
+def test_quarterly_sum_exact_ladder_is_silent():
+    annual = {"2024": {"revenue": 1.0e9}}
+    quarterly = {
+        "2024-03-31": _q(2024, 1, 0.25e9), "2024-06-30": _q(2024, 2, 0.25e9),
+        "2024-09-30": _q(2024, 3, 0.25e9), "2024-12-31": _q(2024, 4, 0.25e9),
+    }
+    assert check_quarterly_sums(annual, quarterly, {"2024"}) == []
+
+
+def test_quarterly_sum_silent_with_only_three_quarters():
+    annual = {"2024": {"revenue": 1.0e9}}
+    quarterly = {
+        "2024-03-31": _q(2024, 1, 0.25e9), "2024-06-30": _q(2024, 2, 0.25e9),
+        "2024-09-30": _q(2024, 3, 0.25e9),  # Q4 missing
+    }
+    assert check_quarterly_sums(annual, quarterly, {"2024"}) == []

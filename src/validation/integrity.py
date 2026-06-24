@@ -28,6 +28,7 @@ _FLOW_FIELDS = tuple(
 
 _OUTLIER_FACTOR = 100.0
 _CASH_TOL = 0.05
+_QUARTERLY_TOL = 0.01
 
 
 def check_field_outliers(
@@ -99,4 +100,48 @@ def check_cashflow_reconciliation(
                 f"cash flow ({flow_sum:,.0f}); residual {residual:,.0f}.",
                 curr,
             ))
+    return findings
+
+
+def check_quarterly_sums(
+    annual: Dict[str, Dict[str, Any]],
+    quarterly: Dict[str, Dict[str, Any]],
+    scored_years: Iterable[str],
+) -> List[Finding]:
+    """Flag a flow field whose four discrete quarters don't sum to the annual figure.
+
+    Validates the cumulative-ladder differencing. Only runs for a fiscal year that
+    has all four discrete quarters and is in the scored window.
+    """
+    scored = set(scored_years)
+    by_fy: Dict[int, Dict[int, Dict[str, Any]]] = {}
+    for period in quarterly.values():
+        fq = period.get("fiscal_quarter")
+        fy = period.get("fiscal_year")
+        if fq in (1, 2, 3, 4) and fy is not None:
+            by_fy.setdefault(int(fy), {})[int(fq)] = period
+
+    findings: List[Finding] = []
+    for year in scored:
+        if not str(year).isdigit():
+            continue
+        quarters = by_fy.get(int(year))
+        ann = annual.get(year)
+        if not quarters or set(quarters) != {1, 2, 3, 4} or not ann:
+            continue
+        for key in _FLOW_FIELDS:
+            ann_val = _num(ann, key)
+            if ann_val is None or abs(ann_val) < _MATERIALITY:
+                continue
+            q_vals = [_num(quarters[q], key) for q in (1, 2, 3, 4)]
+            if any(v is None for v in q_vals):
+                continue
+            sum_q = sum(v for v in q_vals if v is not None)
+            if abs(sum_q - ann_val) / abs(ann_val) > _QUARTERLY_TOL:
+                findings.append(Finding(
+                    MEDIUM, "quarterly_sum_mismatch",
+                    f"'{key}': four quarters sum to {sum_q:,.0f} but annual FY{year} "
+                    f"is {ann_val:,.0f}.",
+                    year,
+                ))
     return findings
