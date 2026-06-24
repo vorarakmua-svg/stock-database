@@ -8,7 +8,7 @@ check is FLAG-ONLY — it emits Findings and never mutates data.
 """
 
 import statistics
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, CASHFLOW, DURATION, INCOME, UNIT_USD
 from .quality import HIGH, LOW, MEDIUM, Finding, _num
@@ -43,7 +43,7 @@ def check_field_outliers(
     scored = set(scored_years)
     findings: List[Finding] = []
     for key in _USD_FIELDS:
-        points = []  # (year, signed_value, magnitude)
+        points: List[Tuple[str, float, float]] = []  # (year, signed_value, magnitude)
         for year, period in annual.items():
             v = _num(period, key)
             if v is not None and v != 0:

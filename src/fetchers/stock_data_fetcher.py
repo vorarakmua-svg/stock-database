@@ -264,11 +264,15 @@ class StockDataFetcher:
         scored_years = set(sorted(annual.keys(), reverse=True)[:5])
 
         report = assess_annual(annual, sector=stock.sector_class)
-        report.findings.extend(check_field_outliers(annual, scored_years))
-        report.findings.extend(check_cashflow_reconciliation(annual, scored_years))
-        report.findings.extend(check_quarterly_sums(annual, quarterly, scored_years))
-        report.findings.extend(check_ratio_bounds(historical, scored_years))
-        report.score = score_for(report.findings)
+        if annual:
+            # Integrity checks all key off annual data; with no annual financials
+            # keep assess_annual's score (0) rather than letting a lone
+            # no_financials finding net out to 75.
+            report.findings.extend(check_field_outliers(annual, scored_years))
+            report.findings.extend(check_cashflow_reconciliation(annual, scored_years))
+            report.findings.extend(check_quarterly_sums(annual, quarterly, scored_years))
+            report.findings.extend(check_ratio_bounds(historical, scored_years))
+            report.score = score_for(report.findings)
 
         stock.data_quality = report.as_dict()
         stock.data_quality["unmapped_tag_count"] = len(stock.unmapped_facts)

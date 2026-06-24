@@ -111,3 +111,17 @@ def test_assess_clean_company_scores_100(tmp_path):
     codes = {f["code"] for f in stock.data_quality["findings"]}
     assert not (codes & integrity_codes)   # no integrity findings on clean data
     assert stock.data_quality["score"] == 100
+
+
+def test_assess_quarterly_only_company_scores_zero(tmp_path):
+    # No annual financials -> assess_annual returns score 0 (no_financials);
+    # _assess must not let integrity scoring net that up to 75.
+    fetcher = _make_fetcher(tmp_path, workers=1)
+    stock = StockData(ticker="QO", cik="000", company_name="Q-Only Inc.")
+    stock.financials_quarterly = {
+        "2024-03-31": {"fiscal_year": 2024, "fiscal_quarter": 1, "revenue": 2.5e8},
+    }
+    fetcher._clean_and_derive(stock)
+    fetcher._compute_metrics(stock)
+    fetcher._assess(stock)
+    assert stock.data_quality["score"] == 0
