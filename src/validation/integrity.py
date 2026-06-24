@@ -11,7 +11,7 @@ import statistics
 from typing import Any, Dict, Iterable, List
 
 from ..mappings.canonical import CANONICAL_FIELDS, CASHFLOW, DURATION, INCOME, UNIT_USD
-from .quality import HIGH, MEDIUM, Finding, _num
+from .quality import HIGH, LOW, MEDIUM, Finding, _num
 
 # Ignore sub-$1M figures (rounding/noise) across all checks.
 _MATERIALITY = 1_000_000.0
@@ -142,6 +142,52 @@ def check_quarterly_sums(
                     MEDIUM, "quarterly_sum_mismatch",
                     f"'{key}': four quarters sum to {sum_q:,.0f} but annual FY{year} "
                     f"is {ann_val:,.0f}.",
+                    year,
+                ))
+    return findings
+
+
+def _out_of_bounds(metric: str, v: float) -> bool:
+    if metric in ("gross_margin", "operating_margin", "ebitda_margin"):
+        return v > 1.01
+    if metric in ("net_margin", "fcf_margin"):
+        return abs(v) > 2.0
+    if metric in ("roe", "roa", "roic"):
+        return abs(v) > 5.0
+    if metric == "efficiency_ratio":
+        return v <= 0 or v > 2.0
+    if metric in ("loss_ratio", "combined_ratio"):
+        return v < 0 or v > 3.0
+    if metric in ("loan_to_deposit", "ffo_payout"):
+        return v < 0 or v > 5.0
+    if metric == "net_interest_margin":
+        return v < 0 or v > 0.25
+    return False
+
+
+_BOUNDED_METRICS = (
+    "gross_margin", "operating_margin", "ebitda_margin", "net_margin", "fcf_margin",
+    "roe", "roa", "roic", "efficiency_ratio", "loss_ratio", "combined_ratio",
+    "loan_to_deposit", "ffo_payout", "net_interest_margin",
+)
+
+
+def check_ratio_bounds(
+    historical: Dict[str, Dict[str, Any]], scored_years: Iterable[str]
+) -> List[Finding]:
+    """Flag a computed metric that falls outside its mathematically-plausible range."""
+    scored = set(scored_years)
+    findings: List[Finding] = []
+    for year in scored:
+        metrics = historical.get(year)
+        if not isinstance(metrics, dict):
+            continue
+        for metric in _BOUNDED_METRICS:
+            v = metrics.get(metric)
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and _out_of_bounds(metric, float(v)):
+                findings.append(Finding(
+                    LOW, "ratio_out_of_bounds",
+                    f"'{metric}' = {float(v):.4f} is outside its plausible range.",
                     year,
                 ))
     return findings

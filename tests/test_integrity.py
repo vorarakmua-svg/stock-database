@@ -4,6 +4,7 @@ from src.validation.integrity import (
     check_cashflow_reconciliation,
     check_field_outliers,
     check_quarterly_sums,
+    check_ratio_bounds,
 )
 
 
@@ -103,3 +104,24 @@ def test_quarterly_sum_silent_with_only_three_quarters():
         "2024-09-30": _q(2024, 3, 0.25e9),  # Q4 missing
     }
     assert check_quarterly_sums(annual, quarterly, {"2024"}) == []
+
+
+def test_ratio_bounds_fire_on_impossible_values():
+    historical = {"2024": {"gross_margin": 2.5, "efficiency_ratio": -0.3, "roe": 0.2}}
+    findings = check_ratio_bounds(historical, {"2024"})
+    metrics_flagged = {f.message.split("'")[1] for f in findings}
+    assert "gross_margin" in metrics_flagged      # >1.01 impossible
+    assert "efficiency_ratio" in metrics_flagged   # <=0 impossible
+    assert "roe" not in metrics_flagged            # 20% is fine
+    assert all(f.severity == "low" and f.code == "ratio_out_of_bounds" for f in findings)
+
+
+def test_ratio_bounds_silent_on_strong_but_real_values():
+    # Apple-like: 82% ROIC, 26% net margin, 45% gross margin — all plausible.
+    historical = {"2024": {"roic": 0.82, "net_margin": 0.26, "gross_margin": 0.45}}
+    assert check_ratio_bounds(historical, {"2024"}) == []
+
+
+def test_ratio_bounds_skip_none_and_unscored_years():
+    historical = {"2024": {"gross_margin": None}, "2019": {"gross_margin": 9.0}}
+    assert check_ratio_bounds(historical, {"2024"}) == []  # None skipped, 2019 unscored
