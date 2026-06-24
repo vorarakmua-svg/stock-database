@@ -51,3 +51,28 @@ def test_apply_sector_none_is_noop():
     metrics = {"roic": 0.2, "inventory_turnover": 5.0}
     apply_sector(metrics, {}, None)
     assert metrics == {"roic": 0.2, "inventory_turnover": 5.0}
+
+
+from src.parsers.sector_metrics import insurer_metrics
+
+
+def test_insurer_metrics_compute():
+    f = {"premiums_earned": 200.0, "claims_incurred": 150.0,
+         "benefits_and_expenses": 190.0}
+    m = insurer_metrics(f)
+    assert m["loss_ratio"] == 150.0 / 200.0          # exact
+    assert m["combined_ratio"] == 190.0 / 200.0      # proxy
+
+
+def test_apply_sector_insurance_adds_and_suppresses():
+    metrics = {"roic": 0.2, "inventory_turnover": 5.0, "ebitda": 100.0,
+               "interest_coverage": 8.0, "roe": 0.12}
+    f = {"premiums_earned": 200.0, "claims_incurred": 150.0,
+         "benefits_and_expenses": 190.0}
+    apply_sector(metrics, f, "insurance")
+    assert metrics["roic"] is None
+    assert metrics["inventory_turnover"] is None
+    assert metrics["ebitda"] is None
+    assert metrics["interest_coverage"] == 8.0   # kept for insurers
+    assert metrics["loss_ratio"] == 150.0 / 200.0
+    assert "combined_ratio" in metrics["_basis"]

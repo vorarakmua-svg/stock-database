@@ -55,6 +55,23 @@ def bank_metrics(financials: Dict[str, Any]) -> Dict[str, Optional[float]]:
     }
 
 
+def insurer_metrics(financials: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    """Insurer ratios: loss ratio (exact) and combined ratio (proxy)."""
+    premiums = _f(financials, "premiums_earned")
+    claims = _f(financials, "claims_incurred")
+    benefits_and_expenses = _f(financials, "benefits_and_expenses")
+
+    loss_ratio: Optional[float] = None
+    if claims is not None and premiums and premiums > 0:
+        loss_ratio = claims / premiums
+
+    combined_ratio: Optional[float] = None
+    if benefits_and_expenses is not None and premiums and premiums > 0:
+        combined_ratio = benefits_and_expenses / premiums
+
+    return {"loss_ratio": loss_ratio, "combined_ratio": combined_ratio}
+
+
 # Generic ratio keys to null per sector (must match keys emitted by
 # CalculatedMetrics.calculate_all).
 SUPPRESSED_BY_SECTOR: Dict[str, frozenset] = {
@@ -92,9 +109,10 @@ _BASIS: Dict[str, str] = {
     "affo": "proxy: ffo - total capex (not maintenance capex)",
 }
 
-# Registered in later tasks: INSURANCE -> insurer_metrics, REIT -> reit_metrics.
+# Registered in later tasks: REIT -> reit_metrics.
 SECTOR_EXTRAS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Optional[float]]]] = {
     BANK: bank_metrics,
+    INSURANCE: insurer_metrics,
 }
 
 
