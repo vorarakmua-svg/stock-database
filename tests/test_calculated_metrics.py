@@ -81,3 +81,41 @@ def test_calculate_historical(calc, sample_financials):
     hist = calc.calculate_historical({"2024": sample_financials, "2023": sample_financials})
     assert set(hist.keys()) == {"2024", "2023"}
     assert hist["2024"]["ebitda"] == pytest.approx(240.0)
+
+
+def test_calculate_all_general_sector_is_unchanged():
+    calc = CalculatedMetrics()
+    financials = {"revenue": 1000.0, "net_income": 100.0, "total_assets": 2000.0,
+                  "total_equity": 800.0, "operating_income": 150.0,
+                  "inventory": 50.0, "cost_of_revenue": 600.0}
+    base = calc.calculate_all(financials)            # sector=None
+    same = calc.calculate_all(financials, sector="general")
+    # No sector keys leak in, nothing is suppressed.
+    assert "efficiency_ratio" not in base
+    assert "ffo" not in same
+    assert base["roic"] == same["roic"]
+    assert same["inventory_turnover"] is not None
+
+
+def test_calculate_all_bank_sector_suppresses_and_adds():
+    calc = CalculatedMetrics()
+    financials = {"net_interest_income": 50.0, "noninterest_income": 30.0,
+                  "noninterest_expense": 48.0, "total_assets": 1000.0,
+                  "total_loans": 600.0, "total_deposits": 900.0,
+                  "inventory": 5.0, "cost_of_revenue": 10.0,
+                  "net_income": 20.0, "total_equity": 120.0}
+    m = calc.calculate_all(financials, sector="bank")
+    assert m["efficiency_ratio"] == 48.0 / 80.0
+    assert m["roic"] is None
+    assert m["inventory_turnover"] is None
+    assert m["roe"] == 20.0 / 120.0      # kept
+
+
+def test_calculate_historical_threads_sector():
+    calc = CalculatedMetrics()
+    annual = {"2024": {"net_income": 100.0, "depreciation_amortization": 40.0,
+                       "capex": 10.0, "revenue": 500.0, "total_assets": 2000.0,
+                       "total_equity": 800.0}}
+    hist = calc.calculate_historical(annual, sector="reit")
+    assert hist["2024"]["ffo"] == 140.0
+    assert hist["2024"]["roic"] is None

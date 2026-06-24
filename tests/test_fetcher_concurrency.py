@@ -54,3 +54,19 @@ def test_failure_becomes_error_stock(tmp_path, monkeypatch):
     results = fetcher.fetch_multiple(["AAA", "BBB"])
     assert len(results) == 2
     assert all(s.errors for s in results)
+
+
+def test_compute_metrics_is_sector_aware(tmp_path):
+    fetcher = _make_fetcher(tmp_path, workers=1)
+    stock = StockData(ticker="RIT", cik="000", company_name="R Inc.")
+    stock.sector_class = "reit"
+    stock.financials_annual = {
+        "2024": {"net_income": 100.0, "depreciation_amortization": 40.0,
+                 "capex": 10.0, "revenue": 500.0, "total_assets": 2000.0,
+                 "total_equity": 800.0},
+    }
+    fetcher._compute_metrics(stock)
+    cm = stock.calculated_metrics
+    assert cm["ffo"] == 140.0                 # REIT ratio present
+    assert cm["roic"] is None                 # suppressed for REITs
+    assert cm["historical"]["2024"]["ffo"] == 140.0

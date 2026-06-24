@@ -373,6 +373,29 @@ python coverage_report.py JPM PGR PLD # specific tickers
 This reports per-field, per-sector fill rates and surfaces any company missing a core
 field (with the raw tags it filed) so candidate-tag lists can be extended.
 
+### Sector-aware metrics
+
+Ratios are computed per the company's sector (classified from its SIC code), so
+cross-company screening compares like with like:
+
+| Sector | Added ratios | Suppressed generic ratios (stored `NULL` = not applicable) |
+|---|---|---|
+| **Bank** | net interest margin\*, efficiency ratio, loan-to-deposit | EBITDA family, ROIC/NOPAT/invested capital, interest coverage, gross/operating margin, inventory & receivables turnover, asset turnover, working capital, net/total debt, FCF family |
+| **Insurer** | loss ratio, combined ratio\* | EBITDA family, ROIC/NOPAT/invested capital, inventory turnover, gross margin, asset turnover, working capital |
+| **REIT** | FFO\*, AFFO\*, FFO/share, FFO payout | ROIC/NOPAT/invested capital, inventory & receivables turnover, gross margin, asset turnover, FCF family |
+
+General operating companies (and utilities/energy) get the full generic ratio
+suite unchanged. A suppressed ratio is stored as `NULL`, so a screen such as
+`WHERE roic > 0.15` automatically excludes sectors where ROIC is undefined
+instead of returning a misleading value.
+
+\* **Proxy** (the registry doesn't split out the exact inputs):
+net interest margin = `net_interest_income / total_assets`;
+combined ratio = `benefits_and_expenses / premiums_earned`;
+FFO = `net_income + total D&A` (no real-estate-specific D&A or gains-on-sale
+adjustment); AFFO = `FFO − total capex`. Each proxy is flagged in the metrics
+JSON under `_basis`.
+
 ### Fiscal vs calendar year
 
 Companies have different fiscal year-ends (Microsoft June, Apple September, Walmart

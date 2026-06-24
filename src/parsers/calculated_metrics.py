@@ -15,6 +15,9 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from .metric_utils import field_value
+from .sector_metrics import apply_sector
+
 
 class CalculatedMetrics:
     """
@@ -37,7 +40,8 @@ class CalculatedMetrics:
         self,
         financials: Dict[str, Any],
         market_data: Optional[Dict[str, Any]] = None,
-        valuation: Optional[Dict[str, Any]] = None
+        valuation: Optional[Dict[str, Any]] = None,
+        sector: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Calculate all derived metrics from financial data.
@@ -46,6 +50,8 @@ class CalculatedMetrics:
             financials: Dictionary of financial statement data (from SEC)
             market_data: Optional market data (from Yahoo)
             valuation: Optional valuation metrics (from Yahoo)
+            sector: Optional sector class (bank/insurance/reit/...) selecting sector
+                ratios + suppression; None (default) keeps the generic suite unchanged.
 
         Returns:
             Dictionary with calculated metrics
@@ -119,17 +125,24 @@ class CalculatedMetrics:
                 metrics["free_cash_flow"], market_data
             )
 
+        # Sector overlay: merge bank/insurer/REIT ratios and null the generic
+        # ratios that don't apply. A None/general sector is a no-op.
+        apply_sector(metrics, financials, sector)
+
         return metrics
 
     def calculate_historical(
         self,
-        annual_financials: Dict[str, Dict[str, Any]]
+        annual_financials: Dict[str, Dict[str, Any]],
+        sector: Optional[str] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Calculate metrics for multiple years of historical data.
 
         Args:
             annual_financials: Dictionary keyed by fiscal year
+            sector: Optional sector class (bank/insurance/reit/...) selecting sector
+                ratios + suppression; None (default) keeps the generic suite unchanged.
 
         Returns:
             Dictionary with calculated metrics for each year
@@ -138,7 +151,7 @@ class CalculatedMetrics:
 
         for year, financials in annual_financials.items():
             try:
-                metrics = self.calculate_all(financials)
+                metrics = self.calculate_all(financials, sector=sector)
                 historical_metrics[year] = metrics
             except Exception as e:
                 self.logger.warning(f"Error calculating metrics for {year}: {e}")
@@ -533,23 +546,8 @@ class CalculatedMetrics:
     def _get_value(
         self, data: Dict[str, Any], keys: List[str]
     ) -> Optional[float]:
-        """
-        Get value from data dictionary, trying multiple possible keys.
-
-        Args:
-            data: Dictionary to search
-            keys: List of possible keys in order of preference
-
-        Returns:
-            First found value, or None
-        """
-        for key in keys:
-            if key in data and data[key] is not None:
-                try:
-                    return float(data[key])
-                except (ValueError, TypeError):
-                    continue
-        return None
+        """Get value from data dictionary, trying multiple possible keys."""
+        return field_value(data, keys)
 
     def format_metrics_summary(self, metrics: Dict[str, Any]) -> str:
         """

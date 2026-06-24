@@ -184,28 +184,10 @@ class StockDataFetcher:
                 self.logger.warning(f"Data-quality validation error for {ticker}: {e}")
                 stock.add_warning(f"Data quality: {str(e)}")
 
-        # Calculate derived metrics (FCF, EBITDA, ROIC, etc.)
+        # Calculate derived metrics (generic + sector-aware).
         if stock.financials_annual:
             try:
-                # Get the most recent year's financials
-                years = sorted(stock.financials_annual.keys(), reverse=True)
-                if years:
-                    latest_financials = stock.financials_annual[years[0]]
-
-                    # Calculate metrics
-                    metrics = self.metrics_calculator.calculate_all(
-                        financials=latest_financials,
-                        market_data=stock.market_data,
-                        valuation=stock.valuation
-                    )
-
-                    # Add historical metrics for all years
-                    metrics["historical"] = self.metrics_calculator.calculate_historical(
-                        stock.financials_annual
-                    )
-
-                    stock.merge_calculated_metrics(metrics)
-
+                self._compute_metrics(stock)
             except Exception as e:
                 self.logger.warning(f"Metrics calculation error for {ticker}: {e}")
                 stock.add_warning(f"Calculated metrics: {str(e)}")
@@ -216,6 +198,28 @@ class StockDataFetcher:
         )
 
         return stock
+
+    def _compute_metrics(self, stock: StockData) -> None:
+        """Populate generic + sector-aware derived metrics on the stock.
+
+        Uses the company's ``sector_class`` so banks/insurers/REITs get their
+        own ratios and the generic ratios that don't apply are stored as None.
+        """
+        years = sorted((stock.financials_annual or {}).keys(), reverse=True)
+        if not years:
+            return
+        latest_financials = stock.financials_annual[years[0]]
+        metrics = self.metrics_calculator.calculate_all(
+            financials=latest_financials,
+            market_data=stock.market_data,
+            valuation=stock.valuation,
+            sector=stock.sector_class,
+        )
+        metrics["historical"] = self.metrics_calculator.calculate_historical(
+            stock.financials_annual,
+            sector=stock.sector_class,
+        )
+        stock.merge_calculated_metrics(metrics)
 
     def _validate_and_score(self, stock: StockData) -> None:
         """Derive identities, validate/coerce periods, attach a data-quality report."""

@@ -33,6 +33,10 @@ _METRIC_COLUMNS = [
     "roic", "roa", "roe", "interest_coverage", "debt_to_ebitda",
     "asset_turnover", "inventory_turnover", "receivables_turnover",
     "gross_margin", "operating_margin", "net_margin", "ebitda_margin",
+    # Sector-aware ratios (NULL where not applicable to the company's sector).
+    "net_interest_margin", "efficiency_ratio", "loan_to_deposit",
+    "loss_ratio", "combined_ratio",
+    "ffo", "affo", "ffo_per_share", "ffo_payout",
 ]
 
 # Point-in-time market/valuation columns for the snapshot table.
