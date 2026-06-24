@@ -15,6 +15,8 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from .metric_utils import field_value
+
 
 class CalculatedMetrics:
     """
@@ -533,23 +535,8 @@ class CalculatedMetrics:
     def _get_value(
         self, data: Dict[str, Any], keys: List[str]
     ) -> Optional[float]:
-        """
-        Get value from data dictionary, trying multiple possible keys.
-
-        Args:
-            data: Dictionary to search
-            keys: List of possible keys in order of preference
-
-        Returns:
-            First found value, or None
-        """
-        for key in keys:
-            if key in data and data[key] is not None:
-                try:
-                    return float(data[key])
-                except (ValueError, TypeError):
-                    continue
-        return None
+        """Get value from data dictionary, trying multiple possible keys."""
+        return field_value(data, keys)
 
     def format_metrics_summary(self, metrics: Dict[str, Any]) -> str:
         """

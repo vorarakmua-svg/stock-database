@@ -58,6 +58,7 @@ files = [
     "src/models/canonical.py",
     "src/validation",
     "src/parsers/derived_fields.py",
+    "src/parsers/metric_utils.py",
     "src/parsers/ttm.py",
     "src/parsers/unmapped.py",
     "src/analysis",
