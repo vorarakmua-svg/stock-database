@@ -18,6 +18,14 @@ def test_bank_metrics_compute_from_canonical_fields():
 def test_bank_metrics_missing_inputs_are_none():
     assert bank_metrics({})["efficiency_ratio"] is None
     assert bank_metrics({})["loan_to_deposit"] is None
+    assert bank_metrics({})["net_interest_margin"] is None
+
+
+def test_bank_efficiency_ratio_requires_both_revenue_components():
+    # Only NII present (noninterest income missing) -> incomplete denominator,
+    # so efficiency_ratio must be None rather than a misleading partial ratio.
+    m = bank_metrics({"net_interest_income": 50.0, "noninterest_expense": 48.0})
+    assert m["efficiency_ratio"] is None
 
 
 def test_apply_sector_bank_adds_and_suppresses():

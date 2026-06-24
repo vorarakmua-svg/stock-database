@@ -39,10 +39,12 @@ def bank_metrics(financials: Dict[str, Any]) -> Dict[str, Optional[float]]:
     if nii is not None and total_assets and total_assets > 0:
         nim = nii / total_assets
 
-    revenue = (nii or 0.0) + (noninterest_income or 0.0)
     efficiency_ratio: Optional[float] = None
-    if noninterest_expense is not None and revenue > 0:
-        efficiency_ratio = noninterest_expense / revenue
+    if (noninterest_expense is not None and nii is not None
+            and noninterest_income is not None):
+        revenue = nii + noninterest_income
+        if revenue > 0:
+            efficiency_ratio = noninterest_expense / revenue
 
     loan_to_deposit: Optional[float] = None
     if total_loans is not None and total_deposits and total_deposits > 0:

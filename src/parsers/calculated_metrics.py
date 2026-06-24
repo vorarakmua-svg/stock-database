@@ -50,6 +50,8 @@ class CalculatedMetrics:
             financials: Dictionary of financial statement data (from SEC)
             market_data: Optional market data (from Yahoo)
             valuation: Optional valuation metrics (from Yahoo)
+            sector: Optional sector class (bank/insurance/reit/...) selecting sector
+                ratios + suppression; None (default) keeps the generic suite unchanged.
 
         Returns:
             Dictionary with calculated metrics
@@ -139,6 +141,8 @@ class CalculatedMetrics:
 
         Args:
             annual_financials: Dictionary keyed by fiscal year
+            sector: Optional sector class (bank/insurance/reit/...) selecting sector
+                ratios + suppression; None (default) keeps the generic suite unchanged.
 
         Returns:
             Dictionary with calculated metrics for each year
