@@ -11,7 +11,7 @@ import statistics
 from typing import Any, Dict, Iterable, List
 
 from ..mappings.canonical import CANONICAL_FIELDS, CASHFLOW, DURATION, INCOME, UNIT_USD
-from .quality import HIGH, Finding, _num
+from .quality import HIGH, MEDIUM, Finding, _num
 
 # Ignore sub-$1M figures (rounding/noise) across all checks.
 _MATERIALITY = 1_000_000.0
@@ -27,6 +27,7 @@ _FLOW_FIELDS = tuple(
 )
 
 _OUTLIER_FACTOR = 100.0
+_CASH_TOL = 0.05
 
 
 def check_field_outliers(
@@ -60,4 +61,42 @@ def check_field_outliers(
                     f"({median:,.0f}); likely a mis-resolved tag or filing error.",
                     year,
                 ))
+    return findings
+
+
+def check_cashflow_reconciliation(
+    annual: Dict[str, Dict[str, Any]], scored_years: Iterable[str]
+) -> List[Finding]:
+    """Flag when change in balance-sheet cash != operating+investing+financing flows.
+
+    The 5% tolerance absorbs the foreign-exchange-effect-on-cash line (not a
+    canonical field) and minor restricted-cash reclassifications.
+    """
+    scored = set(scored_years)
+    findings: List[Finding] = []
+    years = sorted(annual.keys())
+    for prev, curr in zip(years, years[1:]):
+        if curr not in scored:
+            continue
+        cash_curr = _num(annual[curr], "cash_and_equivalents")
+        cash_prev = _num(annual[prev], "cash_and_equivalents")
+        ocf = _num(annual[curr], "operating_cash_flow")
+        icf = _num(annual[curr], "investing_cash_flow")
+        fcf = _num(annual[curr], "financing_cash_flow")
+        if (cash_curr is None or cash_prev is None or ocf is None
+                or icf is None or fcf is None):
+            continue
+        delta = cash_curr - cash_prev
+        flow_sum = ocf + icf + fcf
+        denom = max(abs(delta), abs(flow_sum))
+        if denom < _MATERIALITY:
+            continue
+        residual = delta - flow_sum
+        if abs(residual) / denom > _CASH_TOL:
+            findings.append(Finding(
+                MEDIUM, "cashflow_imbalance",
+                f"change in cash ({delta:,.0f}) != operating+investing+financing "
+                f"cash flow ({flow_sum:,.0f}); residual {residual:,.0f}.",
+                curr,
+            ))
     return findings
