@@ -405,7 +405,7 @@ never alter data):
 | Check | Catches | Threshold | Penalty |
 |---|---|---|---|
 | Magnitude outlier | a USD field wildly inconsistent with its own history (mis-resolved tag / filing error) | ≥ 100× the field's median | −25 |
-| Cash-flow reconciliation | a cash-flow statement that doesn't explain the change in balance-sheet cash | residual > 5% | −10 |
+| Cash-flow consistency | the cash-flow statement's reported net change != its own sections + FX effect | residual > 1% | −10 |
 | Quarterly-sum | discrete quarters that don't sum to the annual figure | per-field > 1% | −10 |
 | Ratio bounds | a computed metric outside its plausible range (e.g. >100% gross margin) | impossibility bounds | −3 |
 
