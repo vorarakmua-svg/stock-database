@@ -13,16 +13,31 @@ def _yr(revenue, assets):
 
 
 def test_outlier_fires_on_1000x_spike():
+    # Revenue spikes in 2022 and reverts in 2023 -> a one-off anomaly (interior year).
     annual = {
         "2021": _yr(1.0e9, 2.0e9),
-        "2022": _yr(1.1e9, 2.1e9),
-        "2023": _yr(1.2e9, 2.2e9),
-        "2024": _yr(1.2e12, 2.3e9),  # revenue 1000x its own median
+        "2022": _yr(1.2e12, 2.1e9),
+        "2023": _yr(1.1e9, 2.2e9),
+        "2024": _yr(1.2e9, 2.3e9),
     }
-    findings = check_field_outliers(annual, {"2024", "2023", "2022", "2021"})
+    findings = check_field_outliers(annual, {"2021", "2022", "2023", "2024"})
     codes = [(f.code, f.period) for f in findings]
-    assert ("magnitude_outlier", "2024") in codes
+    assert ("magnitude_outlier", "2022") in codes
     assert all(f.severity == "high" for f in findings)
+
+
+def test_outlier_silent_on_persistent_step_change():
+    # Goodwill stays tiny for years, then jumps on an acquisition and PERSISTS.
+    # With many tiny pre-merger years the all-history median is tiny, so the OLD
+    # median check flagged every post-merger year (the Realty Income / VEREIT false
+    # positive). Spike-and-revert must NOT flag a jump that persists (~1x the next).
+    tiny = {"goodwill": 1.5e7}
+    big = {"goodwill": 3.7e9}
+    annual = {
+        "2017": tiny, "2018": tiny, "2019": tiny, "2020": tiny, "2021": tiny,
+        "2022": big, "2023": big, "2024": big,
+    }
+    assert check_field_outliers(annual, {"2022", "2023", "2024"}) == []
 
 
 def test_outlier_silent_on_real_growth_and_small_series():

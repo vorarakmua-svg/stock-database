@@ -7,7 +7,6 @@ don't sum to the annual figure, and metrics outside plausible bounds. Every
 check is FLAG-ONLY — it emits Findings and never mutates data.
 """
 
-import statistics
 from typing import Any, Dict, Iterable, List, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, CASHFLOW, DURATION, INCOME, UNIT_USD
@@ -42,11 +41,14 @@ _QUARTERLY_TOL = 0.01
 def check_field_outliers(
     annual: Dict[str, Dict[str, Any]], scored_years: Iterable[str]
 ) -> List[Finding]:
-    """Flag a USD field whose magnitude is >=100x its own across-year median.
+    """Flag a USD field that spikes >=100x BOTH adjacent years (a one-off anomaly).
 
-    A value 100x above its field's median is almost certainly a mis-resolved tag
-    or filing error (real year-over-year growth never approaches 100x). Uses all
-    available years for the median but only flags periods in ``scored_years``.
+    A transient spike-and-revert is the signature of a filing or mis-resolved-tag
+    error; a genuine step-change (e.g. goodwill from an acquisition) jumps and
+    PERSISTS, staying ~1x the next year, so it is correctly not flagged. The first
+    and last points of a field's series -- including the latest year -- are never
+    flagged: there is no later value to confirm a reversion, and a just-happened
+    jump is indistinguishable from a real recent event.
     """
     scored = set(scored_years)
     findings: List[Finding] = []
@@ -56,18 +58,21 @@ def check_field_outliers(
             v = _num(period, key)
             if v is not None and v != 0:
                 points.append((year, v, abs(v)))
-        mags = [m for _, _, m in points]
-        if len(mags) < 3:
+        if len(points) < 3:
             continue
-        median = statistics.median(mags)
-        if median < _MATERIALITY:
-            continue
-        for year, value, mag in points:
-            if year in scored and mag / median >= _OUTLIER_FACTOR:
+        points.sort(key=lambda p: p[0])  # chronological (4-digit year strings)
+        for i in range(1, len(points) - 1):
+            year, value, mag = points[i]
+            if year not in scored or mag < _MATERIALITY:
+                continue
+            prev_mag = points[i - 1][2]
+            next_mag = points[i + 1][2]
+            if mag >= _OUTLIER_FACTOR * prev_mag and mag >= _OUTLIER_FACTOR * next_mag:
                 findings.append(Finding(
                     HIGH, "magnitude_outlier",
-                    f"'{key}' = {value:,.0f} is {mag / median:.0f}x its median "
-                    f"({median:,.0f}); likely a mis-resolved tag or filing error.",
+                    f"'{key}' = {value:,.0f} spikes to {mag / prev_mag:.0f}x the prior "
+                    f"year and {mag / next_mag:.0f}x the next; likely a one-off filing "
+                    f"or tag error.",
                     year,
                 ))
     return findings
