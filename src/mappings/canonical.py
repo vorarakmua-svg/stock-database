@@ -279,6 +279,26 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         ("RepaymentsOfLongTermDebt",),
         sign=SIGN_ABS, description="Stored as a positive magnitude (cash outflow).",
     ),
+    CanonicalField(
+        "net_change_in_cash", "Net Change in Cash", CASHFLOW, UNIT_USD, DURATION,
+        (
+            "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
+            "PeriodIncreaseDecreaseIncludingExchangeRateEffect",
+            "CashAndCashEquivalentsPeriodIncreaseDecrease",
+        ),
+        description="Reported total net change in cash (restricted-cash-inclusive, "
+                    "incl. FX); basis for the cash-flow internal-consistency check.",
+    ),
+    CanonicalField(
+        "fx_effect_on_cash", "FX Effect on Cash", CASHFLOW, UNIT_USD, DURATION,
+        (
+            "EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+            "EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
+            "IncludingDisposalGroupAndDiscontinuedOperations",
+            "EffectOfExchangeRateOnCashAndCashEquivalents",
+            "EffectOfExchangeRateOnCashAndCashEquivalentsContinuingOperations",
+        ),
+    ),
 
     # ---------------- Shares ----------------
     CanonicalField(

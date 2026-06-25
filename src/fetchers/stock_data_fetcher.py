@@ -18,7 +18,13 @@ from ..parsers.derived_fields import apply_derivations
 from ..parsers.ttm import compute_ttm
 from ..parsers.unmapped import detect_unmapped
 from ..parsers.xbrl_parser import XBRLParser
-from ..validation.quality import assess_annual
+from ..validation.integrity import (
+    check_cashflow_reconciliation,
+    check_field_outliers,
+    check_quarterly_sums,
+    check_ratio_bounds,
+)
+from ..validation.quality import assess_annual, score_for
 from .fred_handler import FREDHandler
 from .sec_handler import SECHandler
 from .yahoo_handler import YahooHandler
@@ -176,13 +182,13 @@ class StockDataFetcher:
             self.logger.warning(f"FRED data error for {ticker}: {e}")
             stock.add_warning(f"FRED: {str(e)}")
 
-        # Validate/coerce standardized financials and assess data quality.
+        # Clean, derive identities, and build the TTM series.
         if stock.financials_annual or stock.financials_quarterly:
             try:
-                self._validate_and_score(stock)
+                self._clean_and_derive(stock)
             except Exception as e:
-                self.logger.warning(f"Data-quality validation error for {ticker}: {e}")
-                stock.add_warning(f"Data quality: {str(e)}")
+                self.logger.warning(f"Data cleaning error for {ticker}: {e}")
+                stock.add_warning(f"Data cleaning: {str(e)}")
 
         # Calculate derived metrics (generic + sector-aware).
         if stock.financials_annual:
@@ -191,6 +197,14 @@ class StockDataFetcher:
             except Exception as e:
                 self.logger.warning(f"Metrics calculation error for {ticker}: {e}")
                 stock.add_warning(f"Calculated metrics: {str(e)}")
+
+        # Assess data quality (sector + integrity checks), now that metrics exist.
+        if stock.financials_annual or stock.financials_quarterly:
+            try:
+                self._assess(stock)
+            except Exception as e:
+                self.logger.warning(f"Data-quality assessment error for {ticker}: {e}")
+                stock.add_warning(f"Data quality: {str(e)}")
 
         self.logger.info(
             f"Completed {ticker}: sources={stock.data_sources}, "
@@ -221,10 +235,8 @@ class StockDataFetcher:
         )
         stock.merge_calculated_metrics(metrics)
 
-    def _validate_and_score(self, stock: StockData) -> None:
-        """Derive identities, validate/coerce periods, attach a data-quality report."""
-        # Derive missing fields (e.g. total_liabilities = assets - equity), then
-        # validate + coerce each period; surface validation errors as warnings.
+    def _clean_and_derive(self, stock: StockData) -> None:
+        """Derive identities, validate/coerce each period, and build the TTM series."""
         for attr in ("financials_annual", "financials_quarterly"):
             periods = getattr(stock, attr)
             if not periods:
@@ -238,12 +250,30 @@ class StockDataFetcher:
                     stock.add_warning(f"validation {attr} {period_key}: {err}")
             setattr(stock, attr, cleaned)
 
-        # Trailing-twelve-month series from the (cleaned) discrete quarters.
         if stock.financials_quarterly:
             stock.financials_ttm = compute_ttm(stock.financials_quarterly)
 
-        # Score annual financials (sector-aware) and record findings.
-        report = assess_annual(stock.financials_annual, sector=stock.sector_class)
+    def _assess(self, stock: StockData) -> None:
+        """Attach a data-quality report: sector checks + integrity checks + score.
+
+        Runs after metrics are computed so the ratio-bounds check can see them.
+        """
+        annual = stock.financials_annual or {}
+        quarterly = stock.financials_quarterly or {}
+        historical = (stock.calculated_metrics or {}).get("historical", {})
+        scored_years = set(sorted(annual.keys(), reverse=True)[:5])
+
+        report = assess_annual(annual, sector=stock.sector_class)
+        if annual:
+            # Integrity checks all key off annual data; with no annual financials
+            # keep assess_annual's score (0) rather than letting a lone
+            # no_financials finding net out to 75.
+            report.findings.extend(check_field_outliers(annual, scored_years))
+            report.findings.extend(check_cashflow_reconciliation(annual, scored_years))
+            report.findings.extend(check_quarterly_sums(annual, quarterly, scored_years))
+            report.findings.extend(check_ratio_bounds(historical, scored_years))
+            report.score = score_for(report.findings)
+
         stock.data_quality = report.as_dict()
         stock.data_quality["unmapped_tag_count"] = len(stock.unmapped_facts)
         for message in report.warning_messages():

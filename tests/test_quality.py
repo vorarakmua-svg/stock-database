@@ -1,6 +1,13 @@
 """Tests for the data-quality assessment."""
 
-from src.validation.quality import assess_annual
+from src.validation.quality import (
+    HIGH,
+    LOW,
+    MEDIUM,
+    Finding,
+    assess_annual,
+    score_for,
+)
 
 
 def _balanced_year(**overrides):
@@ -101,3 +108,16 @@ def test_balance_check_skipped_when_liabilities_derived():
     report = assess_annual({"2024": year})
     codes = {f.code for f in report.findings}
     assert "balance_sheet_imbalance" not in codes
+
+
+# ---------------- score_for unit tests ----------------
+
+def test_score_for_no_findings_is_100():
+    assert score_for([]) == 100
+
+
+def test_score_for_sums_penalties_and_clamps():
+    findings = [Finding(HIGH, "x", "m"), Finding(MEDIUM, "y", "m"), Finding(LOW, "z", "m")]
+    assert score_for(findings) == 100 - 25 - 10 - 3  # 62
+    # clamps at 0
+    assert score_for([Finding(HIGH, "x", "m")] * 10) == 0

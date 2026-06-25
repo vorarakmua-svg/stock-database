@@ -396,6 +396,23 @@ FFO = `net_income + total D&A` (no real-estate-specific D&A or gains-on-sale
 adjustment); AFFO = `FFO − total capex`. Each proxy is flagged in the metrics
 JSON under `_basis`.
 
+### Integrity checks (data-quality score)
+
+Beyond required-field and accounting-identity checks, the quality layer runs four
+**flag-only** integrity checks (they surface issues via findings + the 0–100 score; they
+never alter data):
+
+| Check | Catches | Threshold | Penalty |
+|---|---|---|---|
+| Magnitude outlier | a USD field wildly inconsistent with its own history (mis-resolved tag / filing error) | ≥ 100× the field's median | −25 |
+| Cash-flow consistency | the cash-flow statement's reported net change != its own sections + FX effect | residual > 1% | −10 |
+| Quarterly-sum | discrete quarters that don't sum to the annual figure | per-field > 1% | −10 |
+| Ratio bounds | a computed metric outside its plausible range (e.g. >100% gross margin) | impossibility bounds | −3 |
+
+Thresholds are deliberately wide (a $1M materiality floor; the most recent 5 fiscal years are
+scored), so clean filings keep a score of 100. Findings appear in `data_quality.findings` and,
+for medium+ severity, in `warnings`.
+
 ### Fiscal vs calendar year
 
 Companies have different fiscal year-ends (Microsoft June, Apple September, Walmart

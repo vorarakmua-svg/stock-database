@@ -94,6 +94,12 @@ def _num(period: Dict[str, Any], key: str) -> Optional[float]:
     return val if isinstance(val, (int, float)) else None
 
 
+def score_for(findings: List[Finding]) -> int:
+    """0-100 quality score: 100 minus summed severity penalties, clamped at 0."""
+    penalty = sum(_PENALTY.get(f.severity, 0) for f in findings)
+    return max(0, 100 - penalty)
+
+
 def assess_annual(annual: Dict[str, Dict[str, Any]],
                   sector: Optional[str] = None,
                   recent_years: int = 5) -> QualityReport:
@@ -202,6 +208,5 @@ def assess_annual(annual: Dict[str, Dict[str, Any]],
                             f"Revenue changed {change:+.0%} from {prev} to {curr}.", curr)
                 )
 
-    penalty = sum(_PENALTY.get(f.severity, 0) for f in report.findings)
-    report.score = max(0, 100 - penalty)
+    report.score = score_for(report.findings)
     return report
