@@ -35,7 +35,7 @@ _FLOW_FIELDS = tuple(
 )
 
 _OUTLIER_FACTOR = 100.0
-_CASH_TOL = 0.05
+_CASH_TOL = 0.01
 _QUARTERLY_TOL = 0.01
 
 
@@ -74,39 +74,40 @@ def check_field_outliers(
 
 
 def check_cashflow_reconciliation(
-    annual: Dict[str, Dict[str, Any]], scored_years: Iterable[str]
+    annual: Dict[str, Any], scored_years: Iterable[str]
 ) -> List[Finding]:
-    """Flag when change in balance-sheet cash != operating+investing+financing flows.
+    """Flag when the reported net change in cash != operating+investing+financing+FX.
 
-    The 5% tolerance absorbs the foreign-exchange-effect-on-cash line (not a
-    canonical field) and minor restricted-cash reclassifications.
+    An internal-consistency check on the cash-flow statement itself: its reported
+    net-change line equals the sum of its three sections plus the FX effect by
+    construction, so the residual is ~0 for a correctly-tagged filing. (Comparing
+    against the balance-sheet cash line is unsound — that line excludes restricted
+    cash and the FX effect, producing systematic false positives.)
     """
     scored = set(scored_years)
     findings: List[Finding] = []
-    years = sorted(annual.keys())
-    for prev, curr in zip(years, years[1:]):
-        if curr not in scored:
+    for year in scored:
+        period = annual.get(year)
+        if not period:
             continue
-        cash_curr = _num(annual[curr], "cash_and_equivalents")
-        cash_prev = _num(annual[prev], "cash_and_equivalents")
-        ocf = _num(annual[curr], "operating_cash_flow")
-        icf = _num(annual[curr], "investing_cash_flow")
-        fcf = _num(annual[curr], "financing_cash_flow")
-        if (cash_curr is None or cash_prev is None or ocf is None
-                or icf is None or fcf is None):
+        net_change = _num(period, "net_change_in_cash")
+        ocf = _num(period, "operating_cash_flow")
+        icf = _num(period, "investing_cash_flow")
+        fcf = _num(period, "financing_cash_flow")
+        if net_change is None or ocf is None or icf is None or fcf is None:
             continue
-        delta = cash_curr - cash_prev
-        flow_sum = ocf + icf + fcf
-        denom = max(abs(delta), abs(flow_sum))
+        fx = _num(period, "fx_effect_on_cash") or 0.0
+        expected = ocf + icf + fcf + fx
+        denom = max(abs(net_change), abs(expected))
         if denom < _MATERIALITY:
             continue
-        residual = delta - flow_sum
+        residual = net_change - expected
         if abs(residual) / denom > _CASH_TOL:
             findings.append(Finding(
                 MEDIUM, "cashflow_imbalance",
-                f"change in cash ({delta:,.0f}) != operating+investing+financing "
-                f"cash flow ({flow_sum:,.0f}); residual {residual:,.0f}.",
-                curr,
+                f"reported net change in cash ({net_change:,.0f}) != operating+"
+                f"investing+financing+FX ({expected:,.0f}); residual {residual:,.0f}.",
+                year,
             ))
     return findings
 

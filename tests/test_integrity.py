@@ -45,32 +45,32 @@ def test_outlier_only_flags_scored_years():
     assert check_field_outliers(annual, {"2021", "2020", "2019"}) == []
 
 
-def _cf(cash, ocf, icf, fcf):
-    return {"cash_and_equivalents": cash, "operating_cash_flow": ocf,
-            "investing_cash_flow": icf, "financing_cash_flow": fcf}
-
-
-def test_cashflow_imbalance_fires_when_flows_miss_delta_cash():
-    annual = {
-        "2023": _cf(1.00e9, 0, 0, 0),
-        # delta_cash = +1.0e9, but flows sum to +0.5e9 -> 50% residual.
-        "2024": _cf(2.00e9, 0.4e9, -0.1e9, 0.2e9),
-    }
-    findings = check_cashflow_reconciliation(annual, {"2024", "2023"})
+def test_cashflow_imbalance_fires_when_sections_dont_match_net_change():
+    # sections+FX = 0.5e9 but the reported net change is 1.0e9 -> 50% residual.
+    annual = {"2024": {"net_change_in_cash": 1.0e9, "operating_cash_flow": 0.4e9,
+                       "investing_cash_flow": -0.1e9, "financing_cash_flow": 0.2e9}}
+    findings = check_cashflow_reconciliation(annual, {"2024"})
     assert [(f.code, f.period, f.severity) for f in findings] == [
         ("cashflow_imbalance", "2024", "medium")]
 
 
-def test_cashflow_reconcile_tolerates_small_gap():
-    # delta_cash = +1.0e9; flows sum to +0.97e9 -> 3% residual, within 5%.
-    annual = {"2023": _cf(1.0e9, 0, 0, 0), "2024": _cf(2.0e9, 0.9e9, -0.1e9, 0.17e9)}
-    assert check_cashflow_reconciliation(annual, {"2024", "2023"}) == []
+def test_cashflow_reconcile_silent_when_consistent_including_fx():
+    # net_change == OCF+ICF+FCF+FX exactly, with a large non-zero FX -> silent.
+    annual = {"2024": {"net_change_in_cash": -42.0e6, "operating_cash_flow": 30.0e6,
+                       "investing_cash_flow": -20.0e6, "financing_cash_flow": -12.0e6,
+                       "fx_effect_on_cash": -40.0e6}}  # 30 - 20 - 12 - 40 = -42
+    assert check_cashflow_reconciliation(annual, {"2024"}) == []
 
 
-def test_cashflow_reconcile_silent_on_missing_fields():
-    annual = {"2023": {"cash_and_equivalents": 1.0e9},
-              "2024": {"cash_and_equivalents": 2.0e9}}  # no flow fields
-    assert check_cashflow_reconciliation(annual, {"2024", "2023"}) == []
+def test_cashflow_reconcile_skips_when_net_change_or_section_absent():
+    # net_change absent -> skip
+    a1 = {"2024": {"operating_cash_flow": 1.0e9, "investing_cash_flow": 0.0,
+                   "financing_cash_flow": 0.0}}
+    assert check_cashflow_reconciliation(a1, {"2024"}) == []
+    # a section absent -> skip
+    a2 = {"2024": {"net_change_in_cash": 1.0e9, "operating_cash_flow": 1.0e9,
+                   "financing_cash_flow": 0.0}}
+    assert check_cashflow_reconciliation(a2, {"2024"}) == []
 
 
 def _q(fy, fq, revenue):
