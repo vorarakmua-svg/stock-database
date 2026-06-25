@@ -125,3 +125,15 @@ def test_ratio_bounds_silent_on_strong_but_real_values():
 def test_ratio_bounds_skip_none_and_unscored_years():
     historical = {"2024": {"gross_margin": None}, "2019": {"gross_margin": 9.0}}
     assert check_ratio_bounds(historical, {"2024"}) == []  # None skipped, 2019 unscored
+
+
+def test_magnitude_outlier_excludes_volatile_cashflow_residuals():
+    # net_change_in_cash legitimately swings >100x; it must NOT be flagged
+    # (excluded from the outlier candidate set).
+    annual = {
+        "2021": {"net_change_in_cash": 5.0e7},
+        "2022": {"net_change_in_cash": 5.0e7},
+        "2023": {"net_change_in_cash": 5.0e7},
+        "2024": {"net_change_in_cash": 2.0e10},  # 400x swing
+    }
+    assert check_field_outliers(annual, {"2021", "2022", "2023", "2024"}) == []

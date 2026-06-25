@@ -104,3 +104,13 @@ def test_coverage_aggregates_unmapped_tags():
     summary = summarize([co("AAA"), co("BBB")])
     top = {tag: cnt for tag, cnt, _ex in summary.unmapped_top}
     assert top.get("FutureMysteryTagZZZ") == 2  # used by both companies
+
+
+def test_cashflow_reconciliation_fields_resolve():
+    net_tag = ("CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
+               "PeriodIncreaseDecreaseIncludingExchangeRateEffect")
+    facts = _facts(**{net_tag: _annual_usd(5000),
+                      "EffectOfExchangeRateOnCashAndCashEquivalents": _annual_usd(-40)})
+    annual = XBRLParser().extract_annual_financials(facts, years_back=1)["2024"]
+    assert annual["net_change_in_cash"] == 5000
+    assert annual["fx_effect_on_cash"] == -40

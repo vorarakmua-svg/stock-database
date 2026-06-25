@@ -16,9 +16,17 @@ from .quality import HIGH, LOW, MEDIUM, Finding, _num
 # Ignore sub-$1M figures (rounding/noise) across all checks.
 _MATERIALITY = 1_000_000.0
 
+# Volatile net-residual flows that legitimately swing far more than the outlier
+# factor year-to-year (a near-zero year beside a multi-billion one); excluded from
+# the magnitude-outlier candidate set, but still checked by the quarterly-sum check.
+_OUTLIER_EXCLUDE = frozenset({"net_change_in_cash", "fx_effect_on_cash"})
+
 # USD "level" fields (income/balance/cash-flow amounts); excludes per-share and
-# share-count fields. Candidates for the magnitude-outlier check.
-_USD_FIELDS = tuple(f.key for f in CANONICAL_FIELDS if f.unit == UNIT_USD)
+# share-count fields and the volatile residuals above. Candidates for magnitude-outlier.
+_USD_FIELDS = tuple(
+    f.key for f in CANONICAL_FIELDS
+    if f.unit == UNIT_USD and f.key not in _OUTLIER_EXCLUDE
+)
 
 # Flow fields whose quarters should sum to the annual figure.
 _FLOW_FIELDS = tuple(
