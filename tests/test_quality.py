@@ -121,3 +121,18 @@ def test_score_for_sums_penalties_and_clamps():
     assert score_for(findings) == 100 - 25 - 10 - 3  # 62
     # clamps at 0
     assert score_for([Finding(HIGH, "x", "m")] * 10) == 0
+
+
+def test_energy_required_set_drops_operating_income():
+    # An energy company reports everything required EXCEPT operating_income
+    # (integrated oil majors don't file OperatingIncomeLoss).
+    period = {"revenue": 100.0, "net_income": 10.0, "total_assets": 200.0,
+              "total_liabilities": 120.0, "total_equity": 80.0, "operating_cash_flow": 20.0}
+    annual = {"2024": period}
+    energy = assess_annual(annual, sector="energy")
+    assert not any(f.code == "missing_field" for f in energy.findings)
+    assert energy.score == 100
+    # The SAME data under the general sector still requires operating_income.
+    general = assess_annual(annual, sector="general")
+    assert any(f.code == "missing_field" and "operating_income" in f.message
+               for f in general.findings)

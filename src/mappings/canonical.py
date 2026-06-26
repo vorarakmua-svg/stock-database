@@ -178,7 +178,8 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         ("AccountsReceivableNetCurrent", "AccountsReceivableNet", "ReceivablesNetCurrent"),
     ),
     CanonicalField(
-        "inventory", "Inventory", BALANCE, UNIT_USD, INSTANT, ("InventoryNet",),
+        "inventory", "Inventory", BALANCE, UNIT_USD, INSTANT,
+        ("InventoryNet", "EnergyRelatedInventory", "InventoryCrudeOilProductsAndMerchandise"),
     ),
     CanonicalField(
         "ppe_net", "Property, Plant & Equipment (Net)", BALANCE, UNIT_USD, INSTANT,
