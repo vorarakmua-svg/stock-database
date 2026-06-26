@@ -404,7 +404,7 @@ never alter data):
 
 | Check | Catches | Threshold | Penalty |
 |---|---|---|---|
-| Magnitude outlier | a USD field wildly inconsistent with its own history (mis-resolved tag / filing error) | ≥ 100× the field's median | −25 |
+| Magnitude outlier | a USD field that spikes then reverts to its prior level — a one-off filing/tag error (persistent step-changes like M&A goodwill are not flagged) | spike ≥ 100× both adjacent years | −25 |
 | Cash-flow consistency | the cash-flow statement's reported net change != its own sections + FX effect | residual > 1% | −10 |
 | Quarterly-sum | discrete quarters that don't sum to the annual figure | per-field > 1% | −10 |
 | Ratio bounds | a computed metric outside its plausible range (e.g. >100% gross margin) | impossibility bounds | −3 |

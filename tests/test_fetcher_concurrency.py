@@ -77,13 +77,16 @@ def test_assess_flags_magnitude_outlier_end_to_end(tmp_path):
     stock = StockData(ticker="BAD", cik="000", company_name="Bad Inc.")
     # Full required-field set so the only finding is the revenue outlier, not
     # unrelated missing-field findings.
+    # Spike is in interior year 2022 (reverts in 2023) — the new spike-and-revert
+    # logic only flags a value that is >=100x BOTH its chronological neighbours;
+    # the latest year is never flagged (no future neighbour to confirm reversion).
     base = {"net_income": 1.0e8, "operating_income": 1.5e8, "total_assets": 2.0e9,
             "total_liabilities": 1.0e9, "total_equity": 1.0e9, "operating_cash_flow": 2.0e8}
     stock.financials_annual = {
         "2021": {"fiscal_year": 2021, "revenue": 1.0e9, **base},
-        "2022": {"fiscal_year": 2022, "revenue": 1.1e9, **base},
-        "2023": {"fiscal_year": 2023, "revenue": 1.2e9, **base},
-        "2024": {"fiscal_year": 2024, "revenue": 1.2e12, **base},  # 1000x revenue spike
+        "2022": {"fiscal_year": 2022, "revenue": 1.2e12, **base},  # 1000x spike (interior)
+        "2023": {"fiscal_year": 2023, "revenue": 1.1e9, **base},   # reverts
+        "2024": {"fiscal_year": 2024, "revenue": 1.2e9, **base},
     }
     fetcher._clean_and_derive(stock)
     fetcher._compute_metrics(stock)
