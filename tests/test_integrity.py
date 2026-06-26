@@ -152,3 +152,19 @@ def test_magnitude_outlier_excludes_volatile_cashflow_residuals():
         "2024": {"net_change_in_cash": 2.0e10},  # 400x swing
     }
     assert check_field_outliers(annual, {"2021", "2022", "2023", "2024"}) == []
+
+
+def test_outlier_excludes_event_driven_lumpy_flows():
+    # debt_issued spikes 1000x in an interior year and reverts (a real one-off bond
+    # issuance) -> excluded, not flagged. revenue spikes the same way -> still flagged,
+    # proving the exclusion is field-scoped, not global.
+    annual = {
+        "2021": {"debt_issued": 1.0e7, "revenue": 1.0e9},
+        "2022": {"debt_issued": 1.0e10, "revenue": 1.2e12},  # both spike here
+        "2023": {"debt_issued": 1.0e7, "revenue": 1.1e9},    # both revert
+        "2024": {"debt_issued": 1.2e7, "revenue": 1.2e9},
+    }
+    findings = check_field_outliers(annual, {"2021", "2022", "2023", "2024"})
+    fields = [f.message.split("'")[1] for f in findings]
+    assert "revenue" in fields              # recurring field still flagged
+    assert "debt_issued" not in fields      # event-driven flow excluded
