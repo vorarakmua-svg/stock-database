@@ -168,3 +168,12 @@ def test_outlier_excludes_event_driven_lumpy_flows():
     fields = [f.message.split("'")[1] for f in findings]
     assert "revenue" in fields              # recurring field still flagged
     assert "debt_issued" not in fields      # event-driven flow excluded
+
+
+def test_cashflow_imbalance_silent_when_residual_immaterial_to_gross():
+    # Insurer/discontinued-ops shape: net change != OCF+ICF+FCF, but the residual is
+    # tiny vs the GROSS cash activity (huge OCF/ICF that nearly cancel) -> not flagged.
+    annual = {"2024": {"net_change_in_cash": -571.0e6, "operating_cash_flow": 17000.0e6,
+                       "investing_cash_flow": -17000.0e6, "financing_cash_flow": 26.0e6}}
+    # sections sum to 26e6; residual = -597e6; gross = 34026e6; |residual|/gross = 1.8% < 5%
+    assert check_cashflow_reconciliation(annual, {"2024"}) == []

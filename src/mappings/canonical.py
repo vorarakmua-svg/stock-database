@@ -296,6 +296,8 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
             "EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
             "EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
             "IncludingDisposalGroupAndDiscontinuedOperations",
+            "EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
+            "DisposalGroupIncludingDiscontinuedOperations",
             "EffectOfExchangeRateOnCashAndCashEquivalents",
             "EffectOfExchangeRateOnCashAndCashEquivalentsContinuingOperations",
         ),
