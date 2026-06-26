@@ -114,3 +114,16 @@ def test_cashflow_reconciliation_fields_resolve():
     annual = XBRLParser().extract_annual_financials(facts, years_back=1)["2024"]
     assert annual["net_change_in_cash"] == 5000
     assert annual["fx_effect_on_cash"] == -40
+
+
+def test_energy_inventory_tag_resolves():
+    facts = _facts(EnergyRelatedInventory=_instant_usd(21800))
+    annual = XBRLParser().extract_annual_financials(facts, years_back=1)["2024"]
+    assert annual["inventory"] == 21800
+
+
+def test_inventory_prefers_inventorynet_over_energy_tag():
+    facts = _facts(InventoryNet=_instant_usd(500),
+                   EnergyRelatedInventory=_instant_usd(21800))
+    annual = XBRLParser().extract_annual_financials(facts, years_back=1)["2024"]
+    assert annual["inventory"] == 500

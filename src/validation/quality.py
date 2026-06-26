@@ -10,7 +10,7 @@ used for cross-company comparison.
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from ..mappings.sectors import BANK, GENERAL, INSURANCE, REIT
+from ..mappings.sectors import BANK, ENERGY, GENERAL, INSURANCE, REIT
 
 # Severities and the score penalty each carries.
 HIGH = "high"
@@ -26,8 +26,15 @@ _GENERAL_REQUIRED = (
     "revenue", "net_income", "operating_income",
     "total_assets", "total_liabilities", "total_equity", "operating_cash_flow",
 )
+# Integrated oil & gas majors don't file a clean OperatingIncomeLoss; ENERGY uses
+# the general set minus operating_income (utilities keep the general set).
+_ENERGY_REQUIRED = (
+    "revenue", "net_income",
+    "total_assets", "total_liabilities", "total_equity", "operating_cash_flow",
+)
 REQUIRED_BY_SECTOR: Dict[str, tuple] = {
     GENERAL: _GENERAL_REQUIRED,
+    ENERGY: _ENERGY_REQUIRED,
     BANK: (
         "revenue", "net_income", "net_interest_income", "noninterest_income",
         "total_assets", "total_liabilities", "total_equity", "total_deposits",
