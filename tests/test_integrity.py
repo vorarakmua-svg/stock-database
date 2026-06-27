@@ -195,3 +195,21 @@ def test_quarterly_sum_aggregates_to_one_finding_per_year():
     assert findings[0].code == "quarterly_sum_mismatch"
     assert findings[0].period == "2024"
     assert "revenue" in findings[0].message and "net_income" in findings[0].message
+
+
+def test_quarterly_sum_skips_event_driven_flows():
+    # A lumpy event-driven flow (debt_repaid) whose quarters don't sum to annual is NOT
+    # flagged; a core field (revenue) mismatch in the same year IS -- skip is field-scoped.
+    annual = {"2024": {"debt_repaid": 1.0e9, "revenue": 1.0e9}}
+
+    def _q(fq, dr, rev):
+        return {"fiscal_year": 2024, "fiscal_quarter": fq, "debt_repaid": dr, "revenue": rev}
+
+    quarterly = {  # each field's four quarters sum to 0.8e9 vs annual 1.0e9 (20% off)
+        "2024-03-31": _q(1, 0.20e9, 0.20e9), "2024-06-30": _q(2, 0.20e9, 0.20e9),
+        "2024-09-30": _q(3, 0.20e9, 0.20e9), "2024-12-31": _q(4, 0.20e9, 0.20e9),
+    }
+    findings = check_quarterly_sums(annual, quarterly, {"2024"})
+    assert len(findings) == 1
+    assert "revenue" in findings[0].message
+    assert "debt_repaid" not in findings[0].message

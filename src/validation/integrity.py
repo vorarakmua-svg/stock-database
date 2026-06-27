@@ -15,17 +15,15 @@ from .quality import HIGH, LOW, MEDIUM, Finding, _num
 # Ignore sub-$1M figures (rounding/noise) across all checks.
 _MATERIALITY = 1_000_000.0
 
-# Fields excluded from the magnitude-outlier check because they legitimately spike
-# far more than the outlier factor in a single year. The check only makes sense for
-# recurring, relatively stable fields (revenue, income, assets, equity, capex,
-# dividends, D&A). These stay in the quarterly-sum check and stay fully captured.
-_OUTLIER_EXCLUDE = frozenset({
-    # Volatile net residuals (cash-flow reconciliation inputs).
-    "net_change_in_cash", "fx_effect_on_cash",
-    # Event-driven / lumpy flows: financing transactions, buybacks, M&A, one-time charges.
+# Event-driven / lumpy flows: financing transactions, buybacks, M&A, one-time charges.
+# Too noisy for the magnitude-outlier and quarterly-sum consistency checks (they spike in a
+# single year and legitimately don't reconcile quarter-to-annual), but fully captured.
+_EVENT_DRIVEN_FLOWS = frozenset({
     "debt_issued", "debt_repaid", "share_repurchases", "acquisitions",
     "restructuring", "impairment",
 })
+# Volatile net residuals (cash-flow reconciliation inputs) plus the event-driven flows.
+_OUTLIER_EXCLUDE = _EVENT_DRIVEN_FLOWS | frozenset({"net_change_in_cash", "fx_effect_on_cash"})
 
 # USD "level" fields (income/balance/cash-flow amounts); excludes per-share and
 # share-count fields and the volatile residuals above. Candidates for magnitude-outlier.
@@ -158,6 +156,8 @@ def check_quarterly_sums(
             continue
         mismatched: List[str] = []
         for key in _FLOW_FIELDS:
+            if key in _EVENT_DRIVEN_FLOWS:
+                continue
             ann_val = _num(ann, key)
             if ann_val is None or abs(ann_val) < _MATERIALITY:
                 continue
