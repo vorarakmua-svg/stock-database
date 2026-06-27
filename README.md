@@ -396,12 +396,13 @@ FFO = `net_income + total D&A` (no real-estate-specific D&A or gains-on-sale
 adjustment); AFFO = `FFO − total capex`. Each proxy is flagged in the metrics
 JSON under `_basis`.
 
-**Energy & utilities.** Both use the general operating-company schema, but integrated oil &
-gas majors don't file a clean `OperatingIncomeLoss`, so the **energy** sector's required-field
-set drops `operating_income` (utilities keep it — they report it). Oil-major `roic` and
-`inventory_turnover` are left empty rather than approximated, since the underlying operating
-income and a clean cost-of-goods figure aren't reported. The `inventory` line resolves from
-energy-specific tags (`EnergyRelatedInventory`, `InventoryCrudeOilProductsAndMerchandise`).
+**Energy & utilities.** Both use the general operating-company schema. `operating_income` is
+**not a required field** for any sector — integrated oil & gas majors and other diversified
+multinationals (e.g. JNJ) report pretax income by geography rather than a tagged
+`OperatingIncomeLoss` line, so its absence is not a data-quality penalty (it is still captured
+when reported). Oil-major `roic`/`inventory_turnover` are left empty rather than approximated;
+the `inventory` line resolves from energy-specific tags
+(`EnergyRelatedInventory`, `InventoryCrudeOilProductsAndMerchandise`).
 
 ### Integrity checks (data-quality score)
 
