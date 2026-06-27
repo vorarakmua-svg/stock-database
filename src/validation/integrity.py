@@ -156,6 +156,7 @@ def check_quarterly_sums(
         ann = annual.get(year)
         if not quarters or set(quarters) != {1, 2, 3, 4} or not ann:
             continue
+        mismatched: List[str] = []
         for key in _FLOW_FIELDS:
             ann_val = _num(ann, key)
             if ann_val is None or abs(ann_val) < _MATERIALITY:
@@ -165,12 +166,17 @@ def check_quarterly_sums(
                 continue
             sum_q = sum(v for v in q_vals if v is not None)
             if abs(sum_q - ann_val) / abs(ann_val) > _QUARTERLY_TOL:
-                findings.append(Finding(
-                    MEDIUM, "quarterly_sum_mismatch",
-                    f"'{key}': four quarters sum to {sum_q:,.0f} but annual FY{year} "
-                    f"is {ann_val:,.0f}.",
-                    year,
-                ))
+                mismatched.append(key)
+        if mismatched:
+            preview = ", ".join(mismatched[:5])
+            if len(mismatched) > 5:
+                preview += ", ..."
+            findings.append(Finding(
+                MEDIUM, "quarterly_sum_mismatch",
+                f"FY{year}: {len(mismatched)} flow field(s) whose four quarters don't "
+                f"sum to the annual figure ({preview}).",
+                year,
+            ))
     return findings
 
 

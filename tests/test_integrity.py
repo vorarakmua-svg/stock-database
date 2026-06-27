@@ -177,3 +177,21 @@ def test_cashflow_imbalance_silent_when_residual_immaterial_to_gross():
                        "investing_cash_flow": -17000.0e6, "financing_cash_flow": 26.0e6}}
     # sections sum to 26e6; residual = -597e6; gross = 34026e6; |residual|/gross = 1.8% < 5%
     assert check_cashflow_reconciliation(annual, {"2024"}) == []
+
+
+def test_quarterly_sum_aggregates_to_one_finding_per_year():
+    # Two flow fields both mismatch in 2024 -> exactly ONE finding for the year.
+    annual = {"2024": {"revenue": 1.0e9, "net_income": 1.0e9}}
+
+    def _q2(fq, rev, ni):
+        return {"fiscal_year": 2024, "fiscal_quarter": fq, "revenue": rev, "net_income": ni}
+
+    quarterly = {  # each field's quarters sum to 0.8e9 vs annual 1.0e9 (20% off)
+        "2024-03-31": _q2(1, 0.20e9, 0.20e9), "2024-06-30": _q2(2, 0.20e9, 0.20e9),
+        "2024-09-30": _q2(3, 0.20e9, 0.20e9), "2024-12-31": _q2(4, 0.20e9, 0.20e9),
+    }
+    findings = check_quarterly_sums(annual, quarterly, {"2024"})
+    assert len(findings) == 1
+    assert findings[0].code == "quarterly_sum_mismatch"
+    assert findings[0].period == "2024"
+    assert "revenue" in findings[0].message and "net_income" in findings[0].message
