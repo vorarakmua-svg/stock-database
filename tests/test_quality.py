@@ -95,12 +95,6 @@ def test_bank_not_penalized_for_missing_operating_income():
     assert report.score == 100
 
 
-def test_general_company_is_penalized_for_missing_operating_income():
-    year = _bank_year()  # lacks operating_income
-    report = assess_annual({"2024": year}, sector="general")
-    missing = {f.message for f in report.findings if f.code == "missing_field"}
-    assert any("operating_income" in m for m in missing)
-
 
 def test_balance_check_skipped_when_liabilities_derived():
     year = _balanced_year(total_equity=500.0)  # 1200 + 500 != 2000 -> would flag
@@ -123,16 +117,13 @@ def test_score_for_sums_penalties_and_clamps():
     assert score_for([Finding(HIGH, "x", "m")] * 10) == 0
 
 
-def test_energy_required_set_drops_operating_income():
-    # An energy company reports everything required EXCEPT operating_income
-    # (integrated oil majors don't file OperatingIncomeLoss).
+def test_operating_income_not_required():
+    # No sector requires operating_income: diversified multinationals (JNJ, XOM)
+    # report pretax income by geography rather than a tagged operating-income line.
     period = {"revenue": 100.0, "net_income": 10.0, "total_assets": 200.0,
               "total_liabilities": 120.0, "total_equity": 80.0, "operating_cash_flow": 20.0}
     annual = {"2024": period}
-    energy = assess_annual(annual, sector="energy")
-    assert not any(f.code == "missing_field" for f in energy.findings)
-    assert energy.score == 100
-    # The SAME data under the general sector still requires operating_income.
-    general = assess_annual(annual, sector="general")
-    assert any(f.code == "missing_field" and "operating_income" in f.message
-               for f in general.findings)
+    for sector in ("general", "energy"):
+        report = assess_annual(annual, sector=sector)
+        assert not any(f.code == "missing_field" for f in report.findings)
+        assert report.score == 100
