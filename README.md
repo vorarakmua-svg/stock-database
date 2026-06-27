@@ -359,7 +359,8 @@ items per sector — banks (`net_interest_income`, `provision_for_credit_losses`
 (`real_estate_net`) — on top of the universal core. Fields that aren't directly tagged
 are filled by accounting identities (`src/parsers/derived_fields.py`): e.g.
 `total_liabilities = total_assets − total_equity`, and bank revenue from net interest +
-noninterest income.
+noninterest income (captured when reported; broker-dealers classified as banks may report
+fee/trading components without the aggregate, so `noninterest_income` is not required).
 
 The **universal core** (`revenue`, `net_income`, `total_assets`, `total_liabilities`,
 `total_equity`, `operating_cash_flow`) resolves for **100%** of a 41-company
@@ -414,8 +415,8 @@ never alter data):
 |---|---|---|---|
 | Magnitude outlier | a recurring USD field that spikes then reverts — a one-off filing/tag error (persistent M&A step-changes, and event-driven flows like debt issuance, buybacks, M&A, and impairments, are not flagged) | spike ≥ 100× both adjacent years | −25 |
 | Cash-flow consistency | the cash-flow statement's reported net change != its own sections + FX effect | residual > 1% | −10 |
-| Quarterly-sum | discrete quarters that don't sum to the annual figure | per-field > 1% | −10 |
-| Ratio bounds | a computed metric outside its plausible range (e.g. >100% gross margin) | impossibility bounds | −3 |
+| Quarterly-sum | discrete quarters that don't sum to the annual figure; event-driven flows (debt issuance/repayment, buybacks, M&A, impairments/restructuring) are excluded, as for the magnitude-outlier check | per-field > 1% | −10 |
+| Ratio bounds | a computed metric outside its plausible range (e.g. >100% gross margin); roe/roic are not flagged when the equity base is negligible or negative (a buyback-depleted denominator makes the ratio meaningless, not wrong) | impossibility bounds | −3 |
 
 Thresholds are deliberately wide (a $1M materiality floor; the most recent 5 fiscal years are
 scored), so clean filings keep a score of 100. Findings appear in `data_quality.findings` and,
