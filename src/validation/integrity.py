@@ -7,7 +7,7 @@ don't sum to the annual figure, and metrics outside plausible bounds. Every
 check is FLAG-ONLY — it emits Findings and never mutates data.
 """
 
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, CASHFLOW, DURATION, INCOME, UNIT_USD
 from .quality import HIGH, LOW, MEDIUM, Finding, _num
@@ -205,8 +205,26 @@ _BOUNDED_METRICS = (
 )
 
 
+_EQUITY_FLOOR = 0.05
+
+
+def _weak_equity_base(period: Optional[Dict[str, Any]]) -> bool:
+    """True when the equity denominator is too small/negative for roe/roic to be meaningful."""
+    if not isinstance(period, dict):
+        return False
+    equity = _num(period, "total_equity")
+    if equity is None:
+        return False
+    if equity <= 0:
+        return True
+    assets = _num(period, "total_assets")
+    return assets is not None and abs(equity) < _EQUITY_FLOOR * abs(assets)
+
+
 def check_ratio_bounds(
-    historical: Dict[str, Dict[str, Any]], scored_years: Iterable[str]
+    historical: Dict[str, Dict[str, Any]],
+    annual: Dict[str, Dict[str, Any]],
+    scored_years: Iterable[str],
 ) -> List[Finding]:
     """Flag a computed metric that falls outside its mathematically-plausible range."""
     scored = set(scored_years)
@@ -215,7 +233,10 @@ def check_ratio_bounds(
         metrics = historical.get(year)
         if not isinstance(metrics, dict):
             continue
+        weak_equity = _weak_equity_base(annual.get(year))
         for metric in _BOUNDED_METRICS:
+            if metric in ("roe", "roic") and weak_equity:
+                continue
             v = metrics.get(metric)
             if isinstance(v, (int, float)) and not isinstance(v, bool) and _out_of_bounds(metric, float(v)):
                 findings.append(Finding(

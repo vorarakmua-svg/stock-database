@@ -123,7 +123,7 @@ def test_quarterly_sum_silent_with_only_three_quarters():
 
 def test_ratio_bounds_fire_on_impossible_values():
     historical = {"2024": {"gross_margin": 2.5, "efficiency_ratio": -0.3, "roe": 0.2}}
-    findings = check_ratio_bounds(historical, {"2024"})
+    findings = check_ratio_bounds(historical, {}, {"2024"})
     metrics_flagged = {f.message.split("'")[1] for f in findings}
     assert "gross_margin" in metrics_flagged      # >1.01 impossible
     assert "efficiency_ratio" in metrics_flagged   # <=0 impossible
@@ -134,12 +134,12 @@ def test_ratio_bounds_fire_on_impossible_values():
 def test_ratio_bounds_silent_on_strong_but_real_values():
     # Apple-like: 82% ROIC, 26% net margin, 45% gross margin — all plausible.
     historical = {"2024": {"roic": 0.82, "net_margin": 0.26, "gross_margin": 0.45}}
-    assert check_ratio_bounds(historical, {"2024"}) == []
+    assert check_ratio_bounds(historical, {}, {"2024"}) == []
 
 
 def test_ratio_bounds_skip_none_and_unscored_years():
     historical = {"2024": {"gross_margin": None}, "2019": {"gross_margin": 9.0}}
-    assert check_ratio_bounds(historical, {"2024"}) == []  # None skipped, 2019 unscored
+    assert check_ratio_bounds(historical, {}, {"2024"}) == []  # None skipped, 2019 unscored
 
 
 def test_magnitude_outlier_excludes_volatile_cashflow_residuals():
@@ -213,3 +213,15 @@ def test_quarterly_sum_skips_event_driven_flows():
     assert len(findings) == 1
     assert "revenue" in findings[0].message
     assert "debt_repaid" not in findings[0].message
+
+
+def test_ratio_bounds_suppresses_roe_on_weak_equity():
+    # roe = 14.5 is out of bounds, but equity is ~1% of assets (buyback-depleted) -> the
+    # extreme value is a denominator artifact, not a data error -> no finding.
+    historical = {"2024": {"roe": 14.5}}
+    weak = {"2024": {"total_equity": 1.0e9, "total_assets": 100.0e9}}
+    assert check_ratio_bounds(historical, weak, {"2024"}) == []
+    # the same roe on a NORMAL equity base is a genuine error -> still flagged.
+    normal = {"2024": {"total_equity": 50.0e9, "total_assets": 100.0e9}}
+    findings = check_ratio_bounds(historical, normal, {"2024"})
+    assert [(f.code, f.message[:5]) for f in findings] == [("ratio_out_of_bounds", "'roe'")]
