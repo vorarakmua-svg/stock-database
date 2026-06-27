@@ -29,7 +29,7 @@ _GENERAL_REQUIRED = (
 REQUIRED_BY_SECTOR: Dict[str, tuple] = {
     GENERAL: _GENERAL_REQUIRED,
     BANK: (
-        "revenue", "net_income", "net_interest_income", "noninterest_income",
+        "revenue", "net_income", "net_interest_income",
         "total_assets", "total_liabilities", "total_equity", "total_deposits",
         "operating_cash_flow",
     ),

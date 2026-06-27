@@ -127,3 +127,14 @@ def test_operating_income_not_required():
         report = assess_annual(annual, sector=sector)
         assert not any(f.code == "missing_field" for f in report.findings)
         assert report.score == 100
+
+
+def test_bank_not_required_to_report_noninterest_income():
+    # Broker-dealers classified as banks (e.g. Schwab) report fee/trading/commission
+    # components without a noninterest-income aggregate -> its absence is not a defect.
+    period = {"revenue": 100.0, "net_income": 10.0, "net_interest_income": 40.0,
+              "total_assets": 1000.0, "total_liabilities": 900.0, "total_equity": 100.0,
+              "total_deposits": 500.0, "operating_cash_flow": 20.0}
+    report = assess_annual({"2024": period}, sector="bank")
+    assert not any(f.code == "missing_field" for f in report.findings)
+    assert report.score == 100
