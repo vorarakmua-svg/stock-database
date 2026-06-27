@@ -42,6 +42,7 @@ _FLOW_FIELDS = tuple(
 
 _OUTLIER_FACTOR = 100.0
 _CASH_TOL = 0.01
+_CASH_GROSS_TOL = 0.05
 _QUARTERLY_TOL = 0.01
 
 
@@ -114,7 +115,12 @@ def check_cashflow_reconciliation(
         if denom < _MATERIALITY:
             continue
         residual = net_change - expected
-        if abs(residual) / denom > _CASH_TOL:
+        gross = abs(ocf) + abs(icf) + abs(fcf)
+        # Flag only when the residual is material BOTH vs the net change and vs gross
+        # cash activity -- so a small discontinued-ops/FX leftover on a company with
+        # huge gross flows (e.g. an insurer) is not a false positive, while a
+        # mis-resolved section (large vs gross) still is.
+        if abs(residual) > _CASH_TOL * denom and abs(residual) > _CASH_GROSS_TOL * gross:
             findings.append(Finding(
                 MEDIUM, "cashflow_imbalance",
                 f"reported net change in cash ({net_change:,.0f}) != operating+"
@@ -150,6 +156,7 @@ def check_quarterly_sums(
         ann = annual.get(year)
         if not quarters or set(quarters) != {1, 2, 3, 4} or not ann:
             continue
+        mismatched: List[str] = []
         for key in _FLOW_FIELDS:
             ann_val = _num(ann, key)
             if ann_val is None or abs(ann_val) < _MATERIALITY:
@@ -159,12 +166,17 @@ def check_quarterly_sums(
                 continue
             sum_q = sum(v for v in q_vals if v is not None)
             if abs(sum_q - ann_val) / abs(ann_val) > _QUARTERLY_TOL:
-                findings.append(Finding(
-                    MEDIUM, "quarterly_sum_mismatch",
-                    f"'{key}': four quarters sum to {sum_q:,.0f} but annual FY{year} "
-                    f"is {ann_val:,.0f}.",
-                    year,
-                ))
+                mismatched.append(key)
+        if mismatched:
+            preview = ", ".join(mismatched[:5])
+            if len(mismatched) > 5:
+                preview += ", ..."
+            findings.append(Finding(
+                MEDIUM, "quarterly_sum_mismatch",
+                f"FY{year}: {len(mismatched)} flow field(s) whose four quarters don't "
+                f"sum to the annual figure ({preview}).",
+                year,
+            ))
     return findings
 
 

@@ -127,3 +127,11 @@ def test_inventory_prefers_inventorynet_over_energy_tag():
                    EnergyRelatedInventory=_instant_usd(21800))
     annual = XBRLParser().extract_annual_financials(facts, years_back=1)["2024"]
     assert annual["inventory"] == 500
+
+
+def test_disposal_group_fx_variant_resolves():
+    fx_tag = ("EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
+              "DisposalGroupIncludingDiscontinuedOperations")
+    facts = _facts(**{fx_tag: _annual_usd(-136)})
+    annual = XBRLParser().extract_annual_financials(facts, years_back=1)["2024"]
+    assert annual["fx_effect_on_cash"] == -136
