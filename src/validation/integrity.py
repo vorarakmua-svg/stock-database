@@ -7,7 +7,7 @@ don't sum to the annual figure, and metrics outside plausible bounds. Every
 check is FLAG-ONLY — it emits Findings and never mutates data.
 """
 
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, CASHFLOW, DURATION, INCOME, UNIT_USD
 from .quality import HIGH, LOW, MEDIUM, Finding, _num
@@ -15,17 +15,15 @@ from .quality import HIGH, LOW, MEDIUM, Finding, _num
 # Ignore sub-$1M figures (rounding/noise) across all checks.
 _MATERIALITY = 1_000_000.0
 
-# Fields excluded from the magnitude-outlier check because they legitimately spike
-# far more than the outlier factor in a single year. The check only makes sense for
-# recurring, relatively stable fields (revenue, income, assets, equity, capex,
-# dividends, D&A). These stay in the quarterly-sum check and stay fully captured.
-_OUTLIER_EXCLUDE = frozenset({
-    # Volatile net residuals (cash-flow reconciliation inputs).
-    "net_change_in_cash", "fx_effect_on_cash",
-    # Event-driven / lumpy flows: financing transactions, buybacks, M&A, one-time charges.
+# Event-driven / lumpy flows: financing transactions, buybacks, M&A, one-time charges.
+# Too noisy for the magnitude-outlier and quarterly-sum consistency checks (they spike in a
+# single year and legitimately don't reconcile quarter-to-annual), but fully captured.
+_EVENT_DRIVEN_FLOWS = frozenset({
     "debt_issued", "debt_repaid", "share_repurchases", "acquisitions",
     "restructuring", "impairment",
 })
+# Volatile net residuals (cash-flow reconciliation inputs) plus the event-driven flows.
+_OUTLIER_EXCLUDE = _EVENT_DRIVEN_FLOWS | frozenset({"net_change_in_cash", "fx_effect_on_cash"})
 
 # USD "level" fields (income/balance/cash-flow amounts); excludes per-share and
 # share-count fields and the volatile residuals above. Candidates for magnitude-outlier.
@@ -158,6 +156,8 @@ def check_quarterly_sums(
             continue
         mismatched: List[str] = []
         for key in _FLOW_FIELDS:
+            if key in _EVENT_DRIVEN_FLOWS:
+                continue
             ann_val = _num(ann, key)
             if ann_val is None or abs(ann_val) < _MATERIALITY:
                 continue
@@ -205,8 +205,26 @@ _BOUNDED_METRICS = (
 )
 
 
+_EQUITY_FLOOR = 0.05
+
+
+def _weak_equity_base(period: Optional[Dict[str, Any]]) -> bool:
+    """True when the equity denominator is too small/negative for roe/roic to be meaningful."""
+    if not isinstance(period, dict):
+        return False
+    equity = _num(period, "total_equity")
+    if equity is None:
+        return False
+    if equity <= 0:
+        return True
+    assets = _num(period, "total_assets")
+    return assets is not None and abs(equity) < _EQUITY_FLOOR * abs(assets)
+
+
 def check_ratio_bounds(
-    historical: Dict[str, Dict[str, Any]], scored_years: Iterable[str]
+    historical: Dict[str, Dict[str, Any]],
+    annual: Dict[str, Dict[str, Any]],
+    scored_years: Iterable[str],
 ) -> List[Finding]:
     """Flag a computed metric that falls outside its mathematically-plausible range."""
     scored = set(scored_years)
@@ -215,7 +233,10 @@ def check_ratio_bounds(
         metrics = historical.get(year)
         if not isinstance(metrics, dict):
             continue
+        weak_equity = _weak_equity_base(annual.get(year))
         for metric in _BOUNDED_METRICS:
+            if metric in ("roe", "roic") and weak_equity:
+                continue
             v = metrics.get(metric)
             if isinstance(v, (int, float)) and not isinstance(v, bool) and _out_of_bounds(metric, float(v)):
                 findings.append(Finding(

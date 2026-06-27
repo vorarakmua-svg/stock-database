@@ -271,7 +271,7 @@ class StockDataFetcher:
             report.findings.extend(check_field_outliers(annual, scored_years))
             report.findings.extend(check_cashflow_reconciliation(annual, scored_years))
             report.findings.extend(check_quarterly_sums(annual, quarterly, scored_years))
-            report.findings.extend(check_ratio_bounds(historical, scored_years))
+            report.findings.extend(check_ratio_bounds(historical, annual, scored_years))
             report.score = score_for(report.findings)
 
         stock.data_quality = report.as_dict()
