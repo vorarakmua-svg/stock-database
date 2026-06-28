@@ -4,6 +4,13 @@
 **Status:** Approved (brainstorming) → ready for implementation plan
 **Branch:** `fix/fiscal-year-labeling` (off `main`)
 
+> **Superseded (implementation note):** the live merge gate proved SEC's `fy` field is
+> unreliable (HON mis-stamps its FY2021 facts as `fy=2020`), so the `_build_fiscal_year_map` /
+> earliest-filed-`fy` approach described below was abandoned. The shipped implementation uses
+> the **period-end date rule** (`XBRLParser._fiscal_year_from_end`: end-year, minus one for an
+> early-January 52/53-week year-end), which is what Approach B sketched. The README is the
+> source of truth for the final behavior. This document is kept as the historical design record.
+
 ## Context
 
 A 50-stock cross-sector live test (mean data-quality 99.3) surfaced one finding that traced to a

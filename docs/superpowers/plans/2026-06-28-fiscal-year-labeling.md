@@ -1,5 +1,11 @@
 # 52/53-Week Fiscal-Year Labeling Fix — Implementation Plan
 
+> **Superseded (implementation note):** Tasks 1-3 below derive `fiscal_year` from SEC's `fy`
+> field (`_build_fiscal_year_map` / `start_fy`). The live merge gate proved `fy` is unreliable
+> (HON mis-stamps its FY2021 facts as `fy=2020`, regressing HON/USB), so the shipped code instead
+> uses the **period-end date rule** (`_fiscal_year_from_end`). See the README and the spec's
+> Superseded banner. This plan is kept as the historical execution record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Derive each period's `fiscal_year` from the filer's own original-filing SEC `fy` instead of the period-end calendar year, fixing off-by-one labels, missing year buckets, and quarter-grouping collisions for 52/53-week filers whose year-end crosses the Dec/Jan boundary (e.g. JNJ).
