@@ -75,6 +75,22 @@ class XBRLParser:
                 return int(match.group(1))
         return None
 
+    def _fiscal_year_from_end(self, end_iso: Optional[str]) -> Optional[int]:
+        """Fiscal year a period belongs to, from its period-end date.
+
+        A period's fiscal year is its period-end calendar year, except for a 52/53-week
+        filer whose year-end lands in early January (month == 1, day <= 7): that belongs
+        to the prior (December) fiscal year. January-end retailers (day 28-31) keep the
+        end year. SEC's ``fy`` field is deliberately NOT used — filers mis-stamp it (e.g.
+        HON tagged its FY2021 facts as fy=2020).
+        """
+        end = self._parse_iso_date(end_iso)
+        if end is None:
+            return None
+        if end.month == 1 and end.day <= 7:
+            return end.year - 1
+        return end.year
+
     def _span_days(self, entry: Dict[str, Any]) -> Optional[int]:
         """Number of days the fact spans, or None for instant facts (no ``start``)."""
         start = self._parse_iso_date(entry.get("start"))
@@ -126,11 +142,14 @@ class XBRLParser:
         if not us_gaap:
             return {}
 
+        def annual_fy(entry: Dict[str, Any]) -> Optional[int]:
+            return self._fiscal_year_from_end(entry.get("end")) or self._period_year(entry)
+
         data = self._resolve_canonical(
             us_gaap,
             form_set={"10-K", "10-K/A"},
             valid_fn=self._is_full_year,
-            period_key_fn=self._period_year,
+            period_key_fn=annual_fy,
             quarterly=False,
         )
 
@@ -258,8 +277,8 @@ class XBRLParser:
                 if len(points) < 2:
                     continue  # not a cumulative ladder (isolated 3-month fact)
                 points.sort()
-                # The fiscal year this ladder belongs to (year of its latest end).
-                ladder_fy = self._period_year({"end": points[-1][0]})
+                # The fiscal year this ladder belongs to, from its latest end (date rule).
+                ladder_fy = self._fiscal_year_from_end(points[-1][0])
                 prev_end, prev_val = start, 0.0
                 for end, val in points:
                     if not isinstance(val, (int, float)):
