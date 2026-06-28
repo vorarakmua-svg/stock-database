@@ -414,7 +414,7 @@ never alter data):
 | Check | Catches | Threshold | Penalty |
 |---|---|---|---|
 | Magnitude outlier | a recurring USD field that spikes then reverts — a one-off filing/tag error (persistent M&A step-changes, and event-driven flows like debt issuance, buybacks, M&A, and impairments, are not flagged) | spike ≥ 100× both adjacent years | −25 |
-| Cash-flow consistency | the cash-flow statement's reported net change != its own sections + FX effect | residual > 1% | −10 |
+| Cash-flow consistency | the cash-flow statement's reported net change != its own sections + FX effect (a continuing-only statement reconciles once the separately-reported `cash_from_discontinued_operations` line is added) | residual > 1% both bases | −10 |
 | Quarterly-sum | discrete quarters that don't sum to the annual figure; event-driven flows (debt issuance/repayment, buybacks, M&A, impairments/restructuring) are excluded, as for the magnitude-outlier check | per-field > 1% | −10 |
 | Ratio bounds | a computed metric outside its plausible range (e.g. >100% gross margin); roe/roic are not flagged when the equity base is negligible or negative (a buyback-depleted denominator makes the ratio meaningless, not wrong) | impossibility bounds | −3 |
 
