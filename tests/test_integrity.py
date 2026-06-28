@@ -225,3 +225,64 @@ def test_ratio_bounds_suppresses_roe_on_weak_equity():
     normal = {"2024": {"total_equity": 50.0e9, "total_assets": 100.0e9}}
     findings = check_ratio_bounds(historical, normal, {"2024"})
     assert [(f.code, f.message[:5]) for f in findings] == [("ratio_out_of_bounds", "'roe'")]
+
+
+def test_cashflow_reconcile_silent_with_continuing_sections_plus_discontinued():
+    # PRU-shaped: OCF/ICF/FCF are continuing-only; a separate discontinued line and FX
+    # make up the difference to the reported net change. Adding the discontinued line
+    # reconciles, so no finding.
+    annual = {"2021": {
+        "net_change_in_cash": -921.0e6,
+        "operating_cash_flow": 9812.0e6,
+        "investing_cash_flow": -5342.0e6,
+        "financing_cash_flow": -3011.0e6,
+        "fx_effect_on_cash": -309.0e6,
+        "cash_from_discontinued_operations": -2071.0e6,
+    }}  # 9812 - 5342 - 3011 - 309 - 2071 = -921
+    assert check_cashflow_reconciliation(annual, {"2021"}) == []
+
+
+def test_cashflow_reconcile_silent_total_basis_no_discontinued():
+    # Sections already include everything; no discontinued field -> still silent (regression).
+    annual = {"2024": {"net_change_in_cash": -42.0e6, "operating_cash_flow": 30.0e6,
+                       "investing_cash_flow": -20.0e6, "financing_cash_flow": -12.0e6,
+                       "fx_effect_on_cash": -40.0e6}}
+    assert check_cashflow_reconciliation(annual, {"2024"}) == []
+
+
+def test_cashflow_imbalance_fires_when_neither_basis_reconciles():
+    # A genuine break: neither expected nor expected+disc matches the net change.
+    annual = {"2024": {"net_change_in_cash": 5.0e9, "operating_cash_flow": 0.4e9,
+                       "investing_cash_flow": -0.1e9, "financing_cash_flow": 0.2e9,
+                       "cash_from_discontinued_operations": 0.1e9}}
+    findings = check_cashflow_reconciliation(annual, {"2024"})
+    assert [(f.code, f.period) for f in findings] == [("cashflow_imbalance", "2024")]
+
+
+def test_outlier_skips_discontinued_ops_fields():
+    # cash_from_discontinued_operations spikes 100x and reverts, but is excluded.
+    annual = {
+        "2021": {"cash_from_discontinued_operations": 1.0e7, "revenue": 1.0e9},
+        "2022": {"cash_from_discontinued_operations": 1.0e12, "revenue": 1.1e9},
+        "2023": {"cash_from_discontinued_operations": 1.1e7, "revenue": 1.2e9},
+    }
+    findings = check_field_outliers(annual, {"2021", "2022", "2023"})
+    assert all("discontinued" not in f.message for f in findings)
+    assert findings == []  # revenue is a smooth trend; nothing else flags
+
+
+def test_quarterly_sum_skips_discontinued_ops_fields():
+    annual = {"2024": {"cash_from_discontinued_operations": 1.0e9, "revenue": 1.0e9}}
+
+    def _qd(fq, disc, rev):
+        return {"fiscal_year": 2024, "fiscal_quarter": fq,
+                "cash_from_discontinued_operations": disc, "revenue": rev}
+
+    quarterly = {  # each field's quarters sum to 0.8e9 vs annual 1.0e9 (20% off)
+        "2024-03-31": _qd(1, 0.20e9, 0.20e9), "2024-06-30": _qd(2, 0.20e9, 0.20e9),
+        "2024-09-30": _qd(3, 0.20e9, 0.20e9), "2024-12-31": _qd(4, 0.20e9, 0.20e9),
+    }
+    findings = check_quarterly_sums(annual, quarterly, {"2024"})
+    assert len(findings) == 1
+    assert "revenue" in findings[0].message
+    assert "discontinued" not in findings[0].message
