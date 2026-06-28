@@ -47,12 +47,26 @@ def _bank_revenue(p: Dict[str, Any]) -> Optional[float]:
     return None
 
 
+def _discontinued_ops_cash(p: Dict[str, Any]) -> Optional[float]:
+    """Aggregate discontinued-operations cash = sum of the operating/investing/financing
+    discontinued components, used when the single aggregate tag is not filed."""
+    parts = [
+        _num(p, "discontinued_operating_cash_flow"),
+        _num(p, "discontinued_investing_cash_flow"),
+        _num(p, "discontinued_financing_cash_flow"),
+    ]
+    present = [v for v in parts if v is not None]
+    return sum(present) if present else None
+
+
 # Ordered list of (canonical_key, fn, formula). Only applied when the key is
 # absent. Order matters if a derivation depends on another's output.
 DERIVATIONS: List[Tuple[str, Callable[[Dict[str, Any]], Optional[float]], str]] = [
     ("revenue", _bank_revenue, "net_interest_income + noninterest_income"),
     ("total_liabilities", _total_liabilities, "total_assets - total_equity"),
     ("gross_profit", _gross_profit, "revenue - cost_of_revenue"),
+    ("cash_from_discontinued_operations", _discontinued_ops_cash,
+     "discontinued operating + investing + financing cash flows"),
 ]
 
 

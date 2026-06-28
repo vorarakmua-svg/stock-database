@@ -22,8 +22,20 @@ _EVENT_DRIVEN_FLOWS = frozenset({
     "debt_issued", "debt_repaid", "share_repurchases", "acquisitions",
     "restructuring", "impairment",
 })
+# Discontinued-operations cash: lumpy/event-driven, and the aggregate is a cash-flow
+# reconciliation residual. Captured, but excluded from the magnitude-outlier and
+# quarterly-sum checks (like the event-driven flows and the cash residuals).
+_DISCONTINUED_FIELDS = frozenset({
+    "cash_from_discontinued_operations",
+    "discontinued_operating_cash_flow",
+    "discontinued_investing_cash_flow",
+    "discontinued_financing_cash_flow",
+})
 # Volatile net residuals (cash-flow reconciliation inputs) plus the event-driven flows.
-_OUTLIER_EXCLUDE = _EVENT_DRIVEN_FLOWS | frozenset({"net_change_in_cash", "fx_effect_on_cash"})
+_OUTLIER_EXCLUDE = (
+    _EVENT_DRIVEN_FLOWS | _DISCONTINUED_FIELDS
+    | frozenset({"net_change_in_cash", "fx_effect_on_cash"})
+)
 
 # USD "level" fields (income/balance/cash-flow amounts); excludes per-share and
 # share-count fields and the volatile residuals above. Candidates for magnitude-outlier.
@@ -84,6 +96,11 @@ def check_field_outliers(
     return findings
 
 
+def _exceeds_cash_tolerance(residual: float, denom: float, gross: float) -> bool:
+    """True when a cash residual is material BOTH vs the net change and vs gross activity."""
+    return abs(residual) > _CASH_TOL * denom and abs(residual) > _CASH_GROSS_TOL * gross
+
+
 def check_cashflow_reconciliation(
     annual: Dict[str, Any], scored_years: Iterable[str]
 ) -> List[Finding]:
@@ -108,17 +125,24 @@ def check_cashflow_reconciliation(
         if net_change is None or ocf is None or icf is None or fcf is None:
             continue
         fx = _num(period, "fx_effect_on_cash") or 0.0
+        disc = _num(period, "cash_from_discontinued_operations") or 0.0
         expected = ocf + icf + fcf + fx
         denom = max(abs(net_change), abs(expected))
         if denom < _MATERIALITY:
             continue
-        residual = net_change - expected
         gross = abs(ocf) + abs(icf) + abs(fcf)
-        # Flag only when the residual is material BOTH vs the net change and vs gross
-        # cash activity -- so a small discontinued-ops/FX leftover on a company with
-        # huge gross flows (e.g. an insurer) is not a false positive, while a
-        # mis-resolved section (large vs gross) still is.
-        if abs(residual) > _CASH_TOL * denom and abs(residual) > _CASH_GROSS_TOL * gross:
+        # Two valid bases: the section subtotals may already include discontinued
+        # operations (reconciles against `expected`), or be continuing-only (then the
+        # separately-reported discontinued-ops cash line must be added -> `expected +
+        # disc`). Flag only when NEITHER basis reconciles, so a filer like PRU that
+        # reports continuing-only sections plus a separate discontinued line is not a
+        # false positive. When `disc` is 0 the two bases are identical (behavior
+        # unchanged for every filer without discontinued operations).
+        residual = net_change - expected
+        residual_disc = net_change - (expected + disc)
+        denom_disc = max(abs(net_change), abs(expected + disc))
+        if (_exceeds_cash_tolerance(residual, denom, gross)
+                and _exceeds_cash_tolerance(residual_disc, denom_disc, gross)):
             findings.append(Finding(
                 MEDIUM, "cashflow_imbalance",
                 f"reported net change in cash ({net_change:,.0f}) != operating+"
@@ -156,7 +180,7 @@ def check_quarterly_sums(
             continue
         mismatched: List[str] = []
         for key in _FLOW_FIELDS:
-            if key in _EVENT_DRIVEN_FLOWS:
+            if key in _EVENT_DRIVEN_FLOWS or key in _DISCONTINUED_FIELDS:
                 continue
             ann_val = _num(ann, key)
             if ann_val is None or abs(ann_val) < _MATERIALITY:
