@@ -18,6 +18,7 @@ _QUARTER_MAX_DAYS = 100
 
 # Forms that carry quarterly and annual statement facts.
 _QUARTERLY_FORMS = {"10-Q", "10-Q/A", "10-K", "10-K/A"}
+_ANNUAL_FORMS = {"10-K", "10-K/A"}
 
 _FRAME_YEAR_RE = re.compile(r"CY(\d{4})")
 _FRAME_QUARTER_RE = re.compile(r"^CY(\d{4})Q(\d)")
@@ -147,7 +148,7 @@ class XBRLParser:
 
         data = self._resolve_canonical(
             us_gaap,
-            form_set={"10-K", "10-K/A"},
+            form_set=_ANNUAL_FORMS,
             valid_fn=self._is_full_year,
             period_key_fn=annual_fy,
             quarterly=False,
@@ -185,7 +186,7 @@ class XBRLParser:
                 if not tag_data:
                     continue
                 for entry in tag_data.get("units", {}).get(field.xbrl_unit, []):
-                    if entry.get("form", "") not in {"10-K", "10-K/A"}:
+                    if entry.get("form", "") not in _ANNUAL_FORMS:
                         continue
                     if not self._is_full_year(entry):
                         continue
