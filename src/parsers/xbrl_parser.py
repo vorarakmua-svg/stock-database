@@ -158,6 +158,63 @@ class XBRLParser:
             sorted_years = sorted_years[:years_back]
         return {str(y): data[y] for y in sorted_years}
 
+    def extract_annual_vintages(
+        self,
+        facts: Dict[str, Any],
+        years_back: Optional[int] = None,
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Every filing's view of each annual period: ``{fiscal_year: {accn: period}}``.
+
+        Unlike :meth:`extract_annual_financials` (which collapses to the latest-filed
+        value per period), this keeps one period dict per *filing* (accession), so a
+        restated year retains both its original and restated vintages. Reads the
+        already-fetched ``companyfacts`` (every historical instance carries its own
+        ``accn``/``filed``); no extra network. Annual (10-K) only.
+        """
+        us_gaap = facts.get("facts", {}).get("us-gaap", {})
+        if not us_gaap:
+            return {}
+
+        data: Dict[Any, Dict[str, Any]] = {}
+        best: Dict[Any, Tuple[int, str]] = {}
+        period_frames: Dict[Any, set] = {}
+
+        for field in CANONICAL_FIELDS:
+            for priority, tag in enumerate(field.tags):
+                tag_data = us_gaap.get(tag)
+                if not tag_data:
+                    continue
+                for entry in tag_data.get("units", {}).get(field.xbrl_unit, []):
+                    if entry.get("form", "") not in {"10-K", "10-K/A"}:
+                        continue
+                    if not self._is_full_year(entry):
+                        continue
+                    fy = self._fiscal_year_from_end(entry.get("end")) or self._period_year(entry)
+                    accn = entry.get("accn")
+                    if fy is None or not accn:
+                        continue
+                    period = (fy, accn)
+                    frame = entry.get("frame")
+                    if frame:
+                        period_frames.setdefault(period, set()).add(frame)
+                    seed = {
+                        "fiscal_year": fy, "accn": accn,
+                        "filed_date": entry.get("filed"), "period_end": entry.get("end"),
+                        "form": entry.get("form"),
+                    }
+                    self._assign_if_better(data, best, period, seed, field,
+                                           priority, tag, entry)
+
+        self._apply_calendar(data, period_frames, quarterly=False)
+
+        nested: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for (fy, accn), period_dict in data.items():
+            nested.setdefault(str(fy), {})[accn] = period_dict
+        if years_back:
+            keep = sorted(nested.keys(), reverse=True)[:years_back]
+            nested = {y: nested[y] for y in keep}
+        return nested
+
     def extract_quarterly_financials(
         self,
         facts: Dict[str, Any],
