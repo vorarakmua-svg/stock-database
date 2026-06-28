@@ -120,12 +120,26 @@ class SQLiteStore:
                 PRIMARY KEY (ticker, period_end)
             );
 
+            CREATE TABLE IF NOT EXISTS financials_annual_vintages (
+                ticker TEXT NOT NULL,
+                fiscal_year INTEGER NOT NULL,
+                accn TEXT NOT NULL,
+                filed_date TEXT,
+                period_end TEXT,
+                form TEXT,
+                calendar_year INTEGER,
+                {_cols_ddl(_CANONICAL_COLUMNS)},
+                PRIMARY KEY (ticker, fiscal_year, accn)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_fa_calendar_year
                 ON financials_annual (calendar_year);
             CREATE INDEX IF NOT EXISTS idx_fq_calendar
                 ON financials_quarterly (calendar_year, calendar_quarter);
             CREATE INDEX IF NOT EXISTS idx_ttm_calendar
                 ON financials_ttm (ticker, calendar_year, calendar_quarter);
+            CREATE INDEX IF NOT EXISTS idx_fav_asof
+                ON financials_annual_vintages (ticker, fiscal_year, filed_date);
 
             CREATE TABLE IF NOT EXISTS metrics_annual (
                 ticker TEXT NOT NULL,
@@ -186,6 +200,8 @@ class SQLiteStore:
             + [(c, "REAL") for c in _CANONICAL_COLUMNS],
             "financials_ttm": [("fiscal_year", "INTEGER"), ("calendar_year", "INTEGER"),
                                ("calendar_quarter", "INTEGER")]
+            + [(c, "REAL") for c in _CANONICAL_COLUMNS],
+            "financials_annual_vintages": [("calendar_year", "INTEGER")]
             + [(c, "REAL") for c in _CANONICAL_COLUMNS],
             "metrics_annual": [(c, "REAL") for c in _METRIC_COLUMNS],
             "market_snapshots": [(c, "REAL") for c in _SNAPSHOT_COLUMNS],
@@ -313,6 +329,22 @@ class SQLiteStore:
             }
             row.update(self._canonical_values(period))
             self._upsert(conn, "financials_ttm", ["ticker", "period_end"], row)
+
+        # financials_annual_vintages (point-in-time: one row per filing/accession)
+        for fy, by_accn in (stock.financials_annual_vintages or {}).items():
+            for accn, period in by_accn.items():
+                vrow = {
+                    "ticker": stock.ticker,
+                    "fiscal_year": int(fy) if str(fy).isdigit() else None,
+                    "accn": accn,
+                    "filed_date": period.get("filed_date"),
+                    "period_end": period.get("period_end"),
+                    "form": period.get("form"),
+                    "calendar_year": period.get("calendar_year"),
+                }
+                vrow.update(self._canonical_values(period))
+                self._upsert(conn, "financials_annual_vintages",
+                             ["ticker", "fiscal_year", "accn"], vrow)
 
         # market_snapshots (point-in-time)
         md = stock.market_data or {}
