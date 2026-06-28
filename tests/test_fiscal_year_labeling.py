@@ -46,3 +46,36 @@ def test_build_fiscal_year_map_uses_original_filing_fy(parser):
     }
     fy_map = parser._build_fiscal_year_map(us_gaap, {"10-K", "10-K/A"})
     assert fy_map == {"2023-01-01": 2022, "2023-12-31": 2023}
+
+
+# ---------------- annual integration ----------------
+
+def test_annual_dec_jan_boundary_no_collision(parser):
+    # JNJ-like: FY2022 ends 2023-01-01, FY2023 ends 2023-12-31 -> both calendar 2023.
+    # end.year bucketing would collide both into "2023" and drop FY2022; the fy map
+    # keeps them distinct.
+    facts = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        usd(78000, "2022-01-03", "2023-01-01", fy=2022, filed="2023-02-16"),
+        usd(85000, "2023-01-02", "2023-12-31", fy=2023, filed="2024-02-16", frame="CY2023"),
+        # FY2022 carried as a comparative in the FY2023 10-K (inflated fy).
+        usd(78000, "2022-01-03", "2023-01-01", fy=2023, filed="2024-02-16"),
+    ]}}}}}
+    annual = parser.extract_annual_financials(facts, years_back=10)
+
+    assert {"2022", "2023"} <= set(annual.keys())
+    assert annual["2022"]["revenue"] == 78000
+    assert annual["2022"]["fiscal_year"] == 2022
+    assert annual["2022"]["period_end"] == "2023-01-01"
+    assert annual["2023"]["revenue"] == 85000
+    assert annual["2023"]["fiscal_year"] == 2023
+    assert annual["2023"]["period_end"] == "2023-12-31"
+
+
+def test_annual_january_retailer_unchanged(parser):
+    # WMT-like Jan-31 filer: declared FY2026 (fy=2026), macro/calendar 2025.
+    facts = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        usd(648000, "2025-02-01", "2026-01-31", fy=2026, filed="2026-03-15", frame="CY2025"),
+    ]}}}}}
+    period = parser.extract_annual_financials(facts, years_back=1)["2026"]
+    assert period["fiscal_year"] == 2026
+    assert period["calendar_year"] == 2025

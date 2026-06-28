@@ -171,11 +171,24 @@ class XBRLParser:
         if not us_gaap:
             return {}
 
+        fy_map = self._build_fiscal_year_map(us_gaap, {"10-K", "10-K/A"})
+
+        def annual_fy(entry: Dict[str, Any]) -> Optional[int]:
+            end: Optional[str] = entry.get("end")
+            if end is not None:
+                fy = fy_map.get(end)
+                if fy is not None:
+                    return fy
+            fy = self._fiscal_year_fallback(end)
+            if fy is not None:
+                return fy
+            return self._period_year(entry)
+
         data = self._resolve_canonical(
             us_gaap,
             form_set={"10-K", "10-K/A"},
             valid_fn=self._is_full_year,
-            period_key_fn=self._period_year,
+            period_key_fn=annual_fy,
             quarterly=False,
         )
 
