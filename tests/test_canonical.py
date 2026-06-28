@@ -41,3 +41,22 @@ def test_validate_period_reports_bad_type():
 def test_revenue_field_lists_apple_tag():
     # Apple reports under the ASC 606 contract tag; it must be a revenue candidate.
     assert "RevenueFromContractWithCustomerExcludingAssessedTax" in CANONICAL_BY_KEY["revenue"].tags
+
+
+def test_discontinued_ops_cash_fields_registered():
+    from src.mappings.canonical import CANONICAL_BY_KEY
+    expected = {
+        "cash_from_discontinued_operations": "NetCashProvidedByUsedInDiscontinuedOperations",
+        "discontinued_operating_cash_flow":
+            "CashProvidedByUsedInOperatingActivitiesDiscontinuedOperations",
+        "discontinued_investing_cash_flow":
+            "CashProvidedByUsedInInvestingActivitiesDiscontinuedOperations",
+        "discontinued_financing_cash_flow":
+            "CashProvidedByUsedInFinancingActivitiesDiscontinuedOperations",
+    }
+    for key, primary_tag in expected.items():
+        assert key in CANONICAL_BY_KEY, key
+        field = CANONICAL_BY_KEY[key]
+        assert field.tags[0] == primary_tag
+        assert field.statement == "cashflow"
+        assert field.kind == "duration"

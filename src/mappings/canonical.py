@@ -302,6 +302,29 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
             "EffectOfExchangeRateOnCashAndCashEquivalentsContinuingOperations",
         ),
     ),
+    CanonicalField(
+        "cash_from_discontinued_operations", "Cash Flow from Discontinued Operations",
+        CASHFLOW, UNIT_USD, DURATION,
+        ("NetCashProvidedByUsedInDiscontinuedOperations",),
+        description="Net cash flow from discontinued operations; when only the split "
+                    "operating/investing/financing components are filed, this is derived "
+                    "as their sum. Included in the cash-flow consistency check.",
+    ),
+    CanonicalField(
+        "discontinued_operating_cash_flow", "Discontinued Operations — Operating Cash Flow",
+        CASHFLOW, UNIT_USD, DURATION,
+        ("CashProvidedByUsedInOperatingActivitiesDiscontinuedOperations",),
+    ),
+    CanonicalField(
+        "discontinued_investing_cash_flow", "Discontinued Operations — Investing Cash Flow",
+        CASHFLOW, UNIT_USD, DURATION,
+        ("CashProvidedByUsedInInvestingActivitiesDiscontinuedOperations",),
+    ),
+    CanonicalField(
+        "discontinued_financing_cash_flow", "Discontinued Operations — Financing Cash Flow",
+        CASHFLOW, UNIT_USD, DURATION,
+        ("CashProvidedByUsedInFinancingActivitiesDiscontinuedOperations",),
+    ),
 
     # ---------------- Shares ----------------
     CanonicalField(
