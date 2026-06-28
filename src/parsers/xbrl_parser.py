@@ -75,6 +75,51 @@ class XBRLParser:
                 return int(match.group(1))
         return None
 
+    def _build_fiscal_year_map(self, us_gaap: Dict[str, Any], form_set: set) -> Dict[str, int]:
+        """Map each annual period-end to the filer's *own* fiscal year.
+
+        The authoritative source is the SEC ``fy`` of the *original* filing — the
+        earliest-filed ``fp == "FY"`` instance for that period-end. Later comparatives
+        carry an inflated ``fy`` (the filing's year, not the period's), so the
+        earliest-filed instance recovers the declared fiscal year. This is correct for
+        52/53-week filers whose year-end crosses the Dec/Jan boundary, where the
+        period-end *calendar* year is off by one.
+        """
+        best: Dict[str, Tuple[str, int]] = {}  # end -> (earliest_filed, fy)
+        for field in CANONICAL_FIELDS:
+            for tag in field.tags:
+                for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
+                    if entry.get("form", "") not in form_set:
+                        continue
+                    if entry.get("fp") != "FY":
+                        continue
+                    if not self._is_full_year(entry):
+                        continue
+                    end = entry.get("end")
+                    fy = entry.get("fy")
+                    if not end or not isinstance(fy, int):
+                        continue
+                    filed = entry.get("filed") or ""
+                    cur = best.get(end)
+                    if cur is None or filed < cur[0] or (filed == cur[0] and fy < cur[1]):
+                        best[end] = (filed, fy)
+        return {end: fy for end, (_filed, fy) in best.items()}
+
+    def _fiscal_year_fallback(self, end_iso: Optional[str]) -> Optional[int]:
+        """Fiscal year when no original ``fp == "FY"`` filing exists for a period-end
+        (e.g. a pre-XBRL year seen only as a comparative).
+
+        Uses the period-end calendar year, minus one only for an early-January
+        52/53-week year-end (day <= 7), which belongs to the prior (December) fiscal
+        year. January-end retailers (day 28-31) keep the end year.
+        """
+        end = self._parse_iso_date(end_iso)
+        if end is None:
+            return None
+        if end.month == 1 and end.day <= 7:
+            return end.year - 1
+        return end.year
+
     def _span_days(self, entry: Dict[str, Any]) -> Optional[int]:
         """Number of days the fact spans, or None for instant facts (no ``start``)."""
         start = self._parse_iso_date(entry.get("start"))
