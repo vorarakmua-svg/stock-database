@@ -428,7 +428,10 @@ Companies have different fiscal year-ends (Microsoft June, Apple September, Walm
 January), so comparing by fiscal-year number mixes different macroeconomic windows. Each
 period therefore carries two labels:
 
-- `fiscal_year` — the company's own fiscal year (deterministic, from the period-end date).
+- `fiscal_year` — the company's own fiscal year, taken from the filer's original-filing
+  SEC `fy` (the earliest-filed `fp="FY"` instance for the period). This is correct even
+  for 52/53-week filers whose year-end crosses the Dec/Jan boundary (e.g. JNJ), where the
+  period-end's calendar year would be off by one.
 - `calendar_year` (and `calendar_quarter`) — the macro-aligned year taken from SEC's
   XBRL `frame` context flag (e.g. MSFT FY2025, AAPL FY2025, WMT FY2026 and every December
   filer's FY2025 all map to `calendar_year = 2025`; NVIDIA's January "FY2022" → 2021).
