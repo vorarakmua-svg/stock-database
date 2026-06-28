@@ -286,6 +286,10 @@ class XBRLParser:
                 continue
             # Dedup per (start, end): higher-priority tag, then most-recently-filed.
             chosen: Dict[Tuple[str, str], Tuple[int, str, Any]] = {}
+            # Per fiscal-period start: the earliest-filed fy (the original filing's
+            # declared fiscal year), authoritative even when the year-end is in early
+            # January (where the end's calendar year is off by one).
+            start_fy: Dict[str, Tuple[str, int]] = {}
             for priority, tag in enumerate(field.tags):
                 for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
                     if entry.get("form", "") not in _QUARTERLY_FORMS:
@@ -299,6 +303,11 @@ class XBRLParser:
                     if entry.get("frame"):
                         frames.setdefault(end, set()).add(entry["frame"])
                     filed = entry.get("filed") or ""
+                    fy = entry.get("fy")
+                    if isinstance(fy, int):
+                        sf = start_fy.get(start)
+                        if sf is None or filed < sf[0] or (filed == sf[0] and fy < sf[1]):
+                            start_fy[start] = (filed, fy)
                     key = (start, end)
                     cur = chosen.get(key)
                     if cur is not None and not (
@@ -316,8 +325,10 @@ class XBRLParser:
                 if len(points) < 2:
                     continue  # not a cumulative ladder (isolated 3-month fact)
                 points.sort()
-                # The fiscal year this ladder belongs to (year of its latest end).
-                ladder_fy = self._period_year({"end": points[-1][0]})
+                # The fiscal year this ladder belongs to: the original filing's
+                # declared fy (falls back to a Dec/Jan-boundary date rule).
+                sf = start_fy.get(start)
+                ladder_fy = sf[1] if sf is not None else self._fiscal_year_fallback(points[-1][0])
                 prev_end, prev_val = start, 0.0
                 for end, val in points:
                     if not isinstance(val, (int, float)):
