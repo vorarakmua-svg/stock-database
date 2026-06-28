@@ -147,6 +147,10 @@ class StockDataFetcher:
                     quarterly = self.xbrl_parser.extract_quarterly_financials(
                         facts, quarters_back=(years_back * 4 if years_back else None)
                     )
+                    vintages = self.xbrl_parser.extract_annual_vintages(
+                        facts, years_back=years_back
+                    )
+                    stock.financials_annual_vintages = vintages
 
                     stock.merge_parsed_financials(annual, quarterly)
 
@@ -249,6 +253,11 @@ class StockDataFetcher:
                 for err in errors:
                     stock.add_warning(f"validation {attr} {period_key}: {err}")
             setattr(stock, attr, cleaned)
+
+        # Derive identities within each point-in-time vintage (self-contained snapshots).
+        for by_accn in (stock.financials_annual_vintages or {}).values():
+            for period in by_accn.values():
+                apply_derivations(period)
 
         if stock.financials_quarterly:
             stock.financials_ttm = compute_ttm(stock.financials_quarterly)
