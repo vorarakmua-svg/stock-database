@@ -75,43 +75,14 @@ class XBRLParser:
                 return int(match.group(1))
         return None
 
-    def _build_fiscal_year_map(self, us_gaap: Dict[str, Any], form_set: set) -> Dict[str, int]:
-        """Map each annual period-end to the filer's *own* fiscal year.
+    def _fiscal_year_from_end(self, end_iso: Optional[str]) -> Optional[int]:
+        """Fiscal year a period belongs to, from its period-end date.
 
-        The authoritative source is the SEC ``fy`` of the *original* filing — the
-        earliest-filed ``fp == "FY"`` instance for that period-end. Later comparatives
-        carry an inflated ``fy`` (the filing's year, not the period's), so the
-        earliest-filed instance recovers the declared fiscal year. This is correct for
-        52/53-week filers whose year-end crosses the Dec/Jan boundary, where the
-        period-end *calendar* year is off by one.
-        """
-        best: Dict[str, Tuple[str, int]] = {}  # end -> (earliest_filed, fy)
-        for field in CANONICAL_FIELDS:
-            for tag in field.tags:
-                for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
-                    if entry.get("form", "") not in form_set:
-                        continue
-                    if entry.get("fp") != "FY":
-                        continue
-                    if not self._is_full_year(entry):
-                        continue
-                    end = entry.get("end")
-                    fy = entry.get("fy")
-                    if not end or not isinstance(fy, int):
-                        continue
-                    filed = entry.get("filed") or ""
-                    cur = best.get(end)
-                    if cur is None or filed < cur[0] or (filed == cur[0] and fy < cur[1]):
-                        best[end] = (filed, fy)
-        return {end: fy for end, (_filed, fy) in best.items()}
-
-    def _fiscal_year_fallback(self, end_iso: Optional[str]) -> Optional[int]:
-        """Fiscal year when no original ``fp == "FY"`` filing exists for a period-end
-        (e.g. a pre-XBRL year seen only as a comparative).
-
-        Uses the period-end calendar year, minus one only for an early-January
-        52/53-week year-end (day <= 7), which belongs to the prior (December) fiscal
-        year. January-end retailers (day 28-31) keep the end year.
+        A period's fiscal year is its period-end calendar year, except for a 52/53-week
+        filer whose year-end lands in early January (month == 1, day <= 7): that belongs
+        to the prior (December) fiscal year. January-end retailers (day 28-31) keep the
+        end year. SEC's ``fy`` field is deliberately NOT used — filers mis-stamp it (e.g.
+        HON tagged its FY2021 facts as fy=2020).
         """
         end = self._parse_iso_date(end_iso)
         if end is None:
@@ -171,18 +142,8 @@ class XBRLParser:
         if not us_gaap:
             return {}
 
-        fy_map = self._build_fiscal_year_map(us_gaap, {"10-K", "10-K/A"})
-
         def annual_fy(entry: Dict[str, Any]) -> Optional[int]:
-            end: Optional[str] = entry.get("end")
-            if end is not None:
-                fy = fy_map.get(end)
-                if fy is not None:
-                    return fy
-            fy = self._fiscal_year_fallback(end)
-            if fy is not None:
-                return fy
-            return self._period_year(entry)
+            return self._fiscal_year_from_end(entry.get("end")) or self._period_year(entry)
 
         data = self._resolve_canonical(
             us_gaap,
@@ -286,10 +247,6 @@ class XBRLParser:
                 continue
             # Dedup per (start, end): higher-priority tag, then most-recently-filed.
             chosen: Dict[Tuple[str, str], Tuple[int, str, Any]] = {}
-            # Per fiscal-period start: the earliest-filed fy (the original filing's
-            # declared fiscal year), authoritative even when the year-end is in early
-            # January (where the end's calendar year is off by one).
-            start_fy: Dict[str, Tuple[str, int]] = {}
             for priority, tag in enumerate(field.tags):
                 for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
                     if entry.get("form", "") not in _QUARTERLY_FORMS:
@@ -303,11 +260,6 @@ class XBRLParser:
                     if entry.get("frame"):
                         frames.setdefault(end, set()).add(entry["frame"])
                     filed = entry.get("filed") or ""
-                    fy = entry.get("fy")
-                    if isinstance(fy, int):
-                        sf = start_fy.get(start)
-                        if sf is None or filed < sf[0] or (filed == sf[0] and fy < sf[1]):
-                            start_fy[start] = (filed, fy)
                     key = (start, end)
                     cur = chosen.get(key)
                     if cur is not None and not (
@@ -325,10 +277,8 @@ class XBRLParser:
                 if len(points) < 2:
                     continue  # not a cumulative ladder (isolated 3-month fact)
                 points.sort()
-                # The fiscal year this ladder belongs to: the original filing's
-                # declared fy (falls back to a Dec/Jan-boundary date rule).
-                sf = start_fy.get(start)
-                ladder_fy = sf[1] if sf is not None else self._fiscal_year_fallback(points[-1][0])
+                # The fiscal year this ladder belongs to, from its latest end (date rule).
+                ladder_fy = self._fiscal_year_from_end(points[-1][0])
                 prev_end, prev_val = start, 0.0
                 for end, val in points:
                     if not isinstance(val, (int, float)):
