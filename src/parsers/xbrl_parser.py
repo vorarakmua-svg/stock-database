@@ -337,6 +337,37 @@ class XBRLParser:
             return None
         return (e - s).days
 
+    def _assign_if_better(
+        self,
+        data: Dict[Any, Dict[str, Any]],
+        best: Dict[Any, Tuple[int, str]],
+        period: Any,
+        seed: Dict[str, Any],
+        field: Any,
+        priority: int,
+        tag: str,
+        entry: Dict[str, Any],
+    ) -> bool:
+        """Store ``entry``'s value for ``field`` under ``period`` iff it beats the
+        current best (higher-priority tag, or the same tag filed at least as late).
+        Seeds a new period dict from ``seed``. Returns True when it won, so the caller
+        can run any period-level metadata update."""
+        filed = entry.get("filed") or ""
+        bkey = (period, field.key)
+        cur = best.get(bkey)
+        if cur is not None and not (
+            priority < cur[0] or (priority == cur[0] and filed >= cur[1])
+        ):
+            return False
+        best[bkey] = (priority, filed)
+        value = entry.get("val")
+        if field.sign == SIGN_ABS and isinstance(value, (int, float)):
+            value = abs(value)
+        period_dict = data.setdefault(period, dict(seed))
+        period_dict[field.key] = value
+        period_dict.setdefault("_source_tags", {})[field.key] = tag
+        return True
+
     def _resolve_canonical(
         self,
         us_gaap: Dict[str, Any],
@@ -384,28 +415,15 @@ class XBRLParser:
                     if frame:
                         period_frames.setdefault(period, set()).add(frame)
 
-                    filed = entry.get("filed") or ""
-                    bkey = (period, field.key)
-                    cur = best.get(bkey)
-                    # Keep the existing value unless this entry is from a
-                    # higher-priority tag, or the same tag filed at least as late.
-                    if cur is not None and not (
-                        priority < cur[0] or (priority == cur[0] and filed >= cur[1])
+                    seed = self._init_period_meta(period, quarterly)
+                    if not self._assign_if_better(
+                        data, best, period, seed, field, priority, tag, entry
                     ):
                         continue
-                    best[bkey] = (priority, filed)
-
-                    value = entry.get("val")
-                    if field.sign == SIGN_ABS and isinstance(value, (int, float)):
-                        value = abs(value)
-
-                    period_dict = data.setdefault(
-                        period, self._init_period_meta(period, quarterly)
-                    )
-                    period_dict[field.key] = value
-                    period_dict.setdefault("_source_tags", {})[field.key] = tag
 
                     # Period-level metadata follows the latest-filed contributing entry.
+                    period_dict = data[period]
+                    filed = entry.get("filed") or ""
                     if filed >= meta_filed.get(period, ""):
                         meta_filed[period] = filed
                         period_dict["filed_date"] = entry.get("filed")
