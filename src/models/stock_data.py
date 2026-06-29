@@ -46,6 +46,10 @@ class StockData:
     # Trailing-twelve-month series derived from discrete quarters
     financials_ttm: Dict[str, Any] = field(default_factory=dict)
 
+    # Point-in-time vintages: {fiscal_year: {accn: period}}. SQLite-only (excluded
+    # from to_dict/JSON); see the vintaged-ingestion spec.
+    financials_annual_vintages: Dict[str, Any] = field(default_factory=dict)
+
     # SEC submission data
     sec_submissions: Dict[str, Any] = field(default_factory=dict)
 
@@ -85,6 +89,8 @@ class StockData:
         # Convert datetime to ISO string
         if isinstance(data["collected_at"], datetime):
             data["collected_at"] = data["collected_at"].isoformat()
+        # Vintages are SQLite-only — never written to the per-ticker JSON.
+        data.pop("financials_annual_vintages", None)
         return data
 
     def to_json(self, indent: int = 2) -> str:

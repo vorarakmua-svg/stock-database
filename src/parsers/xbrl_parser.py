@@ -18,6 +18,7 @@ _QUARTER_MAX_DAYS = 100
 
 # Forms that carry quarterly and annual statement facts.
 _QUARTERLY_FORMS = {"10-Q", "10-Q/A", "10-K", "10-K/A"}
+_ANNUAL_FORMS = {"10-K", "10-K/A"}
 
 _FRAME_YEAR_RE = re.compile(r"CY(\d{4})")
 _FRAME_QUARTER_RE = re.compile(r"^CY(\d{4})Q(\d)")
@@ -147,7 +148,7 @@ class XBRLParser:
 
         data = self._resolve_canonical(
             us_gaap,
-            form_set={"10-K", "10-K/A"},
+            form_set=_ANNUAL_FORMS,
             valid_fn=self._is_full_year,
             period_key_fn=annual_fy,
             quarterly=False,
@@ -157,6 +158,63 @@ class XBRLParser:
         if years_back:
             sorted_years = sorted_years[:years_back]
         return {str(y): data[y] for y in sorted_years}
+
+    def extract_annual_vintages(
+        self,
+        facts: Dict[str, Any],
+        years_back: Optional[int] = None,
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Every filing's view of each annual period: ``{fiscal_year: {accn: period}}``.
+
+        Unlike :meth:`extract_annual_financials` (which collapses to the latest-filed
+        value per period), this keeps one period dict per *filing* (accession), so a
+        restated year retains both its original and restated vintages. Reads the
+        already-fetched ``companyfacts`` (every historical instance carries its own
+        ``accn``/``filed``); no extra network. Annual (10-K) only.
+        """
+        us_gaap = facts.get("facts", {}).get("us-gaap", {})
+        if not us_gaap:
+            return {}
+
+        data: Dict[Any, Dict[str, Any]] = {}
+        best: Dict[Any, Tuple[int, str]] = {}
+        period_frames: Dict[Any, set] = {}
+
+        for field in CANONICAL_FIELDS:
+            for priority, tag in enumerate(field.tags):
+                tag_data = us_gaap.get(tag)
+                if not tag_data:
+                    continue
+                for entry in tag_data.get("units", {}).get(field.xbrl_unit, []):
+                    if entry.get("form", "") not in _ANNUAL_FORMS:
+                        continue
+                    if not self._is_full_year(entry):
+                        continue
+                    fy = self._fiscal_year_from_end(entry.get("end")) or self._period_year(entry)
+                    accn = entry.get("accn")
+                    if fy is None or not accn:
+                        continue
+                    period = (fy, accn)
+                    frame = entry.get("frame")
+                    if frame:
+                        period_frames.setdefault(period, set()).add(frame)
+                    seed = {
+                        "fiscal_year": fy, "accn": accn,
+                        "filed_date": entry.get("filed"), "period_end": entry.get("end"),
+                        "form": entry.get("form"),
+                    }
+                    self._assign_if_better(data, best, period, seed, field,
+                                           priority, tag, entry)
+
+        self._apply_calendar(data, period_frames, quarterly=False)
+
+        nested: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for (fy, accn), period_dict in data.items():
+            nested.setdefault(str(fy), {})[accn] = period_dict
+        if years_back:
+            keep = sorted(nested.keys(), reverse=True)[:years_back]
+            nested = {y: nested[y] for y in keep}
+        return nested
 
     def extract_quarterly_financials(
         self,
@@ -337,6 +395,37 @@ class XBRLParser:
             return None
         return (e - s).days
 
+    def _assign_if_better(
+        self,
+        data: Dict[Any, Dict[str, Any]],
+        best: Dict[Any, Tuple[int, str]],
+        period: Any,
+        seed: Dict[str, Any],
+        field: Any,
+        priority: int,
+        tag: str,
+        entry: Dict[str, Any],
+    ) -> bool:
+        """Store ``entry``'s value for ``field`` under ``period`` iff it beats the
+        current best (higher-priority tag, or the same tag filed at least as late).
+        Seeds a new period dict from ``seed``. Returns True when it won, so the caller
+        can run any period-level metadata update."""
+        filed = entry.get("filed") or ""
+        bkey = (period, field.key)
+        cur = best.get(bkey)
+        if cur is not None and not (
+            priority < cur[0] or (priority == cur[0] and filed >= cur[1])
+        ):
+            return False
+        best[bkey] = (priority, filed)
+        value = entry.get("val")
+        if field.sign == SIGN_ABS and isinstance(value, (int, float)):
+            value = abs(value)
+        period_dict = data.setdefault(period, dict(seed))
+        period_dict[field.key] = value
+        period_dict.setdefault("_source_tags", {})[field.key] = tag
+        return True
+
     def _resolve_canonical(
         self,
         us_gaap: Dict[str, Any],
@@ -384,28 +473,15 @@ class XBRLParser:
                     if frame:
                         period_frames.setdefault(period, set()).add(frame)
 
-                    filed = entry.get("filed") or ""
-                    bkey = (period, field.key)
-                    cur = best.get(bkey)
-                    # Keep the existing value unless this entry is from a
-                    # higher-priority tag, or the same tag filed at least as late.
-                    if cur is not None and not (
-                        priority < cur[0] or (priority == cur[0] and filed >= cur[1])
+                    seed = self._init_period_meta(period, quarterly)
+                    if not self._assign_if_better(
+                        data, best, period, seed, field, priority, tag, entry
                     ):
                         continue
-                    best[bkey] = (priority, filed)
-
-                    value = entry.get("val")
-                    if field.sign == SIGN_ABS and isinstance(value, (int, float)):
-                        value = abs(value)
-
-                    period_dict = data.setdefault(
-                        period, self._init_period_meta(period, quarterly)
-                    )
-                    period_dict[field.key] = value
-                    period_dict.setdefault("_source_tags", {})[field.key] = tag
 
                     # Period-level metadata follows the latest-filed contributing entry.
+                    period_dict = data[period]
+                    filed = entry.get("filed") or ""
                     if filed >= meta_filed.get(period, ""):
                         meta_filed[period] = filed
                         period_dict["filed_date"] = entry.get("filed")

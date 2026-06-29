@@ -52,3 +52,26 @@ def test_add_source_deduplicates():
     stock.add_source("sec_edgar")
     stock.add_source("sec_edgar")
     assert stock.data_sources == ["sec_edgar"]
+
+
+def test_financials_annual_vintages_defaults_empty():
+    from src.models.stock_data import StockData
+    s = StockData(ticker="T", cik="1", company_name="Test")
+    assert s.financials_annual_vintages == {}
+
+
+def test_vintages_excluded_from_to_dict():
+    from src.models.stock_data import StockData
+    s = StockData(ticker="T", cik="1", company_name="Test")
+    s.financials_annual_vintages = {"2022": {"acc-1": {"revenue": 100}}}
+    assert "financials_annual_vintages" not in s.to_dict()
+
+
+def test_from_dict_keeps_vintages_field_when_present():
+    # financials_annual_vintages is a declared dataclass field, so from_dict keeps it
+    # when present. (The JSON exporter never WRITES the key — see the to_dict test —
+    # so in practice JSON has no vintages; this just pins round-trip behavior.)
+    from src.models.stock_data import StockData
+    s = StockData.from_dict({"ticker": "T", "cik": "1", "company_name": "Test",
+                             "financials_annual_vintages": {"2022": {"a": {"revenue": 1}}}})
+    assert s.financials_annual_vintages == {"2022": {"a": {"revenue": 1}}}

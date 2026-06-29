@@ -507,9 +507,15 @@ WHERE f.calendar_year = 2025 AND m.roic > 0.15 AND m.debt_to_ebitda < 3
 ORDER BY m.roic DESC;
 ```
 
-Tables: `companies`, `financials_annual`, `financials_quarterly`, `metrics_annual`,
-`market_snapshots`, `collection_runs`. All writes are idempotent upserts, so re-runs
-update in place.
+Tables: `companies`, `financials_annual`, `financials_quarterly`, `financials_ttm`,
+`financials_annual_vintages`, `metrics_annual`, `market_snapshots`, `collection_runs`.
+All writes are idempotent upserts, so re-runs update in place.
+
+The `financials_annual_vintages` table stores **point-in-time** data: one row per
+(ticker, fiscal_year, filing accession), so you can see every filing's view of a year —
+the original and each later restatement — keyed by `filed_date`. This is sub-project 1 of
+the no-look-ahead point-in-time work (the as-of-date query API and point-in-time metrics
+follow). Vintages are SQLite-only (not in the per-ticker JSON).
 
 ## Development
 

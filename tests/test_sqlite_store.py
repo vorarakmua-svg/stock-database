@@ -215,3 +215,53 @@ def test_sector_metrics_persist_with_suppressed_nulls(tmp_path):
         assert roic is None          # suppressed -> NULL
     finally:
         conn.close()
+
+
+def test_vintages_table_written_and_idempotent(tmp_path):
+    import sqlite3
+
+    from src.exporters.sqlite_store import SQLiteStore
+    from src.models.stock_data import StockData
+
+    s = StockData(ticker="ZZ", cik="9", company_name="Z Co")
+    s.financials_annual_vintages = {
+        "2022": {
+            "acc-A": {"fiscal_year": 2022, "accn": "acc-A", "filed_date": "2023-02-15",
+                      "period_end": "2022-12-31", "form": "10-K", "calendar_year": 2022,
+                      "revenue": 100.0, "net_income": 10.0},
+            "acc-B": {"fiscal_year": 2022, "accn": "acc-B", "filed_date": "2024-02-15",
+                      "period_end": "2022-12-31", "form": "10-K", "calendar_year": 2022,
+                      "revenue": 110.0, "net_income": 11.0},
+        }
+    }
+    db = tmp_path / "v.db"
+    store = SQLiteStore(db_path=str(db))
+    store.export([s])
+    store.export([s])  # second export must not duplicate rows
+
+    conn = sqlite3.connect(str(db))
+    rows = conn.execute(
+        "SELECT accn, filed_date, revenue FROM financials_annual_vintages "
+        "WHERE ticker='ZZ' AND fiscal_year=2022 ORDER BY filed_date"
+    ).fetchall()
+    conn.close()
+    assert rows == [("acc-A", "2023-02-15", 100.0), ("acc-B", "2024-02-15", 110.0)]
+
+
+def test_vintages_do_not_affect_financials_annual(tmp_path):
+    import sqlite3
+
+    from src.exporters.sqlite_store import SQLiteStore
+    from src.models.stock_data import StockData
+
+    s = StockData(ticker="ZZ", cik="9", company_name="Z Co")
+    s.financials_annual = {"2022": {"fiscal_year": 2022, "period_end": "2022-12-31",
+                                    "revenue": 100.0}}
+    s.financials_annual_vintages = {"2022": {"acc-A": {"fiscal_year": 2022, "accn": "acc-A",
+                                    "filed_date": "2023-02-15", "revenue": 100.0}}}
+    db = tmp_path / "v2.db"
+    SQLiteStore(db_path=str(db)).export([s])
+    conn = sqlite3.connect(str(db))
+    n = conn.execute("SELECT COUNT(*) FROM financials_annual WHERE ticker='ZZ'").fetchone()[0]
+    conn.close()
+    assert n == 1  # the latest-view table is unaffected by vintages
