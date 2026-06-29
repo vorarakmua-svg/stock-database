@@ -141,3 +141,52 @@ def test_as_of_value_delegates(tmp_path):
         assert r.as_of_value("PRU", 2019, "net_income", "2019-01-01") is None
         # Missing field → None.
         assert r.as_of_value("PRU", 2019, "no_such_field", "2025-01-01") is None
+
+
+# ---------------------------------------------------------------------------
+# Task 3: history_as_of
+# ---------------------------------------------------------------------------
+
+def _three_years(tmp_path):
+    def period(fy, accn, filed, ni):
+        return {"fiscal_year": fy, "accn": accn, "filed_date": filed,
+                "period_end": f"{fy}-12-31", "form": "10-K", "calendar_year": fy,
+                "net_income": ni}
+    return _build_db(tmp_path, {
+        "2018": {"k18": period(2018, "k18", "2019-02-15", 80.0)},
+        "2019": {"k19": period(2019, "k19", "2020-02-15", 100.0),
+                 "k19r": period(2019, "k19r", "2021-02-15", 90.0)},
+        "2020": {"k20": period(2020, "k20", "2021-02-15", 110.0)},
+    })
+
+
+def test_history_as_of_only_includes_filed_years(tmp_path):
+    db = _three_years(tmp_path)
+    with AsOfReader(db) as r:
+        # As of mid-2020, FY2020 has not been filed yet (filed 2021-02-15).
+        hist = r.history_as_of("PRU", "2020-06-30")
+        assert set(hist.keys()) == {2018, 2019}
+        assert hist[2019]["net_income"] == 100.0  # pre-restatement
+        assert hist[2018]["net_income"] == 80.0
+
+
+def test_history_as_of_reflects_restatement_and_full_set(tmp_path):
+    db = _three_years(tmp_path)
+    with AsOfReader(db) as r:
+        hist = r.history_as_of("PRU", "2021-02-15")
+        assert set(hist.keys()) == {2018, 2019, 2020}
+        assert hist[2019]["net_income"] == 90.0  # restated by this date
+        assert hist[2020]["net_income"] == 110.0
+
+
+def test_history_as_of_newest_first_and_years_back(tmp_path):
+    db = _three_years(tmp_path)
+    with AsOfReader(db) as r:
+        hist = r.history_as_of("PRU", "2021-02-15", years_back=2)
+        assert list(hist.keys()) == [2020, 2019]  # newest first, trimmed to 2
+
+
+def test_history_as_of_unknown_ticker_empty(tmp_path):
+    db = _three_years(tmp_path)
+    with AsOfReader(db) as r:
+        assert r.history_as_of("ZZZZ", "2025-01-01") == {}

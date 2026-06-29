@@ -69,3 +69,27 @@ class AsOfReader:
         """A single canonical field's value as known on ``as_of_date`` (or ``None``)."""
         row = self.as_of_annual(ticker, fiscal_year, as_of_date)
         return row.get(field) if row is not None else None
+
+    def history_as_of(
+        self, ticker: str, as_of_date: AsOfDate, years_back: Optional[int] = None
+    ) -> Dict[int, Dict[str, Any]]:
+        """Every fiscal year known as of ``as_of_date``, each resolved to its latest
+        vintage filed <= that date. Keyed by fiscal_year, newest first; ``years_back``
+        trims to the most recent N years.
+        """
+        cutoff = self._norm_date(as_of_date)
+        cur = self._conn.execute(
+            "SELECT DISTINCT fiscal_year FROM financials_annual_vintages "
+            "WHERE ticker = ? AND filed_date <= ? "
+            "ORDER BY fiscal_year DESC",
+            (ticker, cutoff),
+        )
+        years = [row["fiscal_year"] for row in cur.fetchall()]
+        if years_back:
+            years = years[:years_back]
+        result: Dict[int, Dict[str, Any]] = {}
+        for fy in years:
+            period = self.as_of_annual(ticker, fy, cutoff)
+            if period is not None:
+                result[int(fy)] = period
+        return result
