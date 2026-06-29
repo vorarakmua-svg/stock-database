@@ -4,6 +4,10 @@ A read-only consumer of the ``financials_annual_vintages`` table (see
 ``exporters/sqlite_store.py``). For a given date ``D``, each annual period resolves to
 the latest filing made on or before ``D`` — so backtests read fundamentals with no
 look-ahead bias. The connection is opened ``mode=ro``; the reader never mutates data.
+
+A vintage with a NULL ``filed_date`` (unknown filing date) is deliberately invisible to
+every as-of query — ``NULL <= D`` is never true — which keeps resolution on the safe side
+of no-look-ahead (omit rather than leak unknown-timed data).
 """
 
 import logging
@@ -13,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 # Accepts an ISO ``YYYY-MM-DD`` string or a date/datetime (normalized before querying).
-AsOfDate = Union[str, "date"]
+AsOfDate = Union[str, date]
 
 
 class AsOfReader:
