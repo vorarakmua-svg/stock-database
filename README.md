@@ -514,8 +514,34 @@ All writes are idempotent upserts, so re-runs update in place.
 The `financials_annual_vintages` table stores **point-in-time** data: one row per
 (ticker, fiscal_year, filing accession), so you can see every filing's view of a year —
 the original and each later restatement — keyed by `filed_date`. This is sub-project 1 of
-the no-look-ahead point-in-time work (the as-of-date query API and point-in-time metrics
-follow). Vintages are SQLite-only (not in the per-ticker JSON).
+the no-look-ahead point-in-time work (point-in-time metrics follow). Vintages are
+SQLite-only (not in the per-ticker JSON).
+
+### Point-in-time as-of queries
+
+To read fundamentals **as they were known on a given date** (no look-ahead), resolve each
+year to the latest filing made on or before that date. In SQL:
+
+```sql
+-- Net income for FY2019 as it was known on 2020-06-30:
+SELECT * FROM financials_annual_vintages
+WHERE ticker = 'PRU' AND fiscal_year = 2019 AND filed_date <= '2020-06-30'
+ORDER BY filed_date DESC, accn DESC LIMIT 1;
+```
+
+Or in Python via `AsOfReader`:
+
+```python
+from src.query.asof import AsOfReader
+
+with AsOfReader("data/output/stock.db") as r:
+    period = r.as_of_annual("PRU", 2019, "2020-06-30")   # full period dict, or None
+    ni = r.as_of_value("PRU", 2019, "net_income", "2020-06-30")
+    history = r.history_as_of("PRU", "2020-06-30")        # {fiscal_year: period}, newest first
+```
+
+`as_of_date` accepts an ISO `YYYY-MM-DD` string or a `datetime.date`. A year not yet filed
+as of that date resolves to `None` (and is absent from `history_as_of`).
 
 ## Development
 
