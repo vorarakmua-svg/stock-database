@@ -64,4 +64,5 @@ files = [
     "src/parsers/unmapped.py",
     "src/analysis",
     "src/exporters/sqlite_store.py",
+    "src/query/asof.py",
 ]
