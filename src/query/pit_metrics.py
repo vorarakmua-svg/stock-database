@@ -12,6 +12,11 @@ structure, coverage, efficiency, and the bank/insurer/REIT sector ratios). Valua
 ratios are intentionally absent: they need the share price as of ``D`` and the project stores
 no historical per-date price series. (``calculate_all`` is called without ``market_data``,
 so those keys never appear.)
+
+Caveat: the financials are point-in-time, but the company's **sector** is read from the
+*current* ``companies`` table — ``sector_class`` is treated as a stable attribute. A company
+reclassified between ``D`` and now would have its current sector applied to historical ratios.
+Pass an explicit ``sector=`` to pin it.
 """
 
 import logging
