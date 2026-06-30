@@ -39,6 +39,11 @@ class AsOfReader:
     def __exit__(self, *exc: Any) -> None:
         self.close()
 
+    @property
+    def conn(self) -> sqlite3.Connection:
+        """The underlying read-only connection (for sibling readers over the same store)."""
+        return self._conn
+
     @staticmethod
     def _norm_date(as_of_date: AsOfDate) -> str:
         """Normalize a date/datetime or ISO string to ``YYYY-MM-DD`` for comparison."""

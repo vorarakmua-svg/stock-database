@@ -65,4 +65,5 @@ files = [
     "src/analysis",
     "src/exporters/sqlite_store.py",
     "src/query/asof.py",
+    "src/query/pit_metrics.py",
 ]
