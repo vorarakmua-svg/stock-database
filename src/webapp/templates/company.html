@@ -20,19 +20,19 @@
     {% if snap.current_price is not none %}
     <div class="snap-stat">
       <span class="snap-label">Price</span>
-      <span class="snap-value">${{ "%.2f"|format(snap.current_price) }}</span>
+      <span class="snap-value">{{ fmt_price(snap.current_price) }}</span>
     </div>
     {% endif %}
     {% if snap.market_cap is not none %}
     <div class="snap-stat">
       <span class="snap-label">Market cap</span>
-      <span class="snap-value">${{ "%.1f"|format(snap.market_cap / 1e9) }}B</span>
+      <span class="snap-value">{{ fmt_money(snap.market_cap) }}</span>
     </div>
     {% endif %}
     {% if snap.pe_trailing is not none %}
     <div class="snap-stat">
       <span class="snap-label">P/E</span>
-      <span class="snap-value">{{ "%.1f"|format(snap.pe_trailing) }}x</span>
+      <span class="snap-value">{{ fmt_mult(snap.pe_trailing) }}</span>
     </div>
     {% endif %}
   </div>
@@ -77,7 +77,6 @@
       hx-get="/ui/companies/{{ ticker }}/metric-chart"
       hx-target="#metric-chart"
       hx-trigger="change"
-      hx-include="[name='metric']"
     >
       {% for label, key in metric_options %}
       <option value="{{ key }}" {% if key == "roic" %}selected{% endif %}>{{ label }}</option>

@@ -54,6 +54,16 @@ def fmt_raw2(x: Optional[float]) -> str:
     return f"{x:.2f}"
 
 
+def fmt_price(x: Optional[float]) -> str:
+    """Format a share price with $ prefix and 2 decimal places.
+
+    None -> "—"; else "$x,xxx.xx" (cents matter for share prices).
+    """
+    if x is None:
+        return "—"
+    return f"${x:,.2f}"
+
+
 def fmt_value(x: Optional[float], kind: str) -> str:
     """Dispatch formatting by kind.
 

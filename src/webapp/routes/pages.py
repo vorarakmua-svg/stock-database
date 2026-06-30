@@ -14,13 +14,19 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from ..dependencies import get_reader
-from ..formatting import fmt_raw2, fmt_value
+from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
 from ..repository import Reader
 
 router = APIRouter()
 
 templates = Jinja2Templates(
     directory=str(Path(__file__).resolve().parent.parent / "templates")
+)
+templates.env.globals.update(
+    fmt_money=fmt_money,
+    fmt_mult=fmt_mult,
+    fmt_pct=fmt_pct,
+    fmt_price=fmt_price,
 )
 
 # ---------------------------------------------------------------------------

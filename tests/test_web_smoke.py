@@ -137,8 +137,9 @@ def test_metric_chart_bad_metric_returns_200_with_error(client: TestClient) -> N
     resp = client.get("/ui/companies/AAA/metric-chart?metric=not_a_metric")
     assert resp.status_code == 200
     body = resp.text
-    # Should render an error message, not raise a 500
-    assert "error" in body.lower() or "unknown" in body.lower() or "invalid" in body.lower() or "not" in body.lower()
+    # Error paragraph must be present and the offending metric name must appear in it
+    assert "chart-error" in body
+    assert "not_a_metric" in body
 
 
 # ---------------------------------------------------------------------------
