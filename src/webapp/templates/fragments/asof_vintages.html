@@ -1,0 +1,33 @@
+{% if vintages %}
+<div class="asof-vintages">
+  <div class="section-header">
+    <h3 class="section-title">
+      Filings for {{ ticker }}{% if fiscal_year %} FY{{ fiscal_year }}{% endif %}
+    </h3>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table statements-table">
+      <thead>
+        <tr>
+          <th class="label-col">Line item</th>
+          {% for v in vintages %}
+          <th class="num">{{ v.filed_date }}<br><span class="form-badge">{{ v.get("form", "") }}</span></th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <th class="row-label">{{ row.label }}</th>
+          {% for val in row.vals %}
+          <td class="num">{{ val }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<p class="empty-row">No vintage filings found for {{ ticker }}{% if fiscal_year %} FY{{ fiscal_year }}{% endif %}.</p>
+{% endif %}

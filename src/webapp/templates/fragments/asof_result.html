@@ -1,0 +1,68 @@
+{% if filing %}
+<div class="asof-result">
+  <div class="section-header">
+    <h2 class="section-title">{{ ticker }} FY{{ fiscal_year }} as of {{ date }}</h2>
+  </div>
+
+  <div class="card meta-card">
+    <table class="data-table">
+      <tbody>
+        <tr><th class="row-label">Form</th><td>{{ filing.get("form", "—") }}</td></tr>
+        <tr><th class="row-label">Filed</th><td>{{ filing.get("filed_date", "—") }}</td></tr>
+        <tr><th class="row-label">Period end</th><td>{{ filing.get("period_end", "—") }}</td></tr>
+        <tr><th class="row-label">Accession</th><td class="accn">{{ filing.get("accn", "—") }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="two-col">
+    <div class="card">
+      <h3 class="card-title">Financials</h3>
+      <table class="data-table">
+        <tbody>
+          {% for row in fin_rows %}
+          <tr>
+            <th class="row-label">{{ row.label }}</th>
+            <td class="num">{{ row.value }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Ratios</h3>
+      {% if ratio_rows %}
+      <table class="data-table">
+        <tbody>
+          {% for row in ratio_rows %}
+          <tr>
+            <th class="row-label">{{ row.label }}</th>
+            <td class="num">{{ row.value }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty-row">Ratios not available for this filing.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="asof-vintages-trigger">
+    <button
+      class="btn btn-secondary"
+      hx-get="/ui/asof/vintages?ticker={{ ticker }}&fiscal_year={{ fiscal_year }}"
+      hx-target="#asof-vintages"
+      hx-trigger="click"
+    >Show all filings (vintages)</button>
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <p class="empty-row">
+    No filing found for <strong>{{ ticker }}</strong> FY{{ fiscal_year }} as of <strong>{{ date }}</strong>.
+    The period had not been filed yet as of that date.
+  </p>
+</div>
+{% endif %}

@@ -13,7 +13,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from ..dependencies import get_reader
+from ...query.asof import AsOfReader
+from ...query.pit_metrics import PointInTimeMetrics
+from ..dependencies import get_asof_reader, get_pit_metrics, get_reader
 from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
 from ..repository import Reader
 
@@ -262,5 +264,118 @@ def metric_chart_fragment(
             "label": label,
             "series_json": json.dumps(series),
             "error": None,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# As-of explorer page + fragments
+# ---------------------------------------------------------------------------
+
+# Curated line items for the as-of result view
+_ASOF_FINANCIALS_ROWS: List[tuple[str, str, str]] = [
+    ("Revenue", "revenue", "money"),
+    ("Net income", "net_income", "money"),
+    ("Total assets", "total_assets", "money"),
+    ("Total equity", "total_equity", "money"),
+    ("Operating cash flow", "operating_cash_flow", "money"),
+]
+
+_ASOF_RATIO_ROWS: List[tuple[str, str, str]] = [
+    ("ROIC", "roic", "pct"),
+    ("ROE", "roe", "pct"),
+    ("Net margin", "net_margin", "pct"),
+    ("Debt/EBITDA", "debt_to_ebitda", "mult"),
+]
+
+# Curated line items displayed in the vintages side-by-side table
+_VINTAGES_ROWS: List[tuple[str, str]] = [
+    ("Revenue", "revenue"),
+    ("Net income", "net_income"),
+    ("Total assets", "total_assets"),
+    ("Total equity", "total_equity"),
+]
+
+
+@router.get("/asof", response_class=HTMLResponse)
+def asof_page(request: Request) -> Any:
+    """As-of explorer page (form only; results load via HTMX)."""
+    return templates.TemplateResponse(
+        "asof.html",
+        {"request": request},
+    )
+
+
+@router.get("/ui/asof/result", response_class=HTMLResponse)
+def asof_result_fragment(
+    request: Request,
+    ticker: str,
+    fiscal_year: int,
+    date: str,
+    asof_reader: AsOfReader = Depends(get_asof_reader),
+    pit: PointInTimeMetrics = Depends(get_pit_metrics),
+) -> Any:
+    """HTMX fragment: as-of financials + ratios for one (ticker, fiscal_year, date)."""
+    filing = asof_reader.as_of_annual(ticker, fiscal_year, date)
+    ratios: Optional[Dict[str, Any]] = None
+    if filing is not None:
+        ratios = pit.metrics_as_of(ticker, fiscal_year, date)
+
+    # Build curated rows
+    fin_rows: List[Dict[str, Any]] = []
+    if filing is not None:
+        for label, key, kind in _ASOF_FINANCIALS_ROWS:
+            val = filing.get(key)
+            if val is not None or True:  # always show the row so structure is clear
+                fin_rows.append({"label": label, "value": fmt_value(val, kind)})
+
+    ratio_rows: List[Dict[str, Any]] = []
+    if ratios is not None:
+        for label, key, kind in _ASOF_RATIO_ROWS:
+            val = ratios.get(key)
+            ratio_rows.append({"label": label, "value": fmt_value(val, kind)})
+
+    return templates.TemplateResponse(
+        "fragments/asof_result.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "fiscal_year": fiscal_year,
+            "date": date,
+            "filing": filing,
+            "fin_rows": fin_rows,
+            "ratio_rows": ratio_rows,
+        },
+    )
+
+
+@router.get("/ui/asof/vintages", response_class=HTMLResponse)
+def asof_vintages_fragment(
+    request: Request,
+    ticker: str,
+    fiscal_year: Optional[int] = None,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """HTMX fragment: side-by-side vintage table for one (ticker, fiscal_year)."""
+    rows = r.vintages(ticker, fiscal_year=fiscal_year)
+
+    # Build (row_label, [value per filing]) structure
+    columns: List[str] = [
+        f"{v['filed_date']} ({v.get('form', '')})" for v in rows
+    ]
+    display_rows: List[Dict[str, Any]] = []
+    for label, key in _VINTAGES_ROWS:
+        values = [fmt_money(v.get(key)) for v in rows]
+        display_rows.append({"label": label, "vals": values})
+
+    return templates.TemplateResponse(
+        "fragments/asof_vintages.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "fiscal_year": fiscal_year,
+            "vintages": rows,
+            "columns": columns,
+            "rows": display_rows,
         },
     )

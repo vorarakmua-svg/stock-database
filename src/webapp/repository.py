@@ -270,3 +270,23 @@ class Reader:
             (ticker,),
         )
         return [dict(row) for row in cur.fetchall()]
+
+    def vintages(
+        self, ticker: str, fiscal_year: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """All ``financials_annual_vintages`` rows for a ticker.
+
+        Optionally filtered to ``fiscal_year``. Ordered by ``fiscal_year`` DESC
+        then ``filed_date`` ASC so the earliest filing of the newest year comes
+        first within each year.
+        """
+        params: List[Any] = [ticker]
+        sql = (
+            "SELECT * FROM financials_annual_vintages WHERE ticker = ?"
+        )
+        if fiscal_year is not None:
+            sql += " AND fiscal_year = ?"
+            params.append(fiscal_year)
+        sql += " ORDER BY fiscal_year DESC, filed_date ASC"
+        cur = self._conn.execute(sql, params)
+        return [dict(row) for row in cur.fetchall()]

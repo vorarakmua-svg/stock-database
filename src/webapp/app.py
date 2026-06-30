@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional, Union
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from .routes import companies, pages
+from .routes import asof_api, companies, pages
 from .settings import WebSettings, default_settings
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -42,6 +42,7 @@ def create_app(
     # Routers — page routes first so they take precedence over /api paths
     app.include_router(pages.router)
     app.include_router(companies.router)
+    app.include_router(asof_api.router)
 
     @app.get("/api/health")
     def health() -> Dict[str, Any]:

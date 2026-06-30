@@ -6,6 +6,8 @@ from typing import Iterator
 
 from fastapi import Depends, HTTPException, Request
 
+from ..query.asof import AsOfReader
+from ..query.pit_metrics import PointInTimeMetrics
 from .repository import Reader
 from .settings import WebSettings
 
@@ -31,3 +33,37 @@ def get_reader(settings: WebSettings = Depends(get_settings)) -> Iterator[Reader
         yield r
     finally:
         r.close()
+
+
+def get_asof_reader(settings: WebSettings = Depends(get_settings)) -> Iterator[AsOfReader]:
+    """FastAPI dependency providing an AsOfReader, closing it on teardown.
+
+    Raises HTTP 503 if the database file does not exist.
+    """
+    if not Path(settings.db_path).exists():
+        raise HTTPException(
+            status_code=503,
+            detail=f"Database not available: {settings.db_path}",
+        )
+    r = AsOfReader(settings.db_path)
+    try:
+        yield r
+    finally:
+        r.close()
+
+
+def get_pit_metrics(settings: WebSettings = Depends(get_settings)) -> Iterator[PointInTimeMetrics]:
+    """FastAPI dependency providing a PointInTimeMetrics, closing it on teardown.
+
+    Raises HTTP 503 if the database file does not exist.
+    """
+    if not Path(settings.db_path).exists():
+        raise HTTPException(
+            status_code=503,
+            detail=f"Database not available: {settings.db_path}",
+        )
+    pit = PointInTimeMetrics.from_path(settings.db_path)
+    try:
+        yield pit
+    finally:
+        pit.close()
