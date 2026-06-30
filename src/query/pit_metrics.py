@@ -16,7 +16,7 @@ so those keys never appear.)
 
 import logging
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 from ..parsers.calculated_metrics import CalculatedMetrics
 from .asof import AsOfReader
@@ -53,3 +53,26 @@ class PointInTimeMetrics:
         )
         row = cur.fetchone()
         return row["sector_class"] if row is not None else None
+
+    def metrics_as_of(
+        self, ticker: str, fiscal_year: int, as_of_date: Any, sector: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """The fundamental ratio suite for ``(ticker, fiscal_year)`` as known on ``as_of_date``.
+
+        Resolves the as-of financials via ``AsOfReader`` and runs the standard calculator on
+        them. Returns ``None`` if the year had not been filed yet as of that date. ``sector``
+        defaults to the company's ``sector_class`` (auto-read); pass a value to override.
+        """
+        period = self.reader.as_of_annual(ticker, fiscal_year, as_of_date)
+        if period is None:
+            return None
+        sec = sector if sector is not None else self._sector(ticker)
+        return self.calculator.calculate_all(period, sector=sec)
+
+    def metric_as_of(
+        self, ticker: str, fiscal_year: int, name: str, as_of_date: Any,
+        sector: Optional[str] = None
+    ) -> Any:
+        """A single ratio's value as known on ``as_of_date`` (or ``None``)."""
+        metrics = self.metrics_as_of(ticker, fiscal_year, as_of_date, sector=sector)
+        return metrics.get(name) if metrics is not None else None
