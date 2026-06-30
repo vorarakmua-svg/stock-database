@@ -37,3 +37,23 @@ class SeriesPoint(BaseModel):
 
     fiscal_year: int
     value: Optional[float] = None
+
+
+class MetricFilterIn(BaseModel):
+    """A single filter predicate in a screen request body."""
+
+    field: str
+    op: str
+    value: float
+    value2: Optional[float] = None
+
+
+class ScreenRequest(BaseModel):
+    """Request body for POST /api/screen."""
+
+    filters: List[MetricFilterIn] = []
+    sector: Optional[str] = None
+    sort: Optional[str] = None
+    sort_dir: str = "desc"
+    limit: int = 100
+    offset: int = 0

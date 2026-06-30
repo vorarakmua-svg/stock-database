@@ -13,11 +13,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from ...exporters.sqlite_store import _METRIC_COLUMNS
 from ...query.asof import AsOfReader
 from ...query.pit_metrics import PointInTimeMetrics
 from ..dependencies import get_asof_reader, get_pit_metrics, get_reader
 from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
 from ..repository import Reader
+from ..screener import parse_screen_params
 
 router = APIRouter()
 
@@ -81,6 +83,47 @@ METRIC_OPTIONS: List[tuple[str, str]] = [
     ("Operating margin", "operating_margin"),
     ("EBITDA margin", "ebitda_margin"),
     ("FCF margin", "fcf_margin"),
+]
+
+# Friendly labels for the screener metric <select>.
+# Unlisted columns fall back to the raw key name.
+_SCREENER_LABELS: Dict[str, str] = {
+    "ebitda": "EBITDA",
+    "ebit": "EBIT",
+    "nopat": "NOPAT",
+    "free_cash_flow": "Free cash flow",
+    "fcf_margin": "FCF margin",
+    "levered_fcf": "Levered FCF",
+    "net_debt": "Net debt",
+    "total_debt": "Total debt",
+    "working_capital": "Working capital",
+    "invested_capital": "Invested capital",
+    "roic": "ROIC",
+    "roa": "ROA",
+    "roe": "ROE",
+    "interest_coverage": "Interest coverage",
+    "debt_to_ebitda": "Debt / EBITDA",
+    "asset_turnover": "Asset turnover",
+    "inventory_turnover": "Inventory turnover",
+    "receivables_turnover": "Receivables turnover",
+    "gross_margin": "Gross margin",
+    "operating_margin": "Operating margin",
+    "net_margin": "Net margin",
+    "ebitda_margin": "EBITDA margin",
+    "net_interest_margin": "Net interest margin",
+    "efficiency_ratio": "Efficiency ratio",
+    "loan_to_deposit": "Loan-to-deposit",
+    "loss_ratio": "Loss ratio",
+    "combined_ratio": "Combined ratio",
+    "ffo": "FFO",
+    "affo": "AFFO",
+    "ffo_per_share": "FFO per share",
+    "ffo_payout": "FFO payout",
+}
+
+# Build list of (label, key) for template selects
+SCREENER_METRIC_OPTIONS: List[tuple[str, str]] = [
+    (_SCREENER_LABELS.get(col, col), col) for col in _METRIC_COLUMNS
 ]
 
 
@@ -377,5 +420,113 @@ def asof_vintages_fragment(
             "vintages": rows,
             "columns": columns,
             "rows": display_rows,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Screener page & fragments
+# ---------------------------------------------------------------------------
+
+_DEFAULT_COMPARE_METRICS_UI = ["roic", "roe", "net_margin", "debt_to_ebitda"]
+
+
+@router.get("/screener", response_class=HTMLResponse)
+def screener_page(
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """Screener page with filter form and HTMX result target."""
+    sectors = r.distinct_sectors()
+    return templates.TemplateResponse(
+        "screener.html",
+        {
+            "request": request,
+            "sectors": sectors,
+            "metric_options": SCREENER_METRIC_OPTIONS,
+        },
+    )
+
+
+@router.get("/ui/screen", response_class=HTMLResponse)
+def screen_fragment(
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """HTMX fragment: screener result table.
+
+    Accepts the same GET shorthand as GET /api/screen.
+    """
+    try:
+        spec = parse_screen_params(dict(request.query_params))
+        result = r.screen(spec)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            "fragments/screener_results.html",
+            {
+                "request": request,
+                "error": str(exc),
+                "items": [],
+                "total": 0,
+                "columns": [],
+            },
+        )
+    return templates.TemplateResponse(
+        "fragments/screener_results.html",
+        {
+            "request": request,
+            "error": None,
+            "items": result["items"],
+            "total": result["total"],
+            "columns": result["columns"],
+        },
+    )
+
+
+@router.get("/ui/compare", response_class=HTMLResponse)
+def compare_fragment(
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """HTMX fragment: side-by-side metric comparison table."""
+    tickers_raw = request.query_params.get("tickers", "")
+    tickers = [t.strip() for t in tickers_raw.split(",") if t.strip()]
+
+    metrics_raw = request.query_params.get("metrics", "")
+    if metrics_raw:
+        metrics = [m.strip() for m in metrics_raw.split(",") if m.strip()]
+    else:
+        metrics = _DEFAULT_COMPARE_METRICS_UI
+
+    if not tickers:
+        return templates.TemplateResponse(
+            "fragments/compare_table.html",
+            {
+                "request": request,
+                "error": "No tickers specified.",
+                "tickers": [],
+                "rows": [],
+            },
+        )
+
+    try:
+        result = r.compare(tickers, metrics)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            "fragments/compare_table.html",
+            {
+                "request": request,
+                "error": str(exc),
+                "tickers": [],
+                "rows": [],
+            },
+        )
+    return templates.TemplateResponse(
+        "fragments/compare_table.html",
+        {
+            "request": request,
+            "error": None,
+            "tickers": result["tickers"],
+            "rows": result["rows"],
         },
     )
