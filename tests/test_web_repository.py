@@ -6,9 +6,12 @@ All assertions use real values from the ``web_db`` fixture (no mocks).
 from __future__ import annotations
 
 import sqlite3
+from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
 
+from src.webapp.dependencies import get_reader
 from src.webapp.repository import Reader  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -456,3 +459,31 @@ def test_connection_is_read_only(web_db):
             r.conn.execute(
                 "INSERT INTO companies (ticker) VALUES ('INJECT')"
             )
+
+
+# ---------------------------------------------------------------------------
+# get_reader dependency
+# ---------------------------------------------------------------------------
+
+
+def test_get_reader_raises_503_when_db_missing(tmp_path):
+    settings = MagicMock()
+    settings.db_path = tmp_path / "nonexistent.db"
+    gen = get_reader(settings)
+    with pytest.raises(HTTPException) as exc_info:
+        next(gen)
+    assert exc_info.value.status_code == 503
+
+
+def test_get_reader_yields_reader_and_closes_on_teardown(web_db):
+    settings = MagicMock()
+    settings.db_path = web_db
+    gen = get_reader(settings)
+    r = next(gen)
+    assert isinstance(r, Reader)
+    # exhaust the generator to trigger the finally block
+    with pytest.raises(StopIteration):
+        next(gen)
+    # connection must be closed after teardown
+    with pytest.raises(sqlite3.ProgrammingError):
+        r.conn.execute("SELECT 1")
