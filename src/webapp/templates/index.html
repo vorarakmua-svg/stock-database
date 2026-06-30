@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Stock DB{% endblock %}
+
+{% block content %}
+<div class="hero">
+  <h1 class="hero-title">Stock fundamentals database</h1>
+  <p class="hero-sub">Standardised, comparable financials across all sectors.</p>
+</div>
+
+<div class="stat-row">
+  <div class="stat-card">
+    <span class="stat-value">{{ company_count }}</span>
+    <span class="stat-label">Companies</span>
+  </div>
+</div>
+
+{% if sectors %}
+<section class="section">
+  <h2 class="section-heading">Browse by sector</h2>
+  <div class="chip-row">
+    {% for s in sectors %}
+    <a class="chip" href="/companies?sector={{ s }}">{{ s }}</a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="section">
+  <p class="muted">Use the search bar above to find a company, or browse the full <a href="/companies">companies list</a>.</p>
+</section>
+{% endblock %}

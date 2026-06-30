@@ -5,9 +5,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
-from .routes import companies
+from .routes import companies, pages
 from .settings import WebSettings, default_settings
+
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 def create_app(
@@ -32,6 +35,12 @@ def create_app(
     app = FastAPI(title="Stock Database Web API", version="0.1.0")
     app.state.settings = settings
 
+    # Mount static files (must exist before the app handles requests)
+    if _STATIC_DIR.exists():
+        app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+    # Routers — page routes first so they take precedence over /api paths
+    app.include_router(pages.router)
     app.include_router(companies.router)
 
     @app.get("/api/health")
