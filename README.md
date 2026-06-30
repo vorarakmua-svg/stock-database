@@ -543,6 +543,23 @@ with AsOfReader("data/output/stock.db") as r:
 `as_of_date` accepts an ISO `YYYY-MM-DD` string or a `datetime.date`. A year not yet filed
 as of that date resolves to `None` (and is absent from `history_as_of`).
 
+For point-in-time **ratios** (computed on the as-of financials), use `PointInTimeMetrics`:
+
+```python
+from src.query.pit_metrics import PointInTimeMetrics
+
+with PointInTimeMetrics.from_path("data/output/stock.db") as pm:
+    roe = pm.metric_as_of("PRU", 2010, "roe", "2012-06-30")   # ROE as known on that date
+    m = pm.metrics_as_of("PRU", 2010, "2012-06-30")           # full ratio dict, or None
+    hist = pm.metrics_history_as_of("PRU", "2012-06-30")      # {fiscal_year: metrics}
+```
+
+Sector is auto-read from the `companies` table, so banks/insurers/REITs get their sector
+ratios (e.g. `net_interest_margin`) with inapplicable generic ratios suppressed. Only
+**fundamental** ratios are produced — valuation/EV ratios (`ev_to_ebitda`, `fcf_yield`, …)
+are intentionally excluded, since they require the share price as of that date and no
+historical per-date price series is stored.
+
 ## Development
 
 Install with the dev extras and run the test suite (no network access required —
