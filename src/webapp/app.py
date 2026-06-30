@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Union
 
 from fastapi import FastAPI
 
+from .routes import companies
 from .settings import WebSettings, default_settings
 
 
@@ -30,6 +31,8 @@ def create_app(
 
     app = FastAPI(title="Stock Database Web API", version="0.1.0")
     app.state.settings = settings
+
+    app.include_router(companies.router)
 
     @app.get("/api/health")
     def health() -> Dict[str, Any]:
