@@ -132,3 +132,61 @@ def test_explicit_sector_overrides_table(tmp_path):
     with PointInTimeMetrics.from_path(db) as pm:
         m = pm.metrics_as_of("JPM", 2019, "2020-06-30", sector="general")
         assert "net_interest_margin" not in m   # override won; generic suite only
+
+
+# ---------------------------------------------------------------------------
+# Task 3: metrics_history_as_of
+# ---------------------------------------------------------------------------
+
+def _three_years(tmp_path):
+    def period(fy, accn, filed, ni):
+        return {"fiscal_year": fy, "accn": accn, "filed_date": filed,
+                "period_end": f"{fy}-12-31", "form": "10-K", "calendar_year": fy,
+                "net_income": ni, "total_equity": 1000.0, "revenue": 1000.0}
+    return _build_db(tmp_path, {
+        "2018": {"k18": period(2018, "k18", "2019-02-15", 80.0)},
+        "2019": {"k19": period(2019, "k19", "2020-02-15", 100.0),
+                 "k19r": period(2019, "k19r", "2021-02-15", 90.0)},
+        "2020": {"k20": period(2020, "k20", "2021-02-15", 110.0)},
+    })
+
+
+def test_history_metrics_only_filed_years_and_pit(tmp_path):
+    db = _three_years(tmp_path)
+    with PointInTimeMetrics.from_path(db) as pm:
+        hist = pm.metrics_history_as_of("PRU", "2020-06-30")
+        assert set(hist.keys()) == {2018, 2019}          # 2020 not yet filed
+        assert hist[2019]["roe"] == 0.10                  # pre-restatement
+        assert hist[2018]["roe"] == 0.08
+
+
+def test_history_metrics_newest_first_and_years_back(tmp_path):
+    db = _three_years(tmp_path)
+    with PointInTimeMetrics.from_path(db) as pm:
+        hist = pm.metrics_history_as_of("PRU", "2021-02-15", years_back=2)
+        assert list(hist.keys()) == [2020, 2019]          # newest first, trimmed
+        assert hist[2019]["roe"] == 0.09                  # restated by this date
+
+
+def test_history_metrics_unknown_ticker_empty(tmp_path):
+    db = _three_years(tmp_path)
+    with PointInTimeMetrics.from_path(db) as pm:
+        assert pm.metrics_history_as_of("ZZZZ", "2025-01-01") == {}
+
+
+class _RaisingCalculator:
+    """Stub calculator that always raises — to exercise per-year error capture."""
+
+    def calculate_all(self, financials, market_data=None, valuation=None, sector=None):
+        raise ValueError("boom")
+
+
+def test_history_metrics_captures_per_year_errors(tmp_path):
+    from src.query.asof import AsOfReader
+    db = _three_years(tmp_path)
+    pm = PointInTimeMetrics(AsOfReader(db), calculator=_RaisingCalculator())
+    hist = pm.metrics_history_as_of("PRU", "2021-02-15")
+    pm.close()
+    assert set(hist.keys()) == {2018, 2019, 2020}
+    for fy in (2018, 2019, 2020):
+        assert hist[fy] == {"error": "boom"}              # captured, not raised

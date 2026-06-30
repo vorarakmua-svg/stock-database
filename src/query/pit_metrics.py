@@ -76,3 +76,26 @@ class PointInTimeMetrics:
         """A single ratio's value as known on ``as_of_date`` (or ``None``)."""
         metrics = self.metrics_as_of(ticker, fiscal_year, as_of_date, sector=sector)
         return metrics.get(name) if metrics is not None else None
+
+    def metrics_history_as_of(
+        self, ticker: str, as_of_date: Any, years_back: Optional[int] = None,
+        sector: Optional[str] = None
+    ) -> Dict[int, Dict[str, Any]]:
+        """Fundamental ratios for every fiscal year known as of ``as_of_date``.
+
+        Each year uses its as-of financials (latest vintage filed <= the date). Keyed by
+        fiscal_year, newest first; ``years_back`` trims to the most recent N. A per-year
+        calculator failure is captured as ``{"error": ...}`` rather than aborting the batch.
+        """
+        periods = self.reader.history_as_of(ticker, as_of_date, years_back=years_back)
+        if not periods:
+            return {}
+        sec = sector if sector is not None else self._sector(ticker)
+        result: Dict[int, Dict[str, Any]] = {}
+        for fy, period in periods.items():
+            try:
+                result[fy] = self.calculator.calculate_all(period, sector=sec)
+            except Exception as e:  # noqa: BLE001 - mirror calculate_historical: never abort the batch
+                self.logger.warning("PIT metrics error for %s FY%s: %s", ticker, fy, e)
+                result[fy] = {"error": str(e)}
+        return result
