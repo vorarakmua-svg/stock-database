@@ -645,7 +645,24 @@ Key endpoints:
 
 ### Data collection
 
-Data collection from the web UI is gated by the `allow_collection` setting (off by default). When disabled, the *Collect* menu item is hidden and collection requests are rejected. To refresh data, use the `stock-data` CLI as described above.
+Data collection from the web UI is gated by the `allow_collection` setting (off by default). When disabled, the *Collect* menu item is hidden and collection requests are rejected.
+
+To enable collection, start the server with the `STOCK_WEB_ALLOW_COLLECTION` environment variable:
+
+```bash
+STOCK_WEB_ALLOW_COLLECTION=1 stock-web
+```
+
+Other supported overrides:
+
+| Variable | Default | Description |
+|---|---|---|
+| `STOCK_WEB_ALLOW_COLLECTION` | `""` (disabled) | Set to `1`, `true`, `yes`, or `on` to enable collection |
+| `STOCK_WEB_HOST` | `127.0.0.1` | Bind host |
+| `STOCK_WEB_PORT` | `8000` | Bind port |
+| `STOCK_WEB_DB_PATH` | default DB path | Path to the SQLite database |
+
+To refresh data without the web UI, use the `stock-data` CLI as described above.
 
 ## License
 

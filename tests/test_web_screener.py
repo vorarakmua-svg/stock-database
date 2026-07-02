@@ -511,7 +511,7 @@ class TestScreenerUI:
         resp = client.get("/ui/compare?tickers=AAA&metrics=roic")
         assert resp.status_code == 200
         # 0.15 formatted as percentage → "15.0%"
-        assert b"15.0" in resp.content or b"AAA" in resp.content
+        assert b"15.0" in resp.content
 
 
 # ---------------------------------------------------------------------------

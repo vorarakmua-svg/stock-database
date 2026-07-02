@@ -426,8 +426,7 @@ def asof_result_fragment(
     if filing is not None:
         for label, key, kind in _ASOF_FINANCIALS_ROWS:
             val = filing.get(key)
-            if val is not None or True:  # always show the row so structure is clear
-                fin_rows.append({"label": label, "value": fmt_value(val, kind)})
+            fin_rows.append({"label": label, "value": fmt_value(val, kind)})
 
     ratio_rows: List[Dict[str, Any]] = []
     if ratios is not None:

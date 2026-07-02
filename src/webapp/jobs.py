@@ -229,3 +229,4 @@ class CollectionJobManager:
                     err_job.state = "error"
                     err_job.error = str(exc)
                     err_job.finished_at = _now_iso()
+                    err_job.current_ticker = None

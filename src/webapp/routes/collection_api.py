@@ -57,7 +57,8 @@ def submit_job(
         include_sec=body.include_sec,
     )
     job = manager.get(job_id)
-    assert job is not None  # just submitted
+    if job is None:
+        raise HTTPException(status_code=500, detail="internal error: job vanished after submit")
     return JSONResponse(status_code=202, content=job.to_dict())
 
 
@@ -135,7 +136,8 @@ async def collection_start_fragment(
         include_sec=include_sec,
     )
     job = manager.get(job_id)
-    assert job is not None
+    if job is None:
+        raise HTTPException(status_code=500, detail="internal error: job vanished after submit")
 
     return templates.TemplateResponse(
         "fragments/job_status.html",

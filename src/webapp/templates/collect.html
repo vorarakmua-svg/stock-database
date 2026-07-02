@@ -9,7 +9,8 @@
 {% if not allow_collection %}
 <div class="alert alert-info">
   <p>Collection is <strong>disabled</strong> in the current settings.
-  Set <code>allow_collection = true</code> in your configuration to enable it.</p>
+  Start the server with the env var to enable it, e.g.
+  <code>STOCK_WEB_ALLOW_COLLECTION=1 stock-web</code>.</p>
 </div>
 {% else %}
 <div class="card">
