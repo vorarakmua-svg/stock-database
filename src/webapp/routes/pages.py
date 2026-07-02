@@ -202,7 +202,6 @@ def home(
             "latest_runs": latest_runs,
             "unmapped_top": unmapped_top,
             "fill_chart_json": fill_chart_json,
-            "fmt_pct": fmt_pct,
         },
     )
 

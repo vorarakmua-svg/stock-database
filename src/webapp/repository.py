@@ -531,19 +531,27 @@ class Reader:
     def latest_collection_runs(self) -> List[Dict[str, Any]]:
         """Most-recent ``collection_runs`` row per ticker, ordered by ticker.
 
-        Joins ``collection_runs`` to a per-ticker MAX subquery so only the
-        most recent collection for each ticker is returned.
+        Uses a two-step CTE: first finds MAX(collected_at) per ticker, then
+        picks MAX(rowid) among any tied rows so exactly one row per ticker is
+        always returned even if two runs share the same collected_at timestamp.
         """
         sql = """
-            SELECT cr.ticker, cr.collected_at, cr.data_sources,
-                   cr.warning_count, cr.error_count, cr.quality_score
-            FROM collection_runs AS cr
-            JOIN (
+            WITH max_ts AS (
                 SELECT ticker, MAX(collected_at) AS mx
                 FROM collection_runs
                 GROUP BY ticker
-            ) AS latest ON cr.ticker = latest.ticker
-                       AND cr.collected_at = latest.mx
+            ),
+            max_rid AS (
+                SELECT cr.ticker, MAX(cr.rowid) AS mr
+                FROM collection_runs AS cr
+                JOIN max_ts ON cr.ticker = max_ts.ticker
+                           AND cr.collected_at = max_ts.mx
+                GROUP BY cr.ticker
+            )
+            SELECT cr.ticker, cr.collected_at, cr.data_sources,
+                   cr.warning_count, cr.error_count, cr.quality_score
+            FROM collection_runs AS cr
+            JOIN max_rid ON cr.rowid = max_rid.mr
             ORDER BY cr.ticker
         """
         cur = self._conn.execute(sql)
@@ -595,6 +603,10 @@ class Reader:
         Denominator = number of in-scope companies that have *any*
         ``financials_annual`` row.  Returns ``{field: fraction}`` (0.0–1.0)
         sorted by field name for stable output.
+
+        Single-pass: one query fetches every company's latest annual row, then
+        Python counts non-null values per field — avoids N_tickers × N_fields
+        round-trips.
         """
         where: List[str] = []
         params: List[Any] = []
@@ -602,39 +614,26 @@ class Reader:
             where.append("c.sector_class = ?")
             params.append(sector_class)
 
-        # Fetch the latest fiscal_year for each in-scope ticker
-        join_clause = (
-            "FROM financials_annual AS fa "
-            "JOIN companies AS c ON fa.ticker = c.ticker"
-        )
         where_clause = (" WHERE " + " AND ".join(where)) if where else ""
-        inner_sql = (
-            f"SELECT fa.ticker, MAX(fa.fiscal_year) AS latest_fy "
-            f"{join_clause}"
-            f"{where_clause}"
-            f" GROUP BY fa.ticker"
-        )
-        cur = self._conn.execute(inner_sql, params)
-        latest_map = {row[0]: row[1] for row in cur.fetchall()}
-        n_total = len(latest_map)
+        latest_sql = f"""
+            SELECT fa.*
+            FROM financials_annual AS fa
+            JOIN (
+                SELECT fa2.ticker, MAX(fa2.fiscal_year) AS mfy
+                FROM financials_annual AS fa2
+                JOIN companies AS c ON fa2.ticker = c.ticker
+                {where_clause}
+                GROUP BY fa2.ticker
+            ) AS lv ON fa.ticker = lv.ticker AND fa.fiscal_year = lv.mfy
+        """
+        rows = [dict(r) for r in self._conn.execute(latest_sql, params).fetchall()]
+        n_total = len(rows)
         if n_total == 0:
             return {f: 0.0 for f in sorted(_CANONICAL_COLUMNS)}
-
-        # Fetch each ticker's latest row
-        rates: Dict[str, float] = {}
-        for field in sorted(_CANONICAL_COLUMNS):
-            count = 0
-            for ticker, fy in latest_map.items():
-                row_cur = self._conn.execute(
-                    f'SELECT "{field}" FROM financials_annual '
-                    f"WHERE ticker = ? AND fiscal_year = ?",
-                    (ticker, fy),
-                )
-                row = row_cur.fetchone()
-                if row is not None and row[0] is not None:
-                    count += 1
-            rates[field] = count / n_total
-        return rates
+        return {
+            f: sum(1 for row in rows if row.get(f) is not None) / n_total
+            for f in sorted(_CANONICAL_COLUMNS)
+        }
 
     def unmapped_facts(self, limit: int = 200) -> List[Dict[str, Any]]:
         """Rows from ``unmapped_facts``, most-recent ``collected_at`` first."""
