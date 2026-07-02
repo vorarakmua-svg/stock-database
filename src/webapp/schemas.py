@@ -57,3 +57,12 @@ class ScreenRequest(BaseModel):
     sort_dir: str = "desc"
     limit: int = 100
     offset: int = 0
+
+
+class JobRequest(BaseModel):
+    """Request body for POST /api/collection/jobs."""
+
+    tickers: List[str]
+    years_back: Optional[int] = None
+    include_yahoo: bool = True
+    include_sec: bool = True

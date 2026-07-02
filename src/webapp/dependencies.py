@@ -8,6 +8,7 @@ from fastapi import Depends, HTTPException, Request
 
 from ..query.asof import AsOfReader
 from ..query.pit_metrics import PointInTimeMetrics
+from .jobs import CollectionJobManager
 from .repository import Reader
 from .settings import WebSettings
 
@@ -50,6 +51,11 @@ def get_asof_reader(settings: WebSettings = Depends(get_settings)) -> Iterator[A
         yield r
     finally:
         r.close()
+
+
+def get_job_manager(request: Request) -> CollectionJobManager:
+    """Return the CollectionJobManager stored on the application state."""
+    return request.app.state.job_manager  # type: ignore[no-any-return]
 
 
 def get_pit_metrics(settings: WebSettings = Depends(get_settings)) -> Iterator[PointInTimeMetrics]:

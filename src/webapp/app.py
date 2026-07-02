@@ -7,7 +7,8 @@ from typing import Any, Dict, Optional, Union
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from .routes import asof_api, companies, pages, quality_api, screener_api
+from .jobs import CollectionJobManager
+from .routes import asof_api, collection_api, companies, pages, quality_api, screener_api
 from .settings import WebSettings, default_settings
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -34,6 +35,7 @@ def create_app(
 
     app = FastAPI(title="Stock Database Web API", version="0.1.0")
     app.state.settings = settings
+    app.state.job_manager = CollectionJobManager(db_path=settings.db_path)
 
     # Mount static files (must exist before the app handles requests)
     if _STATIC_DIR.exists():
@@ -45,6 +47,11 @@ def create_app(
     app.include_router(asof_api.router)
     app.include_router(screener_api.router)
     app.include_router(quality_api.router)
+    app.include_router(collection_api.router)
+
+    @app.on_event("shutdown")
+    def _shutdown_job_manager() -> None:
+        app.state.job_manager.shutdown()
 
     @app.get("/api/health")
     def health() -> Dict[str, Any]:
