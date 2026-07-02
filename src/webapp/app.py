@@ -4,11 +4,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .jobs import CollectionJobManager
-from .routes import asof_api, collection_api, companies, pages, quality_api, screener_api
+from .routes import asof_api, collection_api, companies, export_api, pages, quality_api, screener_api
+from .routes.pages import templates
 from .settings import WebSettings, default_settings
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -48,6 +51,49 @@ def create_app(
     app.include_router(screener_api.router)
     app.include_router(quality_api.router)
     app.include_router(collection_api.router)
+    app.include_router(export_api.router)
+
+    # ---------------------------------------------------------------------------
+    # Error handlers: JSON for /api/* routes, HTML for browser routes
+    # ---------------------------------------------------------------------------
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(
+        request: Request, exc: StarletteHTTPException
+    ) -> Any:
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+            )
+        return templates.TemplateResponse(
+            "error.html",
+            {
+                "request": request,
+                "status_code": exc.status_code,
+                "message": exc.detail or "An error occurred.",
+            },
+            status_code=exc.status_code,
+        )
+
+    @app.exception_handler(Exception)
+    async def generic_exception_handler(
+        request: Request, exc: Exception
+    ) -> Any:
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Internal server error."},
+            )
+        return templates.TemplateResponse(
+            "error.html",
+            {
+                "request": request,
+                "status_code": 500,
+                "message": "Internal server error.",
+            },
+            status_code=500,
+        )
 
     @app.on_event("shutdown")
     def _shutdown_job_manager() -> None:

@@ -552,6 +552,76 @@ def screen_fragment(
     )
 
 
+@router.get("/ui/companies/{ticker}/peers", response_class=HTMLResponse)
+def peers_fragment(
+    ticker: str,
+    request: Request,
+    metrics: Optional[str] = None,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """HTMX fragment: peer benchmarking table for a company."""
+    metric_list: List[str] = (
+        [m.strip() for m in metrics.split(",") if m.strip()]
+        if metrics
+        else DEFAULT_COMPARE_METRICS
+    )
+
+    company = r.get_company(ticker)
+    if company is None or company.get("sector_class") is None:
+        return templates.TemplateResponse(
+            "fragments/peers.html",
+            {
+                "request": request,
+                "error": f"No sector data for {ticker}.",
+                "peers": None,
+                "rows": [],
+            },
+        )
+
+    try:
+        peers = r.peer_comparison(ticker, metric_list)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            "fragments/peers.html",
+            {
+                "request": request,
+                "error": str(exc),
+                "peers": None,
+                "rows": [],
+            },
+        )
+
+    # Pre-format each metric row
+    formatted_rows: List[Dict[str, Any]] = []
+    for m in metric_list:
+        kind = METRIC_KINDS.get(m, "raw")
+        company_val = peers["company"].get(m)
+        median_val = peers["sector_median"].get(m)
+        delta: Optional[float] = (
+            (company_val - median_val)
+            if company_val is not None and median_val is not None
+            else None
+        )
+        formatted_rows.append(
+            {
+                "label": m,
+                "company_fmt": fmt_value(company_val, kind),
+                "median_fmt": fmt_value(median_val, kind),
+                "delta_fmt": fmt_value(delta, kind),
+            }
+        )
+
+    return templates.TemplateResponse(
+        "fragments/peers.html",
+        {
+            "request": request,
+            "error": None,
+            "peers": peers,
+            "rows": formatted_rows,
+        },
+    )
+
+
 @router.get("/ui/compare", response_class=HTMLResponse)
 def compare_fragment(
     request: Request,

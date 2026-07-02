@@ -590,6 +590,63 @@ rate-limiter/retry logic.
 4. Push to branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
+## Web interface
+
+The stock-database ships with a FastAPI web interface for browsing data interactively.
+
+### Install
+
+```bash
+# Web interface only
+pip install -e ".[web]"
+
+# For development (tests + web)
+pip install -e ".[dev,web]"
+```
+
+### Run
+
+```bash
+stock-web
+```
+
+Then open [http://127.0.0.1:8000](http://127.0.0.1:8000) in your browser.
+
+The server binds to `127.0.0.1` by default (localhost only).
+
+### Features
+
+- **Dashboard** — data quality score, field coverage bar chart, freshness summary, unmapped-fact tracker.
+- **Companies browser** — filterable list of all tracked companies with sector drill-down.
+- **Company deep-dive** — transposed annual / quarterly / TTM statements, metric trend charts, peer benchmarking (company vs sector median), and CSV downloads.
+- **Cross-company screener** — filter by any metric (ROIC, net margin, debt/EBITDA, …), sort, paginate, compare selected companies side-by-side, and download results as CSV.
+- **Point-in-time (as-of) explorer** — look up what financials and ratios looked like as of any historical date (before later restatements), and browse vintage side-by-side tables.
+- **CSV export** — download annual financials, annual metrics, or screener results as CSV from any company page or screener view.
+
+### JSON API
+
+An interactive OpenAPI interface is available at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
+All programmatic endpoints are under the `/api/` prefix.
+
+Key endpoints:
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/companies` | Paginated company list (filter by sector/search) |
+| `GET /api/companies/{ticker}` | Company overview |
+| `GET /api/companies/{ticker}/peers` | Peer benchmarking vs sector median |
+| `GET /api/companies/{ticker}/financials/annual` | Annual financials |
+| `GET /api/companies/{ticker}/metrics` | Annual metrics |
+| `GET /api/screen` | Cross-company screener |
+| `GET /api/export/company/{ticker}/annual.csv` | Annual financials as CSV |
+| `GET /api/export/company/{ticker}/metrics.csv` | Annual metrics as CSV |
+| `GET /api/export/screen.csv` | Screener results as CSV |
+| `GET /api/health` | Health check |
+
+### Data collection
+
+Data collection from the web UI is gated by the `allow_collection` setting (off by default). When disabled, the *Collect* menu item is hidden and collection requests are rejected. To refresh data, use the `stock-data` CLI as described above.
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

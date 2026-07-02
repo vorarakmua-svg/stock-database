@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..dependencies import get_reader
 from ..repository import Reader
 from ..schemas import CompanyListResponse, CompanySummary, SearchHit, SeriesPoint
+from ..screener import DEFAULT_COMPARE_METRICS
 
 router = APIRouter(prefix="/api/companies", tags=["companies"])
 
@@ -154,6 +155,50 @@ def metric_series(
             status_code=404, detail=f"unknown metric '{metric}'"
         )
     return [SeriesPoint(fiscal_year=row["fiscal_year"], value=row.get("value")) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# /{ticker}/snapshots
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# /{ticker}/peers
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{ticker}/peers", response_model=Dict[str, Any])
+def company_peers(
+    ticker: str,
+    metrics: Optional[str] = None,
+    r: Reader = Depends(get_reader),
+) -> Dict[str, Any]:
+    """Peer benchmarking: company vs sector median for the given metrics.
+
+    ``metrics`` is a comma-separated list of metric column names; defaults to
+    ``DEFAULT_COMPARE_METRICS``.  Returns 404 if the ticker is unknown or has
+    no ``sector_class``; 400 if a metric is not in the whitelisted column set.
+    """
+    # Pre-check ticker exists and has a sector_class
+    company = r.get_company(ticker)
+    if company is None or company.get("sector_class") is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Company not found or has no sector: {ticker}",
+        )
+
+    metric_list: List[str] = (
+        [m.strip() for m in metrics.split(",") if m.strip()]
+        if metrics
+        else DEFAULT_COMPARE_METRICS
+    )
+
+    try:
+        result = r.peer_comparison(ticker, metric_list)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return result
 
 
 # ---------------------------------------------------------------------------

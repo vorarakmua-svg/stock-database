@@ -5,6 +5,7 @@
 {% else %}
 <div class="mb-2">
   <span class="text-muted">{{ total }} result{% if total != 1 %}s{% endif %}</span>
+  <a href="/api/export/screen.csv{% if base_params %}?{{ base_params | safe }}{% endif %}" class="btn btn-sm btn-outline-secondary ml-2">Download CSV</a>
   <button type="button" class="btn btn-sm btn-outline-secondary ml-2"
       onclick="
         var checked = document.querySelectorAll('.row-check:checked');
