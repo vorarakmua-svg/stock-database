@@ -38,6 +38,8 @@ def export_annual(
     r: Reader = Depends(get_reader),
 ) -> Response:
     """Download annual financials for *ticker* as a CSV attachment."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
     rows = r.annual_financials(ticker)
     content = _rows_to_csv(rows)
     return Response(
@@ -55,6 +57,8 @@ def export_metrics(
     r: Reader = Depends(get_reader),
 ) -> Response:
     """Download annual metrics for *ticker* as a CSV attachment."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
     rows = r.annual_metrics(ticker)
     content = _rows_to_csv(rows)
     return Response(

@@ -119,6 +119,12 @@ def test_annual_csv_filename_header(client: TestClient) -> None:
     assert "AAA" in cd
 
 
+def test_annual_csv_unknown_ticker_404(client: TestClient) -> None:
+    """Annual CSV for unknown ticker returns 404."""
+    resp = client.get("/api/export/company/ZZZNOPE/annual.csv")
+    assert resp.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # GET /api/export/company/{ticker}/metrics.csv
 # ---------------------------------------------------------------------------
@@ -148,6 +154,12 @@ def test_metrics_csv_contains_roic(client: TestClient) -> None:
     reader = csv.DictReader(io.StringIO(resp.text))
     list(reader)  # exhaust iterator to populate fieldnames
     assert "roic" in reader.fieldnames  # type: ignore[operator]
+
+
+def test_metrics_csv_unknown_ticker_404(client: TestClient) -> None:
+    """Metrics CSV for unknown ticker returns 404."""
+    resp = client.get("/api/export/company/ZZZNOPE/metrics.csv")
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -202,8 +214,9 @@ def test_browser_unknown_company_404_html(client: TestClient) -> None:
     resp = client.get("/companies/UNKNOWN")
     assert resp.status_code == 404
     assert "text/html" in resp.headers["content-type"]
-    # Must contain some helpful text (home link or error message)
-    assert "404" in resp.text or "not found" in resp.text.lower() or "home" in resp.text.lower()
+    # Must render the status code and a home link
+    assert "404" in resp.text
+    assert "home" in resp.text.lower()
 
 
 def test_api_unknown_company_404_json(client: TestClient) -> None:
