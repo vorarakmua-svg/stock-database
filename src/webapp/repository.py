@@ -504,6 +504,197 @@ class Reader:
             "sector_median": sector_median,
         }
 
+    # ---- Quality & coverage ------------------------------------------------
+
+    def collection_runs(
+        self,
+        ticker: Optional[str] = None,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """Rows from ``collection_runs``, newest first.
+
+        Optionally filtered to one *ticker*.
+        """
+        where: List[str] = []
+        params: List[Any] = []
+        if ticker is not None:
+            where.append("ticker = ?")
+            params.append(ticker)
+        sql = "SELECT * FROM collection_runs"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY collected_at DESC LIMIT ?"
+        params.append(limit)
+        cur = self._conn.execute(sql, params)
+        return [dict(row) for row in cur.fetchall()]
+
+    def latest_collection_runs(self) -> List[Dict[str, Any]]:
+        """Most-recent ``collection_runs`` row per ticker, ordered by ticker.
+
+        Joins ``collection_runs`` to a per-ticker MAX subquery so only the
+        most recent collection for each ticker is returned.
+        """
+        sql = """
+            SELECT cr.ticker, cr.collected_at, cr.data_sources,
+                   cr.warning_count, cr.error_count, cr.quality_score
+            FROM collection_runs AS cr
+            JOIN (
+                SELECT ticker, MAX(collected_at) AS mx
+                FROM collection_runs
+                GROUP BY ticker
+            ) AS latest ON cr.ticker = latest.ticker
+                       AND cr.collected_at = latest.mx
+            ORDER BY cr.ticker
+        """
+        cur = self._conn.execute(sql)
+        return [dict(row) for row in cur.fetchall()]
+
+    def coverage_by_sector(self) -> List[Dict[str, Any]]:
+        """Per-``sector_class`` summary: n_companies and median quality_score.
+
+        Quality scores come from the latest ``collection_runs`` row per ticker.
+        Median is computed in Python (SQLite has no MEDIAN aggregate).
+        """
+        sectors_cur = self._conn.execute(
+            "SELECT DISTINCT sector_class FROM companies "
+            "WHERE sector_class IS NOT NULL ORDER BY sector_class"
+        )
+        sectors = [row[0] for row in sectors_cur.fetchall()]
+
+        latest_runs = self.latest_collection_runs()
+        qs_by_ticker: Dict[str, Optional[float]] = {
+            r["ticker"]: r["quality_score"] for r in latest_runs
+        }
+
+        result: List[Dict[str, Any]] = []
+        for sector in sectors:
+            tickers_cur = self._conn.execute(
+                "SELECT ticker FROM companies WHERE sector_class = ?",
+                (sector,),
+            )
+            tickers = [row[0] for row in tickers_cur.fetchall()]
+            n = len(tickers)
+            scores: List[float] = []
+            for t in tickers:
+                qs = qs_by_ticker.get(t)
+                if qs is not None:
+                    scores.append(float(qs))
+            result.append({
+                "sector_class": sector,
+                "n_companies": n,
+                "median_quality": statistics.median(scores) if scores else None,
+            })
+        return result
+
+    def field_fill_rates(
+        self, sector_class: Optional[str] = None
+    ) -> Dict[str, float]:
+        """Fraction of in-scope companies whose LATEST ``financials_annual`` row
+        has a non-null value for each canonical field.
+
+        Denominator = number of in-scope companies that have *any*
+        ``financials_annual`` row.  Returns ``{field: fraction}`` (0.0–1.0)
+        sorted by field name for stable output.
+        """
+        where: List[str] = []
+        params: List[Any] = []
+        if sector_class is not None:
+            where.append("c.sector_class = ?")
+            params.append(sector_class)
+
+        # Fetch the latest fiscal_year for each in-scope ticker
+        join_clause = (
+            "FROM financials_annual AS fa "
+            "JOIN companies AS c ON fa.ticker = c.ticker"
+        )
+        where_clause = (" WHERE " + " AND ".join(where)) if where else ""
+        inner_sql = (
+            f"SELECT fa.ticker, MAX(fa.fiscal_year) AS latest_fy "
+            f"{join_clause}"
+            f"{where_clause}"
+            f" GROUP BY fa.ticker"
+        )
+        cur = self._conn.execute(inner_sql, params)
+        latest_map = {row[0]: row[1] for row in cur.fetchall()}
+        n_total = len(latest_map)
+        if n_total == 0:
+            return {f: 0.0 for f in sorted(_CANONICAL_COLUMNS)}
+
+        # Fetch each ticker's latest row
+        rates: Dict[str, float] = {}
+        for field in sorted(_CANONICAL_COLUMNS):
+            count = 0
+            for ticker, fy in latest_map.items():
+                row_cur = self._conn.execute(
+                    f'SELECT "{field}" FROM financials_annual '
+                    f"WHERE ticker = ? AND fiscal_year = ?",
+                    (ticker, fy),
+                )
+                row = row_cur.fetchone()
+                if row is not None and row[0] is not None:
+                    count += 1
+            rates[field] = count / n_total
+        return rates
+
+    def unmapped_facts(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """Rows from ``unmapped_facts``, most-recent ``collected_at`` first."""
+        cur = self._conn.execute(
+            "SELECT * FROM unmapped_facts ORDER BY collected_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def unmapped_top(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Top unmapped tags by company count.
+
+        Returns ``[{"tag", "n_companies", "example_label"}]`` ordered by
+        ``n_companies`` DESC.
+        """
+        cur = self._conn.execute(
+            "SELECT tag, COUNT(DISTINCT ticker) AS n_companies, "
+            "       MAX(label) AS example_label "
+            "FROM unmapped_facts "
+            "GROUP BY tag "
+            "ORDER BY n_companies DESC "
+            "LIMIT ?",
+            (limit,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def data_freshness(self) -> Dict[str, Any]:
+        """High-level freshness summary.
+
+        Returns ``{"latest_company_update", "n_tickers", "table_counts"}``.
+        ``table_counts`` covers the main operational tables.
+        """
+        latest_cur = self._conn.execute(
+            "SELECT MAX(updated_at) FROM companies"
+        )
+        latest_update = latest_cur.fetchone()[0]
+
+        n_cur = self._conn.execute("SELECT COUNT(*) FROM companies")
+        n_tickers = int(n_cur.fetchone()[0])
+
+        tables = [
+            "companies",
+            "financials_annual",
+            "financials_quarterly",
+            "metrics_annual",
+            "market_snapshots",
+            "collection_runs",
+            "unmapped_facts",
+        ]
+        table_counts: Dict[str, int] = {}
+        for tbl in tables:
+            cnt_cur = self._conn.execute(f"SELECT COUNT(*) FROM {tbl}")  # noqa: S608
+            table_counts[tbl] = int(cnt_cur.fetchone()[0])
+
+        return {
+            "latest_company_update": latest_update,
+            "n_tickers": n_tickers,
+            "table_counts": table_counts,
+        }
+
     # ---- Private helpers ---------------------------------------------------
 
     def _fetch_latest_metrics(
