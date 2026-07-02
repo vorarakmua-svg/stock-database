@@ -512,3 +512,26 @@ class TestScreenerUI:
         assert resp.status_code == 200
         # 0.15 formatted as percentage → "15.0%"
         assert b"15.0" in resp.content or b"AAA" in resp.content
+
+
+# ---------------------------------------------------------------------------
+# Sortable column headers
+# ---------------------------------------------------------------------------
+
+
+class TestScreenerSortableHeaders:
+    def test_roic_header_has_hx_get_sort_link(self, client) -> None:  # type: ignore[no-untyped-def]
+        """ROIC column header must contain an hx-get link with sort=roic."""
+        resp = client.get("/ui/screen?roic_gte=0.13")
+        assert resp.status_code == 200
+        content = resp.content.decode()
+        assert "hx-get" in content
+        assert "sort=roic" in content
+
+    def test_sort_dir_toggles_desc_to_asc(self, client) -> None:  # type: ignore[no-untyped-def]
+        """When sort=roic&sort_dir=desc the ROIC header link must toggle to sort_dir=asc."""
+        resp = client.get("/ui/screen?roic_gte=0.13&sort=roic&sort_dir=desc")
+        assert resp.status_code == 200
+        content = resp.content.decode()
+        assert "sort=roic" in content
+        assert "sort_dir=asc" in content

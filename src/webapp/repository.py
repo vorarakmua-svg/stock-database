@@ -10,15 +10,15 @@ from __future__ import annotations
 import sqlite3
 import statistics
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Union
 
 from ..exporters.sqlite_store import _CANONICAL_COLUMNS, _METRIC_COLUMNS, _SNAPSHOT_COLUMNS
 from .screener import SCREEN_COLUMNS, ScreenSpec, build_count_query, build_screen_query
 
 # O(1) whitelist sets — used for column-name validation before interpolation.
-_METRIC_COL_SET: frozenset[str] = frozenset(_METRIC_COLUMNS)
-_CANONICAL_COL_SET: frozenset[str] = frozenset(_CANONICAL_COLUMNS)
-_SNAPSHOT_COL_SET: frozenset[str] = frozenset(_SNAPSHOT_COLUMNS)  # reserved for future snapshot-field filter
+_METRIC_COL_SET: FrozenSet[str] = frozenset(_METRIC_COLUMNS)
+_CANONICAL_COL_SET: FrozenSet[str] = frozenset(_CANONICAL_COLUMNS)
+_SNAPSHOT_COL_SET: FrozenSet[str] = frozenset(_SNAPSHOT_COLUMNS)  # reserved for future snapshot-field filter
 
 
 class Reader:

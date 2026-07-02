@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -19,7 +20,7 @@ from ...query.pit_metrics import PointInTimeMetrics
 from ..dependencies import get_asof_reader, get_pit_metrics, get_reader
 from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
 from ..repository import Reader
-from ..screener import parse_screen_params
+from ..screener import DEFAULT_COMPARE_METRICS, METRIC_KINDS, parse_screen_params
 
 router = APIRouter()
 
@@ -428,9 +429,6 @@ def asof_vintages_fragment(
 # Screener page & fragments
 # ---------------------------------------------------------------------------
 
-_DEFAULT_COMPARE_METRICS_UI = ["roic", "roe", "net_margin", "debt_to_ebitda"]
-
-
 @router.get("/screener", response_class=HTMLResponse)
 def screener_page(
     request: Request,
@@ -469,8 +467,20 @@ def screen_fragment(
                 "items": [],
                 "total": 0,
                 "columns": [],
+                "sort": None,
+                "sort_dir": "desc",
+                "base_params": "",
             },
         )
+
+    # Build base_params: current query string without sort/sort_dir so that
+    # sortable column-header links can append their own sort/sort_dir.
+    base_items = [
+        (k, v) for k, v in request.query_params.multi_items()
+        if k not in ("sort", "sort_dir")
+    ]
+    base_params = urlencode(base_items)
+
     return templates.TemplateResponse(
         "fragments/screener_results.html",
         {
@@ -479,6 +489,9 @@ def screen_fragment(
             "items": result["items"],
             "total": result["total"],
             "columns": result["columns"],
+            "sort": spec.sort,
+            "sort_dir": spec.sort_dir,
+            "base_params": base_params,
         },
     )
 
@@ -496,7 +509,7 @@ def compare_fragment(
     if metrics_raw:
         metrics = [m.strip() for m in metrics_raw.split(",") if m.strip()]
     else:
-        metrics = _DEFAULT_COMPARE_METRICS_UI
+        metrics = DEFAULT_COMPARE_METRICS
 
     if not tickers:
         return templates.TemplateResponse(
@@ -521,12 +534,22 @@ def compare_fragment(
                 "rows": [],
             },
         )
+    # Pre-format each cell so the template renders plain strings.
+    formatted_rows: List[Dict[str, Any]] = []
+    for row in result["rows"]:
+        metric = row["metric"]
+        kind = METRIC_KINDS.get(metric, "raw")
+        formatted_values = {
+            t: fmt_value(v, kind) for t, v in row["values"].items()
+        }
+        formatted_rows.append({"metric": metric, "values": formatted_values})
+
     return templates.TemplateResponse(
         "fragments/compare_table.html",
         {
             "request": request,
             "error": None,
             "tickers": result["tickers"],
-            "rows": result["rows"],
+            "rows": formatted_rows,
         },
     )

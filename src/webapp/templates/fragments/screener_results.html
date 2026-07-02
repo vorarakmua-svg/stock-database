@@ -24,10 +24,19 @@
         <th>Company</th>
         <th>Sector</th>
         <th>FY</th>
-        <th>ROIC</th>
-        <th>ROE</th>
-        <th>Net margin</th>
-        <th>Debt/EBITDA</th>
+        {% set sortable_cols = [('roic', 'ROIC'), ('roe', 'ROE'), ('net_margin', 'Net margin'), ('debt_to_ebitda', 'Debt/EBITDA')] %}
+        {% for col, label in sortable_cols %}
+        {% set dir = 'asc' if (sort == col and sort_dir == 'desc') else 'desc' %}
+        {% set sep = '&' if base_params else '' %}
+        <th>
+          <a hx-get="/ui/screen?{{ base_params | safe }}{{ sep }}sort={{ col }}&sort_dir={{ dir }}"
+             hx-target="#screen-results"
+             hx-swap="innerHTML"
+             style="cursor:pointer;text-decoration:none;color:inherit">
+            {{ label }}{% if sort == col %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}
+          </a>
+        </th>
+        {% endfor %}
       </tr>
     </thead>
     <tbody>

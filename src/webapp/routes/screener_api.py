@@ -13,12 +13,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from ..dependencies import get_reader
 from ..repository import Reader
 from ..schemas import ScreenRequest
-from ..screener import MetricFilter, ScreenSpec, parse_screen_params
+from ..screener import DEFAULT_COMPARE_METRICS, MetricFilter, ScreenSpec, parse_screen_params
 
 router = APIRouter(prefix="/api", tags=["screener"])
-
-# Default metrics returned by /compare when none are specified
-_DEFAULT_COMPARE_METRICS = ["roic", "roe", "net_margin", "debt_to_ebitda"]
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +96,7 @@ def get_compare(
     if metrics:
         metric_list = [m.strip() for m in metrics.split(",") if m.strip()]
     else:
-        metric_list = _DEFAULT_COMPARE_METRICS
+        metric_list = DEFAULT_COMPARE_METRICS
 
     try:
         return r.compare(ticker_list, metric_list)

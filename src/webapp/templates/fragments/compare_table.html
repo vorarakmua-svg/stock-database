@@ -18,14 +18,7 @@
       <tr>
         <td>{{ row.metric }}</td>
         {% for t in tickers %}
-        <td>
-          {% set v = row['values'].get(t) %}
-          {% if v is none %}
-          —
-          {% else %}
-          {{ "%.4f" | format(v) }}
-          {% endif %}
-        </td>
+        <td>{{ row['values'].get(t, '—') }}</td>
         {% endfor %}
       </tr>
       {% endfor %}

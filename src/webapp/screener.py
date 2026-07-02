@@ -13,12 +13,12 @@ A calendar-year alignment option is explicitly out of scope (log as future work)
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from ..exporters.sqlite_store import _METRIC_COLUMNS
 
 # O(1) whitelist lookup
-_METRIC_COL_SET: frozenset[str] = frozenset(_METRIC_COLUMNS)
+_METRIC_COL_SET: FrozenSet[str] = frozenset(_METRIC_COLUMNS)
 
 # Allowed filter operators → SQL operator string
 ALLOWED_OPS: Dict[str, str] = {
@@ -34,6 +34,49 @@ ALLOWED_OPS: Dict[str, str] = {
 SCREEN_COLUMNS: List[str] = (
     ["ticker", "company_name", "sector_class", "fiscal_year"] + list(_METRIC_COLUMNS)
 )
+
+# Default metrics for the compare view — single source of truth.
+DEFAULT_COMPARE_METRICS: List[str] = ["roic", "roe", "net_margin", "debt_to_ebitda"]
+
+# Display kind for each metric column — used by compare_fragment to pre-format values.
+# Metrics not listed here fall back to "raw" in fmt_value.
+METRIC_KINDS: Dict[str, str] = {
+    # percentages
+    "fcf_margin": "pct",
+    "roic": "pct",
+    "roa": "pct",
+    "roe": "pct",
+    "gross_margin": "pct",
+    "operating_margin": "pct",
+    "net_margin": "pct",
+    "ebitda_margin": "pct",
+    "net_interest_margin": "pct",
+    "efficiency_ratio": "pct",
+    "loan_to_deposit": "pct",
+    "loss_ratio": "pct",
+    "combined_ratio": "pct",
+    "ffo_payout": "pct",
+    # multiples
+    "debt_to_ebitda": "mult",
+    "interest_coverage": "mult",
+    # monetary
+    "ebitda": "money",
+    "ebit": "money",
+    "nopat": "money",
+    "free_cash_flow": "money",
+    "levered_fcf": "money",
+    "net_debt": "money",
+    "total_debt": "money",
+    "working_capital": "money",
+    "invested_capital": "money",
+    "ffo": "money",
+    "affo": "money",
+    # raw (turnovers and per-share)
+    "asset_turnover": "raw",
+    "inventory_turnover": "raw",
+    "receivables_turnover": "raw",
+    "ffo_per_share": "raw",
+}
 
 # SQL fragment for the latest-fiscal-year-per-ticker sub-join (shared between
 # the main query and the count query so there is one source of truth).
