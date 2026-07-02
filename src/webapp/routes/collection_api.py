@@ -93,6 +93,7 @@ def collect_page(
 ) -> Any:
     """Data-collection page. Shows a form when enabled, a note when disabled."""
     return templates.TemplateResponse(
+        request,
         "collect.html",
         {
             "request": request,
@@ -140,6 +141,7 @@ async def collection_start_fragment(
         raise HTTPException(status_code=500, detail="internal error: job vanished after submit")
 
     return templates.TemplateResponse(
+        request,
         "fragments/job_status.html",
         {"request": request, "job": job, "terminal": False},
     )
@@ -161,6 +163,7 @@ def job_status_fragment(
         return HTMLResponse("<p>Job not found.</p>", status_code=404)
     terminal = job.state in ("done", "error")
     return templates.TemplateResponse(
+        request,
         "fragments/job_status.html",
         {"request": request, "job": job, "terminal": terminal},
     )

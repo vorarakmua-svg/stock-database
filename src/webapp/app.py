@@ -67,6 +67,7 @@ def create_app(
                 content={"detail": exc.detail},
             )
         return templates.TemplateResponse(
+            request,
             "error.html",
             {
                 "request": request,
@@ -86,6 +87,7 @@ def create_app(
                 content={"detail": "Internal server error."},
             )
         return templates.TemplateResponse(
+            request,
             "error.html",
             {
                 "request": request,

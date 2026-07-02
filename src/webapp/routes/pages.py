@@ -192,6 +192,7 @@ def home(
     )
 
     return templates.TemplateResponse(
+        request,
         "index.html",
         {
             "request": request,
@@ -223,6 +224,7 @@ def quality_page(
     fill_items = sorted(fill_rates.items(), key=lambda kv: kv[1], reverse=True)
 
     return templates.TemplateResponse(
+        request,
         "quality.html",
         {
             "request": request,
@@ -247,6 +249,7 @@ def companies_list(
     companies = r.list_companies(sector_class=sector, limit=1000)
     sectors = r.distinct_sectors()
     return templates.TemplateResponse(
+        request,
         "companies.html",
         {
             "request": request,
@@ -268,6 +271,7 @@ def company_page(
     if overview is None:
         raise HTTPException(status_code=404, detail=f"Company not found: {ticker}")
     return templates.TemplateResponse(
+        request,
         "company.html",
         {
             "request": request,
@@ -293,11 +297,13 @@ def search_fragment(
     """Autocomplete search results fragment."""
     if len(q.strip()) < 1:
         return templates.TemplateResponse(
+            request,
             "fragments/search_results.html",
             {"request": request, "hits": []},
         )
     hits = r.search_companies(q, 8)
     return templates.TemplateResponse(
+        request,
         "fragments/search_results.html",
         {"request": request, "hits": hits},
     )
@@ -331,6 +337,7 @@ def statements_fragment(
 
     columns, display_rows = _build_statement_display(rows_data, column_key, row_spec)
     return templates.TemplateResponse(
+        request,
         "fragments/statements.html",
         {"request": request, "columns": columns, "rows": display_rows},
     )
@@ -348,6 +355,7 @@ def metric_chart_fragment(
         series = r.metric_series(ticker, metric)
     except ValueError as exc:
         return templates.TemplateResponse(
+            request,
             "fragments/metric_chart.html",
             {"request": request, "metric": metric, "error": str(exc)},
         )
@@ -357,6 +365,7 @@ def metric_chart_fragment(
     label = label_map.get(metric, metric)
 
     return templates.TemplateResponse(
+        request,
         "fragments/metric_chart.html",
         {
             "request": request,
@@ -401,6 +410,7 @@ _VINTAGES_ROWS: List[tuple[str, str]] = [
 def asof_page(request: Request) -> Any:
     """As-of explorer page (form only; results load via HTMX)."""
     return templates.TemplateResponse(
+        request,
         "asof.html",
         {"request": request},
     )
@@ -435,6 +445,7 @@ def asof_result_fragment(
             ratio_rows.append({"label": label, "value": fmt_value(val, kind)})
 
     return templates.TemplateResponse(
+        request,
         "fragments/asof_result.html",
         {
             "request": request,
@@ -468,6 +479,7 @@ def asof_vintages_fragment(
         display_rows.append({"label": label, "vals": values})
 
     return templates.TemplateResponse(
+        request,
         "fragments/asof_vintages.html",
         {
             "request": request,
@@ -492,6 +504,7 @@ def screener_page(
     """Screener page with filter form and HTMX result target."""
     sectors = r.distinct_sectors()
     return templates.TemplateResponse(
+        request,
         "screener.html",
         {
             "request": request,
@@ -515,6 +528,7 @@ def screen_fragment(
         result = r.screen(spec)
     except ValueError as exc:
         return templates.TemplateResponse(
+            request,
             "fragments/screener_results.html",
             {
                 "request": request,
@@ -537,6 +551,7 @@ def screen_fragment(
     base_params = urlencode(base_items)
 
     return templates.TemplateResponse(
+        request,
         "fragments/screener_results.html",
         {
             "request": request,
@@ -568,6 +583,7 @@ def peers_fragment(
     company = r.get_company(ticker)
     if company is None or company.get("sector_class") is None:
         return templates.TemplateResponse(
+            request,
             "fragments/peers.html",
             {
                 "request": request,
@@ -581,6 +597,7 @@ def peers_fragment(
         peers = r.peer_comparison(ticker, metric_list)
     except ValueError as exc:
         return templates.TemplateResponse(
+            request,
             "fragments/peers.html",
             {
                 "request": request,
@@ -611,6 +628,7 @@ def peers_fragment(
         )
 
     return templates.TemplateResponse(
+        request,
         "fragments/peers.html",
         {
             "request": request,
@@ -638,6 +656,7 @@ def compare_fragment(
 
     if not tickers:
         return templates.TemplateResponse(
+            request,
             "fragments/compare_table.html",
             {
                 "request": request,
@@ -651,6 +670,7 @@ def compare_fragment(
         result = r.compare(tickers, metrics)
     except ValueError as exc:
         return templates.TemplateResponse(
+            request,
             "fragments/compare_table.html",
             {
                 "request": request,
@@ -670,6 +690,7 @@ def compare_fragment(
         formatted_rows.append({"metric": metric, "values": formatted_values})
 
     return templates.TemplateResponse(
+        request,
         "fragments/compare_table.html",
         {
             "request": request,
