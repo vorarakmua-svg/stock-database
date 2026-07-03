@@ -260,8 +260,11 @@ function renderGP(cfg) {
   var chartType = cfg.chartType || 'line';
   var indicators = cfg.indicators || [];
   var compare = cfg.compare || [];
-  var needsIndicators = indicators.length > 0;
   var needsCompare = compare.length > 0;
+  // Compare mode renders the normalized compare figure instead of the price
+  // figure (see below), which never uses indicator overlays — skip the
+  // indicators fetch entirely when compare is active.
+  var needsIndicators = indicators.length > 0 && !needsCompare;
 
   var barsPromise = fetch('/api/stocks/' + encodeURIComponent(ticker) + '/bars?range=' + encodeURIComponent(range))
     .then(function (resp) { return resp.ok ? resp.json() : []; })

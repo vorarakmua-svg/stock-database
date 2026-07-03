@@ -244,6 +244,7 @@ code { font-family: var(--font-mono); color: var(--color-ink); }
 /* ---- Signed values ---- */
 .num-pos, .up { color: var(--color-up); }
 .num-neg, .down { color: var(--color-down); }
+.flat { color: var(--color-ink-muted); }
 
 /* ---- Company header ---- */
 .company-header {

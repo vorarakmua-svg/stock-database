@@ -118,6 +118,17 @@ def test_des_fragment_sparse_ticker_renders_gracefully(client):
     assert "—" in body  # missing fields fall back to the em-dash placeholder
 
 
+def test_des_fragment_sparse_ticker_change_is_neutral_not_down(client):
+    # BBB has no previous_close, so quote["change"] is None. That must render
+    # as a neutral "flat" class, not "down" (which would falsely paint an
+    # unknown change as a loss).
+    resp = client.get("/ui/stocks/BBB/des")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "quote-change flat" in body
+    assert "down" not in body
+
+
 def test_des_fragment_very_sparse_ticker_no_500(client):
     resp = client.get("/ui/stocks/CCC/des")
     assert resp.status_code == 200
@@ -178,3 +189,35 @@ def test_gp_fragment_reflects_selected_range_and_indicators(client):
     assert '"chartType": "candle"' in body or '"chartType":"candle"' in body
     assert "ma50" in body
     assert "rsi" in body
+
+
+def test_gp_fragment_rejects_script_injection_in_ind_and_compare(client):
+    # Reflected-XSS regression: unknown/malicious `ind`/`compare` tokens must
+    # never reach the inline <script>renderGP({...})</script> call. The route
+    # should whitelist against known indicator keys / known tickers and
+    # silently drop anything else, rather than 400ing or reflecting it.
+    resp = client.get(
+        "/ui/stocks/AAA/gp",
+        params={
+            "ind": '</script><script>alert(1)</script>',
+            "compare": "<img src=x>",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.text
+    assert "<script>alert" not in body
+    assert "</script><script>alert(1)</script>" not in body
+    assert "<img src=x>" not in body
+
+
+def test_gp_fragment_valid_ind_and_compare_round_trip_into_cfg(client):
+    resp = client.get(
+        "/ui/stocks/AAA/gp",
+        params={"ind": "ma50,rsi", "compare": "^GSPC"},
+    )
+    assert resp.status_code == 200
+    body = resp.text
+    assert "renderGP(" in body
+    assert "ma50" in body
+    assert "rsi" in body
+    assert "^GSPC" in body

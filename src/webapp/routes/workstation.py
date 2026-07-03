@@ -114,7 +114,10 @@ def des_fragment(
     analyst = r.analyst_snapshot(ticker)
 
     change = quote.get("change") if quote else None
-    change_class = "up" if (change is not None and change >= 0) else "down"
+    if change is None:
+        change_class = "flat"
+    else:
+        change_class = "up" if change >= 0 else "down"
 
     fifty_two_low = quote.get("fifty_two_week_low") if quote else None
     fifty_two_high = quote.get("fifty_two_week_high") if quote else None
@@ -148,7 +151,7 @@ def des_fragment(
             "officers": profile["officers"],
             "quote": quote,
             "price_fmt": fmt_price(current_price),
-            "change_fmt": fmt_price(change) if change is not None else "—",
+            "change_fmt": fmt_price(change),
             "change_pct_fmt": fmt_pct(quote.get("change_pct") if quote else None),
             "change_class": change_class,
             "post_market_fmt": (
@@ -198,8 +201,8 @@ def gp_fragment(
     resolved_range = range if range in VALID_RANGES else "1Y"
     chart_type = type if type in ("line", "candle") else "line"
 
-    indicators = _split_csv_params(request.query_params.getlist("ind"))
-    compare = _split_csv_params(request.query_params.getlist("compare"))
+    raw_indicators = _split_csv_params(request.query_params.getlist("ind"))
+    raw_compare = _split_csv_params(request.query_params.getlist("compare"))
 
     companies = r.list_companies(limit=1000)
     compare_options = [
@@ -207,6 +210,18 @@ def gp_fragment(
         for c in companies
         if c["ticker"] != ticker
     ]
+
+    # Whitelist: only known indicator keys / known comparison tickers may flow
+    # into cfg (and from there into the inline <script> below). Unknown tokens
+    # are silently dropped rather than rejected — this is a reflected-input
+    # surface (query params rendered back into HTML/JSON), so anything not on
+    # the allowed set must never reach the template.
+    _valid_indicator_keys = frozenset(key for key, _ in _GP_INDICATORS)
+    _valid_compare_tickers = frozenset(
+        [_BENCHMARK_TICKER] + [t for t, _ in compare_options]
+    )
+    indicators = [i for i in raw_indicators if i in _valid_indicator_keys]
+    compare = [c for c in raw_compare if c in _valid_compare_tickers]
 
     cfg = {
         "ticker": ticker,
@@ -231,6 +246,11 @@ def gp_fragment(
             "compare_options": compare_options,
             "benchmark_ticker": _BENCHMARK_TICKER,
             "benchmark_label": _BENCHMARK_LABEL,
-            "cfg_json": json.dumps(cfg),
+            # Defense in depth: json.dumps doesn't escape "</", so a literal
+            # "</script>" inside a whitelisted-but-still-attacker-influenced
+            # string (e.g. a ticker name) could break out of the inline
+            # <script> block in gp.html. The escaped sequence is still valid
+            # JSON and inert once parsed.
+            "cfg_json": json.dumps(cfg).replace("</", "<\\/"),
         },
     )
