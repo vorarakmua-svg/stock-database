@@ -1,0 +1,65 @@
+<section class="section">
+  <h2 class="section-heading">Dividend Overview</h2>
+  <div class="summary-grid">
+    <div class="summary-item"><span class="summary-label">Dividend Rate</span><span class="summary-value">{{ dividend_rate_fmt }}</span></div>
+    <div class="summary-item"><span class="summary-label">Dividend Yield</span><span class="summary-value">{{ dividend_yield_fmt }}</span></div>
+    <div class="summary-item"><span class="summary-label">Payout Ratio</span><span class="summary-value">{{ payout_ratio_fmt }}</span></div>
+    <div class="summary-item"><span class="summary-label">Ex-Dividend Date</span><span class="summary-value">{{ ex_dividend_date }}</span></div>
+    <div class="summary-item"><span class="summary-label">Dividend CAGR</span><span class="summary-value">{{ cagr_fmt }}</span></div>
+    <div class="summary-item"><span class="summary-label">Consistency</span><span class="summary-value">{{ consistency_fmt }}</span></div>
+  </div>
+</section>
+
+<section class="section">
+  <h2 class="section-heading">Annual Dividends</h2>
+  <div id="dvd-chart" class="gp-chart"></div>
+  <script>
+    var _dvdCfg = {{ dvd_cfg_json | safe }};
+    renderDVD('dvd-chart', _dvdCfg.years, _dvdCfg.amounts);
+  </script>
+</section>
+
+<section class="section">
+  <h2 class="section-heading">Payments</h2>
+  <div class="chip-row mt-2">
+    <a class="btn btn-sm" href="{{ csv_href }}">DOWNLOAD CSV</a>
+  </div>
+  {% if payment_rows %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>Date</th><th class="num">Amount</th></tr></thead>
+      <tbody>
+        {% for row in payment_rows %}
+        <tr>
+          <td class="row-label">{{ row.date }}</td>
+          <td class="num">{{ row.amount }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-row">No dividend payments collected.</p>
+  {% endif %}
+</section>
+
+<section class="section">
+  <h2 class="section-heading">Splits</h2>
+  {% if split_rows %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>Date</th><th class="num">Ratio</th></tr></thead>
+      <tbody>
+        {% for row in split_rows %}
+        <tr>
+          <td class="row-label">{{ row.date }}</td>
+          <td class="num">{{ row.ratio }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-row">No stock splits collected.</p>
+  {% endif %}
+</section>

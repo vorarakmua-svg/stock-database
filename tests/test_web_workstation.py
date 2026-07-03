@@ -1,20 +1,40 @@
-"""Tests for the per-stock workstation page and its DES/GP/FA/STAT/ERN fragments.
+"""Tests for the per-stock workstation page and its DES/GP/FA/STAT/ERN/HP/DVD/HDS/INS
+fragments.
 
 Uses the shared ``web_db``/``client`` fixtures (see ``tests/conftest.py``):
 AAA is data-rich (2 snapshots, officers, description, analyst snapshot,
-260 daily price bars); BBB/CCC are sparse (1 snapshot each, no officers, no
-description, no analyst snapshot) and must render gracefully rather than
-500. ``^GSPC`` has price bars but no ``companies`` row.
+260 daily price bars, 6 dividend events + 1 split, 3 institutional + 2
+mutualfund holders, 3 insider transactions); BBB/CCC are sparse (1 snapshot
+each, no officers, no description, no analyst snapshot, no dividends/
+splits/holders/insiders) and must render gracefully rather than 500.
+``^GSPC`` has price bars but no ``companies`` row.
 
 The ``bare_client`` fixture below backs a *second*, separate database
 containing only a bare company (DDD, no financials/snapshot/analyst/earnings
-data whatsoever) — used to exercise the FA/STAT/ERN "no data at all" path
-without perturbing the shared ``web_db`` fixture (several other test modules
-assert exact company counts against it).
+data whatsoever) — used to exercise the FA/STAT/ERN/HP/DVD/HDS/INS "no data
+at all" path without perturbing the shared ``web_db`` fixture (several other
+test modules assert exact company counts against it).
 """
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import pytest
+
+from src.webapp.routes import stocks_api
+
+# AAA's 260 synthetic daily bars run from 2023-01-01 (see conftest's
+# ``_synthetic_bars(260, start="2023-01-01", ...)``). HP range-slicing tests
+# pin "today" near the end of that fixture data (mirrors the pattern in
+# ``tests/test_web_api_stocks.py``) rather than depending on the real wall
+# clock, since a real "today" would be years past the fixture's 2023 dates.
+_AAA_BAR_COUNT = 260
+_AAA_START = date(2023, 1, 1)
+_AAA_LAST = _AAA_START + timedelta(days=_AAA_BAR_COUNT - 1)
+
+
+def _pin_today(monkeypatch, fixed: date) -> None:
+    monkeypatch.setattr(stocks_api, "_today", lambda: fixed)
 
 # ---------------------------------------------------------------------------
 # Page shell: /stocks/{ticker}
@@ -326,6 +346,134 @@ def test_ern_fragment_sparse_ticker_no_500(client):
 
 
 # ---------------------------------------------------------------------------
+# HP fragment (historical OHLCV table + CSV)
+# ---------------------------------------------------------------------------
+
+
+def test_hp_fragment_known_ticker_shows_bar_date_and_csv_link(client, monkeypatch):
+    _pin_today(monkeypatch, _AAA_LAST)
+    resp = client.get("/ui/stocks/AAA/hp")
+    assert resp.status_code == 200
+    body = resp.text
+    assert _AAA_START.isoformat() in body or _AAA_LAST.isoformat() in body
+    assert "/api/export/stock/AAA/bars.csv" in body
+
+
+def test_hp_fragment_range_param_changes_row_count(client, monkeypatch):
+    _pin_today(monkeypatch, _AAA_LAST)
+    full = client.get("/ui/stocks/AAA/hp", params={"range": "MAX"}).text
+    sliced = client.get("/ui/stocks/AAA/hp", params={"range": "1M"}).text
+    # "hp-bar-date" is a marker unique to HP's bar rows (unlike the generic
+    # "row-label" class, which also appears 14x in the always-rendered HELP
+    # overlay in base.html — counting that would compare apples to oranges).
+    full_rows = full.count("hp-bar-date")
+    sliced_rows = sliced.count("hp-bar-date")
+    assert 0 < sliced_rows < full_rows
+
+
+def test_hp_fragment_unknown_range_falls_back_to_1y(client, monkeypatch):
+    # An unrecognized `range` must fall back to the same default (1Y) the GP
+    # route uses, silently — never echoed raw, never a 400/500.
+    _pin_today(monkeypatch, _AAA_LAST)
+    default_resp = client.get("/ui/stocks/AAA/hp", params={"range": "1Y"}).text
+    bogus_resp = client.get("/ui/stocks/AAA/hp", params={"range": "BOGUS"}).text
+    assert default_resp == bogus_resp
+
+
+def test_hp_fragment_unknown_ticker_404(client):
+    resp = client.get("/ui/stocks/ZZZ/hp")
+    assert resp.status_code == 404
+
+
+def test_hp_fragment_sparse_ticker_no_500(client):
+    resp = client.get("/ui/stocks/CCC/hp")
+    assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# DVD fragment (dividends + splits, stats header, annual bar chart)
+# ---------------------------------------------------------------------------
+
+
+def test_dvd_fragment_known_ticker_shows_amount_chart_and_cagr(client):
+    resp = client.get("/ui/stocks/AAA/dvd")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "$0.25" in body  # a dividend amount from the fixture payments
+    assert "renderDVD(" in body
+    assert "CAGR" in body
+    assert "Consistency" in body
+
+
+def test_dvd_fragment_shows_splits_and_csv_link(client):
+    resp = client.get("/ui/stocks/AAA/dvd")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "2023-06-01" in body  # fixture split date
+    assert "/api/export/stock/AAA/dividends.csv" in body
+
+
+def test_dvd_fragment_unknown_ticker_404(client):
+    resp = client.get("/ui/stocks/ZZZ/dvd")
+    assert resp.status_code == 404
+
+
+def test_dvd_fragment_sparse_ticker_no_500(client):
+    # BBB has no dividend_events/split_events rows at all.
+    resp = client.get("/ui/stocks/BBB/dvd")
+    assert resp.status_code == 200
+    assert "renderDVD(" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# HDS fragment (institutional + mutual-fund holders)
+# ---------------------------------------------------------------------------
+
+
+def test_hds_fragment_known_ticker_shows_holder_names(client):
+    resp = client.get("/ui/stocks/AAA/hds")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "BlackRock Inc" in body
+    assert "Fidelity Contrafund" in body
+
+
+def test_hds_fragment_unknown_ticker_404(client):
+    resp = client.get("/ui/stocks/ZZZ/hds")
+    assert resp.status_code == 404
+
+
+def test_hds_fragment_sparse_ticker_no_500(client):
+    resp = client.get("/ui/stocks/BBB/hds")
+    assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# INS fragment (insider transactions, buy/sell tint)
+# ---------------------------------------------------------------------------
+
+
+def test_ins_fragment_known_ticker_shows_insider_and_tint(client):
+    resp = client.get("/ui/stocks/AAA/ins")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "Jane Doe" in body  # "Sale" -> down/red
+    assert "Alice Wu" in body  # "Purchase" -> up/green
+    assert 'class="down"' in body
+    assert 'class="up"' in body
+
+
+def test_ins_fragment_unknown_ticker_404(client):
+    resp = client.get("/ui/stocks/ZZZ/ins")
+    assert resp.status_code == 404
+
+
+def test_ins_fragment_sparse_ticker_no_500(client):
+    resp = client.get("/ui/stocks/BBB/ins")
+    assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # Bare-company (no data at all) fixture — separate DB, see module docstring.
 # ---------------------------------------------------------------------------
 
@@ -371,3 +519,25 @@ def test_ern_fragment_bare_ticker_no_500(bare_client):
     resp = bare_client.get("/ui/stocks/DDD/ern")
     assert resp.status_code == 200
     assert "No earnings history" in resp.text
+
+
+def test_hp_fragment_bare_ticker_no_500(bare_client):
+    resp = bare_client.get("/ui/stocks/DDD/hp")
+    assert resp.status_code == 200
+    assert "No price history collected" in resp.text
+
+
+def test_dvd_fragment_bare_ticker_no_500(bare_client):
+    resp = bare_client.get("/ui/stocks/DDD/dvd")
+    assert resp.status_code == 200
+    assert "renderDVD(" in resp.text
+
+
+def test_hds_fragment_bare_ticker_no_500(bare_client):
+    resp = bare_client.get("/ui/stocks/DDD/hds")
+    assert resp.status_code == 200
+
+
+def test_ins_fragment_bare_ticker_no_500(bare_client):
+    resp = bare_client.get("/ui/stocks/DDD/ins")
+    assert resp.status_code == 200

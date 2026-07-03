@@ -17,7 +17,7 @@ from ..dependencies import get_reader
 from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
 from ..repository import Reader
 from .pages import _STATEMENT_ROWS, _build_statement_display, templates
-from .stocks_api import VALID_RANGES
+from .stocks_api import VALID_RANGES, resolve_range_start
 
 router = APIRouter()
 
@@ -474,5 +474,302 @@ def ern_fragment(
             "earnings_growth_fmt": fmt_pct(analyst.get("earnings_growth") if analyst else None),
             "revenue_growth_fmt": fmt_pct(analyst.get("revenue_growth") if analyst else None),
             "earnings_date": (analyst.get("earnings_date") if analyst else None),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# HP fragment
+# ---------------------------------------------------------------------------
+
+
+@router.get("/ui/stocks/{ticker}/hp", response_class=HTMLResponse)
+def hp_fragment(
+    ticker: str,
+    request: Request,
+    range: str = "1Y",  # noqa: A002 - matches the public query-param name
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """HP panel: OHLCV table newest-first + range buttons + CSV download link.
+
+    Reuses ``stocks_api.resolve_range_start`` for range->start-date resolution
+    (no duplicate range math) and validates ``range`` against the same
+    ``VALID_RANGES`` set the GP route uses — an unknown value silently falls
+    back to ``1Y`` rather than being echoed back raw or erroring.
+    """
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    resolved_range = range if range in VALID_RANGES else "1Y"
+    start = resolve_range_start(resolved_range)
+    start_iso = start.isoformat() if start is not None else None
+    bars = r.price_bars(ticker, start=start_iso)
+
+    # price_bars() is ascending by date; the HP table reads newest-first.
+    rows = [
+        {
+            "date": b["date"],
+            "open": fmt_price(b.get("open")),
+            "high": fmt_price(b.get("high")),
+            "low": fmt_price(b.get("low")),
+            "close": fmt_price(b.get("close")),
+            # Volume is a share count, not a dollar amount, but fmt_money's
+            # B/M/K-suffixed formatting is the same treatment DES/STAT already
+            # give share counts (e.g. DES's summary.volume) — kept consistent
+            # here rather than introducing a new unformatted-thousands kind.
+            "volume": fmt_money(b.get("volume")),
+        }
+        for b in reversed(bars)
+    ]
+
+    return templates.TemplateResponse(
+        request,
+        "fragments/hp.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "range": resolved_range,
+            "range_options": _GP_RANGES,
+            "rows": rows,
+            "csv_href": f"/api/export/stock/{ticker}/bars.csv?range={resolved_range}",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# DVD fragment
+# ---------------------------------------------------------------------------
+
+
+def _annual_dividend_sums(events: List[Dict[str, Any]]) -> Dict[int, float]:
+    """Sum dividend ``amount`` by calendar year from ascending ``dividend_events``.
+
+    Mirrors the year-bucketing step in ``yahoo_handler._get_dividend_history``
+    (``dividends.resample('YE').sum()``), computed directly from event rows
+    already read from the DB rather than a full daily-indexed series.
+    """
+    sums: Dict[int, float] = {}
+    for event in events:
+        raw_date = event.get("date")
+        amount = event.get("amount")
+        if not raw_date or amount is None:
+            continue
+        year = int(str(raw_date)[:4])
+        sums[year] = sums.get(year, 0.0) + float(amount)
+    return sums
+
+
+def _dividend_cagr(annual_sums: Dict[int, float]) -> Optional[float]:
+    """Dividend CAGR, using the SAME formula as ``_get_dividend_history``.
+
+    ``(last_positive_year / first_positive_year) ** (1 / years) - 1``, where
+    ``years = len(annual_sums) - 1`` (the handler's divisor — the number of
+    years spanned by the annual series, not the count of positive years) and
+    first/last are the amounts of the first/last calendar years with a
+    positive sum. ``None`` if fewer than 2 years of data, there are no
+    positive years, or the guard (``first_year > 0 and years > 0``) fails.
+    """
+    if len(annual_sums) < 2:
+        return None
+    positive_years = sorted(year for year, amount in annual_sums.items() if amount > 0)
+    if not positive_years:
+        return None
+    first_year_amount = annual_sums[positive_years[0]]
+    last_year_amount = annual_sums[positive_years[-1]]
+    years = len(annual_sums) - 1
+    if first_year_amount > 0 and years > 0:
+        return (last_year_amount / first_year_amount) ** (1 / years) - 1
+    return None
+
+
+def _dividend_consistency(annual_sums: Dict[int, float]) -> Optional[float]:
+    """Share of consecutive positive-dividend years that did not decrease.
+
+    Mirrors ``_get_dividend_history``'s ``dividend_consistency``: among
+    calendar years with a positive sum (chronological order), the fraction
+    where ``amount[i] >= amount[i - 1]``. ``None`` if fewer than 2 years of
+    data overall, or fewer than 2 positive years.
+    """
+    if len(annual_sums) < 2:
+        return None
+    positive_years = sorted(year for year, amount in annual_sums.items() if amount > 0)
+    annual_list = [annual_sums[year] for year in positive_years]
+    if len(annual_list) <= 1:
+        return None
+    increases = sum(
+        1 for i in range(1, len(annual_list)) if annual_list[i] >= annual_list[i - 1]
+    )
+    return increases / (len(annual_list) - 1)
+
+
+def _fmt_split_ratio(ratio: Optional[float]) -> str:
+    """Format a split ratio as e.g. ``2.00 : 1``; ``None`` -> "—"."""
+    if ratio is None:
+        return "—"
+    return f"{ratio:.2f} : 1"
+
+
+@router.get("/ui/stocks/{ticker}/dvd", response_class=HTMLResponse)
+def dvd_fragment(
+    ticker: str,
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """DVD panel: dividend stats header, annual bar chart, payments + splits tables.
+
+    CAGR/consistency are computed here from ``dividend_events`` with the SAME
+    formulas ``yahoo_handler._get_dividend_history`` uses on the raw yfinance
+    series (see ``_dividend_cagr``/``_dividend_consistency`` above) — re-derived
+    from what's already in the DB, not re-fetched from Yahoo.
+    """
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    quote = r.quote(ticker) or {}
+    events = r.dividend_events(ticker)
+    raw_splits = r.split_events(ticker)
+
+    annual_sums = _annual_dividend_sums(events)
+    cagr = _dividend_cagr(annual_sums)
+    consistency = _dividend_consistency(annual_sums)
+    years = sorted(annual_sums)
+
+    payment_rows = [
+        {"date": e.get("date", ""), "amount": fmt_price(e.get("amount"))}
+        for e in reversed(events)
+    ]
+    split_rows = [
+        {"date": s.get("date", ""), "ratio": _fmt_split_ratio(s.get("ratio"))}
+        for s in reversed(raw_splits)
+    ]
+
+    dvd_cfg = {
+        "years": [str(y) for y in years],
+        "amounts": [annual_sums[y] for y in years],
+    }
+
+    return templates.TemplateResponse(
+        request,
+        "fragments/dvd.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "dividend_rate_fmt": fmt_price(quote.get("dividend_rate")),
+            "dividend_yield_fmt": fmt_pct(quote.get("dividend_yield")),
+            "payout_ratio_fmt": fmt_pct(quote.get("payout_ratio")),
+            "ex_dividend_date": quote.get("ex_dividend_date") or "—",
+            "cagr_fmt": fmt_pct(cagr),
+            "consistency_fmt": fmt_pct(consistency),
+            "payment_rows": payment_rows,
+            "split_rows": split_rows,
+            # Same XSS defense-in-depth as gp_fragment's cfg_json/ern_fragment's
+            # ern_cfg_json — escape "</" so a literal "</script>" can't break
+            # out of the inline <script> block, even though today's inputs
+            # here are DB-derived numbers/year strings only.
+            "dvd_cfg_json": json.dumps(dvd_cfg).replace("</", "<\\/"),
+            "csv_href": f"/api/export/stock/{ticker}/dividends.csv",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# HDS fragment
+# ---------------------------------------------------------------------------
+
+
+def _build_holder_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Format holder rows: holder, shares, % held, value, date reported."""
+    return [
+        {
+            "holder": h.get("holder", ""),
+            "shares": fmt_money(h.get("shares")),
+            "pct_held": fmt_pct(h.get("pct_held")),
+            "value": fmt_money(h.get("value")),
+            "date_reported": h.get("date_reported") or "—",
+        }
+        for h in rows
+    ]
+
+
+@router.get("/ui/stocks/{ticker}/hds", response_class=HTMLResponse)
+def hds_fragment(
+    ticker: str,
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """HDS panel: institutional + mutual-fund holder tables."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    institutional = _build_holder_rows(r.holders(ticker, "institutional"))
+    mutualfund = _build_holder_rows(r.holders(ticker, "mutualfund"))
+
+    return templates.TemplateResponse(
+        request,
+        "fragments/hds.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "institutional": institutional,
+            "mutualfund": mutualfund,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# INS fragment
+# ---------------------------------------------------------------------------
+
+_INS_BUY_KEYWORDS = ("buy", "purchase")
+_INS_SELL_KEYWORDS = ("sale", "sell")
+
+
+def _insider_tint_class(text: str) -> str:
+    """Buy/sell tint for an insider transaction's free-text description.
+
+    Case-insensitive keyword match: "Buy"/"Purchase" -> ``up`` (green),
+    "Sale"/"Sell" -> ``down`` (red), anything else -> ``flat`` (neutral) —
+    reusing the same up/down/flat classes the rest of the app uses for
+    signed values (see app.css's ``.up``/``.down``/``.flat``).
+    """
+    lowered = text.lower()
+    if any(keyword in lowered for keyword in _INS_BUY_KEYWORDS):
+        return "up"
+    if any(keyword in lowered for keyword in _INS_SELL_KEYWORDS):
+        return "down"
+    return "flat"
+
+
+@router.get("/ui/stocks/{ticker}/ins", response_class=HTMLResponse)
+def ins_fragment(
+    ticker: str,
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """INS panel: insider transaction table, tinted green/red by buy/sell keyword."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    transactions = r.insider_transactions(ticker)
+    rows = [
+        {
+            "date": t.get("start_date", ""),
+            "insider": t.get("insider", ""),
+            "position": t.get("position") or "—",
+            "text": t.get("text", ""),
+            "shares": fmt_money(t.get("shares")),
+            "value": fmt_money(t.get("value")),
+            "tint_class": _insider_tint_class(t.get("text") or ""),
+        }
+        for t in transactions
+    ]
+
+    return templates.TemplateResponse(
+        request,
+        "fragments/ins.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "rows": rows,
         },
     )

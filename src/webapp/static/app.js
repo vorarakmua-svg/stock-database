@@ -335,6 +335,37 @@ function renderERN(elId, quarters, estimates, actuals) {
 }
 
 /**
+ * Render the DVD annual-dividends bar chart into the element with the given id.
+ * @param {string} elId - The DOM element id to render into.
+ * @param {Array<string>} years - Calendar year labels (x-axis), ascending.
+ * @param {Array<number>} amounts - Total dividend amount paid that year.
+ */
+function renderDVD(elId, years, amounts) {
+  var el = document.getElementById(elId);
+  if (!el || typeof Plotly === 'undefined') return;
+  if (!years || years.length === 0) {
+    el.innerHTML = '<p class="muted">No dividend history available.</p>';
+    return;
+  }
+  var traces = [
+    {
+      type: 'bar', x: years, y: amounts, name: 'Annual dividend',
+      marker: { color: '#ff9900' },
+    },
+  ];
+  var layout = {
+    margin: { t: 20, r: 24, b: 40, l: 50 },
+    paper_bgcolor: 'transparent',
+    plot_bgcolor: 'transparent',
+    font: { family: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace', color: '#e6e3dc', size: 11 },
+    xaxis: { gridcolor: '#2a2a2a', linecolor: '#2a2a2a' },
+    yaxis: { gridcolor: '#2a2a2a', linecolor: '#2a2a2a' },
+    showlegend: false,
+  };
+  Plotly.newPlot(elId, traces, layout, { responsive: true, displayModeBar: false });
+}
+
+/**
  * HTMX tab-active helper.
  * When a tab button triggers an HTMX request, mark it active and remove
  * active from its siblings.

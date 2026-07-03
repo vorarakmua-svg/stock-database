@@ -1,0 +1,63 @@
+<section class="section">
+  <h2 class="section-heading">Institutional Holders</h2>
+  {% if institutional %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Holder</th>
+          <th class="num">Shares</th>
+          <th class="num">% Held</th>
+          <th class="num">Value</th>
+          <th>Date Reported</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in institutional %}
+        <tr>
+          <td class="row-label">{{ row.holder }}</td>
+          <td class="num">{{ row.shares }}</td>
+          <td class="num">{{ row.pct_held }}</td>
+          <td class="num">{{ row.value }}</td>
+          <td>{{ row.date_reported }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-row">No institutional holders collected.</p>
+  {% endif %}
+</section>
+
+<section class="section">
+  <h2 class="section-heading">Mutual Fund Holders</h2>
+  {% if mutualfund %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Holder</th>
+          <th class="num">Shares</th>
+          <th class="num">% Held</th>
+          <th class="num">Value</th>
+          <th>Date Reported</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in mutualfund %}
+        <tr>
+          <td class="row-label">{{ row.holder }}</td>
+          <td class="num">{{ row.shares }}</td>
+          <td class="num">{{ row.pct_held }}</td>
+          <td class="num">{{ row.value }}</td>
+          <td>{{ row.date_reported }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-row">No mutual fund holders collected.</p>
+  {% endif %}
+</section>
