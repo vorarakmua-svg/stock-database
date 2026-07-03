@@ -10,7 +10,16 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .jobs import CollectionJobManager
-from .routes import asof_api, collection_api, companies, export_api, pages, quality_api, screener_api
+from .routes import (
+    asof_api,
+    collection_api,
+    companies,
+    export_api,
+    pages,
+    quality_api,
+    screener_api,
+    stocks_api,
+)
 from .routes.pages import templates
 from .settings import WebSettings, default_settings
 
@@ -48,6 +57,7 @@ def create_app(
     app.include_router(pages.router)
     app.include_router(companies.router)
     app.include_router(asof_api.router)
+    app.include_router(stocks_api.router)
     app.include_router(screener_api.router)
     app.include_router(quality_api.router)
     app.include_router(collection_api.router)
