@@ -119,6 +119,29 @@ class _FakeTickerBadEarnings(_FakeTicker):
         return pd.DataFrame({"foo": [1, 2], "bar": [3, 4]})
 
 
+class _FakeTickerTzAware(_FakeTicker):
+    """Fake Ticker returning timezone-aware DatetimeIndex (matching real yfinance)."""
+
+    def history(self, period="1y", interval="1d"):
+        if period == "max" and interval == "1d":
+            dates = pd.date_range("2024-01-01", periods=3, freq="D", tz="America/New_York")
+            return pd.DataFrame(
+                {
+                    "Open": [100.0, 101.0, 102.0],
+                    "High": [101.0, 102.0, 103.0],
+                    "Low": [99.0, 100.0, 101.0],
+                    "Close": [100.5, 101.5, 102.5],
+                    "Volume": [1000.0, 1001.0, 1002.0],
+                },
+                index=dates,
+            )
+        return pd.DataFrame()
+
+    @property
+    def splits(self):
+        return pd.Series([4.0], index=pd.DatetimeIndex(["2024-06-10"], tz="America/New_York"))
+
+
 def _patch_ticker(monkeypatch, fake_cls):
     monkeypatch.setattr(yh_module.yf, "Ticker", fake_cls)
 
@@ -211,3 +234,24 @@ def test_fetch_benchmark_bars_defensive_on_failure(monkeypatch):
     handler = YahooHandler(rate_limit_delay=0.0)
 
     assert handler.fetch_benchmark_bars("^GSPC") == []
+
+
+def test_fetch_all_price_bars_with_tz_aware_index(monkeypatch):
+    """Guard against date-shift bugs: tz-aware indexes must not shift local dates."""
+    _patch_ticker(monkeypatch, _FakeTickerTzAware)
+    handler = YahooHandler(rate_limit_delay=0.0)
+    data = handler.fetch_all("AAA")
+
+    bars = data["price_bars"]
+    assert len(bars) == 3
+    assert [b["date"] for b in bars] == ["2024-01-01", "2024-01-02", "2024-01-03"]
+    assert [b["date"] for b in bars] == sorted(b["date"] for b in bars)
+
+
+def test_fetch_all_splits_with_tz_aware_index(monkeypatch):
+    """Guard against date-shift bugs: tz-aware index on splits must not shift date."""
+    _patch_ticker(monkeypatch, _FakeTickerTzAware)
+    handler = YahooHandler(rate_limit_delay=0.0)
+    data = handler.fetch_all("AAA")
+
+    assert data["splits"] == [{"date": "2024-06-10", "ratio": 4.0}]
