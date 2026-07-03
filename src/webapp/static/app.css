@@ -408,6 +408,11 @@ code { font-family: var(--font-mono); color: var(--color-ink); }
   position: absolute; top: 50%; width: 8px; height: 8px; margin-left: -4px;
   background: var(--color-accent); border-radius: 50%; transform: translateY(-50%);
 }
+/* ERN: mean-target marker on the price-target range bar — same shape, muted
+   color so it reads as a secondary reference point next to the current-price
+   marker (which keeps the accent color). Also reused, unstyled, as the
+   buy/hold/sell gauge needle (a single .range-marker on a .range-bar). */
+.range-marker--mean { background: var(--color-ink-muted); }
 
 /* ---- Workstation: GP chart controls ---- */
 .gp-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin-bottom: 0.75rem; }

@@ -296,6 +296,45 @@ function renderGP(cfg) {
 }
 
 /**
+ * Render the ERN earnings-surprise grouped-bar chart (estimate vs actual EPS
+ * per quarter) into the element with the given id.
+ * @param {string} elId - The DOM element id to render into.
+ * @param {Array<string>} quarters - Quarter labels (x-axis), ascending.
+ * @param {Array<number|null>} estimates - EPS estimates, one per quarter.
+ * @param {Array<number|null>} actuals - EPS actuals, one per quarter.
+ */
+function renderERN(elId, quarters, estimates, actuals) {
+  var el = document.getElementById(elId);
+  if (!el || typeof Plotly === 'undefined') return;
+  if (!quarters || quarters.length === 0) {
+    el.innerHTML = '<p class="muted">No earnings history available.</p>';
+    return;
+  }
+  var traces = [
+    {
+      type: 'bar', x: quarters, y: estimates, name: 'Estimate',
+      marker: { color: '#4fc3f7' },
+    },
+    {
+      type: 'bar', x: quarters, y: actuals, name: 'Actual',
+      marker: { color: '#ff9900' },
+    },
+  ];
+  var layout = {
+    barmode: 'group',
+    margin: { t: 20, r: 24, b: 40, l: 50 },
+    paper_bgcolor: 'transparent',
+    plot_bgcolor: 'transparent',
+    font: { family: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace', color: '#e6e3dc', size: 11 },
+    legend: { orientation: 'h', font: { size: 10 } },
+    xaxis: { gridcolor: '#2a2a2a', linecolor: '#2a2a2a' },
+    yaxis: { gridcolor: '#2a2a2a', linecolor: '#2a2a2a' },
+    showlegend: true,
+  };
+  Plotly.newPlot(elId, traces, layout, { responsive: true, displayModeBar: false });
+}
+
+/**
  * HTMX tab-active helper.
  * When a tab button triggers an HTMX request, mark it active and remove
  * active from its siblings.

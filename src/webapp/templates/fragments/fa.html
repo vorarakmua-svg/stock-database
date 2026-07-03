@@ -1,0 +1,25 @@
+<div class="tab-bar" role="tablist">
+  <button class="tab-btn tab-active"
+    hx-get="/ui/companies/{{ ticker }}/statements?period=annual"
+    hx-target="#fa-statements"
+    hx-trigger="click"
+    role="tab">Annual</button>
+  <button class="tab-btn"
+    hx-get="/ui/companies/{{ ticker }}/statements?period=quarterly"
+    hx-target="#fa-statements"
+    hx-trigger="click"
+    role="tab">Quarterly</button>
+  <button class="tab-btn"
+    hx-get="/ui/companies/{{ ticker }}/statements?period=ttm"
+    hx-target="#fa-statements"
+    hx-trigger="click"
+    role="tab">TTM</button>
+  <button class="tab-btn"
+    hx-get="/ui/companies/{{ ticker }}/statements?period=metrics"
+    hx-target="#fa-statements"
+    hx-trigger="click"
+    role="tab">Metrics</button>
+</div>
+<div id="fa-statements" class="statements-panel">
+  {% include "fragments/statements.html" %}
+</div>

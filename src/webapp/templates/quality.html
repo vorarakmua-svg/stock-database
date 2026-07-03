@@ -74,7 +74,7 @@
       <tbody>
         {% for row in latest_runs %}
         <tr>
-          <td><a href="/companies/{{ row.ticker }}">{{ row.ticker }}</a></td>
+          <td><a href="/stocks/{{ row.ticker }}">{{ row.ticker }}</a></td>
           <td>{{ row.collected_at[:10] if row.collected_at else "—" }}</td>
           <td>{{ row.data_sources or "—" }}</td>
           <td class="num">{{ row.warning_count if row.warning_count is not none else "—" }}</td>

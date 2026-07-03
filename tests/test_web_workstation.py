@@ -1,12 +1,20 @@
-"""Tests for the per-stock workstation page and its DES/GP fragments.
+"""Tests for the per-stock workstation page and its DES/GP/FA/STAT/ERN fragments.
 
 Uses the shared ``web_db``/``client`` fixtures (see ``tests/conftest.py``):
 AAA is data-rich (2 snapshots, officers, description, analyst snapshot,
 260 daily price bars); BBB/CCC are sparse (1 snapshot each, no officers, no
 description, no analyst snapshot) and must render gracefully rather than
 500. ``^GSPC`` has price bars but no ``companies`` row.
+
+The ``bare_client`` fixture below backs a *second*, separate database
+containing only a bare company (DDD, no financials/snapshot/analyst/earnings
+data whatsoever) — used to exercise the FA/STAT/ERN "no data at all" path
+without perturbing the shared ``web_db`` fixture (several other test modules
+assert exact company counts against it).
 """
 from __future__ import annotations
+
+import pytest
 
 # ---------------------------------------------------------------------------
 # Page shell: /stocks/{ticker}
@@ -221,3 +229,145 @@ def test_gp_fragment_valid_ind_and_compare_round_trip_into_cfg(client):
     assert "ma50" in body
     assert "rsi" in body
     assert "^GSPC" in body
+
+
+# ---------------------------------------------------------------------------
+# FA fragment (reuses the existing /ui/companies/{ticker}/statements machinery)
+# ---------------------------------------------------------------------------
+
+
+def test_fa_fragment_known_ticker_shows_revenue_and_period_tabs(client):
+    resp = client.get("/ui/stocks/AAA/fa")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "Revenue" in body
+    for label in ["Annual", "Quarterly", "TTM", "Metrics"]:
+        assert f">{label}<" in body
+    assert 'hx-target="#fa-statements"' in body
+    assert 'hx-get="/ui/companies/AAA/statements?period=quarterly"' in body
+
+
+def test_fa_fragment_unknown_ticker_404(client):
+    resp = client.get("/ui/stocks/ZZZ/fa")
+    assert resp.status_code == 404
+
+
+def test_fa_fragment_sparse_ticker_no_500(client):
+    resp = client.get("/ui/stocks/CCC/fa")
+    assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# STAT fragment (dense ratio grid)
+# ---------------------------------------------------------------------------
+
+
+def test_stat_fragment_known_ticker_shows_roe_and_short_interest_label(client):
+    resp = client.get("/ui/stocks/AAA/stat")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "ROE" in body
+    assert "Short % of float" in body
+
+
+def test_stat_fragment_known_ticker_uses_fmt_value_for_roic(client):
+    # AAA's latest (FY2024) metrics_annual row has roic=0.15 -> "15.0%".
+    resp = client.get("/ui/stocks/AAA/stat")
+    assert resp.status_code == 200
+    assert "15.0%" in resp.text
+
+
+def test_stat_fragment_unknown_ticker_404(client):
+    resp = client.get("/ui/stocks/ZZZ/stat")
+    assert resp.status_code == 404
+
+
+def test_stat_fragment_sparse_ticker_no_500(client):
+    resp = client.get("/ui/stocks/BBB/stat")
+    assert resp.status_code == 200
+    assert "ROE" in resp.text  # label always renders; value falls back to "—"
+
+
+# ---------------------------------------------------------------------------
+# ERN fragment (earnings surprise + analyst targets/gauge)
+# ---------------------------------------------------------------------------
+
+
+def test_ern_fragment_known_ticker_shows_surprise_table_and_chart_hook(client):
+    resp = client.get("/ui/stocks/AAA/ern")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "renderERN(" in body
+    assert "2023-12-31" in body  # a quarter from the fixture history
+    assert 'class="num down"' in body or 'class="num up"' in body
+
+
+def test_ern_fragment_shows_analyst_target_and_gauge(client):
+    resp = client.get("/ui/stocks/AAA/ern")
+    assert resp.status_code == 200
+    body = resp.text
+    # target_price_low/high from the aaa2 analyst snapshot fixture
+    assert "$90.00" in body
+    assert "$140.00" in body
+    assert "12" in body  # number_of_analysts
+    assert "2024-08-01" in body  # earnings_date
+
+
+def test_ern_fragment_unknown_ticker_404(client):
+    resp = client.get("/ui/stocks/ZZZ/ern")
+    assert resp.status_code == 404
+
+
+def test_ern_fragment_sparse_ticker_no_500(client):
+    # BBB has no earnings_history and no analyst_snapshot rows at all.
+    resp = client.get("/ui/stocks/BBB/ern")
+    assert resp.status_code == 200
+    assert "renderERN(" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Bare-company (no data at all) fixture — separate DB, see module docstring.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def bare_client(tmp_path):
+    """TestClient backed by a DB with a single company (DDD) and NO other rows
+    anywhere (no financials, metrics, snapshot, analyst, earnings history).
+    """
+    from datetime import datetime
+
+    from fastapi.testclient import TestClient
+
+    from src.exporters.sqlite_store import SQLiteStore
+    from src.models.stock_data import StockData
+    from src.webapp import create_app
+
+    db_path = tmp_path / "bare.db"
+    store = SQLiteStore(db_path)
+    ddd = StockData(
+        ticker="DDD",
+        cik="0000000004",
+        company_name="DDD Bare Co",
+        collected_at=datetime(2024, 1, 15),
+    )
+    store.export([ddd])
+    return TestClient(create_app(db_path=db_path))
+
+
+def test_fa_fragment_bare_ticker_no_500(bare_client):
+    resp = bare_client.get("/ui/stocks/DDD/fa")
+    assert resp.status_code == 200
+    assert "No data available" in resp.text
+
+
+def test_stat_fragment_bare_ticker_no_500(bare_client):
+    resp = bare_client.get("/ui/stocks/DDD/stat")
+    assert resp.status_code == 200
+    assert "ROE" in resp.text
+
+
+def test_ern_fragment_bare_ticker_no_500(bare_client):
+    resp = bare_client.get("/ui/stocks/DDD/ern")
+    assert resp.status_code == 200
+    assert "No earnings history" in resp.text

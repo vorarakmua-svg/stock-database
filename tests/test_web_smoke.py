@@ -53,18 +53,30 @@ def test_companies_sector_filter_bank(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_company_page_aaa_200(client: TestClient) -> None:
+def test_company_page_redirects_to_workstation_fa_tab(client: TestClient) -> None:
+    # /companies/{ticker} is now a legacy redirect to the workstation FA tab
+    # (Task 8). TestClient's default client fixture follows redirects, so
+    # disable that here to inspect the 307 itself.
+    resp = client.get("/companies/AAA", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/stocks/AAA?tab=fa"
+
+
+def test_company_page_redirect_followed_lands_on_workstation(client: TestClient) -> None:
     resp = client.get("/companies/AAA")
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
     body = resp.text
     # Company name present
     assert "AAA" in body
-    # Annual tab button present
-    assert "Annual" in body
+    # Workstation tab bar (FA tab button) present
+    assert ">FA<" in body
 
 
 def test_company_page_unknown_404(client: TestClient) -> None:
+    # The redirect itself doesn't check existence; the followed workstation
+    # page 404s for an unknown ticker, and the shared `client` fixture follows
+    # redirects by default, so this still ends up 404.
     resp = client.get("/companies/UNKNOWN")
     assert resp.status_code == 404
 

@@ -1,0 +1,35 @@
+<section class="section">
+  <h2 class="section-heading">Profitability</h2>
+  <div class="summary-grid">
+    {% for row in profitability %}
+    <div class="summary-item"><span class="summary-label">{{ row.label }}</span><span class="summary-value">{{ row.value }}</span></div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="section">
+  <h2 class="section-heading">Leverage &amp; Liquidity</h2>
+  <div class="summary-grid">
+    {% for row in leverage %}
+    <div class="summary-item"><span class="summary-label">{{ row.label }}</span><span class="summary-value">{{ row.value }}</span></div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="section">
+  <h2 class="section-heading">Valuation</h2>
+  <div class="summary-grid">
+    {% for row in valuation %}
+    <div class="summary-item"><span class="summary-label">{{ row.label }}</span><span class="summary-value">{{ row.value }}</span></div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="section">
+  <h2 class="section-heading">Share Statistics</h2>
+  <div class="summary-grid">
+    {% for row in shares %}
+    <div class="summary-item"><span class="summary-label">{{ row.label }}</span><span class="summary-value">{{ row.value }}</span></div>
+    {% endfor %}
+  </div>
+</section>

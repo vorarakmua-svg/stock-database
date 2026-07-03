@@ -44,7 +44,7 @@
       {% for row in items %}
       <tr>
         <td><input type="checkbox" class="row-check" value="{{ row.ticker }}" /></td>
-        <td><a href="/companies/{{ row.ticker }}">{{ row.ticker }}</a></td>
+        <td><a href="/stocks/{{ row.ticker }}">{{ row.ticker }}</a></td>
         <td>{{ row.company_name or "—" }}</td>
         <td>{{ row.sector_class or "—" }}</td>
         <td>{{ row.fiscal_year or "—" }}</td>

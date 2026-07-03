@@ -14,9 +14,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ..dependencies import get_reader
-from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2
+from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
 from ..repository import Reader
-from .pages import templates
+from .pages import _STATEMENT_ROWS, _build_statement_display, templates
 from .stocks_api import VALID_RANGES
 
 router = APIRouter()
@@ -252,5 +252,227 @@ def gp_fragment(
             # <script> block in gp.html. The escaped sequence is still valid
             # JSON and inert once parsed.
             "cfg_json": json.dumps(cfg).replace("</", "<\\/"),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# FA fragment
+# ---------------------------------------------------------------------------
+
+
+@router.get("/ui/stocks/{ticker}/fa", response_class=HTMLResponse)
+def fa_fragment(
+    ticker: str,
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """FA panel: inner period tabs + the annual statement table, pre-rendered.
+
+    Reuses ``pages._build_statement_display`` — the exact helper backing
+    ``/ui/companies/{ticker}/statements`` — to build the initial (annual)
+    table server-side so it's present on first render, not only after an
+    HTMX-driven follow-up request. Clicking a period tab swaps ``#fa-statements``
+    via that SAME existing fragment endpoint; there is no second copy of the
+    statement-building logic.
+    """
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    rows_data = r.annual_financials(ticker)
+    columns, display_rows = _build_statement_display(
+        rows_data, "fiscal_year", _STATEMENT_ROWS
+    )
+    return templates.TemplateResponse(
+        request,
+        "fragments/fa.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "columns": columns,
+            "rows": display_rows,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# STAT fragment
+# ---------------------------------------------------------------------------
+
+# (label, key, kind) — kind "raw2" is handled as fmt_raw2 (bare 2dp, no
+# suffix); everything else dispatches through fmt_value. Share counts use
+# "money" (same treatment _STATEMENT_ROWS in pages.py already gives
+# shares_outstanding) for consistency across the app rather than introducing
+# a new unformatted-thousands-separator kind.
+_STAT_PROFITABILITY: List[Tuple[str, str, str]] = [
+    ("Gross margin", "gross_margin", "pct"),
+    ("Operating margin", "operating_margin", "pct"),
+    ("Net margin", "net_margin", "pct"),
+    ("EBITDA margin", "ebitda_margin", "pct"),
+    ("ROA", "roa", "pct"),
+    ("ROE", "roe", "pct"),
+    ("ROIC", "roic", "pct"),
+]
+
+_STAT_LEVERAGE: List[Tuple[str, str, str]] = [
+    ("Debt/Equity", "debt_to_equity", "mult"),
+    ("Current ratio", "current_ratio", "mult"),
+    ("Quick ratio", "quick_ratio", "mult"),
+    ("Interest coverage", "interest_coverage", "mult"),
+    ("Debt/EBITDA", "debt_to_ebitda", "mult"),
+]
+
+_STAT_VALUATION: List[Tuple[str, str, str]] = [
+    ("P/E (trailing)", "pe_trailing", "mult"),
+    ("P/E (forward)", "pe_forward", "mult"),
+    ("PEG ratio", "peg_ratio", "mult"),
+    ("Price/Sales", "price_to_sales", "mult"),
+    ("Price/Book", "price_to_book", "mult"),
+    ("EV/EBITDA", "ev_to_ebitda", "mult"),
+]
+
+_STAT_SHARES: List[Tuple[str, str, str]] = [
+    ("Shares outstanding", "shares_outstanding", "money"),
+    ("Float shares", "float_shares", "money"),
+    ("Shares short", "shares_short", "money"),
+    ("Short ratio (days to cover)", "short_ratio", "raw2"),
+    ("Short % of float", "short_percent_of_float", "pct"),
+    ("Insider %", "insider_percent", "pct"),
+    ("Institutional %", "institutional_percent", "pct"),
+]
+
+
+def _build_stat_rows(
+    source: Dict[str, Any], spec: List[Tuple[str, str, str]]
+) -> List[Dict[str, str]]:
+    """Format a fixed set of (label, key, kind) rows from *source*.
+
+    Unlike the multi-period statement table, a dense single-value grid never
+    omits a label just because its value is missing — every row always
+    renders, with ``fmt_value``/``fmt_raw2`` turning ``None`` into "—".
+    """
+    rows: List[Dict[str, str]] = []
+    for label, key, kind in spec:
+        value = source.get(key)
+        formatted = fmt_raw2(value) if kind == "raw2" else fmt_value(value, kind)
+        rows.append({"label": label, "value": formatted})
+    return rows
+
+
+@router.get("/ui/stocks/{ticker}/stat", response_class=HTMLResponse)
+def stat_fragment(
+    ticker: str,
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """STAT panel: dense profitability/leverage/valuation/share-stats grid."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    quote = r.quote(ticker) or {}
+    metrics_rows = r.annual_metrics(ticker, years_back=1)
+    latest_metrics = metrics_rows[0] if metrics_rows else {}
+    # Disjoint field names between market_snapshots and metrics_annual, so
+    # merge order doesn't matter — this just lets every row spec below read
+    # from one dict regardless of which table its key actually lives in.
+    merged: Dict[str, Any] = {**quote, **latest_metrics}
+
+    return templates.TemplateResponse(
+        request,
+        "fragments/stat.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "profitability": _build_stat_rows(merged, _STAT_PROFITABILITY),
+            "leverage": _build_stat_rows(merged, _STAT_LEVERAGE),
+            "valuation": _build_stat_rows(merged, _STAT_VALUATION),
+            "shares": _build_stat_rows(merged, _STAT_SHARES),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# ERN fragment
+# ---------------------------------------------------------------------------
+
+
+@router.get("/ui/stocks/{ticker}/ern", response_class=HTMLResponse)
+def ern_fragment(
+    ticker: str,
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """ERN panel: earnings-surprise history + renderERN chart, analyst
+    target range / recommendation gauge / growth / next earnings date.
+    """
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    history = r.earnings_history(ticker)
+    analyst = r.analyst_snapshot(ticker)
+    quote = r.quote(ticker)
+
+    earnings_rows: List[Dict[str, str]] = []
+    for row in history:
+        surprise = row.get("surprise_pct")
+        if surprise is None:
+            surprise_class = "flat"
+            surprise_fmt = "—"
+        else:
+            surprise_class = "up" if surprise >= 0 else "down"
+            surprise_fmt = f"{surprise:+.1f}%"
+        earnings_rows.append(
+            {
+                "quarter": str(row.get("quarter", "")),
+                "estimate": fmt_raw2(row.get("eps_estimate")),
+                "actual": fmt_raw2(row.get("eps_actual")),
+                "surprise": surprise_fmt,
+                "surprise_class": surprise_class,
+            }
+        )
+
+    # earnings_history stores surprise_pct as an already-scaled percentage
+    # (e.g. -8.7 meaning -8.7%), unlike the 0..1 fractions fmt_pct expects
+    # elsewhere — hence the bespoke f"{:+.1f}%" formatting above instead of
+    # fmt_pct.
+    ern_cfg = {
+        "quarters": [row.get("quarter") for row in history],
+        "estimates": [row.get("eps_estimate") for row in history],
+        "actuals": [row.get("eps_actual") for row in history],
+    }
+
+    target_low = analyst.get("target_price_low") if analyst else None
+    target_mean = analyst.get("target_price_mean") if analyst else None
+    target_median = analyst.get("target_price_median") if analyst else None
+    target_high = analyst.get("target_price_high") if analyst else None
+    current_price = quote.get("current_price") if quote else None
+    recommendation_mean = analyst.get("recommendation_mean") if analyst else None
+    number_of_analysts = analyst.get("number_of_analysts") if analyst else None
+
+    return templates.TemplateResponse(
+        request,
+        "fragments/ern.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "earnings_rows": earnings_rows,
+            # Same XSS defense-in-depth as gp_fragment's cfg_json: json.dumps
+            # doesn't escape "</", so any string value winding up in here
+            # (there is none from user input today — only DB-derived numbers
+            # and dates — but this keeps the inline-<script> pattern uniform
+            # and safe against future fields) gets the closing tag escaped.
+            "ern_cfg_json": json.dumps(ern_cfg).replace("</", "<\\/"),
+            "target_low_fmt": fmt_price(target_low),
+            "target_mean_fmt": fmt_price(target_mean),
+            "target_median_fmt": fmt_price(target_median),
+            "target_high_fmt": fmt_price(target_high),
+            "price_marker_pct": _range_marker_pct(current_price, target_low, target_high),
+            "mean_marker_pct": _range_marker_pct(target_mean, target_low, target_high),
+            "recommendation_mean_fmt": fmt_raw2(recommendation_mean),
+            "gauge_marker_pct": _range_marker_pct(recommendation_mean, 1.0, 5.0),
+            "number_of_analysts": number_of_analysts,
+            "earnings_growth_fmt": fmt_pct(analyst.get("earnings_growth") if analyst else None),
+            "revenue_growth_fmt": fmt_pct(analyst.get("revenue_growth") if analyst else None),
+            "earnings_date": (analyst.get("earnings_date") if analyst else None),
         },
     )
