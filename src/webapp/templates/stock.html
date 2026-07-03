@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}{{ company.ticker }} — Stock DB{% endblock %}
+
+{% block content %}
+<div class="company-header">
+  <div class="company-title-row">
+    <h1>{{ company.company_name or company.ticker }}</h1>
+    <span class="ticker-badge">{{ company.ticker }}</span>
+  </div>
+  <div class="company-meta">
+    {% if company.sector_class %}<span class="meta-item">{{ company.sector_class }}</span>{% endif %}
+    {% if company.sector %}<span class="meta-sep">·</span><span class="meta-item">{{ company.sector }}</span>{% endif %}
+    {% if company.industry %}<span class="meta-sep">·</span><span class="meta-item">{{ company.industry }}</span>{% endif %}
+  </div>
+</div>
+
+<div class="tab-bar" role="tablist">
+  {% for label, key in tabs %}
+  <button
+    class="tab-btn{% if key == active_tab %} tab-active{% endif %}"
+    hx-get="/ui/stocks/{{ ticker }}/{{ key }}"
+    hx-target="#panel"
+    hx-trigger="{% if key == active_tab %}click, load{% else %}click{% endif %}"
+    role="tab"
+  >{{ label }}</button>
+  {% endfor %}
+</div>
+
+<div id="panel" class="panel"></div>
+{% endblock %}

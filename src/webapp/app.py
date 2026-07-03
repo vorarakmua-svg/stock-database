@@ -19,6 +19,7 @@ from .routes import (
     quality_api,
     screener_api,
     stocks_api,
+    workstation,
 )
 from .routes.pages import templates
 from .settings import WebSettings, default_settings
@@ -56,6 +57,7 @@ def create_app(
     # Routers — page routes first so they take precedence over /api paths
     app.include_router(pages.router)
     app.include_router(companies.router)
+    app.include_router(workstation.router)
     app.include_router(asof_api.router)
     app.include_router(stocks_api.router)
     app.include_router(screener_api.router)
