@@ -21,6 +21,28 @@ def usd(val, start=None, end=None, fy=None, fp="FY", form="10-K", filed=None, fr
     return entry
 
 
+def _synthetic_bars(n, start="2023-01-01", base=100.0):
+    """Deterministic synthetic daily OHLCV walk — no randomness, so bar-based tests
+    (moving averages, ordering, counts) are fully reproducible across runs.
+    """
+    from datetime import date, timedelta
+
+    start_date = date.fromisoformat(start)
+    bars = []
+    for i in range(n):
+        price = base + i * 0.1 + (i % 5) * 0.05
+        d = (start_date + timedelta(days=i)).isoformat()
+        bars.append({
+            "date": d,
+            "open": round(price - 0.2, 4),
+            "high": round(price + 0.5, 4),
+            "low": round(price - 0.5, 4),
+            "close": round(price, 4),
+            "volume": float(1_000_000 + i * 500),
+        })
+    return bars
+
+
 @pytest.fixture
 def sample_company_facts():
     """A synthetic SEC ``companyfacts`` payload.
@@ -145,9 +167,13 @@ def web_db(tmp_path):
     Three companies across sectors:
     - AAA (general): 3 fiscal years of financials + metrics, 2 quarterly periods,
       1 TTM period, multi-vintage FY2022 (original + restatement), 2 snapshots,
-      and 1 unmapped fact.
+      1 unmapped fact, 260 daily price bars, 1 analyst snapshot, 4 earnings-surprise
+      rows, 6 dividend events + 1 split, 3 institutional + 2 mutualfund holders,
+      3 insider transactions, 2 officers, and a description/address.
     - BBB (bank): 1 fiscal year, 1 snapshot.
     - CCC (reit): 1 fiscal year, 1 snapshot.
+    - ``^GSPC`` benchmark: 30 daily price bars (via ``export_benchmark_bars``,
+      never a ``companies`` row).
 
     All data is synthetic; no network I/O.
     """
@@ -164,6 +190,14 @@ def web_db(tmp_path):
         "country": "US",
         "full_time_employees": 1000,
         "website": "https://aaa.com",
+        "description": "AAA Corp designs and sells enterprise software products.",
+        "address": "1 Market Street",
+        "city": "San Francisco",
+        "state": "CA",
+        "officers": [
+            {"name": "Jane Doe", "title": "CEO", "age": 50, "total_pay": 5_000_000.0},
+            {"name": "John Smith", "title": "CFO", "age": 45, "total_pay": 3_000_000.0},
+        ],
     }
 
     # --- AAA first snapshot (2024-01-15): full data incl. financials/vintages ---
@@ -250,6 +284,27 @@ def web_db(tmp_path):
             "value": 42.0, "form": "10-K",
         }
     ]
+    # Daily bars: >=260 rows for AAA (enough for MA200 warmup in later tasks).
+    aaa1.price_bars = _synthetic_bars(260, start="2023-01-01", base=100.0)
+    # Earnings-surprise history: 4 quarters, mixed beats and misses.
+    aaa1.earnings_history = [
+        {"quarter": "2023-03-31", "eps_estimate": 1.00, "eps_actual": 1.10, "surprise_pct": 10.0},
+        {"quarter": "2023-06-30", "eps_estimate": 1.05, "eps_actual": 0.95, "surprise_pct": -9.5},
+        {"quarter": "2023-09-30", "eps_estimate": 1.10, "eps_actual": 1.20, "surprise_pct": 9.1},
+        {"quarter": "2023-12-31", "eps_estimate": 1.15, "eps_actual": 1.05, "surprise_pct": -8.7},
+    ]
+    # Dividend history: 6 payments + 1 split.
+    aaa1.dividend_history = {
+        "dividend_payments": [
+            {"date": "2023-02-15", "amount": 0.20},
+            {"date": "2023-05-15", "amount": 0.20},
+            {"date": "2023-08-15", "amount": 0.22},
+            {"date": "2023-11-15", "amount": 0.22},
+            {"date": "2024-02-15", "amount": 0.25},
+            {"date": "2024-05-15", "amount": 0.25},
+        ],
+    }
+    aaa1.splits = [{"date": "2023-06-01", "ratio": 2.0}]
     aaa1.add_source("sec_edgar")
 
     # --- AAA second snapshot (2024-06-15): updated price, no new financials ---
@@ -258,10 +313,50 @@ def web_db(tmp_path):
         sector_class="general", collected_at=datetime(2024, 6, 15),
     )
     aaa2.company_info = _info_aaa
-    aaa2.market_data = {"current_price": 105.0, "market_cap": 5250.0, "beta": 1.15}
+    aaa2.market_data = {
+        "current_price": 105.0, "market_cap": 5250.0, "beta": 1.15,
+        "previous_close": 100.0,
+    }
     aaa2.valuation = {
         "pe_trailing": 21.0, "pe_forward": 18.5, "eps_trailing": 5.0,
         "price_to_book": 3.1, "dividend_yield": 0.02,
+    }
+    # Analyst snapshot: one row, attached to the later (2024-06-15) collection.
+    aaa2.analyst_estimates = {
+        "target_price_low": 90.0, "target_price_mean": 115.0, "target_price_median": 112.0,
+        "target_price_high": 140.0, "recommendation": "buy", "recommendation_mean": 2.1,
+        "number_of_analysts": 12, "earnings_date": "2024-08-01", "forward_eps": 5.5,
+        "forward_pe": 19.0, "earnings_growth": 0.12, "revenue_growth": 0.09,
+        "upside_potential": 0.10,
+    }
+    # Shareholders: 3 institutional + 2 mutualfund holders, 3 insider transactions.
+    # Set on aaa2 (not aaa1): SQLiteStore._write_holders deletes-then-inserts per call,
+    # and aaa2 is processed AFTER aaa1 for the same ticker, so holders set on aaa1
+    # would otherwise be wiped out by aaa2's (empty) shareholders dict.
+    # Insertion order deliberately NOT pre-sorted, to exercise Reader-side ordering.
+    aaa2.shareholders = {
+        "institutional_holders": [
+            {"Holder": "BlackRock Inc", "Shares": 4_500_000.0, "Date Reported": "2024-01-01",
+             "pctHeld": 0.07, "Value": 450_000_000.0},
+            {"Holder": "Vanguard Group", "Shares": 5_000_000.0, "Date Reported": "2024-01-01",
+             "pctHeld": 0.08, "Value": 500_000_000.0},
+            {"Holder": "State Street Corp", "Shares": 3_000_000.0, "Date Reported": "2024-01-01",
+             "pctHeld": 0.05, "Value": 300_000_000.0},
+        ],
+        "mutualfund_holders": [
+            {"Holder": "Fidelity Contrafund", "Shares": 1_000_000.0, "Date Reported": "2024-01-01",
+             "pctHeld": 0.02, "Value": 100_000_000.0},
+            {"Holder": "American Funds Growth", "Shares": 800_000.0, "Date Reported": "2024-01-01",
+             "pctHeld": 0.015, "Value": 80_000_000.0},
+        ],
+        "insider_transactions": [
+            {"Insider": "Jane Doe", "Position": "CEO", "Start Date": "2024-03-01",
+             "Shares": 10_000.0, "Value": 1_050_000.0, "Text": "Sale", "Ownership": "D"},
+            {"Insider": "John Smith", "Position": "CFO", "Start Date": "2024-02-15",
+             "Shares": 5_000.0, "Value": 525_000.0, "Text": "Sale", "Ownership": "D"},
+            {"Insider": "Alice Wu", "Position": "Director", "Start Date": "2024-04-01",
+             "Shares": 2_000.0, "Value": 210_000.0, "Text": "Purchase", "Ownership": "D"},
+        ],
     }
     aaa2.add_source("sec_edgar")
 
@@ -300,6 +395,8 @@ def web_db(tmp_path):
     ccc.add_source("sec_edgar")
 
     store.export([aaa1, aaa2, bbb, ccc])
+    # ^GSPC benchmark bars: 30 rows, never a companies row (see export_benchmark_bars).
+    store.export_benchmark_bars("^GSPC", _synthetic_bars(30, start="2024-01-01", base=4700.0))
     return db_path
 
 
