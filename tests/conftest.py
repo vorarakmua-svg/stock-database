@@ -287,21 +287,23 @@ def web_db(tmp_path):
     # Daily bars: >=260 rows for AAA (enough for MA200 warmup in later tasks).
     aaa1.price_bars = _synthetic_bars(260, start="2023-01-01", base=100.0)
     # Earnings-surprise history: 4 quarters, mixed beats and misses.
+    # Insertion order deliberately NOT pre-sorted, to exercise Reader-side ordering.
     aaa1.earnings_history = [
-        {"quarter": "2023-03-31", "eps_estimate": 1.00, "eps_actual": 1.10, "surprise_pct": 10.0},
-        {"quarter": "2023-06-30", "eps_estimate": 1.05, "eps_actual": 0.95, "surprise_pct": -9.5},
-        {"quarter": "2023-09-30", "eps_estimate": 1.10, "eps_actual": 1.20, "surprise_pct": 9.1},
         {"quarter": "2023-12-31", "eps_estimate": 1.15, "eps_actual": 1.05, "surprise_pct": -8.7},
+        {"quarter": "2023-09-30", "eps_estimate": 1.10, "eps_actual": 1.20, "surprise_pct": 9.1},
+        {"quarter": "2023-06-30", "eps_estimate": 1.05, "eps_actual": 0.95, "surprise_pct": -9.5},
+        {"quarter": "2023-03-31", "eps_estimate": 1.00, "eps_actual": 1.10, "surprise_pct": 10.0},
     ]
     # Dividend history: 6 payments + 1 split.
+    # Insertion order deliberately NOT pre-sorted, to exercise Reader-side ordering.
     aaa1.dividend_history = {
         "dividend_payments": [
-            {"date": "2023-02-15", "amount": 0.20},
-            {"date": "2023-05-15", "amount": 0.20},
-            {"date": "2023-08-15", "amount": 0.22},
-            {"date": "2023-11-15", "amount": 0.22},
-            {"date": "2024-02-15", "amount": 0.25},
             {"date": "2024-05-15", "amount": 0.25},
+            {"date": "2024-02-15", "amount": 0.25},
+            {"date": "2023-11-15", "amount": 0.22},
+            {"date": "2023-08-15", "amount": 0.22},
+            {"date": "2023-05-15", "amount": 0.20},
+            {"date": "2023-02-15", "amount": 0.20},
         ],
     }
     aaa1.splits = [{"date": "2023-06-01", "ratio": 2.0}]

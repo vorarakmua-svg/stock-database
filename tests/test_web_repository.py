@@ -11,6 +11,8 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 
+from src.exporters.sqlite_store import SQLiteStore
+from src.models.stock_data import StockData
 from src.webapp.dependencies import get_reader
 from src.webapp.repository import Reader  # noqa: E402
 
@@ -518,6 +520,21 @@ class TestQuote:
     def test_unknown_ticker_returns_none(self, web_db):
         with Reader(web_db) as r:
             assert r.quote("ZZZNONE") is None
+
+    def test_zero_previous_close_guards_division(self, tmp_path):
+        """When previous_close=0, change and change_pct must be None (division guard)."""
+        db = tmp_path / "stock.db"
+        s = StockData(ticker="TEST", cik="000", company_name="Test Inc.")
+        s.market_data = {"current_price": 10.0, "previous_close": 0.0}
+        SQLiteStore(db).export([s])
+
+        with Reader(db) as r:
+            q = r.quote("TEST")
+        assert q is not None
+        assert q["current_price"] == 10.0
+        assert q["previous_close"] == 0.0
+        assert q["change"] is None
+        assert q["change_pct"] is None
 
 
 class TestPriceBars:
