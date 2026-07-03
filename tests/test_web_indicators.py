@@ -40,6 +40,14 @@ def test_moving_average_shorter_than_window_all_none() -> None:
     assert result == [None, None, None]
 
 
+def test_moving_average_mid_series_nan() -> None:
+    closes = [float(i) for i in range(60)]
+    closes[30] = float("nan")
+    result = moving_average(closes, 5)
+    assert len(result) == len(closes)
+    assert all(isinstance(v, (float, type(None))) for v in result)
+
+
 # ---------------------------------------------------------------------------
 # rsi
 # ---------------------------------------------------------------------------
@@ -86,6 +94,14 @@ def test_rsi_empty() -> None:
     assert rsi([], period=14) == []
 
 
+def test_rsi_mid_series_nan() -> None:
+    closes = [100.0 + float(i) * 0.5 for i in range(60)]
+    closes[30] = float("nan")
+    result = rsi(closes, period=14)
+    assert len(result) == len(closes)
+    assert all(isinstance(v, (float, type(None))) for v in result)
+
+
 # ---------------------------------------------------------------------------
 # macd
 # ---------------------------------------------------------------------------
@@ -126,6 +142,18 @@ def test_macd_shorter_than_slow_window_all_none() -> None:
     assert result["macd"] == [None, None, None]
     assert result["signal"] == [None, None, None]
     assert result["hist"] == [None, None, None]
+
+
+def test_macd_mid_series_nan() -> None:
+    closes = [100.0 + float(i) * 0.5 for i in range(60)]
+    closes[30] = float("nan")
+    result = macd(closes, fast=12, slow=26, signal=9)
+    assert len(result["macd"]) == len(closes)
+    assert len(result["signal"]) == len(closes)
+    assert len(result["hist"]) == len(closes)
+    for m, s, h in zip(result["macd"], result["signal"], result["hist"]):
+        if m is not None and s is not None and h is not None:
+            assert abs(h - (m - s)) < 1e-9
 
 
 # ---------------------------------------------------------------------------

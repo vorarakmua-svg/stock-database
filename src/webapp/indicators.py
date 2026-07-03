@@ -120,7 +120,7 @@ def normalize_pct(closes: List[float]) -> List[Optional[float]]:
     first_valid = series.first_valid_index()
     if first_valid is None:
         return [None] * len(closes)
-    base = series.iloc[first_valid]
+    base = series.loc[first_valid]
     if base == 0.0:
         return [None] * len(closes)
     pct = (series / base) - 1.0
