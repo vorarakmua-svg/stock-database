@@ -66,6 +66,13 @@ _ANALYST_COLUMNS = [
     "earnings_growth", "revenue_growth", "upside_potential",
 ]
 
+# Daily OHLCV bars, one row per (ticker, date). Also used for the ^GSPC benchmark
+# (see export_benchmark_bars), which writes into this same table.
+_PRICE_BAR_COLUMNS = ["open", "high", "low", "close", "volume"]
+
+# Earnings-surprise history, one row per (ticker, quarter).
+_EARNINGS_HISTORY_COLUMNS = ["eps_estimate", "eps_actual", "surprise_pct"]
+
 
 def _cols_ddl(columns: Sequence[str], col_type: str = "REAL") -> str:
     return ", ".join(f'"{c}" {col_type}' for c in columns)
@@ -211,6 +218,23 @@ class SQLiteStore:
                 ticker TEXT NOT NULL, name TEXT NOT NULL, title TEXT, age INTEGER,
                 total_pay REAL,
                 PRIMARY KEY (ticker, name)
+            );
+
+            CREATE TABLE IF NOT EXISTS price_bars (
+                ticker TEXT NOT NULL, date TEXT NOT NULL,
+                {_cols_ddl(_PRICE_BAR_COLUMNS)},
+                PRIMARY KEY (ticker, date)
+            );
+
+            CREATE TABLE IF NOT EXISTS earnings_history (
+                ticker TEXT NOT NULL, quarter TEXT NOT NULL,
+                {_cols_ddl(_EARNINGS_HISTORY_COLUMNS)},
+                PRIMARY KEY (ticker, quarter)
+            );
+
+            CREATE TABLE IF NOT EXISTS split_events (
+                ticker TEXT NOT NULL, date TEXT NOT NULL, ratio REAL,
+                PRIMARY KEY (ticker, date)
             );
 
             CREATE TABLE IF NOT EXISTS collection_runs (
@@ -507,6 +531,11 @@ class SQLiteStore:
         # dividend_events (upsert all known payments)
         self._write_dividend_events(conn, stock.ticker, stock.dividend_history or {})
 
+        # price_bars / earnings_history / split_events (upsert all known records)
+        self._write_price_bars(conn, stock.ticker, stock.price_bars or [])
+        self._write_earnings_history(conn, stock.ticker, stock.earnings_history or [])
+        self._write_split_events(conn, stock.ticker, stock.splits or [])
+
     def _write_holders(self, conn: sqlite3.Connection, ticker: str, collected_at: str,
                         shareholders: Dict[str, Any]) -> None:
         """Replace-per-run: institutional + mutualfund holders from yfinance DataFrames.
@@ -598,3 +627,61 @@ class SQLiteStore:
                 "date": date,
                 "amount": rec.get("amount"),
             })
+
+    def _write_price_bars(self, conn: sqlite3.Connection, ticker: str,
+                           bars: List[Dict[str, Any]]) -> None:
+        """Upsert daily OHLCV bars on (ticker, date). Shared by per-stock export and
+        ``export_benchmark_bars`` (e.g. ^GSPC), which uses ``ticker`` as the index symbol."""
+        for bar in bars:
+            date = bar.get("date")
+            if not date:
+                continue
+            row = {"ticker": ticker, "date": date}
+            row.update({c: bar.get(c) for c in _PRICE_BAR_COLUMNS})
+            self._upsert(conn, "price_bars", ["ticker", "date"], row)
+
+    def _write_earnings_history(self, conn: sqlite3.Connection, ticker: str,
+                                 earnings_history: List[Dict[str, Any]]) -> None:
+        """Upsert earnings-surprise records (estimate vs. actual EPS) on (ticker, quarter)."""
+        for rec in earnings_history:
+            quarter = rec.get("quarter")
+            if not quarter:
+                continue
+            row = {"ticker": ticker, "quarter": quarter}
+            row.update({c: rec.get(c) for c in _EARNINGS_HISTORY_COLUMNS})
+            self._upsert(conn, "earnings_history", ["ticker", "quarter"], row)
+
+    def _write_split_events(self, conn: sqlite3.Connection, ticker: str,
+                             splits: List[Dict[str, Any]]) -> None:
+        """Upsert stock split events on (ticker, date)."""
+        for rec in splits:
+            date = rec.get("date")
+            if not date:
+                continue
+            self._upsert(conn, "split_events", ["ticker", "date"], {
+                "ticker": ticker,
+                "date": date,
+                "ratio": rec.get("ratio"),
+            })
+
+    def export_benchmark_bars(self, symbol: str, bars: List[Dict[str, Any]]) -> None:
+        """Write benchmark index OHLCV bars (e.g. ^GSPC) into ``price_bars``.
+
+        Collected once per run rather than once per ticker, so market-relative
+        metrics (beta, relative strength) can be computed against a common index.
+        Writes bars only — unlike ``export``, this never creates/updates a
+        ``companies`` row, since a benchmark index is not a company.
+        """
+        if not bars:
+            return
+        try:
+            conn = self._connect()
+            try:
+                self._create_schema(conn)
+                self._migrate(conn)
+                self._write_price_bars(conn, symbol, bars)
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            self.logger.error(f"Error writing benchmark bars for {symbol}: {e}")

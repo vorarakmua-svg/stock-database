@@ -436,6 +436,17 @@ class StockDataFetcher:
         # Export
         export_paths = self.export(data, formats=formats)
 
+        # Benchmark (^GSPC) bars: collected once per run, not once per ticker, so
+        # market-relative metrics (beta, relative strength) have a common index.
+        # A benchmark failure must never fail the run.
+        resolved_formats = formats or self.config.output_formats
+        if include_yahoo and "sqlite" in resolved_formats:
+            try:
+                benchmark_bars = self.yahoo_handler.fetch_benchmark_bars()
+                self.sqlite_store.export_benchmark_bars("^GSPC", benchmark_bars)
+            except Exception as e:
+                self.logger.warning(f"Benchmark bars fetch/export failed: {e}")
+
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
 

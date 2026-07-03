@@ -2,12 +2,18 @@
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import pandas as pd
 import yfinance as yf
 
 from .rate_limiter import RateLimiter
+
+# Known yfinance ``earnings_history`` column names — these vary across yfinance
+# releases, so candidates are tried defensively rather than assuming one spelling.
+_EARNINGS_ESTIMATE_KEYS = ("epsEstimate", "EPS Estimate")
+_EARNINGS_ACTUAL_KEYS = ("epsActual", "Reported EPS", "EPS Actual")
+_EARNINGS_SURPRISE_KEYS = ("surprisePercent", "Surprise(%)", "Surprise (%)")
 
 
 class YahooHandler:
@@ -65,6 +71,9 @@ class YahooHandler:
                 "price_history": self._get_price_history(stock),
                 "analyst_estimates": self._get_analyst_estimates(stock),
                 "dividend_history": self._get_dividend_history(stock),
+                "price_bars": self._get_price_bars(stock),
+                "earnings_history": self._get_earnings_history(stock),
+                "splits": self._get_splits(stock),
                 "fetched_at": datetime.now().isoformat(),
                 "source": "yahoo_finance",
             }
@@ -143,6 +152,8 @@ class YahooHandler:
                 "fifty_day_average": info.get("fiftyDayAverage"),
                 "two_hundred_day_average": info.get("twoHundredDayAverage"),
                 "beta": info.get("beta"),
+                "post_market_price": info.get("postMarketPrice"),
+                "pre_market_price": info.get("preMarketPrice"),
             }
 
             # Calculate moving averages from historical data
@@ -674,3 +685,158 @@ class YahooHandler:
         except Exception as e:
             self.logger.debug(f"Error getting dividend history: {e}")
             return {"error": str(e)}
+
+    def fetch_benchmark_bars(self, symbol: str = "^GSPC") -> List[Dict[str, Any]]:
+        """
+        Fetch daily OHLCV bars for a benchmark index (default: S&P 500).
+
+        Called once per collection run (not once per ticker) so market-relative
+        metrics (beta, relative strength) can be computed against a common index.
+        Uses its own rate-limited ``yf.Ticker`` call, independent of ``fetch_all``.
+
+        Returns an empty list on any failure — a benchmark fetch failure must
+        never fail the caller's run.
+        """
+        self.logger.info(f"Fetching benchmark bars for {symbol}")
+        try:
+            self.rate_limiter.wait()
+            stock = yf.Ticker(symbol)
+            return self._get_price_bars(stock)
+        except Exception as e:
+            self.logger.warning(f"Error fetching benchmark bars for {symbol}: {e}")
+            return []
+
+    def _get_price_bars(self, stock: yf.Ticker) -> List[Dict[str, Any]]:
+        """
+        Get the full daily OHLCV price history, ascending by ISO date.
+
+        Returns a list of ``{date, open, high, low, close, volume}`` records,
+        or ``[]`` if no history is available.
+        """
+        try:
+            hist = stock.history(period="max", interval="1d")
+            if hist is None or hist.empty:
+                return []
+
+            hist = hist.sort_index()
+            bars = []
+            for idx, row in hist.iterrows():
+                date_key = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)
+                bars.append({
+                    "date": date_key,
+                    "open": self._safe_float(row.get("Open")),
+                    "high": self._safe_float(row.get("High")),
+                    "low": self._safe_float(row.get("Low")),
+                    "close": self._safe_float(row.get("Close")),
+                    "volume": self._safe_float(row.get("Volume")),
+                })
+            return bars
+        except Exception as e:
+            self.logger.warning(f"Error getting price bars: {e}")
+            return []
+
+    def _get_earnings_history(self, stock: yf.Ticker) -> List[Dict[str, Any]]:
+        """
+        Get historical earnings-surprise records (estimate vs. actual EPS).
+
+        yfinance's ``earnings_history`` column names vary across versions, so
+        known fields are extracted defensively via candidate column names. If
+        the frame's columns match none of the known candidates (an unexpected
+        shape), this tolerates-and-logs by returning ``[]`` rather than guessing.
+        """
+        try:
+            df = stock.earnings_history
+            if df is None or df.empty:
+                return []
+
+            known_columns = set(
+                _EARNINGS_ESTIMATE_KEYS + _EARNINGS_ACTUAL_KEYS
+                + _EARNINGS_SURPRISE_KEYS + ("quarter",)
+            )
+            if not (set(df.columns) & known_columns):
+                self.logger.warning(
+                    "Unrecognized earnings_history column shape; skipping"
+                )
+                return []
+
+            records = []
+            for idx, row in df.iterrows():
+                rec = row.to_dict()
+                quarter = self._extract_earnings_quarter(idx, rec)
+                if quarter is None:
+                    continue
+                records.append({
+                    "quarter": quarter,
+                    "eps_estimate": self._first_numeric(rec, _EARNINGS_ESTIMATE_KEYS),
+                    "eps_actual": self._first_numeric(rec, _EARNINGS_ACTUAL_KEYS),
+                    "surprise_pct": self._first_numeric(rec, _EARNINGS_SURPRISE_KEYS),
+                })
+            return records
+        except Exception as e:
+            self.logger.warning(f"Error getting earnings history: {e}")
+            return []
+
+    def _get_splits(self, stock: yf.Ticker) -> List[Dict[str, Any]]:
+        """Get historical stock split events as ``{date, ratio}`` records, ascending."""
+        try:
+            splits = stock.splits
+            if splits is None or splits.empty:
+                return []
+
+            splits = splits.sort_index()
+            records = []
+            for date, ratio in splits.items():
+                date_key = date.strftime("%Y-%m-%d") if hasattr(date, "strftime") else str(date)
+                records.append({"date": date_key, "ratio": float(ratio)})
+            return records
+        except Exception as e:
+            self.logger.warning(f"Error getting splits: {e}")
+            return []
+
+    def _extract_earnings_quarter(self, idx: Any, rec: Dict[str, Any]) -> Optional[str]:
+        """Get the quarter-end date (ISO string) from a ``quarter`` column or the row index."""
+        src = rec.get("quarter")
+        if src is None:
+            src = idx
+        if src is None:
+            return None
+        if hasattr(src, "strftime"):
+            return src.strftime("%Y-%m-%d")
+        if hasattr(src, "isoformat"):
+            return src.isoformat()
+        return str(src)
+
+    @staticmethod
+    def _first_numeric(rec: Dict[str, Any], keys: Sequence[str]) -> Optional[float]:
+        """Return the first present, non-NaN value among ``keys``, coerced to float."""
+        for key in keys:
+            if key not in rec:
+                continue
+            val = rec[key]
+            if val is None:
+                continue
+            try:
+                if pd.isna(val):
+                    continue
+            except (TypeError, ValueError):
+                pass
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    @staticmethod
+    def _safe_float(val: Any) -> Optional[float]:
+        """Coerce a pandas cell value to ``float``, tolerating ``None``/``NaN``."""
+        if val is None:
+            return None
+        try:
+            if pd.isna(val):
+                return None
+        except (TypeError, ValueError):
+            pass
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return None

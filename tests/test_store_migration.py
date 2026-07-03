@@ -221,6 +221,111 @@ def test_insider_transactions_upsert_idempotent(tmp_path):
         conn.close()
 
 
+def test_export_writes_price_bars_earnings_history_and_splits(tmp_path):
+    """Task 2: 30 synthetic bars + 4 earnings rows + 1 split land in their own tables."""
+    db = tmp_path / "stock.db"
+    s = _full_stock("BBB")
+    s.price_bars = [
+        {"date": f"2024-01-{d:02d}", "open": float(d), "high": float(d) + 1,
+         "low": float(d) - 1, "close": float(d) + 0.5, "volume": float(1000 + d)}
+        for d in range(1, 31)
+    ]
+    s.earnings_history = [
+        {"quarter": "2023-03-31", "eps_estimate": 1.0, "eps_actual": 1.05, "surprise_pct": 5.0},
+        {"quarter": "2023-06-30", "eps_estimate": 1.1, "eps_actual": 1.08, "surprise_pct": -1.8},
+        {"quarter": "2023-09-30", "eps_estimate": 1.2, "eps_actual": 1.25, "surprise_pct": 4.2},
+        {"quarter": "2023-12-31", "eps_estimate": 1.3, "eps_actual": 1.28, "surprise_pct": -1.5},
+    ]
+    s.splits = [{"date": "2024-06-10", "ratio": 2.0}]
+
+    SQLiteStore(db).export([s])
+
+    conn = sqlite3.connect(db)
+    try:
+        bars = conn.execute(
+            "SELECT date, open, high, low, close, volume FROM price_bars "
+            "WHERE ticker='BBB' ORDER BY date"
+        ).fetchall()
+        assert len(bars) == 30
+        assert bars[0] == ("2024-01-01", 1.0, 2.0, 0.0, 1.5, 1001.0)
+        assert bars[-1] == ("2024-01-30", 30.0, 31.0, 29.0, 30.5, 1030.0)
+
+        earnings = conn.execute(
+            "SELECT quarter, eps_estimate, eps_actual, surprise_pct FROM earnings_history "
+            "WHERE ticker='BBB' ORDER BY quarter"
+        ).fetchall()
+        assert earnings == [
+            ("2023-03-31", 1.0, 1.05, 5.0),
+            ("2023-06-30", 1.1, 1.08, -1.8),
+            ("2023-09-30", 1.2, 1.25, 4.2),
+            ("2023-12-31", 1.3, 1.28, -1.5),
+        ]
+
+        splits = conn.execute(
+            "SELECT date, ratio FROM split_events WHERE ticker='BBB'"
+        ).fetchall()
+        assert splits == [("2024-06-10", 2.0)]
+    finally:
+        conn.close()
+
+
+def test_export_price_bars_upsert_idempotent(tmp_path):
+    db = tmp_path / "stock.db"
+    s = _full_stock("BBB")
+    s.price_bars = [{"date": "2024-01-01", "open": 1.0, "high": 2.0, "low": 0.5,
+                      "close": 1.5, "volume": 100.0}]
+    s.earnings_history = [
+        {"quarter": "2023-12-31", "eps_estimate": 1.0, "eps_actual": 1.1, "surprise_pct": 10.0},
+    ]
+    s.splits = [{"date": "2024-06-10", "ratio": 2.0}]
+    store = SQLiteStore(db)
+    store.export([s])
+    store.export([s])  # re-export must not duplicate
+
+    conn = sqlite3.connect(db)
+    try:
+        for table in ("price_bars", "earnings_history", "split_events"):
+            n = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE ticker='BBB'").fetchone()[0]
+            assert n == 1, f"{table} duplicated rows on re-export"
+    finally:
+        conn.close()
+
+
+def test_export_benchmark_bars_writes_bars_without_companies_row(tmp_path):
+    """export_benchmark_bars writes bars only — never creates a companies row."""
+    db = tmp_path / "stock.db"
+    store = SQLiteStore(db)
+    bars = [
+        {"date": "2024-01-02", "open": 4700.0, "high": 4720.0, "low": 4690.0,
+         "close": 4710.0, "volume": 3_000_000.0},
+        {"date": "2024-01-03", "open": 4710.0, "high": 4730.0, "low": 4700.0,
+         "close": 4715.0, "volume": 2_800_000.0},
+    ]
+    store.export_benchmark_bars("^GSPC", bars)
+
+    conn = sqlite3.connect(db)
+    try:
+        rows = conn.execute(
+            "SELECT date, close FROM price_bars WHERE ticker='^GSPC' ORDER BY date"
+        ).fetchall()
+        assert rows == [("2024-01-02", 4710.0), ("2024-01-03", 4715.0)]
+
+        companies = conn.execute(
+            "SELECT COUNT(*) FROM companies WHERE ticker='^GSPC'"
+        ).fetchone()[0]
+        assert companies == 0
+    finally:
+        conn.close()
+
+
+def test_export_benchmark_bars_empty_is_noop(tmp_path):
+    """An empty bars list must not raise and must not touch the DB file at all."""
+    db = tmp_path / "stock.db"
+    store = SQLiteStore(db)
+    store.export_benchmark_bars("^GSPC", [])
+    assert not db.exists()
+
+
 def test_ensure_columns_is_idempotent(tmp_path):
     db = tmp_path / "stock.db"
     conn = sqlite3.connect(db)
