@@ -1,0 +1,28 @@
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% elif not tickers %}
+<p class="text-muted">No tickers selected for comparison.</p>
+{% else %}
+<div class="table-responsive">
+  <table class="table table-sm table-bordered">
+    <thead>
+      <tr>
+        <th>Metric</th>
+        {% for t in tickers %}
+        <th><a href="/companies/{{ t }}">{{ t }}</a></th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ row.metric }}</td>
+        {% for t in tickers %}
+        <td>{{ row['values'].get(t, '—') }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}

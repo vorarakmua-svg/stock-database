@@ -1,0 +1,32 @@
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% elif not peers %}
+<p class="text-muted">No peer data available for this company.</p>
+{% else %}
+<p class="text-muted mb-3">
+  Sector: <strong>{{ peers.sector_class }}</strong> &mdash;
+  {{ peers.n_peers }} peer{% if peers.n_peers != 1 %}s{% endif %} in sector
+</p>
+<div class="table-responsive">
+  <table class="table table-sm table-bordered">
+    <thead>
+      <tr>
+        <th>Metric</th>
+        <th>Company</th>
+        <th>Sector median</th>
+        <th>Delta</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ row.label }}</td>
+        <td>{{ row.company_fmt }}</td>
+        <td>{{ row.median_fmt }}</td>
+        <td>{{ row.delta_fmt }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}

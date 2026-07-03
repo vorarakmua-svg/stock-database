@@ -1,0 +1,8 @@
+{% if error %}
+<p class="chart-error">{{ metric }}: {{ error }}</p>
+{% else %}
+<div id="chart-{{ metric }}"></div>
+<script>
+  renderPlot("chart-{{ metric }}", {{ series_json|safe }}, "{{ label }}");
+</script>
+{% endif %}

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ status_code }} Error — Stock DB{% endblock %}
+
+{% block content %}
+<div class="error-page">
+  <div class="error-code">{{ status_code }}</div>
+  <div class="error-message">{{ message }}</div>
+  <a href="/" class="btn btn-primary mt-4">Go home</a>
+</div>
+{% endblock %}

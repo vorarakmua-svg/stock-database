@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Screener — Stock DB{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Company Screener</h1>
+  <p class="text-muted">Filter companies by fundamental metric thresholds.</p>
+</div>
+
+<form id="screener-form">
+  <div class="card mb-3">
+    <div class="card-body">
+      <!-- Sector filter -->
+      <div class="form-row mb-2">
+        <label for="sector-select">Sector</label>
+        <select id="sector-select" name="sector" class="form-control form-control-sm">
+          <option value="">All sectors</option>
+          {% for s in sectors %}
+          <option value="{{ s }}">{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- Filter rows: pre-render 3 rows -->
+      <div id="filter-rows">
+        {% for i in range(3) %}
+        <div class="filter-row form-row mb-2">
+          <select name="metric_{{ i }}" class="form-control form-control-sm metric-select" style="width:180px">
+            <option value="">(choose metric)</option>
+            {% for label, key in metric_options %}
+            <option value="{{ key }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+          <select name="op_{{ i }}" class="form-control form-control-sm op-select" style="width:60px">
+            <option value="gte">≥</option>
+            <option value="lte">≤</option>
+            <option value="gt">&gt;</option>
+            <option value="lt">&lt;</option>
+            <option value="eq">=</option>
+            <option value="ne">≠</option>
+          </select>
+          <input type="number" name="value_{{ i }}" step="any" class="form-control form-control-sm value-input" style="width:100px" placeholder="value" />
+        </div>
+        {% endfor %}
+      </div>
+
+      <!-- Sort -->
+      <div class="form-row mb-2">
+        <label>Sort by</label>
+        <select name="sort" class="form-control form-control-sm" style="width:180px">
+          <option value="">Ticker (default)</option>
+          {% for label, key in metric_options %}
+          <option value="{{ key }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+        <select name="sort_dir" class="form-control form-control-sm" style="width:80px">
+          <option value="desc">Desc</option>
+          <option value="asc">Asc</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <button type="button" class="btn btn-primary" id="run-screen-btn"
+      hx-include="#screener-form"
+      hx-get="/ui/screen"
+      hx-target="#screen-results"
+      hx-swap="innerHTML"
+      hx-indicator="#screen-spinner">
+    Run Screen
+  </button>
+  <span id="screen-spinner" class="htmx-indicator">Loading…</span>
+</form>
+
+<div id="screen-results" class="mt-4"></div>
+
+<script>
+// Wire up the Run button: build ?field_op=value params from the filter rows
+document.getElementById('run-screen-btn').addEventListener('htmx:configRequest', function(e) {
+  var params = {};
+
+  // Sector
+  var sector = document.getElementById('sector-select').value;
+  if (sector) params['sector'] = sector;
+
+  // Sort
+  var sort = document.querySelector('[name="sort"]').value;
+  if (sort) params['sort'] = sort;
+  params['sort_dir'] = document.querySelector('[name="sort_dir"]').value;
+
+  // Filter rows
+  var rows = document.querySelectorAll('.filter-row');
+  rows.forEach(function(row, i) {
+    var metric = row.querySelector('.metric-select').value;
+    var op = row.querySelector('.op-select').value;
+    var value = row.querySelector('.value-input').value;
+    if (metric && value !== '') {
+      params[metric + '_' + op] = value;
+    }
+  });
+
+  e.detail.parameters = params;
+});
+</script>
+{% endblock %}

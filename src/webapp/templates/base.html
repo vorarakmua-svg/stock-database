@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Stock DB{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+</head>
+<body>
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="nav-brand" href="/">Stock DB</a>
+      <div class="nav-links">
+        <a href="/" class="nav-link">Dashboard</a>
+        <a href="/companies" class="nav-link">Companies</a>
+        <a href="/asof" class="nav-link">As-Of</a>
+        <a href="/screener" class="nav-link">Screener</a>
+        <a href="/quality" class="nav-link">Quality</a>
+        {% if request.app.state.settings.allow_collection %}
+        <a href="/collect" class="nav-link">Collect</a>
+        {% endif %}
+      </div>
+      <div class="search-wrap">
+        <input
+          class="search-input"
+          type="search"
+          name="q"
+          placeholder="Search ticker or company…"
+          autocomplete="off"
+          hx-get="/ui/search"
+          hx-trigger="keyup changed delay:250ms, focus"
+          hx-target="#search-results"
+        />
+        <div id="search-results" class="search-dropdown"></div>
+      </div>
+    </div>
+  </nav>
+
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

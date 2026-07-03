@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}As-Of Explorer — Stock DB{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">As-Of Explorer</h1>
+  <p class="page-subtitle">View fundamentals and ratios as known on a specific date — no look-ahead bias.</p>
+</div>
+
+<div class="card">
+  <form
+    hx-get="/ui/asof/result"
+    hx-target="#asof-result"
+    hx-trigger="submit"
+    class="asof-form"
+  >
+    <div class="form-row">
+      <label class="form-label" for="asof-ticker">Ticker</label>
+      <input
+        id="asof-ticker"
+        class="form-input"
+        type="text"
+        name="ticker"
+        placeholder="e.g. AAPL"
+        required
+      />
+    </div>
+    <div class="form-row">
+      <label class="form-label" for="asof-fy">Fiscal Year</label>
+      <input
+        id="asof-fy"
+        class="form-input"
+        type="number"
+        name="fiscal_year"
+        placeholder="e.g. 2023"
+        required
+      />
+    </div>
+    <div class="form-row">
+      <label class="form-label" for="asof-date">As-of Date</label>
+      <input
+        id="asof-date"
+        class="form-input"
+        type="date"
+        name="date"
+        required
+      />
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" type="submit">View</button>
+    </div>
+  </form>
+</div>
+
+<div id="asof-result" class="asof-result-container"></div>
+<div id="asof-vintages" class="asof-vintages-container"></div>
+{% endblock %}

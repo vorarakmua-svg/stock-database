@@ -21,10 +21,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "ruff>=0.8", "mypy>=1.8", "types-requests"]
+dev = ["pytest>=7.0", "ruff>=0.8", "mypy>=1.8", "types-requests", "httpx>=0.27"]
+web = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "jinja2>=3.1", "python-multipart>=0.0.9"]
 
 [project.scripts]
 stock-data = "src.main:main"
+stock-web = "src.webapp.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["src*"]
@@ -66,4 +68,11 @@ files = [
     "src/exporters/sqlite_store.py",
     "src/query/asof.py",
     "src/query/pit_metrics.py",
+    "src/webapp",
 ]
+
+# click 8.x uses `match` (3.10+) which mypy's 3.9 parser rejects with a syntax
+# error — even when follow_imports="silent". Skip parsing click source entirely.
+[[tool.mypy.overrides]]
+module = ["click", "click.*"]
+follow_imports = "skip"

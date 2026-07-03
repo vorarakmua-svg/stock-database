@@ -1,0 +1,45 @@
+{# Job status fragment. Self-polls every 2s until state is done/error. #}
+<div class="job-status-card"
+  {% if not terminal %}
+  hx-get="/ui/collection/jobs/{{ job.job_id }}"
+  hx-trigger="load delay:2s"
+  hx-swap="outerHTML"
+  {% endif %}
+>
+  <div class="job-status-header">
+    <span class="job-state job-state--{{ job.state }}">{{ job.state | upper }}</span>
+    <span class="job-id text-muted">Job {{ job.job_id[:8] }}&hellip;</span>
+  </div>
+
+  <div class="job-progress">
+    <span>{{ job.completed }} / {{ job.total }} tickers</span>
+    {% if job.current_ticker %}
+    <span class="current-ticker">Currently: <strong>{{ job.current_ticker }}</strong></span>
+    {% endif %}
+  </div>
+
+  <div class="job-meta text-muted">
+    <span>Submitted: {{ job.submitted_at }}</span>
+    {% if job.started_at %}
+    &nbsp;&middot;&nbsp;<span>Started: {{ job.started_at }}</span>
+    {% endif %}
+    {% if job.finished_at %}
+    &nbsp;&middot;&nbsp;<span>Finished: {{ job.finished_at }}</span>
+    {% endif %}
+  </div>
+
+  {% if job.state == "done" and job.summary %}
+  <div class="job-summary">
+    <strong>Done:</strong>
+    {{ job.summary.successful }} successful,
+    {{ job.summary.with_errors }} with errors
+    ({{ job.summary.total }} total).
+  </div>
+  {% endif %}
+
+  {% if job.state == "error" %}
+  <div class="job-error alert alert-danger">
+    <strong>Error:</strong> {{ job.error }}
+  </div>
+  {% endif %}
+</div>

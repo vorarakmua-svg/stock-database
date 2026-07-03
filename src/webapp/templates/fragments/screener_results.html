@@ -1,0 +1,60 @@
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% elif not items %}
+<p class="text-muted">No companies matched your filters.</p>
+{% else %}
+<div class="mb-2">
+  <span class="text-muted">{{ total }} result{% if total != 1 %}s{% endif %}</span>
+  <a href="/api/export/screen.csv{% if base_params %}?{{ base_params | safe }}{% endif %}" class="btn btn-sm btn-outline-secondary ml-2">Download CSV</a>
+  <button type="button" class="btn btn-sm btn-outline-secondary ml-2"
+      onclick="
+        var checked = document.querySelectorAll('.row-check:checked');
+        var tickers = Array.from(checked).map(function(c){ return c.value; }).join(',');
+        if (!tickers) { alert('Select at least one company to compare.'); return; }
+        htmx.ajax('GET', '/ui/compare?tickers=' + encodeURIComponent(tickers), {target: '#screen-results', swap: 'innerHTML'});
+      ">
+    Compare selected
+  </button>
+</div>
+<div class="table-responsive">
+  <table class="table table-sm table-hover">
+    <thead>
+      <tr>
+        <th></th>
+        <th>Ticker</th>
+        <th>Company</th>
+        <th>Sector</th>
+        <th>FY</th>
+        {% set sortable_cols = [('roic', 'ROIC'), ('roe', 'ROE'), ('net_margin', 'Net margin'), ('debt_to_ebitda', 'Debt/EBITDA')] %}
+        {% for col, label in sortable_cols %}
+        {% set dir = 'asc' if (sort == col and sort_dir == 'desc') else 'desc' %}
+        {% set sep = '&' if base_params else '' %}
+        <th>
+          <a hx-get="/ui/screen?{{ base_params | safe }}{{ sep }}sort={{ col }}&sort_dir={{ dir }}"
+             hx-target="#screen-results"
+             hx-swap="innerHTML"
+             style="cursor:pointer;text-decoration:none;color:inherit">
+            {{ label }}{% if sort == col %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}
+          </a>
+        </th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in items %}
+      <tr>
+        <td><input type="checkbox" class="row-check" value="{{ row.ticker }}" /></td>
+        <td><a href="/companies/{{ row.ticker }}">{{ row.ticker }}</a></td>
+        <td>{{ row.company_name or "—" }}</td>
+        <td>{{ row.sector_class or "—" }}</td>
+        <td>{{ row.fiscal_year or "—" }}</td>
+        <td>{{ fmt_pct(row.get("roic")) }}</td>
+        <td>{{ fmt_pct(row.get("roe")) }}</td>
+        <td>{{ fmt_pct(row.get("net_margin")) }}</td>
+        <td>{{ fmt_mult(row.get("debt_to_ebitda")) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}

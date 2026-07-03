@@ -1,0 +1,26 @@
+{% if rows %}
+<div class="table-wrap">
+  <table class="data-table statements-table">
+    <thead>
+      <tr>
+        <th class="label-col"></th>
+        {% for col in columns %}
+        <th class="num">{{ col }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <th class="row-label">{{ row.label }}</th>
+        {% for val in row.vals %}
+        <td class="num">{{ val }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="empty-row">No data available for this period.</p>
+{% endif %}
