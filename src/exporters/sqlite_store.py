@@ -45,6 +45,25 @@ _SNAPSHOT_COLUMNS = [
     "eps_trailing", "price_to_book", "dividend_yield",
     "enterprise_value", "ev_to_ebitda", "ev_to_fcf", "fcf_yield",
     "risk_free_rate",
+    "previous_close", "open", "day_high", "day_low", "volume", "avg_volume",
+    "avg_volume_10d", "fifty_two_week_high", "fifty_two_week_low", "ma_50", "ma_200",
+    "post_market_price", "pre_market_price",
+    "peg_ratio", "price_to_sales", "eps_forward",
+    "dividend_rate", "payout_ratio",
+    "debt_to_equity", "current_ratio", "quick_ratio",
+    "shares_outstanding", "float_shares", "shares_short", "shares_short_prior_month",
+    "short_ratio", "short_percent_of_float", "insider_percent", "institutional_percent",
+]
+
+# Snapshot columns that are text, not numeric (kept separate so _cols_ddl can type them).
+_SNAPSHOT_TEXT_COLUMNS = ["ex_dividend_date"]
+
+# One row per collection: analyst price targets / recommendations (from analyst_estimates).
+_ANALYST_COLUMNS = [
+    "target_price_low", "target_price_mean", "target_price_median", "target_price_high",
+    "recommendation", "recommendation_mean", "number_of_analysts",
+    "earnings_date", "forward_eps", "forward_pe",
+    "earnings_growth", "revenue_growth", "upside_potential",
 ]
 
 
@@ -81,6 +100,10 @@ class SQLiteStore:
                 employees INTEGER,
                 website TEXT,
                 fiscal_year_end TEXT,
+                description TEXT,
+                address TEXT,
+                hq_city TEXT,
+                hq_state TEXT,
                 updated_at TEXT
             );
 
@@ -152,7 +175,42 @@ class SQLiteStore:
                 ticker TEXT NOT NULL,
                 collected_at TEXT NOT NULL,
                 {_cols_ddl(_SNAPSHOT_COLUMNS)},
+                {_cols_ddl(_SNAPSHOT_TEXT_COLUMNS, "TEXT")},
                 PRIMARY KEY (ticker, collected_at)
+            );
+
+            CREATE TABLE IF NOT EXISTS analyst_snapshots (
+                ticker TEXT NOT NULL, collected_at TEXT NOT NULL,
+                target_price_low REAL, target_price_mean REAL, target_price_median REAL,
+                target_price_high REAL,
+                recommendation TEXT, recommendation_mean REAL, number_of_analysts INTEGER,
+                earnings_date TEXT, forward_eps REAL, forward_pe REAL,
+                earnings_growth REAL, revenue_growth REAL, upside_potential REAL,
+                PRIMARY KEY (ticker, collected_at)
+            );
+
+            CREATE TABLE IF NOT EXISTS dividend_events (
+                ticker TEXT NOT NULL, date TEXT NOT NULL, amount REAL,
+                PRIMARY KEY (ticker, date)
+            );
+
+            CREATE TABLE IF NOT EXISTS holders (
+                ticker TEXT NOT NULL, holder_type TEXT NOT NULL, holder TEXT NOT NULL,
+                shares REAL, date_reported TEXT, pct_held REAL, value REAL, collected_at TEXT,
+                PRIMARY KEY (ticker, holder_type, holder)
+            );
+
+            CREATE TABLE IF NOT EXISTS insider_transactions (
+                ticker TEXT NOT NULL, insider TEXT NOT NULL, start_date TEXT NOT NULL,
+                text TEXT NOT NULL,
+                position TEXT, shares REAL, value REAL, ownership TEXT, collected_at TEXT,
+                PRIMARY KEY (ticker, insider, start_date, text)
+            );
+
+            CREATE TABLE IF NOT EXISTS officers (
+                ticker TEXT NOT NULL, name TEXT NOT NULL, title TEXT, age INTEGER,
+                total_pay REAL,
+                PRIMARY KEY (ticker, name)
             );
 
             CREATE TABLE IF NOT EXISTS collection_runs (
@@ -184,33 +242,50 @@ class SQLiteStore:
             """
         )
 
+    @staticmethod
+    def _ensure_columns(conn: sqlite3.Connection, table: str, columns: Dict[str, str]) -> None:
+        """Add any of ``columns`` (name -> SQL type) missing from ``table``.
+
+        Uses ``PRAGMA table_info`` to inspect the live schema and
+        ``ALTER TABLE ... ADD COLUMN`` for anything not already present. Never drops
+        or rewrites existing columns, so it is safe to run repeatedly (idempotent)
+        and against long-lived production databases created under an older schema.
+        ``table`` must be a module-level constant, never user input.
+        """
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, col_type in columns.items():
+            if name not in existing:
+                conn.execute(f'ALTER TABLE {table} ADD COLUMN "{name}" {col_type}')
+
     def _migrate(self, conn: sqlite3.Connection) -> None:
         """Add any columns missing from an existing DB (registry grows over time).
 
         ``CREATE TABLE IF NOT EXISTS`` won't add new columns to a pre-existing table,
         so we reconcile each table against its current expected column set.
         """
-        expected = {
-            "companies": [("sector_class", "TEXT"), ("fiscal_year_end", "TEXT")],
-            "financials_annual": [("calendar_year", "INTEGER")]
-            + [(c, "REAL") for c in _CANONICAL_COLUMNS],
-            "financials_quarterly": [("calendar_year", "INTEGER"),
-                                     ("calendar_quarter", "INTEGER"),
-                                     ("fiscal_quarter", "INTEGER")]
-            + [(c, "REAL") for c in _CANONICAL_COLUMNS],
-            "financials_ttm": [("fiscal_year", "INTEGER"), ("calendar_year", "INTEGER"),
-                               ("calendar_quarter", "INTEGER")]
-            + [(c, "REAL") for c in _CANONICAL_COLUMNS],
-            "financials_annual_vintages": [("calendar_year", "INTEGER")]
-            + [(c, "REAL") for c in _CANONICAL_COLUMNS],
-            "metrics_annual": [(c, "REAL") for c in _METRIC_COLUMNS],
-            "market_snapshots": [(c, "REAL") for c in _SNAPSHOT_COLUMNS],
+        expected: Dict[str, Dict[str, str]] = {
+            "companies": {
+                "sector_class": "TEXT", "fiscal_year_end": "TEXT",
+                "description": "TEXT", "address": "TEXT",
+                "hq_city": "TEXT", "hq_state": "TEXT",
+            },
+            "financials_annual": {"calendar_year": "INTEGER",
+                                   **{c: "REAL" for c in _CANONICAL_COLUMNS}},
+            "financials_quarterly": {"calendar_year": "INTEGER",
+                                      "calendar_quarter": "INTEGER",
+                                      "fiscal_quarter": "INTEGER",
+                                      **{c: "REAL" for c in _CANONICAL_COLUMNS}},
+            "financials_ttm": {"fiscal_year": "INTEGER", "calendar_year": "INTEGER",
+                               "calendar_quarter": "INTEGER",
+                               **{c: "REAL" for c in _CANONICAL_COLUMNS}},
+            "financials_annual_vintages": {"calendar_year": "INTEGER",
+                                            **{c: "REAL" for c in _CANONICAL_COLUMNS}},
+            "metrics_annual": {c: "REAL" for c in _METRIC_COLUMNS},
+            "market_snapshots": {**{c: "REAL" for c in _SNAPSHOT_COLUMNS},
+                                 **{c: "TEXT" for c in _SNAPSHOT_TEXT_COLUMNS}},
         }
         for table, columns in expected.items():
-            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-            for name, col_type in columns:
-                if name not in existing:
-                    conn.execute(f'ALTER TABLE {table} ADD COLUMN "{name}" {col_type}')
+            self._ensure_columns(conn, table, columns)
 
     # ---- upsert helper ----------------------------------------------------
 
@@ -233,6 +308,20 @@ class SQLiteStore:
     def _canonical_values(period: Dict[str, Any]) -> Dict[str, Any]:
         """Pull only canonical numeric columns from a period dict."""
         return {c: period.get(c) for c in _CANONICAL_COLUMNS if c in period}
+
+    @staticmethod
+    def _first(rec: Dict[str, Any], *keys: str) -> Any:
+        """Return the first present, non-None value among ``keys``.
+
+        yfinance's DataFrame column names vary across versions/locales (e.g.
+        ``"Holder"`` vs ``"holder"``, ``"Date Reported"`` vs ``"dateReported"``), so
+        record normalization tries each candidate key defensively rather than
+        assuming one literal spelling.
+        """
+        for key in keys:
+            if key in rec and rec[key] is not None:
+                return rec[key]
+        return None
 
     # ---- public API -------------------------------------------------------
 
@@ -277,6 +366,10 @@ class SQLiteStore:
             "employees": info.get("full_time_employees"),
             "website": info.get("website"),
             "fiscal_year_end": (stock.sec_submissions or {}).get("fiscal_year_end"),
+            "description": info.get("description") or info.get("longBusinessSummary"),
+            "address": info.get("address") or info.get("address1"),
+            "hq_city": info.get("hq_city") or info.get("city"),
+            "hq_state": info.get("hq_state") or info.get("state"),
             "updated_at": collected_at,
         })
 
@@ -349,27 +442,31 @@ class SQLiteStore:
         # market_snapshots (point-in-time)
         md = stock.market_data or {}
         val = stock.valuation or {}
+        shareholders = stock.shareholders or {}
         cm = stock.calculated_metrics or {}
         rf = stock.risk_free_rate or {}
-        snapshot = {
+        # Existing pattern: merge the source dicts and pick columns by name — every
+        # new snapshot column added to _SNAPSHOT_COLUMNS/_SNAPSHOT_TEXT_COLUMNS is
+        # picked up automatically as long as its key matches across market_data/
+        # valuation/shareholders.
+        merged: Dict[str, Any] = {**md, **val, **shareholders}
+        snapshot: Dict[str, Any] = {
             "ticker": stock.ticker,
             "collected_at": collected_at,
-            "current_price": md.get("current_price"),
-            "market_cap": md.get("market_cap"),
-            "beta": md.get("beta"),
-            "pe_trailing": val.get("pe_trailing"),
-            "pe_forward": val.get("pe_forward"),
-            "eps_trailing": val.get("eps_trailing"),
-            "price_to_book": val.get("price_to_book"),
-            "dividend_yield": val.get("dividend_yield"),
-            "enterprise_value": cm.get("enterprise_value"),
-            "ev_to_ebitda": cm.get("ev_to_ebitda"),
-            "ev_to_fcf": cm.get("ev_to_fcf"),
-            "fcf_yield": cm.get("fcf_yield"),
-            "risk_free_rate": rf.get("risk_free_rate"),
         }
+        for col in _SNAPSHOT_COLUMNS:
+            snapshot[col] = merged.get(col)
+        for col in _SNAPSHOT_TEXT_COLUMNS:
+            snapshot[col] = merged.get(col)
+        # These are computed downstream (calculated_metrics / risk_free_rate), not
+        # present verbatim on market_data/valuation/shareholders.
+        snapshot["enterprise_value"] = cm.get("enterprise_value")
+        snapshot["ev_to_ebitda"] = cm.get("ev_to_ebitda")
+        snapshot["ev_to_fcf"] = cm.get("ev_to_fcf")
+        snapshot["fcf_yield"] = cm.get("fcf_yield")
+        snapshot["risk_free_rate"] = rf.get("risk_free_rate")
         # Only record a snapshot if we have any market data.
-        if any(snapshot.get(c) is not None for c in _SNAPSHOT_COLUMNS):
+        if any(snapshot.get(c) is not None for c in _SNAPSHOT_COLUMNS + _SNAPSHOT_TEXT_COLUMNS):
             self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)
 
         # collection_runs
@@ -393,4 +490,111 @@ class SQLiteStore:
                 "value": fact.get("value"),
                 "form": fact.get("form"),
                 "collected_at": collected_at,
+            })
+
+        # holders (replace-per-run: institutional + mutualfund)
+        self._write_holders(conn, stock.ticker, collected_at, shareholders)
+
+        # insider_transactions (upsert on 4-part natural key)
+        self._write_insider_transactions(conn, stock.ticker, collected_at, shareholders)
+
+        # officers (replace-per-run)
+        self._write_officers(conn, stock.ticker, info)
+
+        # analyst_snapshots (one row per collection)
+        self._write_analyst_snapshot(conn, stock.ticker, collected_at, stock.analyst_estimates or {})
+
+        # dividend_events (upsert all known payments)
+        self._write_dividend_events(conn, stock.ticker, stock.dividend_history or {})
+
+    def _write_holders(self, conn: sqlite3.Connection, ticker: str, collected_at: str,
+                        shareholders: Dict[str, Any]) -> None:
+        """Replace-per-run: institutional + mutualfund holders from yfinance DataFrames.
+
+        yfinance's column names vary by version, so every field is looked up
+        defensively via ``_first``; records with no holder name are skipped.
+        """
+        conn.execute("DELETE FROM holders WHERE ticker = ?", (ticker,))
+        for holder_type, key in (("institutional", "institutional_holders"),
+                                  ("mutualfund", "mutualfund_holders")):
+            for rec in shareholders.get(key) or []:
+                holder = self._first(rec, "Holder", "holder")
+                if not holder:
+                    continue
+                self._upsert(conn, "holders", ["ticker", "holder_type", "holder"], {
+                    "ticker": ticker,
+                    "holder_type": holder_type,
+                    "holder": holder,
+                    "shares": self._first(rec, "Shares", "shares"),
+                    "date_reported": self._first(rec, "Date Reported", "dateReported",
+                                                  "date_reported"),
+                    "pct_held": self._first(rec, "pctHeld", "% Out", "pct_held"),
+                    "value": self._first(rec, "Value", "value"),
+                    "collected_at": collected_at,
+                })
+
+    def _write_insider_transactions(self, conn: sqlite3.Connection, ticker: str,
+                                     collected_at: str, shareholders: Dict[str, Any]) -> None:
+        """Upsert insider Form-4-derived transactions on the (ticker, insider, start_date, text) key.
+
+        Records missing an insider name or start date are skipped (they can't form
+        a valid natural key); missing text is coerced to ``""`` since it's part of
+        the primary key but not always populated by yfinance.
+        """
+        for rec in shareholders.get("insider_transactions") or []:
+            insider = self._first(rec, "Insider", "insider")
+            start_date = self._first(rec, "Start Date", "startDate", "start_date")
+            if not insider or not start_date:
+                continue
+            text = self._first(rec, "Text", "text") or ""
+            self._upsert(conn, "insider_transactions",
+                         ["ticker", "insider", "start_date", "text"], {
+                "ticker": ticker,
+                "insider": insider,
+                "start_date": start_date,
+                "text": text,
+                "position": self._first(rec, "Position", "position"),
+                "shares": self._first(rec, "Shares", "shares"),
+                "value": self._first(rec, "Value", "value"),
+                "ownership": self._first(rec, "Ownership", "ownership"),
+                "collected_at": collected_at,
+            })
+
+    def _write_officers(self, conn: sqlite3.Connection, ticker: str,
+                         info: Dict[str, Any]) -> None:
+        """Replace-per-run: company officers (roster changes over time, not additive)."""
+        conn.execute("DELETE FROM officers WHERE ticker = ?", (ticker,))
+        for officer in info.get("officers") or []:
+            name = officer.get("name")
+            if not name:
+                continue
+            self._upsert(conn, "officers", ["ticker", "name"], {
+                "ticker": ticker,
+                "name": name,
+                "title": officer.get("title"),
+                "age": officer.get("age"),
+                "total_pay": officer.get("total_pay"),
+            })
+
+    def _write_analyst_snapshot(self, conn: sqlite3.Connection, ticker: str, collected_at: str,
+                                 analyst: Dict[str, Any]) -> None:
+        """One row per collection run, only when at least one analyst field is known."""
+        if not analyst:
+            return
+        row: Dict[str, Any] = {"ticker": ticker, "collected_at": collected_at}
+        row.update({c: analyst.get(c) for c in _ANALYST_COLUMNS})
+        if any(row.get(c) is not None for c in _ANALYST_COLUMNS):
+            self._upsert(conn, "analyst_snapshots", ["ticker", "collected_at"], row)
+
+    def _write_dividend_events(self, conn: sqlite3.Connection, ticker: str,
+                                dividend_history: Dict[str, Any]) -> None:
+        """Upsert every known dividend payment (append-only in practice; history rarely changes)."""
+        for rec in dividend_history.get("dividend_payments") or []:
+            date = rec.get("date")
+            if not date:
+                continue
+            self._upsert(conn, "dividend_events", ["ticker", "date"], {
+                "ticker": ticker,
+                "date": date,
+                "amount": rec.get("amount"),
             })
