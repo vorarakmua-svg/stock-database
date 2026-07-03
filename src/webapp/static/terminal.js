@@ -65,28 +65,25 @@
   function renderSuggestions(hits) {
     if (!suggestBox) return;
     suggestions = hits || [];
+    suggestBox.textContent = '';
     if (suggestions.length === 0) {
-      suggestBox.innerHTML = '';
       return;
     }
-    var html = suggestions
-      .map(function (hit) {
-        var name = hit.company_name ? ' — ' + hit.company_name : '';
-        return (
-          '<div class="cmdbar-suggest-item" data-ticker="' +
-          hit.ticker +
-          '">' +
-          '<span class="cmdbar-suggest-ticker">' +
-          hit.ticker +
-          '</span>' +
-          '<span class="cmdbar-suggest-name">' +
-          name +
-          '</span>' +
-          '</div>'
-        );
-      })
-      .join('');
-    suggestBox.innerHTML = html;
+    for (var i = 0; i < suggestions.length; i++) {
+      var hit = suggestions[i];
+      var row = document.createElement('div');
+      row.className = 'cmdbar-suggest-item';
+      row.dataset.ticker = hit.ticker;
+      var tickerSpan = document.createElement('span');
+      tickerSpan.className = 'cmdbar-suggest-ticker';
+      tickerSpan.textContent = hit.ticker;
+      row.appendChild(tickerSpan);
+      var nameSpan = document.createElement('span');
+      nameSpan.className = 'cmdbar-suggest-name';
+      nameSpan.textContent = hit.company_name ? ' — ' + hit.company_name : '';
+      row.appendChild(nameSpan);
+      suggestBox.appendChild(row);
+    }
   }
 
   function fetchSuggestions(query) {
@@ -174,6 +171,12 @@
       evt.preventDefault();
       runCommand(cmd.value);
     }
+  });
+
+  cmd.addEventListener('blur', function () {
+    window.setTimeout(function () {
+      clearSuggestions();
+    }, 150);
   });
 
   // ---- Suggestion dropdown: click to select ----
