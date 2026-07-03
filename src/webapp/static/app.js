@@ -12,7 +12,7 @@
 function renderPlot(elId, series, title) {
   if (!series || series.length === 0) {
     const el = document.getElementById(elId);
-    if (el) el.innerHTML = '<p style="color:#637381;font-size:.875rem">No data available.</p>';
+    if (el) el.innerHTML = '<p style="color:#8a8a8a;font-size:.875rem">No data available.</p>';
     return;
   }
 
@@ -25,27 +25,27 @@ function renderPlot(elId, series, title) {
     type: 'scatter',
     mode: 'lines+markers',
     name: title,
-    line: { color: '#4f46e5', width: 2.5 },
-    marker: { color: '#4f46e5', size: 6 },
+    line: { color: '#ff9900', width: 2.5 },
+    marker: { color: '#ff9900', size: 6 },
     hovertemplate: '%{x}: %{y:.2%}<extra></extra>',
   };
 
   var layout = {
-    title: { text: title, font: { size: 14, color: '#1f2933', family: '-apple-system, Segoe UI, Roboto, sans-serif' } },
+    title: { text: title, font: { size: 14, color: '#e6e3dc', family: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace' } },
     margin: { t: 40, r: 24, b: 40, l: 60 },
     xaxis: {
       tickformat: 'd',
-      gridcolor: '#e5e7eb',
-      linecolor: '#e5e7eb',
+      gridcolor: '#2a2a2a',
+      linecolor: '#2a2a2a',
     },
     yaxis: {
       tickformat: '.0%',
-      gridcolor: '#e5e7eb',
-      linecolor: '#e5e7eb',
+      gridcolor: '#2a2a2a',
+      linecolor: '#2a2a2a',
     },
-    paper_bgcolor: '#ffffff',
-    plot_bgcolor: '#ffffff',
-    font: { family: '-apple-system, Segoe UI, Roboto, sans-serif', color: '#1f2933' },
+    paper_bgcolor: 'transparent',
+    plot_bgcolor: 'transparent',
+    font: { family: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace', color: '#e6e3dc' },
     showlegend: false,
   };
 
@@ -71,7 +71,7 @@ function renderBar(elId, labels, values, pct, title) {
   var el = document.getElementById(elId);
   if (!el) return;
   if (!labels || labels.length === 0) {
-    el.innerHTML = '<p style="color:#637381;font-size:.875rem">No data available.</p>';
+    el.innerHTML = '<p style="color:#8a8a8a;font-size:.875rem">No data available.</p>';
     return;
   }
   var trace = {
@@ -81,17 +81,17 @@ function renderBar(elId, labels, values, pct, title) {
     y: labels,
     text: pct,
     textposition: 'outside',
-    marker: { color: '#4f46e5', opacity: 0.8 },
+    marker: { color: '#ff9900', opacity: 0.85 },
     hovertemplate: '%{y}: %{text}<extra></extra>',
   };
   var layout = {
-    title: { text: title, font: { size: 13, color: '#1f2933', family: '-apple-system, Segoe UI, Roboto, sans-serif' } },
+    title: { text: title, font: { size: 13, color: '#e6e3dc', family: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace' } },
     margin: { t: 36, r: 80, b: 36, l: 200 },
-    xaxis: { range: [0, 1.05], tickformat: '.0%', gridcolor: '#e5e7eb', linecolor: '#e5e7eb' },
-    yaxis: { autorange: 'reversed', gridcolor: '#e5e7eb', linecolor: '#e5e7eb' },
-    paper_bgcolor: '#ffffff',
-    plot_bgcolor: '#ffffff',
-    font: { family: '-apple-system, Segoe UI, Roboto, sans-serif', color: '#1f2933', size: 12 },
+    xaxis: { range: [0, 1.05], tickformat: '.0%', gridcolor: '#2a2a2a', linecolor: '#2a2a2a' },
+    yaxis: { autorange: 'reversed', gridcolor: '#2a2a2a', linecolor: '#2a2a2a' },
+    paper_bgcolor: 'transparent',
+    plot_bgcolor: 'transparent',
+    font: { family: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace', color: '#e6e3dc', size: 12 },
     showlegend: false,
   };
   var config = { responsive: true, displayModeBar: false };

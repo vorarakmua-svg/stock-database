@@ -157,3 +157,62 @@ def test_openapi_json_parses(client: TestClient) -> None:
 def test_docs_200(client: TestClient) -> None:
     resp = client.get("/docs")
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Terminal reskin: command bar + HELP overlay (Task 6)
+# ---------------------------------------------------------------------------
+
+
+def test_home_contains_command_bar_input(client: TestClient) -> None:
+    resp = client.get("/")
+    assert resp.status_code == 200
+    body = resp.text
+    assert 'id="cmd"' in body
+
+
+def test_home_loads_terminal_js(client: TestClient) -> None:
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "terminal.js" in resp.text
+
+
+def test_terminal_js_served_200(client: TestClient) -> None:
+    resp = client.get("/static/terminal.js")
+    assert resp.status_code == 200
+    assert "text/javascript" in resp.headers["content-type"] or "javascript" in resp.headers["content-type"]
+
+
+def test_home_contains_help_overlay_content(client: TestClient) -> None:
+    resp = client.get("/")
+    assert resp.status_code == 200
+    body = resp.text
+    # HELP overlay lists function codes — spot-check a few
+    assert "DES" in body
+    assert "SCR" in body
+    assert "HELP" in body
+
+
+# ---------------------------------------------------------------------------
+# All existing pages still render 200 after the reskin
+# ---------------------------------------------------------------------------
+
+
+def test_screener_page_200(client: TestClient) -> None:
+    resp = client.get("/screener")
+    assert resp.status_code == 200
+
+
+def test_asof_page_200(client: TestClient) -> None:
+    resp = client.get("/asof")
+    assert resp.status_code == 200
+
+
+def test_quality_page_200(client: TestClient) -> None:
+    resp = client.get("/quality")
+    assert resp.status_code == 200
+
+
+def test_collect_page_200(client: TestClient) -> None:
+    resp = client.get("/collect")
+    assert resp.status_code == 200

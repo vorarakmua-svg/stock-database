@@ -9,6 +9,19 @@
   <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
 </head>
 <body>
+  <div class="cmdbar">
+    <span class="cmdbar-prompt">&gt;</span>
+    <input
+      id="cmd"
+      class="cmdbar-input"
+      type="text"
+      autocomplete="off"
+      spellcheck="false"
+      placeholder="TICKER FUNCTION  &middot;  e.g. AAPL GP  &middot;  ` or / to focus  &middot;  HELP"
+    />
+    <div id="cmd-suggest" class="cmdbar-suggest"></div>
+  </div>
+
   <nav class="nav">
     <div class="nav-inner">
       <a class="nav-brand" href="/">Stock DB</a>
@@ -42,6 +55,9 @@
     {% block content %}{% endblock %}
   </main>
 
+  {% include "fragments/help.html" %}
+
   <script src="/static/app.js"></script>
+  <script src="/static/terminal.js"></script>
 </body>
 </html>
