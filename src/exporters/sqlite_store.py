@@ -542,25 +542,40 @@ class SQLiteStore:
 
         yfinance's column names vary by version, so every field is looked up
         defensively via ``_first``; records with no holder name are skipped.
+
+        The DELETE only runs when there's at least one insertable record: a
+        transient sub-fetch failure yields empty holder lists, and wiping the
+        previously-good rows on every such hiccup would lose data until the
+        next successful run for no benefit.
         """
-        conn.execute("DELETE FROM holders WHERE ticker = ?", (ticker,))
+        insertable = []
         for holder_type, key in (("institutional", "institutional_holders"),
                                   ("mutualfund", "mutualfund_holders")):
             for rec in shareholders.get(key) or []:
                 holder = self._first(rec, "Holder", "holder")
                 if not holder:
                     continue
-                self._upsert(conn, "holders", ["ticker", "holder_type", "holder"], {
-                    "ticker": ticker,
-                    "holder_type": holder_type,
-                    "holder": holder,
-                    "shares": self._first(rec, "Shares", "shares"),
-                    "date_reported": self._first(rec, "Date Reported", "dateReported",
-                                                  "date_reported"),
-                    "pct_held": self._first(rec, "pctHeld", "% Out", "pct_held"),
-                    "value": self._first(rec, "Value", "value"),
-                    "collected_at": collected_at,
-                })
+                insertable.append((holder_type, holder, rec))
+
+        if not insertable:
+            self.logger.debug(
+                f"No holders returned for {ticker} this run; keeping previous rows"
+            )
+            return
+
+        conn.execute("DELETE FROM holders WHERE ticker = ?", (ticker,))
+        for holder_type, holder, rec in insertable:
+            self._upsert(conn, "holders", ["ticker", "holder_type", "holder"], {
+                "ticker": ticker,
+                "holder_type": holder_type,
+                "holder": holder,
+                "shares": self._first(rec, "Shares", "shares"),
+                "date_reported": self._first(rec, "Date Reported", "dateReported",
+                                              "date_reported"),
+                "pct_held": self._first(rec, "pctHeld", "% Out", "pct_held"),
+                "value": self._first(rec, "Value", "value"),
+                "collected_at": collected_at,
+            })
 
     def _write_insider_transactions(self, conn: sqlite3.Connection, ticker: str,
                                      collected_at: str, shareholders: Dict[str, Any]) -> None:
@@ -591,15 +606,25 @@ class SQLiteStore:
 
     def _write_officers(self, conn: sqlite3.Connection, ticker: str,
                          info: Dict[str, Any]) -> None:
-        """Replace-per-run: company officers (roster changes over time, not additive)."""
+        """Replace-per-run: company officers (roster changes over time, not additive).
+
+        The DELETE only runs when there's at least one insertable record: a
+        transient sub-fetch failure yields an empty officer list, and wiping
+        the previously-good rows on every such hiccup would lose data until
+        the next successful run for no benefit.
+        """
+        insertable = [o for o in (info.get("officers") or []) if o.get("name")]
+        if not insertable:
+            self.logger.debug(
+                f"No officers returned for {ticker} this run; keeping previous rows"
+            )
+            return
+
         conn.execute("DELETE FROM officers WHERE ticker = ?", (ticker,))
-        for officer in info.get("officers") or []:
-            name = officer.get("name")
-            if not name:
-                continue
+        for officer in insertable:
             self._upsert(conn, "officers", ["ticker", "name"], {
                 "ticker": ticker,
-                "name": name,
+                "name": officer["name"],
                 "title": officer.get("title"),
                 "age": officer.get("age"),
                 "total_pay": officer.get("total_pay"),
@@ -676,11 +701,19 @@ class SQLiteStore:
         ``fetch_quote``'s ``market_data`` omits ``ma_50``/``ma_200`` (no
         history call is made for a quote-only refresh). Rather than let the
         DES page's moving averages go blank after every quote refresh, this
-        carries the PREVIOUS snapshot's ``ma_50``/``ma_200``/``beta`` forward
-        into the new row whenever the fresh quote didn't return them (a
-        one-row read-only ``SELECT`` against ``market_snapshots``, no writer
-        contention — this method is only ever called from the single-writer
-        job worker).
+        carries the PREVIOUS snapshot's ``ma_50``/``ma_200``/``beta``, plus
+        ``ev_to_fcf``/``fcf_yield``/``risk_free_rate`` (computed only during a
+        full export's ``calculated_metrics``/``risk_free_rate`` pass — a
+        quote-only fetch has no way to derive them), forward into the new row
+        whenever the fresh quote didn't return them (a one-row read-only
+        ``SELECT`` against ``market_snapshots``, no writer contention — this
+        method is only ever called from the single-writer job worker).
+
+        ``ev_to_ebitda``/``enterprise_value`` are NOT carried forward here:
+        unlike ``ev_to_fcf``/``fcf_yield``, ``fetch_quote`` returns these two
+        directly from yfinance on quote rows, whereas a full-export row
+        computes them internally via ``calculated_metrics`` — so a fresh
+        quote value (when present) should win rather than the stale prior one.
         """
         try:
             conn = self._connect()
@@ -699,11 +732,13 @@ class SQLiteStore:
                 for col in _SNAPSHOT_TEXT_COLUMNS:
                     snapshot[col] = merged.get(col)
 
-                # Carry forward ma_50/ma_200/beta from the latest prior snapshot
-                # when this quote-only fetch didn't return them.
+                # Carry forward ma_50/ma_200/beta/ev_to_fcf/fcf_yield/risk_free_rate
+                # from the latest prior snapshot when this quote-only fetch didn't
+                # return them.
                 prev = self._latest_snapshot_row(conn, ticker)
                 if prev is not None:
-                    for col in ("ma_50", "ma_200", "beta"):
+                    for col in ("ma_50", "ma_200", "beta",
+                                "ev_to_fcf", "fcf_yield", "risk_free_rate"):
                         if snapshot.get(col) is None:
                             snapshot[col] = prev.get(col)
 

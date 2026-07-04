@@ -205,6 +205,74 @@ def test_officers_replace_per_run(tmp_path):
         conn.close()
 
 
+def test_holders_and_officers_wipe_guarded_on_empty_fetch(tmp_path):
+    """A transient yfinance sub-fetch failure yielding empty holders/officers
+    lists must NOT wipe previously-good rows; only a fresh non-empty list
+    replaces them."""
+    db = tmp_path / "stock.db"
+    store = SQLiteStore(db)
+    store.export([_full_stock("AAA")])
+
+    conn = sqlite3.connect(db)
+    try:
+        holders_before = conn.execute(
+            "SELECT holder_type, holder FROM holders WHERE ticker='AAA' ORDER BY holder"
+        ).fetchall()
+        officers_before = conn.execute(
+            "SELECT name FROM officers WHERE ticker='AAA'"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert holders_before  # sanity: rows exist from the first export
+    assert officers_before
+
+    # Second export: holders/officers sections come back EMPTY (simulating a
+    # transient sub-fetch failure) -> previous rows must survive untouched.
+    s2 = _full_stock("AAA")
+    s2.shareholders["institutional_holders"] = []
+    s2.shareholders["mutualfund_holders"] = []
+    s2.company_info["officers"] = []
+    store.export([s2])
+
+    conn = sqlite3.connect(db)
+    try:
+        holders_after_empty = conn.execute(
+            "SELECT holder_type, holder FROM holders WHERE ticker='AAA' ORDER BY holder"
+        ).fetchall()
+        officers_after_empty = conn.execute(
+            "SELECT name FROM officers WHERE ticker='AAA'"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert holders_after_empty == holders_before
+    assert officers_after_empty == officers_before
+
+    # Third export: a NEW non-empty list -> old rows ARE replaced by the new list.
+    s3 = _full_stock("AAA")
+    s3.shareholders["institutional_holders"] = [
+        {"Holder": "NewCo Capital", "Shares": 42.0, "Date Reported": "2024-06-01",
+         "pctHeld": 0.01, "Value": 1000.0},
+    ]
+    s3.shareholders["mutualfund_holders"] = []
+    s3.company_info["officers"] = [
+        {"name": "Fresh Officer", "title": "COO", "age": 40, "total_pay": 500000},
+    ]
+    store.export([s3])
+
+    conn = sqlite3.connect(db)
+    try:
+        holders_final = conn.execute(
+            "SELECT holder_type, holder FROM holders WHERE ticker='AAA' ORDER BY holder"
+        ).fetchall()
+        officers_final = conn.execute(
+            "SELECT name FROM officers WHERE ticker='AAA'"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert holders_final == [("institutional", "NewCo Capital")]
+    assert officers_final == [("Fresh Officer",)]
+
+
 def test_insider_transactions_upsert_idempotent(tmp_path):
     db = tmp_path / "stock.db"
     store = SQLiteStore(db)
