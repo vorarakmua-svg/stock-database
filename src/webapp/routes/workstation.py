@@ -547,6 +547,15 @@ def _annual_dividend_sums(events: List[Dict[str, Any]]) -> Dict[int, float]:
     Mirrors the year-bucketing step in ``yahoo_handler._get_dividend_history``
     (``dividends.resample('YE').sum()``), computed directly from event rows
     already read from the DB rather than a full daily-indexed series.
+
+    ``resample('YE')`` produces one bin per calendar year across the FULL
+    span from the first to the last dividend payment — years with no
+    payments (a lapsed/suspended dividend) still appear as a ``0.0`` bin.
+    To match that exactly, every year in the inclusive range
+    ``min(year)..max(year)`` is present in the returned dict, defaulting to
+    ``0.0`` when no event fell in that year. Without this fill, a gap year
+    would simply be absent, shrinking the apparent span and diverging from
+    the handler's CAGR/consistency math.
     """
     sums: Dict[int, float] = {}
     for event in events:
@@ -556,7 +565,10 @@ def _annual_dividend_sums(events: List[Dict[str, Any]]) -> Dict[int, float]:
             continue
         year = int(str(raw_date)[:4])
         sums[year] = sums.get(year, 0.0) + float(amount)
-    return sums
+    if not sums:
+        return sums
+    min_year, max_year = min(sums), max(sums)
+    return {year: sums.get(year, 0.0) for year in range(min_year, max_year + 1)}
 
 
 def _dividend_cagr(annual_sums: Dict[int, float]) -> Optional[float]:

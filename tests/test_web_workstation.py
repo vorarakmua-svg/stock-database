@@ -19,9 +19,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import pandas as pd
 import pytest
 
-from src.webapp.routes import stocks_api
+from src.webapp.routes import stocks_api, workstation
 
 # AAA's 260 synthetic daily bars run from 2023-01-01 (see conftest's
 # ``_synthetic_bars(260, start="2023-01-01", ...)``). HP range-slicing tests
@@ -355,7 +356,10 @@ def test_hp_fragment_known_ticker_shows_bar_date_and_csv_link(client, monkeypatc
     resp = client.get("/ui/stocks/AAA/hp")
     assert resp.status_code == 200
     body = resp.text
-    assert _AAA_START.isoformat() in body or _AAA_LAST.isoformat() in body
+    # HP renders newest-first with the default "1Y" range; "today" is pinned
+    # to _AAA_LAST (the fixture's most recent bar), so it is always the FIRST
+    # row regardless of how much of the 1Y window falls before _AAA_START.
+    assert _AAA_LAST.isoformat() in body
     assert "/api/export/stock/AAA/bars.csv" in body
 
 
@@ -401,8 +405,66 @@ def test_dvd_fragment_known_ticker_shows_amount_chart_and_cagr(client):
     body = resp.text
     assert "$0.25" in body  # a dividend amount from the fixture payments
     assert "renderDVD(" in body
-    assert "CAGR" in body
-    assert "Consistency" in body
+
+    # AAA's 6 dividend events (see conftest, all in 2023/2024, no gap year):
+    #   2023: 0.20 + 0.20 + 0.22 + 0.22 = 0.84
+    #   2024: 0.25 + 0.25              = 0.50
+    # CAGR = (last_positive / first_positive) ** (1 / (len(annual_sums) - 1)) - 1
+    #      = (0.50 / 0.84) ** (1 / 1) - 1 = -0.404761904... -> fmt_pct -> "-40.5%"
+    # Consistency = share of consecutive positive years that did NOT decrease:
+    #   2024 (0.50) < 2023 (0.84) -> 0 of 1 -> 0.0 -> fmt_pct -> "0.0%"
+    assert (
+        '<span class="summary-label">Dividend CAGR</span>'
+        '<span class="summary-value">-40.5%</span>'
+    ) in body
+    assert (
+        '<span class="summary-label">Consistency</span>'
+        '<span class="summary-value">0.0%</span>'
+    ) in body
+
+
+def test_annual_dividend_sums_zero_fills_gap_years():
+    """A lapsed/suspended dividend year (no events) must appear as ``0.0`` in
+    ``_annual_dividend_sums``, matching ``yahoo_handler._get_dividend_history``'s
+    ``dividends.resample('YE').sum()`` (which bins the FULL year span, not just
+    years with payments). Without the zero-fill, 2020 would simply be absent,
+    shrinking ``len(annual_sums)`` and diverging CAGR/consistency from the
+    handler.
+
+    Cross-checked against an actual pandas ``resample('YE').sum()`` over an
+    equivalent yfinance-style ``Series``, computed independently here (not by
+    calling the route helpers) so a future change that reintroduces the
+    divergence fails structurally rather than by coincidence.
+    """
+    events = [
+        {"date": "2018-03-01", "amount": 1.00},
+        {"date": "2019-06-01", "amount": 1.10},
+        {"date": "2021-03-01", "amount": 1.20},  # 2020 has no events -> gap year
+    ]
+
+    annual_sums = workstation._annual_dividend_sums(events)
+    assert annual_sums == {2018: 1.00, 2019: 1.10, 2020: 0.0, 2021: 1.20}
+
+    cagr = workstation._dividend_cagr(annual_sums)
+    consistency = workstation._dividend_consistency(annual_sums)
+
+    # Mirror _get_dividend_history's own computation with pandas directly.
+    idx = pd.to_datetime([e["date"] for e in events])
+    series = pd.Series([e["amount"] for e in events], index=idx)
+    annual_dividends = series.resample("YE").sum()
+    assert len(annual_dividends) == 4  # 2018, 2019, 2020 (gap), 2021
+
+    positive = annual_dividends[annual_dividends > 0]
+    expected_years = len(annual_dividends) - 1
+    expected_cagr = (positive.iloc[-1] / positive.iloc[0]) ** (1 / expected_years) - 1
+    assert cagr == pytest.approx(expected_cagr)
+
+    annual_list = positive.tolist()
+    expected_increases = sum(
+        1 for i in range(1, len(annual_list)) if annual_list[i] >= annual_list[i - 1]
+    )
+    expected_consistency = expected_increases / (len(annual_list) - 1)
+    assert consistency == pytest.approx(expected_consistency)
 
 
 def test_dvd_fragment_shows_splits_and_csv_link(client):
