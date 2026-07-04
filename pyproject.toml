@@ -13,7 +13,7 @@ authors = [{ name = "vorarakmua-svg" }]
 keywords = ["stocks", "finance", "sec-edgar", "valuation", "dcf"]
 
 dependencies = [
-    "yfinance>=0.2.36",
+    "yfinance>=0.2.50",
     "requests>=2.31.0",
     "pandas>=2.1.0",
     "python-dotenv>=1.0.0",

@@ -16,6 +16,16 @@ _EARNINGS_ACTUAL_KEYS = ("epsActual", "Reported EPS", "EPS Actual")
 _EARNINGS_SURPRISE_KEYS = ("surprisePercent", "Surprise(%)", "Surprise (%)")
 
 
+def _pct_to_fraction(value: Optional[float]) -> Optional[float]:
+    """Convert a percent-unit value to a fraction.
+
+    yfinance >= 0.2.50 returns dividendYield in percent units; we store fractions.
+    """
+    if value is None:
+        return None
+    return value / 100.0
+
+
 class YahooHandler:
     """
     Handler for Yahoo Finance data retrieval using yfinance.
@@ -253,7 +263,7 @@ class YahooHandler:
 
                 # Dividends
                 "dividend_rate": info.get("dividendRate"),
-                "dividend_yield": info.get("dividendYield"),
+                "dividend_yield": _pct_to_fraction(info.get("dividendYield")),
                 "payout_ratio": info.get("payoutRatio"),
                 "ex_dividend_date": self._safe_timestamp(info.get("exDividendDate")),
 
@@ -675,14 +685,14 @@ class YahooHandler:
             result = {
                 # Current dividend info
                 "dividend_rate": info.get("dividendRate"),  # Annual dividend per share
-                "dividend_yield": info.get("dividendYield"),
+                "dividend_yield": _pct_to_fraction(info.get("dividendYield")),
                 "payout_ratio": info.get("payoutRatio"),
                 "ex_dividend_date": self._safe_timestamp(info.get("exDividendDate")),
                 "last_dividend_date": info.get("lastDividendDate"),
                 "last_dividend_value": info.get("lastDividendValue"),
 
                 # 5-year dividend yield
-                "five_year_avg_dividend_yield": info.get("fiveYearAvgDividendYield"),
+                "five_year_avg_dividend_yield": _pct_to_fraction(info.get("fiveYearAvgDividendYield")),
             }
 
             # Process dividend history

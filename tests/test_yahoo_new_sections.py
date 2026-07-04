@@ -6,6 +6,7 @@ All tests monkeypatch ``yf.Ticker`` with fakes exposing only the surface
 """
 
 import pandas as pd
+import pytest
 
 from src.fetchers import yahoo_handler as yh_module
 from src.fetchers.yahoo_handler import YahooHandler
@@ -109,6 +110,19 @@ class _FakeTicker:
     @property
     def recommendations(self):
         return pd.DataFrame()
+
+
+class _FakeTickerWithDividendYield(_FakeTicker):
+    """Fake Ticker whose info carries percent-unit dividend yield fields,
+    matching yfinance >= 0.2.50's actual (percent, not fraction) units."""
+
+    @property
+    def info(self):
+        return {
+            **super().info,
+            "dividendYield": 0.35,
+            "fiveYearAvgDividendYield": 0.52,
+        }
 
 
 class _FakeTickerBadEarnings(_FakeTicker):
@@ -255,3 +269,29 @@ def test_fetch_all_splits_with_tz_aware_index(monkeypatch):
     data = handler.fetch_all("AAA")
 
     assert data["splits"] == [{"date": "2024-06-10", "ratio": 4.0}]
+
+
+def test_fetch_all_normalizes_percent_unit_dividend_yields(monkeypatch):
+    """yfinance >= 0.2.50 returns dividendYield/fiveYearAvgDividendYield in
+    percent units (0.35 meaning 0.35%); the store must hold fractions so the
+    webapp's fmt_pct (x100) renders them correctly, consistent with sibling
+    fraction fields like short_percent_of_float."""
+    _patch_ticker(monkeypatch, _FakeTickerWithDividendYield)
+    handler = YahooHandler(rate_limit_delay=0.0)
+    data = handler.fetch_all("AAA")
+
+    assert data["valuation"]["dividend_yield"] == pytest.approx(0.0035)
+    assert data["dividend_history"]["dividend_yield"] == pytest.approx(0.0035)
+    assert data["dividend_history"]["five_year_avg_dividend_yield"] == pytest.approx(0.0052)
+
+
+def test_fetch_all_dividend_yield_none_stays_none(monkeypatch):
+    """When yfinance omits dividendYield/fiveYearAvgDividendYield, the
+    normalization must not turn the missing value into 0.0 or crash."""
+    _patch_ticker(monkeypatch, _FakeTicker)
+    handler = YahooHandler(rate_limit_delay=0.0)
+    data = handler.fetch_all("AAA")
+
+    assert data["valuation"]["dividend_yield"] is None
+    assert data["dividend_history"]["dividend_yield"] is None
+    assert data["dividend_history"]["five_year_avg_dividend_yield"] is None
