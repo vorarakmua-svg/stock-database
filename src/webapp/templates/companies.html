@@ -30,7 +30,7 @@
     <tbody>
       {% for c in companies %}
       <tr>
-        <td><a href="/companies/{{ c.ticker }}">{{ c.ticker }}</a></td>
+        <td><a href="/stocks/{{ c.ticker }}">{{ c.ticker }}</a></td>
         <td>{{ c.company_name or "—" }}</td>
         <td>{{ c.sector_class or "—" }}</td>
         <td>{{ c.sector or "—" }}</td>

@@ -2,10 +2,13 @@
 
 Security invariant
 ------------------
-Column names placed into SQL come ONLY from the ``_METRIC_COLUMNS`` whitelist
-imported from ``sqlite_store``.  Every user-supplied *value* is a bound ``?``
-parameter.  ``build_screen_query`` raises ``ValueError`` on any non-whitelisted
-field/sort or invalid op/dir.
+Column names placed into SQL come ONLY from two whitelists imported from
+``sqlite_store``: ``_METRIC_COLUMNS`` (qualified ``ma."col"``, latest-fiscal-year
+metrics) and ``SNAPSHOT_SCREEN_COLUMNS`` (qualified ``ms."col"``, latest
+market/valuation snapshot). The two sets are disjoint (enforced by a test), so
+resolution is deterministic; a filter/sort field is looked up in the metric set
+first, then the snapshot set, and any field in neither raises ``ValueError``
+BEFORE any SQL is built. Every user-supplied *value* is a bound ``?`` parameter.
 
 Note: only the latest-fiscal-year-per-ticker semantics are implemented for v1.
 A calendar-year alignment option is explicitly out of scope (log as future work).
@@ -20,6 +23,17 @@ from ..exporters.sqlite_store import _METRIC_COLUMNS
 # O(1) whitelist lookup
 _METRIC_COL_SET: FrozenSet[str] = frozenset(_METRIC_COLUMNS)
 
+# Market/valuation columns exposed to the screener, sourced from the latest
+# market_snapshots row per ticker (subset of the widened _SNAPSHOT_COLUMNS).
+SNAPSHOT_SCREEN_COLUMNS: List[str] = [
+    "pe_trailing", "pe_forward", "dividend_yield", "price_to_book", "peg_ratio",
+    "price_to_sales", "market_cap", "beta", "short_percent_of_float",
+    "insider_percent", "institutional_percent", "debt_to_equity", "current_ratio",
+]
+
+# O(1) whitelist lookup — disjoint from _METRIC_COL_SET (verified by test).
+_SNAPSHOT_COL_SET: FrozenSet[str] = frozenset(SNAPSHOT_SCREEN_COLUMNS)
+
 # Allowed filter operators → SQL operator string
 ALLOWED_OPS: Dict[str, str] = {
     "gte": ">=",
@@ -32,7 +46,9 @@ ALLOWED_OPS: Dict[str, str] = {
 
 # Full ordered list of columns returned by build_screen_query / Reader.screen.
 SCREEN_COLUMNS: List[str] = (
-    ["ticker", "company_name", "sector_class", "fiscal_year"] + list(_METRIC_COLUMNS)
+    ["ticker", "company_name", "sector_class", "fiscal_year"]
+    + list(_METRIC_COLUMNS)
+    + list(SNAPSHOT_SCREEN_COLUMNS)
 )
 
 # Default metrics for the compare view — single source of truth.
@@ -76,6 +92,23 @@ METRIC_KINDS: Dict[str, str] = {
     "inventory_turnover": "raw",
     "receivables_turnover": "raw",
     "ffo_per_share": "raw",
+    # market/valuation (SNAPSHOT_SCREEN_COLUMNS) — percentages
+    "dividend_yield": "pct",
+    "short_percent_of_float": "pct",
+    "insider_percent": "pct",
+    "institutional_percent": "pct",
+    # market/valuation — monetary
+    "market_cap": "money",
+    # market/valuation — multiples
+    "pe_trailing": "mult",
+    "pe_forward": "mult",
+    "peg_ratio": "mult",
+    "price_to_sales": "mult",
+    "price_to_book": "mult",
+    "debt_to_equity": "mult",
+    "current_ratio": "mult",
+    # market/valuation — raw
+    "beta": "raw",
 }
 
 # SQL fragment for the latest-fiscal-year-per-ticker sub-join (shared between
@@ -87,6 +120,20 @@ _LATEST_FY_JOIN: str = (
     "    GROUP BY ticker\n"
     ") latest ON ma.ticker = latest.ticker AND ma.fiscal_year = latest.fy\n"
     "JOIN companies c ON c.ticker = ma.ticker"
+)
+
+# SQL fragment for the latest-market-snapshot-per-ticker LEFT JOIN (shared
+# between the main query and the count query). LEFT JOIN so a ticker with no
+# snapshot row still appears (with NULLs for every snapshot column) rather
+# than being dropped — filters on snapshot columns then naturally exclude it
+# via the NULL comparison, same as an unset metric column would.
+_SNAPSHOT_JOIN: str = (
+    "LEFT JOIN (\n"
+    "    SELECT ticker, MAX(collected_at) AS mx\n"
+    "    FROM market_snapshots\n"
+    "    GROUP BY ticker\n"
+    ") lms ON lms.ticker = ma.ticker\n"
+    "LEFT JOIN market_snapshots ms ON ms.ticker = ma.ticker AND ms.collected_at = lms.mx"
 )
 
 
@@ -122,6 +169,29 @@ class ScreenSpec:
 # ---------------------------------------------------------------------------
 
 
+def _qualify_column(field_name: str, *, context: str = "filter") -> str:
+    """Resolve *field_name* to a qualified, quoted SQL column reference.
+
+    Metric columns (``_METRIC_COL_SET``) resolve to ``ma."col"``; snapshot
+    columns (``_SNAPSHOT_COL_SET``) resolve to ``ms."col"``. The metric
+    whitelist is checked first — the two whitelists are disjoint (enforced by
+    a test), so this is documented precedence rather than a functional
+    tie-breaker.
+
+    Raises ``ValueError`` if *field_name* is in neither whitelist. *context*
+    (``"filter"`` or ``"sort"``) is folded into the message only, to match the
+    caller's existing error-matching expectations.
+    """
+    if field_name in _METRIC_COL_SET:
+        return f'ma."{field_name}"'
+    if field_name in _SNAPSHOT_COL_SET:
+        return f'ms."{field_name}"'
+    raise ValueError(
+        f"Invalid {context} field {field_name!r}: not in whitelisted "
+        "_METRIC_COLUMNS or SNAPSHOT_SCREEN_COLUMNS."
+    )
+
+
 def _build_where(spec: ScreenSpec) -> Tuple[str, List[Any]]:
     """Validate filters/sector and build the WHERE clause + ordered params.
 
@@ -132,20 +202,17 @@ def _build_where(spec: ScreenSpec) -> Tuple[str, List[Any]]:
     clauses: List[str] = []
 
     for f in spec.filters:
-        if f.field not in _METRIC_COL_SET:
-            raise ValueError(
-                f"Invalid filter field {f.field!r}: not in whitelisted _METRIC_COLUMNS."
-            )
+        col = _qualify_column(f.field, context="filter")
         if f.op == "between":
             if f.value2 is None:
                 raise ValueError(
                     "op='between' requires value2 to be provided."
                 )
-            clauses.append(f'ma."{f.field}" BETWEEN ? AND ?')
+            clauses.append(f"{col} BETWEEN ? AND ?")
             params.extend([f.value, f.value2])
         elif f.op in ALLOWED_OPS:
             sql_op = ALLOWED_OPS[f.op]
-            clauses.append(f'ma."{f.field}" {sql_op} ?')
+            clauses.append(f"{col} {sql_op} ?")
             params.append(f.value)
         else:
             raise ValueError(
@@ -184,34 +251,33 @@ def build_screen_query(spec: ScreenSpec) -> Tuple[str, List[Any]]:
             f"Invalid sort_dir {spec.sort_dir!r}: must be 'asc' or 'desc'."
         )
 
-    # Validate sort column
-    if spec.sort is not None and spec.sort not in _METRIC_COL_SET:
-        raise ValueError(
-            f"Invalid sort field {spec.sort!r}: not in whitelisted _METRIC_COLUMNS."
-        )
+    # Validate sort column (may be either a metric or a snapshot column)
+    sort_col: Optional[str] = None
+    if spec.sort is not None:
+        sort_col = _qualify_column(spec.sort, context="sort")
 
     # Build WHERE (also validates filters)
     where_sql, params = _build_where(spec)
 
     # Build ORDER BY with NULLs-last
-    if spec.sort is not None:
-        order_sql = (
-            f'ORDER BY (ma."{spec.sort}" IS NULL), '
-            f'ma."{spec.sort}" {spec.sort_dir.upper()}'
-        )
+    if sort_col is not None:
+        order_sql = f"ORDER BY ({sort_col} IS NULL), {sort_col} {spec.sort_dir.upper()}"
     else:
         order_sql = "ORDER BY ma.ticker"
 
-    # SELECT columns: fixed columns + all metric columns
+    # SELECT columns: fixed columns + all metric columns + all snapshot columns
     metric_cols_sql = ", ".join(f'ma."{c}"' for c in _METRIC_COLUMNS)
+    snapshot_cols_sql = ", ".join(f'ms."{c}"' for c in SNAPSHOT_SCREEN_COLUMNS)
     select_sql = (
-        f"c.ticker, c.company_name, c.sector_class, ma.fiscal_year, {metric_cols_sql}"
+        f"c.ticker, c.company_name, c.sector_class, ma.fiscal_year, "
+        f"{metric_cols_sql}, {snapshot_cols_sql}"
     )
 
     sql = (
         f"SELECT {select_sql}\n"
         f"FROM metrics_annual ma\n"
         f"{_LATEST_FY_JOIN}\n"
+        f"{_SNAPSHOT_JOIN}\n"
         f"{where_sql}\n"
         f"{order_sql}\n"
         f"LIMIT ? OFFSET ?"
@@ -234,6 +300,7 @@ def build_count_query(spec: ScreenSpec) -> Tuple[str, List[Any]]:
         f"SELECT COUNT(*)\n"
         f"FROM metrics_annual ma\n"
         f"{_LATEST_FY_JOIN}\n"
+        f"{_SNAPSHOT_JOIN}\n"
         f"{where_sql}"
     ).strip()
 

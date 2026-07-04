@@ -16,15 +16,22 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from ..config import AppConfig, StorageConfig
+from ..exporters.sqlite_store import SQLiteStore
 from ..fetchers.stock_data_fetcher import StockDataFetcher
+from ..fetchers.yahoo_handler import YahooHandler
 
 # ---------------------------------------------------------------------------
-# Default factory (replaced in tests)
+# Default factories (replaced in tests)
 # ---------------------------------------------------------------------------
 
 def default_fetcher_factory(config: AppConfig) -> StockDataFetcher:
     """Create a real StockDataFetcher from the given config."""
     return StockDataFetcher(config)
+
+
+def default_quote_fetcher_factory(config: AppConfig) -> YahooHandler:
+    """Create a real YahooHandler for quote-only refreshes from the given config."""
+    return YahooHandler(rate_limit_delay=config.yahoo.rate_limit_delay)
 
 
 # ---------------------------------------------------------------------------
@@ -33,6 +40,17 @@ def default_fetcher_factory(config: AppConfig) -> StockDataFetcher:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _collected_at_now() -> str:
+    # collected_at must match the full pipeline's naive-local format — the
+    # column is TEXT-ordered and mixed offsets break latest-row resolution.
+    # ``StockData.collected_at`` (src/models/stock_data.py) is generated via
+    # ``datetime.now()`` (naive local) and serialised with ``.isoformat()``;
+    # a UTC-aware string here would sort lower than a same-day naive-local
+    # string from a full collection run, so ``Reader.quote`` (MAX collected_at)
+    # would keep serving the stale full-run row instead of this refresh.
+    return datetime.now().isoformat()
 
 
 @dataclass
@@ -109,10 +127,12 @@ class CollectionJobManager:
         db_path: Path,
         years_back: Optional[int] = None,
         fetcher_factory: Callable[[AppConfig], StockDataFetcher] = default_fetcher_factory,
+        quote_fetcher_factory: Callable[[AppConfig], YahooHandler] = default_quote_fetcher_factory,
     ) -> None:
         self.db_path: Path = Path(db_path)
         self.years_back: Optional[int] = years_back
         self.fetcher_factory: Callable[[AppConfig], StockDataFetcher] = fetcher_factory
+        self.quote_fetcher_factory: Callable[[AppConfig], YahooHandler] = quote_fetcher_factory
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=1)
         self._jobs: Dict[str, JobStatus] = {}
         self._lock: threading.Lock = threading.Lock()
@@ -127,10 +147,17 @@ class CollectionJobManager:
         years_back: Optional[int] = None,
         include_yahoo: bool = True,
         include_sec: bool = True,
+        mode: str = "full",
     ) -> str:
-        """Enqueue a collection job and return the ``job_id``."""
+        """Enqueue a job and return the ``job_id``.
+
+        ``mode="full"`` (default) runs the existing full collection path
+        (``_run``, unchanged). ``mode="quote"`` runs the lightweight
+        quote-only refresh path (``_run_quote``) instead — both are submitted
+        to the SAME ``ThreadPoolExecutor(max_workers=1)``, so a quote job and
+        a full job never run concurrently regardless of submission order.
+        """
         job_id = uuid.uuid4().hex
-        effective_years = years_back if years_back is not None else self.years_back
         status = JobStatus(
             job_id=job_id,
             tickers=list(tickers),
@@ -140,9 +167,13 @@ class CollectionJobManager:
         )
         with self._lock:
             self._jobs[job_id] = status
-        self._executor.submit(
-            self._run, job_id, list(tickers), effective_years, include_yahoo, include_sec
-        )
+        if mode == "quote":
+            self._executor.submit(self._run_quote, job_id, list(tickers))
+        else:
+            effective_years = years_back if years_back is not None else self.years_back
+            self._executor.submit(
+                self._run, job_id, list(tickers), effective_years, include_yahoo, include_sec
+            )
         return job_id
 
     def get(self, job_id: str) -> Optional[JobStatus]:
@@ -217,9 +248,69 @@ class CollectionJobManager:
                 done_job.finished_at = _now_iso()
                 done_job.current_ticker = None
                 done_job.summary = {
+                    "mode": "full",
                     "total": len(results),
                     "successful": sum(1 for r in results if not r.errors),
                     "with_errors": sum(1 for r in results if r.errors),
+                }
+
+        except Exception as exc:  # noqa: BLE001 — worker must not propagate
+            with self._lock:
+                err_job = self._jobs.get(job_id)
+                if err_job is not None:
+                    err_job.state = "error"
+                    err_job.error = str(exc)
+                    err_job.finished_at = _now_iso()
+                    err_job.current_ticker = None
+
+    def _run_quote(self, job_id: str, tickers: List[str]) -> None:
+        """Worker function for ``mode="quote"`` jobs — same executor as ``_run``,
+        so it is still serialized with any full-collection job.
+
+        Must **never** let an exception propagate out, for the same reason
+        documented on ``_run``. Per-ticker failures are tolerated (counted in
+        ``with_errors``) rather than aborting the whole batch, since
+        ``YahooHandler.fetch_quote`` reports failures via an ``"error"`` key
+        instead of raising.
+        """
+        try:
+            with self._lock:
+                job = self._jobs[job_id]
+                job.state = "running"
+                job.started_at = _now_iso()
+                job.total = len(tickers)
+
+            config = AppConfig(storage=StorageConfig(db_path=self.db_path))
+            handler = self.quote_fetcher_factory(config)
+            store = SQLiteStore(self.db_path)
+
+            successful = 0
+            with_errors = 0
+            for ticker in tickers:
+                with self._lock:
+                    self._jobs[job_id].current_ticker = ticker
+
+                quote = handler.fetch_quote(ticker)
+                if "error" in quote:
+                    with_errors += 1
+                else:
+                    collected_at = _collected_at_now()
+                    store.upsert_quote(ticker, quote, collected_at)
+                    successful += 1
+
+                with self._lock:
+                    self._jobs[job_id].completed += 1
+
+            with self._lock:
+                done_job = self._jobs[job_id]
+                done_job.state = "done"
+                done_job.finished_at = _now_iso()
+                done_job.current_ticker = None
+                done_job.summary = {
+                    "mode": "quote",
+                    "total": len(tickers),
+                    "successful": successful,
+                    "with_errors": with_errors,
                 }
 
         except Exception as exc:  # noqa: BLE001 — worker must not propagate

@@ -265,3 +265,43 @@ def test_vintages_do_not_affect_financials_annual(tmp_path):
     n = conn.execute("SELECT COUNT(*) FROM financials_annual WHERE ticker='ZZ'").fetchone()[0]
     conn.close()
     assert n == 1  # the latest-view table is unaffected by vintages
+
+
+def test_upsert_quote_carries_forward_computed_snapshot_fields(tmp_path):
+    """A quote-only refresh (``fetch_quote``) can't compute ma_50/ma_200/beta
+    (no history call) or ev_to_fcf/fcf_yield/risk_free_rate (full-export-only
+    calculated_metrics/risk_free_rate). Those must carry forward from the
+    latest prior snapshot rather than going NULL on every quote refresh."""
+    db = tmp_path / "quote.db"
+    store = SQLiteStore(db_path=str(db))
+
+    # Seed a prior "full collection" snapshot with the computed-only fields set.
+    s = _company("AAA", 1000.0, 0.20)
+    s.market_data = {"current_price": 95.0}
+    store.export([s])
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "UPDATE market_snapshots SET ma_50=10.0, ma_200=12.0, beta=1.1, "
+        "ev_to_fcf=15.0, fcf_yield=0.07, risk_free_rate=0.045 WHERE ticker='AAA'"
+    )
+    conn.commit()
+    conn.close()
+
+    # A quote-only fetch has none of these fields.
+    quote = {
+        "market_data": {"current_price": 99.0},
+        "valuation": {"pe_trailing": 18.0},
+        "shareholders": {},
+        "analyst_estimates": {},
+    }
+    store.upsert_quote("AAA", quote, "2024-06-01T00:00:00")
+
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute(
+            "SELECT ma_50, ma_200, beta, ev_to_fcf, fcf_yield, risk_free_rate, current_price "
+            "FROM market_snapshots WHERE ticker='AAA' AND collected_at='2024-06-01T00:00:00'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == (10.0, 12.0, 1.1, 15.0, 0.07, 0.045, 99.0)

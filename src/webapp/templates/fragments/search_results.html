@@ -2,7 +2,7 @@
 <ul class="search-list">
   {% for h in hits %}
   <li class="search-item">
-    <a class="search-link" href="/companies/{{ h.ticker }}">
+    <a class="search-link" href="/stocks/{{ h.ticker }}">
       <span class="search-ticker">{{ h.ticker }}</span>
       <span class="search-name">— {{ h.company_name or "" }}</span>
     </a>

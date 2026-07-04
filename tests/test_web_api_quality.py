@@ -1,11 +1,11 @@
 """Tests for the data-quality & coverage API and dashboard (Task 7).
 
 Fixtures from conftest.py:
-- 3 tickers: AAA (general), BBB (bank), CCC (reit)
+- 4 tickers: AAA (general), BBB (bank), CCC (reit), EEE (general)
 - AAA has 2 collection runs (2024-01-15, 2024-06-15)
-- BBB and CCC each have 1 collection run (2024-01-15)
+- BBB, CCC, EEE each have 1 collection run (2024-01-15)
 - AAA has unmapped_facts tag "SomeCustomTag"
-- All 3 tickers have financials_annual with 'revenue' and 'total_assets' populated
+- All 4 tickers have financials_annual with 'revenue' and 'total_assets' populated
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def test_latest_runs_ok(client):
     rows = r.json()
     assert isinstance(rows, list)
     tickers = {row["ticker"] for row in rows}
-    assert tickers == {"AAA", "BBB", "CCC"}
+    assert tickers == {"AAA", "BBB", "CCC", "EEE"}
 
 
 def test_latest_runs_has_quality_keys(client):
@@ -52,8 +52,8 @@ def test_runs_all(client):
     r = client.get("/api/quality/runs")
     assert r.status_code == 200
     rows = r.json()
-    # 4 total rows: AAA×2, BBB×1, CCC×1
-    assert len(rows) == 4
+    # 5 total rows: AAA×2, BBB×1, CCC×1, EEE×1
+    assert len(rows) == 5
 
 
 def test_runs_ticker_filter(client):
@@ -98,7 +98,7 @@ def test_coverage_by_sector_structure(client):
 
 
 def test_coverage_field_fill_rates_known_field(client):
-    """'revenue' is present in all 3 companies' latest annual row -> fill_rate = 1.0."""
+    """'revenue' is present in all 4 companies' latest annual row -> fill_rate = 1.0."""
     r = client.get("/api/quality/coverage")
     ffr = r.json()["field_fill_rates"]
     assert isinstance(ffr, dict)
@@ -181,7 +181,7 @@ def test_freshness_ok(client):
 def test_freshness_n_tickers(client):
     r = client.get("/api/quality/freshness")
     body = r.json()
-    assert body["n_tickers"] == 3
+    assert body["n_tickers"] == 4
 
 
 def test_freshness_table_counts(client):

@@ -1,0 +1,47 @@
+{# Command-bar HELP overlay. Static content; toggled by terminal.js. #}
+<div id="help-overlay" class="help-overlay" hidden>
+  <div class="help-panel">
+    <div class="help-header">
+      <span class="help-title">Command Reference</span>
+      <button type="button" id="help-close" class="help-close" aria-label="Close">&times;</button>
+    </div>
+    <p class="help-hint">
+      Type <span class="kbd">TICKER</span> <span class="kbd">CODE</span> and press Enter
+      &nbsp;·&nbsp; e.g. <span class="kbd">AAPL GP</span>
+      &nbsp;·&nbsp; press <span class="kbd">`</span> or <span class="kbd">/</span> to focus the command line
+      &nbsp;·&nbsp; <span class="kbd">Esc</span> to clear
+    </p>
+
+    <div class="help-grid">
+      <div class="help-col">
+        <h3 class="help-col-title">Per-ticker functions</h3>
+        <table class="data-table help-table">
+          <tbody>
+            <tr><th class="row-label">DES</th><td>Description / overview (default when only a ticker is entered)</td></tr>
+            <tr><th class="row-label">GP</th><td>Price graph</td></tr>
+            <tr><th class="row-label">FA</th><td>Financial analysis (statements)</td></tr>
+            <tr><th class="row-label">ERN</th><td>Earnings</td></tr>
+            <tr><th class="row-label">STAT</th><td>Key statistics</td></tr>
+            <tr><th class="row-label">HP</th><td>Historical prices</td></tr>
+            <tr><th class="row-label">DVD</th><td>Dividends</td></tr>
+            <tr><th class="row-label">HDS</th><td>Holders</td></tr>
+            <tr><th class="row-label">INS</th><td>Insider activity</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="help-col">
+        <h3 class="help-col-title">Global functions</h3>
+        <table class="data-table help-table">
+          <tbody>
+            <tr><th class="row-label">SCR</th><td>Screener</td></tr>
+            <tr><th class="row-label">ASOF</th><td>As-Of explorer</td></tr>
+            <tr><th class="row-label">QM</th><td>Data quality &amp; coverage</td></tr>
+            <tr><th class="row-label">COL</th><td>Data collection</td></tr>
+            <tr><th class="row-label">HELP</th><td>Toggle this overlay</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>

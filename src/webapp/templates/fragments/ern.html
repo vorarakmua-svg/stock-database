@@ -1,0 +1,74 @@
+<section class="section">
+  <h2 class="section-heading">Earnings Surprise</h2>
+  {% if earnings_rows %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Quarter</th>
+          <th class="num">Est. EPS</th>
+          <th class="num">Actual EPS</th>
+          <th class="num">Surprise</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in earnings_rows %}
+        <tr>
+          <td class="row-label">{{ row.quarter }}</td>
+          <td class="num">{{ row.estimate }}</td>
+          <td class="num">{{ row.actual }}</td>
+          <td class="num {{ row.surprise_class }}">{{ row.surprise }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-row">No earnings history collected.</p>
+  {% endif %}
+  <div id="ern-chart" class="gp-chart"></div>
+  <script>
+    var _ernCfg = {{ ern_cfg_json | safe }};
+    renderERN('ern-chart', _ernCfg.quarters, _ernCfg.estimates, _ernCfg.actuals);
+  </script>
+</section>
+
+<section class="section">
+  <h2 class="section-heading">Analyst Estimates</h2>
+
+  <div class="range-block">
+    <div class="summary-label">Price Target Range</div>
+    <div class="range-row">
+      <span class="range-endpoint">{{ target_low_fmt }}</span>
+      <div class="range-bar">
+        {% if mean_marker_pct is not none %}
+        <div class="range-marker range-marker--mean" style="left: {{ mean_marker_pct }}%;" title="Mean target: {{ target_mean_fmt }}"></div>
+        {% endif %}
+        {% if price_marker_pct is not none %}
+        <div class="range-marker" style="left: {{ price_marker_pct }}%;" title="Current price"></div>
+        {% endif %}
+      </div>
+      <span class="range-endpoint">{{ target_high_fmt }}</span>
+    </div>
+    <div class="muted mt-2" style="font-size: 0.75rem;">Mean {{ target_mean_fmt }} &middot; Median {{ target_median_fmt }}</div>
+  </div>
+
+  <div class="range-block mt-4">
+    <div class="summary-label">Recommendation{% if number_of_analysts is not none %} ({{ number_of_analysts }} analysts){% endif %}</div>
+    <div class="range-row">
+      <span class="range-endpoint">BUY (1)</span>
+      <div class="range-bar">
+        {% if gauge_marker_pct is not none %}
+        <div class="range-marker" style="left: {{ gauge_marker_pct }}%;" title="Recommendation mean: {{ recommendation_mean_fmt }}"></div>
+        {% endif %}
+      </div>
+      <span class="range-endpoint">SELL (5)</span>
+    </div>
+  </div>
+
+  <div class="summary-grid mt-4">
+    <div class="summary-item"><span class="summary-label">Earnings Growth</span><span class="summary-value">{{ earnings_growth_fmt }}</span></div>
+    <div class="summary-item"><span class="summary-label">Revenue Growth</span><span class="summary-value">{{ revenue_growth_fmt }}</span></div>
+    <div class="summary-item"><span class="summary-label">Next Earnings</span><span class="summary-value">{{ earnings_date or "—" }}</span></div>
+  </div>
+</section>

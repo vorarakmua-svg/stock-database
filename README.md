@@ -508,8 +508,17 @@ ORDER BY m.roic DESC;
 ```
 
 Tables: `companies`, `financials_annual`, `financials_quarterly`, `financials_ttm`,
-`financials_annual_vintages`, `metrics_annual`, `market_snapshots`, `collection_runs`.
-All writes are idempotent upserts, so re-runs update in place.
+`financials_annual_vintages`, `metrics_annual`, `market_snapshots`, `collection_runs`,
+plus (added for the web terminal — see [Web interface](#web-interface)) `price_bars`
+(daily OHLCV, also used for the `^GSPC` S&P 500 benchmark), `analyst_snapshots`
+(point-in-time price targets/recommendations), `earnings_history` (EPS
+estimate/actual/surprise per quarter), `dividend_events`, `split_events`,
+`holders` (institutional + mutual-fund), `insider_transactions`, and `officers`.
+`market_snapshots` itself was widened with ~40 point-in-time market/valuation
+columns (P/E, PEG, price/book, debt/equity, short interest, 52-week range,
+moving averages, …) — see `SNAPSHOT_SCREEN_COLUMNS` in `src/webapp/screener.py`
+for the subset exposed to the screener. All writes are idempotent upserts, so
+re-runs update in place.
 
 The `financials_annual_vintages` table stores **point-in-time** data: one row per
 (ticker, fiscal_year, filing accession), so you can see every filing's view of a year —
@@ -616,12 +625,44 @@ The server binds to `127.0.0.1` by default (localhost only).
 
 ### Features
 
+- **Terminal command bar** — a Bloomberg-style `TICKER CODE` command line (focus with `` ` `` or `/`) that jumps straight to any workstation tab or global tool. See [Terminal command bar](#terminal-command-bar) below.
+- **Company workstation** — a single per-ticker page (`/stocks/{ticker}`) with 9 tabs: description/overview, price chart with indicators, financial statements, earnings, key stats, historical prices, dividends, holders, and insider activity.
 - **Dashboard** — data quality score, field coverage bar chart, freshness summary, unmapped-fact tracker.
 - **Companies browser** — filterable list of all tracked companies with sector drill-down.
-- **Company deep-dive** — transposed annual / quarterly / TTM statements, metric trend charts, peer benchmarking (company vs sector median), and CSV downloads.
-- **Cross-company screener** — filter by any metric (ROIC, net margin, debt/EBITDA, …), sort, paginate, compare selected companies side-by-side, and download results as CSV.
+- **Cross-company screener** — filter by any fundamental metric (ROIC, net margin, debt/EBITDA, …) *or* market/valuation column (P/E, dividend yield, PEG, short interest, …), sort, paginate, compare selected companies side-by-side, and download results as CSV.
 - **Point-in-time (as-of) explorer** — look up what financials and ratios looked like as of any historical date (before later restatements), and browse vintage side-by-side tables.
+- **On-demand quote refresh** — re-fetch a single ticker's live price/market snapshot from the workstation without running a full collection (see `STOCK_WEB_ALLOW_QUOTE_REFRESH` below).
 - **CSV export** — download annual financials, annual metrics, or screener results as CSV from any company page or screener view.
+
+### Terminal command bar
+
+Type a ticker and a function code into the command bar (e.g. `AAPL GP` ⏎) to jump directly to a workstation tab. A ticker alone defaults to `DES`. Autocomplete suggests tickers as you type.
+
+Per-ticker function codes (`TICKER CODE` → `/stocks/{TICKER}?tab=...`):
+
+| Code | Tab | Shows |
+|---|---|---|
+| `DES` | Description | Company overview, profile, officers (default) |
+| `GP` | Graph | Price chart with MA50/MA200/RSI/MACD indicators and `^GSPC` overlay |
+| `FA` | Financial analysis | Annual/quarterly/TTM statements |
+| `ERN` | Earnings | Earnings-surprise history (EPS estimate vs. actual) |
+| `STAT` | Key statistics | Valuation & market snapshot (P/E, market cap, beta, …) |
+| `HP` | Historical prices | Daily OHLCV price table |
+| `DVD` | Dividends | Dividend payments and stock splits |
+| `HDS` | Holders | Institutional and mutual-fund holders |
+| `INS` | Insiders | Insider transaction history |
+
+Global codes (no ticker needed):
+
+| Code | Destination |
+|---|---|
+| `SCR` | Cross-company screener (`/screener`) |
+| `ASOF` | Point-in-time as-of explorer (`/asof`) |
+| `QM` | Data-quality dashboard (`/quality`) |
+| `COL` | Collection page (`/collect`) |
+| `HELP` | Toggles the in-app command-code cheat sheet |
+
+The legacy `/companies/{ticker}` route still works — it redirects (307) to `/stocks/{ticker}?tab=fa`.
 
 ### JSON API
 
@@ -657,12 +698,20 @@ Other supported overrides:
 
 | Variable | Default | Description |
 |---|---|---|
-| `STOCK_WEB_ALLOW_COLLECTION` | `""` (disabled) | Set to `1`, `true`, `yes`, or `on` to enable collection |
+| `STOCK_WEB_ALLOW_COLLECTION` | `""` (disabled) | Set to `1`, `true`, `yes`, or `on` to enable full collection |
+| `STOCK_WEB_ALLOW_QUOTE_REFRESH` | `"1"` (**enabled**) | Set to `0`/`false`/`no`/`off` to disable the on-demand single-ticker quote refresh (unlike collection, this is opt-out — refresh is low-risk/low-cost). Gates `POST /api/stocks/{ticker}/refresh-quote`. |
 | `STOCK_WEB_HOST` | `127.0.0.1` | Bind host |
 | `STOCK_WEB_PORT` | `8000` | Bind port |
 | `STOCK_WEB_DB_PATH` | default DB path | Path to the SQLite database |
 
 To refresh data without the web UI, use the `stock-data` CLI as described above.
+
+Because the workstation's ERN/HP/DVD/HDS/INS tabs and the `^GSPC` chart overlay
+need price history, analyst estimates, earnings history, dividends/splits, and
+shareholder data, a full collection now makes roughly 6 extra Yahoo Finance
+calls per ticker (`history()`, `dividends`, `splits`, `institutional_holders`,
+`mutualfund_holders`, `insider_transactions`) plus one benchmark call
+(`^GSPC` price history) made once per collection run, not per ticker.
 
 ## License
 

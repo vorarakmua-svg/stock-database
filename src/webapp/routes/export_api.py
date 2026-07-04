@@ -17,6 +17,7 @@ from fastapi.responses import Response
 from ..dependencies import get_reader
 from ..repository import Reader
 from ..screener import parse_screen_params
+from .stocks_api import resample_bars, resolve_interval, resolve_range_start
 
 router = APIRouter(prefix="/api/export", tags=["export"])
 
@@ -66,6 +67,57 @@ def export_metrics(
         media_type="text/csv",
         headers={
             "Content-Disposition": f'attachment; filename="{ticker}_metrics.csv"',
+        },
+    )
+
+
+@router.get("/stock/{ticker}/bars.csv")
+def export_stock_bars(
+    ticker: str,
+    range: str = "1Y",  # noqa: A002 - matches the public query-param name
+    interval: str = "auto",
+    r: Reader = Depends(get_reader),
+) -> Response:
+    """Download OHLCV bars for *ticker* over ``range`` as a CSV attachment.
+
+    404 unknown ticker; 400 on an invalid ``range``/``interval`` (mirrors
+    ``GET /api/stocks/{ticker}/bars``).
+    """
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    try:
+        start = resolve_range_start(range)
+        resolved_interval = resolve_interval(interval, range)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    start_iso = start.isoformat() if start is not None else None
+    raw_bars = r.price_bars(ticker, start=start_iso)
+    rows = resample_bars(raw_bars, resolved_interval)
+    content = _rows_to_csv(rows)
+    return Response(
+        content=content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{ticker}_bars.csv"',
+        },
+    )
+
+
+@router.get("/stock/{ticker}/dividends.csv")
+def export_stock_dividends(
+    ticker: str,
+    r: Reader = Depends(get_reader),
+) -> Response:
+    """Download dividend history for *ticker* as a CSV attachment."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    rows = r.dividend_events(ticker)
+    content = _rows_to_csv(rows)
+    return Response(
+        content=content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{ticker}_dividends.csv"',
         },
     )
 

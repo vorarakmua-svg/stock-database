@@ -1,0 +1,32 @@
+{# Quote-refresh poll fragment (Task 10). DES's REFRESH button POSTs to
+   /api/stocks/{ticker}/refresh-quote, then kicks off polling of this
+   fragment (see fragments/des.html's hx-on::after-request). While the job
+   is queued/running, this re-polls itself every 2s; once it reaches a
+   terminal state the wrapper carries NO hx-trigger, so polling stops on its
+   own. "done" swaps in a DES reload; "error" shows the failure message. #}
+{% if terminal %}
+<div id="refresh-status">
+  {% if job.state == "done" %}
+  <div
+    class="job-state job-state--done"
+    hx-get="/ui/stocks/{{ ticker }}/des"
+    hx-trigger="load"
+    hx-target="#panel"
+    hx-swap="innerHTML"
+  >Quote refreshed.</div>
+  {% else %}
+  <div class="job-error alert alert-danger">
+    <strong>Refresh failed:</strong> {{ job.error }}
+  </div>
+  {% endif %}
+</div>
+{% else %}
+<div
+  id="refresh-status"
+  hx-get="/ui/stocks/{{ ticker }}/refresh-status/{{ job.job_id }}"
+  hx-trigger="load, every 2s"
+  hx-swap="outerHTML"
+>
+  <span class="job-state job-state--{{ job.state }}">{{ job.state | upper }}</span>
+</div>
+{% endif %}

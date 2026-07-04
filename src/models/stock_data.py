@@ -69,6 +69,15 @@ class StockData:
     # Dividend payment history (from Yahoo)
     dividend_history: Dict[str, Any] = field(default_factory=dict)
 
+    # Daily OHLCV price bars: {date, open, high, low, close, volume} (from Yahoo)
+    price_bars: List[Dict[str, Any]] = field(default_factory=list)
+
+    # Earnings-surprise history: {quarter, eps_estimate, eps_actual, surprise_pct} (from Yahoo)
+    earnings_history: List[Dict[str, Any]] = field(default_factory=list)
+
+    # Stock split events: {date, ratio} (from Yahoo)
+    splits: List[Dict[str, Any]] = field(default_factory=list)
+
     # Calculated metrics for DCF modeling (FCF, EBITDA, ROIC, etc.)
     calculated_metrics: Dict[str, Any] = field(default_factory=dict)
 
@@ -285,6 +294,18 @@ class StockData:
         # Dividend payment history
         if "dividend_history" in yahoo_data:
             self.dividend_history = yahoo_data["dividend_history"]
+
+        # Daily OHLCV price bars
+        if "price_bars" in yahoo_data:
+            self.price_bars = yahoo_data["price_bars"]
+
+        # Earnings-surprise history
+        if "earnings_history" in yahoo_data:
+            self.earnings_history = yahoo_data["earnings_history"]
+
+        # Stock split events
+        if "splits" in yahoo_data:
+            self.splits = yahoo_data["splits"]
 
     def merge_sec_data(self, sec_data: Dict[str, Any]) -> None:
         """

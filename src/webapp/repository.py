@@ -20,6 +20,9 @@ _METRIC_COL_SET: FrozenSet[str] = frozenset(_METRIC_COLUMNS)
 _CANONICAL_COL_SET: FrozenSet[str] = frozenset(_CANONICAL_COLUMNS)
 _SNAPSHOT_COL_SET: FrozenSet[str] = frozenset(_SNAPSHOT_COLUMNS)  # reserved for future snapshot-field filter
 
+# Valid ``holder_type`` values for the ``holders`` table (guards SQL interpolation).
+_HOLDER_TYPES: FrozenSet[str] = frozenset({"institutional", "mutualfund"})
+
 
 class Reader:
     """Read-only DAL over the SQLite stock database."""
@@ -292,6 +295,124 @@ class Reader:
         sql += " ORDER BY fiscal_year DESC, filed_date ASC"
         cur = self._conn.execute(sql, params)
         return [dict(row) for row in cur.fetchall()]
+
+    # ---- Terminal workstation: quote/bars/analyst/earnings/dividends/holders ----
+
+    def quote(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """Latest ``market_snapshots`` row plus computed ``change``/``change_pct``.
+
+        ``change`` = ``current_price - previous_close``; ``change_pct`` = ``change /
+        previous_close``. Both are ``None`` unless both inputs are non-null and
+        ``previous_close`` is non-zero. Returns ``None`` if the ticker has no
+        snapshot rows.
+        """
+        row = self.latest_snapshot(ticker)
+        if row is None:
+            return None
+        current_price = row.get("current_price")
+        previous_close = row.get("previous_close")
+        change: Optional[float] = None
+        change_pct: Optional[float] = None
+        if current_price is not None and previous_close is not None and previous_close != 0:
+            change = current_price - previous_close
+            change_pct = change / previous_close
+        row["change"] = change
+        row["change_pct"] = change_pct
+        return row
+
+    def price_bars(
+        self, ticker: str, start: Optional[str] = None, end: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """``price_bars`` rows ascending by ``date``, optionally bounded by ``start``/``end``.
+
+        Also used for benchmark series (e.g. ``^GSPC``) which share this table.
+        """
+        where = ["ticker = ?"]
+        params: List[Any] = [ticker]
+        if start is not None:
+            where.append("date >= ?")
+            params.append(start)
+        if end is not None:
+            where.append("date <= ?")
+            params.append(end)
+        sql = "SELECT * FROM price_bars WHERE " + " AND ".join(where) + " ORDER BY date ASC"
+        cur = self._conn.execute(sql, params)
+        return [dict(row) for row in cur.fetchall()]
+
+    def analyst_snapshot(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """Newest ``analyst_snapshots`` row by ``collected_at``, or ``None``."""
+        cur = self._conn.execute(
+            "SELECT * FROM analyst_snapshots WHERE ticker = ? "
+            "ORDER BY collected_at DESC LIMIT 1",
+            (ticker,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row is not None else None
+
+    def earnings_history(self, ticker: str) -> List[Dict[str, Any]]:
+        """All ``earnings_history`` rows ascending by ``quarter``."""
+        cur = self._conn.execute(
+            "SELECT * FROM earnings_history WHERE ticker = ? ORDER BY quarter ASC",
+            (ticker,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def dividend_events(self, ticker: str) -> List[Dict[str, Any]]:
+        """All ``dividend_events`` rows ascending by ``date``."""
+        cur = self._conn.execute(
+            "SELECT * FROM dividend_events WHERE ticker = ? ORDER BY date ASC",
+            (ticker,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def split_events(self, ticker: str) -> List[Dict[str, Any]]:
+        """All ``split_events`` rows ascending by ``date``."""
+        cur = self._conn.execute(
+            "SELECT * FROM split_events WHERE ticker = ? ORDER BY date ASC",
+            (ticker,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def holders(self, ticker: str, holder_type: str) -> List[Dict[str, Any]]:
+        """``holders`` rows for ``ticker``, descending by ``pct_held``.
+
+        Raises ``ValueError`` unless ``holder_type`` is one of the whitelisted
+        ``_HOLDER_TYPES`` (``institutional``/``mutualfund``) — it is interpolated
+        nowhere (bound as a parameter), but the guard mirrors the other
+        whitelisted-input methods and gives callers a clean 400 mapping.
+        """
+        if holder_type not in _HOLDER_TYPES:
+            raise ValueError(
+                f"Unknown holder_type {holder_type!r}. "
+                f"Must be one of {sorted(_HOLDER_TYPES)}."
+            )
+        cur = self._conn.execute(
+            "SELECT * FROM holders WHERE ticker = ? AND holder_type = ? "
+            "ORDER BY pct_held DESC",
+            (ticker, holder_type),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def insider_transactions(self, ticker: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """``insider_transactions`` rows for ``ticker``, descending by ``start_date``."""
+        cur = self._conn.execute(
+            "SELECT * FROM insider_transactions WHERE ticker = ? "
+            "ORDER BY start_date DESC LIMIT ?",
+            (ticker, limit),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def profile(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """Company profile: ``{"company": ..., "officers": [...]}``, or ``None`` if unknown."""
+        company = self.get_company(ticker)
+        if company is None:
+            return None
+        cur = self._conn.execute(
+            "SELECT * FROM officers WHERE ticker = ? ORDER BY name ASC",
+            (ticker,),
+        )
+        officers = [dict(row) for row in cur.fetchall()]
+        return {"company": company, "officers": officers}
 
     # ---- Screener & cross-company analytics --------------------------------
 

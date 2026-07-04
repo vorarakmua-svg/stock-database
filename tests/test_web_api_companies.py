@@ -16,13 +16,13 @@ from fastapi.testclient import TestClient
 
 
 def test_list_companies_all(client: TestClient) -> None:
-    """Default list returns all 3 fixture companies with correct total."""
+    """Default list returns all 4 fixture companies with correct total."""
     resp = client.get("/api/companies")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["total"] == 3
+    assert data["total"] == 4
     tickers = {item["ticker"] for item in data["items"]}
-    assert tickers == {"AAA", "BBB", "CCC"}
+    assert tickers == {"AAA", "BBB", "CCC", "EEE"}
 
 
 def test_list_companies_has_required_fields(client: TestClient) -> None:
@@ -58,7 +58,7 @@ def test_list_companies_limit(client: TestClient) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["items"]) == 1
-    assert data["total"] == 3
+    assert data["total"] == 4
 
 
 # ---------------------------------------------------------------------------

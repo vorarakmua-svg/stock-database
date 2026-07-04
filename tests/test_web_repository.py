@@ -11,6 +11,8 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 
+from src.exporters.sqlite_store import SQLiteStore
+from src.models.stock_data import StockData
 from src.webapp.dependencies import get_reader
 from src.webapp.repository import Reader  # noqa: E402
 
@@ -23,7 +25,8 @@ class TestListCompanies:
     def test_returns_all_companies(self, web_db):
         with Reader(web_db) as r:
             result = r.list_companies()
-        assert len(result) == 3
+        # AAA, BBB, CCC, EEE
+        assert len(result) == 4
 
     def test_ordered_by_ticker(self, web_db):
         with Reader(web_db) as r:
@@ -71,7 +74,8 @@ class TestListCompanies:
             page1 = r.list_companies(limit=2, offset=0)
             page2 = r.list_companies(limit=2, offset=2)
         assert len(page1) == 2
-        assert len(page2) == 1
+        # With 4 companies total, offset=2, limit=2 returns 2 more
+        assert len(page2) == 2
 
     def test_sector_and_search_combined(self, web_db):
         # general sector + search for "AAA" → 1 match
@@ -84,16 +88,18 @@ class TestListCompanies:
 class TestCountCompanies:
     def test_all(self, web_db):
         with Reader(web_db) as r:
-            assert r.count_companies() == 3
+            # AAA, BBB, CCC, EEE
+            assert r.count_companies() == 4
 
     def test_by_sector(self, web_db):
         with Reader(web_db) as r:
-            assert r.count_companies(sector_class="general") == 1
+            # AAA and EEE both in general sector
+            assert r.count_companies(sector_class="general") == 2
 
     def test_by_search(self, web_db):
         with Reader(web_db) as r:
-            # "Corp" appears in "AAA Corp" only
-            assert r.count_companies(search="Corp") == 1
+            # "Corp" appears in "AAA Corp" and "EEE Corp"
+            assert r.count_companies(search="Corp") == 2
 
     def test_no_match_returns_zero(self, web_db):
         with Reader(web_db) as r:
@@ -487,3 +493,219 @@ def test_get_reader_yields_reader_and_closes_on_teardown(web_db):
     # connection must be closed after teardown
     with pytest.raises(sqlite3.ProgrammingError):
         r.conn.execute("SELECT 1")
+
+
+# ---------------------------------------------------------------------------
+# Task 3: quote / bars / analyst / earnings / dividends / splits / holders /
+# insiders / profile
+# ---------------------------------------------------------------------------
+
+
+class TestQuote:
+    def test_returns_latest_snapshot_with_change(self, web_db):
+        with Reader(web_db) as r:
+            q = r.quote("AAA")
+        assert q is not None
+        # Latest AAA snapshot (2024-06-15): current_price=105.0, previous_close=100.0
+        assert q["current_price"] == 105.0
+        assert q["previous_close"] == 100.0
+        assert q["change"] == pytest.approx(5.0)
+        assert q["change_pct"] == pytest.approx(0.05)
+
+    def test_none_safe_when_previous_close_missing(self, web_db):
+        # BBB has a snapshot but no previous_close set.
+        with Reader(web_db) as r:
+            q = r.quote("BBB")
+        assert q is not None
+        assert q["previous_close"] is None
+        assert q["change"] is None
+        assert q["change_pct"] is None
+
+    def test_unknown_ticker_returns_none(self, web_db):
+        with Reader(web_db) as r:
+            assert r.quote("ZZZNONE") is None
+
+    def test_zero_previous_close_guards_division(self, tmp_path):
+        """When previous_close=0, change and change_pct must be None (division guard)."""
+        db = tmp_path / "stock.db"
+        s = StockData(ticker="TEST", cik="000", company_name="Test Inc.")
+        s.market_data = {"current_price": 10.0, "previous_close": 0.0}
+        SQLiteStore(db).export([s])
+
+        with Reader(db) as r:
+            q = r.quote("TEST")
+        assert q is not None
+        assert q["current_price"] == 10.0
+        assert q["previous_close"] == 0.0
+        assert q["change"] is None
+        assert q["change_pct"] is None
+
+
+class TestPriceBars:
+    def test_aaa_has_at_least_260_bars(self, web_db):
+        with Reader(web_db) as r:
+            bars = r.price_bars("AAA")
+        assert len(bars) >= 260
+
+    def test_ascending_by_date(self, web_db):
+        with Reader(web_db) as r:
+            bars = r.price_bars("AAA")
+        dates = [b["date"] for b in bars]
+        assert dates == sorted(dates)
+        assert dates[0] == "2023-01-01"
+
+    def test_bar_shape(self, web_db):
+        with Reader(web_db) as r:
+            bars = r.price_bars("AAA")
+        first = bars[0]
+        assert {"date", "open", "high", "low", "close", "volume"} <= set(first.keys())
+        assert first["close"] == 100.0
+
+    def test_start_end_filters(self, web_db):
+        with Reader(web_db) as r:
+            bars = r.price_bars("AAA", start="2023-01-01", end="2023-01-05")
+        assert len(bars) == 5
+        assert bars[0]["date"] == "2023-01-01"
+        assert bars[-1]["date"] == "2023-01-05"
+
+    def test_gspc_benchmark_bars(self, web_db):
+        with Reader(web_db) as r:
+            bars = r.price_bars("^GSPC")
+        assert len(bars) == 30
+        assert bars[0]["date"] == "2024-01-01"
+
+    def test_unknown_ticker_empty(self, web_db):
+        with Reader(web_db) as r:
+            assert r.price_bars("ZZZNONE") == []
+
+
+class TestAnalystSnapshot:
+    def test_returns_latest_row(self, web_db):
+        with Reader(web_db) as r:
+            snap = r.analyst_snapshot("AAA")
+        assert snap is not None
+        assert snap["recommendation"] == "buy"
+        assert snap["number_of_analysts"] == 12
+        assert snap["target_price_mean"] == 115.0
+
+    def test_unknown_ticker_returns_none(self, web_db):
+        with Reader(web_db) as r:
+            assert r.analyst_snapshot("ZZZNONE") is None
+
+
+class TestEarningsHistory:
+    def test_ascending_by_quarter(self, web_db):
+        with Reader(web_db) as r:
+            rows = r.earnings_history("AAA")
+        quarters = [row["quarter"] for row in rows]
+        assert quarters == sorted(quarters)
+        assert quarters == ["2023-03-31", "2023-06-30", "2023-09-30", "2023-12-31"]
+
+    def test_has_mixed_beats_and_misses(self, web_db):
+        with Reader(web_db) as r:
+            rows = r.earnings_history("AAA")
+        surprises = [row["surprise_pct"] for row in rows]
+        assert any(s > 0 for s in surprises)
+        assert any(s < 0 for s in surprises)
+
+    def test_unknown_ticker_empty(self, web_db):
+        with Reader(web_db) as r:
+            assert r.earnings_history("ZZZNONE") == []
+
+
+class TestDividendEvents:
+    def test_ascending_by_date_six_rows(self, web_db):
+        with Reader(web_db) as r:
+            rows = r.dividend_events("AAA")
+        assert len(rows) == 6
+        dates = [row["date"] for row in rows]
+        assert dates == sorted(dates)
+
+    def test_amount_values(self, web_db):
+        with Reader(web_db) as r:
+            rows = r.dividend_events("AAA")
+        assert rows[0]["amount"] == 0.20
+        assert rows[-1]["amount"] == 0.25
+
+    def test_unknown_ticker_empty(self, web_db):
+        with Reader(web_db) as r:
+            assert r.dividend_events("ZZZNONE") == []
+
+
+class TestSplitEvents:
+    def test_returns_one_split(self, web_db):
+        with Reader(web_db) as r:
+            rows = r.split_events("AAA")
+        assert len(rows) == 1
+        assert rows[0]["date"] == "2023-06-01"
+        assert rows[0]["ratio"] == 2.0
+
+    def test_unknown_ticker_empty(self, web_db):
+        with Reader(web_db) as r:
+            assert r.split_events("ZZZNONE") == []
+
+
+class TestHolders:
+    def test_institutional_desc_by_pct_held(self, web_db):
+        with Reader(web_db) as r:
+            rows = r.holders("AAA", "institutional")
+        assert len(rows) == 3
+        holders = [row["holder"] for row in rows]
+        assert holders == ["Vanguard Group", "BlackRock Inc", "State Street Corp"]
+        pct = [row["pct_held"] for row in rows]
+        assert pct == sorted(pct, reverse=True)
+
+    def test_mutualfund_desc_by_pct_held(self, web_db):
+        with Reader(web_db) as r:
+            rows = r.holders("AAA", "mutualfund")
+        assert len(rows) == 2
+        holders = [row["holder"] for row in rows]
+        assert holders == ["Fidelity Contrafund", "American Funds Growth"]
+
+    def test_invalid_holder_type_raises_value_error(self, web_db):
+        with Reader(web_db) as r:
+            with pytest.raises(ValueError):
+                r.holders("AAA", "bogus")
+
+    def test_unknown_ticker_empty(self, web_db):
+        with Reader(web_db) as r:
+            assert r.holders("ZZZNONE", "institutional") == []
+
+
+class TestInsiderTransactions:
+    def test_desc_by_start_date(self, web_db):
+        with Reader(web_db) as r:
+            rows = r.insider_transactions("AAA")
+        assert len(rows) == 3
+        insiders = [row["insider"] for row in rows]
+        assert insiders == ["Alice Wu", "Jane Doe", "John Smith"]
+        dates = [row["start_date"] for row in rows]
+        assert dates == sorted(dates, reverse=True)
+
+    def test_limit_respected(self, web_db):
+        with Reader(web_db) as r:
+            rows = r.insider_transactions("AAA", limit=1)
+        assert len(rows) == 1
+        assert rows[0]["insider"] == "Alice Wu"
+
+    def test_unknown_ticker_empty(self, web_db):
+        with Reader(web_db) as r:
+            assert r.insider_transactions("ZZZNONE") == []
+
+
+class TestProfile:
+    def test_company_and_officers(self, web_db):
+        with Reader(web_db) as r:
+            profile = r.profile("AAA")
+        assert profile is not None
+        assert profile["company"]["ticker"] == "AAA"
+        assert profile["company"]["description"] == (
+            "AAA Corp designs and sells enterprise software products."
+        )
+        assert profile["company"]["address"] == "1 Market Street"
+        names = [o["name"] for o in profile["officers"]]
+        assert names == ["Jane Doe", "John Smith"]
+
+    def test_unknown_ticker_returns_none(self, web_db):
+        with Reader(web_db) as r:
+            assert r.profile("ZZZNONE") is None

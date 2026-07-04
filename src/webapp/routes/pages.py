@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from ...exporters.sqlite_store import _METRIC_COLUMNS
@@ -20,7 +20,12 @@ from ...query.pit_metrics import PointInTimeMetrics
 from ..dependencies import get_asof_reader, get_pit_metrics, get_reader
 from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
 from ..repository import Reader
-from ..screener import DEFAULT_COMPARE_METRICS, METRIC_KINDS, parse_screen_params
+from ..screener import (
+    DEFAULT_COMPARE_METRICS,
+    METRIC_KINDS,
+    SNAPSHOT_SCREEN_COLUMNS,
+    parse_screen_params,
+)
 
 router = APIRouter()
 
@@ -122,9 +127,31 @@ _SCREENER_LABELS: Dict[str, str] = {
     "ffo_payout": "FFO payout",
 }
 
+# Friendly labels for the SNAPSHOT_SCREEN_COLUMNS ("MARKET / VALUATION" optgroup).
+_SNAPSHOT_SCREENER_LABELS: Dict[str, str] = {
+    "pe_trailing": "P/E (trailing)",
+    "pe_forward": "P/E (forward)",
+    "dividend_yield": "Dividend yield",
+    "price_to_book": "Price / book",
+    "peg_ratio": "PEG ratio",
+    "price_to_sales": "Price / sales",
+    "market_cap": "Market cap",
+    "beta": "Beta",
+    "short_percent_of_float": "Short % of float",
+    "insider_percent": "Insider %",
+    "institutional_percent": "Institutional %",
+    "debt_to_equity": "Debt / equity",
+    "current_ratio": "Current ratio",
+}
+
 # Build list of (label, key) for template selects
 SCREENER_METRIC_OPTIONS: List[tuple[str, str]] = [
     (_SCREENER_LABELS.get(col, col), col) for col in _METRIC_COLUMNS
+]
+
+# Market/valuation options for the screener's "MARKET / VALUATION" optgroup.
+SCREENER_SNAPSHOT_OPTIONS: List[tuple[str, str]] = [
+    (_SNAPSHOT_SCREENER_LABELS.get(col, col), col) for col in SNAPSHOT_SCREEN_COLUMNS
 ]
 
 
@@ -260,27 +287,17 @@ def companies_list(
     )
 
 
-@router.get("/companies/{ticker}", response_class=HTMLResponse)
-def company_page(
-    ticker: str,
-    request: Request,
-    r: Reader = Depends(get_reader),
-) -> Any:
-    """Single-company deep-dive page."""
-    overview = r.company_overview(ticker)
-    if overview is None:
-        raise HTTPException(status_code=404, detail=f"Company not found: {ticker}")
-    return templates.TemplateResponse(
-        request,
-        "company.html",
-        {
-            "request": request,
-            "overview": overview,
-            "metric_options": METRIC_OPTIONS,
-            # Convenience shortcut used in template URLs
-            "ticker": ticker,
-        },
-    )
+@router.get("/companies/{ticker}")
+def company_page(ticker: str) -> Any:
+    """Legacy single-company deep-dive page — redirects to the workstation.
+
+    The ``/stocks/{ticker}`` workstation (Task 8) superseded this page; the FA
+    tab there reuses the exact same statements fragment this page used to
+    render. This redirects unconditionally (no ticker-existence check here —
+    ``/stocks/{ticker}`` already 404s for an unknown ticker, so old bookmarks
+    to an unknown company still end up 404).
+    """
+    return RedirectResponse(f"/stocks/{ticker}?tab=fa", status_code=307)
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +527,7 @@ def screener_page(
             "request": request,
             "sectors": sectors,
             "metric_options": SCREENER_METRIC_OPTIONS,
+            "snapshot_options": SCREENER_SNAPSHOT_OPTIONS,
         },
     )
 

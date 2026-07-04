@@ -1,0 +1,50 @@
+<div class="gp-controls" id="gp-controls">
+  <input type="hidden" name="range" value="{{ range }}">
+  <input type="hidden" name="type" value="{{ chart_type }}">
+
+  <div class="range-buttons chip-row">
+    {% for rk in range_options %}
+    <button type="button" class="chip{% if rk == range %} chip-active{% endif %}"
+      hx-get="/ui/stocks/{{ ticker }}/gp" hx-target="#panel"
+      hx-include="#gp-controls" hx-vals='{"range": "{{ rk }}"}'
+    >{{ rk }}</button>
+    {% endfor %}
+  </div>
+
+  <div class="chart-type-toggle chip-row">
+    <button type="button" class="chip{% if chart_type == 'line' %} chip-active{% endif %}"
+      hx-get="/ui/stocks/{{ ticker }}/gp" hx-target="#panel"
+      hx-include="#gp-controls" hx-vals='{"type": "line"}'
+    >Line</button>
+    <button type="button" class="chip{% if chart_type == 'candle' %} chip-active{% endif %}"
+      hx-get="/ui/stocks/{{ ticker }}/gp" hx-target="#panel"
+      hx-include="#gp-controls" hx-vals='{"type": "candle"}'
+    >Candle</button>
+  </div>
+
+  <div class="form-check-group indicator-checks">
+    {% for key, label in indicator_options %}
+    <label>
+      <input type="checkbox" name="ind" value="{{ key }}" {% if key in indicators %}checked{% endif %}
+        hx-get="/ui/stocks/{{ ticker }}/gp" hx-target="#panel"
+        hx-include="#gp-controls" hx-trigger="change">
+      {{ label }}
+    </label>
+    {% endfor %}
+  </div>
+
+  <select name="compare" class="metric-select compare-select" multiple
+    hx-get="/ui/stocks/{{ ticker }}/gp" hx-target="#panel"
+    hx-include="#gp-controls" hx-trigger="change">
+    <option value="{{ benchmark_ticker }}" {% if benchmark_ticker in compare %}selected{% endif %}>{{ benchmark_label }}</option>
+    {% for t, name in compare_options %}
+    <option value="{{ t }}" {% if t in compare %}selected{% endif %}>{{ name }} ({{ t }})</option>
+    {% endfor %}
+  </select>
+</div>
+
+<div id="gp-chart" class="gp-chart"></div>
+
+<script>
+  renderGP({{ cfg_json | safe }});
+</script>
