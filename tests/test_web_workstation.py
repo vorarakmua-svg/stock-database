@@ -118,13 +118,17 @@ def test_des_fragment_shows_officers_and_description(client):
     assert "AAA Corp designs" in body
 
 
-def test_des_fragment_shows_as_of_stamp_and_refresh_placeholder(client):
+def test_des_fragment_shows_as_of_stamp_and_refresh_button(client):
+    # The `client` fixture uses default WebSettings, where allow_quote_refresh
+    # defaults to True (Task 10) — so DES renders the LIVE refresh button here,
+    # not the disabled placeholder (see test_web_quote_refresh.py for the
+    # disabled-gate rendering case).
     resp = client.get("/ui/stocks/AAA/des")
     assert resp.status_code == 200
     body = resp.text
     assert "AS OF" in body
     assert "REFRESH" in body
-    assert "disabled" in body
+    assert 'hx-post="/api/stocks/AAA/refresh-quote"' in body
 
 
 def test_des_fragment_shows_next_earnings_date(client):

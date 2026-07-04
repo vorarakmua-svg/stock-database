@@ -89,6 +89,40 @@ class YahooHandler:
                 "source": "yahoo_finance",
             }
 
+    def fetch_quote(self, ticker: str) -> Dict[str, Any]:
+        """Fetch a lightweight, quote-only snapshot for on-demand refresh (Task 10).
+
+        Makes exactly ONE rate-limited ``yf.Ticker(ticker)`` call and reuses
+        the same private extractors ``fetch_all`` uses for market data,
+        valuation, and analyst estimates, plus the SCALAR shareholder stats
+        only (no holder-list DataFrame calls, no history/bars call).
+
+        Deliberately makes no ``stock.history()`` call, so the returned
+        ``market_data`` never includes ``ma_50``/``ma_200`` here (those
+        require the "1y" history call ``_get_market_data`` makes for a full
+        collection) — ``SQLiteStore.upsert_quote`` carries the previous
+        snapshot's values for those forward instead of leaving them ``None``.
+
+        Returns ``{"market_data": ..., "valuation": ..., "shareholders": ...,
+        "analyst_estimates": ...}`` on success, or ``{"error": ...}`` (never
+        raises) on failure — mirroring ``fetch_all``'s contract so callers
+        (e.g. ``CollectionJobManager``'s quote-job worker) can check for the
+        ``"error"`` key rather than needing a try/except per ticker.
+        """
+        self.logger.info(f"Fetching Yahoo quote-only data for {ticker}")
+        try:
+            self.rate_limiter.wait()
+            stock = yf.Ticker(ticker)
+            return {
+                "market_data": self._get_market_data(stock, include_moving_averages=False),
+                "valuation": self._get_valuation_metrics(stock),
+                "shareholders": self._get_shareholder_stats(stock),
+                "analyst_estimates": self._get_analyst_estimates(stock),
+            }
+        except Exception as e:
+            self.logger.error(f"Error fetching Yahoo quote for {ticker}: {e}")
+            return {"error": str(e)}
+
     def _get_company_info(self, stock: yf.Ticker) -> Dict[str, Any]:
         """Extract company information from yfinance info dict."""
         try:
@@ -129,13 +163,20 @@ class YahooHandler:
             for officer in officers
         ]
 
-    def _get_market_data(self, stock: yf.Ticker) -> Dict[str, Any]:
-        """Extract market data and technical indicators."""
+    def _get_market_data(
+        self, stock: yf.Ticker, include_moving_averages: bool = True
+    ) -> Dict[str, Any]:
+        """Extract market data and technical indicators.
+
+        ``include_moving_averages=False`` skips the ``stock.history(period="1y")``
+        call entirely — used by ``fetch_quote`` so an on-demand quote refresh
+        makes exactly one Yahoo request. In that case ``ma_50``/``ma_200`` are
+        simply absent from the returned dict (see ``fetch_quote`` and
+        ``SQLiteStore.upsert_quote`` for how the previous snapshot's values are
+        carried forward instead of being lost).
+        """
         try:
             info = stock.info
-
-            # Get historical data for technical indicators
-            hist = stock.history(period="1y")
 
             data = {
                 "current_price": info.get("currentPrice") or info.get("regularMarketPrice"),
@@ -156,13 +197,16 @@ class YahooHandler:
                 "pre_market_price": info.get("preMarketPrice"),
             }
 
-            # Calculate moving averages from historical data
-            if not hist.empty and len(hist) > 0:
-                close_prices = hist['Close']
-                if len(close_prices) >= 50:
-                    data["ma_50"] = float(close_prices.tail(50).mean())
-                if len(close_prices) >= 200:
-                    data["ma_200"] = float(close_prices.tail(200).mean())
+            # Calculate moving averages from historical data (skipped for a
+            # quote-only refresh — see include_moving_averages above).
+            if include_moving_averages:
+                hist = stock.history(period="1y")
+                if not hist.empty and len(hist) > 0:
+                    close_prices = hist['Close']
+                    if len(close_prices) >= 50:
+                        data["ma_50"] = float(close_prices.tail(50).mean())
+                    if len(close_prices) >= 200:
+                        data["ma_200"] = float(close_prices.tail(200).mean())
 
             return data
         except Exception as e:
@@ -234,12 +278,17 @@ class YahooHandler:
             self.logger.warning(f"Error getting valuation metrics: {e}")
             return {}
 
-    def _get_shareholders(self, stock: yf.Ticker) -> Dict[str, Any]:
-        """Extract shareholder and ownership information."""
+    def _get_shareholder_stats(self, stock: yf.Ticker) -> Dict[str, Any]:
+        """Scalar shareholder/ownership stats only — no holder-list DataFrames.
+
+        Extracted out of ``_get_shareholders`` so ``fetch_quote`` can reuse
+        exactly this piece (the cheap ``stock.info`` fields) without also
+        triggering the extra yfinance calls the major/institutional/mutual-fund
+        holder lists and insider-transactions require.
+        """
         try:
             info = stock.info
-
-            data = {
+            return {
                 "shares_outstanding": info.get("sharesOutstanding"),
                 "float_shares": info.get("floatShares"),
                 "shares_short": info.get("sharesShort"),
@@ -249,6 +298,14 @@ class YahooHandler:
                 "insider_percent": info.get("heldPercentInsiders"),
                 "institutional_percent": info.get("heldPercentInstitutions"),
             }
+        except Exception as e:
+            self.logger.warning(f"Error getting shareholder stats: {e}")
+            return {}
+
+    def _get_shareholders(self, stock: yf.Ticker) -> Dict[str, Any]:
+        """Extract shareholder and ownership information."""
+        try:
+            data = self._get_shareholder_stats(stock)
 
             # Get major holders if available
             try:

@@ -13,9 +13,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from ..dependencies import get_reader
+from ..dependencies import get_job_manager, get_reader, get_settings
 from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
+from ..jobs import CollectionJobManager
 from ..repository import Reader
+from ..settings import WebSettings
 from .pages import _STATEMENT_ROWS, _build_statement_display, templates
 from .stocks_api import VALID_RANGES, resolve_range_start
 
@@ -104,6 +106,7 @@ def des_fragment(
     ticker: str,
     request: Request,
     r: Reader = Depends(get_reader),
+    settings: WebSettings = Depends(get_settings),
 ) -> Any:
     """DES panel: quote header, summary grid, description, officers, next earnings."""
     profile = r.profile(ticker)
@@ -163,7 +166,40 @@ def des_fragment(
             "summary": summary,
             "description": profile["company"].get("description"),
             "earnings_date": analyst.get("earnings_date") if analyst else None,
+            "allow_quote_refresh": settings.allow_quote_refresh,
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Quote-refresh poll fragment (Task 10)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/ui/stocks/{ticker}/refresh-status/{job_id}", response_class=HTMLResponse)
+def refresh_status_fragment(
+    ticker: str,
+    job_id: str,
+    request: Request,
+    manager: CollectionJobManager = Depends(get_job_manager),
+) -> Any:
+    """Quote-refresh poll fragment for the DES REFRESH button.
+
+    Polled (via ``htmx.ajax`` kicked off from the button's response handler,
+    then self-polling) until the job reaches a terminal state; ``done``
+    triggers a DES panel reload, ``error`` shows the failure message. See
+    ``templates/fragments/refresh_status.html`` for exactly how polling stops.
+    """
+    job = manager.get(job_id)
+    if job is None:
+        return HTMLResponse(
+            '<div id="refresh-status">Refresh job not found.</div>', status_code=404
+        )
+    terminal = job.state in ("done", "error")
+    return templates.TemplateResponse(
+        request,
+        "fragments/refresh_status.html",
+        {"request": request, "ticker": ticker, "job": job, "terminal": terminal},
     )
 
 

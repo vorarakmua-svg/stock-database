@@ -664,6 +664,76 @@ class SQLiteStore:
                 "ratio": rec.get("ratio"),
             })
 
+    def upsert_quote(self, ticker: str, quote: Dict[str, Any], collected_at: str) -> None:
+        """Write ONE ``market_snapshots`` row + ONE ``analyst_snapshots`` row from
+        a quote-only fetch (``YahooHandler.fetch_quote``) — nothing else.
+
+        ``market_snapshots``' primary key is ``(ticker, collected_at)``, so
+        this INSERTS a new row rather than overwriting the snapshot from the
+        last full collection — a quote refresh never clobbers full-collection
+        history.
+
+        ``fetch_quote``'s ``market_data`` omits ``ma_50``/``ma_200`` (no
+        history call is made for a quote-only refresh). Rather than let the
+        DES page's moving averages go blank after every quote refresh, this
+        carries the PREVIOUS snapshot's ``ma_50``/``ma_200``/``beta`` forward
+        into the new row whenever the fresh quote didn't return them (a
+        one-row read-only ``SELECT`` against ``market_snapshots``, no writer
+        contention — this method is only ever called from the single-writer
+        job worker).
+        """
+        try:
+            conn = self._connect()
+            try:
+                self._create_schema(conn)
+                self._migrate(conn)
+
+                md = quote.get("market_data") or {}
+                val = quote.get("valuation") or {}
+                shareholders = quote.get("shareholders") or {}
+                merged: Dict[str, Any] = {**md, **val, **shareholders}
+
+                snapshot: Dict[str, Any] = {"ticker": ticker, "collected_at": collected_at}
+                for col in _SNAPSHOT_COLUMNS:
+                    snapshot[col] = merged.get(col)
+                for col in _SNAPSHOT_TEXT_COLUMNS:
+                    snapshot[col] = merged.get(col)
+
+                # Carry forward ma_50/ma_200/beta from the latest prior snapshot
+                # when this quote-only fetch didn't return them.
+                prev = self._latest_snapshot_row(conn, ticker)
+                if prev is not None:
+                    for col in ("ma_50", "ma_200", "beta"):
+                        if snapshot.get(col) is None:
+                            snapshot[col] = prev.get(col)
+
+                if any(snapshot.get(c) is not None
+                       for c in _SNAPSHOT_COLUMNS + _SNAPSHOT_TEXT_COLUMNS):
+                    self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)
+
+                self._write_analyst_snapshot(
+                    conn, ticker, collected_at, quote.get("analyst_estimates") or {}
+                )
+
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            self.logger.error(f"Error writing quote for {ticker}: {e}")
+
+    @staticmethod
+    def _latest_snapshot_row(conn: sqlite3.Connection, ticker: str) -> Optional[Dict[str, Any]]:
+        """Newest ``market_snapshots`` row for *ticker* by ``collected_at``, or ``None``."""
+        cur = conn.execute(
+            "SELECT * FROM market_snapshots WHERE ticker = ? ORDER BY collected_at DESC LIMIT 1",
+            (ticker,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        columns = [d[0] for d in cur.description]
+        return dict(zip(columns, row))
+
     def export_benchmark_bars(self, symbol: str, bars: List[Dict[str, Any]]) -> None:
         """Write benchmark index OHLCV bars (e.g. ^GSPC) into ``price_bars``.
 

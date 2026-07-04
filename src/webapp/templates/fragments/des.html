@@ -8,8 +8,18 @@
   {% endif %}
   <div class="quote-stamp-row">
     <span class="muted">AS OF {{ collected_at or "—" }}</span>
-    <button class="btn btn-sm" disabled title="Quote refresh arrives with the collection job (Task 10)">REFRESH</button>
+    {% if allow_quote_refresh %}
+    <button
+      class="btn btn-sm"
+      hx-post="/api/stocks/{{ ticker }}/refresh-quote"
+      hx-swap="none"
+      hx-on::after-request="if (event.detail.successful) { htmx.ajax('GET', '/ui/stocks/{{ ticker }}/refresh-status/' + JSON.parse(event.detail.xhr.response).job_id, {target: '#refresh-status', swap: 'innerHTML'}); }"
+    >REFRESH</button>
+    {% else %}
+    <button class="btn btn-sm" disabled title="Quote refresh is disabled in the current settings">REFRESH</button>
+    {% endif %}
   </div>
+  <div id="refresh-status"></div>
 </div>
 
 <section class="section">

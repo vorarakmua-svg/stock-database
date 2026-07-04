@@ -33,8 +33,9 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..dependencies import get_reader
+from ..dependencies import get_job_manager, get_reader, get_settings
 from ..indicators import indicator_bundle, normalize_pct
+from ..jobs import CollectionJobManager
 from ..repository import Reader
 from ..schemas import (
     AnalystOut,
@@ -47,6 +48,7 @@ from ..schemas import (
     QuoteOut,
     SplitEvent,
 )
+from ..settings import WebSettings
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 
@@ -362,3 +364,35 @@ def insiders(
 ) -> List[Dict[str, Any]]:
     """Insider (Form-4-derived) transactions for *ticker*, newest first."""
     return r.insider_transactions(ticker, limit=limit)
+
+
+# ---------------------------------------------------------------------------
+# On-demand quote refresh (Task 10) — DES panel's REFRESH button
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{ticker}/refresh-quote", status_code=202)
+def refresh_quote(
+    ticker: str,
+    settings: WebSettings = Depends(get_settings),
+    manager: CollectionJobManager = Depends(get_job_manager),
+    r: Reader = Depends(get_reader),
+) -> Dict[str, Any]:
+    """Submit a lightweight quote-only refresh job for *ticker*.
+
+    409 if quote refresh is disabled (``settings.allow_quote_refresh``); 404
+    if *ticker* is unknown; else 202 with ``{"job_id": ...}`` — poll via the
+    existing ``GET /api/collection/jobs/{job_id}`` JSON endpoint, or (for the
+    DES panel) the HTMX fragment at
+    ``GET /ui/stocks/{ticker}/refresh-status/{job_id}``.
+
+    Runs on the SAME serialized single-writer job manager as full collection
+    jobs (``manager.submit(..., mode="quote")``) — never a second writer.
+    """
+    if not settings.allow_quote_refresh:
+        raise HTTPException(status_code=409, detail="quote refresh is disabled")
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    job_id = manager.submit(tickers=[ticker], mode="quote")
+    return {"job_id": job_id}
