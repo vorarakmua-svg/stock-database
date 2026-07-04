@@ -11,13 +11,16 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi.testclient import TestClient
 
+from src.exporters.sqlite_store import SQLiteStore
 from src.models.stock_data import StockData
 from src.webapp import create_app
+from src.webapp.repository import Reader
 from src.webapp.settings import WebSettings
 
 # ---------------------------------------------------------------------------
@@ -136,6 +139,85 @@ def _analyst_count(db_path: Path, ticker: str) -> int:
         return int(cur.fetchone()[0])
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Tests: collected_at timestamp convention (live-smoke find #2)
+#
+# ``market_snapshots.collected_at`` is TEXT-ordered (``ORDER BY collected_at
+# DESC``/``MAX(collected_at)``), and the full pipeline writes NAIVE LOCAL
+# timestamps (``StockData.collected_at`` -> ``datetime.now().isoformat()``,
+# no ``+HH:MM`` suffix). If the quote-refresh path ever writes a
+# timezone-AWARE string instead, a same-day naive-local row can sort higher
+# than a chronologically later aware row (e.g. naive local "14:10" > aware
+# "07:23+00:00" on a UTC+7 machine), so ``Reader.quote``/``latest_snapshot``
+# would keep serving the stale row after a refresh.
+# ---------------------------------------------------------------------------
+
+def test_quote_refresh_collected_at_has_no_utc_offset_suffix(web_db: Path) -> None:
+    """Format parity: the quote path's generated ``collected_at`` must match
+    the full pipeline's naive-local ``datetime.now().isoformat()`` convention
+    (no ``+HH:MM`` offset suffix) — mixed formats break TEXT-ordered
+    latest-row resolution on ``market_snapshots``."""
+    client = _make_client(web_db)
+    r = client.post("/api/stocks/AAA/refresh-quote")
+    assert r.status_code == 202
+    job_id = r.json()["job_id"]
+    final = _wait_until_done(client, job_id)
+    assert final["state"] == "done"
+
+    conn = sqlite3.connect(web_db)
+    try:
+        cur = conn.execute(
+            "SELECT collected_at FROM market_snapshots WHERE ticker = ? "
+            "ORDER BY collected_at DESC LIMIT 1",
+            ("AAA",),
+        )
+        collected_at = cur.fetchone()[0]
+    finally:
+        conn.close()
+
+    assert "+" not in collected_at, (
+        f"collected_at={collected_at!r} looks timezone-aware "
+        "(contains a '+HH:MM' offset) — must be naive-local like the full "
+        "pipeline's StockData.collected_at"
+    )
+
+
+def test_quote_refresh_wins_latest_row_resolution_over_naive_local_seed(
+    web_db: Path,
+) -> None:
+    """Regression guard: a same-day full-collection row (naive-local
+    ``collected_at``, written via the normal export path) must not outrank a
+    chronologically later quote-refresh row in ``Reader.quote``'s latest-row
+    resolution. This is the exact live-smoke bug: mixing naive-local and
+    UTC-aware ``collected_at`` strings in the same TEXT-ordered column broke
+    ``MAX(collected_at)``, so a refresh appeared to do nothing.
+    """
+    ticker = "ZZZ"
+    seed = StockData(
+        ticker=ticker, cik="0000000099", company_name="ZZZ Corp",
+        sector_class="general", collected_at=datetime.now(),
+    )
+    seed.market_data = {"current_price": 50.0, "previous_close": 49.0}
+    seed.valuation = {"pe_trailing": 15.0}
+    assert SQLiteStore(web_db).export([seed]) is not None
+
+    client = _make_client(web_db)
+    r = client.post(f"/api/stocks/{ticker}/refresh-quote")
+    assert r.status_code == 202
+    job_id = r.json()["job_id"]
+    final = _wait_until_done(client, job_id)
+    assert final["state"] == "done"
+
+    with Reader(web_db) as reader:
+        quote = reader.quote(ticker)
+
+    assert quote is not None
+    # From _CANNED_QUOTE (the refresh), NOT the seed's 50.0/49.0 — proves the
+    # refresh row won latest-row resolution rather than the older seed row.
+    assert quote["current_price"] == 123.45
+    assert quote["previous_close"] == 120.0
 
 
 # ---------------------------------------------------------------------------

@@ -42,6 +42,17 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _collected_at_now() -> str:
+    # collected_at must match the full pipeline's naive-local format — the
+    # column is TEXT-ordered and mixed offsets break latest-row resolution.
+    # ``StockData.collected_at`` (src/models/stock_data.py) is generated via
+    # ``datetime.now()`` (naive local) and serialised with ``.isoformat()``;
+    # a UTC-aware string here would sort lower than a same-day naive-local
+    # string from a full collection run, so ``Reader.quote`` (MAX collected_at)
+    # would keep serving the stale full-run row instead of this refresh.
+    return datetime.now().isoformat()
+
+
 @dataclass
 class JobStatus:
     """Snapshot of a collection job's current state.
@@ -283,7 +294,7 @@ class CollectionJobManager:
                 if "error" in quote:
                     with_errors += 1
                 else:
-                    collected_at = _now_iso()
+                    collected_at = _collected_at_now()
                     store.upsert_quote(ticker, quote, collected_at)
                     successful += 1
 
