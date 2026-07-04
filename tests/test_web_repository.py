@@ -25,7 +25,8 @@ class TestListCompanies:
     def test_returns_all_companies(self, web_db):
         with Reader(web_db) as r:
             result = r.list_companies()
-        assert len(result) == 3
+        # AAA, BBB, CCC, EEE
+        assert len(result) == 4
 
     def test_ordered_by_ticker(self, web_db):
         with Reader(web_db) as r:
@@ -73,7 +74,8 @@ class TestListCompanies:
             page1 = r.list_companies(limit=2, offset=0)
             page2 = r.list_companies(limit=2, offset=2)
         assert len(page1) == 2
-        assert len(page2) == 1
+        # With 4 companies total, offset=2, limit=2 returns 2 more
+        assert len(page2) == 2
 
     def test_sector_and_search_combined(self, web_db):
         # general sector + search for "AAA" → 1 match
@@ -86,16 +88,18 @@ class TestListCompanies:
 class TestCountCompanies:
     def test_all(self, web_db):
         with Reader(web_db) as r:
-            assert r.count_companies() == 3
+            # AAA, BBB, CCC, EEE
+            assert r.count_companies() == 4
 
     def test_by_sector(self, web_db):
         with Reader(web_db) as r:
-            assert r.count_companies(sector_class="general") == 1
+            # AAA and EEE both in general sector
+            assert r.count_companies(sector_class="general") == 2
 
     def test_by_search(self, web_db):
         with Reader(web_db) as r:
-            # "Corp" appears in "AAA Corp" only
-            assert r.count_companies(search="Corp") == 1
+            # "Corp" appears in "AAA Corp" and "EEE Corp"
+            assert r.count_companies(search="Corp") == 2
 
     def test_no_match_returns_zero(self, web_db):
         with Reader(web_db) as r:

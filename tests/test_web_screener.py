@@ -335,8 +335,8 @@ class TestReaderScreen:
             spec = ScreenSpec(filters=[], limit=1, offset=0)
             result = r.screen(spec)
 
-        # Only AAA has metrics_annual rows in the fixture
-        assert result["total"] == 1
+        # AAA and EEE have metrics_annual rows in the fixture
+        assert result["total"] == 2
         assert len(result["items"]) == 1
 
     def test_screen_columns_match_screen_columns(self, web_db) -> None:  # type: ignore[no-untyped-def]
@@ -419,6 +419,50 @@ class TestReaderScreen:
         assert len(result["items"]) >= 1
         assert result["items"][0]["ticker"] == "AAA"
 
+    def test_unfiltered_screen_includes_eee_with_null_snapshot_columns(self, web_db) -> None:  # type: ignore[no-untyped-def]
+        """LEFT JOIN regression guard: EEE has metrics_annual but no market_snapshots,
+        so it appears in unfiltered screens with NULL snapshot columns."""
+        from src.webapp.repository import Reader
+        from src.webapp.screener import ScreenSpec
+
+        with Reader(web_db) as r:
+            spec = ScreenSpec(filters=[], limit=100)
+            result = r.screen(spec)
+
+        # EEE must be in the result (LEFT JOIN includes it)
+        eee_rows = [row for row in result["items"] if row["ticker"] == "EEE"]
+        assert len(eee_rows) == 1, "EEE should appear in unfiltered screen"
+
+        eee_row = eee_rows[0]
+        # All snapshot columns must be None for EEE (no market_snapshots row)
+        from src.webapp.screener import SNAPSHOT_SCREEN_COLUMNS
+        for col in SNAPSHOT_SCREEN_COLUMNS:
+            assert eee_row[col] is None, f"EEE's {col} should be None but got {eee_row[col]}"
+
+        # total must count both AAA and EEE (2 companies with metrics_annual)
+        assert result["total"] == 2
+
+    def test_snapshot_filter_excludes_eee_null_comparison(self, web_db) -> None:  # type: ignore[no-untyped-def]
+        """Snapshot filters exclude tickers with NULL snapshot columns: EEE has no
+        market_snapshots row, so dividend_yield >= 0.0001 excludes it while
+        including AAA (which has a snapshot with dividend_yield=0.02)."""
+        from src.webapp.repository import Reader
+        from src.webapp.screener import MetricFilter, ScreenSpec
+
+        with Reader(web_db) as r:
+            spec = ScreenSpec(
+                filters=[MetricFilter(field="dividend_yield", op="gte", value=0.0001)],
+                limit=100
+            )
+            result = r.screen(spec)
+
+        tickers = [row["ticker"] for row in result["items"]]
+        # AAA has dividend_yield=0.02, so it's included
+        assert "AAA" in tickers, "AAA should be included (has dividend_yield=0.02)"
+        # EEE has NULL dividend_yield, so NULL >= 0.0001 is false, excludes it
+        assert "EEE" not in tickers, "EEE should be excluded (NULL snapshot columns)"
+        assert result["total"] == 1
+
 
 # ---------------------------------------------------------------------------
 # Reader.compare
@@ -473,15 +517,18 @@ class TestReaderCompare:
 
 class TestReaderSectorMedians:
     def test_general_sector_medians(self, web_db) -> None:  # type: ignore[no-untyped-def]
-        """AAA is the only general-sector company; its values are the medians."""
+        """Medians of AAA (roic=0.15) and EEE (roic=0.08) in general sector."""
         from src.webapp.repository import Reader
 
         with Reader(web_db) as r:
             medians = r.sector_medians("general")
 
-        assert medians.get("roic") == pytest.approx(0.15)
+        # roic median of [0.15, 0.08] = 0.115
+        assert medians.get("roic") == pytest.approx(0.115)
+        # net_margin median of [0.10, 0.10] = 0.10
         assert medians.get("net_margin") == pytest.approx(0.10)
-        assert medians.get("gross_margin") == pytest.approx(0.45)
+        # gross_margin median of [0.45, 0.40] = 0.425
+        assert medians.get("gross_margin") == pytest.approx(0.425)
 
     def test_no_metrics_sector_returns_empty_dict(self, web_db) -> None:  # type: ignore[no-untyped-def]
         """Bank sector (BBB) has no metrics_annual rows → empty dict."""
@@ -525,8 +572,9 @@ class TestReaderSectorAggregates:
             aggs = r.sector_aggregates()
 
         general = next(a for a in aggs if a["sector_class"] == "general")
-        assert general["n"] == 1
-        assert general.get("roic") == pytest.approx(0.15)
+        # AAA (roic=0.15) and EEE (roic=0.08) both in general sector
+        assert general["n"] == 2
+        assert general.get("roic") == pytest.approx(0.115)
 
     def test_bank_sector_null_metrics(self, web_db) -> None:  # type: ignore[no-untyped-def]
         from src.webapp.repository import Reader
@@ -565,8 +613,8 @@ class TestReaderPeerComparison:
         assert result["sector_class"] == "general"
         assert result["n_peers"] >= 1
         assert result["company"].get("roic") == pytest.approx(0.15)
-        # sector median = AAA's own value (only member in general sector)
-        assert result["sector_median"].get("roic") == pytest.approx(0.15)
+        # sector median = median of AAA (0.15) and EEE (0.08) in general sector
+        assert result["sector_median"].get("roic") == pytest.approx(0.115)
 
     def test_peer_comparison_invalid_metric_raises(self, web_db) -> None:  # type: ignore[no-untyped-def]
         from src.webapp.repository import Reader
@@ -671,7 +719,8 @@ class TestScreenerAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, dict)
-        assert data.get("roic") == pytest.approx(0.15)
+        # roic median of AAA (0.15) and EEE (0.08) in general sector
+        assert data.get("roic") == pytest.approx(0.115)
 
 
 # ---------------------------------------------------------------------------

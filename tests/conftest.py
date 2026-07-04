@@ -401,7 +401,35 @@ def web_db(tmp_path):
     }
     ccc.add_source("sec_edgar")
 
-    store.export([aaa1, aaa2, bbb, ccc])
+    # --- EEE: general sector, metrics but NO snapshot (no market_data/valuation) ---
+    # Fixture to guard the LEFT JOIN regression: EEE gets >=1 metrics_annual row
+    # but NO market_snapshots row (market_data & valuation both empty). This ensures
+    # unfiltered screens include EEE with NULL snapshot columns, and snapshot filters
+    # exclude it via NULL comparisons.
+    eee = StockData(
+        ticker="EEE", cik="0000000004", company_name="EEE Corp",
+        sector_class="general", collected_at=datetime(2024, 1, 15),
+    )
+    eee.company_info = {"sector": "Technology", "industry": "Software", "country": "US"}
+    # Deliberately NO market_data/valuation: snapshot will NOT be written.
+    eee.financials_annual = {
+        "2023": {
+            "fiscal_year": 2023, "period_end": "2023-12-31",
+            "filed_date": "2024-02-10", "calendar_year": 2023,
+            "revenue": 600.0, "net_income": 60.0,
+            "total_assets": 1200.0, "total_liabilities": 600.0, "total_equity": 600.0,
+            "operating_cash_flow": 90.0, "capex": 30.0,
+        }
+    }
+    # roic=0.08 (below the 0.13 threshold used in existing tests)
+    eee.calculated_metrics = {
+        "historical": {
+            "2023": {"roic": 0.08, "net_margin": 0.10, "gross_margin": 0.40},
+        }
+    }
+    eee.add_source("sec_edgar")
+
+    store.export([aaa1, aaa2, bbb, ccc, eee])
     # ^GSPC benchmark bars: 30 rows, never a companies row (see export_benchmark_bars).
     store.export_benchmark_bars("^GSPC", _synthetic_bars(30, start="2024-01-01", base=4700.0))
     return db_path
