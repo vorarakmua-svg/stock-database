@@ -20,7 +20,12 @@ from ...query.pit_metrics import PointInTimeMetrics
 from ..dependencies import get_asof_reader, get_pit_metrics, get_reader
 from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
 from ..repository import Reader
-from ..screener import DEFAULT_COMPARE_METRICS, METRIC_KINDS, parse_screen_params
+from ..screener import (
+    DEFAULT_COMPARE_METRICS,
+    METRIC_KINDS,
+    SNAPSHOT_SCREEN_COLUMNS,
+    parse_screen_params,
+)
 
 router = APIRouter()
 
@@ -122,9 +127,31 @@ _SCREENER_LABELS: Dict[str, str] = {
     "ffo_payout": "FFO payout",
 }
 
+# Friendly labels for the SNAPSHOT_SCREEN_COLUMNS ("MARKET / VALUATION" optgroup).
+_SNAPSHOT_SCREENER_LABELS: Dict[str, str] = {
+    "pe_trailing": "P/E (trailing)",
+    "pe_forward": "P/E (forward)",
+    "dividend_yield": "Dividend yield",
+    "price_to_book": "Price / book",
+    "peg_ratio": "PEG ratio",
+    "price_to_sales": "Price / sales",
+    "market_cap": "Market cap",
+    "beta": "Beta",
+    "short_percent_of_float": "Short % of float",
+    "insider_percent": "Insider %",
+    "institutional_percent": "Institutional %",
+    "debt_to_equity": "Debt / equity",
+    "current_ratio": "Current ratio",
+}
+
 # Build list of (label, key) for template selects
 SCREENER_METRIC_OPTIONS: List[tuple[str, str]] = [
     (_SCREENER_LABELS.get(col, col), col) for col in _METRIC_COLUMNS
+]
+
+# Market/valuation options for the screener's "MARKET / VALUATION" optgroup.
+SCREENER_SNAPSHOT_OPTIONS: List[tuple[str, str]] = [
+    (_SNAPSHOT_SCREENER_LABELS.get(col, col), col) for col in SNAPSHOT_SCREEN_COLUMNS
 ]
 
 
@@ -500,6 +527,7 @@ def screener_page(
             "request": request,
             "sectors": sectors,
             "metric_options": SCREENER_METRIC_OPTIONS,
+            "snapshot_options": SCREENER_SNAPSHOT_OPTIONS,
         },
     )
 

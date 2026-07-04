@@ -166,12 +166,16 @@ def web_db(tmp_path):
 
     Three companies across sectors:
     - AAA (general): 3 fiscal years of financials + metrics, 2 quarterly periods,
-      1 TTM period, multi-vintage FY2022 (original + restatement), 2 snapshots,
-      1 unmapped fact, 260 daily price bars, 1 analyst snapshot, 4 earnings-surprise
-      rows, 6 dividend events + 1 split, 3 institutional + 2 mutualfund holders,
-      3 insider transactions, 2 officers, and a description/address.
-    - BBB (bank): 1 fiscal year, 1 snapshot.
-    - CCC (reit): 1 fiscal year, 1 snapshot.
+      1 TTM period, multi-vintage FY2022 (original + restatement), 2 snapshots
+      (latest has dividend_yield=0.02, short_percent_of_float=0.03 — for
+      screener market/valuation-column tests), 1 unmapped fact, 260 daily price
+      bars, 1 analyst snapshot, 4 earnings-surprise rows, 6 dividend events + 1
+      split, 3 institutional + 2 mutualfund holders, 3 insider transactions,
+      2 officers, and a description/address.
+    - BBB (bank): 1 fiscal year, 1 snapshot (pe_trailing=10.0, price_to_book=1.2;
+      no dividend_yield/short_percent_of_float — NULL for those columns).
+    - CCC (reit): 1 fiscal year, 1 snapshot (pe_trailing=25.0, price_to_book=1.5;
+      no dividend_yield/short_percent_of_float — NULL for those columns).
     - ``^GSPC`` benchmark: 30 daily price bars (via ``export_benchmark_bars``,
       never a ``companies`` row).
 
@@ -322,6 +326,7 @@ def web_db(tmp_path):
     aaa2.valuation = {
         "pe_trailing": 21.0, "pe_forward": 18.5, "eps_trailing": 5.0,
         "price_to_book": 3.1, "dividend_yield": 0.02,
+        "short_percent_of_float": 0.03,
     }
     # Analyst snapshot: one row, attached to the later (2024-06-15) collection.
     aaa2.analyst_estimates = {

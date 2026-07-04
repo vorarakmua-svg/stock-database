@@ -26,9 +26,16 @@
         <div class="filter-row form-row mb-2">
           <select name="metric_{{ i }}" class="form-control form-control-sm metric-select" style="width:180px">
             <option value="">(choose metric)</option>
-            {% for label, key in metric_options %}
-            <option value="{{ key }}">{{ label }}</option>
-            {% endfor %}
+            <optgroup label="METRICS">
+              {% for label, key in metric_options %}
+              <option value="{{ key }}">{{ label }}</option>
+              {% endfor %}
+            </optgroup>
+            <optgroup label="MARKET / VALUATION">
+              {% for label, key in snapshot_options %}
+              <option value="{{ key }}">{{ label }}</option>
+              {% endfor %}
+            </optgroup>
           </select>
           <select name="op_{{ i }}" class="form-control form-control-sm op-select" style="width:60px">
             <option value="gte">≥</option>
@@ -48,9 +55,16 @@
         <label>Sort by</label>
         <select name="sort" class="form-control form-control-sm" style="width:180px">
           <option value="">Ticker (default)</option>
-          {% for label, key in metric_options %}
-          <option value="{{ key }}">{{ label }}</option>
-          {% endfor %}
+          <optgroup label="METRICS">
+            {% for label, key in metric_options %}
+            <option value="{{ key }}">{{ label }}</option>
+            {% endfor %}
+          </optgroup>
+          <optgroup label="MARKET / VALUATION">
+            {% for label, key in snapshot_options %}
+            <option value="{{ key }}">{{ label }}</option>
+            {% endfor %}
+          </optgroup>
         </select>
         <select name="sort_dir" class="form-control form-control-sm" style="width:80px">
           <option value="desc">Desc</option>

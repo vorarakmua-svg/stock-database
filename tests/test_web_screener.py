@@ -72,6 +72,96 @@ class TestBuildScreenQuerySecurity:
         assert "general" in params
 
 
+class TestSnapshotWhitelist:
+    """SNAPSHOT_SCREEN_COLUMNS: disjoint from the metric whitelist and a true
+    subset of the widened _SNAPSHOT_COLUMNS (derivation guard)."""
+
+    def test_whitelists_are_disjoint(self) -> None:
+        from src.webapp.screener import _METRIC_COL_SET, SNAPSHOT_SCREEN_COLUMNS
+
+        overlap = _METRIC_COL_SET & set(SNAPSHOT_SCREEN_COLUMNS)
+        assert overlap == set(), f"Whitelists must be disjoint; overlap: {overlap}"
+
+    def test_snapshot_columns_are_derived_from_sqlite_store(self) -> None:
+        from src.exporters.sqlite_store import _SNAPSHOT_COLUMNS
+        from src.webapp.screener import SNAPSHOT_SCREEN_COLUMNS
+
+        missing = set(SNAPSHOT_SCREEN_COLUMNS) - set(_SNAPSHOT_COLUMNS)
+        assert missing == set(), f"SNAPSHOT_SCREEN_COLUMNS not in _SNAPSHOT_COLUMNS: {missing}"
+
+
+class TestBuildScreenQuerySnapshotColumns:
+    """Snapshot (market/valuation) filters/sort: qualified ms."col", LEFT JOIN,
+    injection guard, NULLs-last ordering."""
+
+    def test_snapshot_field_filter_qualifies_ms(self) -> None:
+        from src.webapp.screener import MetricFilter, ScreenSpec, build_screen_query
+
+        spec = ScreenSpec(
+            filters=[MetricFilter(field="dividend_yield", op="gte", value=0.01)]
+        )
+        sql, params = build_screen_query(spec)
+        assert 'ms."dividend_yield" >= ?' in sql
+        assert 0.01 in params
+
+    def test_snapshot_join_present(self) -> None:
+        from src.webapp.screener import ScreenSpec, build_screen_query
+
+        sql, _ = build_screen_query(ScreenSpec(filters=[]))
+        upper = sql.upper()
+        assert "LEFT JOIN" in upper
+        assert "MARKET_SNAPSHOTS" in upper
+        assert "MAX(COLLECTED_AT)" in upper
+
+    def test_snapshot_sort_qualifies_ms_and_nulls_last(self) -> None:
+        from src.webapp.screener import ScreenSpec, build_screen_query
+
+        spec = ScreenSpec(filters=[], sort="dividend_yield", sort_dir="desc")
+        sql, _ = build_screen_query(spec)
+        assert 'ms."dividend_yield" IS NULL' in sql
+        assert 'ms."dividend_yield" DESC' in sql
+
+    def test_fake_snapshot_ish_field_raises(self) -> None:
+        """A plausible-looking but non-whitelisted snapshot field is rejected."""
+        from src.webapp.screener import MetricFilter, ScreenSpec, build_screen_query
+
+        spec = ScreenSpec(
+            filters=[MetricFilter(field="fifty_two_week_high", op="gte", value=1.0)]
+        )
+        with pytest.raises(ValueError, match="field"):
+            build_screen_query(spec)
+
+    def test_sql_injection_in_snapshot_ish_field_raises(self) -> None:
+        from src.webapp.screener import MetricFilter, ScreenSpec, build_screen_query
+
+        spec = ScreenSpec(
+            filters=[
+                MetricFilter(
+                    field='dividend_yield"; DROP TABLE market_snapshots; --',
+                    op="gte",
+                    value=0.01,
+                )
+            ]
+        )
+        with pytest.raises(ValueError, match="field"):
+            build_screen_query(spec)
+
+    def test_snapshot_sort_field_injection_raises(self) -> None:
+        from src.webapp.screener import ScreenSpec, build_screen_query
+
+        spec = ScreenSpec(filters=[], sort="market_cap; DROP TABLE--")
+        with pytest.raises(ValueError, match="sort"):
+            build_screen_query(spec)
+
+    def test_count_query_has_same_snapshot_join(self) -> None:
+        from src.webapp.screener import ScreenSpec, build_count_query
+
+        sql, _ = build_count_query(ScreenSpec(filters=[]))
+        upper = sql.upper()
+        assert "LEFT JOIN" in upper
+        assert "MARKET_SNAPSHOTS" in upper
+
+
 class TestBuildScreenQueryOperators:
     """Each operator emits the right SQL fragment; values are in params."""
 
@@ -257,6 +347,77 @@ class TestReaderScreen:
             result = r.screen(ScreenSpec(filters=[]))
 
         assert result["columns"] == SCREEN_COLUMNS
+
+    def test_gspc_never_appears_in_screen_results(self, web_db) -> None:  # type: ignore[no-untyped-def]
+        """^GSPC has price_bars only (via export_benchmark_bars) — no companies/
+        metrics_annual rows — so the INNER JOIN on metrics_annual excludes it
+        from every screen, filtered or not."""
+        from src.webapp.repository import Reader
+        from src.webapp.screener import ScreenSpec
+
+        with Reader(web_db) as r:
+            result = r.screen(ScreenSpec(filters=[], limit=1000))
+
+        tickers = [row["ticker"] for row in result["items"]]
+        assert "^GSPC" not in tickers
+
+    def test_dividend_yield_filter_returns_aaa(self, web_db) -> None:  # type: ignore[no-untyped-def]
+        """AAA's latest snapshot has dividend_yield=0.02 — filter must match it."""
+        from src.webapp.repository import Reader
+        from src.webapp.screener import MetricFilter, ScreenSpec
+
+        with Reader(web_db) as r:
+            spec = ScreenSpec(
+                filters=[MetricFilter(field="dividend_yield", op="gte", value=0.01)]
+            )
+            result = r.screen(spec)
+
+        tickers = [row["ticker"] for row in result["items"]]
+        assert "AAA" in tickers
+        assert result["items"][0]["dividend_yield"] == pytest.approx(0.02)
+
+    def test_short_percent_of_float_filter_excludes_when_too_high(self, web_db) -> None:  # type: ignore[no-untyped-def]
+        """AAA's short_percent_of_float=0.03 — a higher threshold must exclude it,
+        proving the snapshot filter actually filters (not a no-op)."""
+        from src.webapp.repository import Reader
+        from src.webapp.screener import MetricFilter, ScreenSpec
+
+        with Reader(web_db) as r:
+            spec = ScreenSpec(
+                filters=[MetricFilter(field="short_percent_of_float", op="gte", value=0.5)]
+            )
+            result = r.screen(spec)
+
+        assert result["items"] == []
+        assert result["total"] == 0
+
+    def test_snapshot_filter_count_matches_items(self, web_db) -> None:  # type: ignore[no-untyped-def]
+        """total from build_count_query must match len(items) when the snapshot
+        filter + LEFT JOIN are applied identically to both queries."""
+        from src.webapp.repository import Reader
+        from src.webapp.screener import MetricFilter, ScreenSpec
+
+        with Reader(web_db) as r:
+            spec = ScreenSpec(
+                filters=[MetricFilter(field="dividend_yield", op="gte", value=0.01)],
+                limit=100,
+            )
+            result = r.screen(spec)
+
+        assert result["total"] == len(result["items"])
+
+    def test_sort_by_snapshot_column_nulls_last(self, web_db) -> None:  # type: ignore[no-untyped-def]
+        """Sorting by a snapshot column must not crash and must return AAA (the
+        only ticker with both a metrics_annual row and a non-NULL value)."""
+        from src.webapp.repository import Reader
+        from src.webapp.screener import ScreenSpec
+
+        with Reader(web_db) as r:
+            spec = ScreenSpec(filters=[], sort="dividend_yield", sort_dir="desc")
+            result = r.screen(spec)
+
+        assert len(result["items"]) >= 1
+        assert result["items"][0]["ticker"] == "AAA"
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +619,31 @@ class TestScreenerAPI:
         resp = client.get("/api/screen?evil_gte=0.1")
         assert resp.status_code == 400
 
+    def test_get_screen_dividend_yield_shorthand(self, client) -> None:  # type: ignore[no-untyped-def]
+        """A snapshot column works via the same GET shorthand as a metric column."""
+        resp = client.get("/api/screen?dividend_yield_gte=0.01")
+        assert resp.status_code == 200
+        data = resp.json()
+        tickers = [row["ticker"] for row in data["items"]]
+        assert "AAA" in tickers
+
+    def test_get_screen_multi_underscore_snapshot_field_shorthand(self, client) -> None:  # type: ignore[no-untyped-def]
+        """Regression: a multi-underscore snapshot field name combined with
+        another filter must parse both correctly (each split on its own
+        trailing _<op>, not misparsed by the other filter's suffix)."""
+        resp = client.get(
+            "/api/screen?dividend_yield_gte=0.01&short_percent_of_float_gte=0.02"
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        tickers = [row["ticker"] for row in data["items"]]
+        assert "AAA" in tickers
+
+    def test_get_screen_snapshot_injection_400(self, client) -> None:  # type: ignore[no-untyped-def]
+        """Even via the GET shorthand, a non-whitelisted snapshot-ish field is 400."""
+        resp = client.get("/api/screen?fifty_two_week_high_gte=1.0")
+        assert resp.status_code == 400
+
     def test_get_compare_shape(self, client) -> None:  # type: ignore[no-untyped-def]
         resp = client.get("/api/compare?tickers=AAA,BBB&metrics=roic,roe")
         assert resp.status_code == 200
@@ -497,6 +683,13 @@ class TestScreenerUI:
     def test_screener_page_200(self, client) -> None:  # type: ignore[no-untyped-def]
         resp = client.get("/screener")
         assert resp.status_code == 200
+
+    def test_screener_page_has_market_valuation_optgroup(self, client) -> None:  # type: ignore[no-untyped-def]
+        resp = client.get("/screener")
+        content = resp.content.decode()
+        assert "MARKET / VALUATION" in content
+        assert 'value="dividend_yield"' in content
+        assert 'value="pe_trailing"' in content
 
     def test_screen_fragment_contains_aaa(self, client) -> None:  # type: ignore[no-untyped-def]
         resp = client.get("/ui/screen?roic_gte=0.13")
