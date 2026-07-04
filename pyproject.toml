@@ -48,7 +48,9 @@ target-version = "py39"
 select = ["E", "F", "W", "I"]
 
 [tool.mypy]
-python_version = "3.9"
+# mypy >= 2.0 dropped python_version = "3.9" (must be 3.10+). Runtime 3.9
+# compatibility is still enforced by ruff (target py39) and the py3.9 CI job.
+python_version = "3.10"
 ignore_missing_imports = true
 follow_imports = "silent"
 warn_unused_ignores = false
@@ -75,4 +77,10 @@ files = [
 # error — even when follow_imports="silent". Skip parsing click source entirely.
 [[tool.mypy.overrides]]
 module = ["click", "click.*"]
+follow_imports = "skip"
+
+# numpy >= 2.5 stubs use PEP 695 `type` statements (3.12+) which any lower
+# python_version target rejects as a syntax error — same failure mode as click.
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*"]
 follow_imports = "skip"

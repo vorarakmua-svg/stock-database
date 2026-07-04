@@ -32,10 +32,14 @@ resolve to an all-``None`` list rather than raising.
 
 from __future__ import annotations
 
+import warnings
 from typing import Any, Dict, List, Optional
 
-import numpy as np
 import pandas as pd
+
+# Direct numpy imports are avoided here: numpy >= 2.5 ships PEP 695 stubs that
+# newer mypy cannot parse below a 3.12 target, and this module is strictly checked.
+_NAN = float("nan")
 
 
 def _series(closes: List[float]) -> "pd.Series[float]":
@@ -71,7 +75,9 @@ def rsi(closes: List[float], period: int = 14) -> List[Optional[float]]:
     avg_gain = up.ewm(alpha=1.0 / period, adjust=False).mean()
     avg_loss = down.ewm(alpha=1.0 / period, adjust=False).mean()
 
-    with np.errstate(divide="ignore", invalid="ignore"):
+    with warnings.catch_warnings():
+        # Suppress numpy's divide/invalid RuntimeWarnings from x/0 and 0/0.
+        warnings.simplefilter("ignore", RuntimeWarning)
         rs = avg_gain / avg_loss
         rsi_values = 100.0 - (100.0 / (1.0 + rs))
 
@@ -79,7 +85,7 @@ def rsi(closes: List[float], period: int = 14) -> List[Optional[float]]:
     rsi_values = rsi_values.where(~flat, 50.0)
 
     warm = min(period, len(closes))
-    rsi_values.iloc[:warm] = np.nan
+    rsi_values.iloc[:warm] = _NAN
     return _to_optional_floats(rsi_values)
 
 
@@ -97,9 +103,9 @@ def macd(
     hist = macd_line - signal_line
 
     warm = min(slow, len(closes))
-    macd_line.iloc[:warm] = np.nan
-    signal_line.iloc[:warm] = np.nan
-    hist.iloc[:warm] = np.nan
+    macd_line.iloc[:warm] = _NAN
+    signal_line.iloc[:warm] = _NAN
+    hist.iloc[:warm] = _NAN
 
     return {
         "macd": _to_optional_floats(macd_line),
