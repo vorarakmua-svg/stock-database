@@ -141,6 +141,8 @@ label { color: var(--color-ink-muted); font-size: 0.85rem; }
   position: sticky; top: 0;
 }
 .data-table td, .table td { padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--color-border); }
+.data-table th { padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--color-border); text-align: left; }
+.statements-table .row-label { min-width: 160px; }
 .data-table tbody tr:last-child td, .table tbody tr:last-child td { border-bottom: none; }
 .data-table tbody tr, .table-hover tbody tr { transition: background var(--ease); }
 .data-table tbody tr:hover, .table-hover tbody tr:hover { background: var(--color-surface-2); }
