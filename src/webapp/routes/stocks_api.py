@@ -47,6 +47,7 @@ from ..schemas import (
     ProfileOut,
     QuoteOut,
     SplitEvent,
+    StockSummaryOut,
 )
 from ..settings import WebSettings
 
@@ -182,6 +183,18 @@ def _slice_bundle(bundle: Dict[str, Any], start: Optional[date]) -> Dict[str, An
             "hist": macd["hist"][idx:],
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Summary (watchlist batch)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/summary", response_model=List[StockSummaryOut])
+def summary(tickers: str, r: Reader = Depends(get_reader)) -> List[Dict[str, Any]]:
+    """Batch watchlist summary. ``tickers`` is comma-separated; unknown skipped."""
+    wanted = [t.strip().upper() for t in tickers.split(",") if t.strip()][:50]
+    return r.stock_summaries(wanted)
 
 
 # ---------------------------------------------------------------------------

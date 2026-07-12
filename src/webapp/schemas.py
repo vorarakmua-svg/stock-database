@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CompanySummary(BaseModel):
@@ -175,3 +175,17 @@ class ProfileOut(BaseModel):
 
     company: Dict[str, Any]
     officers: List[Dict[str, Any]] = []
+
+
+class StockSummaryOut(BaseModel):
+    """One watchlist-card row from GET /api/stocks/summary."""
+
+    ticker: str
+    company_name: Optional[str] = None
+    price: Optional[float] = None
+    change: Optional[float] = None
+    change_pct: Optional[float] = None
+    pe_trailing: Optional[float] = None
+    quality_score: Optional[int] = None
+    as_of: Optional[str] = None
+    sparkline: List[float] = Field(default_factory=list)

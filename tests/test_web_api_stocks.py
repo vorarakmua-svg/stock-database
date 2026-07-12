@@ -421,3 +421,46 @@ def test_export_dividends_csv_parses_with_header(client):
 def test_export_dividends_csv_unknown_ticker_404(client):
     resp = client.get("/api/export/stock/ZZZ/dividends.csv")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# summary (watchlist batch)
+# ---------------------------------------------------------------------------
+
+
+def test_summary_returns_known_tickers_and_skips_unknown(client):
+    resp = client.get("/api/stocks/summary?tickers=AAA,ZZZ")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [row["ticker"] for row in body] == ["AAA"]
+    row = body[0]
+    # aaa2 snapshot: current_price=105.0, previous_close=100.0
+    assert row["price"] == 105.0
+    assert row["change"] == 5.0
+    assert row["change_pct"] == 0.05
+    assert 0 < len(row["sparkline"]) <= 63
+    assert all(isinstance(v, float) for v in row["sparkline"])
+
+
+def test_summary_normalizes_case_and_whitespace(client):
+    resp = client.get("/api/stocks/summary?tickers=%20aaa%20")
+    assert resp.status_code == 200
+    assert [row["ticker"] for row in resp.json()] == ["AAA"]
+
+
+def test_summary_empty_param_returns_empty_list(client):
+    resp = client.get("/api/stocks/summary?tickers=,,")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_summary_includes_latest_quality_score(client, web_db):
+    conn = sqlite3.connect(str(web_db))
+    conn.execute(
+        "INSERT INTO collection_runs (ticker, collected_at, quality_score) "
+        "VALUES ('AAA', '2030-01-01T00:00:00', 88)"
+    )
+    conn.commit()
+    conn.close()
+    resp = client.get("/api/stocks/summary?tickers=AAA")
+    assert resp.json()[0]["quality_score"] == 88
