@@ -132,7 +132,8 @@
   // Column-header sort links inside the results fragment re-request /ui/screen
   // themselves; capture their sort so chip edits keep it, and sync the URL.
   document.body.addEventListener('htmx:afterSettle', function (evt) {
-    if (evt.detail.target && evt.detail.target.id === 'screen-results' && evt.detail.pathInfo) {
+    if (evt.detail.target && evt.detail.target.id === 'screen-results' && evt.detail.pathInfo
+        && (evt.detail.pathInfo.requestPath || '').indexOf('/ui/screen') === 0) {
       var path = evt.detail.pathInfo.requestPath || '';
       var qi = path.indexOf('?');
       if (qi !== -1) {
