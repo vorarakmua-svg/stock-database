@@ -6,6 +6,7 @@
   <div class="company-title-row">
     <h1>{{ company.company_name or company.ticker }}</h1>
     <span class="ticker-badge">{{ company.ticker }}</span>
+    <button id="watch-star" class="star-btn" type="button" data-ticker="{{ ticker }}" aria-label="Toggle watchlist">☆</button>
   </div>
   <div class="company-meta">
     {% if company.sector_class %}<span class="meta-item">{{ company.sector_class }}</span>{% endif %}
@@ -15,16 +16,22 @@
 </div>
 
 <div class="tab-bar" role="tablist">
-  {% for label, key in tabs %}
+  {% for label, code, key in tabs %}
   <button
     class="tab-btn{% if key == active_tab %} tab-active{% endif %}"
     hx-get="/ui/stocks/{{ ticker }}/{{ key }}"
     hx-target="#panel"
+    hx-indicator="#panel-skeleton"
     hx-trigger="{% if key == active_tab %}click, load{% else %}click{% endif %}"
     role="tab"
-  >{{ label }}</button>
+  >{{ label }} <span class="tab-code">{{ code }}</span></button>
   {% endfor %}
 </div>
 
+<div id="panel-skeleton" class="skeleton-stack" aria-hidden="true">
+  <div class="skeleton skeleton--bar"></div>
+  <div class="skeleton skeleton--bar w60"></div>
+  <div class="skeleton skeleton--block"></div>
+</div>
 <div id="panel" class="panel"></div>
 {% endblock %}

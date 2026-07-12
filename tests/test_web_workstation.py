@@ -158,7 +158,7 @@ def test_des_fragment_sparse_ticker_change_is_neutral_not_down(client):
     resp = client.get("/ui/stocks/BBB/des")
     assert resp.status_code == 200
     body = resp.text
-    assert "quote-change flat" in body
+    assert "pill flat quote-change" in body
     assert "down" not in body
 
 
