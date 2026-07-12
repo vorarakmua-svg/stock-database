@@ -3,6 +3,35 @@
  * Minimal client-side behaviour: Plotly chart renderer + HTMX tab-active helper.
  */
 
+/** Slate Pro chart theme — single source of chart colors (mirrors app.css tokens). */
+var SLATE = {
+  grid: '#21262d', ink: '#e6edf3', muted: '#8b949e',
+  accent: '#388bfd', accentFill: 'rgba(31, 111, 235, 0.12)',
+  up: '#3fb950', down: '#f85149', warn: '#d29922', purple: '#a371f7', pink: '#f778ba',
+  fontUI: 'Inter, "Segoe UI", system-ui, sans-serif',
+  fontMono: '"JetBrains Mono", "Cascadia Mono", Consolas, monospace',
+};
+
+function slateAxis(extra) {
+  var ax = {
+    gridcolor: SLATE.grid, linecolor: SLATE.grid, zerolinecolor: '#30363d',
+    tickfont: { family: SLATE.fontMono, size: 11, color: SLATE.muted },
+  };
+  return Object.assign(ax, extra || {});
+}
+
+function slateLayout(overrides) {
+  var base = {
+    paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+    font: { family: SLATE.fontUI, color: SLATE.ink, size: 12 },
+    hoverlabel: { bgcolor: '#1c2128', bordercolor: '#30363d', font: { family: SLATE.fontMono, size: 11, color: SLATE.ink } },
+    colorway: [SLATE.accent, SLATE.warn, SLATE.purple, SLATE.pink, SLATE.up, SLATE.down],
+    margin: { t: 24, r: 24, b: 40, l: 56 },
+    showlegend: false,
+  };
+  return Object.assign(base, overrides || {});
+}
+
 /**
  * Render a Plotly line chart into the element with the given id.
  * @param {string} elId - The DOM element id to render into.
@@ -12,7 +41,7 @@
 function renderPlot(elId, series, title) {
   if (!series || series.length === 0) {
     const el = document.getElementById(elId);
-    if (el) el.innerHTML = '<p style="color:#8a8a8a;font-size:.875rem">No data available.</p>';
+    if (el) el.innerHTML = '<p class="muted">No data available.</p>';
     return;
   }
 
@@ -25,29 +54,19 @@ function renderPlot(elId, series, title) {
     type: 'scatter',
     mode: 'lines+markers',
     name: title,
-    line: { color: '#ff9900', width: 2.5 },
-    marker: { color: '#ff9900', size: 6 },
+    line: { color: SLATE.accent, width: 2 },
+    marker: { color: SLATE.accent, size: 5 },
+    fill: 'tozeroy',
+    fillcolor: SLATE.accentFill,
     hovertemplate: '%{x}: %{y:.2%}<extra></extra>',
   };
 
-  var layout = {
-    title: { text: title, font: { size: 14, color: '#e6e3dc', family: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace' } },
+  var layout = slateLayout({
+    title: { text: title, font: { size: 13, color: SLATE.muted, family: SLATE.fontUI } },
     margin: { t: 40, r: 24, b: 40, l: 60 },
-    xaxis: {
-      tickformat: 'd',
-      gridcolor: '#2a2a2a',
-      linecolor: '#2a2a2a',
-    },
-    yaxis: {
-      tickformat: '.0%',
-      gridcolor: '#2a2a2a',
-      linecolor: '#2a2a2a',
-    },
-    paper_bgcolor: 'transparent',
-    plot_bgcolor: 'transparent',
-    font: { family: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace', color: '#e6e3dc' },
-    showlegend: false,
-  };
+    xaxis: slateAxis({ tickformat: 'd' }),
+    yaxis: slateAxis({ tickformat: '.0%' }),
+  });
 
   var config = {
     responsive: true,
@@ -71,7 +90,7 @@ function renderBar(elId, labels, values, pct, title) {
   var el = document.getElementById(elId);
   if (!el) return;
   if (!labels || labels.length === 0) {
-    el.innerHTML = '<p style="color:#8a8a8a;font-size:.875rem">No data available.</p>';
+    el.innerHTML = '<p class="muted">No data available.</p>';
     return;
   }
   var trace = {
@@ -81,19 +100,15 @@ function renderBar(elId, labels, values, pct, title) {
     y: labels,
     text: pct,
     textposition: 'outside',
-    marker: { color: '#ff9900', opacity: 0.85 },
+    marker: { color: SLATE.accent, opacity: 0.9 },
     hovertemplate: '%{y}: %{text}<extra></extra>',
   };
-  var layout = {
-    title: { text: title, font: { size: 13, color: '#e6e3dc', family: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace' } },
+  var layout = slateLayout({
+    title: { text: title, font: { size: 13, color: SLATE.muted, family: SLATE.fontUI } },
     margin: { t: 36, r: 80, b: 36, l: 200 },
-    xaxis: { range: [0, 1.05], tickformat: '.0%', gridcolor: '#2a2a2a', linecolor: '#2a2a2a' },
-    yaxis: { autorange: 'reversed', gridcolor: '#2a2a2a', linecolor: '#2a2a2a' },
-    paper_bgcolor: 'transparent',
-    plot_bgcolor: 'transparent',
-    font: { family: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace', color: '#e6e3dc', size: 12 },
-    showlegend: false,
-  };
+    xaxis: slateAxis({ range: [0, 1.05], tickformat: '.0%' }),
+    yaxis: slateAxis({ autorange: 'reversed' }),
+  });
   var config = { responsive: true, displayModeBar: false };
   if (typeof Plotly !== 'undefined') {
     Plotly.newPlot(elId, [trace], layout, config);
@@ -104,14 +119,7 @@ function renderBar(elId, labels, values, pct, title) {
  * GP panel — dark Plotly layout shared by the price figure and the compare figure.
  */
 function _gpBaseLayout() {
-  return {
-    margin: { t: 10, r: 24, b: 30, l: 55 },
-    paper_bgcolor: 'transparent',
-    plot_bgcolor: 'transparent',
-    font: { family: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace', color: '#e6e3dc', size: 11 },
-    legend: { orientation: 'h', font: { size: 10 } },
-    showlegend: true,
-  };
+  return slateLayout({ margin: { t: 10, r: 24, b: 30, l: 55 }, legend: { orientation: 'h', font: { size: 10, color: SLATE.muted } }, showlegend: true, hovermode: 'x unified' });
 }
 
 /**
@@ -158,24 +166,24 @@ function _gpRenderPriceFigure(el, bars, bundle, chartType, indicators) {
       high: bars.map(function (b) { return b.high; }),
       low: bars.map(function (b) { return b.low; }),
       close: bars.map(function (b) { return b.close; }),
-      increasing: { line: { color: '#00e676' } },
-      decreasing: { line: { color: '#ff5252' } },
+      increasing: { line: { color: SLATE.up } },
+      decreasing: { line: { color: SLATE.down } },
       name: 'Price', xaxis: 'x', yaxis: 'y',
     });
   } else {
     traces.push({
       type: 'scatter', mode: 'lines', x: dates,
       y: bars.map(function (b) { return b.close; }),
-      line: { color: '#e6e3dc', width: 1.5 },
+      line: { color: SLATE.accent, width: 1.75 },
       name: 'Close', xaxis: 'x', yaxis: 'y',
     });
   }
 
   if (bundle && wantsMA50) {
-    traces.push({ type: 'scatter', mode: 'lines', x: bundle.dates, y: bundle.ma_50, line: { color: '#ff9900', width: 1.25 }, name: 'MA50', xaxis: 'x', yaxis: 'y' });
+    traces.push({ type: 'scatter', mode: 'lines', x: bundle.dates, y: bundle.ma_50, line: { color: SLATE.warn, width: 1.25 }, name: 'MA50', xaxis: 'x', yaxis: 'y' });
   }
   if (bundle && wantsMA200) {
-    traces.push({ type: 'scatter', mode: 'lines', x: bundle.dates, y: bundle.ma_200, line: { color: '#4fc3f7', width: 1.25 }, name: 'MA200', xaxis: 'x', yaxis: 'y' });
+    traces.push({ type: 'scatter', mode: 'lines', x: bundle.dates, y: bundle.ma_200, line: { color: SLATE.purple, width: 1.25 }, name: 'MA200', xaxis: 'x', yaxis: 'y' });
   }
 
   var extraPanels = [];
@@ -184,28 +192,28 @@ function _gpRenderPriceFigure(el, bars, bundle, chartType, indicators) {
   var domains = _gpComputeDomains(extraPanels.length);
 
   var layout = _gpBaseLayout();
-  layout.xaxis = {
-    domain: [0, 1], gridcolor: '#2a2a2a', linecolor: '#2a2a2a',
+  layout.xaxis = slateAxis({
+    domain: [0, 1],
     rangeslider: { visible: false }, showticklabels: extraPanels.length === 0,
-  };
-  layout.yaxis = { domain: domains.main, gridcolor: '#2a2a2a', linecolor: '#2a2a2a' };
+  });
+  layout.yaxis = slateAxis({ domain: domains.main });
 
   extraPanels.forEach(function (kind, i) {
     var n = i + 2;
     var isLast = i === extraPanels.length - 1;
-    layout['xaxis' + n] = {
-      domain: [0, 1], matches: 'x', gridcolor: '#2a2a2a', linecolor: '#2a2a2a',
+    layout['xaxis' + n] = slateAxis({
+      domain: [0, 1], matches: 'x',
       showticklabels: isLast,
-    };
-    layout['yaxis' + n] = { domain: domains.extras[i], gridcolor: '#2a2a2a', linecolor: '#2a2a2a' };
+    });
+    layout['yaxis' + n] = slateAxis({ domain: domains.extras[i] });
 
     if (kind === 'rsi' && bundle) {
       layout['yaxis' + n].range = [0, 100];
-      traces.push({ type: 'scatter', mode: 'lines', x: bundle.dates, y: bundle.rsi, line: { color: '#ff9900', width: 1.25 }, name: 'RSI', xaxis: 'x' + n, yaxis: 'y' + n });
+      traces.push({ type: 'scatter', mode: 'lines', x: bundle.dates, y: bundle.rsi, line: { color: SLATE.warn, width: 1.25 }, name: 'RSI', xaxis: 'x' + n, yaxis: 'y' + n });
     } else if (kind === 'macd' && bundle) {
-      traces.push({ type: 'scatter', mode: 'lines', x: bundle.dates, y: bundle.macd.macd, line: { color: '#e6e3dc', width: 1.25 }, name: 'MACD', xaxis: 'x' + n, yaxis: 'y' + n });
-      traces.push({ type: 'scatter', mode: 'lines', x: bundle.dates, y: bundle.macd.signal, line: { color: '#ff9900', width: 1.25 }, name: 'Signal', xaxis: 'x' + n, yaxis: 'y' + n });
-      traces.push({ type: 'bar', x: bundle.dates, y: bundle.macd.hist, marker: { color: '#4fc3f7' }, name: 'Hist', xaxis: 'x' + n, yaxis: 'y' + n });
+      traces.push({ type: 'scatter', mode: 'lines', x: bundle.dates, y: bundle.macd.macd, line: { color: SLATE.accent, width: 1.25 }, name: 'MACD', xaxis: 'x' + n, yaxis: 'y' + n });
+      traces.push({ type: 'scatter', mode: 'lines', x: bundle.dates, y: bundle.macd.signal, line: { color: SLATE.warn, width: 1.25 }, name: 'Signal', xaxis: 'x' + n, yaxis: 'y' + n });
+      traces.push({ type: 'bar', x: bundle.dates, y: bundle.macd.hist, marker: { color: 'rgba(139, 148, 158, 0.5)' }, name: 'Hist', xaxis: 'x' + n, yaxis: 'y' + n });
     }
   });
 
@@ -235,8 +243,8 @@ function _gpRenderCompareFigure(el, compareData, ticker, compareList) {
     return;
   }
   var layout = _gpBaseLayout();
-  layout.xaxis = { gridcolor: '#2a2a2a', linecolor: '#2a2a2a' };
-  layout.yaxis = { ticksuffix: '%', gridcolor: '#2a2a2a', linecolor: '#2a2a2a' };
+  layout.xaxis = slateAxis({});
+  layout.yaxis = slateAxis({ ticksuffix: '%' });
   Plotly.newPlot(el.id, traces, layout, { responsive: true, displayModeBar: false });
 }
 
@@ -313,24 +321,21 @@ function renderERN(elId, quarters, estimates, actuals) {
   var traces = [
     {
       type: 'bar', x: quarters, y: estimates, name: 'Estimate',
-      marker: { color: '#4fc3f7' },
+      marker: { color: '#6e7681' },
     },
     {
       type: 'bar', x: quarters, y: actuals, name: 'Actual',
-      marker: { color: '#ff9900' },
+      marker: { color: SLATE.accent },
     },
   ];
-  var layout = {
+  var layout = slateLayout({
     barmode: 'group',
     margin: { t: 20, r: 24, b: 40, l: 50 },
-    paper_bgcolor: 'transparent',
-    plot_bgcolor: 'transparent',
-    font: { family: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace', color: '#e6e3dc', size: 11 },
-    legend: { orientation: 'h', font: { size: 10 } },
-    xaxis: { gridcolor: '#2a2a2a', linecolor: '#2a2a2a' },
-    yaxis: { gridcolor: '#2a2a2a', linecolor: '#2a2a2a' },
+    legend: { orientation: 'h', font: { size: 10, color: SLATE.muted } },
     showlegend: true,
-  };
+    xaxis: slateAxis(),
+    yaxis: slateAxis(),
+  });
   Plotly.newPlot(elId, traces, layout, { responsive: true, displayModeBar: false });
 }
 
@@ -350,18 +355,14 @@ function renderDVD(elId, years, amounts) {
   var traces = [
     {
       type: 'bar', x: years, y: amounts, name: 'Annual dividend',
-      marker: { color: '#ff9900' },
+      marker: { color: SLATE.accent },
     },
   ];
-  var layout = {
+  var layout = slateLayout({
     margin: { t: 20, r: 24, b: 40, l: 50 },
-    paper_bgcolor: 'transparent',
-    plot_bgcolor: 'transparent',
-    font: { family: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace', color: '#e6e3dc', size: 11 },
-    xaxis: { gridcolor: '#2a2a2a', linecolor: '#2a2a2a' },
-    yaxis: { gridcolor: '#2a2a2a', linecolor: '#2a2a2a' },
-    showlegend: false,
-  };
+    xaxis: slateAxis(),
+    yaxis: slateAxis(),
+  });
   Plotly.newPlot(elId, traces, layout, { responsive: true, displayModeBar: false });
 }
 
