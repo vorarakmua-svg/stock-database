@@ -82,23 +82,6 @@ def test_company_page_unknown_404(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Search fragment
-# ---------------------------------------------------------------------------
-
-
-def test_search_returns_aaa(client: TestClient) -> None:
-    resp = client.get("/ui/search?q=AA")
-    assert resp.status_code == 200
-    assert "AAA" in resp.text
-
-
-def test_search_empty_q_returns_200(client: TestClient) -> None:
-    resp = client.get("/ui/search?q=")
-    assert resp.status_code == 200
-    # No error — empty fragment or empty list
-
-
-# ---------------------------------------------------------------------------
 # Statements fragment
 # ---------------------------------------------------------------------------
 
@@ -172,25 +155,26 @@ def test_docs_200(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Terminal reskin: command bar + HELP overlay (Task 6)
+# Command palette + HELP overlay (Task 2)
 # ---------------------------------------------------------------------------
 
 
-def test_home_contains_command_bar_input(client: TestClient) -> None:
+def test_home_contains_palette_open_button(client: TestClient) -> None:
     resp = client.get("/")
     assert resp.status_code == 200
     body = resp.text
-    assert 'id="cmd"' in body
+    assert 'id="palette-open"' in body
+    assert 'id="palette-input"' in body
 
 
-def test_home_loads_terminal_js(client: TestClient) -> None:
+def test_home_loads_palette_js(client: TestClient) -> None:
     resp = client.get("/")
     assert resp.status_code == 200
-    assert "terminal.js" in resp.text
+    assert "palette.js" in resp.text
 
 
-def test_terminal_js_served_200(client: TestClient) -> None:
-    resp = client.get("/static/terminal.js")
+def test_palette_js_served_200(client: TestClient) -> None:
+    resp = client.get("/static/palette.js")
     assert resp.status_code == 200
     assert "text/javascript" in resp.headers["content-type"] or "javascript" in resp.headers["content-type"]
 

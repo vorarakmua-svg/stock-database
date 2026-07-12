@@ -305,27 +305,6 @@ def company_page(ticker: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/ui/search", response_class=HTMLResponse)
-def search_fragment(
-    request: Request,
-    q: str = "",
-    r: Reader = Depends(get_reader),
-) -> Any:
-    """Autocomplete search results fragment."""
-    if len(q.strip()) < 1:
-        return templates.TemplateResponse(
-            request,
-            "fragments/search_results.html",
-            {"request": request, "hits": []},
-        )
-    hits = r.search_companies(q, 8)
-    return templates.TemplateResponse(
-        request,
-        "fragments/search_results.html",
-        {"request": request, "hits": hits},
-    )
-
-
 @router.get("/ui/companies/{ticker}/statements", response_class=HTMLResponse)
 def statements_fragment(
     ticker: str,
