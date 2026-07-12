@@ -12,7 +12,7 @@
   function read(key) {
     try { return JSON.parse(localStorage.getItem(key)) || []; } catch (e) { return []; }
   }
-  function write(key, list) { localStorage.setItem(key, JSON.stringify(list)); }
+  function write(key, list) { try { localStorage.setItem(key, JSON.stringify(list)); } catch (e) { /* storage unavailable */ } }
 
   window.Watchlist = {
     list: function () { return read(KEY); },
@@ -55,7 +55,7 @@
     var dirClass = hasPct ? (row.change_pct >= 0 ? 'up' : 'down') : 'flat';
     var stroke = dirClass === 'down' ? 'var(--color-down)'
       : dirClass === 'up' ? 'var(--color-up-text)' : 'var(--color-ink-muted)';
-    var q = row.quality_score === null || row.quality_score === undefined ? '—' : row.quality_score;
+    var q = row.quality_score === null || row.quality_score === undefined ? '—' : String(Math.round(Number(row.quality_score)));
     return '<a class="wl-card" href="/stocks/' + encodeURIComponent(row.ticker) + '">'
       + (removable ? '<button class="wl-remove" type="button" data-ticker="' + esc(row.ticker) + '" title="Remove from watchlist">✕</button>' : '')
       + '<div class="wl-top"><span class="wl-ticker mono">' + esc(row.ticker) + '</span>'
@@ -67,11 +67,14 @@
       + '</a>';
   }
 
+  // Resolves [] for an empty ticker list; resolves null on any failure
+  // (non-OK response or network error) so callers can tell "no data"
+  // apart from "fetch failed" and avoid destructive pruning.
   function fetchSummaries(tickers) {
     if (!tickers.length) return Promise.resolve([]);
     return fetch('/api/stocks/summary?tickers=' + encodeURIComponent(tickers.join(',')))
-      .then(function (resp) { return resp.ok ? resp.json() : []; })
-      .catch(function () { return []; });
+      .then(function (resp) { return resp.ok ? resp.json() : null; })
+      .catch(function () { return null; });
   }
 
   window.renderWatchlistHome = function () {
@@ -91,6 +94,14 @@
       }
       grid.innerHTML = '<div class="skeleton skeleton--bar"></div>';
       fetchSummaries(tickers).then(function (rows) {
+        if (rows === null) {
+          // Fetch failed — show an error state; never prune on failure.
+          grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1">'
+            + 'Could not load watchlist data — <a href="#" id="wl-retry">retry</a>.</div>';
+          var retry = document.getElementById('wl-retry');
+          if (retry) retry.addEventListener('click', function (evt) { evt.preventDefault(); drawWatchlist(); });
+          return;
+        }
         var known = {};
         rows.forEach(function (r) { known[r.ticker] = true; });
         // prune tickers the DB no longer knows
@@ -128,7 +139,7 @@
         recentRow.innerHTML = '<p class="muted">Pages you visit show up here.</p>';
       } else {
         fetchSummaries(recents.slice(0, 6)).then(function (rows) {
-          recentRow.innerHTML = rows.map(function (r) { return card(r, false); }).join('')
+          recentRow.innerHTML = (rows || []).map(function (r) { return card(r, false); }).join('')
             || '<p class="muted">Pages you visit show up here.</p>';
         });
       }
