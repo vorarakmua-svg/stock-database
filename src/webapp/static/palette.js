@@ -90,6 +90,7 @@
   function close() {
     overlay.hidden = true;
     mode = null;
+    reqSeq++;
   }
 
   function render() {
@@ -138,6 +139,7 @@
   }
 
   function build(query) {
+    var seq = ++reqSeq;
     var tokens = query.trim().split(/\s+/).filter(Boolean);
 
     // "TICKER FN" — second token picks a workstation function
@@ -181,7 +183,6 @@
 
     // One token: ticker/company search + pages
     var q = tokens[0];
-    var seq = ++reqSeq;
     fetch('/api/companies/search?q=' + encodeURIComponent(q))
       .then(function (resp) { return resp.ok ? resp.json() : []; })
       .catch(function () { return []; })
