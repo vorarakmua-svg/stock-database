@@ -29,5 +29,5 @@
   </div>
 </div>
 {% else %}
-<p class="empty-row">No vintage filings found for {{ ticker }}{% if fiscal_year %} FY{{ fiscal_year }}{% endif %}.</p>
+<div class="empty-state">No vintage filings found for {{ ticker }}{% if fiscal_year %} FY{{ fiscal_year }}{% endif %}.</div>
 {% endif %}

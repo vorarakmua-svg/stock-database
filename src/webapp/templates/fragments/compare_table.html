@@ -1,7 +1,7 @@
 {% if error %}
 <div class="alert alert-danger">{{ error }}</div>
 {% elif not tickers %}
-<p class="text-muted">No tickers selected for comparison.</p>
+<div class="empty-state">No tickers selected for comparison.</div>
 {% else %}
 <div class="table-responsive">
   <table class="table table-sm table-bordered">
