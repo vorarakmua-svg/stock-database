@@ -2,117 +2,51 @@
 {% block title %}Screener — Stock DB{% endblock %}
 {% block content %}
 <div class="page-header">
-  <h1>Company Screener</h1>
-  <p class="text-muted">Filter companies by fundamental metric thresholds.</p>
+  <div>
+    <h1 class="page-title">Screener</h1>
+    <p class="page-subtitle">Filter companies by fundamental metric thresholds.</p>
+  </div>
+  <div class="form-row">
+    <button class="btn btn-sm" type="button" id="scr-save">Save screen</button>
+    <button class="btn btn-sm" type="button" id="scr-copy">Copy link</button>
+  </div>
 </div>
 
-<form id="screener-form">
-  <div class="card mb-3">
-    <div class="card-body">
-      <!-- Sector filter -->
-      <div class="form-row mb-2">
-        <label for="sector-select">Sector</label>
-        <select id="sector-select" name="sector" class="form-control form-control-sm">
-          <option value="">All sectors</option>
-          {% for s in sectors %}
-          <option value="{{ s }}">{{ s }}</option>
-          {% endfor %}
-        </select>
-      </div>
-
-      <!-- Filter rows: pre-render 3 rows -->
-      <div id="filter-rows">
-        {% for i in range(3) %}
-        <div class="filter-row form-row mb-2">
-          <select name="metric_{{ i }}" class="form-control form-control-sm metric-select" style="width:180px">
-            <option value="">(choose metric)</option>
-            <optgroup label="METRICS">
-              {% for label, key in metric_options %}
-              <option value="{{ key }}">{{ label }}</option>
-              {% endfor %}
-            </optgroup>
-            <optgroup label="MARKET / VALUATION">
-              {% for label, key in snapshot_options %}
-              <option value="{{ key }}">{{ label }}</option>
-              {% endfor %}
-            </optgroup>
+<div class="card mb-3">
+  <div class="form-row" id="chip-bar">
+    <select id="sector-select" class="form-control form-control-sm">
+      <option value="">All sectors</option>
+    {% for s in sectors %}
+      <option value="{{ s }}">{{ s }}</option>
+    {% endfor %}
+    </select>
+    <span id="chips"></span>
+    <span style="position:relative;">
+      <button class="chip-add" type="button" id="add-filter">+ Add filter</button>
+      <div class="popover" id="filter-popover" hidden>
+        <input type="text" class="form-control form-control-sm" id="popover-search"
+               placeholder="Search metrics…" autocomplete="off" style="width:100%;" />
+        <div class="popover-list" id="popover-list"></div>
+        <div class="form-row mt-2" id="popover-editor" hidden>
+          <strong id="popover-metric-label" style="font-size:0.8rem;"></strong>
+          <select id="popover-op" class="form-control form-control-sm" style="width:64px;">
+            <option value="gte">≥</option><option value="lte">≤</option>
+            <option value="gt">&gt;</option><option value="lt">&lt;</option>
+            <option value="eq">=</option><option value="ne">≠</option>
           </select>
-          <select name="op_{{ i }}" class="form-control form-control-sm op-select" style="width:60px">
-            <option value="gte">≥</option>
-            <option value="lte">≤</option>
-            <option value="gt">&gt;</option>
-            <option value="lt">&lt;</option>
-            <option value="eq">=</option>
-            <option value="ne">≠</option>
-          </select>
-          <input type="number" name="value_{{ i }}" step="any" class="form-control form-control-sm value-input" style="width:100px" placeholder="value" />
+          <input type="number" step="any" id="popover-value" class="form-control form-control-sm"
+                 style="width:110px;" placeholder="value" />
+          <button class="btn btn-primary btn-sm" type="button" id="popover-apply">Add</button>
         </div>
-        {% endfor %}
       </div>
-
-      <!-- Sort -->
-      <div class="form-row mb-2">
-        <label>Sort by</label>
-        <select name="sort" class="form-control form-control-sm" style="width:180px">
-          <option value="">Ticker (default)</option>
-          <optgroup label="METRICS">
-            {% for label, key in metric_options %}
-            <option value="{{ key }}">{{ label }}</option>
-            {% endfor %}
-          </optgroup>
-          <optgroup label="MARKET / VALUATION">
-            {% for label, key in snapshot_options %}
-            <option value="{{ key }}">{{ label }}</option>
-            {% endfor %}
-          </optgroup>
-        </select>
-        <select name="sort_dir" class="form-control form-control-sm" style="width:80px">
-          <option value="desc">Desc</option>
-          <option value="asc">Asc</option>
-        </select>
-      </div>
-    </div>
+    </span>
   </div>
+  <div class="form-row mt-2" id="saved-screens"></div>
+  <div id="scr-note" class="muted mt-2" style="font-size:0.8rem;"></div>
+</div>
 
-  <button type="button" class="btn btn-primary" id="run-screen-btn"
-      hx-include="#screener-form"
-      hx-get="/ui/screen"
-      hx-target="#screen-results"
-      hx-swap="innerHTML"
-      hx-indicator="#screen-spinner">
-    Run Screen
-  </button>
-  <span id="screen-spinner" class="htmx-indicator">Loading…</span>
-</form>
+<div id="screen-results"></div>
 
-<div id="screen-results" class="mt-4"></div>
-
-<script>
-// Wire up the Run button: build ?field_op=value params from the filter rows
-document.getElementById('run-screen-btn').addEventListener('htmx:configRequest', function(e) {
-  var params = {};
-
-  // Sector
-  var sector = document.getElementById('sector-select').value;
-  if (sector) params['sector'] = sector;
-
-  // Sort
-  var sort = document.querySelector('[name="sort"]').value;
-  if (sort) params['sort'] = sort;
-  params['sort_dir'] = document.querySelector('[name="sort_dir"]').value;
-
-  // Filter rows
-  var rows = document.querySelectorAll('.filter-row');
-  rows.forEach(function(row, i) {
-    var metric = row.querySelector('.metric-select').value;
-    var op = row.querySelector('.op-select').value;
-    var value = row.querySelector('.value-input').value;
-    if (metric && value !== '') {
-      params[metric + '_' + op] = value;
-    }
-  });
-
-  e.detail.parameters = params;
-});
-</script>
+<script type="application/json" id="screener-metrics">{{ metric_json | safe }}</script>
+<script src="/static/screener.js"></script>
 {% endblock %}

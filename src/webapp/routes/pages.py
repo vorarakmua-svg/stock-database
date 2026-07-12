@@ -477,14 +477,24 @@ def screener_page(
 ) -> Any:
     """Screener page with filter form and HTMX result target."""
     sectors = r.distinct_sectors()
+    metric_options = SCREENER_METRIC_OPTIONS
+    snapshot_options = SCREENER_SNAPSHOT_OPTIONS
+    metric_json = json.dumps(
+        [{"key": key, "label": label, "group": "Metrics"} for label, key in metric_options]
+        + [
+            {"key": key, "label": label, "group": "Market / Valuation"}
+            for label, key in snapshot_options
+        ]
+    )
     return templates.TemplateResponse(
         request,
         "screener.html",
         {
             "request": request,
             "sectors": sectors,
-            "metric_options": SCREENER_METRIC_OPTIONS,
-            "snapshot_options": SCREENER_SNAPSHOT_OPTIONS,
+            "metric_options": metric_options,
+            "snapshot_options": snapshot_options,
+            "metric_json": metric_json,
         },
     )
 
