@@ -96,3 +96,10 @@ def test_compute_and_store_skips_broken_ticker(seeded_db):
 def test_compute_and_store_explicit_ticker_list(seeded_db):
     n = compute_and_store(seeded_db, tickers=["AAA"])
     assert n == 1
+
+
+def test_compute_and_store_missing_companies_table_returns_zero(tmp_path):
+    """A DB without a companies table logs a warning and returns 0, not a crash."""
+    empty = tmp_path / "no_schema.db"
+    n = compute_and_store(empty)
+    assert n == 0

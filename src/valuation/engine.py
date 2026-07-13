@@ -104,8 +104,12 @@ def compute_and_store(db_path: Union[str, Path],
     conn.row_factory = sqlite3.Row
     try:
         if tickers is None:
-            tickers = [r["ticker"] for r in conn.execute(
-                "SELECT ticker FROM companies ORDER BY ticker").fetchall()]
+            try:
+                tickers = [r["ticker"] for r in conn.execute(
+                    "SELECT ticker FROM companies ORDER BY ticker").fetchall()]
+            except sqlite3.OperationalError as e:
+                log.warning(f"Cannot list companies for valuation: {e}")
+                return 0
         computed_at = datetime.now(timezone.utc).isoformat()
         stored = 0
         for ticker in tickers:
