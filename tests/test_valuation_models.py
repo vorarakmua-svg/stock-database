@@ -1,0 +1,75 @@
+"""Valuation models: hand-checked values, N/A paths, scenario ordering."""
+import pytest
+
+from src.valuation.inputs import FYRecord, ValuationInputs
+from src.valuation.models import dcf_per_share, value_dcf
+
+
+def _fy(fy, fcf=None, net_income=None, equity=None, eps=None, shares=100.0,
+        ffo_ps=None, period_end=None):
+    return FYRecord(fiscal_year=fy, period_end=period_end, net_income=net_income,
+                    total_equity=equity, eps_diluted=eps, shares=shares,
+                    fcf=fcf, ffo_per_share=ffo_ps)
+
+
+def _inputs(**kwargs):
+    defaults = dict(ticker="AAA", sector_class="general", fy_records=[],
+                    shares_outstanding=100.0, beta=1.0, risk_free_rate=0.045,
+                    analyst_growth=None, dividends=[], fy_end_prices={})
+    defaults.update(kwargs)
+    return ValuationInputs(**defaults)
+
+
+# ---- dcf_per_share: closed-form perpetuity check ----
+def test_dcf_per_share_zero_growth_is_perpetuity():
+    # growth = terminal = 0, discount 10%: PV of flat 100/yr forever = 1000
+    v = dcf_per_share(100.0, 100.0, growth=0.0, discount=0.10, terminal_growth=0.0)
+    assert v == pytest.approx(10.0, rel=1e-9)
+
+
+def test_dcf_per_share_monotonic_in_growth_and_discount():
+    lo = dcf_per_share(100.0, 100.0, 0.02, 0.10)
+    hi = dcf_per_share(100.0, 100.0, 0.08, 0.10)
+    assert hi > lo
+    cheap_money = dcf_per_share(100.0, 100.0, 0.05, 0.08)
+    dear_money = dcf_per_share(100.0, 100.0, 0.05, 0.12)
+    assert cheap_money > dear_money
+
+
+# ---- value_dcf ----
+def test_value_dcf_happy_path_scenario_ordering():
+    recs = [_fy(fy, fcf=100.0 * 1.05 ** i) for i, fy in enumerate(range(2019, 2024))]
+    res = value_dcf(_inputs(fy_records=recs))
+    assert res.applicable is True
+    assert res.model == "dcf"
+    assert res.basis_fiscal_year == 2023
+    assert res.value_bear < res.value_base < res.value_bull
+    assert res.assumptions["growth_source"] == "hist_only"
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.05)
+
+
+def test_value_dcf_na_wrong_sector():
+    res = value_dcf(_inputs(sector_class="bank"))
+    assert res.applicable is False
+    assert res.na_reason == "not applicable to sector 'bank'"
+
+
+def test_value_dcf_na_insufficient_history():
+    recs = [_fy(fy, fcf=100.0) for fy in (2021, 2022, 2023)]
+    res = value_dcf(_inputs(fy_records=recs))
+    assert res.applicable is False
+    assert res.na_reason == "insufficient FCF history (need >= 4 fiscal years)"
+
+
+def test_value_dcf_na_negative_fcf():
+    recs = [_fy(fy, fcf=-50.0) for fy in range(2019, 2024)]
+    res = value_dcf(_inputs(fy_records=recs))
+    assert res.applicable is False
+    assert res.na_reason == "median 3-year FCF is not positive"
+
+
+def test_value_dcf_na_missing_shares():
+    recs = [_fy(fy, fcf=100.0) for fy in range(2019, 2024)]
+    res = value_dcf(_inputs(fy_records=recs, shares_outstanding=None))
+    assert res.applicable is False
+    assert res.na_reason == "shares outstanding unavailable"
