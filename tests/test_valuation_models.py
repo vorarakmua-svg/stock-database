@@ -11,6 +11,7 @@ from src.valuation.models import (
     value_ddm,
     value_graham,
     value_lynch,
+    value_multiples,
 )
 
 
@@ -179,3 +180,43 @@ def test_value_lynch_na_sector_and_history():
     recs = [_fy(2023, eps=2.0, shares=100.0)]
     res = value_lynch(_inputs(fy_records=recs))
     assert res.na_reason == "insufficient EPS history (need >= 4 fiscal years)"
+
+
+# ---- Historical multiples band ----
+def test_value_multiples_pe_band_hand_computed():
+    # FY-end P/E multiples: 10, 12, 14 -> band (10, 12, 14) * latest EPS 2.0
+    recs = [_fy(2021, eps=2.0), _fy(2022, eps=2.0), _fy(2023, eps=2.0)]
+    prices = {2021: 20.0, 2022: 24.0, 2023: 28.0}
+    res = value_multiples(_inputs(fy_records=recs, fy_end_prices=prices))
+    assert res.applicable is True
+    assert res.value_bear == pytest.approx(20.0)
+    assert res.value_base == pytest.approx(24.0)
+    assert res.value_bull == pytest.approx(28.0)
+    assert res.assumptions["multiple_kind"] == "pe"
+
+
+def test_value_multiples_reit_uses_pffo():
+    recs = [_fy(fy, ffo_ps=3.0) for fy in (2021, 2022, 2023)]
+    prices = {2021: 30.0, 2022: 36.0, 2023: 42.0}
+    res = value_multiples(_inputs(sector_class="reit", fy_records=recs,
+                                  fy_end_prices=prices))
+    assert res.applicable is True
+    assert res.assumptions["multiple_kind"] == "pffo"
+    assert res.value_base == pytest.approx(12.0 * 3.0)
+
+
+def test_value_multiples_na_insufficient_history():
+    recs = [_fy(2022, eps=2.0), _fy(2023, eps=2.0)]
+    prices = {2022: 24.0, 2023: 28.0}
+    res = value_multiples(_inputs(fy_records=recs, fy_end_prices=prices))
+    assert res.applicable is False
+    assert res.na_reason == "insufficient multiple history (need >= 3 fiscal years)"
+
+
+def test_value_multiples_na_negative_latest_basis():
+    recs = [_fy(2020, eps=2.0), _fy(2021, eps=2.0), _fy(2022, eps=2.0),
+            _fy(2023, eps=-1.0)]
+    prices = {2020: 20.0, 2021: 20.0, 2022: 20.0, 2023: 20.0}
+    res = value_multiples(_inputs(fy_records=recs, fy_end_prices=prices))
+    assert res.applicable is False
+    assert res.na_reason == "latest per-share basis is not positive"

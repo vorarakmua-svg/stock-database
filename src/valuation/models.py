@@ -10,7 +10,7 @@ import math
 import statistics
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .assumptions import (
     DDM_GROWTH_CAP,
@@ -20,7 +20,7 @@ from .assumptions import (
     derive_growth,
     growth_scenarios,
 )
-from .inputs import ValuationInputs
+from .inputs import FYRecord, ValuationInputs
 
 DCF_SECTORS = ("general", "utility", "energy")
 
@@ -232,6 +232,52 @@ def value_lynch(inputs: ValuationInputs) -> ValuationResult:
         value_bear=_lynch_fair_pe(g_bear) * eps,
         value_base=_lynch_fair_pe(g_base) * eps,
         value_bull=_lynch_fair_pe(g_bull) * eps,
+        assumptions=assumptions,
+        basis_fiscal_year=latest.fiscal_year,
+    )
+
+
+def _multiple_basis(sector_class: str) -> Tuple[str, Callable[[FYRecord], Optional[float]]]:
+    if sector_class in ("bank", "insurance"):
+        return "pb", lambda r: r.bvps()
+    if sector_class == "reit":
+        return "pffo", lambda r: r.ffo_per_share
+    return "pe", lambda r: r.eps()
+
+
+def value_multiples(inputs: ValuationInputs) -> ValuationResult:
+    """Price vs the company's own 5-year band of its sector-appropriate multiple."""
+    kind, basis_fn = _multiple_basis(inputs.sector_class)
+    recs = inputs.fy_records[-5:]
+    multiples = []
+    for r in recs:
+        b = basis_fn(r)
+        p = inputs.fy_end_prices.get(r.fiscal_year)
+        if b is not None and b > 0 and p is not None and p > 0:
+            multiples.append(p / b)
+    if len(multiples) < 3:
+        return _na("multiples",
+                   "insufficient multiple history (need >= 3 fiscal years)")
+    latest = inputs.fy_records[-1]
+    latest_basis = basis_fn(latest)
+    if latest_basis is None or latest_basis <= 0:
+        return _na("multiples", "latest per-share basis is not positive",
+                   basis_fy=latest.fiscal_year)
+    band_low, band_mid, band_high = (min(multiples),
+                                     statistics.median(multiples),
+                                     max(multiples))
+    assumptions: Dict[str, Any] = {
+        "multiple_kind": kind,
+        "band_low": band_low, "band_median": band_mid, "band_high": band_high,
+        "n_years": len(multiples),
+        "latest_basis": latest_basis,
+    }
+    return ValuationResult(
+        model="multiples",
+        applicable=True,
+        value_bear=band_low * latest_basis,
+        value_base=band_mid * latest_basis,
+        value_bull=band_high * latest_basis,
         assumptions=assumptions,
         basis_fiscal_year=latest.fiscal_year,
     )
