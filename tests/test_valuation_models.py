@@ -2,7 +2,7 @@
 import pytest
 
 from src.valuation.inputs import FYRecord, ValuationInputs
-from src.valuation.models import dcf_per_share, value_dcf
+from src.valuation.models import dcf_per_share, ddm_per_share, value_dcf, value_ddm
 
 
 def _fy(fy, fcf=None, net_income=None, equity=None, eps=None, shares=100.0,
@@ -73,3 +73,45 @@ def test_value_dcf_na_missing_shares():
     res = value_dcf(_inputs(fy_records=recs, shares_outstanding=None))
     assert res.applicable is False
     assert res.na_reason == "shares outstanding unavailable"
+
+
+# ---- ddm_per_share: closed-form perpetuity check ----
+def _quarterly_dividends(start_year, end_year, start_amount, growth_per_year):
+    """Four equal payments per calendar year, growing annually."""
+    events = []
+    amount = start_amount
+    for year in range(start_year, end_year + 1):
+        for month in ("03", "06", "09", "12"):
+            events.append((f"{year}-{month}-15", amount / 4.0))
+        amount *= 1.0 + growth_per_year
+    return events
+
+
+def test_ddm_per_share_zero_growth_is_perpetuity():
+    # growth = terminal = 0, discount 10%: 1/yr forever = 10.0
+    assert ddm_per_share(1.0, 0.0, 0.10, terminal_growth=0.0) == pytest.approx(10.0)
+
+
+# ---- value_ddm ----
+def test_value_ddm_happy_path_for_bank():
+    divs = _quarterly_dividends(2019, 2023, 1.00, 0.05)
+    res = value_ddm(_inputs(sector_class="bank", dividends=divs))
+    assert res.applicable is True
+    assert res.model == "ddm"
+    assert res.value_bear < res.value_base < res.value_bull
+    # Growth clamps to DDM cap 10%, hist CAGR ~5% -> hist wins the min()
+    assert res.assumptions["growth_cap"] == 0.10
+    assert res.assumptions["ttm_dps"] == pytest.approx(1.00 * 1.05 ** 4)
+
+
+def test_value_ddm_na_no_dividends():
+    res = value_ddm(_inputs(sector_class="bank", dividends=[]))
+    assert res.applicable is False
+    assert res.na_reason == "no dividend history"
+
+
+def test_value_ddm_na_too_short():
+    divs = _quarterly_dividends(2022, 2023, 1.0, 0.0)
+    res = value_ddm(_inputs(sector_class="bank", dividends=divs))
+    assert res.applicable is False
+    assert res.na_reason == "insufficient dividend history (need >= 3 calendar years)"

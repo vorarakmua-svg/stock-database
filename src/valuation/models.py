@@ -8,9 +8,11 @@ A model that does not apply returns ``applicable=False`` with a user-facing
 
 import statistics
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from datetime import date, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
 from .assumptions import (
+    DDM_GROWTH_CAP,
     DISCOUNT_SPREAD,
     TERMINAL_GROWTH,
     derive_discount,
@@ -97,4 +99,65 @@ def value_dcf(inputs: ValuationInputs) -> ValuationResult:
         value_bull=dcf_per_share(basis, shares, g_bull, discount - DISCOUNT_SPREAD),
         assumptions=assumptions,
         basis_fiscal_year=basis_fy,
+    )
+
+
+def ddm_per_share(ttm_dps: float, growth: float, discount: float,
+                  terminal_growth: float = TERMINAL_GROWTH) -> float:
+    """Multi-stage Gordon DDM: 5 years at ``growth``, then terminal growth."""
+    value = 0.0
+    d = ttm_dps
+    for t in range(1, 6):
+        d *= 1.0 + growth
+        value += d / (1.0 + discount) ** t
+    terminal = d * (1.0 + terminal_growth) / (discount - terminal_growth)
+    value += terminal / (1.0 + discount) ** 5
+    return value
+
+
+def _annual_dividend_totals(dividends: List[Tuple[str, float]]) -> List[Tuple[int, float]]:
+    totals: Dict[int, float] = {}
+    for date_str, amount in dividends:
+        year = int(date_str[:4])
+        totals[year] = totals.get(year, 0.0) + amount
+    return sorted(totals.items())
+
+
+def value_ddm(inputs: ValuationInputs) -> ValuationResult:
+    """Multi-stage dividend discount model — any steady payer, and the primary
+    model for banks/insurers where FCF is meaningless."""
+    if not inputs.dividends:
+        return _na("ddm", "no dividend history")
+    annual = _annual_dividend_totals(inputs.dividends)
+    if len(annual) < 3:
+        return _na("ddm", "insufficient dividend history (need >= 3 calendar years)")
+
+    anchor = date.fromisoformat(inputs.dividends[-1][0][:10])
+    cutoff = (anchor - timedelta(days=365)).isoformat()
+    ttm = sum(a for d, a in inputs.dividends if d[:10] > cutoff)
+    if ttm <= 0:
+        return _na("ddm", "no dividends in trailing 12 months")
+
+    # CAGR over complete calendar years only (the anchor year is likely partial).
+    complete = [total for year, total in annual if year < anchor.year]
+    growth, gmeta = derive_growth(complete, inputs.analyst_growth, cap=DDM_GROWTH_CAP)
+    discount, dmeta = derive_discount(inputs.risk_free_rate, inputs.beta)
+    g_bear, g_base, g_bull = growth_scenarios(growth, cap=DDM_GROWTH_CAP)
+    assumptions: Dict[str, Any] = {}
+    assumptions.update(gmeta)
+    assumptions.update(dmeta)
+    assumptions.update({
+        "ttm_dps": ttm,
+        "ttm_anchor": anchor.isoformat(),
+        "dividend_years": len(annual),
+        "terminal_growth": TERMINAL_GROWTH,
+    })
+    return ValuationResult(
+        model="ddm",
+        applicable=True,
+        value_bear=ddm_per_share(ttm, g_bear, discount + DISCOUNT_SPREAD),
+        value_base=ddm_per_share(ttm, g_base, discount),
+        value_bull=ddm_per_share(ttm, g_bull, discount - DISCOUNT_SPREAD),
+        assumptions=assumptions,
+        basis_fiscal_year=anchor.year,
     )
