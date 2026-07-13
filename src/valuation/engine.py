@@ -8,10 +8,14 @@ to a live price at read time.
 """
 
 import logging
+import sqlite3
 import statistics
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from .inputs import ValuationInputs
+from ..exporters.sqlite_store import SQLiteStore
+from .inputs import ValuationInputs, load_inputs
 from .models import (
     ValuationResult,
     value_dcf,
@@ -84,3 +88,35 @@ def upside_pct(median_base: Optional[float],
     if median_base is None or price is None or price <= 0:
         return None
     return (median_base - price) / price
+
+
+def compute_and_store(db_path: Union[str, Path],
+                      tickers: Optional[List[str]] = None,
+                      logger: Optional[logging.Logger] = None) -> int:
+    """Compute and persist valuations for *tickers* (default: every company).
+
+    Per-ticker failures are logged and skipped — a bad ticker never aborts
+    the batch. Returns the number of tickers successfully stored.
+    """
+    log = logger or logging.getLogger(__name__)
+    store = SQLiteStore(db_path=Path(db_path), logger=log)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        if tickers is None:
+            tickers = [r["ticker"] for r in conn.execute(
+                "SELECT ticker FROM companies ORDER BY ticker").fetchall()]
+        computed_at = datetime.now(timezone.utc).isoformat()
+        stored = 0
+        for ticker in tickers:
+            try:
+                inputs = load_inputs(conn, ticker)
+                results = run_valuations(inputs, logger=log)
+                summary = intrinsic_summary(results)
+                store.export_valuations(ticker, results, summary, computed_at)
+                stored += 1
+            except Exception as e:
+                log.warning(f"Valuation failed for {ticker}: {e}")
+        return stored
+    finally:
+        conn.close()
