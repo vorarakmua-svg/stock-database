@@ -157,6 +157,19 @@ CREATE TABLE IF NOT EXISTS valuations (
 Rows are upserted per (ticker, model) on every collection/backfill. Non-applicable models
 still get rows so "not valued" is distinguishable from "never computed".
 
+A companion table stores the cross-model medians per ticker (SQLite has no MEDIAN
+aggregate, and the screener needs these in SQL). Medians of intrinsic values are
+price-independent, so storing them keeps the compare-live principle intact:
+
+```sql
+CREATE TABLE IF NOT EXISTS valuation_summary (
+    ticker TEXT PRIMARY KEY,
+    n_applicable INTEGER NOT NULL,
+    median_bear REAL, median_base REAL, median_bull REAL,
+    computed_at TEXT NOT NULL
+);
+```
+
 ## Webapp
 
 - **Repository** (`webapp/repository.py`): `valuations(ticker)` returning all model rows,
