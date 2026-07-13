@@ -6,6 +6,7 @@ A model that does not apply returns ``applicable=False`` with a user-facing
 ``na_reason`` — no number is better than a fake number.
 """
 
+import math
 import statistics
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -160,4 +161,77 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
         value_bull=ddm_per_share(ttm, g_bull, discount - DISCOUNT_SPREAD),
         assumptions=assumptions,
         basis_fiscal_year=anchor.year,
+    )
+
+
+LYNCH_PE_FLOOR = 5.0
+LYNCH_PE_CAP = 25.0
+
+
+def value_graham(inputs: ValuationInputs) -> ValuationResult:
+    """Graham Number: sqrt(22.5 * EPS * BVPS). Bear/bull vary EPS over 3 FYs."""
+    recs = [r for r in inputs.fy_records
+            if r.eps() is not None and r.bvps() is not None]
+    if not recs:
+        return _na("graham", "EPS or book value unavailable")
+    latest = recs[-1]
+    eps = latest.eps()
+    bvps = latest.bvps()
+    assert eps is not None and bvps is not None  # narrowed by filter above
+    if eps <= 0:
+        return _na("graham", "EPS is not positive", basis_fy=latest.fiscal_year)
+    if bvps <= 0:
+        return _na("graham", "book value per share is not positive",
+                   basis_fy=latest.fiscal_year)
+    last3 = [e for e in (r.eps() for r in recs[-3:]) if e is not None and e > 0]
+    eps_bear, eps_bull = min(last3), max(last3)
+    assumptions: Dict[str, Any] = {
+        "eps_base": eps, "eps_bear": eps_bear, "eps_bull": eps_bull,
+        "bvps": bvps, "multiplier": 22.5,
+    }
+    return ValuationResult(
+        model="graham",
+        applicable=True,
+        value_bear=math.sqrt(22.5 * eps_bear * bvps),
+        value_base=math.sqrt(22.5 * eps * bvps),
+        value_bull=math.sqrt(22.5 * eps_bull * bvps),
+        assumptions=assumptions,
+        basis_fiscal_year=latest.fiscal_year,
+    )
+
+
+def _lynch_fair_pe(growth: float) -> float:
+    return min(max(growth * 100.0, LYNCH_PE_FLOOR), LYNCH_PE_CAP)
+
+
+def value_lynch(inputs: ValuationInputs) -> ValuationResult:
+    """Peter Lynch fair value: growth-rate-as-fair-P/E times latest EPS."""
+    if inputs.sector_class not in DCF_SECTORS:
+        return _na("lynch", f"not applicable to sector '{inputs.sector_class}'")
+    recs = [r for r in inputs.fy_records if r.eps() is not None]
+    if len(recs) < 4:
+        return _na("lynch", "insufficient EPS history (need >= 4 fiscal years)")
+    latest = recs[-1]
+    eps = latest.eps()
+    assert eps is not None
+    if eps <= 0:
+        return _na("lynch", "EPS is not positive", basis_fy=latest.fiscal_year)
+    growth, gmeta = derive_growth([r.eps() for r in recs], inputs.analyst_growth)
+    g_bear, g_base, g_bull = growth_scenarios(growth)
+    assumptions: Dict[str, Any] = {}
+    assumptions.update(gmeta)
+    assumptions.update({
+        "eps_base": eps,
+        "fair_pe_base": _lynch_fair_pe(g_base),
+        "fair_pe_floor": LYNCH_PE_FLOOR,
+        "fair_pe_cap": LYNCH_PE_CAP,
+    })
+    return ValuationResult(
+        model="lynch",
+        applicable=True,
+        value_bear=_lynch_fair_pe(g_bear) * eps,
+        value_base=_lynch_fair_pe(g_base) * eps,
+        value_bull=_lynch_fair_pe(g_bull) * eps,
+        assumptions=assumptions,
+        basis_fiscal_year=latest.fiscal_year,
     )

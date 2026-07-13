@@ -1,8 +1,17 @@
 """Valuation models: hand-checked values, N/A paths, scenario ordering."""
+import math
+
 import pytest
 
 from src.valuation.inputs import FYRecord, ValuationInputs
-from src.valuation.models import dcf_per_share, ddm_per_share, value_dcf, value_ddm
+from src.valuation.models import (
+    dcf_per_share,
+    ddm_per_share,
+    value_dcf,
+    value_ddm,
+    value_graham,
+    value_lynch,
+)
 
 
 def _fy(fy, fcf=None, net_income=None, equity=None, eps=None, shares=100.0,
@@ -115,3 +124,58 @@ def test_value_ddm_na_too_short():
     res = value_ddm(_inputs(sector_class="bank", dividends=divs))
     assert res.applicable is False
     assert res.na_reason == "insufficient dividend history (need >= 3 calendar years)"
+
+
+# ---- Graham Number ----
+def test_value_graham_hand_computed():
+    recs = [_fy(fy, net_income=None, equity=2000.0, eps=e, shares=100.0)
+            for fy, e in ((2021, 2.0), (2022, 2.5), (2023, 3.0))]
+    res = value_graham(_inputs(fy_records=recs))
+    assert res.applicable is True
+    # base: sqrt(22.5 * 3.0 * 20.0); bear uses min EPS 2.0; bull max EPS 3.0
+    assert res.value_base == pytest.approx(math.sqrt(22.5 * 3.0 * 20.0))
+    assert res.value_bear == pytest.approx(math.sqrt(22.5 * 2.0 * 20.0))
+    assert res.value_bull == res.value_base
+    assert res.basis_fiscal_year == 2023
+
+
+def test_value_graham_na_negative_eps():
+    recs = [_fy(2023, equity=2000.0, eps=-1.0, shares=100.0)]
+    res = value_graham(_inputs(fy_records=recs))
+    assert res.applicable is False
+    assert res.na_reason == "EPS is not positive"
+
+
+def test_value_graham_na_no_data():
+    res = value_graham(_inputs(fy_records=[]))
+    assert res.applicable is False
+    assert res.na_reason == "EPS or book value unavailable"
+
+
+# ---- Peter Lynch ----
+def test_value_lynch_hand_computed():
+    # EPS CAGR 100->121 over 4 yrs with values in between = 4.88%/yr;
+    # analyst 12% -> min is hist. fair P/E = growth*100 clamped [5,25].
+    eps_hist = [2.00, 2.10, 2.20, 2.31, 2.42]
+    recs = [_fy(2019 + i, eps=e, shares=100.0) for i, e in enumerate(eps_hist)]
+    res = value_lynch(_inputs(fy_records=recs, analyst_growth=0.12))
+    assert res.applicable is True
+    g = res.assumptions["growth_base"]
+    expected_pe = min(max(g * 100.0, 5.0), 25.0)
+    assert res.value_base == pytest.approx(expected_pe * 2.42)
+    assert res.value_bear < res.value_base < res.value_bull
+
+
+def test_value_lynch_fair_pe_floor_applies():
+    recs = [_fy(2019 + i, eps=2.0, shares=100.0) for i in range(5)]  # 0% growth
+    res = value_lynch(_inputs(fy_records=recs))
+    assert res.applicable is True
+    assert res.value_base == pytest.approx(5.0 * 2.0)  # P/E floor 5
+
+
+def test_value_lynch_na_sector_and_history():
+    res = value_lynch(_inputs(sector_class="reit"))
+    assert res.na_reason == "not applicable to sector 'reit'"
+    recs = [_fy(2023, eps=2.0, shares=100.0)]
+    res = value_lynch(_inputs(fy_records=recs))
+    assert res.na_reason == "insufficient EPS history (need >= 4 fiscal years)"
