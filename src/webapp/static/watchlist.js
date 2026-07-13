@@ -93,7 +93,11 @@
         return;
       }
       grid.innerHTML = '<div class="skeleton skeleton--bar"></div>';
-      fetchSummaries(tickers).then(function (rows) {
+      // Summary endpoint caps at 50 tickers — send only that many, and prune
+      // only among the sent subset so tickers past the cap are never treated
+      // as "unknown to the DB" and deleted from localStorage.
+      var sent = tickers.slice(0, 50);
+      fetchSummaries(sent).then(function (rows) {
         if (rows === null) {
           // Fetch failed — show an error state; never prune on failure.
           grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1">'
@@ -104,8 +108,8 @@
         }
         var known = {};
         rows.forEach(function (r) { known[r.ticker] = true; });
-        // prune tickers the DB no longer knows
-        tickers.filter(function (t) { return !known[t]; }).forEach(window.Watchlist.remove.bind(window.Watchlist));
+        // prune tickers the DB no longer knows (within the sent subset only)
+        sent.filter(function (t) { return !known[t]; }).forEach(window.Watchlist.remove.bind(window.Watchlist));
         grid.innerHTML = rows.map(function (r) { return card(r, true); }).join('')
           + '<div class="wl-add-tile" id="wl-add-tile">+ Add ticker</div>';
         var tile = document.getElementById('wl-add-tile');

@@ -21,7 +21,7 @@
   function recordRecent(t) {
     var l = getRecents().filter(function (x) { return x !== t; });
     l.unshift(t);
-    localStorage.setItem(RKEY, JSON.stringify(l.slice(0, 8)));
+    try { localStorage.setItem(RKEY, JSON.stringify(l.slice(0, 8))); } catch (e) { /* storage unavailable */ }
   }
 
   // Function codes on /stocks/{ticker}
@@ -252,7 +252,7 @@
 
   // Record direct /stocks/{ticker} visits as recents
   var m = window.location.pathname.match(/^\/stocks\/([^/]+)$/);
-  if (m) recordRecent(decodeURIComponent(m[1]));
+  if (m && document.getElementById('watch-star')) recordRecent(decodeURIComponent(m[1]));
 
   // HELP overlay close wiring (was in terminal.js)
   var helpClose = document.getElementById('help-close');
