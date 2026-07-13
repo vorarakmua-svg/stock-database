@@ -4,50 +4,31 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}Stock DB{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/app.css" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
 </head>
 <body>
-  <div class="cmdbar">
-    <span class="cmdbar-prompt">&gt;</span>
-    <input
-      id="cmd"
-      class="cmdbar-input"
-      type="text"
-      autocomplete="off"
-      spellcheck="false"
-      placeholder="TICKER FUNCTION  &middot;  e.g. AAPL GP  &middot;  ` or / to focus  &middot;  HELP"
-    />
-    <div id="cmd-suggest" class="cmdbar-suggest"></div>
-  </div>
-
   <nav class="nav">
     <div class="nav-inner">
       <a class="nav-brand" href="/">Stock DB</a>
       <div class="nav-links">
-        <a href="/" class="nav-link">Dashboard</a>
+        <a href="/" class="nav-link">Home</a>
         <a href="/companies" class="nav-link">Companies</a>
-        <a href="/asof" class="nav-link">As-Of</a>
         <a href="/screener" class="nav-link">Screener</a>
+        <a href="/asof" class="nav-link">As-Of</a>
         <a href="/quality" class="nav-link">Quality</a>
         {% if request.app.state.settings.allow_collection %}
         <a href="/collect" class="nav-link">Collect</a>
         {% endif %}
       </div>
-      <div class="search-wrap">
-        <input
-          class="search-input"
-          type="search"
-          name="q"
-          placeholder="Search ticker or company…"
-          autocomplete="off"
-          hx-get="/ui/search"
-          hx-trigger="keyup changed delay:250ms, focus"
-          hx-target="#search-results"
-        />
-        <div id="search-results" class="search-dropdown"></div>
-      </div>
+      <button id="palette-open" class="palette-open" type="button">
+        <span>Search or jump to…</span>
+        <span class="kbd">Ctrl K</span>
+      </button>
     </div>
   </nav>
 
@@ -57,7 +38,22 @@
 
   {% include "fragments/help.html" %}
 
+  <div id="palette-overlay" class="palette-overlay" hidden>
+    <div class="palette">
+      <input id="palette-input" class="palette-input" type="text"
+             placeholder="Search tickers, pages, functions…  (try: AAPL GP)"
+             autocomplete="off" spellcheck="false" />
+      <div id="palette-results" class="palette-results"></div>
+      <div class="palette-foot">
+        <span><span class="kbd">↑↓</span> navigate</span>
+        <span><span class="kbd">Enter</span> open</span>
+        <span><span class="kbd">Esc</span> close</span>
+      </div>
+    </div>
+  </div>
+
   <script src="/static/app.js"></script>
-  <script src="/static/terminal.js"></script>
+  <script src="/static/watchlist.js"></script>
+  <script src="/static/palette.js"></script>
 </body>
 </html>

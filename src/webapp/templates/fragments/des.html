@@ -1,7 +1,7 @@
 <div class="quote-header">
   <div class="quote-price-row">
     <span class="quote-price">{{ price_fmt }}</span>
-    <span class="quote-change {{ change_class }}">{{ change_fmt }} ({{ change_pct_fmt }})</span>
+    <span class="pill {{ change_class }} quote-change">{{ change_fmt }} ({{ change_pct_fmt }})</span>
   </div>
   {% if has_post_market %}
   <div class="quote-afterhours muted">After hours: {{ post_market_fmt }}</div>
@@ -56,7 +56,7 @@
   {% if description %}
   <p>{{ description }}</p>
   {% else %}
-  <p class="muted">No description collected.</p>
+  <div class="empty-state">No description collected.</div>
   {% endif %}
 </section>
 
@@ -81,11 +81,15 @@
     </table>
   </div>
   {% else %}
-  <p class="muted">No officer data collected.</p>
+  <div class="empty-state">No officer data collected.</div>
   {% endif %}
 </section>
 
 <section class="section">
   <h2 class="section-heading">Next Earnings</h2>
-  <p>{{ earnings_date or "No upcoming earnings date collected." }}</p>
+  {% if earnings_date %}
+  <p>{{ earnings_date }}</p>
+  {% else %}
+  <div class="empty-state">No upcoming earnings date collected.</div>
+  {% endif %}
 </section>

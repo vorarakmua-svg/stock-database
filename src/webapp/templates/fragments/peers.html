@@ -1,7 +1,7 @@
 {% if error %}
 <div class="alert alert-danger">{{ error }}</div>
 {% elif not peers %}
-<p class="text-muted">No peer data available for this company.</p>
+<div class="empty-state">No peer data available for this company.</div>
 {% else %}
 <p class="text-muted mb-3">
   Sector: <strong>{{ peers.sector_class }}</strong> &mdash;

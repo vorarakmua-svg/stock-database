@@ -23,20 +23,22 @@ from .stocks_api import VALID_RANGES, resolve_range_start
 
 router = APIRouter()
 
-# (label, key) for every function tab in the workstation tab bar. Order matters —
-# it's the order the buttons render in.
-TABS: List[Tuple[str, str]] = [
-    ("DES", "des"),
-    ("GP", "gp"),
-    ("FA", "fa"),
-    ("ERN", "ern"),
-    ("STAT", "stat"),
-    ("HP", "hp"),
-    ("DVD", "dvd"),
-    ("HDS", "hds"),
-    ("INS", "ins"),
+# (label, code, key) for every function tab in the workstation tab bar. Order
+# matters — it's the order the buttons render in. `label` is the friendly name
+# shown first, `code` is the terminal-style abbreviation shown in a `.tab-code`
+# span alongside it (e.g. "Overview DES"), `key` is the fragment-route key.
+TABS: List[Tuple[str, str, str]] = [
+    ("Overview", "DES", "des"),
+    ("Chart", "GP", "gp"),
+    ("Financials", "FA", "fa"),
+    ("Earnings", "ERN", "ern"),
+    ("Statistics", "STAT", "stat"),
+    ("History", "HP", "hp"),
+    ("Dividends", "DVD", "dvd"),
+    ("Holders", "HDS", "hds"),
+    ("Insiders", "INS", "ins"),
 ]
-_TAB_KEYS = frozenset(key for _, key in TABS)
+_TAB_KEYS = frozenset(key for _, _, key in TABS)
 
 _GP_RANGES: List[str] = ["1M", "3M", "6M", "YTD", "1Y", "5Y", "MAX"]
 _GP_INDICATORS: List[Tuple[str, str]] = [

@@ -1,152 +1,47 @@
 {% extends "base.html" %}
-{% block title %}Dashboard — Stock DB{% endblock %}
+{% block title %}Home — Stock DB{% endblock %}
 
 {% block content %}
-<div class="hero">
-  <h1 class="hero-title">Stock fundamentals database</h1>
-  <p class="hero-sub">Standardised, comparable financials across all sectors.</p>
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Watchlist</h1>
+    <p class="page-subtitle">Standardised, comparable financials across all sectors.</p>
+  </div>
+  <button class="btn btn-primary btn-sm" type="button" id="wl-add">+ Add ticker</button>
 </div>
 
-<!-- Freshness badge -->
-<div class="stat-row">
-  <div class="stat-card">
-    <span class="stat-value">{{ company_count }}</span>
-    <span class="stat-label">Companies</span>
-  </div>
-  {% if freshness %}
-  <div class="stat-card">
-    <span class="stat-value">{{ freshness.table_counts.get("collection_runs", 0) }}</span>
-    <span class="stat-label">Collection runs</span>
-  </div>
-  <div class="stat-card">
-    <span class="stat-value">{{ freshness.table_counts.get("unmapped_facts", 0) }}</span>
-    <span class="stat-label">Unmapped facts</span>
-  </div>
-  {% if freshness.latest_company_update %}
-  <div class="stat-card" style="min-width:180px;">
-    <span class="stat-value" style="font-size:1rem;">{{ freshness.latest_company_update[:10] }}</span>
-    <span class="stat-label">Last updated</span>
-  </div>
-  {% endif %}
-  {% endif %}
-</div>
+<div id="watchlist-grid" class="wl-grid"></div>
 
-<!-- Browse by sector -->
-{% if sectors %}
 <section class="section">
-  <h2 class="section-heading">Browse by sector</h2>
-  <div class="chip-row">
-    {% for s in sectors %}
-    <a class="chip" href="/companies?sector={{ s }}">{{ s }}</a>
-    {% endfor %}
-  </div>
+  <h2 class="section-heading">Recently viewed</h2>
+  <div id="recent-row" class="wl-grid wl-grid--small"></div>
 </section>
-{% endif %}
 
-<!-- Sector coverage cards -->
 {% if by_sector %}
 <section class="section">
   <h2 class="section-heading">Sector coverage</h2>
-  <div class="stat-row" style="flex-wrap:wrap;">
+  <div class="stat-row">
     {% for sec in by_sector %}
-    <div class="stat-card" style="min-width:140px;align-items:flex-start;">
-      <span class="stat-value" style="font-size:1.4rem;">{{ sec.n_companies }}</span>
-      <span class="stat-label" style="font-size:0.75rem;">{{ sec.sector_class }}</span>
+    <a class="stat-card" href="/companies?sector={{ sec.sector_class }}">
+      <span class="stat-value">{{ sec.n_companies }}</span>
+      <span class="stat-label">{{ sec.sector_class }}</span>
       {% if sec.median_quality is not none %}
-      <span class="muted" style="font-size:0.75rem;margin-top:0.25rem;">quality {{ sec.median_quality | int }}</span>
+      <span class="muted mono" style="font-size:0.72rem;">quality {{ sec.median_quality | int }}</span>
       {% endif %}
-    </div>
+    </a>
     {% endfor %}
   </div>
 </section>
 {% endif %}
 
-<!-- Fill-rate bar chart -->
-{% if fill_chart_json %}
-<section class="section">
-  <div class="chart-section">
-    <div class="chart-header">
-      <h2 class="section-heading">Field fill rates (top 15 canonical fields)</h2>
-      <a href="/quality" class="muted" style="font-size:0.8rem;">Full view &rarr;</a>
-    </div>
-    <div id="fill-rate-chart" style="height:320px;"></div>
-  </div>
-</section>
-{% endif %}
-
-<!-- Latest collection runs table -->
-{% if latest_runs %}
-<section class="section">
-  <h2 class="section-heading">Latest collection runs</h2>
-  <div class="table-wrap">
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Ticker</th>
-          <th>Collected at</th>
-          <th>Sources</th>
-          <th class="num">Warnings</th>
-          <th class="num">Errors</th>
-          <th class="num">Quality</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in latest_runs %}
-        <tr>
-          <td><a href="/stocks/{{ row.ticker }}">{{ row.ticker }}</a></td>
-          <td>{{ row.collected_at[:10] if row.collected_at else "—" }}</td>
-          <td>{{ row.data_sources or "—" }}</td>
-          <td class="num">{{ row.warning_count if row.warning_count is not none else "—" }}</td>
-          <td class="num">{{ row.error_count if row.error_count is not none else "—" }}</td>
-          <td class="num">{{ row.quality_score if row.quality_score is not none else "—" }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
-{% endif %}
-
-<!-- Unmapped tags worklist -->
-{% if unmapped_top %}
-<section class="section">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem;">
-    <h2 class="section-heading" style="margin:0;">Top unmapped XBRL tags</h2>
-    <a href="/quality" class="muted" style="font-size:0.8rem;">Full list &rarr;</a>
-  </div>
-  <div class="table-wrap">
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Tag</th>
-          <th>Example label</th>
-          <th class="num">Companies</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in unmapped_top %}
-        <tr>
-          <td><code>{{ row.tag }}</code></td>
-          <td>{{ row.example_label or "—" }}</td>
-          <td class="num">{{ row.n_companies }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
-{% endif %}
-
-<section class="section">
-  <p class="muted">Use the search bar above to find a company, or browse the full <a href="/companies">companies list</a>.</p>
-</section>
-
-{% if fill_chart_json %}
-<script>
-(function() {
-  var data = {{ fill_chart_json | safe }};
-  renderBar('fill-rate-chart', data.labels, data.values, data.pct, 'Field fill rate');
-})();
-</script>
-{% endif %}
+<div class="ops-strip">
+  <span class="mono">● {{ company_count }} companies</span>
+  {% if freshness %}
+  <span class="mono">{{ freshness.table_counts.get("collection_runs", 0) }} collection runs</span>
+  {% if freshness.latest_company_update %}
+  <span class="mono">last updated {{ freshness.latest_company_update[:10] }}</span>
+  {% endif %}
+  {% endif %}
+  <a href="/quality">Data quality →</a>
+</div>
 {% endblock %}

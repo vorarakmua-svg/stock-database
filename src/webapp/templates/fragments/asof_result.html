@@ -44,7 +44,7 @@
         </tbody>
       </table>
       {% else %}
-      <p class="empty-row">Ratios not available for this filing.</p>
+      <div class="empty-state">Ratios not available for this filing.</div>
       {% endif %}
     </div>
   </div>
@@ -59,10 +59,8 @@
   </div>
 </div>
 {% else %}
-<div class="card">
-  <p class="empty-row">
-    No filing found for <strong>{{ ticker }}</strong> FY{{ fiscal_year }} as of <strong>{{ date }}</strong>.
-    The period had not been filed yet as of that date.
-  </p>
+<div class="empty-state">
+  No filing found for <strong>{{ ticker }}</strong> FY{{ fiscal_year }} as of <strong>{{ date }}</strong>.
+  The period had not been filed yet as of that date.
 </div>
 {% endif %}

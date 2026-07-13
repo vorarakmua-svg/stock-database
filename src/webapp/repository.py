@@ -414,6 +414,46 @@ class Reader:
         officers = [dict(row) for row in cur.fetchall()]
         return {"company": company, "officers": officers}
 
+    def stock_summaries(self, tickers: List[str]) -> List[Dict[str, Any]]:
+        """Watchlist-card batch: quote + trailing-quarter sparkline + quality.
+
+        Unknown tickers are skipped; output order follows input order. The
+        sparkline is the last ~63 trading days of closes, ascending.
+        """
+        out: List[Dict[str, Any]] = []
+        for ticker in tickers:
+            company = self.get_company(ticker)
+            if company is None:
+                continue
+            quote = self.quote(ticker) or {}
+            cur = self._conn.execute(
+                "SELECT close FROM ("
+                "  SELECT date, close FROM price_bars WHERE ticker = ? "
+                "  ORDER BY date DESC LIMIT 63"
+                ") ORDER BY date ASC",
+                (ticker,),
+            )
+            sparkline = [row["close"] for row in cur.fetchall() if row["close"] is not None]
+            run = self._conn.execute(
+                "SELECT quality_score FROM collection_runs WHERE ticker = ? "
+                "ORDER BY collected_at DESC LIMIT 1",
+                (ticker,),
+            ).fetchone()
+            out.append(
+                {
+                    "ticker": ticker,
+                    "company_name": company.get("company_name"),
+                    "price": quote.get("current_price"),
+                    "change": quote.get("change"),
+                    "change_pct": quote.get("change_pct"),
+                    "pe_trailing": quote.get("pe_trailing"),
+                    "quality_score": run["quality_score"] if run is not None else None,
+                    "as_of": quote.get("collected_at"),
+                    "sparkline": sparkline,
+                }
+            )
+        return out
+
     # ---- Screener & cross-company analytics --------------------------------
 
     def screen(self, spec: ScreenSpec) -> Dict[str, Any]:

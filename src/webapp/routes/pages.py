@@ -199,37 +199,15 @@ def home(
     request: Request,
     r: Reader = Depends(get_reader),
 ) -> Any:
-    """Dashboard / home page."""
-    company_count = r.count_companies()
-    sectors = r.distinct_sectors()
-    freshness = r.data_freshness()
-    by_sector = r.coverage_by_sector()
-    latest_runs = r.latest_collection_runs()
-    unmapped_top = r.unmapped_top(limit=10)
-    fill_rates = r.field_fill_rates()
-
-    # Pick the 15 most-populated canonical fields for the bar chart
-    sorted_rates = sorted(fill_rates.items(), key=lambda kv: kv[1], reverse=True)
-    chart_fields = [f for f, _ in sorted_rates[:15]]
-    chart_values = [fill_rates[f] for f in chart_fields]
-    chart_pct = [fmt_pct(v) for v in chart_values]
-
-    fill_chart_json = json.dumps(
-        {"labels": chart_fields, "values": chart_values, "pct": chart_pct}
-    )
-
+    """Home: watchlist (client-rendered) + sector coverage + ops strip."""
     return templates.TemplateResponse(
         request,
         "index.html",
         {
             "request": request,
-            "company_count": company_count,
-            "sectors": sectors,
-            "freshness": freshness,
-            "by_sector": by_sector,
-            "latest_runs": latest_runs,
-            "unmapped_top": unmapped_top,
-            "fill_chart_json": fill_chart_json,
+            "company_count": r.count_companies(),
+            "freshness": r.data_freshness(),
+            "by_sector": r.coverage_by_sector(),
         },
     )
 
@@ -303,27 +281,6 @@ def company_page(ticker: str) -> Any:
 # ---------------------------------------------------------------------------
 # Fragment routes
 # ---------------------------------------------------------------------------
-
-
-@router.get("/ui/search", response_class=HTMLResponse)
-def search_fragment(
-    request: Request,
-    q: str = "",
-    r: Reader = Depends(get_reader),
-) -> Any:
-    """Autocomplete search results fragment."""
-    if len(q.strip()) < 1:
-        return templates.TemplateResponse(
-            request,
-            "fragments/search_results.html",
-            {"request": request, "hits": []},
-        )
-    hits = r.search_companies(q, 8)
-    return templates.TemplateResponse(
-        request,
-        "fragments/search_results.html",
-        {"request": request, "hits": hits},
-    )
 
 
 @router.get("/ui/companies/{ticker}/statements", response_class=HTMLResponse)
@@ -520,14 +477,24 @@ def screener_page(
 ) -> Any:
     """Screener page with filter form and HTMX result target."""
     sectors = r.distinct_sectors()
+    metric_options = SCREENER_METRIC_OPTIONS
+    snapshot_options = SCREENER_SNAPSHOT_OPTIONS
+    metric_json = json.dumps(
+        [{"key": key, "label": label, "group": "Metrics"} for label, key in metric_options]
+        + [
+            {"key": key, "label": label, "group": "Market / Valuation"}
+            for label, key in snapshot_options
+        ]
+    )
     return templates.TemplateResponse(
         request,
         "screener.html",
         {
             "request": request,
             "sectors": sectors,
-            "metric_options": SCREENER_METRIC_OPTIONS,
-            "snapshot_options": SCREENER_SNAPSHOT_OPTIONS,
+            "metric_options": metric_options,
+            "snapshot_options": snapshot_options,
+            "metric_json": metric_json,
         },
     )
 

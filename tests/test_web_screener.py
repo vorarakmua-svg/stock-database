@@ -733,12 +733,14 @@ class TestScreenerUI:
         resp = client.get("/screener")
         assert resp.status_code == 200
 
-    def test_screener_page_has_market_valuation_optgroup(self, client) -> None:  # type: ignore[no-untyped-def]
+    def test_screener_page_exposes_market_valuation_metrics(self, client) -> None:  # type: ignore[no-untyped-def]
+        # The chip-based screener ships the metric catalog as JSON (script
+        # id="screener-metrics") rather than fixed <optgroup>/<option> markup.
         resp = client.get("/screener")
         content = resp.content.decode()
-        assert "MARKET / VALUATION" in content
-        assert 'value="dividend_yield"' in content
-        assert 'value="pe_trailing"' in content
+        assert "Market / Valuation" in content
+        assert '"dividend_yield"' in content
+        assert '"pe_trailing"' in content
 
     def test_screen_fragment_contains_aaa(self, client) -> None:  # type: ignore[no-untyped-def]
         resp = client.get("/ui/screen?roic_gte=0.13")

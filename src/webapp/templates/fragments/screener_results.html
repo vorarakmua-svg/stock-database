@@ -1,7 +1,7 @@
 {% if error %}
 <div class="alert alert-danger">{{ error }}</div>
 {% elif not items %}
-<p class="text-muted">No companies matched your filters.</p>
+<div class="empty-state">No companies matched your filters.</div>
 {% else %}
 <div class="mb-2">
   <span class="text-muted">{{ total }} result{% if total != 1 %}s{% endif %}</span>
@@ -10,7 +10,7 @@
       onclick="
         var checked = document.querySelectorAll('.row-check:checked');
         var tickers = Array.from(checked).map(function(c){ return c.value; }).join(',');
-        if (!tickers) { alert('Select at least one company to compare.'); return; }
+        if (!tickers) { document.getElementById('scr-note').textContent = 'Select at least one company to compare.'; return; }
         htmx.ajax('GET', '/ui/compare?tickers=' + encodeURIComponent(tickers), {target: '#screen-results', swap: 'innerHTML'});
       ">
     Compare selected
@@ -33,7 +33,7 @@
           <a hx-get="/ui/screen?{{ base_params | safe }}{{ sep }}sort={{ col }}&sort_dir={{ dir }}"
              hx-target="#screen-results"
              hx-swap="innerHTML"
-             style="cursor:pointer;text-decoration:none;color:inherit">
+             class="sort-link">
             {{ label }}{% if sort == col %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}
           </a>
         </th>

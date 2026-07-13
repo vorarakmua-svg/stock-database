@@ -24,7 +24,7 @@
     </table>
   </div>
   {% else %}
-  <p class="empty-row">No earnings history collected.</p>
+  <div class="empty-state">No earnings history collected.</div>
   {% endif %}
   <div id="ern-chart" class="gp-chart"></div>
   <script>
@@ -50,7 +50,7 @@
       </div>
       <span class="range-endpoint">{{ target_high_fmt }}</span>
     </div>
-    <div class="muted mt-2" style="font-size: 0.75rem;">Mean {{ target_mean_fmt }} &middot; Median {{ target_median_fmt }}</div>
+    <div class="muted mt-2 text-sm">Mean {{ target_mean_fmt }} &middot; Median {{ target_median_fmt }}</div>
   </div>
 
   <div class="range-block mt-4">

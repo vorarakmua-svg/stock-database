@@ -41,8 +41,8 @@
           <td><code>{{ field }}</code></td>
           <td class="num">{{ fmt_pct(rate) }}</td>
           <td>
-            <div style="background:var(--color-border);border-radius:3px;height:8px;width:240px;overflow:hidden;">
-              <div style="background:var(--color-accent);height:100%;width:{{ (rate * 100) | round | int }}%;"></div>
+            <div class="coverage-bar">
+              <div class="coverage-bar__fill" style="width:{{ (rate * 100) | round | int }}%;"></div>
             </div>
           </td>
         </tr>
@@ -51,7 +51,7 @@
     </table>
   </div>
   {% else %}
-  <p class="muted">No data available.</p>
+  <div class="empty-state">No data available.</div>
   {% endif %}
 </section>
 
@@ -86,7 +86,7 @@
     </table>
   </div>
   {% else %}
-  <p class="muted">No collection runs recorded.</p>
+  <div class="empty-state">No collection runs recorded.</div>
   {% endif %}
 </section>
 
@@ -115,7 +115,7 @@
     </table>
   </div>
   {% else %}
-  <p class="muted">No unmapped facts recorded.</p>
+  <div class="empty-state">No unmapped facts recorded.</div>
   {% endif %}
 </section>
 
