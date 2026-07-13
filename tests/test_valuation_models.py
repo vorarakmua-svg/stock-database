@@ -154,15 +154,15 @@ def test_value_graham_na_no_data():
 
 # ---- Peter Lynch ----
 def test_value_lynch_hand_computed():
-    # EPS CAGR 100->121 over 4 yrs with values in between = 4.88%/yr;
-    # analyst 12% -> min is hist. fair P/E = growth*100 clamped [5,25].
-    eps_hist = [2.00, 2.10, 2.20, 2.31, 2.42]
+    # EPS CAGR 10%/yr; analyst 12% -> min is hist 10%.
+    # fair P/E = growth*100 clamped [5,25]: bear 7 -> base 10 -> bull 13.
+    eps_hist = [2.00, 2.20, 2.42, 2.662, 2.9282]
     recs = [_fy(2019 + i, eps=e, shares=100.0) for i, e in enumerate(eps_hist)]
     res = value_lynch(_inputs(fy_records=recs, analyst_growth=0.12))
     assert res.applicable is True
     g = res.assumptions["growth_base"]
     expected_pe = min(max(g * 100.0, 5.0), 25.0)
-    assert res.value_base == pytest.approx(expected_pe * 2.42)
+    assert res.value_base == pytest.approx(expected_pe * 2.9282)
     assert res.value_bear < res.value_base < res.value_bull
 
 
