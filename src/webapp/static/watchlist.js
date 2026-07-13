@@ -158,4 +158,10 @@
     paint(window.Watchlist.has(t));
     star.addEventListener('click', function () { paint(window.Watchlist.toggle(t)); });
   }
+
+  // Home page auto-init. This script loads at the end of <body>, so the DOM
+  // is parsed by now — an inline call from the template would run too early.
+  if (document.getElementById('watchlist-grid')) {
+    window.renderWatchlistHome();
+  }
 })();

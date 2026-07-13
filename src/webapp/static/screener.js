@@ -229,5 +229,9 @@
   sectorSel.value = state.sector;
   renderChips();
   renderSaved();
-  if (window.location.search) run();
+  if (window.location.search) {
+    // This script executes at parse time, but htmx is loaded with `defer`
+    // (runs before DOMContentLoaded) — delay the auto-run until it exists.
+    document.addEventListener('DOMContentLoaded', function () { run(); });
+  }
 })();
