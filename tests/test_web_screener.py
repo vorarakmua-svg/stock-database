@@ -859,3 +859,58 @@ def test_screen_results_fragment_has_upside_header(client, web_db) -> None:  # t
     resp = client.get("/ui/screen")
     assert resp.status_code == 200
     assert "Upside" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Owner-earnings ("Buffett mode") upside column + verdict filter
+# ---------------------------------------------------------------------------
+
+
+def _seed_oe(web_db, ticker, base, buy_below):  # type: ignore[no-untyped-def]
+    import json as _json
+    conn = sqlite3.connect(str(web_db))
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS valuations ("
+        "ticker TEXT NOT NULL, model TEXT NOT NULL, applicable INTEGER NOT NULL, "
+        "na_reason TEXT, value_bear REAL, value_base REAL, value_bull REAL, "
+        "assumptions TEXT, basis_fiscal_year INTEGER, computed_at TEXT NOT NULL, "
+        "PRIMARY KEY (ticker, model));"
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO valuations VALUES (?, 'owner_earnings', 1, NULL, "
+        "?, ?, ?, ?, 2025, '2024-01-05T00:00:00')",
+        (ticker, base * 0.8, base, base * 1.2,
+         _json.dumps({"buy_below": buy_below})),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_screen_returns_owner_earnings_upside(client, web_db):  # type: ignore[no-untyped-def]
+    _seed_oe(web_db, "AAA", base=200.0, buy_below=140.0)
+    resp = client.get("/api/screen", params={"limit": 10})
+    assert resp.status_code == 200
+    aaa = next(i for i in resp.json()["items"] if i["ticker"] == "AAA")
+    assert aaa["oe_upside_pct"] is not None   # price 105 vs base 200 -> ~+90%
+
+
+def test_screen_sort_by_owner_earnings_upside(client, web_db):  # type: ignore[no-untyped-def]
+    _seed_oe(web_db, "AAA", base=200.0, buy_below=140.0)
+    resp = client.get("/api/screen", params={"sort": "oe_upside_pct",
+                                             "sort_dir": "desc", "limit": 10})
+    assert resp.status_code == 200
+
+
+def test_screen_owner_earnings_verdict_filter(client, web_db):  # type: ignore[no-untyped-def]
+    # price 105 < buy_below 140 -> cheap on the Buffett method
+    _seed_oe(web_db, "AAA", base=200.0, buy_below=140.0)
+    resp = client.get("/api/screen", params={"oe_verdict": "cheap", "limit": 10})
+    assert resp.status_code == 200
+    assert "AAA" in [i["ticker"] for i in resp.json()["items"]]
+    resp = client.get("/api/screen", params={"oe_verdict": "expensive", "limit": 10})
+    assert "AAA" not in [i["ticker"] for i in resp.json()["items"]]
+
+
+def test_screen_owner_earnings_verdict_invalid_400(client):  # type: ignore[no-untyped-def]
+    resp = client.get("/api/screen", params={"oe_verdict": "bogus"})
+    assert resp.status_code == 400

@@ -11,9 +11,10 @@ The first two sets are disjoint (enforced by a test), so resolution is
 deterministic; a filter/sort field is looked up in the metric set first, then
 the snapshot set, then the valuation-expression set, and any field in none of
 them raises ``ValueError`` BEFORE any SQL is built. Every user-supplied *value*
-(including the ``verdict`` filter, which only ever selects one of three FIXED
-SQL clauses after validation against ``ALLOWED_VERDICTS``) is either a bound
-``?`` parameter or a hard-coded clause — never a raw string interpolation.
+(including the ``verdict`` and ``oe_verdict`` filters, each of which only ever
+selects one of three FIXED SQL clauses after validation against
+``ALLOWED_VERDICTS``) is either a bound ``?`` parameter or a hard-coded clause
+— never a raw string interpolation.
 
 Note: only the latest-fiscal-year-per-ticker semantics are implemented for v1.
 A calendar-year alignment option is explicitly out of scope (log as future work).
@@ -46,6 +47,8 @@ _SNAPSHOT_COL_SET: FrozenSet[str] = frozenset(SNAPSHOT_SCREEN_COLUMNS)
 VALUATION_EXPRS: Dict[str, str] = {
     "val_upside_pct":
         '((vsum."median_base" - ms."current_price") / NULLIF(ms."current_price", 0))',
+    "oe_upside_pct":
+        '((oe."value_base" - ms."current_price") / NULLIF(ms."current_price", 0))',
 }
 VALUATION_SELECT_COLUMNS: List[str] = ["median_bear", "median_base", "median_bull"]
 ALLOWED_VERDICTS = ("cheap", "fair", "expensive")
@@ -60,12 +63,17 @@ ALLOWED_OPS: Dict[str, str] = {
     "ne": "<>",
 }
 
+# Raw owner-earnings columns (not computed expressions) returned alongside
+# oe_upside_pct so _annotate_verdicts can derive the Buffett verdict.
+OWNER_EARNINGS_SELECT: List[str] = ["oe_base", "oe_assumptions"]
+
 # Full ordered list of columns returned by build_screen_query / Reader.screen.
 SCREEN_COLUMNS: List[str] = (
     ["ticker", "company_name", "sector_class", "fiscal_year"]
     + list(_METRIC_COLUMNS)
     + list(SNAPSHOT_SCREEN_COLUMNS)
     + VALUATION_SELECT_COLUMNS
+    + OWNER_EARNINGS_SELECT
     + list(VALUATION_EXPRS)
 )
 
@@ -134,6 +142,7 @@ METRIC_KINDS: Dict[str, str] = {
     "median_bull": "raw",
     # valuation — computed percentage
     "val_upside_pct": "pct",
+    "oe_upside_pct": "pct",
 }
 
 # SQL fragment for the latest-fiscal-year-per-ticker sub-join (shared between
@@ -166,6 +175,12 @@ _VALUATION_JOIN: str = (
     "LEFT JOIN valuation_summary vsum ON vsum.ticker = ma.ticker"
 )
 
+# Owner-earnings row per ticker. Its own LEFT JOIN so an unvalued ticker still appears.
+_OWNER_EARNINGS_JOIN: str = (
+    "LEFT JOIN valuations oe ON oe.ticker = ma.ticker "
+    "AND oe.model = 'owner_earnings' AND oe.applicable = 1"
+)
+
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -189,6 +204,7 @@ class ScreenSpec:
     filters: List[MetricFilter] = field(default_factory=list)
     sector: Optional[str] = None
     verdict: Optional[str] = None
+    verdict_oe: Optional[str] = None
     sort: Optional[str] = None
     sort_dir: str = "desc"
     limit: int = 100
@@ -276,6 +292,25 @@ def _build_where(spec: ScreenSpec) -> Tuple[str, List[Any]]:
                 f'AND {price} <= vsum."median_bull"'
             )
 
+    if spec.verdict_oe is not None:
+        if spec.verdict_oe not in ALLOWED_VERDICTS:
+            raise ValueError(
+                f"Invalid oe_verdict {spec.verdict_oe!r}: must be one of "
+                f"{list(ALLOWED_VERDICTS)}."
+            )
+        price = 'ms."current_price"'
+        # buy_below lives in the assumptions JSON; SQLite's json_extract reads it.
+        buy_below = 'json_extract(oe."assumptions", \'$.buy_below\')'
+        if spec.verdict_oe == "cheap":
+            clauses.append(f'{price} > 0 AND {price} < {buy_below}')
+        elif spec.verdict_oe == "expensive":
+            clauses.append(f'{price} > 0 AND {price} > oe."value_base"')
+        else:
+            clauses.append(
+                f'{price} > 0 AND {price} >= {buy_below} '
+                f'AND {price} <= oe."value_base"'
+            )
+
     where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     return where_sql, params
 
@@ -322,13 +357,14 @@ def build_screen_query(spec: ScreenSpec) -> Tuple[str, List[Any]]:
     metric_cols_sql = ", ".join(f'ma."{c}"' for c in _METRIC_COLUMNS)
     snapshot_cols_sql = ", ".join(f'ms."{c}"' for c in SNAPSHOT_SCREEN_COLUMNS)
     valuation_cols_sql = ", ".join(f'vsum."{c}"' for c in VALUATION_SELECT_COLUMNS)
+    oe_cols_sql = 'oe."value_base" AS oe_base, oe."assumptions" AS oe_assumptions'
     valuation_exprs_sql = ", ".join(
         f"{expr} AS {name}" for name, expr in VALUATION_EXPRS.items()
     )
     select_sql = (
         f"c.ticker, c.company_name, c.sector_class, ma.fiscal_year, "
         f"{metric_cols_sql}, {snapshot_cols_sql}, "
-        f"{valuation_cols_sql}, {valuation_exprs_sql}"
+        f"{valuation_cols_sql}, {oe_cols_sql}, {valuation_exprs_sql}"
     )
 
     sql = (
@@ -337,6 +373,7 @@ def build_screen_query(spec: ScreenSpec) -> Tuple[str, List[Any]]:
         f"{_LATEST_FY_JOIN}\n"
         f"{_SNAPSHOT_JOIN}\n"
         f"{_VALUATION_JOIN}\n"
+        f"{_OWNER_EARNINGS_JOIN}\n"
         f"{where_sql}\n"
         f"{order_sql}\n"
         f"LIMIT ? OFFSET ?"
@@ -361,6 +398,7 @@ def build_count_query(spec: ScreenSpec) -> Tuple[str, List[Any]]:
         f"{_LATEST_FY_JOIN}\n"
         f"{_SNAPSHOT_JOIN}\n"
         f"{_VALUATION_JOIN}\n"
+        f"{_OWNER_EARNINGS_JOIN}\n"
         f"{where_sql}"
     ).strip()
 
@@ -376,16 +414,16 @@ def parse_screen_params(params: Dict[str, str]) -> ScreenSpec:
     """Parse HTTP query-string key/value pairs into a ``ScreenSpec``.
 
     Keys of the form ``<field>_<op>`` (where op ∈ ALLOWED_OPS) become
-    ``MetricFilter`` entries.  Reserved keys ``sector``, ``verdict``, ``sort``,
-    ``sort_dir``, ``limit``, ``offset`` are handled separately.
-    All other keys are silently ignored.
+    ``MetricFilter`` entries.  Reserved keys ``sector``, ``verdict``,
+    ``oe_verdict``, ``sort``, ``sort_dir``, ``limit``, ``offset`` are handled
+    separately.  All other keys are silently ignored.
 
     Raises ``ValueError`` for bad limit/offset, unparseable float values, or an
-    unrecognized ``verdict``.
+    unrecognized ``verdict``/``oe_verdict``.
     The ``ScreenSpec`` itself is NOT validated here — call ``build_screen_query``
     (or ``Reader.screen``) to apply the whitelist checks.
     """
-    RESERVED = {"sector", "verdict", "sort", "sort_dir", "limit", "offset"}
+    RESERVED = {"sector", "verdict", "oe_verdict", "sort", "sort_dir", "limit", "offset"}
     VALID_OPS = set(ALLOWED_OPS.keys())
 
     sector = params.get("sector") or None
@@ -393,6 +431,11 @@ def parse_screen_params(params: Dict[str, str]) -> ScreenSpec:
     if verdict is not None and verdict not in ALLOWED_VERDICTS:
         raise ValueError(
             f"Invalid verdict {verdict!r}: must be one of {list(ALLOWED_VERDICTS)}."
+        )
+    verdict_oe = params.get("oe_verdict") or None
+    if verdict_oe is not None and verdict_oe not in ALLOWED_VERDICTS:
+        raise ValueError(
+            f"Invalid oe_verdict {verdict_oe!r}: must be one of {list(ALLOWED_VERDICTS)}."
         )
     sort_raw = params.get("sort", "").strip()
     sort: Optional[str] = sort_raw if sort_raw else None
@@ -432,6 +475,7 @@ def parse_screen_params(params: Dict[str, str]) -> ScreenSpec:
         filters=filters,
         sector=sector,
         verdict=verdict,
+        verdict_oe=verdict_oe,
         sort=sort,
         sort_dir=sort_dir,
         limit=limit,

@@ -20,6 +20,7 @@
 
   var sectorSel = document.getElementById('sector-select');
   var verdictSel = document.getElementById('verdict-select');
+  var oeVerdictSel = document.getElementById('oe-verdict-select');
   var popover = document.getElementById('filter-popover');
   var popSearch = document.getElementById('popover-search');
   var popList = document.getElementById('popover-list');
@@ -29,16 +30,17 @@
   var popValue = document.getElementById('popover-value');
   var note = document.getElementById('scr-note');
 
-  var state = { sector: '', verdict: '', filters: [], sort: '', sort_dir: 'desc' };
+  var state = { sector: '', verdict: '', oeVerdict: '', filters: [], sort: '', sort_dir: 'desc' };
   var pendingKey = null;
   var debounceTimer = null;
 
   // ---- URL <-> state ----
   function parseQS(qs) {
-    var s = { sector: '', verdict: '', filters: [], sort: '', sort_dir: 'desc' };
+    var s = { sector: '', verdict: '', oeVerdict: '', filters: [], sort: '', sort_dir: 'desc' };
     new URLSearchParams(qs).forEach(function (value, key) {
       if (key === 'sector') { s.sector = value; return; }
       if (key === 'verdict') { s.verdict = value; return; }
+      if (key === 'oe_verdict') { s.oeVerdict = value; return; }
       if (key === 'sort') { s.sort = value; return; }
       if (key === 'sort_dir') { s.sort_dir = value; return; }
       for (var i = 0; i < OP_KEYS.length; i++) {
@@ -56,6 +58,7 @@
     var p = new URLSearchParams();
     if (state.sector) p.set('sector', state.sector);
     if (state.verdict) p.set('verdict', state.verdict);
+    if (state.oeVerdict) p.set('oe_verdict', state.oeVerdict);
     state.filters.forEach(function (f) { p.set(f.field + '_' + f.op, f.value); });
     if (state.sort) { p.set('sort', state.sort); p.set('sort_dir', state.sort_dir); }
     return p.toString();
@@ -104,6 +107,7 @@
         state = parseQS(sc.qs);
         sectorSel.value = state.sector;
         verdictSel.value = state.verdict;
+        oeVerdictSel.value = state.oeVerdict;
         sync();
       });
       var x = document.createElement('button');
@@ -207,6 +211,10 @@
     state.verdict = verdictSel.value;
     sync();
   });
+  oeVerdictSel.addEventListener('change', function () {
+    state.oeVerdict = oeVerdictSel.value;
+    sync();
+  });
   document.getElementById('scr-save').addEventListener('click', function () {
     var qs = buildQS();
     if (!qs) { note.textContent = 'Add at least one filter before saving.'; return; }
@@ -215,7 +223,7 @@
       var m = BY_KEY[f.field];
       return (m ? m.label : f.field) + OPS[f.op] + f.value;
     });
-    var prefix = [state.sector, state.verdict].filter(Boolean).join(' · ');
+    var prefix = [state.sector, state.verdict, state.oeVerdict].filter(Boolean).join(' · ');
     name = (prefix ? prefix + ' · ' : '') + existing.join(', ');
     var screens;
     try { screens = JSON.parse(localStorage.getItem(SKEY)) || []; } catch (e) { screens = []; }
@@ -237,6 +245,7 @@
   state = parseQS(window.location.search);
   sectorSel.value = state.sector;
   verdictSel.value = state.verdict;
+  oeVerdictSel.value = state.oeVerdict;
   renderChips();
   renderSaved();
   if (window.location.search) {

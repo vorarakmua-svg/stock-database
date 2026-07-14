@@ -6,6 +6,7 @@ ValueError from any Reader method → HTTP 400.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -25,12 +26,29 @@ router = APIRouter(prefix="/api", tags=["screener"])
 
 
 def _annotate_verdicts(items: List[Dict[str, Any]]) -> None:
-    """Attach a ``val_verdict`` (cheap/fair/expensive/None) to each row in place."""
+    """Attach ``val_verdict`` and ``oe_verdict`` (cheap/fair/expensive/None) to
+    each row in place."""
     for row in items:
         row["val_verdict"] = valuation_verdict(
             row.get("median_bear"), row.get("median_bull"),
             row.get("current_price"),
         )
+        oe_base = row.get("oe_base")
+        price = row.get("current_price")
+        buy_below = None
+        try:
+            buy_below = json.loads(row.get("oe_assumptions") or "{}").get("buy_below")
+        except ValueError:
+            buy_below = None
+        oe_v = None
+        if oe_base is not None and price and price > 0 and buy_below is not None:
+            if price < buy_below:
+                oe_v = "cheap"
+            elif price > oe_base:
+                oe_v = "expensive"
+            else:
+                oe_v = "fair"
+        row["oe_verdict"] = oe_v
 
 
 @router.post("/screen")
