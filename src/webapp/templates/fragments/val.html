@@ -84,6 +84,14 @@
     Owner earnings {{ oe.base_fmt }} · Price {{ price_fmt }} — the gap between the two
     is the method, not the business: this model credits back growth capex and discounts
     at the Treasury rate instead of a beta-derived cost of equity.</p>
+  {% set vol = oe.assumptions.get('volatility') %}
+  {% if vol %}
+  <p class="text-muted">Owner earnings were positive in {{ vol.positive_years }} of
+    {{ vol.total_years }} years; they fell by half or more against their recent normal in
+    {{ vol.collapse_years }} of them, and the worst single-year fall was
+    {{ "%.0f%%" | format(vol.worst_drop * 100) }}. This model does not judge whether that is
+    predictable enough to forecast — that call is yours.</p>
+  {% endif %}
   <div class="table-wrap">
     <table class="data-table">
       <thead><tr><th>Bear</th><th class="num">Base</th><th class="num">Bull</th></tr></thead>

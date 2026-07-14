@@ -348,6 +348,41 @@ def owner_earnings(rec: FYRecord) -> Optional[float]:
     return rec.net_income + da - maintenance
 
 
+def owner_earnings_volatility(history: List[float]) -> Dict[str, Any]:
+    """How steady is this owner-earnings history?
+
+    The model cannot mechanically make Buffett's circle-of-competence call — no
+    simple metric separates an oil major from a soft-drink company without also
+    misjudging one of them (both a trend-fit and a drawdown filter were tried
+    against real data and each refused businesses the other kept). So it does not
+    pretend to. It records the evidence and lets the reader judge:
+
+    * ``collapse_years`` — years in which owner earnings fell below HALF their
+      trailing 3-year median, or went negative. A steady business rarely halves
+      against its own recent normal; a cyclical does it every cycle.
+    * ``worst_drop`` — the deepest single-year fall, as a fraction (0.72 = a 72% fall).
+    * ``positive_years`` / ``total_years`` — the raw sign record.
+    """
+    total = len(history)
+    positive = sum(1 for v in history if v > 0)
+    collapses = 0
+    worst_drop = 0.0
+    for i in range(1, total):
+        prev, cur = history[i - 1], history[i]
+        if prev > 0 and cur < prev:
+            worst_drop = max(worst_drop, (prev - cur) / prev)
+    for i in range(3, total):
+        base = statistics.median(history[i - 3:i])
+        if history[i] <= 0 or (base > 0 and history[i] < 0.5 * base):
+            collapses += 1
+    return {
+        "collapse_years": collapses,
+        "worst_drop": worst_drop,
+        "positive_years": positive,
+        "total_years": total,
+    }
+
+
 def value_owner_earnings(inputs: ValuationInputs) -> ValuationResult:
     """Owner earnings discounted at the Treasury rate, with a margin of safety.
 
@@ -434,6 +469,7 @@ def value_owner_earnings(inputs: ValuationInputs) -> ValuationResult:
         "terminal_growth": TERMINAL_GROWTH,
         "shares_outstanding": shares,
         "shares_source": shares_source,
+        "volatility": owner_earnings_volatility([v for v in oe_hist if v is not None]),
     })
     if rf_fallback:
         assumptions["rf_fallback"] = True

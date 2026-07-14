@@ -10,6 +10,7 @@ from src.valuation.models import (
     dcf_per_share,
     ddm_per_share,
     owner_earnings,
+    owner_earnings_volatility,
     value_dcf,
     value_ddm,
     value_graham,
@@ -454,3 +455,30 @@ def test_value_owner_earnings_erratic_reason_needs_a_full_window():
     res = value_owner_earnings(_inputs(fy_records=recs))
     assert res.applicable is False
     assert res.na_reason == "owner earnings too erratic to forecast"
+
+
+# ---- Owner earnings volatility evidence ----
+def test_owner_earnings_volatility_steady_history_has_no_collapses():
+    history = [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0]
+    vol = owner_earnings_volatility(history)
+    assert vol["collapse_years"] == 0
+    assert vol["worst_drop"] < 0.1
+    assert vol["positive_years"] == 10
+    assert vol["total_years"] == 10
+
+
+def test_owner_earnings_volatility_cyclical_history_has_collapses():
+    history = [10.0, 2.0, 12.0, 3.0, 14.0, 4.0, 16.0, 5.0, 18.0, 6.0]
+    vol = owner_earnings_volatility(history)
+    assert vol["collapse_years"] >= 2
+    assert vol["worst_drop"] > 0.5
+
+
+def test_value_owner_earnings_assumptions_contain_volatility():
+    recs = [_oe_fy(fy, ni=200.0 * 1.05 ** i) for i, fy in enumerate(range(2016, 2026))]
+    res = value_owner_earnings(_inputs(fy_records=recs, risk_free_rate=0.045))
+    assert res.applicable is True
+    vol = res.assumptions["volatility"]
+    assert set(vol.keys()) == {
+        "collapse_years", "worst_drop", "positive_years", "total_years",
+    }
