@@ -447,6 +447,20 @@ class StockDataFetcher:
             except Exception as e:
                 self.logger.warning(f"Benchmark bars fetch/export failed: {e}")
 
+        # Valuations: recompute for the just-collected tickers so the stored
+        # fair-value ranges always reflect the newest fundamentals. Import is
+        # local + lazy, and a valuation failure must never fail the run.
+        if "sqlite" in resolved_formats and data:
+            try:
+                from ..valuation import engine as valuation_engine
+                valuation_engine.compute_and_store(
+                    self.sqlite_store.db_path,
+                    tickers=[s.ticker for s in data],
+                    logger=self.logger,
+                )
+            except Exception as e:
+                self.logger.warning(f"Valuation computation failed: {e}")
+
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
 

@@ -131,3 +131,50 @@ def test_backfill_cli_empty_db_returns_1(tmp_path):
     conn.close()
     rc = backfill_main(["--db", str(empty)])
     assert rc == 1
+
+
+def test_fetch_and_export_triggers_valuations(monkeypatch):
+    """fetch_and_export calls compute_and_store for the collected tickers."""
+    from src.fetchers import stock_data_fetcher as sdf
+
+    calls = {}
+
+    def fake_compute_and_store(db_path, tickers=None, logger=None):
+        calls["db_path"] = db_path
+        calls["tickers"] = tickers
+        return len(tickers or [])
+
+    monkeypatch.setattr(
+        "src.valuation.engine.compute_and_store", fake_compute_and_store
+    )
+
+    fetcher = sdf.StockDataFetcher.__new__(sdf.StockDataFetcher)
+    # Only the attributes fetch_and_export touches:
+    import logging as _logging
+
+    class _FakeStore:
+        db_path = "fake.db"
+
+        def export_benchmark_bars(self, *a, **k):
+            pass
+
+    class _FakeStock:
+        ticker = "AAA"
+        errors = []
+        warnings = []
+
+    fetcher.logger = _logging.getLogger("test")
+    fetcher.sqlite_store = _FakeStore()
+    fetcher.config = type("C", (), {"output_formats": ["sqlite"]})()
+    monkeypatch.setattr(fetcher, "fetch_multiple", lambda *a, **k: [_FakeStock()])
+    monkeypatch.setattr(fetcher, "export", lambda *a, **k: {"sqlite": ["fake.db"]})
+    monkeypatch.setattr(
+        fetcher, "yahoo_handler",
+        type("Y", (), {"fetch_benchmark_bars": lambda self: []})(),
+        raising=False,
+    )
+
+    summary = fetcher.fetch_and_export(["AAA"])
+    assert calls["tickers"] == ["AAA"]
+    assert calls["db_path"] == "fake.db"
+    assert summary["tickers_fetched"] == 1
