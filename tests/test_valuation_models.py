@@ -434,3 +434,23 @@ def test_value_owner_earnings_na_missing_shares():
     res = value_owner_earnings(_inputs(fy_records=recs, shares_outstanding=None))
     assert res.applicable is False
     assert res.na_reason == "shares outstanding unavailable"
+
+
+def test_value_owner_earnings_short_but_clean_history_is_not_called_erratic():
+    """6 years, every one positive — that is not erratic, it is just short."""
+    recs = [_oe_fy(fy, ni=200.0) for fy in range(2020, 2026)]
+    res = value_owner_earnings(_inputs(fy_records=recs))
+    assert res.applicable is False
+    assert res.na_reason == (
+        "insufficient history for the predictability test (need >= 10 fiscal years)")
+
+
+def test_value_owner_earnings_erratic_reason_needs_a_full_window():
+    """With a full 10-year window and too few positive years, the erratic reason
+    is the true one."""
+    recs = []
+    for i, fy in enumerate(range(2016, 2026)):
+        recs.append(_oe_fy(fy, ni=200.0 if i % 2 == 0 else -150.0))
+    res = value_owner_earnings(_inputs(fy_records=recs))
+    assert res.applicable is False
+    assert res.na_reason == "owner earnings too erratic to forecast"

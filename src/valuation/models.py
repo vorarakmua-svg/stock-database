@@ -367,6 +367,10 @@ def value_owner_earnings(inputs: ValuationInputs) -> ValuationResult:
     basis_fy = recs[-1].fiscal_year
 
     window = recs[-OE_HISTORY_WINDOW:]
+    if len(window) < OE_HISTORY_WINDOW:
+        return _na("owner_earnings",
+                   "insufficient history for the predictability test (need >= 10 fiscal years)",
+                   basis_fy=basis_fy)
     oe_hist = [owner_earnings(r) for r in window]
     positive_years = sum(1 for v in oe_hist if v is not None and v > 0)
     if positive_years < OE_MIN_POSITIVE_YEARS:
