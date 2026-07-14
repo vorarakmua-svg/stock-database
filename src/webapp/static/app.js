@@ -377,11 +377,16 @@ function renderVAL(elId, cfg) {
   var spans = cfg.models.map(function (m) { return m.bull - m.bear; });
   var bases = cfg.models.map(function (m) { return m.base; });
 
+  // x is the bar SPAN (bull - bear), not the upper bound, so the hover reads
+  // the real endpoints from customdata instead.
+  var bounds = cfg.models.map(function (m) { return [m.bear, m.bull]; });
+
   var range = {
-    y: labels, x: spans, base: bears,
+    y: labels, x: spans, base: bears, customdata: bounds,
     type: 'bar', orientation: 'h', name: 'Bear–Bull',
     marker: { color: SLATE.accentFill },
-    hovertemplate: '%{y}: %{base:.2f} – %{x:.2f}<extra></extra>',
+    hovertemplate:
+      '%{y}: %{customdata[0]:.2f} – %{customdata[1]:.2f}<extra></extra>',
   };
   var baseMarks = {
     y: labels, x: bases,

@@ -263,14 +263,17 @@ def _build_where(spec: ScreenSpec) -> Tuple[str, List[Any]]:
                 f"Invalid verdict {spec.verdict!r}: must be one of "
                 f"{list(ALLOWED_VERDICTS)}."
             )
+        # engine.verdict() renders "—" for a non-positive price; the SQL filter
+        # must agree, so every clause is guarded by price > 0.
         price = 'ms."current_price"'
         if spec.verdict == "cheap":
-            clauses.append(f'{price} < vsum."median_bear"')
+            clauses.append(f'{price} > 0 AND {price} < vsum."median_bear"')
         elif spec.verdict == "expensive":
-            clauses.append(f'{price} > vsum."median_bull"')
+            clauses.append(f'{price} > 0 AND {price} > vsum."median_bull"')
         else:
             clauses.append(
-                f'{price} >= vsum."median_bear" AND {price} <= vsum."median_bull"'
+                f'{price} > 0 AND {price} >= vsum."median_bear" '
+                f'AND {price} <= vsum."median_bull"'
             )
 
     where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""

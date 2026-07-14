@@ -834,6 +834,21 @@ def test_screen_verdict_filter_cheap(client, web_db) -> None:  # type: ignore[no
     assert "AAA" not in [i["ticker"] for i in resp.json()["items"]]
 
 
+def test_screen_verdict_filter_excludes_nonpositive_price(client, web_db) -> None:  # type: ignore[no-untyped-def]
+    """engine.verdict() returns None for price <= 0 ("—"); SQL must agree."""
+    conn = sqlite3.connect(str(web_db))
+    conn.execute(
+        "UPDATE market_snapshots SET current_price = 0 WHERE ticker = 'AAA'"
+    )
+    conn.commit()
+    conn.close()
+    _seed_summary(web_db, "AAA", 1e6, 2e6, 3e6)  # price 0 < bear -> would be "cheap"
+    for v in ("cheap", "fair", "expensive"):
+        resp = client.get("/api/screen", params={"verdict": v, "limit": 10})
+        assert resp.status_code == 200
+        assert "AAA" not in [i["ticker"] for i in resp.json()["items"]], v
+
+
 def test_screen_verdict_filter_invalid_400(client) -> None:  # type: ignore[no-untyped-def]
     resp = client.get("/api/screen", params={"verdict": "bogus"})
     assert resp.status_code == 400
