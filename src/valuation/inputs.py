@@ -18,6 +18,12 @@ _MAX_FY_HISTORY = 10
 #: stock split, not as ordinary issuance.
 SPLIT_JUMP_THRESHOLD = 1.5
 
+#: The largest ratio still credible as a real split. No listed company has ever
+#: split 50:1 (or 1:50) in one step, so a seam beyond this is a unit/scale error
+#: in the source data (some fiscal years are filed in thousands, others in
+#: units), not a corporate action.
+MAX_SPLIT_RATIO = 50.0
+
 
 @dataclass
 class FYRecord:
@@ -70,30 +76,80 @@ class ValuationInputs:
     dividends: List[Tuple[str, float]] = field(default_factory=list)
     fy_end_prices: Dict[int, float] = field(default_factory=dict)
     as_of: Optional[date] = None
+    #: True when a unit/scale discontinuity in the source share counts forced
+    #: the older fiscal years to be dropped (see ``_normalize_splits``).
+    history_truncated: bool = False
+
+
+def _eps_moved_inversely(ratio: float, eps_older: Optional[float],
+                         eps_newer: Optional[float]) -> bool:
+    """Did EPS move opposite to the share count across this seam?
+
+    A split multiplies the share count and divides as-reported EPS by the same
+    factor, so EPS must fall across a forward split (and rise across a reverse
+    one). An acquisition-scale share issuance — the real hazard near the 1.5
+    threshold, e.g. Realty Income's 1.48x VEREIT merger — brings its own
+    earnings with it and does not invert EPS, so the share jump alone would
+    otherwise be enough to rescale a whole history wrongly.
+
+    The comparison is on MAGNITUDE, not signed value: a split rescales EPS
+    multiplicatively whatever its sign, so a loss-making company's per-share
+    loss grows across a reverse split (GE: -2.62 -> -4.99 over its 1:8). A
+    seam whose EPS changes sign carries no directional information, and neither
+    does a missing or zero EPS; those fall back to the share-count signal alone.
+    """
+    if not eps_older or not eps_newer:
+        return True
+    if (eps_older > 0) != (eps_newer > 0):
+        return True
+    if ratio > 1.0:
+        return abs(eps_newer) < abs(eps_older)
+    return abs(eps_newer) > abs(eps_older)
 
 
 def _normalize_splits(records: List[FYRecord],
-                      shares_detect: List[Optional[float]]) -> None:
+                      shares_detect: List[Optional[float]]
+                      ) -> Tuple[List[FYRecord], bool]:
     """Restate every year's per-share figures onto the current share basis.
 
     ``financials_annual`` stores per-share values AS REPORTED, and SEC filings
     restate only ~3 prior years after a split, so a long per-share series has a
     hard discontinuity at each split. ``split_events`` cannot be relied on (it
     is empty for most tickers), so splits are detected from the share-count
-    series itself: walking newest -> oldest, a >= 1.5x rise in the share count
-    at a seam means every year at or before that seam is on a pre-split basis.
+    series itself. Walking newest -> oldest, each seam's ratio
+    ``shares[i + 1] / shares[i]`` is classified:
 
-    Mutates *records* in place. Per-share values are DIVIDED by the cumulative
-    factor and share counts MULTIPLIED by it; split-invariant absolutes
-    (net_income, total_equity) are untouched — which keeps ``bvps()`` correct.
+    * ``1.5 .. 50``    -> forward split; fold into the cumulative factor.
+    * ``1/50 .. 1/1.5`` -> reverse split; same treatment with a factor < 1,
+      which scales the older years' per-share values UP and their share counts
+      DOWN — exactly the correction a reverse split needs.
+    * beyond ``+/- 50x`` -> not a credible corporate action. The source data
+      mixes units across fiscal years (thousands vs units), so everything older
+      than this seam is on an unknown scale and simply CANNOT be compared to the
+      modern series. Truncate: drop the older records and stop walking. The
+      models' "insufficient history" guards then take over honestly.
+    * otherwise -> ordinary issuance / buyback; no adjustment.
+
+    Mutates the surviving *records* in place and returns
+    ``(surviving_records, history_truncated)``. Per-share values are DIVIDED by
+    the cumulative factor and share counts MULTIPLIED by it; split-invariant
+    absolutes (net_income, total_equity) are untouched — which keeps ``bvps()``
+    correct.
     """
     factor = 1.0
     for i in range(len(records) - 2, -1, -1):
         older, newer = shares_detect[i], shares_detect[i + 1]
         if older and newer and older > 0 and newer > 0:
-            jump = newer / older
-            if jump >= SPLIT_JUMP_THRESHOLD:
-                factor *= jump
+            ratio = newer / older
+            forward = SPLIT_JUMP_THRESHOLD <= ratio <= MAX_SPLIT_RATIO
+            reverse = (1.0 / MAX_SPLIT_RATIO) <= ratio <= (1.0 / SPLIT_JUMP_THRESHOLD)
+            if ratio > MAX_SPLIT_RATIO or ratio < 1.0 / MAX_SPLIT_RATIO:
+                # Unit discontinuity: the pre-seam years are uncomparable.
+                return records[i + 1:], True
+            if (forward or reverse) and _eps_moved_inversely(
+                ratio, records[i].eps_diluted, records[i + 1].eps_diluted
+            ):
+                factor *= ratio
         rec = records[i]
         rec.split_factor = factor
         if factor == 1.0:
@@ -104,6 +160,7 @@ def _normalize_splits(records: List[FYRecord],
             rec.ffo_per_share /= factor
         if rec.shares is not None:
             rec.shares *= factor
+    return records, False
 
 
 def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
@@ -158,7 +215,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
                 ffo_per_share=r["ffo_per_share"],
             )
         )
-    _normalize_splits(records, shares_detect)
+    records, history_truncated = _normalize_splits(records, shares_detect)
 
     snap = conn.execute(
         "SELECT shares_outstanding, beta, risk_free_rate, collected_at "
@@ -209,4 +266,5 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         dividends=dividends,
         fy_end_prices=fy_end_prices,
         as_of=as_of,
+        history_truncated=history_truncated,
     )

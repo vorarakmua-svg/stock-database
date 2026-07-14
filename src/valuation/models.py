@@ -259,6 +259,7 @@ def value_lynch(inputs: ValuationInputs) -> ValuationResult:
         "fair_pe_floor": LYNCH_PE_FLOOR,
         "fair_pe_cap": LYNCH_PE_CAP,
         "split_adjusted": _split_adjusted(recs),
+        "history_truncated": inputs.history_truncated,
     })
     return ValuationResult(
         model="lynch",
@@ -306,6 +307,7 @@ def value_multiples(inputs: ValuationInputs) -> ValuationResult:
         "n_years": len(multiples),
         "latest_basis": latest_basis,
         "split_adjusted": _split_adjusted(recs),
+        "history_truncated": inputs.history_truncated,
     }
     return ValuationResult(
         model="multiples",

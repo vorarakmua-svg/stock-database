@@ -205,6 +205,115 @@ def test_ordinary_issuance_below_threshold_is_not_a_split(split_db):
     assert recs[0].eps_diluted == pytest.approx(4.00)
 
 
+def _seam_db(tmp_path, name, rows):
+    """Build a 5-FY ticker 'SPL' from (fy, net_income, eps, shares) rows."""
+    db_path = tmp_path / name
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('SPL', 'general')")
+    for fy, ni, eps, shares in rows:
+        conn.execute(
+            "INSERT INTO financials_annual (ticker, fiscal_year, period_end, "
+            "net_income, total_equity, eps_diluted, weighted_avg_shares_diluted) "
+            "VALUES ('SPL', ?, ?, ?, ?, ?, ?)",
+            (fy, f"{fy}-12-31", ni, 800.0, eps, shares),
+        )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_huge_unit_seam_truncates_history_instead_of_splitting(tmp_path):
+    """COP shape: shares stored in thousands then in units (959x) is NOT a split."""
+    db = _seam_db(tmp_path, "units_up.db", [
+        (2017, 1.05e9, 0.95, 1_100_000.0),
+        (2018, 1.10e9, 1.00, 1_110_000.0),
+        (2019, 1.15e9, 1.05, 1_123_536.0),
+        (2020, 1.20e9, 1.11, 1_078_030_000.0),
+        (2021, 1.25e9, 1.16, 1_070_000_000.0),
+    ])
+    conn = _connect(db)
+    inputs = load_inputs(conn, "SPL")
+    conn.close()
+    assert [r.fiscal_year for r in inputs.fy_records] == [2020, 2021]
+    assert all(r.split_factor == 1.0 for r in inputs.fy_records)
+    assert inputs.history_truncated is True
+    assert inputs.fy_records[0].eps_diluted == pytest.approx(1.11)
+
+
+def test_tiny_unit_seam_truncates_history(tmp_path):
+    """MCD/COP shape: shares drop by ~1000x at a seam -> unit error, not a split."""
+    db = _seam_db(tmp_path, "units_down.db", [
+        (2017, 1.05e9, 0.95, 1_500_000_000.0),
+        (2018, 1.10e9, 1.00, 1_497_608_000.0),
+        (2019, 1.15e9, 1.05, 1_491_067.0),
+        (2020, 1.20e9, 1.11, 1_480_000.0),
+        (2021, 1.25e9, 1.16, 1_470_000.0),
+    ])
+    conn = _connect(db)
+    inputs = load_inputs(conn, "SPL")
+    conn.close()
+    assert [r.fiscal_year for r in inputs.fy_records] == [2019, 2020, 2021]
+    assert all(r.split_factor == 1.0 for r in inputs.fy_records)
+    assert inputs.history_truncated is True
+
+
+def test_genuine_forward_split_still_normalizes(split_db):
+    """Regression guard: AAPL/GOOGL/NVDA-shaped 4:1 split behavior is unchanged."""
+    conn = _connect(split_db)
+    inputs = load_inputs(conn, "SPL")
+    conn.close()
+    assert inputs.history_truncated is False
+    by_fy = {r.fiscal_year: r for r in inputs.fy_records}
+    assert [by_fy[fy].split_factor for fy in range(2019, 2024)] == [4.0, 4.0, 4.0, 1.0, 1.0]
+    assert by_fy[2019].eps_diluted == pytest.approx(1.0)
+    assert by_fy[2019].shares == pytest.approx(400.0)
+
+
+def test_reverse_split_scales_old_eps_up_and_shares_down(tmp_path):
+    """GE shape: 1:8 reverse split -> pre-split EPS x8, pre-split shares / 8."""
+    db = _seam_db(tmp_path, "reverse.db", [
+        (2019, 800.0, 1.00, 800.0),
+        (2020, 880.0, 1.10, 800.0),
+        (2021, 968.0, 9.68, 100.0),
+        (2022, 1064.8, 10.648, 100.0),
+        (2023, 1171.3, 11.713, 100.0),
+    ])
+    conn = _connect(db)
+    inputs = load_inputs(conn, "SPL")
+    conn.close()
+    assert inputs.history_truncated is False
+    by_fy = {r.fiscal_year: r for r in inputs.fy_records}
+    assert by_fy[2019].split_factor == pytest.approx(0.125)
+    assert by_fy[2020].split_factor == pytest.approx(0.125)
+    assert by_fy[2021].split_factor == pytest.approx(1.0)
+    # per-share values divided by f < 1 -> scaled UP by 8
+    assert by_fy[2019].eps_diluted == pytest.approx(8.0)
+    assert by_fy[2020].eps_diluted == pytest.approx(8.8)
+    # share counts multiplied by f < 1 -> scaled DOWN by 8, onto the 100 basis
+    assert by_fy[2019].shares == pytest.approx(100.0)
+    assert by_fy[2019].bvps() == pytest.approx(8.0)
+
+
+def test_ordinary_issuance_and_buyback_are_not_splits(tmp_path):
+    """1.2x issuance (and a 0.9x buyback) leave the series untouched."""
+    db = _seam_db(tmp_path, "issuance.db", [
+        (2019, 100.0, 1.00, 100.0),
+        (2020, 110.0, 1.10, 100.0),
+        (2021, 120.0, 1.00, 120.0),   # 1.2x issuance
+        (2022, 130.0, 1.20, 108.0),   # 0.9x buyback
+        (2023, 140.0, 1.30, 108.0),
+    ])
+    conn = _connect(db)
+    inputs = load_inputs(conn, "SPL")
+    conn.close()
+    assert inputs.history_truncated is False
+    assert all(r.split_factor == 1.0 for r in inputs.fy_records)
+    assert inputs.fy_records[0].eps_diluted == pytest.approx(1.0)
+    assert len(inputs.fy_records) == 5
+
+
 def test_fyrecord_eps_and_bvps_fallbacks():
     rec = FYRecord(fiscal_year=2023, period_end=None, net_income=100.0,
                    total_equity=500.0, eps_diluted=None, shares=50.0,
