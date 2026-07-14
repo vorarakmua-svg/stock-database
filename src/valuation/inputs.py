@@ -35,6 +35,9 @@ class FYRecord:
     per-share series and price/EPS multiples are comparable across a split.
     ``split_factor`` records the factor that was applied to this year (1.0 =
     as reported).
+
+    ``depreciation_amortization`` and ``capex`` are absolute dollar figures, not
+    per-share, so they are never split-adjusted.
     """
 
     fiscal_year: int
@@ -45,6 +48,8 @@ class FYRecord:
     shares: Optional[float]
     fcf: Optional[float]
     ffo_per_share: Optional[float]
+    depreciation_amortization: Optional[float] = None
+    capex: Optional[float] = None
     split_factor: float = 1.0
 
     def eps(self) -> Optional[float]:
@@ -177,6 +182,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     fy_rows = conn.execute(
         "SELECT fa.fiscal_year, fa.period_end, fa.net_income, fa.total_equity, "
         "fa.eps_diluted, fa.weighted_avg_shares_diluted, fa.shares_outstanding, "
+        "fa.depreciation_amortization, fa.capex, "
         "ma.levered_fcf, ma.free_cash_flow, ma.ffo_per_share "
         "FROM financials_annual fa "
         "LEFT JOIN metrics_annual ma "
@@ -213,6 +219,8 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
                 shares=shares,
                 fcf=fcf,
                 ffo_per_share=r["ffo_per_share"],
+                depreciation_amortization=r["depreciation_amortization"],
+                capex=r["capex"],
             )
         )
     records, history_truncated = _normalize_splits(records, shares_detect)
