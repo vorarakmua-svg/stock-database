@@ -679,3 +679,24 @@ def test_val_fragment_empty_state(client):
 def test_val_fragment_unknown_ticker_404(client):
     resp = client.get("/ui/stocks/ZZZ/val")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# DES fragment: valuation verdict strip (Task 13)
+# ---------------------------------------------------------------------------
+
+
+def test_des_fragment_shows_valuation_verdict(client, web_db):
+    _seed_val_rows(web_db)
+    resp = client.get("/ui/stocks/AAA/des")
+    assert resp.status_code == 200
+    assert "Valuation" in resp.text
+    # One of the three verdict labels (depends on AAA's seeded price)
+    assert ("Looks cheap" in resp.text or "Fairly valued" in resp.text
+            or "Looks expensive" in resp.text)
+
+
+def test_des_fragment_not_valued_without_rows(client):
+    resp = client.get("/ui/stocks/AAA/des")
+    assert resp.status_code == 200
+    assert "Not valued" in resp.text

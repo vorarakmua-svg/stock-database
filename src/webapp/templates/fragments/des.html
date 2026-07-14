@@ -35,6 +35,10 @@
     <div class="summary-item"><span class="summary-label">Beta</span><span class="summary-value">{{ summary.beta }}</span></div>
     <div class="summary-item"><span class="summary-label">Dividend Yield</span><span class="summary-value">{{ summary.dividend_yield }}</span></div>
     <div class="summary-item"><span class="summary-label">Ex-Dividend Date</span><span class="summary-value">{{ summary.ex_dividend_date }}</span></div>
+    <div class="summary-item"><span class="summary-label">Valuation</span>
+      <span class="summary-value"><span class="pill verdict-{{ val_verdict or 'none' }}">{{ val_verdict_label }}</span></span></div>
+    <div class="summary-item"><span class="summary-label">Upside (median)</span>
+      <span class="summary-value">{{ val_upside_fmt }}</span></div>
   </div>
 
   <div class="range-block">

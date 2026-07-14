@@ -133,6 +133,13 @@ def des_fragment(
     current_price = quote.get("current_price") if quote else None
     marker_pct = _range_marker_pct(current_price, fifty_two_low, fifty_two_high)
 
+    val_summary = r.valuation_summary(ticker)
+    val_verdict = verdict(
+        val_summary.get("median_bear") if val_summary else None,
+        val_summary.get("median_bull") if val_summary else None,
+        current_price,
+    )
+
     summary: Dict[str, str] = {
         "open": fmt_price(quote.get("open") if quote else None),
         "day_low": fmt_price(quote.get("day_low") if quote else None),
@@ -173,6 +180,12 @@ def des_fragment(
             "description": profile["company"].get("description"),
             "earnings_date": analyst.get("earnings_date") if analyst else None,
             "allow_quote_refresh": settings.allow_quote_refresh,
+            "val_verdict": val_verdict,
+            "val_verdict_label": VERDICT_LABELS[val_verdict],
+            "val_upside_fmt": fmt_pct(upside_pct(
+                val_summary.get("median_base") if val_summary else None,
+                current_price,
+            )),
         },
     )
 
