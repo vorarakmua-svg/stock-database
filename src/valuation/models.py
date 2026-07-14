@@ -77,8 +77,16 @@ def value_dcf(inputs: ValuationInputs) -> ValuationResult:
     if basis <= 0:
         return _na("dcf", "median 3-year FCF is not positive", basis_fy=basis_fy)
     shares = inputs.shares_outstanding
+    shares_source = "market_snapshot"
     if not shares or shares <= 0:
-        return _na("dcf", "shares outstanding unavailable", basis_fy=basis_fy)
+        shares = None
+        for r in reversed(recs):
+            if r.shares is not None and r.shares > 0:
+                shares = r.shares
+                shares_source = "financials_annual"
+                break
+        if not shares:
+            return _na("dcf", "shares outstanding unavailable", basis_fy=basis_fy)
 
     growth, gmeta = derive_growth(fcf_hist, inputs.analyst_growth)
     discount, dmeta = derive_discount(inputs.risk_free_rate, inputs.beta)
@@ -91,6 +99,7 @@ def value_dcf(inputs: ValuationInputs) -> ValuationResult:
         "fcf_years": len(fcf_hist),
         "terminal_growth": TERMINAL_GROWTH,
         "shares_outstanding": shares,
+        "shares_source": shares_source,
     })
     return ValuationResult(
         model="dcf",

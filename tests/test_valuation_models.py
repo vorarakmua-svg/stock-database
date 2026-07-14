@@ -79,10 +79,52 @@ def test_value_dcf_na_negative_fcf():
 
 
 def test_value_dcf_na_missing_shares():
-    recs = [_fy(fy, fcf=100.0) for fy in range(2019, 2024)]
+    # Shares missing from BOTH the market snapshot and every FY record.
+    recs = [_fy(fy, fcf=100.0, shares=None) for fy in range(2019, 2024)]
     res = value_dcf(_inputs(fy_records=recs, shares_outstanding=None))
     assert res.applicable is False
     assert res.na_reason == "shares outstanding unavailable"
+
+
+def test_value_dcf_shares_fallback_to_financials_annual():
+    # No market-snapshot share count, but financials_annual has it for every FY.
+    recs = [_fy(fy, fcf=100.0 * 1.05 ** i, shares=50.0)
+            for i, fy in enumerate(range(2019, 2024))]
+    res_fallback = value_dcf(_inputs(fy_records=recs, shares_outstanding=None))
+    res_snapshot = value_dcf(_inputs(fy_records=recs, shares_outstanding=50.0))
+    assert res_fallback.applicable is True
+    assert res_fallback.assumptions["shares_source"] == "financials_annual"
+    assert res_fallback.assumptions["shares_outstanding"] == 50.0
+    assert res_fallback.value_base == pytest.approx(res_snapshot.value_base)
+    assert res_fallback.value_bear == pytest.approx(res_snapshot.value_bear)
+    assert res_fallback.value_bull == pytest.approx(res_snapshot.value_bull)
+
+
+def test_value_dcf_shares_fallback_walks_back_to_latest_positive():
+    # Latest FY record's shares is missing; walk back to the most recent
+    # fiscal year (among the FCF-filtered records) with a positive count.
+    recs = [_fy(2019, fcf=100.0, shares=80.0),
+            _fy(2020, fcf=105.0, shares=80.0),
+            _fy(2021, fcf=110.0, shares=80.0),
+            _fy(2022, fcf=115.0, shares=None),
+            _fy(2023, fcf=120.0, shares=None)]
+    res = value_dcf(_inputs(fy_records=recs, shares_outstanding=None))
+    assert res.applicable is True
+    assert res.assumptions["shares_source"] == "financials_annual"
+    assert res.assumptions["shares_outstanding"] == 80.0
+
+
+def test_value_dcf_shares_prefers_market_snapshot_when_present():
+    # Both sources present with DIFFERENT values -> the market snapshot wins.
+    recs = [_fy(fy, fcf=100.0 * 1.05 ** i, shares=50.0)
+            for i, fy in enumerate(range(2019, 2024))]
+    res = value_dcf(_inputs(fy_records=recs, shares_outstanding=200.0))
+    res_other = value_dcf(_inputs(fy_records=recs, shares_outstanding=50.0))
+    assert res.applicable is True
+    assert res.assumptions["shares_source"] == "market_snapshot"
+    assert res.assumptions["shares_outstanding"] == 200.0
+    # Per-share value scales as 1/shares -> confirms 200 (snapshot), not 50 (FY), was used.
+    assert res.value_base == pytest.approx(res_other.value_base * 50.0 / 200.0)
 
 
 # ---- ddm_per_share: closed-form perpetuity check ----
