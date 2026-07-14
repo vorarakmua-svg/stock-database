@@ -19,6 +19,7 @@
   var SKEY = 'stockdb.screens';
 
   var sectorSel = document.getElementById('sector-select');
+  var verdictSel = document.getElementById('verdict-select');
   var popover = document.getElementById('filter-popover');
   var popSearch = document.getElementById('popover-search');
   var popList = document.getElementById('popover-list');
@@ -28,15 +29,16 @@
   var popValue = document.getElementById('popover-value');
   var note = document.getElementById('scr-note');
 
-  var state = { sector: '', filters: [], sort: '', sort_dir: 'desc' };
+  var state = { sector: '', verdict: '', filters: [], sort: '', sort_dir: 'desc' };
   var pendingKey = null;
   var debounceTimer = null;
 
   // ---- URL <-> state ----
   function parseQS(qs) {
-    var s = { sector: '', filters: [], sort: '', sort_dir: 'desc' };
+    var s = { sector: '', verdict: '', filters: [], sort: '', sort_dir: 'desc' };
     new URLSearchParams(qs).forEach(function (value, key) {
       if (key === 'sector') { s.sector = value; return; }
+      if (key === 'verdict') { s.verdict = value; return; }
       if (key === 'sort') { s.sort = value; return; }
       if (key === 'sort_dir') { s.sort_dir = value; return; }
       for (var i = 0; i < OP_KEYS.length; i++) {
@@ -53,6 +55,7 @@
   function buildQS() {
     var p = new URLSearchParams();
     if (state.sector) p.set('sector', state.sector);
+    if (state.verdict) p.set('verdict', state.verdict);
     state.filters.forEach(function (f) { p.set(f.field + '_' + f.op, f.value); });
     if (state.sort) { p.set('sort', state.sort); p.set('sort_dir', state.sort_dir); }
     return p.toString();
@@ -100,6 +103,7 @@
       chip.addEventListener('click', function () {
         state = parseQS(sc.qs);
         sectorSel.value = state.sector;
+        verdictSel.value = state.verdict;
         sync();
       });
       var x = document.createElement('button');
@@ -194,9 +198,13 @@
     }
   });
 
-  // ---- Sector / save / copy ----
+  // ---- Sector / verdict / save / copy ----
   sectorSel.addEventListener('change', function () {
     state.sector = sectorSel.value;
+    sync();
+  });
+  verdictSel.addEventListener('change', function () {
+    state.verdict = verdictSel.value;
     sync();
   });
   document.getElementById('scr-save').addEventListener('click', function () {
@@ -207,7 +215,8 @@
       var m = BY_KEY[f.field];
       return (m ? m.label : f.field) + OPS[f.op] + f.value;
     });
-    name = (state.sector ? state.sector + ' · ' : '') + existing.join(', ');
+    var prefix = [state.sector, state.verdict].filter(Boolean).join(' · ');
+    name = (prefix ? prefix + ' · ' : '') + existing.join(', ');
     var screens;
     try { screens = JSON.parse(localStorage.getItem(SKEY)) || []; } catch (e) { screens = []; }
     screens.push({ name: name.slice(0, 60), qs: qs });
@@ -227,6 +236,7 @@
   // ---- Init from URL ----
   state = parseQS(window.location.search);
   sectorSel.value = state.sector;
+  verdictSel.value = state.verdict;
   renderChips();
   renderSaved();
   if (window.location.search) {

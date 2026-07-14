@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from ...valuation.engine import verdict as valuation_verdict
 from ..dependencies import get_reader
 from ..repository import Reader
 from ..schemas import ScreenRequest
@@ -21,6 +22,15 @@ router = APIRouter(prefix="/api", tags=["screener"])
 # ---------------------------------------------------------------------------
 # Screen
 # ---------------------------------------------------------------------------
+
+
+def _annotate_verdicts(items: List[Dict[str, Any]]) -> None:
+    """Attach a ``val_verdict`` (cheap/fair/expensive/None) to each row in place."""
+    for row in items:
+        row["val_verdict"] = valuation_verdict(
+            row.get("median_bear"), row.get("median_bull"),
+            row.get("current_price"),
+        )
 
 
 @router.post("/screen")
@@ -49,7 +59,9 @@ def post_screen(
             limit=body.limit,
             offset=body.offset,
         )
-        return r.screen(spec)
+        result = r.screen(spec)
+        _annotate_verdicts(result["items"])
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -62,12 +74,14 @@ def get_screen(
     """Screen companies via query-string shorthand.
 
     Keys of the form ``<field>_<op>`` (op ∈ gte/lte/gt/lt/eq/ne) become
-    filters.  Reserved keys: ``sector``, ``sort``, ``sort_dir``, ``limit``,
-    ``offset``.  Returns ``{"columns", "items", "total"}``.
+    filters.  Reserved keys: ``sector``, ``verdict``, ``sort``, ``sort_dir``,
+    ``limit``, ``offset``.  Returns ``{"columns", "items", "total"}``.
     """
     try:
         spec = parse_screen_params(dict(request.query_params))
-        return r.screen(spec)
+        result = r.screen(spec)
+        _annotate_verdicts(result["items"])
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

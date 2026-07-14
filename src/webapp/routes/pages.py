@@ -26,6 +26,7 @@ from ..screener import (
     SNAPSHOT_SCREEN_COLUMNS,
     parse_screen_params,
 )
+from .screener_api import _annotate_verdicts
 
 router = APIRouter()
 
@@ -511,6 +512,7 @@ def screen_fragment(
     try:
         spec = parse_screen_params(dict(request.query_params))
         result = r.screen(spec)
+        _annotate_verdicts(result["items"])
     except ValueError as exc:
         return templates.TemplateResponse(
             request,

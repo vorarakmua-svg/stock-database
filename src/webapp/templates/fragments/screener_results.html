@@ -25,7 +25,7 @@
         <th>Company</th>
         <th>Sector</th>
         <th>FY</th>
-        {% set sortable_cols = [('roic', 'ROIC'), ('roe', 'ROE'), ('net_margin', 'Net margin'), ('debt_to_ebitda', 'Debt/EBITDA')] %}
+        {% set sortable_cols = [('roic', 'ROIC'), ('roe', 'ROE'), ('net_margin', 'Net margin'), ('debt_to_ebitda', 'Debt/EBITDA'), ('val_upside_pct', 'Upside %')] %}
         {% for col, label in sortable_cols %}
         {% set dir = 'asc' if (sort == col and sort_dir == 'desc') else 'desc' %}
         {% set sep = '&' if base_params else '' %}
@@ -38,6 +38,7 @@
           </a>
         </th>
         {% endfor %}
+        <th>Valuation</th>
       </tr>
     </thead>
     <tbody>
@@ -52,6 +53,11 @@
         <td>{{ fmt_pct(row.get("roe")) }}</td>
         <td>{{ fmt_pct(row.get("net_margin")) }}</td>
         <td>{{ fmt_mult(row.get("debt_to_ebitda")) }}</td>
+        <td>{{ fmt_pct(row.get("val_upside_pct")) }}</td>
+        <td>{% if row.get("val_verdict") == "cheap" %}<span class="pill verdict-cheap">Looks cheap</span>
+            {% elif row.get("val_verdict") == "expensive" %}<span class="pill verdict-expensive">Looks expensive</span>
+            {% elif row.get("val_verdict") == "fair" %}<span class="pill verdict-fair">Fairly valued</span>
+            {% else %}—{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>
