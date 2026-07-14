@@ -367,6 +367,51 @@ function renderDVD(elId, years, amounts) {
 }
 
 /**
+ * Render the VAL fair-value-range chart into the element with the given id.
+ * @param {string} elId - The DOM element id to render into.
+ * @param {{models: Array<{label: string, bear: number, base: number, bull: number}>, price: (number|null)}} cfg
+ */
+function renderVAL(elId, cfg) {
+  var labels = cfg.models.map(function (m) { return m.label; });
+  var bears = cfg.models.map(function (m) { return m.bear; });
+  var spans = cfg.models.map(function (m) { return m.bull - m.bear; });
+  var bases = cfg.models.map(function (m) { return m.base; });
+
+  var range = {
+    y: labels, x: spans, base: bears,
+    type: 'bar', orientation: 'h', name: 'Bear–Bull',
+    marker: { color: SLATE.accentFill },
+    hovertemplate: '%{y}: %{base:.2f} – %{x:.2f}<extra></extra>',
+  };
+  var baseMarks = {
+    y: labels, x: bases,
+    type: 'scatter', mode: 'markers', name: 'Base',
+    marker: { size: 10, symbol: 'line-ns-open', color: SLATE.accent },
+    hovertemplate: 'Base: %{x:.2f}<extra></extra>',
+  };
+  var layout = slateLayout({
+    barmode: 'overlay',
+    showlegend: false,
+    xaxis: slateAxis({ title: 'Per-share value' }),
+    yaxis: slateAxis({ automargin: true }),
+    margin: { t: 8, r: 8, b: 32, l: 8 },
+  });
+  if (cfg.price !== null && cfg.price !== undefined) {
+    layout.shapes = [{
+      type: 'line', x0: cfg.price, x1: cfg.price, y0: -0.5,
+      y1: labels.length - 0.5,
+      line: { color: SLATE.down, width: 2, dash: 'dot' },
+    }];
+    layout.annotations = [{
+      x: cfg.price, y: labels.length - 0.5, yanchor: 'bottom',
+      text: 'Price', showarrow: false, font: { color: SLATE.down },
+    }];
+  }
+  Plotly.newPlot(elId, [range, baseMarks], layout,
+                 { displayModeBar: false, responsive: true });
+}
+
+/**
  * HTMX tab-active helper.
  * When a tab button triggers an HTMX request, mark it active and remove
  * active from its siblings.

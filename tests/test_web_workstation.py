@@ -607,3 +607,75 @@ def test_hds_fragment_bare_ticker_no_500(bare_client):
 def test_ins_fragment_bare_ticker_no_500(bare_client):
     resp = bare_client.get("/ui/stocks/DDD/ins")
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# VAL fragment
+# ---------------------------------------------------------------------------
+
+
+def _seed_val_rows(web_db, ticker="AAA"):
+    import json as _json
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect(str(web_db))
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS valuations (
+            ticker TEXT NOT NULL, model TEXT NOT NULL,
+            applicable INTEGER NOT NULL, na_reason TEXT,
+            value_bear REAL, value_base REAL, value_bull REAL,
+            assumptions TEXT, basis_fiscal_year INTEGER,
+            computed_at TEXT NOT NULL,
+            PRIMARY KEY (ticker, model)
+        );
+        CREATE TABLE IF NOT EXISTS valuation_summary (
+            ticker TEXT PRIMARY KEY, n_applicable INTEGER NOT NULL,
+            median_bear REAL, median_base REAL, median_bull REAL,
+            computed_at TEXT NOT NULL
+        );
+        """
+    )
+    dcf_assumptions = _json.dumps({
+        "growth_base": 0.05, "discount_base": 0.09, "fcf_basis": 100.0,
+        "shares_outstanding": 100.0, "terminal_growth": 0.025,
+        "growth_cap": 0.15,
+    })
+    conn.execute(
+        "INSERT OR REPLACE INTO valuations VALUES (?, 'dcf', 1, NULL, 80.0, 100.0, "
+        "120.0, ?, 2023, '2024-01-05T00:00:00')", (ticker, dcf_assumptions))
+    conn.execute(
+        "INSERT OR REPLACE INTO valuations VALUES (?, 'ddm', 0, 'no dividend "
+        "history', NULL, NULL, NULL, '{}', NULL, '2024-01-05T00:00:00')", (ticker,))
+    conn.execute(
+        "INSERT OR REPLACE INTO valuation_summary VALUES (?, 1, 80.0, 100.0, "
+        "120.0, '2024-01-05T00:00:00')", (ticker,))
+    conn.commit()
+    conn.close()
+
+
+def test_val_tab_in_tab_bar(client):
+    resp = client.get("/stocks/AAA")
+    assert resp.status_code == 200
+    assert "VAL" in resp.text
+    assert '/ui/stocks/AAA/val' in resp.text
+
+
+def test_val_fragment_renders_chart_and_models(client, web_db):
+    _seed_val_rows(web_db)
+    resp = client.get("/ui/stocks/AAA/val")
+    assert resp.status_code == 200
+    assert "renderVAL" in resp.text
+    assert "no dividend history" in resp.text        # N/A reason listed
+    assert "Sensitivity" in resp.text                # DCF grid present
+    assert "growth_base" in resp.text                # assumptions shown
+
+
+def test_val_fragment_empty_state(client):
+    resp = client.get("/ui/stocks/AAA/val")
+    assert resp.status_code == 200
+    assert "No valuations computed yet" in resp.text
+
+
+def test_val_fragment_unknown_ticker_404(client):
+    resp = client.get("/ui/stocks/ZZZ/val")
+    assert resp.status_code == 404
