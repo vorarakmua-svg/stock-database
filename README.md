@@ -19,6 +19,17 @@ A professional-grade Python data pipeline for collecting US stock fundamentals f
   - Complete dividend payment history with CAGR calculations
   - All inputs needed for DCF, Graham Number, and Peter Lynch models
 
+- **Valuation Models** — 5 sector-aware fair-value models computed and stored per
+  ticker (`src/valuation/`): two-stage FCF DCF, multi-stage DDM, Graham Number,
+  Peter Lynch fair-value, and a historical price-multiple band. Each produces a
+  bear/base/bull per-share range plus the exact assumptions used (growth,
+  discount rate, basis figures), so every number is reproducible from stored
+  data rather than recomputed live. Models that don't fit a company's sector
+  (e.g. DCF/Lynch for banks and REITs) are honestly reported as not-applicable
+  with a human-readable reason instead of a misleading number — no fake output
+  is ever better than an admitted gap. See [Valuation layer](#valuation-layer)
+  below.
+
 - **Database-Like Behavior**
   - Merge mode preserves historical data across runs
   - Tracks collection history and price snapshots
@@ -278,6 +289,33 @@ This data pipeline provides all inputs needed for:
 | **Graham Number** | EPS, Book Value per Share | 100% |
 | **Peter Lynch** | PEG ratio, earnings growth, dividends | 100% |
 | **Buffett Analysis** | ROE, margins, debt levels, moat indicators | 100% |
+
+## Valuation layer
+
+Beyond raw inputs, `src/valuation/` computes and stores actual fair-value estimates —
+five sector-aware models per ticker, each producing a bear/base/bull per-share range:
+
+| Model | Applies to | Basis |
+|---|---|---|
+| **DCF** (two-stage FCF) | general, utility, energy | Median 3-year FCF, growth = min(historical CAGR, analyst estimate), CAPM discount rate |
+| **DDM** (multi-stage Gordon) | any steady dividend payer | Trailing-12-month dividend, dividend CAGR |
+| **Graham Number** | any company with positive EPS + book value | `sqrt(22.5 × EPS × BVPS)` |
+| **Peter Lynch fair value** | general, utility, energy | Growth-rate-as-fair-P/E × EPS |
+| **Historical multiples band** | all sectors (sector-appropriate multiple: P/E, P/B for banks/insurers, P/FFO for REITs) | Company's own 5-year multiple range |
+
+A model that doesn't fit a company's sector or lacks the data it needs (e.g. DCF/Lynch
+for banks and REITs, DDM for non-payers) reports `applicable=false` with a plain-English
+`na_reason` instead of a fabricated number. Every computed value is stored alongside the
+exact assumptions used (growth, discount rate, basis figures) in the `valuations` table,
+with cross-model bear/base/bull medians in `valuation_summary` — so results are
+reproducible and auditable, not just a live calculation.
+
+Valuations are recomputed automatically after each collection run and can be backfilled
+on demand with `python -m src.valuation.backfill`; see the
+[USAGE_GUIDE](USAGE_GUIDE.md#valuation-layer) for the full CLI reference. In the web
+interface, the workstation's **VAL** tab shows the full per-model breakdown and a DCF
+sensitivity grid, the **DES** tab shows an at-a-glance verdict pill, and the
+[screener](#web-interface) adds sortable Upside % and verdict columns/filter.
 
 ## Project Structure
 
@@ -626,10 +664,10 @@ The server binds to `127.0.0.1` by default (localhost only).
 ### Features
 
 - **Terminal command bar** — a Bloomberg-style `TICKER CODE` command line (focus with `` ` `` or `/`) that jumps straight to any workstation tab or global tool. See [Terminal command bar](#terminal-command-bar) below.
-- **Company workstation** — a single per-ticker page (`/stocks/{ticker}`) with 9 tabs: description/overview, price chart with indicators, financial statements, earnings, key stats, historical prices, dividends, holders, and insider activity.
+- **Company workstation** — a single per-ticker page (`/stocks/{ticker}`) with 10 tabs: description/overview, price chart with indicators, financial statements, earnings, key stats, historical prices, dividends, holders, insider activity, and valuation.
 - **Dashboard** — data quality score, field coverage bar chart, freshness summary, unmapped-fact tracker.
 - **Companies browser** — filterable list of all tracked companies with sector drill-down.
-- **Cross-company screener** — filter by any fundamental metric (ROIC, net margin, debt/EBITDA, …) *or* market/valuation column (P/E, dividend yield, PEG, short interest, …), sort, paginate, compare selected companies side-by-side, and download results as CSV.
+- **Cross-company screener** — filter by any fundamental metric (ROIC, net margin, debt/EBITDA, …) *or* market/valuation column (P/E, dividend yield, PEG, short interest, …) *or* the valuation layer's Upside % / verdict, sort, paginate, compare selected companies side-by-side, and download results as CSV.
 - **Point-in-time (as-of) explorer** — look up what financials and ratios looked like as of any historical date (before later restatements), and browse vintage side-by-side tables.
 - **On-demand quote refresh** — re-fetch a single ticker's live price/market snapshot from the workstation without running a full collection (see `STOCK_WEB_ALLOW_QUOTE_REFRESH` below).
 - **CSV export** — download annual financials, annual metrics, or screener results as CSV from any company page or screener view.
@@ -651,6 +689,7 @@ Per-ticker function codes (`TICKER CODE` → `/stocks/{TICKER}?tab=...`):
 | `DVD` | Dividends | Dividend payments and stock splits |
 | `HDS` | Holders | Institutional and mutual-fund holders |
 | `INS` | Insiders | Insider transaction history |
+| `VAL` | Valuation | Fair-value ranges per model (DCF/DDM/Graham/Lynch/multiples), assumptions, DCF sensitivity |
 
 Global codes (no ticker needed):
 
@@ -678,7 +717,8 @@ Key endpoints:
 | `GET /api/companies/{ticker}/peers` | Peer benchmarking vs sector median |
 | `GET /api/companies/{ticker}/financials/annual` | Annual financials |
 | `GET /api/companies/{ticker}/metrics` | Annual metrics |
-| `GET /api/screen` | Cross-company screener |
+| `GET /api/stocks/{ticker}/valuation` | Per-model fair-value ranges, assumptions, verdict, upside % |
+| `GET /api/screen` | Cross-company screener (supports `verdict=cheap\|fair\|expensive`) |
 | `GET /api/export/company/{ticker}/annual.csv` | Annual financials as CSV |
 | `GET /api/export/company/{ticker}/metrics.csv` | Annual metrics as CSV |
 | `GET /api/export/screen.csv` | Screener results as CSV |

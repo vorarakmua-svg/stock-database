@@ -10,15 +10,16 @@ A comprehensive guide on how to use the output data from the Stock Data Collecti
 2. [Loading Data in Python](#loading-data-in-python)
 3. [Working with JSON Data](#working-with-json-data)
 4. [Working with CSV Data](#working-with-csv-data)
-5. [Valuation Models](#valuation-models)
+5. [Valuation Layer](#valuation-layer) — built-in, stored fair-value models
+6. [Valuation Models](#valuation-models) — DIY formulas over the raw JSON/CSV
    - [DCF (Discounted Cash Flow)](#dcf-discounted-cash-flow)
    - [Graham Number](#graham-number)
    - [Peter Lynch Fair Value](#peter-lynch-fair-value)
    - [Buffett-Style Analysis](#buffett-style-analysis)
-6. [Financial Analysis Examples](#financial-analysis-examples)
-7. [Building Dashboards](#building-dashboards)
-8. [Data Quality Checks](#data-quality-checks)
-9. [Common Use Cases](#common-use-cases)
+7. [Financial Analysis Examples](#financial-analysis-examples)
+8. [Building Dashboards](#building-dashboards)
+9. [Data Quality Checks](#data-quality-checks)
+10. [Common Use Cases](#common-use-cases)
 
 ---
 
@@ -287,6 +288,80 @@ with pd.ExcelWriter('stock_analysis.xlsx') as writer:
 ```
 
 ---
+
+## Valuation Layer
+
+Unlike the DIY formulas in the next section (which you write yourself against the raw
+JSON/CSV), `src/valuation/` is a built-in module that **computes and stores** actual
+fair-value estimates in the SQLite database, using only data already collected — no
+extra network calls.
+
+### The five models
+
+| Model | Applies to | What it needs |
+|---|---|---|
+| **DCF** (two-stage FCF) | general, utility, energy | ≥4 years of FCF history, shares outstanding |
+| **DDM** (multi-stage Gordon) | any steady dividend payer | ≥3 calendar years of dividend history |
+| **Graham Number** | any company with positive EPS + book value | Latest EPS, book value per share |
+| **Peter Lynch fair value** | general, utility, energy | ≥4 years of EPS history |
+| **Historical multiples band** | all sectors | ≥3 fiscal years of price + sector-appropriate multiple (P/E, P/B for banks/insurers, P/FFO for REITs) |
+
+Each model returns a **bear / base / bull** per-share range, not a single number — growth
+and discount-rate assumptions are deliberately conservative (growth = min(historical CAGR,
+analyst estimate), CAPM discount rate with a floor/cap). When a model doesn't fit a
+company's sector (DCF/Lynch for banks, insurers, and REITs) or the data it needs isn't
+available (e.g. no dividend history for DDM), it reports `applicable = false` with a
+plain-English `na_reason` — never a fabricated number.
+
+Results are stored in two tables:
+
+- **`valuations`** — one row per (ticker, model): `applicable`, `na_reason`,
+  `value_bear`/`value_base`/`value_bull`, the exact `assumptions` used (JSON), and
+  `basis_fiscal_year`.
+- **`valuation_summary`** — one row per ticker: `n_applicable` and the cross-model
+  `median_bear`/`median_base`/`median_bull` (price-independent; verdict and upside % are
+  computed at read time against the live price).
+
+### Running the backfill
+
+Valuations recompute **automatically** at the end of every `python -m src.main` collection
+run (for the tickers just collected) — you normally don't need to run anything extra. To
+(re)compute valuations for tickers already in the database without re-collecting data
+(e.g. after upgrading the valuation models, or to backfill a ticker collected before the
+valuation layer existed):
+
+```bash
+# Every company already in the database
+python -m src.valuation.backfill
+
+# Explicit database path
+python -m src.valuation.backfill --db data/output/stock.db
+
+# Only specific tickers
+python -m src.valuation.backfill AAPL MSFT GOOGL
+```
+
+This reads only what collection already stored (financials, dividends, price bars,
+market snapshots) — it never hits the network. Output looks like:
+
+```
+Valuations stored for 50 tickers in data/output/stock.db
+```
+
+### Viewing valuations
+
+- **Web UI** — the workstation's **VAL** tab (`/stocks/{ticker}?tab=val`) shows every
+  model's bear/base/bull range against the current price, the assumptions behind each
+  number, and (when DCF applies) a growth/discount-rate sensitivity grid. The **DES**
+  (overview) tab shows an at-a-glance verdict pill (*Looks cheap* / *Fairly valued* /
+  *Looks expensive*) and the median upside %.
+- **Screener** (`/screener`) — adds a sortable **Upside %** column and a verdict chip per
+  row, plus a verdict filter (`cheap` / `fair` / `expensive`).
+- **API** — `GET /api/stocks/{ticker}/valuation` returns the full payload (`verdict`,
+  `verdict_label`, `upside_pct`, `summary`, and the per-model `models` list with
+  `applicable`/`na_reason`/`assumptions`); `GET /api/screen?verdict=cheap` filters the
+  screener by verdict; `GET /api/export/screen.csv` includes `median_base` and
+  `val_upside_pct` columns.
 
 ## Valuation Models
 
