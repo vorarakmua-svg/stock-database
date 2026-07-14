@@ -349,6 +349,32 @@ class Reader:
         row = cur.fetchone()
         return dict(row) if row is not None else None
 
+    def valuations(self, ticker: str) -> List[Dict[str, Any]]:
+        """All ``valuations`` model rows for a ticker, ordered by model.
+
+        Returns [] when the table does not exist yet (DB predates the
+        valuation layer) — callers treat that the same as "not computed".
+        """
+        try:
+            cur = self._conn.execute(
+                "SELECT * FROM valuations WHERE ticker = ? ORDER BY model",
+                (ticker,),
+            )
+        except sqlite3.OperationalError:
+            return []
+        return [dict(row) for row in cur.fetchall()]
+
+    def valuation_summary(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """The ``valuation_summary`` medians row, or None."""
+        try:
+            cur = self._conn.execute(
+                "SELECT * FROM valuation_summary WHERE ticker = ?", (ticker,)
+            )
+        except sqlite3.OperationalError:
+            return None
+        row = cur.fetchone()
+        return dict(row) if row is not None else None
+
     def earnings_history(self, ticker: str) -> List[Dict[str, Any]]:
         """All ``earnings_history`` rows ascending by ``quarter``."""
         cur = self._conn.execute(
