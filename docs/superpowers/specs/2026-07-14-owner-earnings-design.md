@@ -136,7 +136,11 @@ honest-output rule.
 - `not applicable to sector '<sector>'` — banks, insurers, REITs (as with the DCF;
   owner earnings are meaningless where capex and D&A are not the capital cycle)
 - `insufficient history (need >= 4 fiscal years)`
-- `owner earnings too erratic to forecast` — the predictability gate
+- `insufficient history for the predictability test (need >= 10 fiscal years)` —
+  fewer than ten years of owner earnings, so the 8-of-10 test cannot be run. A short
+  history is not an erratic one, and saying otherwise would be a false reason.
+- `owner earnings too erratic to forecast` — the predictability gate proper: a full
+  ten-year window exists and fewer than eight of those years are positive
 - `median 3-year owner earnings is not positive`
 - `shares outstanding unavailable`
 
