@@ -15,6 +15,7 @@ from ..models.canonical import validate_period
 from ..models.stock_data import StockData
 from ..parsers.calculated_metrics import CalculatedMetrics
 from ..parsers.derived_fields import apply_derivations
+from ..parsers.share_scale import normalize_share_scale
 from ..parsers.ttm import compute_ttm
 from ..parsers.unmapped import detect_unmapped
 from ..parsers.xbrl_parser import XBRLParser
@@ -245,6 +246,15 @@ class StockDataFetcher:
             periods = getattr(stock, attr)
             if not periods:
                 continue
+            # Fix share counts filed in thousands/millions BEFORE anything reads
+            # them — derivations, validation and every per-share metric downstream
+            # all assume units. Cross-period, so a year with no EPS to anchor on
+            # still inherits the scale its siblings agree on.
+            for period_key, fields in normalize_share_scale(periods).items():
+                stock.add_warning(
+                    f"share scale {attr} {period_key}: rescaled {', '.join(fields)} "
+                    "(filed in thousands/millions)"
+                )
             cleaned = {}
             for period_key, period in periods.items():
                 apply_derivations(period)
@@ -256,6 +266,7 @@ class StockDataFetcher:
 
         # Derive identities within each point-in-time vintage (self-contained snapshots).
         for by_accn in (stock.financials_annual_vintages or {}).values():
+            normalize_share_scale(by_accn)
             for period in by_accn.values():
                 apply_derivations(period)
 
