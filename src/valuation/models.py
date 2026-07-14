@@ -370,7 +370,10 @@ def owner_earnings_volatility(history: List[float]) -> Dict[str, Any]:
     for i in range(1, total):
         prev, cur = history[i - 1], history[i]
         if prev > 0 and cur < prev:
-            worst_drop = max(worst_drop, (prev - cur) / prev)
+            # Capped at 100%: a year that swings to a loss has wiped out its
+            # earnings entirely, and reporting "a 334% fall" (SLB's raw figure)
+            # would read as nonsense rather than as evidence.
+            worst_drop = max(worst_drop, min(1.0, (prev - cur) / prev))
     for i in range(3, total):
         base = statistics.median(history[i - 3:i])
         if history[i] <= 0 or (base > 0 and history[i] < 0.5 * base):

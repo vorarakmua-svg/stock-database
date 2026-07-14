@@ -482,3 +482,11 @@ def test_value_owner_earnings_assumptions_contain_volatility():
     assert set(vol.keys()) == {
         "collapse_years", "worst_drop", "positive_years", "total_years",
     }
+
+
+def test_owner_earnings_volatility_caps_a_swing_to_a_loss_at_100pct():
+    """A year that swings to a loss has wiped out its earnings, not fallen 334%.
+    SLB's raw figure was 334% — a number that reads as nonsense rather than as
+    evidence, which defeats the point of showing it."""
+    vol = owner_earnings_volatility([10.0, -24.0, 10.0, 10.0])
+    assert vol["worst_drop"] == 1.0

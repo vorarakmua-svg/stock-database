@@ -126,10 +126,26 @@ and declines to forecast what he cannot predict.
 **Require owner earnings positive in at least 8 of the last 10 fiscal years.**
 Fewer -> N/A with the reason `owner earnings too erratic to forecast`.
 
-This deliberately refuses to value cyclicals (SLB, COP and similar), which is the
-correct outcome: a discounted-cash-flow model applied to unpredictable cash flows
-is precision theatre, and publishing the number would violate the layer's
-honest-output rule.
+**AMENDED 2026-07-14 after live verification — the original claim here was false.**
+This gate was specified as "deliberately refuses to value cyclicals (SLB, COP and
+similar)". Driving it against the real 50-ticker database disproved that: SLB, COP,
+CVX and CAT are all valued. The gate tests the **sign** of owner earnings, not their
+stability — and for capital-heavy cyclicals the large, steady D&A add-back genuinely
+smooths owner earnings relative to net income.
+
+Two stability metrics were then tested against the real data and both misclassify: a
+log-linear trend fit refuses KO, PG, JNJ and WMT (archetypal predictable businesses)
+while keeping SLB and COP; a collapse-year filter refuses ABBV, PFE and T while keeping
+CVX, XOM and CAT. No simple mechanical gate reproduces the qualitative
+circle-of-competence judgment.
+
+So the model does not pretend to make it. The positivity gate stays — it genuinely
+refuses loss-making histories — and the **volatility evidence is stored and shown**
+instead (`assumptions.volatility`: `collapse_years`, `worst_drop`, `positive_years`,
+`total_years`). The VAL tab states it plainly ("owner earnings were positive in 8 of 10
+years; they fell by half or more against their recent normal in 2 of them; the worst
+single-year fall was 100%") and says explicitly that the judgment is the reader's.
+Showing the evidence is honest; faking a judgment no formula can make is not.
 
 ### N/A reasons (exact, user-facing copy)
 
