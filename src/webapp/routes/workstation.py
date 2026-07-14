@@ -13,6 +13,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
+from ...valuation.assumptions import DISCOUNT_SPREAD, GROWTH_CAP
+from ...valuation.engine import VERDICT_LABELS, upside_pct, verdict
+from ...valuation.models import dcf_per_share
 from ..dependencies import get_job_manager, get_reader, get_settings
 from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
 from ..jobs import CollectionJobManager
@@ -37,6 +40,7 @@ TABS: List[Tuple[str, str, str]] = [
     ("Dividends", "DVD", "dvd"),
     ("Holders", "HDS", "hds"),
     ("Insiders", "INS", "ins"),
+    ("Valuation", "VAL", "val"),
 ]
 _TAB_KEYS = frozenset(key for _, _, key in TABS)
 
@@ -129,6 +133,13 @@ def des_fragment(
     current_price = quote.get("current_price") if quote else None
     marker_pct = _range_marker_pct(current_price, fifty_two_low, fifty_two_high)
 
+    val_summary = r.valuation_summary(ticker)
+    val_verdict = verdict(
+        val_summary.get("median_bear") if val_summary else None,
+        val_summary.get("median_bull") if val_summary else None,
+        current_price,
+    )
+
     summary: Dict[str, str] = {
         "open": fmt_price(quote.get("open") if quote else None),
         "day_low": fmt_price(quote.get("day_low") if quote else None),
@@ -169,6 +180,12 @@ def des_fragment(
             "description": profile["company"].get("description"),
             "earnings_date": analyst.get("earnings_date") if analyst else None,
             "allow_quote_refresh": settings.allow_quote_refresh,
+            "val_verdict": val_verdict,
+            "val_verdict_label": VERDICT_LABELS[val_verdict],
+            "val_upside_fmt": fmt_pct(upside_pct(
+                val_summary.get("median_base") if val_summary else None,
+                current_price,
+            )),
         },
     )
 
@@ -821,5 +838,122 @@ def ins_fragment(
             "request": request,
             "ticker": ticker,
             "rows": rows,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# VAL fragment
+# ---------------------------------------------------------------------------
+
+
+def _dcf_sensitivity(assumptions: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Growth x discount grid of DCF per-share values from stored assumptions.
+
+    Returns None when the stored assumptions lack the required inputs
+    (pre-valuation rows, or a hand-edited DB).
+    """
+    try:
+        fcf = float(assumptions["fcf_basis"])
+        shares = float(assumptions["shares_outstanding"])
+        g0 = float(assumptions["growth_base"])
+        d0 = float(assumptions["discount_base"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    growth_offsets = [-0.03, -0.02, -0.01, 0.0, 0.01, 0.02, 0.03]
+    growths = sorted({min(max(g0 + off, 0.0), GROWTH_CAP) for off in growth_offsets})
+    discounts = [d0 - DISCOUNT_SPREAD, d0, d0 + DISCOUNT_SPREAD]
+    rows = []
+    for d in discounts:
+        rows.append({
+            "discount": d,
+            "values": [dcf_per_share(fcf, shares, g, d) for g in growths],
+        })
+    return {"growths": growths, "rows": rows}
+
+
+@router.get("/ui/stocks/{ticker}/val", response_class=HTMLResponse)
+def val_fragment(
+    ticker: str,
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """VAL panel: fair-value ranges vs price, per-model detail, DCF sensitivity."""
+    company = r.get_company(ticker)
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    rows = r.valuations(ticker)
+    summary = r.valuation_summary(ticker)
+    quote = r.quote(ticker)
+    price = quote.get("current_price") if quote else None
+
+    model_labels = {"dcf": "DCF", "ddm": "Dividend Discount", "graham": "Graham Number",
+                    "lynch": "Peter Lynch", "multiples": "Multiples Band"}
+    applicable = []
+    not_applicable = []
+    sensitivity = None
+    for row in rows:
+        try:
+            assumptions = json.loads(row.get("assumptions") or "{}")
+        except ValueError:
+            assumptions = {}
+        entry = {
+            "model": row["model"],
+            "label": model_labels.get(row["model"], row["model"]),
+            "na_reason": row.get("na_reason"),
+            "bear": row.get("value_bear"),
+            "base": row.get("value_base"),
+            "bull": row.get("value_bull"),
+            "bear_fmt": fmt_price(row.get("value_bear")),
+            "base_fmt": fmt_price(row.get("value_base")),
+            "bull_fmt": fmt_price(row.get("value_bull")),
+            "basis_fy": row.get("basis_fiscal_year"),
+            "assumptions": assumptions,
+        }
+        if row["applicable"]:
+            applicable.append(entry)
+            if row["model"] == "dcf":
+                sensitivity = _dcf_sensitivity(assumptions)
+        else:
+            not_applicable.append(entry)
+
+    v = verdict(
+        summary.get("median_bear") if summary else None,
+        summary.get("median_bull") if summary else None,
+        price,
+    )
+    upside = upside_pct(summary.get("median_base") if summary else None, price)
+
+    val_cfg = {
+        "models": [{"label": e["label"], "bear": e["bear"], "base": e["base"],
+                    "bull": e["bull"]} for e in applicable],
+        "price": price,
+    }
+    computed_at = rows[0].get("computed_at") if rows else None
+    return templates.TemplateResponse(
+        request,
+        "fragments/val.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "has_rows": bool(rows),
+            "applicable": applicable,
+            "not_applicable": not_applicable,
+            "verdict": v,
+            "verdict_label": VERDICT_LABELS[v],
+            "upside_fmt": fmt_pct(upside),
+            "price_fmt": fmt_price(price),
+            "summary": summary,
+            "median_base_fmt": fmt_price(summary.get("median_base") if summary else None),
+            "sensitivity": sensitivity,
+            "computed_at": computed_at,
+            # Same XSS defense-in-depth as gp_fragment's cfg_json/ern_fragment's
+            # ern_cfg_json/dvd_fragment's dvd_cfg_json: escape "</" so a literal
+            # "</script>" can't break out of the inline <script> block. Today's
+            # inputs here are DB-derived numbers and a fixed model-label map,
+            # but this keeps the inline-<script> pattern uniform and safe
+            # against future fields.
+            "val_cfg_json": json.dumps(val_cfg).replace("</", "<\\/"),
         },
     )

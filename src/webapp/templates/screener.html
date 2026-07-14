@@ -20,6 +20,12 @@
       <option value="{{ s }}">{{ s }}</option>
     {% endfor %}
     </select>
+    <select id="verdict-select" class="form-control form-control-sm">
+      <option value="">Any valuation</option>
+      <option value="cheap">Looks cheap</option>
+      <option value="fair">Fairly valued</option>
+      <option value="expensive">Looks expensive</option>
+    </select>
     <span id="chips"></span>
     <span style="position:relative;">
       <button class="chip-add" type="button" id="add-filter">+ Add filter</button>

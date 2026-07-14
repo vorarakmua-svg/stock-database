@@ -5,6 +5,7 @@ The security-critical tests (injection-guard) run first.
 """
 from __future__ import annotations
 
+import sqlite3
 from typing import Optional
 
 import pytest
@@ -779,3 +780,82 @@ class TestScreenerSortableHeaders:
         content = resp.content.decode()
         assert "sort=roic" in content
         assert "sort_dir=asc" in content
+
+
+# ---------------------------------------------------------------------------
+# Valuation columns + verdict filter
+# ---------------------------------------------------------------------------
+
+
+def _seed_summary(web_db, ticker, bear, base, bull):  # type: ignore[no-untyped-def]
+    conn = sqlite3.connect(str(web_db))
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS valuation_summary ("
+        "ticker TEXT PRIMARY KEY, n_applicable INTEGER NOT NULL, "
+        "median_bear REAL, median_base REAL, median_bull REAL, "
+        "computed_at TEXT NOT NULL);"
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO valuation_summary VALUES (?, 3, ?, ?, ?, "
+        "'2024-01-05T00:00:00')",
+        (ticker, bear, base, bull),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_screen_returns_valuation_columns(client, web_db) -> None:  # type: ignore[no-untyped-def]
+    _seed_summary(web_db, "AAA", 80.0, 100.0, 120.0)
+    resp = client.get("/api/screen", params={"limit": 10})
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    aaa = next(i for i in items if i["ticker"] == "AAA")
+    assert aaa["median_base"] == 100.0
+    assert aaa["val_upside_pct"] is not None
+
+
+def test_screen_sort_by_upside(client, web_db) -> None:  # type: ignore[no-untyped-def]
+    _seed_summary(web_db, "AAA", 80.0, 100.0, 120.0)
+    resp = client.get(
+        "/api/screen",
+        params={"sort": "val_upside_pct", "sort_dir": "desc", "limit": 10},
+    )
+    assert resp.status_code == 200
+
+
+def test_screen_verdict_filter_cheap(client, web_db) -> None:  # type: ignore[no-untyped-def]
+    # AAA priced far below its bear median -> cheap
+    _seed_summary(web_db, "AAA", 1e6, 2e6, 3e6)
+    resp = client.get("/api/screen", params={"verdict": "cheap", "limit": 10})
+    assert resp.status_code == 200
+    tickers = [i["ticker"] for i in resp.json()["items"]]
+    assert "AAA" in tickers
+    resp = client.get("/api/screen", params={"verdict": "expensive", "limit": 10})
+    assert "AAA" not in [i["ticker"] for i in resp.json()["items"]]
+
+
+def test_screen_verdict_filter_excludes_nonpositive_price(client, web_db) -> None:  # type: ignore[no-untyped-def]
+    """engine.verdict() returns None for price <= 0 ("—"); SQL must agree."""
+    conn = sqlite3.connect(str(web_db))
+    conn.execute(
+        "UPDATE market_snapshots SET current_price = 0 WHERE ticker = 'AAA'"
+    )
+    conn.commit()
+    conn.close()
+    _seed_summary(web_db, "AAA", 1e6, 2e6, 3e6)  # price 0 < bear -> would be "cheap"
+    for v in ("cheap", "fair", "expensive"):
+        resp = client.get("/api/screen", params={"verdict": v, "limit": 10})
+        assert resp.status_code == 200
+        assert "AAA" not in [i["ticker"] for i in resp.json()["items"]], v
+
+
+def test_screen_verdict_filter_invalid_400(client) -> None:  # type: ignore[no-untyped-def]
+    resp = client.get("/api/screen", params={"verdict": "bogus"})
+    assert resp.status_code == 400
+
+
+def test_screen_results_fragment_has_upside_header(client, web_db) -> None:  # type: ignore[no-untyped-def]
+    _seed_summary(web_db, "AAA", 80.0, 100.0, 120.0)
+    resp = client.get("/ui/screen")
+    assert resp.status_code == 200
+    assert "Upside" in resp.text

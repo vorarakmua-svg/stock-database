@@ -27,12 +27,14 @@ sliced down to the requested range.
 """
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 
+from ...valuation.engine import VERDICT_LABELS, upside_pct, verdict
 from ..dependencies import get_job_manager, get_reader, get_settings
 from ..indicators import indicator_bundle, normalize_pct
 from ..jobs import CollectionJobManager
@@ -322,6 +324,52 @@ def analyst(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
     if row is None:
         raise HTTPException(status_code=404, detail=f"no analyst data for {ticker}")
     return row
+
+
+@router.get("/{ticker}/valuation")
+def valuation(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
+    """Stored per-model fair-value ranges + live verdict vs the latest price."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    rows = r.valuations(ticker)
+    summary = r.valuation_summary(ticker)
+    quote = r.quote(ticker)
+    price = quote.get("current_price") if quote else None
+
+    models = []
+    for row in rows:
+        try:
+            assumptions = json.loads(row.get("assumptions") or "{}")
+        except ValueError:
+            assumptions = {}
+        models.append({
+            "model": row["model"],
+            "applicable": bool(row["applicable"]),
+            "na_reason": row.get("na_reason"),
+            "value_bear": row.get("value_bear"),
+            "value_base": row.get("value_base"),
+            "value_bull": row.get("value_bull"),
+            "assumptions": assumptions,
+            "basis_fiscal_year": row.get("basis_fiscal_year"),
+            "computed_at": row.get("computed_at"),
+        })
+
+    v = verdict(
+        summary.get("median_bear") if summary else None,
+        summary.get("median_bull") if summary else None,
+        price,
+    )
+    return {
+        "ticker": ticker,
+        "price": price,
+        "verdict": v,
+        "verdict_label": VERDICT_LABELS[v],
+        "upside_pct": upside_pct(
+            summary.get("median_base") if summary else None, price
+        ),
+        "summary": summary,
+        "models": models,
+    }
 
 
 @router.get("/{ticker}/earnings", response_model=List[EarningsRow])

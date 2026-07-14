@@ -2,13 +2,18 @@
 
 Security invariant
 ------------------
-Column names placed into SQL come ONLY from two whitelists imported from
-``sqlite_store``: ``_METRIC_COLUMNS`` (qualified ``ma."col"``, latest-fiscal-year
-metrics) and ``SNAPSHOT_SCREEN_COLUMNS`` (qualified ``ms."col"``, latest
-market/valuation snapshot). The two sets are disjoint (enforced by a test), so
-resolution is deterministic; a filter/sort field is looked up in the metric set
-first, then the snapshot set, and any field in neither raises ``ValueError``
-BEFORE any SQL is built. Every user-supplied *value* is a bound ``?`` parameter.
+Column names placed into SQL come ONLY from whitelists: ``_METRIC_COLUMNS``
+(imported from ``sqlite_store``, qualified ``ma."col"``, latest-fiscal-year
+metrics), ``SNAPSHOT_SCREEN_COLUMNS`` (qualified ``ms."col"``, latest
+market/valuation snapshot), and ``VALUATION_EXPRS`` (a fixed name -> SQL
+expression mapping for computed valuation fields such as ``val_upside_pct``).
+The first two sets are disjoint (enforced by a test), so resolution is
+deterministic; a filter/sort field is looked up in the metric set first, then
+the snapshot set, then the valuation-expression set, and any field in none of
+them raises ``ValueError`` BEFORE any SQL is built. Every user-supplied *value*
+(including the ``verdict`` filter, which only ever selects one of three FIXED
+SQL clauses after validation against ``ALLOWED_VERDICTS``) is either a bound
+``?`` parameter or a hard-coded clause — never a raw string interpolation.
 
 Note: only the latest-fiscal-year-per-ticker semantics are implemented for v1.
 A calendar-year alignment option is explicitly out of scope (log as future work).
@@ -29,10 +34,21 @@ SNAPSHOT_SCREEN_COLUMNS: List[str] = [
     "pe_trailing", "pe_forward", "dividend_yield", "price_to_book", "peg_ratio",
     "price_to_sales", "market_cap", "beta", "short_percent_of_float",
     "insider_percent", "institutional_percent", "debt_to_equity", "current_ratio",
+    "current_price",
 ]
 
 # O(1) whitelist lookup — disjoint from _METRIC_COL_SET (verified by test).
 _SNAPSHOT_COL_SET: FrozenSet[str] = frozenset(SNAPSHOT_SCREEN_COLUMNS)
+
+# Valuation medians (stored in valuation_summary) exposed to the screener.
+# val_upside_pct is a computed expression, not a raw column, so it lives in
+# its own whitelist mapping field name -> SQL expression.
+VALUATION_EXPRS: Dict[str, str] = {
+    "val_upside_pct":
+        '((vsum."median_base" - ms."current_price") / NULLIF(ms."current_price", 0))',
+}
+VALUATION_SELECT_COLUMNS: List[str] = ["median_bear", "median_base", "median_bull"]
+ALLOWED_VERDICTS = ("cheap", "fair", "expensive")
 
 # Allowed filter operators → SQL operator string
 ALLOWED_OPS: Dict[str, str] = {
@@ -49,6 +65,8 @@ SCREEN_COLUMNS: List[str] = (
     ["ticker", "company_name", "sector_class", "fiscal_year"]
     + list(_METRIC_COLUMNS)
     + list(SNAPSHOT_SCREEN_COLUMNS)
+    + VALUATION_SELECT_COLUMNS
+    + list(VALUATION_EXPRS)
 )
 
 # Default metrics for the compare view — single source of truth.
@@ -109,6 +127,13 @@ METRIC_KINDS: Dict[str, str] = {
     "current_ratio": "mult",
     # market/valuation — raw
     "beta": "raw",
+    "current_price": "raw",
+    # valuation medians — raw
+    "median_bear": "raw",
+    "median_base": "raw",
+    "median_bull": "raw",
+    # valuation — computed percentage
+    "val_upside_pct": "pct",
 }
 
 # SQL fragment for the latest-fiscal-year-per-ticker sub-join (shared between
@@ -136,6 +161,11 @@ _SNAPSHOT_JOIN: str = (
     "LEFT JOIN market_snapshots ms ON ms.ticker = ma.ticker AND ms.collected_at = lms.mx"
 )
 
+# Per-ticker valuation medians; LEFT JOIN so unvalued tickers still appear.
+_VALUATION_JOIN: str = (
+    "LEFT JOIN valuation_summary vsum ON vsum.ticker = ma.ticker"
+)
+
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -158,6 +188,7 @@ class ScreenSpec:
 
     filters: List[MetricFilter] = field(default_factory=list)
     sector: Optional[str] = None
+    verdict: Optional[str] = None
     sort: Optional[str] = None
     sort_dir: str = "desc"
     limit: int = 100
@@ -186,9 +217,11 @@ def _qualify_column(field_name: str, *, context: str = "filter") -> str:
         return f'ma."{field_name}"'
     if field_name in _SNAPSHOT_COL_SET:
         return f'ms."{field_name}"'
+    if field_name in VALUATION_EXPRS:
+        return VALUATION_EXPRS[field_name]
     raise ValueError(
         f"Invalid {context} field {field_name!r}: not in whitelisted "
-        "_METRIC_COLUMNS or SNAPSHOT_SCREEN_COLUMNS."
+        "_METRIC_COLUMNS, SNAPSHOT_SCREEN_COLUMNS, or VALUATION_EXPRS."
     )
 
 
@@ -223,6 +256,25 @@ def _build_where(spec: ScreenSpec) -> Tuple[str, List[Any]]:
     if spec.sector is not None:
         clauses.append("c.sector_class = ?")
         params.append(spec.sector)
+
+    if spec.verdict is not None:
+        if spec.verdict not in ALLOWED_VERDICTS:
+            raise ValueError(
+                f"Invalid verdict {spec.verdict!r}: must be one of "
+                f"{list(ALLOWED_VERDICTS)}."
+            )
+        # engine.verdict() renders "—" for a non-positive price; the SQL filter
+        # must agree, so every clause is guarded by price > 0.
+        price = 'ms."current_price"'
+        if spec.verdict == "cheap":
+            clauses.append(f'{price} > 0 AND {price} < vsum."median_bear"')
+        elif spec.verdict == "expensive":
+            clauses.append(f'{price} > 0 AND {price} > vsum."median_bull"')
+        else:
+            clauses.append(
+                f'{price} > 0 AND {price} >= vsum."median_bear" '
+                f'AND {price} <= vsum."median_bull"'
+            )
 
     where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     return where_sql, params
@@ -266,11 +318,17 @@ def build_screen_query(spec: ScreenSpec) -> Tuple[str, List[Any]]:
         order_sql = "ORDER BY ma.ticker"
 
     # SELECT columns: fixed columns + all metric columns + all snapshot columns
+    # + valuation median columns + valuation computed expressions
     metric_cols_sql = ", ".join(f'ma."{c}"' for c in _METRIC_COLUMNS)
     snapshot_cols_sql = ", ".join(f'ms."{c}"' for c in SNAPSHOT_SCREEN_COLUMNS)
+    valuation_cols_sql = ", ".join(f'vsum."{c}"' for c in VALUATION_SELECT_COLUMNS)
+    valuation_exprs_sql = ", ".join(
+        f"{expr} AS {name}" for name, expr in VALUATION_EXPRS.items()
+    )
     select_sql = (
         f"c.ticker, c.company_name, c.sector_class, ma.fiscal_year, "
-        f"{metric_cols_sql}, {snapshot_cols_sql}"
+        f"{metric_cols_sql}, {snapshot_cols_sql}, "
+        f"{valuation_cols_sql}, {valuation_exprs_sql}"
     )
 
     sql = (
@@ -278,6 +336,7 @@ def build_screen_query(spec: ScreenSpec) -> Tuple[str, List[Any]]:
         f"FROM metrics_annual ma\n"
         f"{_LATEST_FY_JOIN}\n"
         f"{_SNAPSHOT_JOIN}\n"
+        f"{_VALUATION_JOIN}\n"
         f"{where_sql}\n"
         f"{order_sql}\n"
         f"LIMIT ? OFFSET ?"
@@ -301,6 +360,7 @@ def build_count_query(spec: ScreenSpec) -> Tuple[str, List[Any]]:
         f"FROM metrics_annual ma\n"
         f"{_LATEST_FY_JOIN}\n"
         f"{_SNAPSHOT_JOIN}\n"
+        f"{_VALUATION_JOIN}\n"
         f"{where_sql}"
     ).strip()
 
@@ -316,18 +376,24 @@ def parse_screen_params(params: Dict[str, str]) -> ScreenSpec:
     """Parse HTTP query-string key/value pairs into a ``ScreenSpec``.
 
     Keys of the form ``<field>_<op>`` (where op ∈ ALLOWED_OPS) become
-    ``MetricFilter`` entries.  Reserved keys ``sector``, ``sort``,
+    ``MetricFilter`` entries.  Reserved keys ``sector``, ``verdict``, ``sort``,
     ``sort_dir``, ``limit``, ``offset`` are handled separately.
     All other keys are silently ignored.
 
-    Raises ``ValueError`` for bad limit/offset or unparseable float values.
+    Raises ``ValueError`` for bad limit/offset, unparseable float values, or an
+    unrecognized ``verdict``.
     The ``ScreenSpec`` itself is NOT validated here — call ``build_screen_query``
     (or ``Reader.screen``) to apply the whitelist checks.
     """
-    RESERVED = {"sector", "sort", "sort_dir", "limit", "offset"}
+    RESERVED = {"sector", "verdict", "sort", "sort_dir", "limit", "offset"}
     VALID_OPS = set(ALLOWED_OPS.keys())
 
     sector = params.get("sector") or None
+    verdict = params.get("verdict") or None
+    if verdict is not None and verdict not in ALLOWED_VERDICTS:
+        raise ValueError(
+            f"Invalid verdict {verdict!r}: must be one of {list(ALLOWED_VERDICTS)}."
+        )
     sort_raw = params.get("sort", "").strip()
     sort: Optional[str] = sort_raw if sort_raw else None
     sort_dir = params.get("sort_dir", "desc")
@@ -365,6 +431,7 @@ def parse_screen_params(params: Dict[str, str]) -> ScreenSpec:
     return ScreenSpec(
         filters=filters,
         sector=sector,
+        verdict=verdict,
         sort=sort,
         sort_dir=sort_dir,
         limit=limit,

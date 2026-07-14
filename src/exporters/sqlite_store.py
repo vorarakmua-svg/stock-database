@@ -15,10 +15,14 @@ Tables:
 All writes are idempotent upserts on the natural keys.
 """
 
+import json
 import logging
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
+
+if TYPE_CHECKING:  # avoid a runtime exporters -> valuation dependency
+    from ..valuation.models import ValuationResult
 
 from ..mappings.canonical import CANONICAL_FIELDS
 from ..models.stock_data import StockData
@@ -245,6 +249,25 @@ class SQLiteStore:
                 error_count INTEGER,
                 quality_score INTEGER,
                 PRIMARY KEY (ticker, collected_at)
+            );
+
+            CREATE TABLE IF NOT EXISTS valuations (
+                ticker TEXT NOT NULL,
+                model TEXT NOT NULL,
+                applicable INTEGER NOT NULL,
+                na_reason TEXT,
+                value_bear REAL, value_base REAL, value_bull REAL,
+                assumptions TEXT,
+                basis_fiscal_year INTEGER,
+                computed_at TEXT NOT NULL,
+                PRIMARY KEY (ticker, model)
+            );
+
+            CREATE TABLE IF NOT EXISTS valuation_summary (
+                ticker TEXT PRIMARY KEY,
+                n_applicable INTEGER NOT NULL,
+                median_bear REAL, median_base REAL, median_bull REAL,
+                computed_at TEXT NOT NULL
             );
 
             -- Material us-gaap facts under tags not yet in the canonical registry.
@@ -790,3 +813,34 @@ class SQLiteStore:
                 conn.close()
         except Exception as e:
             self.logger.error(f"Error writing benchmark bars for {symbol}: {e}")
+
+    def export_valuations(self, ticker: str, results: "List[ValuationResult]",
+                          summary: Dict[str, Any], computed_at: str) -> None:
+        """Upsert one ticker's per-model valuation rows + the medians summary."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            for res in results:
+                self._upsert(conn, "valuations", ["ticker", "model"], {
+                    "ticker": ticker,
+                    "model": res.model,
+                    "applicable": 1 if res.applicable else 0,
+                    "na_reason": res.na_reason,
+                    "value_bear": res.value_bear,
+                    "value_base": res.value_base,
+                    "value_bull": res.value_bull,
+                    "assumptions": json.dumps(res.assumptions),
+                    "basis_fiscal_year": res.basis_fiscal_year,
+                    "computed_at": computed_at,
+                })
+            self._upsert(conn, "valuation_summary", ["ticker"], {
+                "ticker": ticker,
+                "n_applicable": summary["n_applicable"],
+                "median_bear": summary["median_bear"],
+                "median_base": summary["median_base"],
+                "median_bull": summary["median_bull"],
+                "computed_at": computed_at,
+            })
+            conn.commit()
+        finally:
+            conn.close()

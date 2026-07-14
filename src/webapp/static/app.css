@@ -198,6 +198,9 @@ input:focus, select:focus, .form-control:focus, .form-input:focus, .metric-selec
 }
 .pill.up, .pill.num-pos { background: var(--color-up-bg); color: var(--color-up-text); }
 .pill.down, .pill.num-neg { background: var(--color-down-bg); color: var(--color-down); }
+.pill.verdict-cheap { background: var(--color-up-bg); color: var(--color-up-text); }
+.pill.verdict-expensive { background: var(--color-down-bg); color: var(--color-down); }
+.pill.verdict-fair, .pill.verdict-none { background: var(--color-surface-2); color: var(--color-ink-muted); }
 .chip-row { display: flex; gap: 0.4rem; flex-wrap: wrap; }
 .chip {
   display: inline-flex; align-items: center; cursor: pointer;

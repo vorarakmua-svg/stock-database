@@ -61,6 +61,7 @@ files = [
     "src/mappings/sectors.py",
     "src/models/canonical.py",
     "src/validation",
+    "src/valuation",
     "src/parsers/derived_fields.py",
     "src/parsers/metric_utils.py",
     "src/parsers/sector_metrics.py",

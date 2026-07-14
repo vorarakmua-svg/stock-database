@@ -1,0 +1,94 @@
+{% if not has_rows %}
+<div class="empty-state">
+  No valuations computed yet. Run a collection, or backfill from existing data:
+  <code>python -m src.valuation.backfill</code>
+</div>
+{% else %}
+<section class="section">
+  <h2 class="section-heading">Fair Value vs Price</h2>
+  <div class="chip-row">
+    <span class="pill verdict-{{ verdict or 'none' }}">{{ verdict_label }}</span>
+    <span class="text-muted">Median fair value {{ median_base_fmt }} ·
+      Price {{ price_fmt }} · Upside {{ upside_fmt }}</span>
+  </div>
+  {% if applicable %}
+  <div id="val-chart" class="gp-chart"></div>
+  <script>
+    var _valCfg = {{ val_cfg_json | safe }};
+    renderVAL('val-chart', _valCfg);
+  </script>
+  {% else %}
+  <div class="empty-state">No model applies to this company — see reasons below.</div>
+  {% endif %}
+  <p class="text-muted mt-2">Computed {{ computed_at }} from stored fundamentals.
+    Ranges are bear/base/bull scenarios from conservative mechanical assumptions —
+    not forecasts.</p>
+</section>
+
+<section class="section">
+  <h2 class="section-heading">Models</h2>
+  {% if applicable %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>Model</th><th class="num">Bear</th><th class="num">Base</th>
+        <th class="num">Bull</th><th class="num">Basis FY</th><th>Assumptions</th></tr></thead>
+      <tbody>
+        {% for m in applicable %}
+        <tr>
+          <td class="row-label">{{ m.label }}</td>
+          <td class="num">{{ m.bear_fmt }}</td>
+          <td class="num">{{ m.base_fmt }}</td>
+          <td class="num">{{ m.bull_fmt }}</td>
+          <td class="num">{{ m.basis_fy or "—" }}</td>
+          <td>
+            <details>
+              <summary>show</summary>
+              <table class="data-table">
+                <tbody>
+                  {% for k, v in m.assumptions.items() %}
+                  <tr><td class="row-label">{{ k }}</td><td class="num">{{ v }}</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </details>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% if not_applicable %}
+  <h3 class="section-heading mt-2">Not applicable</h3>
+  <ul>
+    {% for m in not_applicable %}
+    <li><strong>{{ m.label }}</strong> — {{ m.na_reason }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
+{% if sensitivity %}
+<section class="section">
+  <h2 class="section-heading">DCF Sensitivity</h2>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Discount \ Growth</th>
+          {% for g in sensitivity.growths %}<th class="num">{{ "%.1f%%" | format(g * 100) }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in sensitivity.rows %}
+        <tr>
+          <td class="row-label">{{ "%.1f%%" | format(row.discount * 100) }}</td>
+          {% for v in row["values"] %}<td class="num">{{ "%.2f" | format(v) }}</td>{% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endif %}
