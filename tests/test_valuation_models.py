@@ -336,3 +336,18 @@ def test_value_multiples_na_negative_latest_basis():
     res = value_multiples(_inputs(fy_records=recs, fy_end_prices=prices))
     assert res.applicable is False
     assert res.na_reason == "latest per-share basis is not positive"
+
+
+def test_all_models_report_history_truncated_in_assumptions():
+    """The truncation flag reaches every model's assumptions, not just the two
+    that read the per-share series — DCF/Graham/DDM silently run on the
+    shortened window too, so the trust anchor must say so."""
+    recs = [_fy(fy, fcf=100.0 * 1.05 ** i, net_income=200.0, equity=1000.0,
+                eps=2.0 + 0.1 * i, shares=100.0)
+            for i, fy in enumerate(range(2019, 2024))]
+    divs = _quarterly_dividends(2019, 2023, 1.00, 0.05)
+    inputs = _inputs(fy_records=recs, dividends=divs, history_truncated=True)
+    for res in (value_dcf(inputs), value_graham(inputs), value_ddm(inputs),
+                value_lynch(inputs)):
+        assert res.applicable is True, res.na_reason
+        assert res.assumptions["history_truncated"] is True, res.model

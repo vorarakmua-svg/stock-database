@@ -102,6 +102,7 @@ def value_dcf(inputs: ValuationInputs) -> ValuationResult:
     assumptions.update({
         "fcf_basis": basis,
         "fcf_years": len(fcf_hist),
+        "history_truncated": inputs.history_truncated,
         "terminal_growth": TERMINAL_GROWTH,
         "shares_outstanding": shares,
         "shares_source": shares_source,
@@ -173,6 +174,7 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
         "ttm_dps": ttm,
         "ttm_anchor": anchor.isoformat(),
         "dividend_years": len(annual),
+        "history_truncated": inputs.history_truncated,
         "terminal_growth": TERMINAL_GROWTH,
     })
     return ValuationResult(
@@ -210,6 +212,7 @@ def value_graham(inputs: ValuationInputs) -> ValuationResult:
     assumptions: Dict[str, Any] = {
         "eps_base": eps, "eps_bear": eps_bear, "eps_bull": eps_bull,
         "bvps": bvps, "multiplier": 22.5,
+        "history_truncated": inputs.history_truncated,
     }
     return ValuationResult(
         model="graham",
