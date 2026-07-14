@@ -15,6 +15,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .assumptions import (
     DDM_GROWTH_CAP,
     DISCOUNT_SPREAD,
+    MARGIN_OF_SAFETY,
+    OE_DISCOUNT_FLOOR,
+    OE_HISTORY_WINDOW,
+    OE_MIN_POSITIVE_YEARS,
     TERMINAL_GROWTH,
     derive_discount,
     derive_growth,
@@ -320,4 +324,121 @@ def value_multiples(inputs: ValuationInputs) -> ValuationResult:
         value_bull=band_high * latest_basis,
         assumptions=assumptions,
         basis_fiscal_year=latest.fiscal_year,
+    )
+
+
+def owner_earnings(rec: FYRecord) -> Optional[float]:
+    """Buffett's owner earnings: net income + non-cash charges - MAINTENANCE capex.
+
+    Maintenance capex is the one figure he leaves to judgment; depreciation is the
+    accounting estimate of the same thing (what it costs to stand still), so we use
+    ``min(D&A, |capex|)`` — capped at what the company actually spent, since you
+    cannot spend more maintaining assets than you spent in total. Capex above that
+    is growth spending and is NOT subtracted: the whole point of the measure is to
+    stop treating expansion as a cost of standing still.
+
+    Stock-based compensation is deliberately NOT added back. It is a real cost of
+    running the business, whatever its cash character.
+    """
+    if rec.net_income is None or rec.depreciation_amortization is None:
+        return None
+    da = rec.depreciation_amortization
+    capex = abs(rec.capex) if rec.capex is not None else da
+    maintenance = min(da, capex)
+    return rec.net_income + da - maintenance
+
+
+def value_owner_earnings(inputs: ValuationInputs) -> ValuationResult:
+    """Owner earnings discounted at the Treasury rate, with a margin of safety.
+
+    Deliberately unlike ``value_dcf``: no beta, no equity-risk premium, growth capex
+    credited back, and a refusal to value a business whose earnings cannot be
+    forecast. Its verdict is its own (see ``engine.owner_earnings_verdict``) and it is
+    excluded from the cross-model median — averaging a Treasury-discounted value with
+    CAPM-discounted ones would silently drag every verdict toward "cheap".
+    """
+    if inputs.sector_class not in DCF_SECTORS:
+        return _na("owner_earnings",
+                   f"not applicable to sector '{inputs.sector_class}'")
+    recs = [r for r in inputs.fy_records if owner_earnings(r) is not None]
+    if len(recs) < 4:
+        return _na("owner_earnings",
+                   "insufficient history (need >= 4 fiscal years)")
+    basis_fy = recs[-1].fiscal_year
+
+    window = recs[-OE_HISTORY_WINDOW:]
+    oe_hist = [owner_earnings(r) for r in window]
+    positive_years = sum(1 for v in oe_hist if v is not None and v > 0)
+    if positive_years < OE_MIN_POSITIVE_YEARS:
+        return _na("owner_earnings", "owner earnings too erratic to forecast",
+                   basis_fy=basis_fy)
+
+    basis = statistics.median([v for v in oe_hist[-3:] if v is not None])
+    if basis <= 0:
+        return _na("owner_earnings",
+                   "median 3-year owner earnings is not positive", basis_fy=basis_fy)
+
+    shares = inputs.shares_outstanding
+    shares_source = "market_snapshot"
+    if not shares or shares <= 0:
+        shares = None
+        for r in reversed(recs):
+            if r.shares is not None and r.shares > 0:
+                shares = r.shares
+                shares_source = "financials_annual"
+                break
+        if not shares:
+            return _na("owner_earnings", "shares outstanding unavailable",
+                       basis_fy=basis_fy)
+
+    growth, gmeta = derive_growth(
+        oe_hist, inputs.analyst_growth,
+        periods=[r.fiscal_year for r in window],
+    )
+    g_bear, g_base, g_bull = growth_scenarios(growth)
+
+    # Buffett's discount rate: the long-term government rate, floored. No beta.
+    rf = inputs.risk_free_rate
+    rf_fallback = rf is None
+    if rf is None:
+        rf = OE_DISCOUNT_FLOOR
+    discount = max(rf, OE_DISCOUNT_FLOOR)
+
+    # The discount rate is held FIXED across scenarios: under this method it is an
+    # observable market fact, not a risk knob. Only growth varies.
+    latest = recs[-1]
+    da = latest.depreciation_amortization or 0.0
+    latest_capex = abs(latest.capex) if latest.capex is not None else da
+    maintenance = min(da, latest_capex)
+
+    value_base = dcf_per_share(basis, shares, g_base, discount)
+    assumptions: Dict[str, Any] = {}
+    assumptions.update(gmeta)
+    assumptions.update({
+        "owner_earnings_basis": basis,
+        "maintenance_capex": maintenance,
+        "growth_capex_added_back": latest_capex - maintenance,
+        "discount_base": discount,
+        "discount_floor": OE_DISCOUNT_FLOOR,
+        "risk_free_rate": rf,
+        "beta_used": False,
+        "sbc_added_back": False,
+        "margin_of_safety": MARGIN_OF_SAFETY,
+        "buy_below": value_base * (1.0 - MARGIN_OF_SAFETY),
+        "positive_years": positive_years,
+        "history_truncated": inputs.history_truncated,
+        "terminal_growth": TERMINAL_GROWTH,
+        "shares_outstanding": shares,
+        "shares_source": shares_source,
+    })
+    if rf_fallback:
+        assumptions["rf_fallback"] = True
+    return ValuationResult(
+        model="owner_earnings",
+        applicable=True,
+        value_bear=dcf_per_share(basis, shares, g_bear, discount),
+        value_base=value_base,
+        value_bull=dcf_per_share(basis, shares, g_bull, discount),
+        assumptions=assumptions,
+        basis_fiscal_year=basis_fy,
     )
