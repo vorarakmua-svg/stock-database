@@ -304,7 +304,10 @@ def _build_where(spec: ScreenSpec) -> Tuple[str, List[Any]]:
         if spec.verdict_oe == "cheap":
             clauses.append(f'{price} > 0 AND {price} < {buy_below}')
         elif spec.verdict_oe == "expensive":
-            clauses.append(f'{price} > 0 AND {price} > oe."value_base"')
+            clauses.append(
+                f'{price} > 0 AND {buy_below} IS NOT NULL '
+                f'AND {price} > oe."value_base"'
+            )
         else:
             clauses.append(
                 f'{price} > 0 AND {price} >= {buy_below} '

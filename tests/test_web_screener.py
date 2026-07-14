@@ -914,3 +914,29 @@ def test_screen_owner_earnings_verdict_filter(client, web_db):  # type: ignore[n
 def test_screen_owner_earnings_verdict_invalid_400(client):  # type: ignore[no-untyped-def]
     resp = client.get("/api/screen", params={"oe_verdict": "bogus"})
     assert resp.status_code == 400
+
+
+def test_oe_verdict_expensive_requires_buy_below(client, web_db):  # type: ignore[no-untyped-def]
+    """SQL and the Python annotator must agree: with no buy_below there is no
+    owner-earnings verdict, so the row must not be returned by the filter either."""
+    import json as _json
+    conn = sqlite3.connect(str(web_db))
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS valuations ("
+        "ticker TEXT NOT NULL, model TEXT NOT NULL, applicable INTEGER NOT NULL, "
+        "na_reason TEXT, value_bear REAL, value_base REAL, value_bull REAL, "
+        "assumptions TEXT, basis_fiscal_year INTEGER, computed_at TEXT NOT NULL, "
+        "PRIMARY KEY (ticker, model));"
+    )
+    # value_base far BELOW AAA's price of 105 -> would match "expensive" on price
+    # alone, but there is no buy_below, so no verdict exists.
+    conn.execute(
+        "INSERT OR REPLACE INTO valuations VALUES ('AAA', 'owner_earnings', 1, NULL, "
+        "8.0, 10.0, 12.0, ?, 2025, '2024-01-05T00:00:00')",
+        (_json.dumps({"discount_base": 0.07}),),
+    )
+    conn.commit()
+    conn.close()
+    resp = client.get("/api/screen", params={"oe_verdict": "expensive", "limit": 10})
+    assert resp.status_code == 200
+    assert "AAA" not in [i["ticker"] for i in resp.json()["items"]]

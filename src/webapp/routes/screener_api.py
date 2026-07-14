@@ -36,11 +36,11 @@ def _annotate_verdicts(items: List[Dict[str, Any]]) -> None:
         oe_base = row.get("oe_base")
         price = row.get("current_price")
         buy_below = None
+        oe_v = None
         try:
             buy_below = json.loads(row.get("oe_assumptions") or "{}").get("buy_below")
-        except ValueError:
+        except (ValueError, AttributeError):
             buy_below = None
-        oe_v = None
         if oe_base is not None and price and price > 0 and buy_below is not None:
             if price < buy_below:
                 oe_v = "cheap"
