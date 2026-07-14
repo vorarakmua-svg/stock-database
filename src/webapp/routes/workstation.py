@@ -14,8 +14,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ...valuation.assumptions import DISCOUNT_SPREAD, GROWTH_CAP
-from ...valuation.engine import VERDICT_LABELS, upside_pct, verdict
-from ...valuation.models import dcf_per_share
+from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
+from ...valuation.models import ValuationResult, dcf_per_share
 from ..dependencies import get_job_manager, get_reader, get_settings
 from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
 from ..jobs import CollectionJobManager
@@ -889,7 +889,8 @@ def val_fragment(
     price = quote.get("current_price") if quote else None
 
     model_labels = {"dcf": "DCF", "ddm": "Dividend Discount", "graham": "Graham Number",
-                    "lynch": "Peter Lynch", "multiples": "Multiples Band"}
+                    "lynch": "Peter Lynch", "multiples": "Multiples Band",
+                    "owner_earnings": "Owner Earnings"}
     applicable = []
     not_applicable = []
     sensitivity = None
@@ -917,6 +918,36 @@ def val_fragment(
                 sensitivity = _dcf_sensitivity(assumptions)
         else:
             not_applicable.append(entry)
+
+    # Owner earnings is a separate lens (Treasury-discounted, not CAPM-discounted)
+    # and must never appear as a sixth bar in the five-model chart/table below.
+    oe = next((e for e in applicable + not_applicable
+               if e["model"] == "owner_earnings"), None)
+    applicable = [e for e in applicable if e["model"] != "owner_earnings"]
+    not_applicable = [e for e in not_applicable if e["model"] != "owner_earnings"]
+
+    oe_verdict = None
+    oe_ctx = None
+    if oe is not None:
+        if oe["base"] is not None:
+            oe_result = ValuationResult(
+                model="owner_earnings", applicable=True, value_base=oe["base"],
+                assumptions=oe["assumptions"],
+            )
+            oe_verdict = owner_earnings_verdict(oe_result, price)
+        oe_ctx = {
+            "na_reason": oe["na_reason"],
+            "bear_fmt": oe["bear_fmt"],
+            "base_fmt": oe["base_fmt"],
+            "bull_fmt": oe["bull_fmt"],
+            "buy_below_fmt": fmt_price(oe["assumptions"].get("buy_below")),
+            "assumptions": oe["assumptions"],
+            "verdict": oe_verdict,
+            "verdict_label": VERDICT_LABELS[oe_verdict],
+            # The method gap is the insight: same company, two philosophies.
+            "dcf_base_fmt": next(
+                (e["base_fmt"] for e in applicable if e["model"] == "dcf"), "—"),
+        }
 
     v = verdict(
         summary.get("median_bear") if summary else None,
@@ -947,6 +978,7 @@ def val_fragment(
             "summary": summary,
             "median_base_fmt": fmt_price(summary.get("median_base") if summary else None),
             "sensitivity": sensitivity,
+            "oe": oe_ctx,
             "computed_at": computed_at,
             # Same XSS defense-in-depth as gp_fragment's cfg_json/ern_fragment's
             # ern_cfg_json/dvd_fragment's dvd_cfg_json: escape "</" so a literal
