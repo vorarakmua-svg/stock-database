@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from src.exporters.sqlite_store import SQLiteStore
+from src.valuation.backfill import main as backfill_main
 from src.valuation.engine import compute_and_store
 
 
@@ -103,3 +104,30 @@ def test_compute_and_store_missing_companies_table_returns_zero(tmp_path):
     empty = tmp_path / "no_schema.db"
     n = compute_and_store(empty)
     assert n == 0
+
+
+def test_backfill_cli_runs_on_explicit_db(seeded_db, capsys):
+    rc = backfill_main(["--db", str(seeded_db)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "1 ticker" in out
+    conn = sqlite3.connect(seeded_db)
+    assert conn.execute("SELECT COUNT(*) FROM valuations").fetchone()[0] == 5
+    conn.close()
+
+
+def test_backfill_cli_ticker_filter(seeded_db):
+    rc = backfill_main(["--db", str(seeded_db), "AAA"])
+    assert rc == 0
+
+
+def test_backfill_cli_empty_db_returns_1(tmp_path):
+    from src.exporters.sqlite_store import SQLiteStore
+    empty = tmp_path / "empty.db"
+    store = SQLiteStore(db_path=empty)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.commit()
+    conn.close()
+    rc = backfill_main(["--db", str(empty)])
+    assert rc == 1
