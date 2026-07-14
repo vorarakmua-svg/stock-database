@@ -1,5 +1,6 @@
 """Valuation models: hand-checked values, N/A paths, scenario ordering."""
 import math
+from datetime import date
 
 import pytest
 
@@ -16,16 +17,17 @@ from src.valuation.models import (
 
 
 def _fy(fy, fcf=None, net_income=None, equity=None, eps=None, shares=100.0,
-        ffo_ps=None, period_end=None):
+        ffo_ps=None, period_end=None, split_factor=1.0):
     return FYRecord(fiscal_year=fy, period_end=period_end, net_income=net_income,
                     total_equity=equity, eps_diluted=eps, shares=shares,
-                    fcf=fcf, ffo_per_share=ffo_ps)
+                    fcf=fcf, ffo_per_share=ffo_ps, split_factor=split_factor)
 
 
 def _inputs(**kwargs):
     defaults = dict(ticker="AAA", sector_class="general", fy_records=[],
                     shares_outstanding=100.0, beta=1.0, risk_free_rate=0.045,
-                    analyst_growth=None, dividends=[], fy_end_prices={})
+                    analyst_growth=None, dividends=[], fy_end_prices={},
+                    as_of=date(2024, 1, 1))
     defaults.update(kwargs)
     return ValuationInputs(**defaults)
 
@@ -162,6 +164,39 @@ def test_value_ddm_na_no_dividends():
     assert res.na_reason == "no dividend history"
 
 
+def test_value_ddm_na_dividends_discontinued():
+    # Paid 2015-2023, suspended since: as of 2026 that is no longer a payer.
+    divs = _quarterly_dividends(2015, 2023, 1.00, 0.05)
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 7, 1)))
+    assert res.applicable is False
+    assert res.na_reason == "dividends discontinued (no payment in the last 15 months)"
+
+
+def test_value_ddm_na_no_dividends_in_trailing_12_months():
+    # Last payment 2023-12-15; as of 2025-01-10 that is 13 months back:
+    # inside the 15-month suspension window, but outside the TTM window.
+    divs = _quarterly_dividends(2021, 2023, 1.00, 0.05)
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2025, 1, 10)))
+    assert res.applicable is False
+    assert res.na_reason == "no dividends in trailing 12 months"
+
+
+def test_value_ddm_ttm_window_anchored_to_as_of():
+    divs = _quarterly_dividends(2019, 2023, 1.00, 0.05)
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2024, 6, 1)))
+    assert res.applicable is True
+    assert res.assumptions["ttm_anchor"] == "2024-06-01"
+    # Only the payments in the 365 days before as_of: 2023-06/09/12 (3 of 4).
+    assert res.assumptions["ttm_dps"] == pytest.approx(3.0 * (1.00 * 1.05 ** 4) / 4.0)
+
+
+def test_value_ddm_cagr_uses_calendar_years():
+    divs = _quarterly_dividends(2019, 2023, 1.00, 0.05)
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2024, 1, 1)))
+    assert res.assumptions["cagr_years"] == 4  # 2019 -> 2023, not len-1 of positions
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.05)
+
+
 def test_value_ddm_na_too_short():
     divs = _quarterly_dividends(2022, 2023, 1.0, 0.0)
     res = value_ddm(_inputs(sector_class="bank", dividends=divs))
@@ -214,6 +249,45 @@ def test_value_lynch_fair_pe_floor_applies():
     res = value_lynch(_inputs(fy_records=recs))
     assert res.applicable is True
     assert res.value_base == pytest.approx(5.0 * 2.0)  # P/E floor 5
+
+
+def test_value_lynch_na_when_no_growth_is_derivable():
+    # 5 FYs of EPS but the first is negative -> no CAGR; no analyst estimate
+    # -> growth_source "none". Publishing floor-P/E x EPS here would be a
+    # fabricated number.
+    eps_hist = [-1.0, 1.0, 2.0, 3.0, 4.0]
+    recs = [_fy(2019 + i, eps=e, shares=100.0) for i, e in enumerate(eps_hist)]
+    res = value_lynch(_inputs(fy_records=recs, analyst_growth=None))
+    assert res.applicable is False
+    assert res.na_reason == "no usable earnings-growth history"
+    assert res.basis_fiscal_year == 2023
+    assert res.value_base is None
+
+
+def test_value_lynch_and_multiples_flag_split_adjustment():
+    eps_hist = [2.00, 2.20, 2.42, 2.662, 2.9282]
+    recs = [_fy(2019 + i, eps=e, shares=100.0, split_factor=4.0 if i < 2 else 1.0)
+            for i, e in enumerate(eps_hist)]
+    prices = {fy: 30.0 for fy in range(2019, 2024)}
+    lynch = value_lynch(_inputs(fy_records=recs, fy_end_prices=prices))
+    mult = value_multiples(_inputs(fy_records=recs, fy_end_prices=prices))
+    assert lynch.assumptions["split_adjusted"] is True
+    assert mult.assumptions["split_adjusted"] is True
+
+    plain = [_fy(2019 + i, eps=e, shares=100.0) for i, e in enumerate(eps_hist)]
+    assert value_lynch(
+        _inputs(fy_records=plain)).assumptions["split_adjusted"] is False
+    assert value_multiples(
+        _inputs(fy_records=plain, fy_end_prices=prices)
+    ).assumptions["split_adjusted"] is False
+
+
+def test_value_lynch_cagr_uses_fiscal_year_span():
+    eps_hist = [2.00, 2.20, 2.42, 2.662, 2.9282]
+    recs = [_fy(2019 + i, eps=e, shares=100.0) for i, e in enumerate(eps_hist)]
+    res = value_lynch(_inputs(fy_records=recs))
+    assert res.assumptions["cagr_years"] == 4
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.10)
 
 
 def test_value_lynch_na_sector_and_history():

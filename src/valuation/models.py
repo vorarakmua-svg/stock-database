@@ -24,6 +24,10 @@ from .inputs import FYRecord, ValuationInputs
 
 DCF_SECTORS = ("general", "utility", "energy")
 
+#: A payer whose most recent dividend is older than this (15 months — one
+#: missed annual payment plus a grace quarter) is treated as having stopped.
+DIVIDEND_STALE_DAYS = 456
+
 
 @dataclass
 class ValuationResult:
@@ -88,7 +92,8 @@ def value_dcf(inputs: ValuationInputs) -> ValuationResult:
         if not shares:
             return _na("dcf", "shares outstanding unavailable", basis_fy=basis_fy)
 
-    growth, gmeta = derive_growth(fcf_hist, inputs.analyst_growth)
+    growth, gmeta = derive_growth(fcf_hist, inputs.analyst_growth,
+                                  periods=[r.fiscal_year for r in recs])
     discount, dmeta = derive_discount(inputs.risk_free_rate, inputs.beta)
     g_bear, g_base, g_bull = growth_scenarios(growth)
     assumptions: Dict[str, Any] = {}
@@ -142,15 +147,23 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
     if len(annual) < 3:
         return _na("ddm", "insufficient dividend history (need >= 3 calendar years)")
 
-    anchor = date.fromisoformat(inputs.dividends[-1][0][:10])
+    # Anchor the TTM window to "now" (the latest data collection), NOT to the
+    # last dividend in the table — otherwise a company that suspended its
+    # dividend years ago still shows a full DDM fair value today.
+    anchor = inputs.as_of or date.today()
+    last_paid = date.fromisoformat(inputs.dividends[-1][0][:10])
+    if (anchor - last_paid).days > DIVIDEND_STALE_DAYS:
+        return _na("ddm", "dividends discontinued (no payment in the last 15 months)")
     cutoff = (anchor - timedelta(days=365)).isoformat()
-    ttm = sum(a for d, a in inputs.dividends if d[:10] > cutoff)
+    ttm = sum(a for d, a in inputs.dividends if cutoff < d[:10] <= anchor.isoformat())
     if ttm <= 0:
         return _na("ddm", "no dividends in trailing 12 months")
 
     # CAGR over complete calendar years only (the anchor year is likely partial).
-    complete = [total for year, total in annual if year < anchor.year]
-    growth, gmeta = derive_growth(complete, inputs.analyst_growth, cap=DDM_GROWTH_CAP)
+    complete_years = [(year, total) for year, total in annual if year < anchor.year]
+    complete = [total for _, total in complete_years]
+    growth, gmeta = derive_growth(complete, inputs.analyst_growth, cap=DDM_GROWTH_CAP,
+                                  periods=[year for year, _ in complete_years])
     discount, dmeta = derive_discount(inputs.risk_free_rate, inputs.beta)
     g_bear, g_base, g_bull = growth_scenarios(growth, cap=DDM_GROWTH_CAP)
     assumptions: Dict[str, Any] = {}
@@ -213,6 +226,11 @@ def _lynch_fair_pe(growth: float) -> float:
     return min(max(growth * 100.0, LYNCH_PE_FLOOR), LYNCH_PE_CAP)
 
 
+def _split_adjusted(recs: List[FYRecord]) -> bool:
+    """True iff any record used was restated onto the current share basis."""
+    return any(r.split_factor != 1.0 for r in recs)
+
+
 def value_lynch(inputs: ValuationInputs) -> ValuationResult:
     """Peter Lynch fair value: growth-rate-as-fair-P/E times latest EPS."""
     if inputs.sector_class not in DCF_SECTORS:
@@ -225,7 +243,13 @@ def value_lynch(inputs: ValuationInputs) -> ValuationResult:
     assert eps is not None
     if eps <= 0:
         return _na("lynch", "EPS is not positive", basis_fy=latest.fiscal_year)
-    growth, gmeta = derive_growth([r.eps() for r in recs], inputs.analyst_growth)
+    growth, gmeta = derive_growth([r.eps() for r in recs], inputs.analyst_growth,
+                                  periods=[r.fiscal_year for r in recs])
+    if gmeta["growth_source"] == "none":
+        # Lynch IS the growth rate: with no CAGR and no analyst estimate the
+        # P/E floor would publish 5 x EPS — a number with no information in it.
+        return _na("lynch", "no usable earnings-growth history",
+                   basis_fy=latest.fiscal_year)
     g_bear, g_base, g_bull = growth_scenarios(growth)
     assumptions: Dict[str, Any] = {}
     assumptions.update(gmeta)
@@ -234,6 +258,7 @@ def value_lynch(inputs: ValuationInputs) -> ValuationResult:
         "fair_pe_base": _lynch_fair_pe(g_base),
         "fair_pe_floor": LYNCH_PE_FLOOR,
         "fair_pe_cap": LYNCH_PE_CAP,
+        "split_adjusted": _split_adjusted(recs),
     })
     return ValuationResult(
         model="lynch",
@@ -280,6 +305,7 @@ def value_multiples(inputs: ValuationInputs) -> ValuationResult:
         "band_low": band_low, "band_median": band_mid, "band_high": band_high,
         "n_years": len(multiples),
         "latest_basis": latest_basis,
+        "split_adjusted": _split_adjusted(recs),
     }
     return ValuationResult(
         model="multiples",

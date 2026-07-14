@@ -9,14 +9,27 @@ period-end closing price — so the models themselves never touch the database.
 
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Dict, List, Optional, Tuple
 
 _MAX_FY_HISTORY = 10
 
+#: A year-over-year rise in the share count of at least this factor is read as a
+#: stock split, not as ordinary issuance.
+SPLIT_JUMP_THRESHOLD = 1.5
+
 
 @dataclass
 class FYRecord:
-    """One fiscal year of fundamentals relevant to valuation."""
+    """One fiscal year of fundamentals relevant to valuation.
+
+    Per-share figures (``eps_diluted``, ``ffo_per_share``) and ``shares`` are
+    normalized onto the CURRENT (latest-year) share basis by ``load_inputs`` —
+    the same convention Yahoo's adjusted price bars use — so that multi-year
+    per-share series and price/EPS multiples are comparable across a split.
+    ``split_factor`` records the factor that was applied to this year (1.0 =
+    as reported).
+    """
 
     fiscal_year: int
     period_end: Optional[str]
@@ -26,6 +39,7 @@ class FYRecord:
     shares: Optional[float]
     fcf: Optional[float]
     ffo_per_share: Optional[float]
+    split_factor: float = 1.0
 
     def eps(self) -> Optional[float]:
         """Diluted EPS as reported, else net income / shares."""
@@ -55,6 +69,41 @@ class ValuationInputs:
     analyst_growth: Optional[float] = None
     dividends: List[Tuple[str, float]] = field(default_factory=list)
     fy_end_prices: Dict[int, float] = field(default_factory=dict)
+    as_of: Optional[date] = None
+
+
+def _normalize_splits(records: List[FYRecord],
+                      shares_detect: List[Optional[float]]) -> None:
+    """Restate every year's per-share figures onto the current share basis.
+
+    ``financials_annual`` stores per-share values AS REPORTED, and SEC filings
+    restate only ~3 prior years after a split, so a long per-share series has a
+    hard discontinuity at each split. ``split_events`` cannot be relied on (it
+    is empty for most tickers), so splits are detected from the share-count
+    series itself: walking newest -> oldest, a >= 1.5x rise in the share count
+    at a seam means every year at or before that seam is on a pre-split basis.
+
+    Mutates *records* in place. Per-share values are DIVIDED by the cumulative
+    factor and share counts MULTIPLIED by it; split-invariant absolutes
+    (net_income, total_equity) are untouched — which keeps ``bvps()`` correct.
+    """
+    factor = 1.0
+    for i in range(len(records) - 2, -1, -1):
+        older, newer = shares_detect[i], shares_detect[i + 1]
+        if older and newer and older > 0 and newer > 0:
+            jump = newer / older
+            if jump >= SPLIT_JUMP_THRESHOLD:
+                factor *= jump
+        rec = records[i]
+        rec.split_factor = factor
+        if factor == 1.0:
+            continue
+        if rec.eps_diluted is not None:
+            rec.eps_diluted /= factor
+        if rec.ffo_per_share is not None:
+            rec.ffo_per_share /= factor
+        if rec.shares is not None:
+            rec.shares *= factor
 
 
 def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
@@ -80,6 +129,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         (ticker,),
     ).fetchall()
     records: List[FYRecord] = []
+    shares_detect: List[Optional[float]] = []
     for r in fy_rows[-_MAX_FY_HISTORY:]:
         fcf = r["levered_fcf"] if r["levered_fcf"] is not None else r["free_cash_flow"]
         shares = (
@@ -87,6 +137,15 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
             if r["weighted_avg_shares_diluted"] is not None
             else r["shares_outstanding"]
         )
+        # Split detection needs the share count that MATCHES the reported EPS,
+        # so net_income / eps_diluted is preferred over shares_outstanding
+        # (weighted_avg_shares_diluted is NULL for e.g. GOOGL).
+        detect = r["weighted_avg_shares_diluted"]
+        if detect is None and r["net_income"] is not None and r["eps_diluted"]:
+            detect = r["net_income"] / r["eps_diluted"]
+        if detect is None:
+            detect = r["shares_outstanding"]
+        shares_detect.append(detect)
         records.append(
             FYRecord(
                 fiscal_year=int(r["fiscal_year"]),
@@ -99,12 +158,20 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
                 ffo_per_share=r["ffo_per_share"],
             )
         )
+    _normalize_splits(records, shares_detect)
 
     snap = conn.execute(
-        "SELECT shares_outstanding, beta, risk_free_rate FROM market_snapshots "
+        "SELECT shares_outstanding, beta, risk_free_rate, collected_at "
+        "FROM market_snapshots "
         "WHERE ticker = ? ORDER BY collected_at DESC LIMIT 1",
         (ticker,),
     ).fetchone()
+    as_of = date.today()
+    if snap is not None and snap["collected_at"]:
+        try:
+            as_of = date.fromisoformat(str(snap["collected_at"])[:10])
+        except ValueError:  # unparseable timestamp -> today
+            pass
     analyst = conn.execute(
         "SELECT earnings_growth FROM analyst_snapshots "
         "WHERE ticker = ? ORDER BY collected_at DESC LIMIT 1",
@@ -141,4 +208,5 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         analyst_growth=analyst["earnings_growth"] if analyst else None,
         dividends=dividends,
         fy_end_prices=fy_end_prices,
+        as_of=as_of,
     )
