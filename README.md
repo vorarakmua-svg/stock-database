@@ -765,25 +765,28 @@ Key endpoints:
 
 ### Data collection
 
-Data collection from the web UI is gated by the `allow_collection` setting (off by default). When disabled, the *Collect* menu item is hidden and collection requests are rejected.
+Data collection from the web UI is enabled by default. The workstation provides two ways to update data:
 
-To enable collection, start the server with the `STOCK_WEB_ALLOW_COLLECTION` environment variable:
+1. **UPDATE DATA button** — click on any stock page to fetch and recompute valuations for a single company.
+2. **Unknown-ticker fetch** — type an unknown ticker into the command bar (`` ` `` or `/`) to open a fetch page and collect that company.
+
+Valuations are recomputed automatically after each fetch. To disable data collection (e.g. in read-only deployments), set the `STOCK_WEB_ALLOW_COLLECTION` environment variable to a falsy value:
 
 ```bash
-STOCK_WEB_ALLOW_COLLECTION=1 stock-web
+STOCK_WEB_ALLOW_COLLECTION=0 stock-web
 ```
 
-Other supported overrides:
+Supported settings:
 
 | Variable | Default | Description |
 |---|---|---|
-| `STOCK_WEB_ALLOW_COLLECTION` | `""` (disabled) | Set to `1`, `true`, `yes`, or `on` to enable full collection |
-| `STOCK_WEB_ALLOW_QUOTE_REFRESH` | `"1"` (**enabled**) | Set to `0`/`false`/`no`/`off` to disable the on-demand single-ticker quote refresh (unlike collection, this is opt-out — refresh is low-risk/low-cost). Gates `POST /api/stocks/{ticker}/refresh-quote`. |
+| `STOCK_WEB_ALLOW_COLLECTION` | `True` | Set to `0`, `false`, `no`, or `off` to disable full collection (hides UPDATE DATA button and unknown-ticker fetch). |
+| `STOCK_WEB_ALLOW_QUOTE_REFRESH` | `True` (**enabled**) | Set to `0`/`false`/`no`/`off` to disable the on-demand single-ticker quote refresh (unlike collection, this is opt-out — refresh is low-risk/low-cost). Gates `POST /api/stocks/{ticker}/refresh-quote`. |
 | `STOCK_WEB_HOST` | `127.0.0.1` | Bind host |
 | `STOCK_WEB_PORT` | `8000` | Bind port |
 | `STOCK_WEB_DB_PATH` | default DB path | Path to the SQLite database |
 
-To refresh data without the web UI, use the `stock-data` CLI as described above.
+To refresh data without the web UI or to backfill historical valuations, use the `stock-data` CLI as described above.
 
 Because the workstation's ERN/HP/DVD/HDS/INS tabs and the `^GSPC` chart overlay
 need price history, analyst estimates, earnings history, dividends/splits, and

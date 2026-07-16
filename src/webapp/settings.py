@@ -19,7 +19,7 @@ class WebSettings:
     db_path: Path = field(default_factory=_default_db_path)
     host: str = "127.0.0.1"
     port: int = 8000
-    allow_collection: bool = False
+    allow_collection: bool = True
     allow_quote_refresh: bool = True
 
     @classmethod
@@ -30,9 +30,10 @@ class WebSettings:
           STOCK_WEB_DB_PATH             — path to the SQLite database
           STOCK_WEB_HOST                — bind host (default ``"127.0.0.1"``)
           STOCK_WEB_PORT                — bind port as integer (default ``8000``)
-          STOCK_WEB_ALLOW_COLLECTION    — truthy values ``1``, ``true``, ``yes``,
-                                          ``on`` (case-insensitive) enable full
-                                          collection; default ``False`` when unset.
+          STOCK_WEB_ALLOW_COLLECTION    — falsy values ``0``, ``false``, ``no``,
+                                          ``off`` (case-insensitive) disable full
+                                          collection; default ``True`` when unset
+                                          (enabled unless set to a falsy value).
           STOCK_WEB_ALLOW_QUOTE_REFRESH — same truthy set enables the lightweight
                                           on-demand quote refresh; unlike
                                           STOCK_WEB_ALLOW_COLLECTION, this
@@ -48,10 +49,11 @@ class WebSettings:
         port_env = os.environ.get("STOCK_WEB_PORT")
         port: int = int(port_env) if port_env else 8000
 
-        truthy = {"1", "true", "yes", "on"}
+        falsy = {"0", "false", "no", "off"}
         allow_raw = os.environ.get("STOCK_WEB_ALLOW_COLLECTION", "").strip().lower()
-        allow_collection: bool = allow_raw in truthy
+        allow_collection: bool = allow_raw not in falsy if allow_raw else True
 
+        truthy = {"1", "true", "yes", "on"}
         quote_refresh_env = os.environ.get("STOCK_WEB_ALLOW_QUOTE_REFRESH")
         allow_quote_refresh: bool = (
             True if quote_refresh_env is None else quote_refresh_env.strip().lower() in truthy

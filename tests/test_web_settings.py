@@ -14,11 +14,11 @@ from src.webapp.settings import WebSettings
 # ---------------------------------------------------------------------------
 
 class TestWebSettingsFromEnv:
-    def test_default_allow_collection_is_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Unset STOCK_WEB_ALLOW_COLLECTION → allow_collection is False."""
+    def test_default_allow_collection_is_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Unset STOCK_WEB_ALLOW_COLLECTION → allow_collection is True."""
         monkeypatch.delenv("STOCK_WEB_ALLOW_COLLECTION", raising=False)
         settings = WebSettings.from_env()
-        assert settings.allow_collection is False
+        assert settings.allow_collection is True
 
     def test_allow_collection_truthy_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """STOCK_WEB_ALLOW_COLLECTION=1 → allow_collection is True."""
@@ -49,6 +49,20 @@ class TestWebSettingsFromEnv:
         monkeypatch.setenv("STOCK_WEB_ALLOW_COLLECTION", "0")
         settings = WebSettings.from_env()
         assert settings.allow_collection is False
+
+    def test_allow_collection_defaults_on(self) -> None:
+        """WebSettings() with no args → allow_collection is True."""
+        assert WebSettings().allow_collection is True
+
+    def test_allow_collection_env_disable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """STOCK_WEB_ALLOW_COLLECTION=0 via from_env → False."""
+        monkeypatch.setenv("STOCK_WEB_ALLOW_COLLECTION", "0")
+        assert WebSettings.from_env().allow_collection is False
+
+    def test_allow_collection_env_unset_means_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Unset STOCK_WEB_ALLOW_COLLECTION → allow_collection is True."""
+        monkeypatch.delenv("STOCK_WEB_ALLOW_COLLECTION", raising=False)
+        assert WebSettings.from_env().allow_collection is True
 
     def test_port_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """STOCK_WEB_PORT=9001 → port == 9001."""

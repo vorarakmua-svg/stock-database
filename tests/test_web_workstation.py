@@ -780,6 +780,18 @@ def collection_enabled_client(web_db):
     return TestClient(create_app(settings=settings))
 
 
+@pytest.fixture
+def collection_disabled_client(web_db):
+    """TestClient for the same web_db, but with allow_collection=False."""
+    from fastapi.testclient import TestClient
+
+    from src.webapp import create_app
+    from src.webapp.settings import WebSettings
+
+    settings = WebSettings(db_path=web_db, allow_collection=False)
+    return TestClient(create_app(settings=settings))
+
+
 def test_stock_page_shows_update_button_when_collection_enabled(collection_enabled_client):
     resp = collection_enabled_client.get("/stocks/AAA")
     assert resp.status_code == 200
@@ -788,10 +800,9 @@ def test_stock_page_shows_update_button_when_collection_enabled(collection_enabl
     assert 'hx-post="/ui/stocks/AAA/update"' in body
 
 
-def test_stock_page_hides_update_button_when_disabled(client):
-    # The `client` fixture uses default WebSettings, where allow_collection
-    # defaults to False.
-    resp = client.get("/stocks/AAA")
+def test_stock_page_hides_update_button_when_disabled(collection_disabled_client):
+    # When allow_collection is False, the UPDATE DATA button should be hidden.
+    resp = collection_disabled_client.get("/stocks/AAA")
     assert resp.status_code == 200
     assert "UPDATE DATA" not in resp.text
 
@@ -818,8 +829,8 @@ def test_unknown_plausible_ticker_gets_fetch_page(collection_enabled_client):
     assert 'hx-post="/ui/stocks/ZZZZ/update"' in body
 
 
-def test_unknown_ticker_plain_404_when_collection_disabled(client):
-    resp = client.get("/stocks/ZZZZ")
+def test_unknown_ticker_plain_404_when_collection_disabled(collection_disabled_client):
+    resp = collection_disabled_client.get("/stocks/ZZZZ")
     assert resp.status_code == 404
     assert "Fetch" not in resp.text
 
