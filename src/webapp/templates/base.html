@@ -11,7 +11,7 @@
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
 </head>
-<body>
+<body data-allow-collect="{{ '1' if request.app.state.settings.allow_collection else '0' }}">
   <nav class="nav">
     <div class="nav-inner">
       <a class="nav-brand" href="/">Stock DB</a>

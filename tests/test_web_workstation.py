@@ -801,3 +801,36 @@ def test_val_empty_state_points_at_update_button(client):
     assert resp.status_code == 200
     assert "click UPDATE DATA above" in resp.text
     assert "backfill" not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Unknown-ticker fetch page + palette flag (Task 3)
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_plausible_ticker_gets_fetch_page(collection_enabled_client):
+    resp = collection_enabled_client.get("/stocks/ZZZZ")
+    assert resp.status_code == 404
+    body = resp.text
+    # The ticker renders inside a <strong> tag, so match the literal rendered
+    # fragment rather than a "ZZZZ is not in the database" contiguous string.
+    assert "<strong>ZZZZ</strong> is not in the database" in body
+    assert 'hx-post="/ui/stocks/ZZZZ/update"' in body
+
+
+def test_unknown_ticker_plain_404_when_collection_disabled(client):
+    resp = client.get("/stocks/ZZZZ")
+    assert resp.status_code == 404
+    assert "Fetch" not in resp.text
+
+
+def test_implausible_path_plain_404(collection_enabled_client):
+    resp = collection_enabled_client.get("/stocks/%3Bdrop")
+    assert resp.status_code == 404
+    assert "Fetch" not in resp.text
+
+
+def test_base_page_carries_allow_collect_flag(collection_enabled_client):
+    resp = collection_enabled_client.get("/")
+    assert resp.status_code == 200
+    assert 'data-allow-collect="1"' in resp.text

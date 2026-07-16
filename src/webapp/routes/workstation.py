@@ -71,14 +71,29 @@ def stock_page(
     request: Request,
     tab: str = "des",
     r: Reader = Depends(get_reader),
+    settings: WebSettings = Depends(get_settings),
 ) -> Any:
     """The workstation shell: header strip + tab bar. 404 if *ticker* is unknown.
 
     ``?tab=`` picks which tab fires on page load (``hx-trigger="load"``); an
     unrecognized value falls back to ``des`` rather than erroring.
+
+    An unknown-but-plausible ticker (matches ``_TICKER_RE``) gets offered a
+    fetch page instead of a dead-end 404, but only when collection is
+    enabled — otherwise there is no working ``UPDATE DATA`` button behind it.
     """
     company = r.get_company(ticker)
     if company is None:
+        symbol = ticker.strip().upper()
+        if settings.allow_collection and _TICKER_RE.match(symbol):
+            # Not in the database, but fetchable — offer to fetch it instead
+            # of dead-ending. Still a 404: the resource genuinely isn't here.
+            return templates.TemplateResponse(
+                request,
+                "fetch_ticker.html",
+                {"request": request, "ticker": symbol},
+                status_code=404,
+            )
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
     active_tab = tab if tab in _TAB_KEYS else "des"
     return templates.TemplateResponse(
