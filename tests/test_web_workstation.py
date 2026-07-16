@@ -761,3 +761,43 @@ def test_des_fragment_not_valued_without_rows(client):
     resp = client.get("/ui/stocks/AAA/des")
     assert resp.status_code == 200
     assert "Not valued" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# UPDATE DATA button (Task 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def collection_enabled_client(web_db):
+    """TestClient for the same web_db, but with allow_collection=True."""
+    from fastapi.testclient import TestClient
+
+    from src.webapp import create_app
+    from src.webapp.settings import WebSettings
+
+    settings = WebSettings(db_path=web_db, allow_collection=True)
+    return TestClient(create_app(settings=settings))
+
+
+def test_stock_page_shows_update_button_when_collection_enabled(collection_enabled_client):
+    resp = collection_enabled_client.get("/stocks/AAA")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "UPDATE DATA" in body
+    assert 'hx-post="/ui/stocks/AAA/update"' in body
+
+
+def test_stock_page_hides_update_button_when_disabled(client):
+    # The `client` fixture uses default WebSettings, where allow_collection
+    # defaults to False.
+    resp = client.get("/stocks/AAA")
+    assert resp.status_code == 200
+    assert "UPDATE DATA" not in resp.text
+
+
+def test_val_empty_state_points_at_update_button(client):
+    resp = client.get("/ui/stocks/AAA/val")
+    assert resp.status_code == 200
+    assert "click UPDATE DATA above" in resp.text
+    assert "backfill" not in resp.text

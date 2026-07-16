@@ -275,3 +275,47 @@ def test_job_survives_valuation_failure(monkeypatch, web_db: Path) -> None:
     job_status = _wait_until_done(client, job_id)
     assert job_status["state"] == "done"
     assert job_status["summary"]["valuations_computed"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: POST /ui/stocks/{ticker}/update (Task 2 — UPDATE DATA button)
+# ---------------------------------------------------------------------------
+
+def test_update_route_submits_single_ticker_job(web_db: Path) -> None:
+    """POST /ui/stocks/AAA/update -> 200, job-status fragment, job for ["AAA"]."""
+    client = _make_client(web_db, allow_collection=True)
+    r = client.post("/ui/stocks/AAA/update")
+    assert r.status_code == 200
+    assert "job-status-card" in r.text
+
+    jobs = client.get("/api/collection/jobs").json()
+    assert any(j["tickers"] == ["AAA"] for j in jobs)
+
+
+def test_update_route_unknown_ticker_is_allowed(web_db: Path) -> None:
+    """POST /ui/stocks/ZZZZ/update -> 200, job submitted for ["ZZZZ"] even
+    though ZZZZ does not exist in the database — this is how brand-new
+    tickers get fetched (Task 3 reuses this exact route)."""
+    client = _make_client(web_db, allow_collection=True)
+    r = client.post("/ui/stocks/ZZZZ/update")
+    assert r.status_code == 200
+    assert "job-status-card" in r.text
+
+    jobs = client.get("/api/collection/jobs").json()
+    assert any(j["tickers"] == ["ZZZZ"] for j in jobs)
+
+
+def test_update_route_implausible_ticker_404(web_db: Path) -> None:
+    """A symbol that cannot plausibly be a ticker 404s rather than being
+    sent to SEC/Yahoo."""
+    client = _make_client(web_db, allow_collection=True)
+    r = client.post("/ui/stocks/%3Bdrop/update")
+    assert r.status_code == 404
+
+
+def test_update_route_disabled_409(web_db: Path) -> None:
+    """allow_collection=False -> 409, 'Collection is disabled.'"""
+    client = _make_client(web_db, allow_collection=False)
+    r = client.post("/ui/stocks/AAA/update")
+    assert r.status_code == 409
+    assert "Collection is disabled." in r.text

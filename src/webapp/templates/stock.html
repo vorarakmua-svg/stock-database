@@ -7,6 +7,12 @@
     <h1>{{ company.company_name or company.ticker }}</h1>
     <span class="ticker-badge">{{ company.ticker }}</span>
     <button id="watch-star" class="star-btn" type="button" data-ticker="{{ ticker }}" aria-label="Toggle watchlist">☆</button>
+    {% if request.app.state.settings.allow_collection %}
+    <button class="btn btn-sm" type="button"
+      hx-post="/ui/stocks/{{ ticker }}/update"
+      hx-target="#update-status" hx-swap="innerHTML"
+      hx-disabled-elt="this">UPDATE DATA</button>
+    {% endif %}
   </div>
   <div class="company-meta">
     {% if company.sector_class %}<span class="meta-item">{{ company.sector_class }}</span>{% endif %}
@@ -14,6 +20,7 @@
     {% if company.industry %}<span class="meta-sep">·</span><span class="meta-item">{{ company.industry }}</span>{% endif %}
   </div>
 </div>
+<div id="update-status" class="mt-2"></div>
 
 <div class="tab-bar" role="tablist">
   {% for label, code, key in tabs %}
@@ -34,4 +41,16 @@
   <div class="skeleton skeleton--block"></div>
 </div>
 <div id="panel" class="panel"></div>
+
+<script>
+  document.body.addEventListener('htmx:afterSettle', function (evt) {
+    var status = document.getElementById('update-status');
+    if (!status || !status.contains(evt.target)) return;
+    if (status.querySelector('.job-state--done')) {
+      var active = document.querySelector('.tab-btn.tab-active');
+      if (active) active.click();
+      setTimeout(function () { status.innerHTML = ''; }, 2000);
+    }
+  });
+</script>
 {% endblock %}
