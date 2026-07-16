@@ -7,6 +7,7 @@ JobStatus. Callers always receive snapshots, never live references.
 """
 from __future__ import annotations
 
+import logging
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -19,6 +20,8 @@ from ..config import AppConfig, StorageConfig
 from ..exporters.sqlite_store import SQLiteStore
 from ..fetchers.stock_data_fetcher import StockDataFetcher
 from ..fetchers.yahoo_handler import YahooHandler
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Default factories (replaced in tests)
@@ -242,6 +245,21 @@ class CollectionJobManager:
                 # Export once after all tickers fetched
                 fetcher.export(results, formats=["sqlite"])
 
+            # Valuations: recompute for the fetched tickers so a web-triggered
+            # collection behaves exactly like a terminal run. Lazy import so
+            # tests can monkeypatch src.valuation.engine.compute_and_store, and
+            # never-fail — the collected data has already landed.
+            valuations_computed = 0
+            try:
+                from ..valuation import engine as valuation_engine
+                valuations_computed = valuation_engine.compute_and_store(
+                    self.db_path,
+                    tickers=[r.ticker for r in results],
+                    logger=logger,
+                )
+            except Exception as exc:  # noqa: BLE001 — job must still succeed
+                logger.warning(f"Valuation computation failed: {exc}")
+
             with self._lock:
                 done_job = self._jobs[job_id]
                 done_job.state = "done"
@@ -252,6 +270,7 @@ class CollectionJobManager:
                     "total": len(results),
                     "successful": sum(1 for r in results if not r.errors),
                     "with_errors": sum(1 for r in results if r.errors),
+                    "valuations_computed": valuations_computed,
                 }
 
         except Exception as exc:  # noqa: BLE001 — worker must not propagate

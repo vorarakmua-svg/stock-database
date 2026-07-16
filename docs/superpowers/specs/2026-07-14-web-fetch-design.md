@@ -50,7 +50,7 @@ succeeds, run the valuation engine for the job's tickers:
 - lazy module import (`from ..valuation import engine as valuation_engine`) exactly
   like the `fetch_and_export` hook, so tests can monkeypatch and no import cycle
   forms at module load;
-- `compute_and_store(db_path, tickers=[...successfully fetched tickers...])`;
+- `compute_and_store(db_path, tickers=[...the job's fetched tickers...])`;
 - wrapped so a valuation failure NEVER fails the job (log + continue) — the job's
   collected data must still land.
 

@@ -230,3 +230,48 @@ def test_collect_page_enabled(web_db: Path) -> None:
     assert r.status_code == 200
     # Should contain a form or input for tickers
     assert b"ticker" in r.content.lower() or b"collect" in r.content.lower()
+
+
+# ---------------------------------------------------------------------------
+# Tests: valuation hook (web fetch == terminal fetch)
+# ---------------------------------------------------------------------------
+
+def test_job_run_computes_valuations(monkeypatch, web_db: Path) -> None:
+    """A web-triggered fetch must recompute valuations, exactly like a
+    terminal run — the job runner previously bypassed the hook."""
+    calls: Dict[str, Any] = {}
+
+    def fake_compute_and_store(db_path, tickers=None, logger=None):
+        calls["db_path"] = db_path
+        calls["tickers"] = tickers
+        return len(tickers or [])
+
+    monkeypatch.setattr(
+        "src.valuation.engine.compute_and_store", fake_compute_and_store
+    )
+    client = _make_client(web_db)
+    r = client.post("/api/collection/jobs", json={"tickers": ["AAA", "BBB"]})
+    assert r.status_code == 202
+    job_id = r.json()["job_id"]
+    job_status = _wait_until_done(client, job_id)
+    assert job_status["state"] == "done"
+    assert calls["tickers"] == ["AAA", "BBB"]
+    assert str(calls["db_path"]).endswith(".db")
+    # summary reports it
+    assert job_status["summary"]["valuations_computed"] == 2
+
+
+def test_job_survives_valuation_failure(monkeypatch, web_db: Path) -> None:
+    """A crashing valuation step must not fail the job — the collected data
+    already landed."""
+    def boom(db_path, tickers=None, logger=None):
+        raise RuntimeError("valuation exploded")
+
+    monkeypatch.setattr("src.valuation.engine.compute_and_store", boom)
+    client = _make_client(web_db)
+    r = client.post("/api/collection/jobs", json={"tickers": ["AAA"]})
+    assert r.status_code == 202
+    job_id = r.json()["job_id"]
+    job_status = _wait_until_done(client, job_id)
+    assert job_status["state"] == "done"
+    assert job_status["summary"]["valuations_computed"] == 0
