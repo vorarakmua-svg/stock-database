@@ -81,9 +81,12 @@
       Price {{ price_fmt }}</span>
   </div>
   <p class="text-muted mt-2">Academic DCF {{ oe.dcf_base_fmt }} ·
-    Owner earnings {{ oe.base_fmt }} · Price {{ price_fmt }} — the gap between the two
-    is the method, not the business: this model credits back growth capex and discounts
-    at the Treasury rate instead of a beta-derived cost of equity.</p>
+    Owner earnings {{ oe.base_fmt }} · Price {{ price_fmt }} — the two differ in method,
+    not in the business. This lens measures owner earnings (crediting back growth capex)
+    and discounts at the Treasury rate; the academic DCF uses free cash flow and a
+    beta-derived cost of equity. Those choices usually raise the value, but where owner
+    earnings run below free cash flow they lower it — the gap is the method, whichever
+    way it points.</p>
   {% set vol = oe.assumptions.get('volatility') %}
   {% if vol %}
   <p class="text-muted">Owner earnings were positive in {{ vol.positive_years }} of
