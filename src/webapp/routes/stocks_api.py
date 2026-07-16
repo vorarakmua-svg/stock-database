@@ -34,7 +34,8 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 
-from ...valuation.engine import VERDICT_LABELS, upside_pct, verdict
+from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
+from ...valuation.models import ValuationResult
 from ..dependencies import get_job_manager, get_reader, get_settings
 from ..indicators import indicator_bundle, normalize_pct
 from ..jobs import CollectionJobManager
@@ -359,6 +360,19 @@ def valuation(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
         summary.get("median_bull") if summary else None,
         price,
     )
+    oe_row = next((r for r in rows if r["model"] == "owner_earnings"), None)
+    oe_result = None
+    if oe_row is not None:
+        oe_result = ValuationResult(
+            model="owner_earnings",
+            applicable=bool(oe_row["applicable"]),
+            value_base=oe_row.get("value_base"),
+            assumptions=next(
+                (m["assumptions"] for m in models if m["model"] == "owner_earnings"),
+                {},
+            ),
+        )
+    oe_v = owner_earnings_verdict(oe_result, price)
     return {
         "ticker": ticker,
         "price": price,
@@ -369,6 +383,8 @@ def valuation(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
         ),
         "summary": summary,
         "models": models,
+        "owner_earnings_verdict": oe_v,
+        "owner_earnings_verdict_label": VERDICT_LABELS[oe_v],
     }
 
 

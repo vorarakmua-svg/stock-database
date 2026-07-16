@@ -27,8 +27,10 @@ A professional-grade Python data pipeline for collecting US stock fundamentals f
   data rather than recomputed live. Models that don't fit a company's sector
   (e.g. DCF/Lynch for banks and REITs) are honestly reported as not-applicable
   with a human-readable reason instead of a misleading number — no fake output
-  is ever better than an admitted gap. See [Valuation layer](#valuation-layer)
-  below.
+  is ever better than an admitted gap. A sixth model, **owner earnings
+  ("Buffett mode")**, values companies the way Buffett describes rather than by
+  textbook DCF, and is deliberately kept out of this five-model median instead
+  of folded into it. See [Valuation layer](#valuation-layer) below.
 
 - **Database-Like Behavior**
   - Merge mode preserves historical data across runs
@@ -309,6 +311,43 @@ for banks and REITs, DDM for non-payers) reports `applicable=false` with a plain
 exact assumptions used (growth, discount rate, basis figures) in the `valuations` table,
 with cross-model bear/base/bull medians in `valuation_summary` — so results are
 reproducible and auditable, not just a live calculation.
+
+A sixth model, **owner earnings ("Buffett mode")** (`owner_earnings`), follows
+Buffett's own stated method rather than textbook DCF, for the same sectors as the
+DCF (general, utility, energy):
+
+| Model | Applies to | Basis |
+|---|---|---|
+| **Owner earnings (Buffett mode)** | general, utility, energy | Median 3-year owner earnings (`net income + D&A − maintenance capex`, maintenance capex = `min(D&A, \|capex\|)`); discounted at `max(10-yr Treasury, 7%)` — no beta |
+
+Two deliberate divergences from the DCF above it:
+- **Growth capex is credited back.** Only maintenance capex (capped at D&A) is
+  subtracted, so investing to grow isn't penalized as if it were merely standing
+  still. Stock-based comp is still subtracted — Buffett treats it as a real cost.
+- **No beta.** The discount rate is the 10-year Treasury yield floored at 7%, so
+  collapsing yields can't manufacture an absurdly cheap valuation. The margin of
+  safety instead lives in the price (`buy_below = intrinsic value x 0.70`);
+  only prices below that threshold are called "cheap".
+
+Because a Treasury-discounted value isn't comparable to a CAPM-discounted one,
+**`owner_earnings` is excluded from the cross-model median** that drives the
+headline verdict, upside %, and screener ranking — it carries its own verdict
+instead. This matters on the real data: the median company's CAPM DCF prices it
+at 0.68x price vs 1.98x under the Treasury discount — the same cash flows, a
+170% swing driven purely by method. Concretely: MSFT's academic DCF is $245.66
+vs owner earnings $559.92 (2.28x); NVDA's is $41.86 vs $142.00 (3.39x) — in both
+cases the gap is the growth capex being credited back rather than subtracted.
+Verified live: adding the model changed zero of the 50 existing summary rows.
+
+It also refuses histories that aren't consistently positive (owner earnings
+positive in at least 8 of the last 10 fiscal years) or shorter than 10 years, and
+it does not claim to filter cyclicals — it records the volatility evidence (years
+positive, worst single-year fall) and leaves the circle-of-competence judgment to
+the reader. One honest limitation: GOOGL is not applicable under this model
+because Alphabet's older SEC filings don't tag a cash-flow D&A concept, leaving
+under 10 years of history — a source-data gap, not a bug, and a little ironic
+since Alphabet is exactly the kind of heavy-growth-capex company this model
+exists to value properly.
 
 Valuations are recomputed automatically after each collection run and can be backfilled
 on demand with `python -m src.valuation.backfill`; see the

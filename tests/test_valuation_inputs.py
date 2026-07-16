@@ -21,9 +21,11 @@ def val_db(tmp_path):
     for i, fy in enumerate(range(2019, 2024)):
         conn.execute(
             "INSERT INTO financials_annual (ticker, fiscal_year, period_end, "
-            "net_income, total_equity, eps_diluted, weighted_avg_shares_diluted) "
-            "VALUES ('AAA', ?, ?, ?, ?, ?, ?)",
-            (fy, f"{fy}-12-31", 100.0 + 10 * i, 500.0, 1.0 + 0.1 * i, 100.0),
+            "net_income, total_equity, eps_diluted, weighted_avg_shares_diluted, "
+            "depreciation_amortization, capex) "
+            "VALUES ('AAA', ?, ?, ?, ?, ?, ?, ?, ?)",
+            (fy, f"{fy}-12-31", 100.0 + 10 * i, 500.0, 1.0 + 0.1 * i, 100.0,
+             40.0, -60.0),
         )
         conn.execute(
             "INSERT INTO metrics_annual (ticker, fiscal_year, free_cash_flow, "
@@ -325,3 +327,32 @@ def test_fyrecord_eps_and_bvps_fallbacks():
                     fcf=None, ffo_per_share=None)
     assert rec2.eps() == 1.5
     assert rec2.bvps() is None
+
+
+def test_load_inputs_carries_da_and_capex(val_db):
+    conn = _connect(val_db)
+    inputs = load_inputs(conn, "AAA")
+    conn.close()
+    rec = inputs.fy_records[-1]
+    assert rec.depreciation_amortization == 40.0
+    assert rec.capex == -60.0  # as filed: capex is negative in the cash-flow statement
+
+
+def test_split_normalization_leaves_da_and_capex_alone():
+    """D&A and capex are absolute dollars, not per-share — a split does not
+    restate them, so the normalizer must not scale them."""
+    from src.valuation.inputs import FYRecord, _normalize_splits
+    recs = [
+        FYRecord(fiscal_year=2020, period_end=None, net_income=100.0,
+                 total_equity=500.0, eps_diluted=8.0, shares=100.0, fcf=None,
+                 ffo_per_share=None, depreciation_amortization=40.0, capex=-60.0),
+        FYRecord(fiscal_year=2021, period_end=None, net_income=100.0,
+                 total_equity=500.0, eps_diluted=2.0, shares=400.0, fcf=None,
+                 ffo_per_share=None, depreciation_amortization=44.0, capex=-66.0),
+    ]
+    survivors, truncated = _normalize_splits(recs, [100.0, 400.0])
+    assert truncated is False
+    assert survivors[0].split_factor == 4.0          # 4:1 split detected
+    assert survivors[0].eps_diluted == 2.0           # per-share restated
+    assert survivors[0].depreciation_amortization == 40.0   # absolute, untouched
+    assert survivors[0].capex == -60.0                      # absolute, untouched

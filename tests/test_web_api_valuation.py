@@ -72,3 +72,33 @@ def test_valuation_endpoint_no_rows_yet(client):
 def test_valuation_endpoint_unknown_ticker_404(client):
     resp = client.get("/api/stocks/ZZZ/valuation")
     assert resp.status_code == 404
+
+
+def test_valuation_endpoint_returns_owner_earnings_verdict(client, web_db):
+    import json as _json
+    import sqlite3 as _sqlite3
+    _seed_valuations(web_db)
+    conn = _sqlite3.connect(str(web_db))
+    conn.execute(
+        "INSERT OR REPLACE INTO valuations VALUES ('AAA', 'owner_earnings', 1, NULL, "
+        "200.0, 250.0, 300.0, ?, 2025, '2024-01-05T00:00:00')",
+        (_json.dumps({"buy_below": 175.0, "discount_base": 0.07,
+                      "beta_used": False}),),
+    )
+    conn.commit()
+    conn.close()
+    resp = client.get("/api/stocks/AAA/valuation")
+    assert resp.status_code == 200
+    body = resp.json()
+    # AAA's seeded price is 105.0, well below buy_below 175 -> cheap on this method,
+    # even though the five-model median says otherwise. That divergence is the point.
+    assert body["owner_earnings_verdict"] == "cheap"
+    assert body["owner_earnings_verdict_label"] == "Looks cheap"
+    oe = next(m for m in body["models"] if m["model"] == "owner_earnings")
+    assert oe["assumptions"]["beta_used"] is False
+
+
+def test_valuation_endpoint_owner_earnings_absent(client):
+    resp = client.get("/api/stocks/AAA/valuation")
+    assert resp.status_code == 200
+    assert resp.json()["owner_earnings_verdict"] is None

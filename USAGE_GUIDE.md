@@ -11,6 +11,7 @@ A comprehensive guide on how to use the output data from the Stock Data Collecti
 3. [Working with JSON Data](#working-with-json-data)
 4. [Working with CSV Data](#working-with-csv-data)
 5. [Valuation Layer](#valuation-layer) — built-in, stored fair-value models
+   - [Owner Earnings ("Buffett mode")](#owner-earnings-buffett-mode) — separate lens, excluded from the median
 6. [Valuation Models](#valuation-models) — DIY formulas over the raw JSON/CSV
    - [DCF (Discounted Cash Flow)](#dcf-discounted-cash-flow)
    - [Graham Number](#graham-number)
@@ -362,6 +363,95 @@ Valuations stored for 50 tickers in data/output/stock.db
   `applicable`/`na_reason`/`assumptions`); `GET /api/screen?verdict=cheap` filters the
   screener by verdict; `GET /api/export/screen.csv` includes `median_base` and
   `val_upside_pct` columns.
+
+### Owner Earnings ("Buffett mode")
+
+A sixth model, alongside the five above, computed and stored the same way — but
+intentionally excluded from the five-model median described above.
+
+**Model key:** `owner_earnings`. Applies to the same sectors as the DCF (general,
+utility, energy); banks, insurers, and REITs report `not applicable`, same as DCF.
+
+```
+owner_earnings    = net_income + depreciation_amortization - maintenance_capex
+maintenance_capex = min(depreciation_amortization, abs(capex))
+```
+
+Growth capex (the excess of capex over D&A) is **not** subtracted — the model's
+whole point is to stop penalizing a company for investing to grow. Stock-based
+compensation is **not** added back; it's real compensation, and Buffett has been
+explicit that pretending otherwise is dishonest. Basis is the median of the last
+3 fiscal years, the same shape as the DCF's FCF basis.
+
+**Discount rate:** `max(10-year Treasury yield, 7%)`. No beta — Buffett rejects
+it as a risk measure — and a 7% floor so a collapse in yields can't manufacture
+an implausibly cheap valuation.
+
+**Margin of safety lives in the price**, not the discount rate:
+`buy_below = intrinsic_value x 0.70`. The verdict is its own:
+- price below `buy_below` → **cheap**
+- price between `buy_below` and intrinsic value → **fair**
+- price above intrinsic value → **expensive**
+
+**Predictability gate.** The model refuses to value a history that isn't
+consistently positive: owner earnings must be positive in at least 8 of the last
+10 fiscal years, and at least 10 years of history must exist to run the test at
+all. Below that threshold it reports `applicable=false` with an honest reason
+(`owner earnings too erratic to forecast`, or the insufficient-history variant)
+instead of a number. It deliberately does **not** claim to filter cyclicals —
+against the real database the 8-of-10 gate still values SLB, COP, CVX, and CAT,
+because the D&A add-back smooths their owner earnings relative to net income even
+though the underlying business is volatile. Rather than fake a mechanical
+judgment no formula can make honestly, the model stores the volatility evidence
+(`assumptions.volatility`: `positive_years`, `total_years`, `collapse_years`,
+`worst_drop`) and leaves the circle-of-competence call to you. On the real data:
+MSFT is positive 10 of 10 years with 0 collapse years and a 35% worst single-year
+fall; SLB is positive 8 of 10 with 2 collapse years and a 100% worst fall — the
+model values both and shows you why that's a judgment call, not a fact it makes
+for you.
+
+**Why it's excluded from the five-model median.** A Treasury-discounted value and
+a CAPM-discounted value answer different questions; mixing them into one median
+would silently average two incompatible philosophies and drag every verdict
+toward "cheap" without you knowing why. On the real 50-ticker database, the
+median CAPM DCF prices the market at 0.68x price while the Treasury-discounted
+owner-earnings model prices it at 1.98x — the same cash flows, 170% apart,
+purely from the discount-rate choice. Concretely: MSFT's academic DCF is $245.66
+vs owner earnings $559.92 (2.28x); NVDA's is $41.86 vs $142.00 (3.39x) — in both
+cases the gap is the growth capex being credited back rather than subtracted.
+Verified against the live 50-ticker run: adding `owner_earnings` changed **zero**
+of the existing five-model summary rows.
+
+**So the two verdicts can legitimately disagree** — a stock can be "expensive"
+under the five-model median (CAPM discount) and "cheap" under owner earnings
+(Treasury discount) with no error anywhere. The gap tells you how much of any
+verdict is method rather than business; it is not a discrepancy to reconcile.
+
+**Known limitation:** GOOGL is `not applicable` under this model. Alphabet's
+older SEC filings don't tag a cash-flow D&A concept, so its owner-earnings
+history is under 10 years — a gap in SEC's own filed data, not a bug, and a
+little ironic since Alphabet is exactly the kind of heavy-growth-capex company
+this model exists to value properly.
+
+**Where it shows up:**
+
+- **Web UI** — the VAL tab's "Owner Earnings (Buffett)" section, below the
+  five-model chart: intrinsic value (bear/base/bull), the `buy_below` threshold
+  and its verdict chip, a method-gap line comparing academic DCF vs owner
+  earnings vs price, and the volatility statement above. When not applicable,
+  the reason is shown directly.
+- **API** — `GET /api/stocks/{ticker}/valuation` already returns every model's
+  row (`model: "owner_earnings"` in the `models` list) plus two top-level
+  fields, `owner_earnings_verdict` and `owner_earnings_verdict_label` (its
+  verdict isn't derivable from the shared `summary` medians, so it's returned
+  separately).
+- **Screener** (`/screener`) — a sortable **Buffett upside %** column
+  (`oe_upside_pct`, `(owner_earnings base − price) / price`), kept separate
+  from the regular Upside % column, plus a filter on its own verdict:
+  `oe_verdict=cheap|fair|expensive`. Both are included in
+  `GET /api/export/screen.csv`.
+- Computed by the same `python -m src.valuation.backfill` as the other five
+  models, and recomputed automatically after each collection run.
 
 ## Valuation Models
 

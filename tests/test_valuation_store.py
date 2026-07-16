@@ -53,7 +53,8 @@ def test_compute_and_store_writes_five_model_rows_and_summary(seeded_db):
     rows = conn.execute(
         "SELECT * FROM valuations WHERE ticker='AAA' ORDER BY model"
     ).fetchall()
-    assert [r["model"] for r in rows] == ["dcf", "ddm", "graham", "lynch", "multiples"]
+    assert [r["model"] for r in rows] == [
+        "dcf", "ddm", "graham", "lynch", "multiples", "owner_earnings"]
     by_model = {r["model"]: r for r in rows}
     assert by_model["dcf"]["applicable"] == 1
     assert by_model["dcf"]["value_bear"] < by_model["dcf"]["value_bull"]
@@ -75,7 +76,7 @@ def test_compute_and_store_is_idempotent_upsert(seeded_db):
     compute_and_store(seeded_db)
     conn = sqlite3.connect(seeded_db)
     count = conn.execute("SELECT COUNT(*) FROM valuations").fetchone()[0]
-    assert count == 5
+    assert count == 6
     conn.close()
 
 
@@ -90,7 +91,7 @@ def test_compute_and_store_skips_broken_ticker(seeded_db):
     count = conn.execute(
         "SELECT COUNT(*) FROM valuations WHERE ticker='BBB' AND applicable=0"
     ).fetchone()[0]
-    assert count == 5
+    assert count == 6
     conn.close()
 
 
@@ -112,7 +113,7 @@ def test_backfill_cli_runs_on_explicit_db(seeded_db, capsys):
     out = capsys.readouterr().out
     assert "1 ticker" in out
     conn = sqlite3.connect(seeded_db)
-    assert conn.execute("SELECT COUNT(*) FROM valuations").fetchone()[0] == 5
+    assert conn.execute("SELECT COUNT(*) FROM valuations").fetchone()[0] == 6
     conn.close()
 
 

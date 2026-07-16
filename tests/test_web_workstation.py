@@ -681,6 +681,67 @@ def test_val_fragment_unknown_ticker_404(client):
     assert resp.status_code == 404
 
 
+def _seed_owner_earnings(web_db, ticker="AAA", applicable=1, na_reason=None):
+    import json as _json
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect(str(web_db))
+    a = _json.dumps({
+        "buy_below": 175.0, "discount_base": 0.07, "risk_free_rate": 0.045,
+        "beta_used": False, "sbc_added_back": False, "margin_of_safety": 0.30,
+        "maintenance_capex": 50.0, "growth_capex_added_back": 10.0,
+        "positive_years": 10,
+        "volatility": {
+            "collapse_years": 2, "worst_drop": 0.35,
+            "positive_years": 10, "total_years": 10,
+        },
+    })
+    conn.execute(
+        "INSERT OR REPLACE INTO valuations VALUES (?, 'owner_earnings', ?, ?, "
+        "200.0, 250.0, 300.0, ?, 2025, '2024-01-05T00:00:00')",
+        (ticker, applicable, na_reason, a),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_val_fragment_shows_owner_earnings_section(client, web_db):
+    _seed_val_rows(web_db)
+    _seed_owner_earnings(web_db)
+    resp = client.get("/ui/stocks/AAA/val")
+    assert resp.status_code == 200
+    assert "Owner Earnings" in resp.text
+    assert "Buy below" in resp.text          # the margin-of-safety threshold
+    assert "Looks cheap" in resp.text        # price 105 < buy_below 175
+    assert "growth_capex_added_back" in resp.text   # assumptions on show
+
+
+def test_val_fragment_shows_owner_earnings_volatility_evidence(client, web_db):
+    _seed_val_rows(web_db)
+    _seed_owner_earnings(web_db)
+    resp = client.get("/ui/stocks/AAA/val")
+    assert resp.status_code == 200
+    assert "positive in 10 of" in resp.text
+    assert "fell by half or more" in resp.text
+    assert "35%" in resp.text          # worst_drop 0.35 formatted as a percent
+    assert "that call is yours" in resp.text
+
+
+def test_val_fragment_owner_earnings_na_reason_is_shown(client, web_db):
+    _seed_val_rows(web_db)
+    _seed_owner_earnings(web_db, applicable=0,
+                         na_reason="owner earnings too erratic to forecast")
+    resp = client.get("/ui/stocks/AAA/val")
+    assert resp.status_code == 200
+    assert "owner earnings too erratic to forecast" in resp.text
+
+
+def test_val_fragment_without_owner_earnings_row_still_renders(client, web_db):
+    _seed_val_rows(web_db)
+    resp = client.get("/ui/stocks/AAA/val")
+    assert resp.status_code == 200
+    assert "Fair Value vs Price" in resp.text   # the existing five-model panel intact
+
+
 # ---------------------------------------------------------------------------
 # DES fragment: valuation verdict strip (Task 13)
 # ---------------------------------------------------------------------------

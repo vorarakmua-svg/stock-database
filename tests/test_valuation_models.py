@@ -4,15 +4,19 @@ from datetime import date
 
 import pytest
 
+from src.valuation.assumptions import MARGIN_OF_SAFETY, OE_DISCOUNT_FLOOR
 from src.valuation.inputs import FYRecord, ValuationInputs
 from src.valuation.models import (
     dcf_per_share,
     ddm_per_share,
+    owner_earnings,
+    owner_earnings_volatility,
     value_dcf,
     value_ddm,
     value_graham,
     value_lynch,
     value_multiples,
+    value_owner_earnings,
 )
 
 
@@ -351,3 +355,138 @@ def test_all_models_report_history_truncated_in_assumptions():
                 value_lynch(inputs)):
         assert res.applicable is True, res.na_reason
         assert res.assumptions["history_truncated"] is True, res.model
+
+
+# ---- Owner earnings (Buffett mode) ----
+def _oe_fy(fy, ni=200.0, da=50.0, capex=-60.0, shares=100.0):
+    """A fiscal year with the cash-flow figures owner earnings needs."""
+    rec = _fy(fy, net_income=ni, equity=1000.0, eps=2.0, shares=shares)
+    rec.depreciation_amortization = da
+    rec.capex = capex
+    return rec
+
+
+def test_owner_earnings_adds_back_growth_capex():
+    # capex 60 exceeds D&A 50 -> maintenance is 50, the other 10 is growth spend
+    # owner earnings = 200 + 50 - 50 = 200   (plain FCF would be 200 + 50 - 60 = 190)
+    assert owner_earnings(_oe_fy(2023, ni=200.0, da=50.0, capex=-60.0)) == 200.0
+
+
+def test_owner_earnings_caps_maintenance_at_actual_capex():
+    # capex 30 is BELOW D&A 50 -> you cannot spend more on maintenance than you spent
+    # owner earnings = 200 + 50 - 30 = 220
+    assert owner_earnings(_oe_fy(2023, ni=200.0, da=50.0, capex=-30.0)) == 220.0
+
+
+def test_owner_earnings_none_without_inputs():
+    rec = _fy(2023, net_income=200.0, shares=100.0)  # no D&A, no capex
+    assert owner_earnings(rec) is None
+
+
+def test_value_owner_earnings_happy_path():
+    recs = [_oe_fy(fy, ni=200.0 * 1.05 ** i) for i, fy in enumerate(range(2016, 2026))]
+    res = value_owner_earnings(_inputs(fy_records=recs, risk_free_rate=0.045))
+    assert res.applicable is True
+    assert res.model == "owner_earnings"
+    assert res.value_bear < res.value_base < res.value_bull
+    a = res.assumptions
+    assert a["discount_base"] == OE_DISCOUNT_FLOOR   # 4.5% rf floors at 7%
+    assert a["beta_used"] is False
+    assert a["sbc_added_back"] is False
+    assert a["margin_of_safety"] == MARGIN_OF_SAFETY
+    assert a["buy_below"] == pytest.approx(res.value_base * 0.70)
+    assert a["positive_years"] == 10
+    assert a["maintenance_capex"] == 50.0
+    assert a["growth_capex_added_back"] == pytest.approx(10.0)
+
+
+def test_value_owner_earnings_uses_treasury_above_the_floor():
+    recs = [_oe_fy(fy) for fy in range(2016, 2026)]
+    res = value_owner_earnings(_inputs(fy_records=recs, risk_free_rate=0.09))
+    assert res.assumptions["discount_base"] == 0.09  # above the 7% floor -> used as-is
+
+
+def test_value_owner_earnings_na_erratic_earnings():
+    """The predictability gate: Buffett declines to forecast what he cannot predict."""
+    recs = []
+    for i, fy in enumerate(range(2016, 2026)):
+        ni = 200.0 if i % 2 == 0 else -150.0  # only 5 of 10 years positive
+        recs.append(_oe_fy(fy, ni=ni))
+    res = value_owner_earnings(_inputs(fy_records=recs))
+    assert res.applicable is False
+    assert res.na_reason == "owner earnings too erratic to forecast"
+
+
+def test_value_owner_earnings_na_wrong_sector():
+    res = value_owner_earnings(_inputs(sector_class="bank"))
+    assert res.applicable is False
+    assert res.na_reason == "not applicable to sector 'bank'"
+
+
+def test_value_owner_earnings_na_insufficient_history():
+    recs = [_oe_fy(fy) for fy in (2023, 2024, 2025)]
+    res = value_owner_earnings(_inputs(fy_records=recs))
+    assert res.applicable is False
+    assert res.na_reason == "insufficient history (need >= 4 fiscal years)"
+
+
+def test_value_owner_earnings_na_missing_shares():
+    recs = [_oe_fy(fy, shares=None) for fy in range(2016, 2026)]
+    res = value_owner_earnings(_inputs(fy_records=recs, shares_outstanding=None))
+    assert res.applicable is False
+    assert res.na_reason == "shares outstanding unavailable"
+
+
+def test_value_owner_earnings_short_but_clean_history_is_not_called_erratic():
+    """6 years, every one positive — that is not erratic, it is just short."""
+    recs = [_oe_fy(fy, ni=200.0) for fy in range(2020, 2026)]
+    res = value_owner_earnings(_inputs(fy_records=recs))
+    assert res.applicable is False
+    assert res.na_reason == (
+        "insufficient history for the predictability test (need >= 10 fiscal years)")
+
+
+def test_value_owner_earnings_erratic_reason_needs_a_full_window():
+    """With a full 10-year window and too few positive years, the erratic reason
+    is the true one."""
+    recs = []
+    for i, fy in enumerate(range(2016, 2026)):
+        recs.append(_oe_fy(fy, ni=200.0 if i % 2 == 0 else -150.0))
+    res = value_owner_earnings(_inputs(fy_records=recs))
+    assert res.applicable is False
+    assert res.na_reason == "owner earnings too erratic to forecast"
+
+
+# ---- Owner earnings volatility evidence ----
+def test_owner_earnings_volatility_steady_history_has_no_collapses():
+    history = [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0]
+    vol = owner_earnings_volatility(history)
+    assert vol["collapse_years"] == 0
+    assert vol["worst_drop"] < 0.1
+    assert vol["positive_years"] == 10
+    assert vol["total_years"] == 10
+
+
+def test_owner_earnings_volatility_cyclical_history_has_collapses():
+    history = [10.0, 2.0, 12.0, 3.0, 14.0, 4.0, 16.0, 5.0, 18.0, 6.0]
+    vol = owner_earnings_volatility(history)
+    assert vol["collapse_years"] >= 2
+    assert vol["worst_drop"] > 0.5
+
+
+def test_value_owner_earnings_assumptions_contain_volatility():
+    recs = [_oe_fy(fy, ni=200.0 * 1.05 ** i) for i, fy in enumerate(range(2016, 2026))]
+    res = value_owner_earnings(_inputs(fy_records=recs, risk_free_rate=0.045))
+    assert res.applicable is True
+    vol = res.assumptions["volatility"]
+    assert set(vol.keys()) == {
+        "collapse_years", "worst_drop", "positive_years", "total_years",
+    }
+
+
+def test_owner_earnings_volatility_caps_a_swing_to_a_loss_at_100pct():
+    """A year that swings to a loss has wiped out its earnings, not fallen 334%.
+    SLB's raw figure was 334% — a number that reads as nonsense rather than as
+    evidence, which defeats the point of showing it."""
+    vol = owner_earnings_volatility([10.0, -24.0, 10.0, 10.0])
+    assert vol["worst_drop"] == 1.0

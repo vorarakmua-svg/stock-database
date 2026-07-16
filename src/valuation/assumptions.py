@@ -19,6 +19,22 @@ DISCOUNT_SPREAD = 0.01
 DEFAULT_BETA = 1.0
 DEFAULT_RF = 0.045
 
+#: Owner-earnings ("Buffett mode") discount floor. Buffett describes discounting
+#: at the long-term government rate, but has also said he would not mechanically
+#: discount at absurdly low rates when yields collapse — so the Treasury yield is
+#: used, floored here. Beta plays no part.
+OE_DISCOUNT_FLOOR = 0.07
+
+#: The safety lives in the PRICE, not in a padded discount rate: buy only at a
+#: discount to intrinsic value.
+MARGIN_OF_SAFETY = 0.30
+
+#: Predictability gate — owner earnings must be positive in at least this many of
+#: the last OE_HISTORY_WINDOW fiscal years, or the business is refused as
+#: unforecastable rather than valued with false precision.
+OE_MIN_POSITIVE_YEARS = 8
+OE_HISTORY_WINDOW = 10
+
 
 def _cagr_span(n_values: int, periods: Optional[Sequence[int]]) -> Optional[int]:
     """Year count for the CAGR exponent: the true calendar span when the year

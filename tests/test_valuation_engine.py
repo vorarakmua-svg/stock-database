@@ -2,8 +2,10 @@
 import pytest
 
 from src.valuation.engine import (
+    MEDIAN_MODELS,
     VERDICT_LABELS,
     intrinsic_summary,
+    owner_earnings_verdict,
     run_valuations,
     upside_pct,
     verdict,
@@ -22,7 +24,8 @@ def _inputs(**kwargs):
 
 def test_run_valuations_returns_all_five_models_in_order():
     results = run_valuations(_inputs())
-    assert [r.model for r in results] == ["dcf", "ddm", "graham", "lynch", "multiples"]
+    assert [r.model for r in results] == [
+        "dcf", "ddm", "graham", "lynch", "multiples", "owner_earnings"]
     # Empty inputs: every model is N/A with a reason, none raises
     assert all(r.applicable is False and r.na_reason for r in results)
 
@@ -77,3 +80,50 @@ def test_upside_pct():
 def test_verdict_labels_complete():
     assert VERDICT_LABELS["cheap"] == "Looks cheap"
     assert VERDICT_LABELS[None] == "Not valued"
+
+
+def test_run_valuations_returns_six_models_in_order():
+    results = run_valuations(_inputs())
+    assert [r.model for r in results] == [
+        "dcf", "ddm", "graham", "lynch", "multiples", "owner_earnings"]
+
+
+def test_median_models_excludes_owner_earnings():
+    assert "owner_earnings" not in MEDIAN_MODELS
+    assert set(MEDIAN_MODELS) == {"dcf", "ddm", "graham", "lynch", "multiples"}
+
+
+def test_owner_earnings_never_moves_the_median():
+    """The load-bearing carve-out: a Treasury-discounted value must not be averaged
+    into a median of CAPM-discounted ones, or every existing verdict silently drifts
+    toward 'cheap'. This is the invariant a future sixth model is most likely to break.
+    """
+    five = [
+        _res("dcf", 80.0, 100.0, 120.0),
+        _res("ddm", 60.0, 90.0, 110.0),
+        _res("graham", 70.0, 110.0, 130.0),
+        _res("lynch", 75.0, 105.0, 125.0),
+        _res("multiples", 85.0, 115.0, 135.0),
+    ]
+    without = intrinsic_summary(five)
+    # An owner-earnings row 10x higher than everything else must change nothing.
+    with_oe = intrinsic_summary(five + [_res("owner_earnings", 800.0, 1000.0, 1200.0)])
+    assert with_oe == without
+    assert with_oe["n_applicable"] == 5
+
+
+def test_owner_earnings_verdict_margin_of_safety():
+    res = ValuationResult(
+        model="owner_earnings", applicable=True,
+        value_bear=80.0, value_base=100.0, value_bull=120.0,
+        assumptions={"buy_below": 70.0},
+    )
+    assert owner_earnings_verdict(res, 60.0) == "cheap"       # below the MOS threshold
+    assert owner_earnings_verdict(res, 70.0) == "fair"        # at the threshold
+    assert owner_earnings_verdict(res, 100.0) == "fair"       # at intrinsic value
+    assert owner_earnings_verdict(res, 101.0) == "expensive"  # above intrinsic value
+    assert owner_earnings_verdict(res, None) is None
+    assert owner_earnings_verdict(res, 0.0) is None
+    assert owner_earnings_verdict(None, 60.0) is None
+    na = ValuationResult(model="owner_earnings", applicable=False, na_reason="x")
+    assert owner_earnings_verdict(na, 60.0) is None
