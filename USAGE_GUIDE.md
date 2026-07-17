@@ -12,15 +12,16 @@ A comprehensive guide on how to use the output data from the Stock Data Collecti
 4. [Working with CSV Data](#working-with-csv-data)
 5. [Valuation Layer](#valuation-layer) — built-in, stored fair-value models
    - [Owner Earnings ("Buffett mode")](#owner-earnings-buffett-mode) — separate lens, excluded from the median
-6. [Valuation Models](#valuation-models) — DIY formulas over the raw JSON/CSV
+6. [Updating Data from the Web](#updating-data-from-the-web) — UPDATE DATA button, fetching new tickers
+7. [Valuation Models](#valuation-models) — DIY formulas over the raw JSON/CSV
    - [DCF (Discounted Cash Flow)](#dcf-discounted-cash-flow)
    - [Graham Number](#graham-number)
    - [Peter Lynch Fair Value](#peter-lynch-fair-value)
    - [Buffett-Style Analysis](#buffett-style-analysis)
-7. [Financial Analysis Examples](#financial-analysis-examples)
-8. [Building Dashboards](#building-dashboards)
-9. [Data Quality Checks](#data-quality-checks)
-10. [Common Use Cases](#common-use-cases)
+8. [Financial Analysis Examples](#financial-analysis-examples)
+9. [Building Dashboards](#building-dashboards)
+10. [Data Quality Checks](#data-quality-checks)
+11. [Common Use Cases](#common-use-cases)
 
 ---
 
@@ -325,8 +326,10 @@ Results are stored in two tables:
 
 ### Running the backfill
 
-Valuations recompute **automatically** at the end of every `python -m src.main` collection
-run (for the tickers just collected) — you normally don't need to run anything extra. To
+Valuations recompute **automatically** at the end of every collection run — whether a
+`python -m src.main` terminal run or a web-submitted job (see
+[Updating Data from the Web](#updating-data-from-the-web)) — for the tickers just
+collected, so you normally don't need to run anything extra. To
 (re)compute valuations for tickers already in the database without re-collecting data
 (e.g. after upgrading the valuation models, or to backfill a ticker collected before the
 valuation layer existed):
@@ -452,6 +455,53 @@ this model exists to value properly.
   `GET /api/export/screen.csv`.
 - Computed by the same `python -m src.valuation.backfill` as the other five
   models, and recomputed automatically after each collection run.
+
+---
+
+## Updating Data from the Web
+
+You don't need the terminal to refresh the database — the web interface can run
+collection itself. These surfaces are enabled by default (see
+[disabling collection](#disabling-collection-read-only-deployments) below).
+
+### Updating a company already in the database
+
+Every stock page (`/stocks/{ticker}`) has an **UPDATE DATA** button next to the
+company name. Clicking it submits a single-ticker collection job — the same
+Yahoo + SEC collection a terminal run performs, and valuations are recomputed
+automatically afterwards, so one click updates everything. Job status is shown
+inline under the header, and when the job finishes the active tab reloads with
+the fresh data.
+
+### Fetching a ticker not yet in the database
+
+Two ways to add a brand-new company:
+
+- **Command palette** — press `Ctrl+K` (or `Cmd+K`), type the ticker; if it
+  isn't in the database, an action row **Fetch {TICKER} from SEC/Yahoo**
+  appears. Picking it opens the fetch page.
+- **Direct URL** — visit `/stocks/{ticker}`. An unknown-but-plausible ticker
+  gets a fetch page (still a 404 — the data genuinely isn't there yet) instead
+  of a dead end.
+
+On the fetch page, click **Fetch {TICKER} from SEC/Yahoo**. When the job
+completes you land on the new company's workstation page, valuations included.
+
+### Disabling collection (read-only deployments)
+
+Web collection is on by default. To turn the write surfaces off, start the
+server with `STOCK_WEB_ALLOW_COLLECTION` set to a falsy value (`0`, `false`,
+`no`, or `off`, case-insensitive):
+
+```bash
+STOCK_WEB_ALLOW_COLLECTION=0 stock-web
+```
+
+When disabled, the UPDATE DATA button and the unknown-ticker fetch page are
+hidden, and collection API requests are rejected (HTTP 409). The `stock-data`
+CLI and `python -m src.valuation.backfill` work either way.
+
+---
 
 ## Valuation Models
 

@@ -33,7 +33,8 @@
     <strong>Done:</strong>
     {{ job.summary.successful }} successful,
     {{ job.summary.with_errors }} with errors
-    ({{ job.summary.total }} total).
+    ({{ job.summary.total }} total{% if job.summary.valuations_computed is defined %},
+    {{ job.summary.valuations_computed }} valuation{{ 's' if job.summary.valuations_computed != 1 }} refreshed{% endif %}).
   </div>
   {% endif %}
 

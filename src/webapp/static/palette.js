@@ -191,6 +191,17 @@
         var tickerRows = (hits || []).map(function (h) {
           return { type: 'ticker', ticker: h.ticker, sub: h.company_name || '', code: '', href: '/stocks/' + encodeURIComponent(h.ticker), group: 'Tickers' };
         });
+        if (tickerRows.length === 0 && !mode &&
+            /^[A-Za-z][A-Za-z0-9.\-]{0,5}$/.test(q) &&
+            document.body.getAttribute('data-allow-collect') === '1') {
+          tickerRows.push({
+            type: 'page',
+            label: 'Fetch ' + q.toUpperCase() + ' from SEC/Yahoo',
+            sub: 'Not in database', code: '',
+            href: '/stocks/' + encodeURIComponent(q.toUpperCase()),
+            group: 'Actions'
+          });
+        }
         setItems(tickerRows.concat(mode ? [] : staticRows.filter(function (r) { return r.score >= 0; })));
       });
   }

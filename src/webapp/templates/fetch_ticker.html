@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ ticker }} — Stock DB{% endblock %}
+
+{% block content %}
+<div class="company-header">
+  <div class="company-title-row">
+    <h1>{{ ticker }}</h1>
+    <span class="ticker-badge">{{ ticker }}</span>
+  </div>
+</div>
+
+<section class="section">
+  <div class="empty-state">
+    <p><strong>{{ ticker }}</strong> is not in the database yet.</p>
+    <button class="btn" type="button"
+      hx-post="/ui/stocks/{{ ticker }}/update"
+      hx-target="#update-status" hx-swap="innerHTML"
+      hx-disabled-elt="this">Fetch {{ ticker }} from SEC/Yahoo</button>
+  </div>
+  <div id="update-status" class="mt-2"></div>
+</section>
+
+<script>
+  document.body.addEventListener('htmx:afterSettle', function (evt) {
+    var status = document.getElementById('update-status');
+    if (!status || !status.contains(evt.target)) return;
+    if (status.querySelector('.job-state--done')) {
+      window.location.href = '/stocks/{{ ticker }}';
+    }
+  });
+</script>
+{% endblock %}

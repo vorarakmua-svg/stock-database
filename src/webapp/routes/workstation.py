@@ -8,6 +8,7 @@ tab bar; clicking them 404s until their tasks land.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -25,6 +26,10 @@ from .pages import _STATEMENT_ROWS, _build_statement_display, templates
 from .stocks_api import VALID_RANGES, resolve_range_start
 
 router = APIRouter()
+
+#: A string that could plausibly be a ticker symbol. Anything else 404s rather
+#: than being sent to SEC/Yahoo.
+_TICKER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9.\-]{0,5}$")
 
 # (label, code, key) for every function tab in the workstation tab bar. Order
 # matters — it's the order the buttons render in. `label` is the friendly name
@@ -66,14 +71,29 @@ def stock_page(
     request: Request,
     tab: str = "des",
     r: Reader = Depends(get_reader),
+    settings: WebSettings = Depends(get_settings),
 ) -> Any:
     """The workstation shell: header strip + tab bar. 404 if *ticker* is unknown.
 
     ``?tab=`` picks which tab fires on page load (``hx-trigger="load"``); an
     unrecognized value falls back to ``des`` rather than erroring.
+
+    An unknown-but-plausible ticker (matches ``_TICKER_RE``) gets offered a
+    fetch page instead of a dead-end 404, but only when collection is
+    enabled — otherwise there is no working ``UPDATE DATA`` button behind it.
     """
     company = r.get_company(ticker)
     if company is None:
+        symbol = ticker.strip().upper()
+        if settings.allow_collection and _TICKER_RE.match(symbol):
+            # Not in the database, but fetchable — offer to fetch it instead
+            # of dead-ending. Still a 404: the resource genuinely isn't here.
+            return templates.TemplateResponse(
+                request,
+                "fetch_ticker.html",
+                {"request": request, "ticker": symbol},
+                status_code=404,
+            )
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
     active_tab = tab if tab in _TAB_KEYS else "des"
     return templates.TemplateResponse(
@@ -86,6 +106,41 @@ def stock_page(
             "tabs": TABS,
             "active_tab": active_tab,
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# UPDATE DATA fragment: submit a single-ticker collection job
+# ---------------------------------------------------------------------------
+
+
+@router.post("/ui/stocks/{ticker}/update", response_class=HTMLResponse)
+def update_ticker_fragment(
+    ticker: str,
+    request: Request,
+    manager: CollectionJobManager = Depends(get_job_manager),
+    settings: WebSettings = Depends(get_settings),
+) -> Any:
+    """Submit a single-ticker collection job and return the status fragment.
+
+    Deliberately does NOT require the ticker to exist in the database — this
+    same route fetches brand-new tickers (see the unknown-ticker page). The
+    job runner recomputes valuations after export, so one click updates
+    everything.
+    """
+    if not settings.allow_collection:
+        return HTMLResponse("<p>Collection is disabled.</p>", status_code=409)
+    symbol = ticker.strip().upper()
+    if not _TICKER_RE.match(symbol):
+        raise HTTPException(status_code=404, detail=f"Not a ticker: {ticker}")
+    job_id = manager.submit(
+        tickers=[symbol], years_back=None, include_yahoo=True, include_sec=True,
+    )
+    job = manager.get(job_id)
+    return templates.TemplateResponse(
+        request,
+        "fragments/job_status.html",
+        {"request": request, "job": job, "terminal": False},
     )
 
 

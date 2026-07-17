@@ -761,3 +761,87 @@ def test_des_fragment_not_valued_without_rows(client):
     resp = client.get("/ui/stocks/AAA/des")
     assert resp.status_code == 200
     assert "Not valued" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# UPDATE DATA button (Task 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def collection_enabled_client(web_db):
+    """TestClient for the same web_db, but with allow_collection=True."""
+    from fastapi.testclient import TestClient
+
+    from src.webapp import create_app
+    from src.webapp.settings import WebSettings
+
+    settings = WebSettings(db_path=web_db, allow_collection=True)
+    return TestClient(create_app(settings=settings))
+
+
+@pytest.fixture
+def collection_disabled_client(web_db):
+    """TestClient for the same web_db, but with allow_collection=False."""
+    from fastapi.testclient import TestClient
+
+    from src.webapp import create_app
+    from src.webapp.settings import WebSettings
+
+    settings = WebSettings(db_path=web_db, allow_collection=False)
+    return TestClient(create_app(settings=settings))
+
+
+def test_stock_page_shows_update_button_when_collection_enabled(collection_enabled_client):
+    resp = collection_enabled_client.get("/stocks/AAA")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "UPDATE DATA" in body
+    assert 'hx-post="/ui/stocks/AAA/update"' in body
+
+
+def test_stock_page_hides_update_button_when_disabled(collection_disabled_client):
+    # When allow_collection is False, the UPDATE DATA button should be hidden.
+    resp = collection_disabled_client.get("/stocks/AAA")
+    assert resp.status_code == 200
+    assert "UPDATE DATA" not in resp.text
+
+
+def test_val_empty_state_points_at_update_button(client):
+    resp = client.get("/ui/stocks/AAA/val")
+    assert resp.status_code == 200
+    assert "click UPDATE DATA above" in resp.text
+    assert "backfill" not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Unknown-ticker fetch page + palette flag (Task 3)
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_plausible_ticker_gets_fetch_page(collection_enabled_client):
+    resp = collection_enabled_client.get("/stocks/ZZZZ")
+    assert resp.status_code == 404
+    body = resp.text
+    # The ticker renders inside a <strong> tag, so match the literal rendered
+    # fragment rather than a "ZZZZ is not in the database" contiguous string.
+    assert "<strong>ZZZZ</strong> is not in the database" in body
+    assert 'hx-post="/ui/stocks/ZZZZ/update"' in body
+
+
+def test_unknown_ticker_plain_404_when_collection_disabled(collection_disabled_client):
+    resp = collection_disabled_client.get("/stocks/ZZZZ")
+    assert resp.status_code == 404
+    assert "Fetch" not in resp.text
+
+
+def test_implausible_path_plain_404(collection_enabled_client):
+    resp = collection_enabled_client.get("/stocks/%3Bdrop")
+    assert resp.status_code == 404
+    assert "Fetch" not in resp.text
+
+
+def test_base_page_carries_allow_collect_flag(collection_enabled_client):
+    resp = collection_enabled_client.get("/")
+    assert resp.status_code == 200
+    assert 'data-allow-collect="1"' in resp.text
