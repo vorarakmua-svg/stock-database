@@ -31,7 +31,16 @@ class Reader:
         self.db_path = Path(db_path)
         if not self.db_path.exists():
             raise FileNotFoundError(f"Database not found: {self.db_path}")
-        self._conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
+        # check_same_thread=False: FastAPI runs a sync dependency's __enter__,
+        # the endpoint body, and the cleanup in whichever threadpool workers
+        # are free — three potentially different threads using this one
+        # request's connection SEQUENTIALLY (never concurrently; every request
+        # gets its own Reader). Sequential cross-thread use is safe in
+        # sqlite3's default serialized mode; the default same-thread check
+        # made responses 500 whenever the threadpool happened to hop.
+        self._conn = sqlite3.connect(
+            f"file:{self.db_path}?mode=ro", uri=True, check_same_thread=False
+        )
         self._conn.row_factory = sqlite3.Row
 
     def close(self) -> None:
