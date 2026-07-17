@@ -709,3 +709,35 @@ class TestProfile:
     def test_unknown_ticker_returns_none(self, web_db):
         with Reader(web_db) as r:
             assert r.profile("ZZZNONE") is None
+
+
+def test_reader_survives_threadpool_hopping(web_db):
+    """FastAPI runs a sync dependency's __enter__, the endpoint body, and the
+    cleanup in whichever threadpool workers are free — three potentially
+    DIFFERENT threads touching one request's connection sequentially. With
+    sqlite3's default check_same_thread=True this 500s whenever the dice land
+    on two workers (seen live: /api/stocks/summary alternating 200/500).
+    Sequential cross-thread use of a per-request connection is safe; assert
+    the Reader allows it."""
+    import threading
+
+    reader = Reader(web_db)          # "dependency thread": connection created here
+    errors = []
+
+    def use_it():                    # "endpoint thread"
+        try:
+            assert reader.get_company("AAA") is not None
+        except Exception as exc:     # noqa: BLE001 — captured for the assert below
+            errors.append(exc)
+
+    def close_it():                  # "cleanup thread"
+        try:
+            reader.close()
+        except Exception as exc:     # noqa: BLE001
+            errors.append(exc)
+
+    for fn in (use_it, close_it):
+        t = threading.Thread(target=fn)
+        t.start()
+        t.join()
+    assert errors == []
