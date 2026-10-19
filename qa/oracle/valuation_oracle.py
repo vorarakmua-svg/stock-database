@@ -21,6 +21,7 @@ Exit code 1 if any applicable value disagrees with every reading beyond the tole
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import math
 import sqlite3
@@ -240,13 +241,28 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         anchor = stored.get("ttm_anchor")
         if not anchor:
             return None
-        ttm = db.execute("select coalesce(sum(amount),0) from dividend_events where ticker=? "
-                         "and date>date(?,'-365 days') and date<=?", (ticker, anchor, anchor)).fetchone()[0]
-        years = db.execute("select substr(date,1,4) y, sum(amount), count(*) from dividend_events where ticker=? "
-                           "and substr(date,1,4) < substr(?,1,4) group by y order by y", (ticker, anchor)).fetchall()
+        events = db.execute("select substr(date,1,10), amount from dividend_events where ticker=? and amount is not "
+                            "null order by date", (ticker,)).fetchall()
+        # A spin-off isn't a cash dividend. Yahoo records some twice: a price factor between 2:3 and 3:2 in its
+        # split history and, that day, a "dividend" worth the spun-off shares (DHR 2016: 1.319 and $24.56, 228x
+        # its regular payment; BUG-011). Such a payment, over 5x the median within 400 days, is dropped.
+        spin_days = {d[:10] for d, ratio in x.splits if ratio and ratio != 1 and 1 / 1.5 < ratio < 1.5}
+
+        def spun_off(day: str, amount: float) -> bool:
+            near = [a for d, a in events if d != day
+                    and abs((datetime.date.fromisoformat(d) - datetime.date.fromisoformat(day)).days) <= 400]
+            return day in spin_days and bool(near) and amount > 5 * median(near)
+
+        events = [(d, a) for d, a in events if not spun_off(d, a)]
+        ttm_start = (datetime.date.fromisoformat(anchor[:10]) - datetime.timedelta(days=365)).isoformat()
+        ttm = sum(a for d, a in events if ttm_start < d <= anchor[:10])
+        by_year: Dict[int, List[float]] = {}
+        for d, a in events:
+            if d[:4] < anchor[:4]:
+                by_year.setdefault(int(d[:4]), []).append(a)
         # The spec's "<= 10 yrs" is a calendar window (complete years before the anchor year), and the
         # exponent is the calendar span, so a payment gap can't stretch or shrink the growth rate.
-        window = [(int(y), v, n) for y, v, n in years if int(y) >= int(anchor[:4]) - 10]
+        window = [(y, sum(v), len(v)) for y, v in sorted(by_year.items()) if y >= int(anchor[:4]) - 10]
         # Growth compares full years (BUG-009): a first year with fewer payments than the window's usual
         # count is partial (dividend started or restarted mid-year, or an ex-date slipped a year back).
         if len(window) >= 2 and window[0][2] < median([n for _, _, n in window]):
