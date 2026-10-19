@@ -118,3 +118,21 @@ profitable year) for the user.
 Gates: ruff ✓ mypy ✓ pytest 863 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(valuation): analyst growth never stands in for a missing growth history
 Next: no P0/P1 open → BUG-006 (P2, oldest open P2)
+
+## Iteration 7: 2026-10-20 03:50: fix
+Picked: BUG-006, the oldest open P2 (no P0/P1 open; CI: 563cf05 ✓; f7feea4 running)
+Did: Root cause: `_normalize_splits` multiplied in the observed share-count seam ratio, which includes a year of
+buybacks (AAPL 3.808 vs 4). It ignored `split_events` as "empty for most tickers", but 107/127 companies have rows,
+and 17 of the 18 with a detected split have declared ratios. The seam isn't the split date (SEC restates ~3 years),
+so detection stays; a declared ratio or run of ratios within ±25% of the jump now replaces it, else the jump is kept.
+Tests first: the declared-ratio test failed with 3.8095; the fallback guard passed (today's behavior). A helper test
+covers runs (NVDA 4×10), tolerance and the date filter; removing the tolerance fails it, restored byte-identical.
+Evidence: `qa/evidence/iter07-bug006-{red,green,impact}.txt`, `iter07-oracle-{golden,real}.txt`
+Result: BUG-006 VERIFIED. Golden Level 2: **0 mismatches** (was 2). Real: 26 → 18 (AAPL/NEE/WMT/RTX Lynch and
+ANET/APH/AVGO/LRCX multiples resolved). Six values move 0.7–3.5% (AAPL Lynch 109.18 → 111.90); no applicability
+changes. VAL-04/05 back to TODO pending L6 (GE, SCCO, SPGI, T, NOW, WDC). New lead L10: APP split detected with
+none declared.
+Gates: ruff ✓ mypy ✓ pytest 866 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(valuation): split adjustment uses declared split ratios
+Next: BUG-007 (P2) needs a user decision on the bear case, so take BUG-009 (P2) next; BUG-007 is recorded as
+NEEDS-USER.

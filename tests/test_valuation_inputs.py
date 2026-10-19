@@ -184,6 +184,53 @@ def test_split_normalizes_per_share_history_to_current_basis(split_db):
     assert by_fy[2023].bvps() == pytest.approx(2.0)
 
 
+def _buyback_split_db(tmp_path, declared_splits):
+    """4:1 split in 2022 while buybacks shrank the old share count (110 -> 105): the observed seam
+    is 400 / 105 = 3.81, not 4 (AAPL: 20.0B / 5.252B = 3.808 around its 2020 4:1 split)."""
+    db_path = tmp_path / "buyback_split.db"
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('BBS', 'general')")
+    for fy, eps, shares in [(2019, 4.00, 110.0), (2020, 4.40, 108.0), (2021, 4.84, 105.0),
+                            (2022, 1.331, 400.0), (2023, 1.464, 400.0)]:
+        conn.execute(
+            "INSERT INTO financials_annual (ticker, fiscal_year, period_end, net_income, total_equity, "
+            "eps_diluted, weighted_avg_shares_diluted) VALUES ('BBS', ?, ?, ?, 800.0, ?, ?)",
+            (fy, f"{fy}-12-31", eps * shares, eps, shares),
+        )
+    for date_str, ratio in declared_splits:
+        conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('BBS', ?, ?)", (date_str, ratio))
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_split_factor_uses_the_declared_ratio_not_the_share_jump(tmp_path):
+    # The share jump also carries a year of buybacks; split_events declares the exact 4:1.
+    conn = _connect(_buyback_split_db(tmp_path, [("2022-06-01", 4.0)]))
+    by_fy = {r.fiscal_year: r for r in load_inputs(conn, "BBS").fy_records}
+    conn.close()
+    assert by_fy[2021].split_factor == pytest.approx(4.0)
+    assert by_fy[2021].eps_diluted == pytest.approx(4.84 / 4)
+
+
+def test_split_factor_falls_back_to_the_share_jump_without_declared_splits(tmp_path):
+    # Tickers without split_events rows keep the detected jump (the only evidence there is).
+    conn = _connect(_buyback_split_db(tmp_path, []))
+    by_fy = {r.fiscal_year: r for r in load_inputs(conn, "BBS").fy_records}
+    conn.close()
+    assert by_fy[2021].split_factor == pytest.approx(400.0 / 105.0)
+
+
+def test_declared_ratio_matches_a_run_of_splits_and_ignores_unrelated_ones():
+    from src.valuation.inputs import _declared_ratio
+    nvda = [("2021-07-20", 4.0), ("2024-06-10", 10.0)]
+    assert _declared_ratio(38.1, "2020-01-26", nvda) == 40.0  # seam restated for both splits
+    assert _declared_ratio(3.81, "2020-01-26", [("2022-06-01", 2.0)]) == 3.81  # 2:1 is nowhere near
+    assert _declared_ratio(3.81, "2023-01-01", [("2022-06-01", 4.0)]) == 3.81  # split predates the seam
+
+
 def test_split_detected_from_net_income_over_eps_when_shares_null(split_db):
     """GOOGL case: weighted_avg_shares_diluted is NULL; derive shares = NI / EPS."""
     conn = _connect(split_db)

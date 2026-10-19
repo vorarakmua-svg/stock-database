@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 104 · PASS 2 · FAIL 3 · N-A 0 · BLOCKED 0 · NEEDS-USER 0  
+**Status counts:** TODO 105 · PASS 2 · FAIL 2 · N-A 0 · BLOCKED 0 · NEEDS-USER 0  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -14,8 +14,8 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | VAL-01 | DCF (two-stage FCF) | PASS | iter 6 | Level 1 ✓ and Level 2 ✓ on every applicable DCF row (real + golden) after BUG-008; `qa/evidence/iter06-oracle-*.txt` |
 | VAL-02 | DDM (multi-stage) | FAIL→BUG-009 | iter 5 | BUG-005 fixed (≤10-yr window; oracle DDM mismatches 41 → 0); open edge case: partial initiation year / special payments (BUG-009) |
 | VAL-03 | Graham Number | FAIL→BUG-007 | iter 4 | Level 1 ✓ (124 rows); EPS = reported diluted EPS ✓; bear ignores loss years (8 cos) |
-| VAL-04 | Peter Lynch | FAIL→BUG-006 | iter 6 | BUG-008 fixed (16 rows now N/A for no measurable growth); split factor still from share jumps (AAPL/NEE/WMT) |
-| VAL-05 | Historical multiples band | TODO | iter 4 | Level 1 ✓ (131 rows); 8 unexplained Level-2 mismatches among recent splitters and spin-offs, see lead L6 |
+| VAL-04 | Peter Lynch | TODO | iter 7 | BUG-006 and BUG-008 fixed; 4 unexplained Level-2 mismatches (GE, SCCO, SPGI, T): lead L6 |
+| VAL-05 | Historical multiples band | TODO | iter 7 | Level 1 ✓; BUG-006 fix resolved ANET/APH/AVGO/LRCX; 4 unexplained (NOW, SCCO, SPGI, WDC): lead L6 |
 | VAL-06 | Owner earnings | TODO | |  |
 | VAL-07 | Summary | TODO | |  |
 | VAL-08 | Invariant scan over the whole real-DB copy | TODO | |  |

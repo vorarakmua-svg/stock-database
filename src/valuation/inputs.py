@@ -7,10 +7,11 @@ growth estimate, the full dividend history, and each fiscal year's on-or-before
 period-end closing price — so the models themselves never touch the database.
 """
 
+import math
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 _MAX_FY_HISTORY = 10
 
@@ -23,6 +24,32 @@ SPLIT_JUMP_THRESHOLD = 1.5
 #: in the source data (some fiscal years are filed in thousands, others in
 #: units), not a corporate action.
 MAX_SPLIT_RATIO = 50.0
+
+#: A declared ratio from ``split_events`` replaces a detected share-count jump
+#: when it is within this factor of it. The jump also carries a year of buybacks
+#: or issuance (AAPL's 2020 4:1 shows up as 20.0B / 5.252B = 3.81), so the
+#: declared ratio is the exact one; a jump nowhere near any declared ratio keeps
+#: the detected value (the only evidence there is).
+DECLARED_SPLIT_TOLERANCE = 1.25
+
+
+def _declared_ratio(observed: float, period_end: Optional[str],
+                    splits: Sequence[Tuple[str, float]]) -> float:
+    """The declared split ratio, or run of consecutive ratios, dated after
+    *period_end* that is closest to the *observed* seam ratio, if within
+    DECLARED_SPLIT_TOLERANCE of it; otherwise *observed*. A run covers a seam
+    that spans two splits (e.g. restated for both NVDA's 4:1 and 10:1)."""
+    later = [ratio for when, ratio in splits
+             if ratio and ratio > 0 and (period_end is None or str(when)[:10] > str(period_end)[:10])]
+    best, best_gap = observed, math.log(DECLARED_SPLIT_TOLERANCE)
+    for start in range(len(later)):
+        run = 1.0
+        for ratio in later[start:]:
+            run *= ratio
+            gap = abs(math.log(observed / run))
+            if gap <= best_gap:
+                best, best_gap = run, gap
+    return best
 
 
 @dataclass
@@ -113,15 +140,18 @@ def _eps_moved_inversely(ratio: float, eps_older: Optional[float],
 
 
 def _normalize_splits(records: List[FYRecord],
-                      shares_detect: List[Optional[float]]
+                      shares_detect: List[Optional[float]],
+                      splits: Sequence[Tuple[str, float]] = (),
                       ) -> Tuple[List[FYRecord], bool]:
     """Restate every year's per-share figures onto the current share basis.
 
     ``financials_annual`` stores per-share values AS REPORTED, and SEC filings
     restate only ~3 prior years after a split, so a long per-share series has a
-    hard discontinuity at each split. ``split_events`` cannot be relied on (it
-    is empty for most tickers), so splits are detected from the share-count
-    series itself. Walking newest -> oldest, each seam's ratio
+    hard discontinuity where the stored data switches basis — not at the split
+    date itself. Splits are therefore detected from the share-count series.
+    When ``split_events`` declares a ratio close to a detected jump, that exact
+    ratio is applied (see ``_declared_ratio``), since the jump also carries a
+    year of buybacks or issuance. Walking newest -> oldest, each seam's ratio
     ``shares[i + 1] / shares[i]`` is classified:
 
     * ``1.5 .. 50``    -> forward split; fold into the cumulative factor.
@@ -154,7 +184,7 @@ def _normalize_splits(records: List[FYRecord],
             if (forward or reverse) and _eps_moved_inversely(
                 ratio, records[i].eps_diluted, records[i + 1].eps_diluted
             ):
-                factor *= ratio
+                factor *= _declared_ratio(ratio, records[i].period_end, splits)
         rec = records[i]
         rec.split_factor = factor
         if factor == 1.0:
@@ -223,7 +253,13 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
                 capex=r["capex"],
             )
         )
-    records, history_truncated = _normalize_splits(records, shares_detect)
+    splits = [
+        (s["date"], s["ratio"])
+        for s in conn.execute(
+            "SELECT date, ratio FROM split_events WHERE ticker = ? ORDER BY date", (ticker,)
+        ).fetchall()
+    ]
+    records, history_truncated = _normalize_splits(records, shares_detect, splits)
 
     snap = conn.execute(
         "SELECT shares_outstanding, beta, risk_free_rate, collected_at "

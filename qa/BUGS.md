@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 3 · P3 2 · NEEDS-USER 3 · Verified: 4
+**Open:** P0 0 · P1 0 · P2 2 · P3 2 · NEEDS-USER 3 · Verified: 5
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -55,13 +55,13 @@ Root cause: `value_ddm` (`src/valuation/models.py`) built the CAGR from every co
 Notes: evidence `qa/evidence/iter04-val-{golden,realcopy}.txt`. Explains lead L4 (AAPL `years_of_data` 39.2).
 
 ### BUG-006 [P2][VAL] Split adjustment of per-share history uses observed share-count jumps, not declared split ratios
-Status: OPEN
-Found: iteration 4 via VAL-04 | Fixed: — | Regression test: —
+Status: VERIFIED
+Found: iteration 4 via VAL-04 | Fixed: iteration 7 (see LOG) | Regression tests: `tests/test_valuation_inputs.py::test_split_factor_uses_the_declared_ratio_not_the_share_jump`, `::test_split_factor_falls_back_to_the_share_jump_without_declared_splits`, `::test_declared_ratio_matches_a_run_of_splits_and_ignores_unrelated_ones`
 Repro: AAPL Lynch: stored `hist_cagr` 14.64% vs 15.26% with the declared 4:1 split (FY2016 EPS 8.31/4 = 2.08 → FY2025 7.46).
 Expected: per-share values moved to today's basis with the `split_events` ratios.
 Actual: the implied factor is 3.808 = FY2018 weighted shares 20.0B (restated) ÷ FY2017 5.252B, which includes buybacks. Lynch base AAPL 109.18 vs 111.90 (−2.4%); NEE −2.0%, WMT −2.5% (all recent splitters).
-Root cause: to confirm in the fix iteration. The stored history also mixes bases within one year (AAPL FY2018: weighted shares restated, shares_outstanding not), see VALID-04.
-Notes: may also explain some multiples mismatches (lead L6).
+Root cause: `_normalize_splits` (`src/valuation/inputs.py`) multiplied in the observed seam ratio (newer ÷ older share count), which includes that year's buybacks or issuance. Its docstring said `split_events` was 'empty for most tickers'; that is stale: 107 of 127 companies have rows, and 17 of the 18 companies with a detected split have declared ratios. Detection is kept (the seam is where the stored data switches basis, not the split date), but a declared ratio, or run of consecutive ratios, after the older year within ±25% of the jump now replaces it; otherwise the jump is kept. Verified on a backfilled copy: golden Level 2 now 0 mismatches; real 26 → 18 (AAPL/NEE/WMT/RTX Lynch and ANET/APH/AVGO/LRCX multiples resolved). Six values move 0.7–3.5% (AAPL Lynch 109.18 → 111.90, the oracle's value); `qa/evidence/iter07-bug006-impact.txt`.
+Notes: it did: four of the eight L6 multiples mismatches were this bug. Mixed bases within one year (AAPL FY2018: weighted shares restated, shares_outstanding not) remain a VALID-04 topic.
 
 ### BUG-007 [P2][VAL] Graham bear case ignores loss years
 Status: OPEN, needs a decision (NEEDS-USER on the intended behavior)
@@ -107,7 +107,8 @@ Proposal: run the default (unfiltered) screen on load. Small effort, low risk. A
 - L2 [GATHER] SPY: Yahoo answered 404 "No fundamentals data" 3 times, yet the run recorded 0 warnings / 0 errors (silent gap). (iter 1)
 - L3 [CLI] A batch containing a failed ticker (ZZZZ, errors=1) still exited 0. Check the intended exit-code semantics. (iter 1)
 - L5 [MATCH] Web UPDATE DATA jobs export SQLite only (`src/webapp/jobs.py:246`, `formats=["sqlite"]`), so JSON and the CSVs go stale after web updates. Possibly by design; confirm in MATCH-05. (iter 3)
-- L6 [VAL] Multiples/Lynch Level-2 mismatches not yet explained: ANET APH AVGO LRCX NOW (recent splits), WDC (Sandisk spin-off), SCCO (stock dividends), SPGI, GE (1:8 reverse split + spin-offs; Lynch 92%), T (Lynch 28%). Adjudicate oracle vs code. (iter 4)
+- L6 [VAL] Level-2 mismatches not yet explained: NOW multiples (271%), WDC multiples (Sandisk spin-off), SCCO Lynch + multiples (stock dividends; EPS gaps, see L7), SPGI Lynch + multiples, GE Lynch (1:8 reverse split + spin-offs; 94%), T Lynch (28%). ANET/APH/AVGO/LRCX were BUG-006, fixed in iteration 7. Adjudicate oracle vs code. (iter 4, updated iter 7)
+- L10 [VAL] APP: a split was detected and applied though `split_events` declares none, and AppLovin has never split. Possible false positive rescaling its EPS history. (iter 7)
 - L7 [VALID] `eps_diluted` is null for early FYs while net income and shares exist (DELL 2015–2019, SCCO 2014–2018; GOOGL weighted shares before 2022): canonical mapping gap. (iter 4)
 - L8 [VAL] Graham/P/B BVPS uses weighted diluted shares and total equity including preferred (JPM basis $130.30 vs about $124 common). The spec is ambiguous. (iter 4)
 - L9 [VAL] KKR graham/multiples: the oracle can't derive the inputs; check the data. (iter 4)
