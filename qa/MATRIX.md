@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 104 · PASS 1 · FAIL 2 · N-A 0 · BLOCKED 0 · NEEDS-USER 2  
+**Status counts:** TODO 102 · PASS 1 · FAIL 5 · N-A 0 · BLOCKED 0 · NEEDS-USER 1  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -11,7 +11,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
-| VAL-01 | DCF (two-stage FCF) | NEEDS-USER | iter 13 | Level 1 ✓ and Level 2 ✓ on every derivable DCF row; the 16 rows with an unmeasurable CAGR follow the plan's analyst-only fallback, which the spec doesn't define: Q5 |
+| VAL-01 | DCF (two-stage FCF) | FAIL→BUG-022 | iter 17 | Level 1 ✓, Level 2 ✓ on every derivable row, but GOOGL, DELL and HON divide by a single-class or halved share count (BUG-022); unmeasurable-CAGR rows: Q5 |
 | VAL-02 | DDM (multi-stage) | NEEDS-USER | iter 16 | BUG-005, -009, -010, -011 and -017 fixed; the oracle agrees on every derivable DDM row. Left for the user: growth when no CAGR is measurable (Q5, 7 rows), CB's missing payments (Q4), special dividends (Q3) |
 | VAL-03 | Graham Number | FAIL→BUG-007 | iter 11 | Level 1 ✓; BUG-014 fixed (KLAC on today's basis; oracle agrees); left: the bear case ignores loss years (BUG-007, NEEDS-USER) and XOM's Level-2 mismatch (lead L6) |
 | VAL-04 | Peter Lynch | TODO | iter 13 | BUG-006 and BUG-014 fixed; BUG-016 restored the plan's rule, so 16 Lynch rows use the analyst figure again (not derivable from the spec: Q5); left: SCCO and DELL Level-2 mismatches (leads L6, L7) |
@@ -64,7 +64,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | GATHER-03 | companyfacts parsing | TODO | |  |
 | GATHER-04 | Rates | TODO | |  |
 | GATHER-05 | Rate limiting and retries | TODO | |  |
-| GATHER-06 | Failure modes (mocked) | TODO | |  |
+| GATHER-06 | Failure modes (mocked) | FAIL→BUG-026 | iter 17 | a failed re-collection no longer erases stored data (BUG-018 fixed); a locked summary.csv crashes the export before SQLite (BUG-026, P0) |
 | GATHER-07 | SEC cache | TODO | |  |
 | GATHER-08 | Idempotency | TODO | |  |
 | GATHER-09 | Ticker input | TODO | |  |
@@ -82,7 +82,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | STORE-03 | WAL handling | TODO | |  |
 | STORE-04 | The web Reader (`mode=ro`) never writes; per-request connections survive threadpool hoppin… | TODO | |  |
 | STORE-05 | The as-of API and UI equal `AsOfReader`; edge dates (before the first filing, today, the f… | TODO | |  |
-| STORE-06 | CSV exports | TODO | |  |
+| STORE-06 | CSV exports | FAIL→BUG-021 | iter 17 | BUG-004/015/018 fixed; a file without a `ticker` column still loses every row (BUG-021); kept copies can collide (BUG-027) |
 | STORE-07 | The real-DB copy passes `PRAGMA integrity_check` and `foreign_key_check`.… | TODO | | Bootstrap: integrity_check ok on realcopy, but the schema declares no foreign keys (0 of 19 tables), so foreign_key_check is vacuous; needs an orphan-row join check. |
 
 ## API: HTTP API (`/docs`, every `/api/*` route)

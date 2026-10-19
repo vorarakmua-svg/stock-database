@@ -356,3 +356,19 @@ Result: BUG-018 VERIFIED; both failure shapes now keep everything in all three s
 comparison is still untested). No valuation changes.
 Gates: ruff ✓ mypy ✓ pytest 892 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(exporters): a failed re-collection never erases stored data
+
+## Iteration 17 (continued): code review 2 recorded
+Review: an opus reviewer covered abed57a..e8c3aa1 (5 fixes). No critical issues; it confirmed the oracle-first
+ordering, the exact BUG-016 restoration, and the `filed_date` rule (36 of 36 historical share splits replay
+correctly). Each finding was re-checked before recording (`qa/evidence/iter17-review2-checks.txt`,
+`iter17-l13-check.txt`): the CSV no-`ticker` repro (both variants), CRM's DDM, the GOOGL/DELL/HON share counts, the
+ABT/DELL/RTX ratios, `_assess`'s catch-all, and lead L13, reproduced as a crash.
+Recorded: BUG-026 (P0, a locked summary.csv crashes the export before SQLite: L13 confirmed), BUG-021 (P1, the CSV
+merge drops every row from a file without a `ticker` column), BUG-022 (P1, DCF/owner earnings use a single-class
+share count for GOOGL and DELL, halved for HON: values about 2× high), BUG-023 (P2, spin-off/merger factors ≥ 3:2
+pass as splits), BUG-024, BUG-025, BUG-027, BUG-028 (P3). BUG-010's impact note and Q5's context updated for the
+restored fallback (CRM DDM +28%, not −16%). L13 promoted; L14 extended. VAL-01 → FAIL→BUG-022, GATHER-06 →
+FAIL→BUG-026, STORE-06 → FAIL→BUG-021. Not acted on: the stale oracle Lynch comment (an edit to it was denied by
+the permission classifier in iteration 13).
+Review 3 is due after 5 fixes past e8c3aa1 (4 so far: eb63f81, 0940188, 83495c2 and BUG-018's).
+Next: BUG-026 (P0)
