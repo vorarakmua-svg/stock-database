@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 1 · P2 0 · P3 2 · NEEDS-USER 1 · Verified: 1
+**Open:** P0 0 · P1 0 · P2 0 · P3 2 · NEEDS-USER 2 · Verified: 2
 
 ---
 
@@ -35,13 +35,13 @@ Actual (suspected): ArrowDown moves within the old list; the new results then la
 Root cause: to confirm. The arrow handlers in `src/webapp/static/palette.js` don't check `itemsQuery === input.value` the way `enter()` does.
 
 ### BUG-004 [P1][STORE] summary.csv keeps only the last collection run's tickers, and its columns depend on that run
-Status: OPEN
-Found: iteration 2 via DOCS-02 (real-data run of the guide's CSV examples), relates to MATCH-05 | Fixed: — | Regression test: —
+Status: VERIFIED
+Found: iteration 2 via DOCS-02 (real-data run of the guide's CSV examples), relates to MATCH-05 | Fixed: iteration 3 (see LOG) | Regression test: `tests/test_csv_exporter.py` (5 tests)
 Repro: collect two batches into the same `--output-dir`, then read `output/csv/summary.csv`.
 Expected: one row per collected company (README: "Summary metrics for all tickers") with a stable column set.
 Actual: each run overwrites it with only that run's tickers. Golden: 4 of 19 (ARM TSM SPY ZZZZ). **Your real data: 2 of 127 (BSX, KKR).** The columns are the union of that run's keys, so the `calc_*` columns vanish when no ticker in the run has calculated metrics. The guide's screening examples then raise `KeyError: ['calc_ev_to_ebitda'] not in index` or see only 2 companies.
-Root cause: to confirm. `CSVExporter.export` (`src/exporters/csv_exporter.py:34`) writes `summary.csv` from the current run's `List[StockData]` with columns = union of keys.
-Notes: expected fix direction: build the summary from all stored tickers (JSON dir or DB) with a fixed column order. Check `financial_history.csv` for the same pattern.
+Root cause: both CSV writers opened their file with mode `'w'` and wrote only the current run's `List[StockData]`. `financial_history.csv` had the same overwrite. `StockData.to_summary()` added each section's keys only when the section was non-empty, and the columns were the union of *this run's* keys. Fix: `to_summary()` always emits every key (None when empty); `export()` and `export_financial_history()` merge with the existing file (a ticker or ticker-year replaces the same one; everything else is kept; same rule as the JSON merge), sorted. An unreadable old file logs a warning and falls back to this run's data. Evidence: RED `qa/evidence/iter03-bug004-red.txt` (5 failures), GREEN `iter03-bug004-green.txt`. Live CLI: `stock-data KO` then `stock-data JPM` into one dir gives summary.csv with JPM **and** KO and all 7 calc_* columns, and financial_history.csv with both (39 rows).
+Notes: **NEEDS-USER:** the fix doesn't repair your existing `data/output/csv/summary.csv` (still 2 of 127 tickers). Future runs merge into it, but a complete file needs a one-off rebuild from the 127 JSON files, which writes to the real data, so it's the user's call.
 
 ### Q1 [UX] NEEDS-USER: show all companies on /screener before a filter is chosen
 Status: NEEDS-USER
@@ -55,4 +55,5 @@ Proposal: run the default (unfiltered) screen on load. Small effort, low risk. A
 - L1 [GATHER/VALID] XOM, TSM and ARM finished without `calculated_metrics` in their sources (every other golden ticker has it). XOM is a plain US 10-K filer. (iter 1)
 - L2 [GATHER] SPY: Yahoo answered 404 "No fundamentals data" 3 times, yet the run recorded 0 warnings / 0 errors (silent gap). (iter 1)
 - L3 [CLI] A batch containing a failed ticker (ZZZZ, errors=1) still exited 0. Check the intended exit-code semantics. (iter 1)
+- L5 [MATCH] Web UPDATE DATA jobs export SQLite only (`src/webapp/jobs.py:246`, `formats=["sqlite"]`), so JSON and the CSVs go stale after web updates. Possibly by design; confirm in MATCH-05. (iter 3)
 - L4 [VAL/VALID] `dividend_history.years_of_data` is the span from the first to the last payment (`yahoo_handler.py:710`): AAPL shows 39.2 years, including its 1995–2012 suspension. Check whether DDM or anything else treats it as an unbroken record. (iter 2)

@@ -3,7 +3,7 @@
 import csv
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from ..models.stock_data import StockData
 
@@ -37,7 +37,11 @@ class CSVExporter:
         filename: str = "summary.csv"
     ) -> Optional[Path]:
         """
-        Export stock data summaries to CSV.
+        Export stock data summaries to CSV, keeping tickers from earlier runs.
+
+        A ticker in ``data`` replaces its existing row; rows for other tickers
+        are kept, so the file summarizes every ticker collected into this
+        output directory, not just the latest run.
 
         Args:
             data: List of StockData objects
@@ -53,13 +57,19 @@ class CSVExporter:
         try:
             filepath = self.output_dir / filename
 
-            # Get summaries
-            summaries = [stock.to_summary() for stock in data]
+            # This run's summaries replace earlier rows for the same tickers
+            existing_columns, existing_rows = self._read_existing(filepath)
+            new_rows = {
+                summary["ticker"]: self._clean_for_csv(summary)
+                for summary in (stock.to_summary() for stock in data)
+            }
+            rows = {row["ticker"]: row for row in existing_rows if row["ticker"] not in new_rows}
+            rows.update(new_rows)
 
             # Determine all columns (union of all keys)
-            all_columns = set()
-            for summary in summaries:
-                all_columns.update(summary.keys())
+            all_columns = set(existing_columns)
+            for row in new_rows.values():
+                all_columns.update(row.keys())
 
             # Sort columns for consistent output
             # Put key columns first
@@ -85,17 +95,27 @@ class CSVExporter:
             with open(filepath, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=columns, extrasaction='ignore')
                 writer.writeheader()
-                for summary in summaries:
-                    # Clean values for CSV
-                    cleaned = self._clean_for_csv(summary)
-                    writer.writerow(cleaned)
+                for ticker in sorted(rows):
+                    writer.writerow(rows[ticker])
 
-            self.logger.info(f"Exported {len(data)} stocks to {filepath}")
+            self.logger.info(f"Exported {len(data)} stocks to {filepath} ({len(rows)} in total)")
             return filepath
 
         except Exception as e:
             self.logger.error(f"Error exporting to CSV: {e}")
             return None
+
+    def _read_existing(self, filepath: Path) -> Tuple[List[str], List[Dict[str, str]]]:
+        """Columns and rows of an earlier export, so a run adds to it instead of replacing it."""
+        if not filepath.exists():
+            return [], []
+        try:
+            with open(filepath, newline='', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                return list(reader.fieldnames or []), [row for row in reader if row.get("ticker")]
+        except (OSError, UnicodeDecodeError, csv.Error) as e:
+            self.logger.warning(f"Could not read existing {filepath.name} ({e}); writing this run's data only")
+            return [], []
 
     def _clean_for_csv(self, data: dict) -> dict:
         """Clean values for CSV output."""
@@ -125,9 +145,11 @@ class CSVExporter:
         filename: str = "financial_history.csv"
     ) -> Optional[Path]:
         """
-        Export historical financial data to CSV.
+        Export historical financial data to CSV, keeping earlier runs' rows.
 
-        Creates a time-series CSV with annual financials.
+        Creates a time-series CSV with annual financials. Like the JSON merge,
+        a ticker-year in ``data`` replaces the same ticker-year; all other rows
+        (other tickers, older years) are kept.
 
         Args:
             data: List of StockData objects
@@ -157,8 +179,14 @@ class CSVExporter:
                 self.logger.warning("No financial history to export")
                 return None
 
+            # This run's ticker-years replace the same ticker-years from earlier runs
+            existing_columns, existing_rows = self._read_existing(filepath)
+            merged = {(row["ticker"], row.get("fiscal_year", "")): row for row in existing_rows}
+            for row in rows:
+                merged[(str(row["ticker"]), str(row["fiscal_year"]))] = self._clean_for_csv(row)
+
             # Get all columns
-            all_columns = set()
+            all_columns = set(existing_columns)
             for row in rows:
                 all_columns.update(row.keys())
 
@@ -170,8 +198,8 @@ class CSVExporter:
             with open(filepath, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=columns, extrasaction='ignore')
                 writer.writeheader()
-                for row in rows:
-                    writer.writerow(self._clean_for_csv(row))
+                for key in sorted(merged):
+                    writer.writerow(merged[key])
 
             self.logger.info(f"Exported financial history to {filepath}")
             return filepath

@@ -42,3 +42,21 @@ Prompt: §4.4 now says background subagents can't be awaited inside an iteration
 Gates: ruff ✓ mypy ✓ pytest 854 passed (1 known warning) | CI: PR #28 bootstrap run pending at start
 Commit: (this commit) docs: USAGE_GUIDE examples use the export's real field names
 Next: BUG-004 (P1), the highest-severity open bug.
+
+## Iteration 3: 2026-10-20 01:25: fix
+Picked: BUG-004 (P1), the highest-severity open bug (CI pending, not red)
+Did: Root cause: both CSV writers overwrote their file with the current run's tickers only (`financial_history.csv`
+too). `to_summary()` emitted a section's keys only when that section was non-empty, so columns followed the run.
+Tests first (`tests/test_csv_exporter.py`, 5 tests): all failed for the predicted reasons. Fix: `to_summary()`
+always emits every key; `export()` and `export_financial_history()` merge with the existing file using the JSON merge
+rule (the newest ticker / ticker-year wins, everything else kept), sorted; an unreadable old file falls back with a
+warning.
+Evidence: `qa/evidence/iter03-bug004-{red,green}.txt`. Live CLI: `stock-data KO` then `stock-data JPM` into one
+scratch dir gives summary.csv = JPM + KO with all 7 calc_* columns, and financial_history.csv = both (39 rows).
+Result: BUG-004 VERIFIED. MATCH-05 back to TODO (full JSON/SQLite/CSV value check still to do). New lead L5: web
+UPDATE DATA jobs write SQLite only. NEEDS-USER: your real summary.csv still has 2 of 127 tickers; rebuilding it
+writes real data.
+Gates: ruff ✓ mypy ✓ pytest 859 passed (1 known warning) | CI: pending
+Commit: (this commit) fix(exporters): CSV summaries keep every collected ticker
+Next: no P0–P2 bugs open, so a discovery unit in the riskiest area: VAL-01..05 (build `qa/oracle/valuation_oracle.py`
+and check the five models on the golden basket).
