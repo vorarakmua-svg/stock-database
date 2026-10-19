@@ -41,7 +41,7 @@ def _cagr_span(n_values: int, periods: Optional[Sequence[int]]) -> Optional[int]
     labels are known, else the number of positions (which assumes no gaps)."""
     if periods is None:
         return n_values - 1
-    if len(periods) != n_values:
+    if len(periods) != n_values or n_values < 2:
         return None
     span = periods[-1] - periods[0]
     return span if span > 0 else None

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 3 · P3 2 · NEEDS-USER 6 · Verified: 7
+**Open:** P0 0 · P1 0 · P2 2 · P3 2 · NEEDS-USER 6 · Verified: 8
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -90,12 +90,12 @@ Root cause: `value_ddm` measured growth from calendar-year totals (`_annual_divi
 Notes: special payments are a policy question, now Q3. A short LAST year is deliberately not dropped: it can be a real cut or suspension, and hiding it would overstate growth.
 
 ### BUG-010 [P2][VAL] DDM dividend CAGR is computed from fewer than 4 fiscal years
-Status: OPEN
-Found: iteration 8 via VAL-02 (while fixing BUG-009) | Fixed: — | Regression test: —
+Status: VERIFIED
+Found: iteration 8 via VAL-02 (while fixing BUG-009) | Fixed: iteration 10 (see LOG) | Regression test: `tests/test_valuation_models.py::test_value_ddm_growth_needs_4_full_years_of_dividends` (3 full years measure nothing; 4 do)
 Repro: TMUS has full dividend years 2024 and 2025 only → stored `hist_cagr` 29.3% over 1 year. BKNG, CRM and META also span 1 year, DELL 2.
 Expected: spec, shared assumptions: the historical CAGR "uses up to 10 FYs of the model's basis metric (FCF for DCF, dividends for DDM, EPS for Lynch); requires ≥ 4 FYs". With fewer, the CAGR is undefined, so growth is flat 0% (BUG-008's rule).
 Actual: `value_ddm` passes any ≥ 2 complete years to `derive_growth`. DCF and Lynch enforce ≥ 4 FYs; DDM doesn't (the plan left it out, and the oracle shares the gap).
-Notes: 5 DDM rows today would go flat: BKNG 9.7%, CRM 4.0%, DELL 10.0% (18.4% capped), TMUS 5.3%, META (already 0%). Applicability is unchanged: the DDM section's "N/A when < 3 calendar years" still decides it.
+Fix: with fewer than 4 full years left after BUG-009's first-year rule, `value_ddm` hands `derive_growth` no history, so no CAGR is measured (`_cagr_span` now returns None for an empty history instead of raising IndexError). Applicability is unchanged: the DDM section's "N/A when < 3 calendar years" still decides it. The oracle took the spec's rule in its own commit first and flagged exactly BKNG, CRM, DELL and TMUS against the pre-fix code (`qa/evidence/iter10-oracle-before-fix.txt`); after the fix it agrees on every DDM row. Impact (`qa/evidence/iter10-bug010-impact.txt`), under today's flat fallback for an unmeasured CAGR (which BUG-016 may revert): BKNG −34%, CRM −16%, DELL −34%, TMUS −21%; META unchanged; no median moves, no verdict flips.
 
 ### BUG-011 [P2][DATA] DHR's 2016 Fortive spin-off is stored as a $24.56 cash dividend (and as a 1.319 split)
 Status: OPEN

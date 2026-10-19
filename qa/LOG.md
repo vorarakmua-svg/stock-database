@@ -182,3 +182,19 @@ New: BUG-013 (P2, SEC annual dividends per share is one period's amount for V/CE
 Gates: ruff ✓ mypy ✓ pytest 874 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(validation): flag dividend payments missing from Yahoo against SEC filings
 Next: record the reviewer's findings (if they arrived), then BUG-010 (P2, oldest open P2)
+
+## Iteration 10: 2026-10-20 05:45: fix
+Picked: BUG-010 (P2), the oldest open P2 (no P0/P1 open; CI: 9c22ef8 running). Code review 1 was still running.
+Did: The spec's shared assumptions say the historical CAGR "requires ≥ 4 FYs"; DCF and Lynch enforce it, the DDM
+didn't. Test first, as a boundary pair: 3 full years must measure nothing (RED: 0.05 == None); 4 still measure
+(passed before and after). Fix: with fewer than 4 full years, `derive_growth` gets no history; `_cagr_span` returns
+None for an empty history (the mutant without that guard raises IndexError). Mutants with a minimum of 3 and of 5
+each fail a boundary case; restored byte-identical. Following the review's advice, the oracle took the spec's rule
+in its own commit first: run on iteration 8's pre-fix valuations, it flagged exactly BKNG, CRM, DELL and TMUS.
+Evidence: `qa/evidence/iter10-bug010-{red,green,mutants,impact}.txt`, `iter10-oracle-before-fix.txt`,
+`iter10-oracle-{golden,real}.txt`
+Result: BUG-010 VERIFIED. Oracle after the fix: golden 0/59 at both levels; real L1 0/503, L2 the same 18 (no DDM
+rows). Impact under today's flat fallback (BUG-016 may revert it): BKNG −34%, CRM −16%, DELL −34%, TMUS −21%; no
+median or verdict changes.
+Gates: ruff ✓ mypy ✓ pytest 876 passed (1 known warning) | CI: pending for this push
+Commit: chore(qa): the oracle rule, then (this commit) fix(valuation): DDM growth needs 4 full years of dividends

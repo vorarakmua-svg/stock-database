@@ -12,7 +12,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
 | VAL-01 | DCF (two-stage FCF) | PASS | iter 6 | Level 1 ✓ and Level 2 ✓ on every applicable DCF row (real + golden) after BUG-008; `qa/evidence/iter06-oracle-*.txt` |
-| VAL-02 | DDM (multi-stage) | FAIL→BUG-010 | iter 9 | BUG-005 and BUG-009 fixed (oracle agrees on every DDM row); open: CAGR from < 4 FYs (BUG-010), DHR spin-off stored as a dividend (BUG-011); CB's missing payments are upstream and now flagged (BUG-012), the DDM's handling is Q4; specials policy: Q3 |
+| VAL-02 | DDM (multi-stage) | FAIL→BUG-011 | iter 10 | BUG-005, BUG-009 and BUG-010 fixed (oracle agrees on every DDM row); open: DHR spin-off stored as a dividend (BUG-011); CB's missing payments are upstream and flagged (BUG-012), the DDM's handling is Q4; specials policy: Q3 |
 | VAL-03 | Graham Number | FAIL→BUG-007 | iter 8 | Level 1 ✓ (124 rows); EPS = reported diluted EPS ✓; bear ignores loss years (8 cos): BUG-007 awaits the user's decision |
 | VAL-04 | Peter Lynch | TODO | iter 7 | BUG-006 and BUG-008 fixed; 4 unexplained Level-2 mismatches (GE, SCCO, SPGI, T): lead L6 |
 | VAL-05 | Historical multiples band | TODO | iter 7 | Level 1 ✓; BUG-006 fix resolved ANET/APH/AVGO/LRCX; 4 unexplained (NOW, SCCO, SPGI, WDC): lead L6 |

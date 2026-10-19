@@ -243,6 +243,17 @@ def test_value_ddm_keeps_a_full_first_year_when_a_later_year_has_a_special():
     assert res.assumptions["hist_cagr"] == pytest.approx(0.10)
 
 
+@pytest.mark.parametrize("first_year, hist_cagr", [(2021, None), (2020, 0.05)])
+def test_value_ddm_growth_needs_4_full_years_of_dividends(first_year, hist_cagr):
+    # Spec: the historical CAGR "requires >= 4 FYs". DDM stays applicable from 3 calendar years,
+    # but with fewer full years no CAGR is measured (TMUS's 2 full years read 29%/yr from a
+    # single year's change).
+    res = value_ddm(_inputs(dividends=_quarterly_dividends(first_year, 2023, 1.00, 0.05)))
+    assert res.applicable is True
+    assert res.assumptions["hist_cagr"] == (None if hist_cagr is None else pytest.approx(hist_cagr))
+    assert res.assumptions["growth_source"] == ("none" if hist_cagr is None else "hist_only")
+
+
 def test_value_ddm_na_too_short():
     divs = _quarterly_dividends(2022, 2023, 1.0, 0.0)
     res = value_ddm(_inputs(sector_class="bank", dividends=divs))

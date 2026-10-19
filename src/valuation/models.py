@@ -183,6 +183,12 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
     if len(complete_years) >= 2 and payments[complete_years[0][0]] < statistics.median(
             payments[year] for year, _ in complete_years):
         complete_years = complete_years[1:]
+    # The spec's historical CAGR "requires >= 4 FYs" (DCF and Lynch are N/A
+    # below that). DDM stays applicable from 3 calendar years, so with fewer
+    # full years no CAGR is measured (TMUS's 2 full years read 29%/yr from a
+    # single year's change).
+    if len(complete_years) < 4:
+        complete_years = []
     complete = [total for _, total in complete_years]
     growth, gmeta = derive_growth(complete, inputs.analyst_growth, cap=DDM_GROWTH_CAP,
                                   periods=[year for year, _ in complete_years])
