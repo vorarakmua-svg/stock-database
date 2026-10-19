@@ -245,7 +245,8 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         # count is partial (dividend started or restarted mid-year, or an ex-date slipped a year back).
         if len(window) >= 2 and window[0][2] < median([n for _, _, n in window]):
             window = window[1:]
-        span = window[-1][0] - window[0][0] if len(window) >= 2 else 0
+        # The spec's historical CAGR "requires >= 4 FYs" (BUG-010): fewer full years measure nothing.
+        span = window[-1][0] - window[0][0] if len(window) >= 4 else None
         hist = (window[-1][1] / window[0][1]) ** (1 / span) - 1 if span and window[0][1] > 0 else None
         g = x.growth(hist, 0.10)
         _, r = x.discount()
