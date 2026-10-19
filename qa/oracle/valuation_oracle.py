@@ -132,11 +132,12 @@ def check_level1(db: sqlite3.Connection, tickers: List[str], tol: float) -> int:
 # closer to the latest share count in log space.
 
 
-def cagr(series: List[float]) -> Optional[float]:
-    """Compound growth from the first to the last value (None if undefined)."""
-    if len(series) < 2 or series[0] <= 0 or series[-1] <= 0:
+def cagr(window: List[Tuple[int, float]]) -> Optional[float]:
+    """Compound growth from the first to the last (fiscal year, value) over their fiscal-year span (None if
+    undefined), so a year without a value neither stretches nor shrinks the rate."""
+    if len(window) < 2 or window[0][1] <= 0 or window[-1][1] <= 0:
         return None
-    return (series[-1] / series[0]) ** (1 / (len(series) - 1)) - 1
+    return (window[-1][1] / window[0][1]) ** (1 / (window[-1][0] - window[0][0])) - 1
 
 
 def median(xs: List[float]) -> float:
@@ -205,6 +206,13 @@ class Inputs:
             return shares
         return min((shares, shares * factor), key=lambda s: abs(math.log(s / latest)))
 
+    def last_10_fys(self, series: List[Tuple[int, float]]) -> List[Tuple[int, float]]:
+        """The spec's "<= 10-FY CAGR windows": the values of the last 10 fiscal years the filings cover. A year
+        without a value leaves a gap; the window doesn't reach further back for it (SCCO has no EPS for FY2013-18,
+        so 10 values went back to FY2010)."""
+        latest = self.annual[-1][0] if self.annual else None
+        return [(fy, v) for fy, v in series if latest is not None and latest - 10 < fy <= latest]
+
     def eps_series(self) -> List[Tuple[int, float]]:
         """Reported diluted EPS (it nets out preferred dividends) moved to today's split basis;
         net income / diluted shares only when EPS wasn't reported."""
@@ -236,19 +244,21 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
     if model in ("dcf", "ddm", "lynch") and x.rf is None:
         return None
     if model == "dcf":
-        rows = db.execute("select coalesce(levered_fcf, free_cash_flow) from metrics_annual where ticker=? "
-                          "and coalesce(levered_fcf, free_cash_flow) is not null order by fiscal_year",
+        rows = db.execute("select fiscal_year, coalesce(levered_fcf, free_cash_flow) from metrics_annual where "
+                          "ticker=? and coalesce(levered_fcf, free_cash_flow) is not null order by fiscal_year",
                           (ticker,)).fetchall()
-        fcf = [r[0] for r in rows][-10:]
+        window = x.last_10_fys([(fy, v) for fy, v in rows])
+        fcf = [v for _fy, v in window]
         if len(fcf) < 4:
             return None
-        g = x.growth(cagr(fcf), 0.15)
+        g = x.growth(cagr(window), 0.15)
         _, r = x.discount()
         if g is None or not x.snap_shares:
             return {"inputs": {"fcf_basis": median(fcf[-3:]), "hist_cagr": None}}
         vals = [dcf_per_share(median(fcf[-3:]), gi, ri, x.snap_shares) for gi, ri in scenarios(g, r, 0.15, False)]
-        return {"inputs": {"fcf_basis": median(fcf[-3:]), "hist_cagr": cagr(fcf), "cagr_years": len(fcf) - 1,
-                           "growth_base": g, "discount_base": r, "shares_outstanding": x.snap_shares}, "values": vals}
+        return {"inputs": {"fcf_basis": median(fcf[-3:]), "hist_cagr": cagr(window),
+                           "cagr_years": window[-1][0] - window[0][0], "growth_base": g, "discount_base": r,
+                           "shares_outstanding": x.snap_shares}, "values": vals}
     if model == "ddm":
         anchor = stored.get("ttm_anchor")
         if not anchor:
@@ -319,15 +329,16 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
                            "bvps_period_end": x.bvps(x.annual[-1], "period_end")},
                 "values": out["diluted"], "alt_values": out["period_end"]}
     if model == "lynch":
-        window = [e for _fy, e in eps][-10:]
-        if len(window) < 4 or window[-1] <= 0:
+        window = x.last_10_fys(eps)
+        if len(window) < 4 or window[-1][1] <= 0:
             return None
         if cagr(window) is None:  # Lynch publishes nothing without a measurable growth rate
             return {"inputs": {"hist_cagr": None}}
         g = x.growth(cagr(window), 0.15)
         trio = [max(g - SPREAD_G, 0.0), g, min(g + SPREAD_G, 0.15)]
-        return {"inputs": {"eps_base": window[-1], "hist_cagr": cagr(window), "cagr_years": len(window) - 1,
-                           "growth_base": g}, "values": [clamp(gi * 100, 5, 25) * window[-1] for gi in trio]}
+        latest = window[-1][1]
+        return {"inputs": {"eps_base": latest, "hist_cagr": cagr(window), "cagr_years": window[-1][0] - window[0][0],
+                           "growth_base": g}, "values": [clamp(gi * 100, 5, 25) * latest for gi in trio]}
     if model == "multiples":
         kind = stored.get("multiple_kind")
         basis_by_fy: Dict[int, Optional[float]] = {}
