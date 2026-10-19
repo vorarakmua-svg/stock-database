@@ -91,7 +91,7 @@ python -m src.main AAPL -v
 | `--formats`, `-f` | Output formats (`json`, `csv`, `sqlite`) | `json csv sqlite` |
 | `--db` | SQLite database path | `<output-dir>/output/stock.db` |
 | `--workers`, `-w` | Tickers fetched concurrently (1 = sequential) | `4` |
-| `--years` | Years of historical data | `10` |
+| `--years` | Limit history to the most recent N years | all available |
 | `--no-yahoo` | Skip Yahoo Finance data | `false` |
 | `--no-sec` | Skip SEC EDGAR data | `false` |
 | `--sec-user-agent` | SEC API User-Agent header | `StockDataCollector admin@example.com` |
@@ -101,7 +101,7 @@ python -m src.main AAPL -v
 
 ```bash
 # Fetch 10 years of data for tech stocks
-python -m src.main AAPL MSFT GOOGL AMZN META
+python -m src.main AAPL MSFT GOOGL AMZN META --years 10
 
 # Yahoo Finance data only (faster)
 python -m src.main TSLA --no-sec

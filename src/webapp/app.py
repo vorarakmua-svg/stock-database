@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -25,6 +25,19 @@ from .routes.pages import templates
 from .settings import WebSettings, default_settings
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+class _RevalidatedStaticFiles(StaticFiles):
+    """StaticFiles that browsers must revalidate (a cheap ETag 304) before reusing.
+
+    Without a Cache-Control header, browsers cache JS/CSS heuristically and keep
+    running the old copy after an update until a hard refresh.
+    """
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def create_app(
@@ -52,7 +65,7 @@ def create_app(
 
     # Mount static files (must exist before the app handles requests)
     if _STATIC_DIR.exists():
-        app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+        app.mount("/static", _RevalidatedStaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     # Routers — page routes first so they take precedence over /api paths
     app.include_router(pages.router)
