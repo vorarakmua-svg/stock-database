@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 2 · P2 4 · P3 2 · NEEDS-USER 7 · Verified: 9
+**Open:** P0 0 · P1 1 · P2 4 · P3 2 · NEEDS-USER 7 · Verified: 10
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -134,12 +134,12 @@ Root cause: `src/valuation/inputs.py` (`_normalize_splits`, `load_inputs`): "cur
 Notes: the review calls it P0-class (wrong numbers on screen); by the iteration-4 valuation calibration (large errors for some tickers) it's P1, and every company that splits shows it until its next annual report. The oracle shares the reading (`to_current_basis` aims at the latest FY's share count), so it couldn't catch this. Other declared "splits" after the latest FY: CRWD 4:1 (only its DCF applies, and that uses current shares), HON 0.9535 and SPGI 1.057 (spin-off price factors, see L12), SCCO 1.008 and 1.01 (stock dividends).
 
 ### BUG-015 [P1][STORE] The CSV merge can silently drop every accumulated row
-Status: OPEN
-Found: iteration 10 by code review 1; the BOM case reproduced in scratch (`qa/evidence/iter10-review-csv-bom.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED
+Found: iteration 10 by code review 1; the BOM case reproduced in scratch (`qa/evidence/iter10-review-csv-bom.txt`) | Fixed: iteration 12 (see LOG) | Regression tests: `tests/test_csv_exporter.py::test_summary_keeps_earlier_rows_after_excel_adds_a_byte_order_mark`, `::test_financial_history_keeps_earlier_rows_after_excel_adds_a_byte_order_mark`, `::test_an_unreadable_summary_is_kept_aside_not_overwritten`, `::test_a_failure_mid_write_leaves_the_old_summary_whole`
 Repro: export AAA and BBB; save `summary.csv` from Excel as "CSV UTF-8" (which adds a byte-order mark); export CCC: the file now holds only CCC.
 Expected: earlier rows kept (BUG-004's guarantee), or, when the old file can't be read, the file left untouched with an error.
 Actual: `_read_existing` reads with `utf-8`, so the BOM turns the header into `\ufeffticker` and `row.get("ticker")` drops every row. Per the review, an Excel ANSI (cp1252) save with one non-ASCII character logs a warning and is overwritten with this run's rows, and an exception mid-write leaves a truncated file.
-Root cause: `src/exporters/csv_exporter.py` (`_read_existing`, `export`; BUG-004's fix, 42f8a01): BOM-intolerant read, overwrite when unreadable, non-atomic write.
+Root cause: `src/exporters/csv_exporter.py` (`_read_existing`, `export`; BUG-004's fix, 42f8a01): BOM-intolerant read, overwrite when unreadable, non-atomic write. Fix: reads use `utf-8-sig`; a file that still can't be parsed is moved aside as `<name>.unreadable-<timestamp>.csv` with a warning naming it (other read errors propagate and leave it untouched); writes go to a `.tmp` file that `os.replace` swaps in only once complete. Both CSV exports share these paths. Moving aside rather than refusing keeps the export returning a path, which matters while lead L13's KeyError on a failed summary export is open. Verified end to end through the fetcher's export path on real golden data (`qa/evidence/iter12-bug015-e2e.txt`): KO's rows survive an Excel UTF-8 re-save in both files, an Excel ANSI re-save is kept aside byte-identical, and no `.tmp` file is left.
 Notes: before BUG-004's fix a failure lost one run; now the file holds every run, so a failure loses all of them (rebuildable from SQLite or JSON, but nothing says so). Fix direction (review): read with `utf-8-sig`; back up or refuse instead of overwriting an unreadable file; write to a temp file and `os.replace`.
 
 ### BUG-016 [P1][VAL] Iteration 6 changed a planned valuation rule without the user's decision (loop rule 6)

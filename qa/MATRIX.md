@@ -50,7 +50,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | MATCH-02 | Cross-source fundamentals | TODO | |  |
 | MATCH-03 | Market math | TODO | |  |
 | MATCH-04 | Price history | TODO | |  |
-| MATCH-05 | Store consistency | FAIL→BUG-015 | iter 10 | BUG-004 fixed (CSVs accumulate across runs), but the merge can drop every row (BUG-015) or blank one (BUG-018); JSON vs SQLite vs CSV values untested |
+| MATCH-05 | Store consistency | FAIL→BUG-018 | iter 12 | BUG-004 and BUG-015 fixed (the CSVs accumulate across runs and survive Excel re-saves); open: a failed re-collection blanks a row (BUG-018); JSON vs SQLite vs CSV values untested |
 | MATCH-06 | UI vs DB | TODO | |  |
 | MATCH-07 | Peers and sector medians are computed within the right sector and the medians are correct.… | TODO | |  |
 | MATCH-08 | Dedup | TODO | |  |

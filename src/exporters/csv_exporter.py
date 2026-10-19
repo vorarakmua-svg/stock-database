@@ -2,8 +2,10 @@
 
 import csv
 import logging
+import os
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..models.stock_data import StockData
 
@@ -91,12 +93,7 @@ class CSVExporter:
             # Add remaining columns sorted alphabetically
             columns.extend(sorted(all_columns))
 
-            # Write CSV
-            with open(filepath, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=columns, extrasaction='ignore')
-                writer.writeheader()
-                for ticker in sorted(rows):
-                    writer.writerow(rows[ticker])
+            self._write_atomically(filepath, columns, [rows[ticker] for ticker in sorted(rows)])
 
             self.logger.info(f"Exported {len(data)} stocks to {filepath} ({len(rows)} in total)")
             return filepath
@@ -106,16 +103,40 @@ class CSVExporter:
             return None
 
     def _read_existing(self, filepath: Path) -> Tuple[List[str], List[Dict[str, str]]]:
-        """Columns and rows of an earlier export, so a run adds to it instead of replacing it."""
+        """Columns and rows of an earlier export, so a run adds to it instead of replacing it.
+
+        The file holds every earlier run, so nothing here may lose it. ``utf-8-sig``
+        reads past the byte-order mark Excel adds when it saves "CSV UTF-8"; a file
+        that still can't be parsed (an Excel ANSI save) is moved aside for the user
+        instead of being overwritten, and any other error propagates with the file
+        left as it is.
+        """
         if not filepath.exists():
             return [], []
         try:
-            with open(filepath, newline='', encoding='utf-8') as f:
+            with open(filepath, newline='', encoding='utf-8-sig') as f:
                 reader = csv.DictReader(f)
                 return list(reader.fieldnames or []), [row for row in reader if row.get("ticker")]
-        except (OSError, UnicodeDecodeError, csv.Error) as e:
-            self.logger.warning(f"Could not read existing {filepath.name} ({e}); writing this run's data only")
+        except (UnicodeDecodeError, csv.Error) as e:
+            kept = filepath.with_name(f"{filepath.stem}.unreadable-{datetime.now():%Y%m%d-%H%M%S}{filepath.suffix}")
+            filepath.replace(kept)
+            self.logger.warning(
+                f"Could not read existing {filepath.name} ({e}); kept it as {kept.name} and wrote this run's data only"
+            )
             return [], []
+
+    def _write_atomically(self, filepath: Path, columns: List[str], rows: List[Dict[str, Any]]) -> None:
+        """Write to a temporary file and swap it in, so a failure mid-write leaves the old file whole."""
+        tmp = filepath.with_name(filepath.name + ".tmp")
+        try:
+            with open(tmp, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=columns, extrasaction='ignore')
+                writer.writeheader()
+                for row in rows:
+                    writer.writerow(row)
+            os.replace(tmp, filepath)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def _clean_for_csv(self, data: dict) -> dict:
         """Clean values for CSV output."""
@@ -194,12 +215,7 @@ class CSVExporter:
             priority = ["ticker", "fiscal_year"]
             columns = priority + sorted(all_columns - set(priority))
 
-            # Write CSV
-            with open(filepath, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=columns, extrasaction='ignore')
-                writer.writeheader()
-                for key in sorted(merged):
-                    writer.writerow(merged[key])
+            self._write_atomically(filepath, columns, [merged[key] for key in sorted(merged)])
 
             self.logger.info(f"Exported financial history to {filepath}")
             return filepath

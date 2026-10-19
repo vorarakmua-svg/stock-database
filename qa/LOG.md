@@ -237,3 +237,22 @@ Gates: ruff ✓ mypy ✓ pytest 879 passed (1 known warning) | CI: pending for t
 Commit: chore(qa) oracle basis (c5f6e72), then (this commit) fix(valuation): per-share history follows splits after
 the latest filing
 Next: BUG-015 (P1, the CSV merge can drop every row), then BUG-016
+
+## Iteration 12: 2026-10-20 02:20: fix
+Picked: BUG-015 (P1), the only open P1 (CI: 694f135 running at the start).
+Did: Root cause per code review 1 and the iteration-10 repro: `_read_existing` read plain UTF-8 (an Excel BOM hid
+the `ticker` column, so every row was dropped), an unreadable file was overwritten with this run's rows, and both
+exports rewrote their file in place. Design: move an unreadable file aside instead of refusing, because a `None`
+return trips lead L13's KeyError and skips the SQLite export. Tests first: 4 RED for the right reasons (BOM summary:
+['CCC'] only; BOM history: BBB only; cp1252: no backup kept; a mid-write OSError: header-only file). Fix: `utf-8-sig`
+reads; an unparsable file moved aside as `<name>.unreadable-<timestamp>.csv`; writes through a `.tmp` file and
+`os.replace`, shared by both exports. Mutants (plain utf-8 read, no move-aside, write straight to the target, temp
+file kept on failure) each fail their test; restored byte-identical. End to end through the fetcher's export path
+on real golden StockData (offline): the UTF-8 and ANSI re-save cases behave as specified.
+Tooling note: test code written through a Bash heredoc lost a level of backslash escapes (a cp1252 literal and two
+BOM byte literals), so code with escapes now goes through script files.
+Evidence: `qa/evidence/iter12-bug015-{red,green,mutants,e2e}.txt`
+Result: BUG-015 VERIFIED. MATCH-05 → FAIL→BUG-018 (a failed re-collection still blanks a row).
+Gates: ruff ✓ mypy ✓ pytest 883 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(exporters): the CSV merge never loses earlier rows
+Next: BUG-016 (P1, restore the plan's growth fallback until the user decides Q5)
