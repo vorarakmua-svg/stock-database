@@ -341,3 +341,41 @@ def test_a_run_without_market_data_writes_no_snapshot(tmp_path):
     assert latest == (150.0,)
     assert runs == 2  # the failed run is still recorded
 
+
+def _latest_price_and_count(db_path, ticker):
+    conn = sqlite3.connect(db_path)
+    latest = conn.execute("SELECT current_price FROM market_snapshots WHERE ticker = ? "
+                          "ORDER BY collected_at DESC LIMIT 1", (ticker,)).fetchone()
+    count = conn.execute("SELECT count(*) FROM market_snapshots WHERE ticker = ?", (ticker,)).fetchone()[0]
+    conn.close()
+    return latest, count
+
+
+def _priced_store(tmp_path):
+    store = SQLiteStore(db_path=tmp_path / "stock.db")
+    good = _company("AAA", revenue=1.0e9, roic=0.12)
+    good.market_data = {"current_price": 150.0, "market_cap": 1.5e11, "beta": 1.1, "ma_50": 148.0}
+    good.collected_at = datetime(2026, 8, 4, 12, 0)
+    store.export([good])
+    return store
+
+
+def test_a_quote_without_a_price_writes_no_snapshot(tmp_path):
+    # upsert_quote carried beta, the moving averages and the rate forward, so any quote made a new latest
+    # snapshot, even one a Yahoo rate limit left without a price.
+    store = _priced_store(tmp_path)
+    store.upsert_quote("AAA", {"market_data": {}, "valuation": {"pe_trailing": 25.0}, "shareholders": {},
+                               "analyst_estimates": {}}, "2026-10-20T09:00:00")
+    assert _latest_price_and_count(tmp_path / "stock.db", "AAA") == ((150.0,), 1)
+
+
+def test_a_run_with_only_price_history_writes_no_snapshot(tmp_path):
+    # Yahoo's quote data can come back empty while its price history works: the moving averages alone made a
+    # latest snapshot with no price, market cap, shares or beta.
+    store = _priced_store(tmp_path)
+    partial = StockData(ticker="AAA", collected_at=datetime(2026, 10, 20, 9, 0))
+    partial.market_data = {"ma_50": 343.0, "ma_200": 343.0}
+    partial.merge_risk_free_rate({"risk_free_rate": 0.0419, "source": "fallback"})
+    store.export([partial])
+    assert _latest_price_and_count(tmp_path / "stock.db", "AAA") == ((150.0,), 1)
+

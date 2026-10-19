@@ -3,10 +3,12 @@
    fragment (see fragments/des.html's hx-on::after-request). While the job
    is queued/running, this re-polls itself every 2s; once it reaches a
    terminal state the wrapper carries NO hx-trigger, so polling stops on its
-   own. "done" swaps in a DES reload; "error" shows the failure message. #}
+   own. "done" swaps in a DES reload; "error", or a finished job whose quote
+   for this ticker failed (say, Yahoo rate-limited), shows the failure message. #}
 {% if terminal %}
+{% set failures = (job.summary or {}).get("errors") or {} %}
 <div id="refresh-status">
-  {% if job.state == "done" %}
+  {% if job.state == "done" and ticker not in failures %}
   <div
     class="job-state job-state--done"
     hx-get="/ui/stocks/{{ ticker }}/des"
@@ -16,7 +18,7 @@
   >Quote refreshed.</div>
   {% else %}
   <div class="job-error alert alert-danger">
-    <strong>Refresh failed:</strong> {{ job.error }}
+    <strong>Refresh failed:</strong> {{ failures.get(ticker) or job.error }}
   </div>
   {% endif %}
 </div>

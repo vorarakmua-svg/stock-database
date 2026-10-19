@@ -578,3 +578,18 @@ VAL-07, VAL-08 and VAL-11, and the code's and oracle's share counts on 146 compa
 Gates: ruff ✓ mypy ✓ pytest 917 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) chore(qa): record code review 4 findings
 Next: BUG-033 (P1); then the P2s oldest first (BUG-017, BUG-034, BUG-035, BUG-036, BUG-037)
+
+## Iteration 30: 2026-10-20 04:38: fix
+Picked: BUG-033 (P1), the only open P0–P1 (CI: 1810180 ✓; 63ffeaf running).
+Did: Tests first, all RED: an empty quote and a price-history-only export each made a price-less latest snapshot,
+and a rate-limited refresh through the real YahooHandler (yfinance mocked) counted as a success. Fix: a snapshot needs
+this run's price in both `SQLiteStore.export` and `upsert_quote`, and `fetch_quote` reports an error when it got no
+price. A fourth test then showed the page still said "Quote refreshed." for that failed job (RED); the quote job now
+keeps each failed ticker's message and the status fragment shows it. Five mutants each fail a test; restored
+byte-identical. Re-ran the review's scenarios on fresh golden copies; checked that a good refresh writes only the two
+snapshot rows.
+Evidence: `qa/evidence/iter30-bug033-{red,green,mutants,e2e}.txt`, `iter30-gather13-only-snapshot.txt`
+Result: BUG-033 VERIFIED. GATHER-13 → PASS.
+Gates: ruff ✓ mypy ✓ pytest 921 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(exporters): a market snapshot needs a price, and a failed quote refresh says so
+Next: BUG-017 (P2, the oldest open P2; a third fix attempt, oracle rule first)

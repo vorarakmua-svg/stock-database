@@ -123,12 +123,18 @@ class YahooHandler:
         try:
             self.rate_limiter.wait()
             stock = yf.Ticker(ticker)
-            return {
+            quote = {
                 "market_data": self._get_market_data(stock, include_moving_averages=False),
                 "valuation": self._get_valuation_metrics(stock),
                 "shareholders": self._get_shareholder_stats(stock),
                 "analyst_estimates": self._get_analyst_estimates(stock),
             }
+            # The extractors swallow Yahoo's errors (a rate limit leaves each one empty),
+            # so a quote without a price is a failed fetch, not a refresh.
+            if quote["market_data"].get("current_price") is None:
+                self.logger.error(f"Yahoo returned no price for {ticker}")
+                return {"error": "Yahoo returned no price"}
+            return quote
         except Exception as e:
             self.logger.error(f"Error fetching Yahoo quote for {ticker}: {e}")
             return {"error": str(e)}

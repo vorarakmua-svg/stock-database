@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 93 · PASS 6 · FAIL 8 · N-A 0 · BLOCKED 0 · NEEDS-USER 2  
+**Status counts:** TODO 93 · PASS 7 · FAIL 7 · N-A 0 · BLOCKED 0 · NEEDS-USER 2  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -71,7 +71,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | GATHER-10 | `--workers 1` and `--workers 4` produce identical DB content apart from timestamps.… | TODO | |  |
 | GATHER-11 | Flag combinations | TODO | |  |
 | GATHER-12 | Web jobs on a scratch server | TODO | |  |
-| GATHER-13 | Quote refresh (`POST /api/stocks/{T}/refresh-quote`) writes only the snapshot; `STOCK_WEB_… | FAIL→BUG-033 | iter 29 | a failed refresh writes a price-less latest snapshot and reports success (BUG-033); the rest untested |
+| GATHER-13 | Quote refresh (`POST /api/stocks/{T}/refresh-quote`) writes only the snapshot; `STOCK_WEB_… | PASS | iter 30 | a successful refresh writes one market and one analyst snapshot and nothing else (19 tables); a failed one writes none, counts as an error and says so on the page (BUG-033 fixed); `STOCK_WEB_ALLOW_QUOTE_REFRESH=0` returns 409 and disables the button (tests) |
 
 ## STORE: Persistence and queries
 

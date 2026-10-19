@@ -305,6 +305,8 @@ class CollectionJobManager:
 
             successful = 0
             with_errors = 0
+            # Each failed ticker's message, so the DES status can say why a refresh failed.
+            errors: Dict[str, str] = {}
             for ticker in tickers:
                 with self._lock:
                     self._jobs[job_id].current_ticker = ticker
@@ -312,6 +314,7 @@ class CollectionJobManager:
                 quote = handler.fetch_quote(ticker)
                 if "error" in quote:
                     with_errors += 1
+                    errors[ticker] = str(quote["error"])
                 else:
                     collected_at = _collected_at_now()
                     store.upsert_quote(ticker, quote, collected_at)
@@ -330,6 +333,7 @@ class CollectionJobManager:
                     "total": len(tickers),
                     "successful": successful,
                     "with_errors": with_errors,
+                    "errors": errors,
                 }
 
         except Exception as exc:  # noqa: BLE001 — worker must not propagate

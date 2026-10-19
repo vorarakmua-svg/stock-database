@@ -61,12 +61,6 @@ _SNAPSHOT_COLUMNS = [
 
 # Snapshot columns that are text, not numeric (kept separate so _cols_ddl can type them).
 _SNAPSHOT_TEXT_COLUMNS = ["ex_dividend_date"]
-#: Snapshot columns only a market-data fetch (Yahoo) fills: not the risk-free rate, which a run
-#: gets even when Yahoo fails, nor the ratios computed downstream from market cap.
-_MARKET_COLUMNS = [
-    c for c in _SNAPSHOT_COLUMNS
-    if c not in ("risk_free_rate", "enterprise_value", "ev_to_ebitda", "ev_to_fcf", "fcf_yield")
-] + _SNAPSHOT_TEXT_COLUMNS
 
 # One row per collection: analyst price targets / recommendations (from analyst_estimates).
 _ANALYST_COLUMNS = [
@@ -525,9 +519,10 @@ class SQLiteStore:
         snapshot["ev_to_fcf"] = cm.get("ev_to_fcf")
         snapshot["fcf_yield"] = cm.get("fcf_yield")
         snapshot["risk_free_rate"] = rf.get("risk_free_rate")
-        # Only record a snapshot when the run got market data. A Yahoo failure still gets a
-        # risk-free rate, and a rate-only row would become the latest snapshot, with no price.
-        if any(snapshot.get(c) is not None for c in _MARKET_COLUMNS):
+        # Only record a snapshot when the run got a price: the latest snapshot is where the
+        # price, verdict and upside come from. A Yahoo failure still gets a risk-free rate,
+        # and the price history (the moving averages) can work while the quote fails.
+        if snapshot.get("current_price") is not None:
             self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)
 
         # collection_runs
@@ -769,18 +764,19 @@ class SQLiteStore:
                 for col in _SNAPSHOT_TEXT_COLUMNS:
                     snapshot[col] = merged.get(col)
 
-                # Carry forward ma_50/ma_200/beta/ev_to_fcf/fcf_yield/risk_free_rate
-                # from the latest prior snapshot when this quote-only fetch didn't
-                # return them.
-                prev = self._latest_snapshot_row(conn, ticker)
-                if prev is not None:
-                    for col in ("ma_50", "ma_200", "beta",
-                                "ev_to_fcf", "fcf_yield", "risk_free_rate"):
-                        if snapshot.get(col) is None:
-                            snapshot[col] = prev.get(col)
-
-                if any(snapshot.get(c) is not None
-                       for c in _SNAPSHOT_COLUMNS + _SNAPSHOT_TEXT_COLUMNS):
+                # A quote without a price writes no snapshot: with the fields carried
+                # forward below it would become the latest one, with no price, verdict
+                # or upside behind it (a Yahoo rate limit leaves every extractor empty).
+                if snapshot.get("current_price") is not None:
+                    # Carry forward ma_50/ma_200/beta/ev_to_fcf/fcf_yield/risk_free_rate
+                    # from the latest prior snapshot when this quote-only fetch didn't
+                    # return them.
+                    prev = self._latest_snapshot_row(conn, ticker)
+                    if prev is not None:
+                        for col in ("ma_50", "ma_200", "beta",
+                                    "ev_to_fcf", "fcf_yield", "risk_free_rate"):
+                            if snapshot.get(col) is None:
+                                snapshot[col] = prev.get(col)
                     self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)
 
                 self._write_analyst_snapshot(

@@ -272,6 +272,43 @@ def test_refresh_quote_poll_to_done_writes_new_snapshot_rows(web_db: Path) -> No
     assert "$123.45" in des.text
 
 
+def _rate_limited_client(web_db: Path, monkeypatch) -> TestClient:
+    """A client whose quote refreshes go through the real YahooHandler while Yahoo answers 429."""
+    import src.fetchers.yahoo_handler as yh
+
+    class RateLimitedTicker:
+        def __init__(self, ticker: str) -> None:
+            self.ticker = ticker
+
+        def __getattr__(self, name: str) -> Any:
+            raise Exception("Too Many Requests. Rate limited. Try after a while.")
+
+    monkeypatch.setattr(yh.yf, "Ticker", RateLimitedTicker)
+    client = _make_client(web_db)
+    client.app.state.job_manager.quote_fetcher_factory = lambda config: yh.YahooHandler(rate_limit_delay=0)
+    return client
+
+
+def test_a_rate_limited_refresh_reports_an_error_and_keeps_the_latest_snapshot(web_db: Path, monkeypatch) -> None:
+    # A Yahoo 429 leaves every quote extractor empty. The refresh used to count as a success and write a
+    # snapshot holding only carried-forward fields, so the page lost its price, verdict and upside.
+    before = _snapshot_count(web_db, "AAA")
+    client = _rate_limited_client(web_db, monkeypatch)
+    final = _wait_until_done(client, client.post("/api/stocks/AAA/refresh-quote").json()["job_id"])
+    assert (final["summary"]["successful"], final["summary"]["with_errors"]) == (0, 1)
+    assert _snapshot_count(web_db, "AAA") == before
+
+
+def test_a_failed_refresh_says_so_on_the_stock_page(web_db: Path, monkeypatch) -> None:
+    # The status fragment said "Quote refreshed." for every finished job, including one whose only ticker failed.
+    client = _rate_limited_client(web_db, monkeypatch)
+    job_id = client.post("/api/stocks/AAA/refresh-quote").json()["job_id"]
+    _wait_until_done(client, job_id)
+    body = client.get(f"/ui/stocks/AAA/refresh-status/{job_id}").text
+    assert "Refresh failed" in body and "Yahoo returned no price" in body
+    assert "Quote refreshed" not in body and "/ui/stocks/AAA/des" not in body
+
+
 def test_refresh_quote_job_summary_notes_mode(web_db: Path) -> None:
     client = _make_client(web_db)
     r = client.post("/api/stocks/AAA/refresh-quote")
