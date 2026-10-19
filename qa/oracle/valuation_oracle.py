@@ -263,10 +263,15 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         # The spec's "<= 10 yrs" is a calendar window (complete years before the anchor year), and the
         # exponent is the calendar span, so a payment gap can't stretch or shrink the growth rate.
         window = [(y, sum(v), len(v)) for y, v in sorted(by_year.items()) if y >= int(anchor[:4]) - 10]
-        # Growth compares full years (BUG-009): a first year with fewer payments than the window's usual
-        # count is partial (dividend started or restarted mid-year, or an ex-date slipped a year back).
-        if len(window) >= 2 and window[0][2] < median([n for _, _, n in window]):
+        # Growth compares full years (BUG-009, BUG-017). Leading years with fewer payments than the window's
+        # usual count are partial (a dividend started, paused or restarted, or an ex-date slipped a year back);
+        # a last year with more holds a payment that belongs to the next year (O 2025's Dec 31 ex-date), so it
+        # is scaled to the usual count.
+        usual = median([n for _, _, n in window]) if window else 0
+        while len(window) >= 2 and window[0][2] < usual:
             window = window[1:]
+        if window and window[-1][2] > usual:
+            window[-1] = (window[-1][0], window[-1][1] * usual / window[-1][2], window[-1][2])
         # The spec's historical CAGR "requires >= 4 FYs" (BUG-010): fewer full years measure nothing.
         span = window[-1][0] - window[0][0] if len(window) >= 4 else None
         hist = (window[-1][1] / window[0][1]) ** (1 / span) - 1 if span and window[0][1] > 0 else None
