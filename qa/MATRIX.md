@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 95 · PASS 7 · FAIL 3 · N-A 0 · BLOCKED 0 · NEEDS-USER 4  
+**Status counts:** TODO 96 · PASS 7 · FAIL 2 · N-A 0 · BLOCKED 0 · NEEDS-USER 4  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -14,7 +14,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | VAL-01 | DCF (two-stage FCF) | NEEDS-USER | iter 20 | Level 1 ✓ and Level 2 ✓ on every derivable DCF row, with every share class counted (BUG-022 fixed); left: the rows without a measurable CAGR follow the plan's fallback, which the spec doesn't define (Q5) |
 | VAL-02 | DDM (multi-stage) | NEEDS-USER | iter 25 | BUG-017 fixed again: each end of the dividend CAGR is judged by its neighbours' cadence, so frequency changes, specials and slipped payments are handled; the oracle agrees on every derivable row (golden 0/57; real: the known 12 are other models); user questions: Q3, Q4, Q5 |
 | VAL-03 | Graham Number | NEEDS-USER | iter 26 | Level 1 ✓; Level 2 ✓ on every derivable row (XOM and KKR derived with the period-end count since 0f47b5f); left: the bear case with loss years (BUG-007, NEEDS-USER, 8 rows) |
-| VAL-04 | Peter Lynch | NEEDS-USER | iter 26 | Level 1 ✓; Level 2 ✓ on every derivable row (SCCO was the oracle's positional window, e4b6a1f); 16 rows incl. DELL rest on Q5 (growth when the CAGR can't be measured); inputs: SCCO's FY2011–18 EPS unmapped (BUG-032, no value change) |
+| VAL-04 | Peter Lynch | NEEDS-USER | iter 28 | Level 1 ✓; Level 2 ✓ on every derivable row (SCCO was the oracle's positional window, e4b6a1f); 16 rows incl. DELL rest on Q5 (growth when the CAGR can't be measured); BUG-032 fixed: once re-collected, SCCO measures FY2016–25 (20.2%, capped at 15% as before) |
 | VAL-05 | Historical multiples band | PASS | iter 27 | Level 1 ✓ and Level 2 ✓ on every derivable row, real and golden (`qa/evidence/iter27-oracle-*.txt`): P/E, P/B for banks and insurers, P/FFO for REITs over the last 5 FYs, prices at each FY end, at least 3 years; BUG-031 fixed (NOW's split-mixed band) |
 | VAL-06 | Owner earnings | PASS | iter 26 | 127 real and 19 golden rows: every N/A reason and the 8-of-10 gate match the spec recomputed from raw tables; volatility fields, buy_below = 0.70 × base, discount = max(rf, 7%), no beta, no SBC add-back; excluded from the median (it would move 81 summaries); the API's verdict follows the spec for all; values recompute exactly (iter 22). UX note for REPORT: UBER's 'insufficient history' is decided either way (5 of 9 years positive) (`qa/evidence/iter26-val06.txt`) |
 | VAL-07 | Summary | PASS | iter 22 | summary rows equal the medians of the applicable models (127 real, 19 golden; 32 with an even count); the screener's upside, verdict and Buffett verdict equal the valuation API's for every company (126, 14), and sorting by upside ranks by those numbers; the verdict rule matches the spec (code read); `qa/evidence/iter22-discovery-val.txt` |
@@ -29,7 +29,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
-| VALID-01 | Canonical mapping | FAIL→BUG-032 | iter 26 | SEC's combined BasicAndDiluted EPS and share concepts are unmapped for 9 filers (BUG-032); the coverage_report run over the basket is untested |
+| VALID-01 | Canonical mapping | TODO | iter 28 | BUG-032 fixed: the combined BasicAndDiluted EPS and share concepts fill both fields (132 values for 9 filers, none changed); the coverage_report run over the basket is untested |
 | VALID-02 | Accounting identities | TODO | |  |
 | VALID-03 | Sign conventions | TODO | |  |
 | VALID-04 | Units and scale | TODO | |  |

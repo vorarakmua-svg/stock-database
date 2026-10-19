@@ -145,13 +145,15 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
 
     # ---------------- Per share (duration) ----------------
+    # A filer without dilutive securities may tag one figure for both (SCCO FY2011-18,
+    # SPG, O): it fills the basic and the diluted field when the separate tag is absent.
     CanonicalField(
         "eps_basic", "EPS Basic", PER_SHARE, UNIT_USD_PER_SHARE, DURATION,
-        ("EarningsPerShareBasic",),
+        ("EarningsPerShareBasic", "EarningsPerShareBasicAndDiluted"),
     ),
     CanonicalField(
         "eps_diluted", "EPS Diluted", PER_SHARE, UNIT_USD_PER_SHARE, DURATION,
-        ("EarningsPerShareDiluted",),
+        ("EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"),
     ),
     CanonicalField(
         "dividends_per_share", "Dividends Per Share", PER_SHARE, UNIT_USD_PER_SHARE, DURATION,
@@ -331,13 +333,16 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         "shares_outstanding", "Shares Outstanding", SHARES, UNIT_SHARES, INSTANT,
         ("CommonStockSharesOutstanding", "EntityCommonStockSharesOutstanding"),
     ),
+    # As with EPS, the combined count fills both fields when the separate one is absent.
     CanonicalField(
         "weighted_avg_shares_basic", "Weighted Avg Shares (Basic)", SHARES, UNIT_SHARES, DURATION,
-        ("WeightedAverageNumberOfSharesOutstandingBasic",),
+        ("WeightedAverageNumberOfSharesOutstandingBasic",
+         "WeightedAverageNumberOfShareOutstandingBasicAndDiluted"),
     ),
     CanonicalField(
         "weighted_avg_shares_diluted", "Weighted Avg Shares (Diluted)", SHARES, UNIT_SHARES, DURATION,
-        ("WeightedAverageNumberOfDilutedSharesOutstanding",),
+        ("WeightedAverageNumberOfDilutedSharesOutstanding",
+         "WeightedAverageNumberOfShareOutstandingBasicAndDiluted"),
     ),
 
     # ---------------- Operating long-tail (general) ----------------

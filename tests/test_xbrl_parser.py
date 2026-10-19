@@ -170,3 +170,32 @@ def test_a_duration_field_with_only_point_in_time_facts_stays_empty():
     annual = XBRLParser().extract_annual_financials(_dividend_facts([], cash_paid))
     assert "dividends_per_share" not in annual.get("2025", {})
 
+
+def _fy2024(val):
+    return usd(val, start="2024-01-01", end="2024-12-31", fy=2024, filed="2025-02-27")
+
+
+def test_the_combined_basic_and_diluted_concepts_fill_both_fields():
+    # A filer without dilutive securities may tag one EPS and one share count for both (SCCO for
+    # FY2011-18, SPG, O, NOW, PANW, MO, TSLA, CRWD): those years had no EPS or share counts at all.
+    annual = XBRLParser().extract_annual_financials({"facts": {"us-gaap": {
+        "EarningsPerShareBasicAndDiluted": {"units": {"USD/shares": [_fy2024(1.00)]}},
+        "WeightedAverageNumberOfShareOutstandingBasicAndDiluted": {"units": {"shares": [_fy2024(773.1e6)]}},
+    }}})
+    year = annual["2024"]
+    assert (year["eps_basic"], year["eps_diluted"]) == (1.00, 1.00)
+    assert (year["weighted_avg_shares_basic"], year["weighted_avg_shares_diluted"]) == (773.1e6, 773.1e6)
+
+
+def test_the_separate_basic_and_diluted_concepts_win_over_the_combined_one():
+    annual = XBRLParser().extract_annual_financials({"facts": {"us-gaap": {
+        "EarningsPerShareBasic": {"units": {"USD/shares": [_fy2024(1.02)]}},
+        "EarningsPerShareDiluted": {"units": {"USD/shares": [_fy2024(1.00)]}},
+        "EarningsPerShareBasicAndDiluted": {"units": {"USD/shares": [_fy2024(1.01)]}},
+        "WeightedAverageNumberOfDilutedSharesOutstanding": {"units": {"shares": [_fy2024(780e6)]}},
+        "WeightedAverageNumberOfShareOutstandingBasicAndDiluted": {"units": {"shares": [_fy2024(773e6)]}},
+    }}})
+    year = annual["2024"]
+    assert (year["eps_basic"], year["eps_diluted"]) == (1.02, 1.00)
+    assert (year["weighted_avg_shares_basic"], year["weighted_avg_shares_diluted"]) == (773e6, 780e6)
+

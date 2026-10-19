@@ -545,3 +545,19 @@ row moves. Oracle: real Level 2 8 beyond 0.5% (BUG-007 only), golden 0/57. VAL-0
 Gates: ruff ✓ mypy ✓ pytest 915 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(valuation): a declared split counts even when EPS rose across its seam
 Next: BUG-032 (P2); record code review 4 when it reports
+
+## Iteration 28: 2026-10-20 04:21: fix
+Picked: BUG-032 (P2), the only open P0–P2 (CI: a8fb8e4 running). Code review 4 is still running.
+Did: The parser resolves tags per period, so the fix is the registry: SEC's combined BasicAndDiluted EPS and share
+concepts become the second candidate of `eps_basic`, `eps_diluted` and both weighted share counts. Tests first: a
+year filed only under the combined concepts had no record at all, and a basic count came only from the combined one
+(both RED); the separate concepts keep priority. Three mutants (no diluted fallback; the combined tag first; no
+basic-count fallback) each fail a test; restored byte-identical. Verified end to end: the cached filings of all nine
+filers gain 132 values and change none; a CLI collection of TSLA from a scratch SEC cache stores its FY2012–14 EPS.
+Evidence: `qa/evidence/iter28-bug032-{red,green,mutants,parse,cli,impact}.txt`, `iter28-oracle-real.txt`
+Result: BUG-032 VERIFIED. On a real-data copy with the values filled, no valuation or summary row moves (SCCO's
+Lynch now measures FY2016–25: 20.2%, capped at 15% as before); oracle Level 2 still only the 8 BUG-007 rows.
+VALID-01 → TODO (the coverage_report run is left).
+Gates: ruff ✓ mypy ✓ pytest 917 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): EPS and share counts filed as BasicAndDiluted fill both fields
+Next: no P0–P2 is open: discovery VAL-09, VAL-12, VAL-13; record code review 4 when it reports
