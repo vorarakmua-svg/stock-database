@@ -108,17 +108,22 @@ class CSVExporter:
         """Columns and rows of an earlier export, so a run adds to it instead of replacing it.
 
         The file holds every earlier run, so nothing here may lose it. ``utf-8-sig``
-        reads past the byte-order mark Excel adds when it saves "CSV UTF-8"; a file
-        that still can't be parsed (an Excel ANSI save) is moved aside for the user
-        instead of being overwritten, and any other error propagates with the file
-        left as it is.
+        reads past the byte-order mark Excel adds when it saves "CSV UTF-8". A file
+        that still can't be parsed (an Excel ANSI save), or parses without a
+        ``ticker`` column (an Excel save with ``;`` separators, a renamed header),
+        is moved aside for the user instead of being overwritten; any other error
+        propagates with the file left as it is.
         """
         if not filepath.exists():
             return [], []
         try:
             with open(filepath, newline='', encoding='utf-8-sig') as f:
                 reader = csv.DictReader(f)
-                return list(reader.fieldnames or []), [row for row in reader if row.get("ticker")]
+                columns = list(reader.fieldnames or [])
+                rows = [row for row in reader if row.get("ticker")]
+            if columns and "ticker" not in columns:
+                raise csv.Error(f"no 'ticker' column (header {','.join(columns)[:60]!r})")
+            return columns, rows
         except (UnicodeDecodeError, csv.Error) as e:
             kept = filepath.with_name(f"{filepath.stem}.unreadable-{datetime.now():%Y%m%d-%H%M%S}{filepath.suffix}")
             filepath.replace(kept)

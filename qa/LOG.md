@@ -388,3 +388,17 @@ Commit: (this commit) fix(fetchers): a failed summary CSV no longer stops the ot
 Review cadence: 5 fixes past e8c3aa1 (eb63f81, 0940188, 83495c2, 2aba934 and this one), so code review 3 is
 dispatched in the background on e8c3aa1..HEAD.
 Next: BUG-021 (P1, the oldest open P1), then BUG-022
+
+## Iteration 19: 2026-10-20 04:35: fix
+Picked: BUG-021 (P1), the oldest open P1 (CI: 0850065 ✓; 8dc494b running). Code review 3 was still running.
+Did: Root cause (code review 2, reproduced): `_read_existing` parsed a `;`-separated Excel save, or a header renamed
+`Ticker`, without error, but no row had a `ticker` key, so every row was filtered out and the file rewritten. Test
+first, parametrized over both variants: no kept copy existed (RED). Fix: a file whose header lacks `ticker` takes
+the move-aside path, checked after the file is closed (Windows can't rename an open file). The mutant without the
+check fails both variants; restored byte-identical. Review 2's repro now keeps the earlier file aside in both cases,
+with a warning that quotes the header.
+Evidence: `qa/evidence/iter19-bug021-{red,green,mutants,e2e}.txt`
+Result: BUG-021 VERIFIED. STORE-06 → FAIL→BUG-027 (P3, same-second kept copies).
+Gates: ruff ✓ mypy ✓ pytest 895 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(exporters): a CSV without a ticker column is kept aside, not dropped
+Next: record code review 3 when it reports; then BUG-022 (P1, single-class share counts in the DCF)

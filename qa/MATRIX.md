@@ -82,7 +82,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | STORE-03 | WAL handling | TODO | |  |
 | STORE-04 | The web Reader (`mode=ro`) never writes; per-request connections survive threadpool hoppin… | TODO | |  |
 | STORE-05 | The as-of API and UI equal `AsOfReader`; edge dates (before the first filing, today, the f… | TODO | |  |
-| STORE-06 | CSV exports | FAIL→BUG-021 | iter 17 | BUG-004/015/018 fixed; a file without a `ticker` column still loses every row (BUG-021); kept copies can collide (BUG-027) |
+| STORE-06 | CSV exports | FAIL→BUG-027 | iter 19 | BUG-004, BUG-015, BUG-018 and BUG-021 fixed (the CSVs accumulate, survive Excel re-saves in any form, and keep data a failed run didn't get); left: kept copies can collide within a second (BUG-027, P3) |
 | STORE-07 | The real-DB copy passes `PRAGMA integrity_check` and `foreign_key_check`.… | TODO | | Bootstrap: integrity_check ok on realcopy, but the schema declares no foreign keys (0 of 19 tables), so foreign_key_check is vacuous; needs an orphan-row join check. |
 
 ## API: HTTP API (`/docs`, every `/api/*` route)

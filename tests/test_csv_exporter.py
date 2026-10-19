@@ -143,3 +143,24 @@ def test_a_failed_recollection_keeps_the_earlier_values(tmp_path: Path) -> None:
     assert row["current_price"] == "12.5000"
     assert row["error_count"] == "1"
 
+
+@pytest.mark.parametrize("rewrite", ["semicolons", "renamed header"])
+def test_a_summary_without_a_ticker_column_is_kept_aside(tmp_path: Path, rewrite: str) -> None:
+    # Excel saves CSV with ';' where that's the list separator (BOM included), and a header can be
+    # renamed. Either way the file parses but has no `ticker` column, so every earlier row was dropped.
+    exporter = CSVExporter(tmp_path)
+    exporter.export([_stock("AAA"), _stock("BBB")])
+    path = tmp_path / "summary.csv"
+    with open(path, newline="", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+    if rewrite == "semicolons":
+        path.write_bytes(b"\xef\xbb\xbf" + "\r\n".join(";".join(r) for r in rows).encode("utf-8") + b"\r\n")
+    else:
+        rows[0][0] = "Ticker"
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerows(rows)
+    saved = path.read_bytes()
+    exporter.export([_stock("CCC")])
+    assert [kept.read_bytes() for kept in tmp_path.glob("summary.unreadable-*.csv")] == [saved]
+    assert [r["ticker"] for r in _rows(path)] == ["CCC"]
+

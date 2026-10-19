@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 2 · P2 1 · P3 8 · NEEDS-USER 7 · Verified: 15
+**Open:** P0 0 · P1 1 · P2 1 · P3 8 · NEEDS-USER 7 · Verified: 16
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -188,13 +188,13 @@ Actual: the parser stores what was filed: V, CEG at a quarter of the year, PLD a
 Notes: not used by the valuations; the exports carry it, and the dividend completeness check (BUG-012) reads it, where a too-low figure can only hide a finding. Options: prefer `CashPaid` when both tags have a full-year fact and they differ more than 2× (PLD); flag a year whose SEC figure is about a quarter of Yahoo's payments (V, CEG); or WONTFIX as the filers' own data.
 
 ### BUG-021 [P1][STORE] The CSV merge silently drops every earlier row when the old file has no `ticker` column
-Status: OPEN
-Found: iteration 17 by code review 2; reproduced (`qa/evidence/iter17-review2-checks.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED
+Found: iteration 17 by code review 2; reproduced (`qa/evidence/iter17-review2-checks.txt`) | Fixed: iteration 19 (see LOG) | Regression test: `tests/test_csv_exporter.py::test_a_summary_without_a_ticker_column_is_kept_aside` (`;` separators with a BOM; a header renamed `Ticker`)
 Repro: export AAA and BBB; re-save `summary.csv` with `;` separators plus a BOM (Excel's CSV save where the list separator is `;`), or rename its header to `Ticker`; export CCC: the file holds only CCC, with no warning and nothing kept aside.
 Expected: BUG-015's guarantee: earlier rows kept, or the old file moved aside with a warning.
 Actual: `_read_existing` reads it fine, but no row has a `ticker` key, so every row is filtered out and the file is rewritten.
 Root cause: `src/exporters/csv_exporter.py` `_read_existing`: a file that parses but has no `ticker` column isn't treated as unreadable.
-Notes: fix direction (review): when the file has content but `ticker` isn't among the columns (or no row survives), take the move-aside path.
+Fix: `_read_existing` treats a file whose header has no `ticker` column like an unparsable one: it's moved aside as `<name>.unreadable-<timestamp>.csv` with a warning that quotes the header, and the run writes its own rows. Both CSV exports use that path. Verified with review 2's repro (`qa/evidence/iter19-bug021-e2e.txt`): both variants now keep the earlier file aside instead of dropping it.
 
 ### BUG-022 [P1][VAL] DCF and owner earnings divide by a single-class share count for GOOGL and DELL (and a halved one for HON)
 Status: OPEN
