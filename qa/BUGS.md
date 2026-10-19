@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 1 · P2 1 · P3 14 · NEEDS-USER 8 · Verified: 28
+**Open:** P0 0 · P1 1 · P2 3 · P3 21 · NEEDS-USER 10 · Verified: 28
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -165,6 +165,7 @@ Fix (iteration 25): `value_ddm` judges each end of the window by the cadence of 
 Reopened (code review 4, re-checked at 1810180 in `qa/evidence/iter29-review4-checks.txt`): (1) an end year with one payment more than the median of its neighbours is scaled even when the adjacent year already pays on the new schedule: annual → semiannual for the last two full years reads −2.78% (true 5%), 2 → 3 and 3 → 4 a year read 0.37% and 1.70%, semiannual 2016–17 then annual reads 13.41%, quarterly then 3 a year reads 8.41%; (2) the year-before exception can't tell a lower-frequency schedule from a suspension restarted with the same count: a flat dividend with 2 payments in 2015 (suspended) and 2 in 2016 (restarted) reads 8.01% (true 0%). The oracle shares both (in the review a golden copy with KO semiannual for 2024–25, JNJ semiannual then annual and PLD suspended and restarted gave 0/13 beyond 0.5%). No current value is affected (the review scanned all 108 real and 15 golden payers). Also, P3: a regular-size extra (up to 1.5x) at a window end is scaled as a slip, which partly decides Q3 (a 1.2x extra in the last year reads 5.46%, between 5.00% without it and 8.11% with it; the iteration-25 demo's MSFT "slipped" payment was such an extra, and SCCO's 2019 will be scaled once it starts the window); a slip in a year with a raise over 50% is not scaled (8.01% against 5.36%). Correction: the iteration-25 note "a special or a higher frequency doesn't pass the size test" holds only for payments over 1.5x and an adjacent year still on the old schedule. Fix direction (review): scale an end year only when the adjacent year's count is at most the usual count, and grant the year-before exception only when the first year's payments are at least 1.5x the later typical payment; oracle rule commit first, tests for these shapes. This would be the third fix attempt: if it fails, question the design (loop §10), e.g. SEC's declared dividends per share as the annual series (lead L14).
 Fix (iteration 31, the third attempt): an end year is scaled only when its adjacent year is still on the usual schedule (a neighbour that already pays more often means the schedule changed), and a short first year counts as a lower-frequency schedule only when the year before paid as often and each payment is at least 1.5x the later years' typical one (a restart pays the same size). The oracle took both conditions first (0345344) and, against the unfixed code, flagged exactly the four rewritten DDM rows of a golden copy (KO annual then semiannual, MSFT semiannual then annual, AAPL three a year from 2018, XOM suspended and restarted with the same count). Tests: three cadence shapes and the restart case RED; a guard for a record that opens with one larger payment (HWM); four mutants each fail a test. Impact (`qa/evidence/iter31-bug017-impact.txt`): no valuation or summary row moves on the real or golden copies; on the demo the four rows return to the growth their untouched records give (AAPL 7.06%, KO 4.27%, MSFT 9.76%) and XOM measures from 2017. Oracle: demo and golden 0/57, real the 8 BUG-007 rows. Design note (loop §10, systematic-debugging 4.5): each attempt fixed the shapes reported and exposed new ones at the window ends. If this rule fails again, the alternatives are SEC's declared dividends per share as the annual series (no ex-date cadence, but a change of the spec's input and BUG-013/020's data gaps: the user's decision), or only the initiation-year rule with the slip bias accepted. The regular-size-extra and big-raise limits moved to BUG-040 (P3).
 
+Iteration 39: code review 5 found that the third fix misreads a special dividend next to a window end, and four other shapes; under §10 the payment-cadence design goes to the user (BUG-049).
 ### BUG-018 [P1][STORE] A failed re-collection erased earlier data in every store (upgraded from P2 in iteration 17)
 Status: VERIFIED (iteration 24; reopened in iteration 23 by code review 3 for the latest market snapshot and the CSV's per-field rule)
 Found: iteration 10 by code review 1 (CSV only); reproduced and widened in iteration 17 (`qa/evidence/iter17-bug018-repro.txt`) | Fixed: iteration 17 (see LOG) | Regression tests: `tests/test_csv_exporter.py::test_a_failed_recollection_keeps_the_earlier_values`, `tests/test_json_exporter.py::test_a_failed_recollection_keeps_the_earlier_sections`, `tests/test_sqlite_store.py::test_a_failed_recollection_keeps_the_company_details`
@@ -275,6 +276,7 @@ Root cause: `src/valuation/inputs.py` `_normalize_splits`. The FY2022 → FY2023
 Notes: a scan of every company (`qa/evidence/iter26-split-veto-scan.txt`) finds NOW the only declared split vetoed this way; the other 22 matched declared splits are applied. NOW's summary median ($33.59) and verdict don't move (multiples is its highest model either way); its multiples row and VAL-tab band are wrong. Fix direction: a seam that matches a declared split needs no EPS check, while one declared split must not be used at two seams (lead L12). The oracle already gives the expected values.
 Fix (iteration 27): in `_normalize_splits` a seam that a declared split matches is a split whatever EPS did; the EPS-direction test now judges only seams no declared split explains. Writing the guard test exposed a second defect in the same walk: the test compared the older year's EPS as reported with the newer year's EPS already divided by the newer seams' factor, so once one split was applied any older share jump read as "EPS fell", and the same declared split could be used again (lead L12): an acquisition that doubled the share count before a 2:1 split was rescaled 4x. Now the test reads the figures as reported, and each declared split explains one seam (`_declared_ratio` became `_declared_run`, which returns the matching splits). Impact (`qa/evidence/iter27-bug031-impact.txt`): one row of 762 changes, NOW's multiples ($81.05 / $153.19 / $258.45 -> $140.46 / $258.45 / $959.30, band 48.5-154.8 -> 84.1-574.4); no summary, verdict or golden row moves, and the API shows the new band (`iter27-bug031-api.txt`). Oracle: real Level 1 0/519, Level 2 8 beyond 0.5% (the BUG-007 rows only); golden 0/57.
 
+Iteration 39: code review 5 found that skipping the EPS-direction test for a declared match lets a post-filing split explain a merger or IPO seam and be applied twice (BUG-047).
 ### BUG-032 [P2][VALID] EPS and weighted share counts filed under SEC's combined "BasicAndDiluted" concepts are dropped
 Status: VERIFIED (iteration 28)
 Found: iteration 26 via VAL-04 (lead L7) | Fixed: iteration 28 (see LOG) | Regression tests: `tests/test_xbrl_parser.py::test_the_combined_basic_and_diluted_concepts_fill_both_fields`, `::test_the_separate_basic_and_diluted_concepts_win_over_the_combined_one`
@@ -388,6 +390,72 @@ Found: iteration 38 (looking up the server's settings) | Fixed: — | Regression
 Repro: `stock-web --help`, or any argument, is ignored: uvicorn starts on 127.0.0.1:8000 against the default database. The settings exist only as `STOCK_WEB_*` environment variables (`src/webapp/settings.py`), which nothing on the command line lists; the `__main__` docstring names four of the five (not `STOCK_WEB_ALLOW_QUOTE_REFRESH`).
 Expected: `--help` prints usage with the environment variables, and unknown arguments are refused.   Actual: a server starts. (This loop's lookup started one against the user's database; it served no request, was stopped, and `stock.db` and its WAL are unmodified.)
 
+### BUG-047 [P2][VAL] A declared split made after the latest 10-K can explain an older merger or IPO seam, and is then applied twice
+Status: OPEN
+Found: iteration 39 by code review 5 (I1), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Repro: shares double in FY2020 through a stock-paid merger while EPS keeps rising (2.3 → 2.6), and a 2:1 split follows the FY2025 10-K (`review5/demo_double_split.py`): FY2016–19 get split_factor 4.0 and EPS 0.50–0.575, against 2.0 and 1.00–1.15 at 61f8a56. End to end (`t_split/build_db.py`), Lynch's base is $18.60 on 13.4% growth against $7.75 on 5.0%, and the oracle flags it (L2 MISMATCH, 58.3%). Variant (`demo_old_split.py`): a split whose own seam lies before the 10-FY window is taken by a merger seam in the window's first year (FY2016's EPS halved, 2.0 → 1.0); there the oracle's closeness heuristic agrees with the code.
+Expected: a split restates only the years filed before it; a merger seam stays a merger.   Actual: `_declared_run` offers every split dated after the older year's period end, and since a8fb8e4 (BUG-031's fix) a declared match skips the EPS-direction test; `_apply_later_splits` then applies the post-filing split a second time.
+Impact today: none. No post-filing split matches a seam on the real or golden copies; CRWD is the near miss (IPO seam 3.122 against its 4:1 of 2026-07-02: ×1.281, tolerance ×1.25).
+Notes: the review's trial patch (drop splits dated after the latest FY filing before `_normalize_splits`) fixes the main case with no current value moving. The variant needs another guard: row-level `filed_date` can't decide it (13 of 23 real matched seams fall outside the two years' filing dates).
+
+### BUG-048 [P2][VAL] After a failed quote, a split made since the last priced snapshot moves per-share values off the shown price's basis
+Status: OPEN
+Found: iteration 39 by code review 5 (I2), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Repro: FY2023–25 filed 2025-08-08, a 10:1 split on 2026-06-12, and the latest priced snapshot from 2026-06-01 at $1,000: a later run's quote failed, so BUG-033's fix wrote no snapshot, while that run still stored the split and the price bars (`t_split/stale_snapshot.py`). Latest EPS 3.00, split_factor 10.0, Graham base $14.21 against the $1,000 price (61f8a56: EPS 30.00, $142.08). With Yahoo's split-adjusted dividends, DDM is $9.45 at both revisions, so DDM was already on the new basis; BUG-036's fix moved Graham, Lynch, the multiples band and the DCF there too. The verdict reads "expensive", with upside near −90%, until a run gets a quote.
+Expected: per-share values on the price's basis: apply a post-filing split only up to the snapshot's date, or withhold the verdict and upside.   Actual: values about a tenth of the price beside them.
+Impact today: none (no split of 3:2 or more postdates the latest priced snapshot on the real or golden copies).
+Notes: the oracle applies simple ratios unconditionally too, so its rule changes first (its own commit, before the fix).
+
+### BUG-049 [P2][VAL] BUG-017's third fix reads a special dividend next to a window end as a schedule change
+Status: NEEDS-USER (§10: BUG-017 has had three fixes; how DDM reads the payment history is your decision)
+Found: iteration 39 by code review 5 (I3), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Repro: a quarterly dividend growing 5% a year, with 2026's March payment ex-dated 2025-12-31 (`t_bug017/s3_min.py`), reads 5.12% (DDM base $125.23). Add a 3× special in 2024 and HEAD reads 7.75% ($139.97), against 5.12% at 61f8a56: the adjacent-year condition (e84da96) counts the special as a payment, so 2025's slip is no longer scaled. Shapes misread at both revisions, true growth 5% (`ddm_shapes.py`): semiannual to quarterly with a slip, 7.75%; quarterly to monthly with a slip, 5.98%; annual to semiannual from November 2025 with the transition year last, 9.84% (DDM $150.78 against $125); semiannual 40/60 with a slip, 4.36%. The oracle mirrors the rule and gives the same numbers, so it can't see any of them.
+Impact today: none (every DDM value is the same at 61f8a56 and 98013f4: 99 real and 14 golden payers).
+Analysis: three fixes (iterations 16, 25, 31) each patched the count-based reading of Yahoo's ex-dates, and each later review found a shape it misreads. Counting payments can't tell a slipped payment from an extra or special one, or a frequency change from a slip, without the declared schedule.
+Options: (a) take DDM's growth history from SEC's annual dividends per share (the `dividends_per_share` field, from the 10-K's declared or cash-paid series, restated for splits), keeping Yahoo's payments for the latest rate; it needs a fallback where a filer tags only point-in-time payments (9 such years are empty after BUG-013); (b) keep only the initiation-year rule and accept slip noise of about a point of growth in the shapes above; (c) a fourth patch: count only regular-size payments in the adjacent-year test (the review's trial patch fixes the special case, and no current value moves), leaving the frequency-change shapes. Recommendation: (a). Related: Q3 (specials) and BUG-040.
+
+### BUG-050 [P3][VAL] Post-filing split factors are judged all or nothing, and a non-simple one applies without any count
+Status: OPEN
+Found: iteration 39 by code review 5 (M1, M2), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Repro: (M1, `demo_mixed_post_filing.py`) a 2:1 split plus a 1.6 spin-off factor after the latest 10-K, with Yahoo's counts at 2×: nothing applies (split_factor 1.0, EPS 3.0). (M2) an ABT-like 2.0842 factor with no Yahoo count applies (split_factor 2.0842, EPS 3.00 → 1.439), against the docstring ("applies only when one of Yahoo's counts moved by it"); after BUG-033's fix a first run whose quote failed has no snapshot, so no count.
+Expected: each factor judged on its own; a non-simple factor refused without a count.   Actual: as above. No current case.
+
+### BUG-051 [P3][VAL] BUG-035's 2–5% share-count tiebreaker follows count drift
+Status: OPEN
+Found: iteration 39 by code review 5 (M3), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Repro: across 112 single-figure real companies the latest FY diluted count (today's basis) sits a median 1.84% from Yahoo's count, and 42% sit more than 2.5% away (`t_bug035/fy_vs_yahoo.py`): the size of the gaps the tiebreaker settles. `t_bug035/demo_drift.py`: MRVL as stored picks Yahoo's 875.8M (right); the same company after 4% buybacks picks market cap ÷ price, 855.9M (wrong); a company with a 3% second class after 4% issuance picks Yahoo's 1,000M (wrong).
+Expected: a tiebreaker fresher than the last fiscal year (e.g. the latest 10-Q count).   Actual: the FY count, up to a year stale. Notes: whether units and second classes count at all is Q7.
+
+### BUG-052 [P3][GATHER] The Treasury.gov fallback takes last year's year-end rate on any failure, and a blank latest 10-year gives no rate
+Status: OPEN
+Found: iteration 39 by code review 5 (M4), re-run on 98013f4 with the request stubbed (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Repro (`t_bug041/check_fallbacks.py`): on 2026-10-20 a 500 from the current-year request gives source treasury_gov, date 2025-12-31, 4.57%; a latest row whose 10 Yr is blank gives rate None although the day before has a yield. In early January (current-year feed empty) the prior year's 2025-12-31 is right. No test covers the prior-year path that GATHER-04 names.
+Expected: the prior year only while the current year has no rows; the latest row that has a 10-year yield.   Actual: as above.
+
+### BUG-053 [P3][UI] A quote refresh whose database write fails reports success
+Status: OPEN
+Found: iteration 39 by code review 5 (M5), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Repro (`t_bug033/write_failure.py`): with `upsert_quote` raising "database is locked", the job summary reads `successful: 1, errors: {}`, the snapshot count stays 1 → 1, and the page says "Quote refreshed.": `sqlite_store.py` logs and swallows the write error, and `jobs.py` counts a success.
+Expected: "Refresh failed: database is locked".   Actual: a success message.
+
+### BUG-054 [P3][STORE] A priced run without beta writes a NULL beta: the full export carries nothing forward
+Status: OPEN
+Found: iteration 39 by code review 5 (M6), re-run on 98013f4 with Yahoo mocked (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Repro (`t_bug033/partial_export.py`): a run whose quote has a price but no beta writes `beta NULL` into the new snapshot; `load_inputs` reads beta None, so valuations fall back to 1.0 (flagged), although the previous snapshot had 1.3. `upsert_quote` carries beta forward; `export` doesn't. Not verified against live Yahoo.
+Expected: the last known beta, flagged as carried, or the same rule in both writers.   Actual: NULL.
+
+### BUG-055 [P3][STORE] An empty-string company field is "missing" to the CSV but a value to JSON and SQLite
+Status: OPEN
+Found: iteration 39 by code review 5 (M7), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Repro (`t_bug034/check_empty_string.py`): a run with `website` = "" stores '' in JSON and SQLite, while the CSV keeps the old URL (`csv_exporter.py` treats "" as missing; the JSON merge and SQLite's COALESCE don't). None of the 146 JSON files has a "" company field today.
+Expected: the three stores agree.   Actual: as above.
+
+### BUG-056 [P3][UI] The refresh-status fragment matches the ticker case-sensitively
+Status: OPEN
+Found: iteration 39 by code review 5 (M8), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Repro (`t_bug033/case_check.py`): for a failed AAPL quote job, `/ui/stocks/AAPL/refresh-status/<job>` says "Refresh failed" but `/ui/stocks/aapl/refresh-status/<job>` says "Quote refreshed". Not reachable from the UI: the lowercase stock page, DES and refresh-quote routes return 404.
+Expected: the same answer in either case (or a 404).   Actual: a false success.
+
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
@@ -418,6 +486,11 @@ Status: NEEDS-USER
 Context: SEC's ticker map now sends XOM to ExxonMobil Holdings Corp (CIK 2115436), which has filed only 10-Qs since 2026-07; the 20 fiscal years of history are under Exxon Mobil Corp (CIK 34088). A fresh collection therefore has no XOM fundamentals, and every model that needs fiscal years is N/A; re-collecting into your existing database keeps the stored years. Since iteration 38 the gap is explained in the run, the database and the FA and VAL tabs (BUG-042).
 Options: (a) a small, explicit successor map in the code (2115436 → 34088), reading the predecessor's facts for the years the new registrant lacks: safe, but each reorganization needs an entry; (b) fall back automatically to the CIK already stored for the ticker when the new one has no 10-K: no upkeep, but a reassigned ticker could mix two unrelated companies, and a fresh database has no stored CIK; (c) keep the explanation only and wait for the new registrant's first 10-K. Recommendation: (a).
 
+### Q7 [VAL] NEEDS-USER: should per-share values count every share class and partnership unit?
+Status: NEEDS-USER
+Context: `_total_shares` takes market cap ÷ price (every class and unit, the way Yahoo values the company) when it is more than 5% above Yahoo's count, and settles a 2–5% gap by whichever figure is nearer the latest FY count (BUG-035). That decides the question company by company, and between 2% and 5% the answer flips with count drift (BUG-051): PLD takes market cap ÷ price on the real copy (954.8M) but Yahoo's count on the golden one (950.3M); KKR, BLK and PLTR sit in the same band. Above 5%: SPG's partnership units (17%), BX's (65%), and the second classes of APP, V, META, GOOGL and BRK-B. Raised by code review 5.
+Options: (a) always count every class and unit (market cap ÷ price whenever it is larger); (b) count only the listed class (Yahoo's count, or the FY diluted count); (c) keep the gap rule and make its tiebreaker fresher (BUG-051). Recommendation: (a) for classes, which share the same earnings; units are your call (they are exchangeable into shares, so (a) is the conservative choice).
+
 ---
 
 ## Leads (unconfirmed; discovery units confirm or drop them)
@@ -437,3 +510,4 @@ Options: (a) a small, explicit successor map in the code (2115436 → 34088), re
 - L14 [QA] Oracle independence: the oracle still takes the DDM `ttm_anchor` from the stored output and buckets dividends by the ex-date's calendar year, like the code. Fixed in iteration 11: it now takes today's basis from `market_snapshots` and ignores spin-off factors. Oracle rule changes go in their own commit first (loop prompt §7). (review 1, iter 10; updated iter 11) Review 2: the oracle also shares the code's 3:2 split threshold (4:3 and 5:4 splits, 15 in this universe, are invisible to both), and its snapshot share anchor is single-class for GOOGL and DELL and halved for HON (BUG-022). Review 3: the DDM oracle copies the code's spin-off and full-year heuristics (bffce5f, 3dd48f1), so agreement there only confirms the code matches its rule; an independent annual series (SEC's declared dividends per share, trustworthy after BUG-013) and VAL-13's hand-worked cases would make it independent.
 - L15 [CODE] `tests/test_docs_usage_guide.py` would run the guide's `fig.show()`, opening a browser during pytest, if plotly were installed (it isn't here). (review 1, iter 10)
 - L16 [STORE] The JSON export writes in place, and an unreadable existing JSON is silently replaced, losing its history (the CSV analogue was BUG-015). Pre-existing. (review 3, iter 23)
+- L17 [VALID] HON's latest FY diluted count, on today's basis, is 2.03× Yahoo's count (`t_bug035/fy_vs_yahoo.py` on the real copy, iteration 39): check for a missed reverse split or a wrong Yahoo count.

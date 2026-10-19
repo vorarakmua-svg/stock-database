@@ -736,3 +736,23 @@ GATHER-02 → FAIL→BUG-043.
 Gates: ruff ✓ mypy ✓ pytest 953 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(fetchers): say why a filer's SEC data gave no annual financials
 Next: record code review 5 (re-run I1–I3 first), then BUG-043 (P1). Fixes since review 5's range: 2 (8feac32, this).
+
+## Iteration 39: 2026-10-20 06:20: review
+Picked: recording code review 5 (LOOP_PROMPT §4.6), which reported at the end of iteration 38; BUG-043 (P1) is next.
+CI: 98013f4 running at the start (ce6e232 ✓).
+Did: re-ran every claim on an archive of 98013f4 and on the reviewer's base (61f8a56), from copies of the review's
+scripts (§4.4). All 11 claims hold on HEAD: I1 (split factor 4.0 against 2.0; Lynch $18.60 against $7.75, and the
+oracle flags it), its variant, I2 (Graham $14.21 against $142.08 beside a $1,000 price; DDM $9.45 at both), I3 (7.75%
+against 5.12%; four more shapes misread at both revisions; the oracle gives the same numbers), and M1–M8. Current
+impact checked independently: no post-filing split at a seam (CRWD a near miss), no split after the latest priced
+snapshot, and no DDM value different from 61f8a56 (99 real, 14 golden payers), so I1 and I2 stay P2. Under §10,
+BUG-017's three fixes send the DDM payment-cadence design to the user (BUG-049, with options) rather than a fourth
+patch. The review's units policy note becomes Q7. The drift scan also showed HON's FY count at 2.03× Yahoo's (L17).
+Process note from the review: list every commit of the range in the next review brief (review 5's brief missed five).
+Evidence: `qa/evidence/iter39-review5-rerun.txt`, `qa/evidence/review5-report.md`
+Result: new BUG-047 and BUG-048 (P2), BUG-049 (P2, NEEDS-USER), BUG-050 to BUG-056 (P3), Q7 and L17. VAL-02 →
+NEEDS-USER; VAL-09 → FAIL→BUG-047; GATHER-04 → FAIL→BUG-052; STORE-06 notes BUG-055.
+Gates: ruff ✓ mypy ✓ pytest 953 passed (1 known warning); no code changed | CI: pending for this push
+Commit: (this commit) chore(qa): record code review 5; the DDM cadence design goes to the user
+Next: BUG-043 (P1: read ARM's US-GAAP 20-F), then BUG-047 and BUG-048 (P2, oracle commit first for BUG-048), then
+BUG-045. Fixes since review 5's range: 2 (8feac32, 98013f4).
