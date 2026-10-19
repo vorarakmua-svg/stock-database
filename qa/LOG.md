@@ -510,3 +510,23 @@ Commit: chore(qa) oracle cadence rule (e21a0b0), then (this commit) fix(valuatio
 how often a company pays
 Review 4 is due (5 fixes past 8dc494b: 2d92381, c6678d0, 4998ec8, 23fb062 and this commit): dispatched to opus.
 Next: record code review 4 when it reports; meanwhile discovery VAL-06, VAL-09, VAL-12, VAL-13
+
+## Iteration 26: 2026-10-20 04:03: discovery
+Picked: VAL-03, VAL-04, VAL-05, VAL-06, because no P0–P2 bug is open and VAL comes first: the oracle's unexplained
+Level-2 rows (leads L6, L7, L9) and the untested parts of owner earnings (CI: 61f8a56 ✓). Code review 4 is running.
+Did: Hand-checked each disagreement from the raw rows. NOW's multiples is a code bug (BUG-031): its declared 5:1 split
+matches the FY2022→FY2023 seam, but the EPS-direction check vetoes it (a $723M tax benefit lifted 2023 EPS past the
+split ratio); a scan of every company finds no other case. SCCO's Lynch was the oracle's own positional window (10
+values back to FY2010, exponent 9 for 15 years): oracle fixed (e4b6a1f). XOM's Graham, DELL's Lynch and KKR: the
+oracle demanded a diluted share count these filers don't report; with the period-end count (0f47b5f) XOM and KKR
+agree and DELL's Lynch rests on Q5. L7's EPS gaps: SEC's combined BasicAndDiluted concepts aren't mapped (BUG-032;
+9 filers; no value change). VAL-06: gate, N/A reasons, volatility, buy_below, discount, the median exclusion and the
+API's verdict all follow the spec on 127 real and 19 golden rows.
+Evidence: `qa/evidence/iter26-{leads-xom-now,leads-dell-scco,split-veto-scan,basic-and-diluted,val06}.txt`,
+`iter26-oracle-{fy-window,shares-fallback}-{real,golden}.txt`
+Result: VAL-03 → NEEDS-USER (BUG-007 only); VAL-04 → NEEDS-USER (Q5: 16 rows incl. DELL); VAL-05 → FAIL→BUG-031;
+VAL-06 → PASS; VALID-01 → FAIL→BUG-032. Real copy: Level 1 0/519, Level 2 9 beyond 0.5% (the 8 BUG-007 rows and
+NOW), 39 not derivable (Q5); golden 0/57. Leads L6, L7 and L9 resolved. New: BUG-031 (P1), BUG-032 (P2).
+Gates: ruff ✓ mypy ✓ pytest 912 passed (1 known warning) | CI: 61f8a56 ✓; pending for this push
+Commit: oracle e4b6a1f and 0f47b5f, then (this commit) chore(qa): discovery VAL-03 to VAL-06
+Next: BUG-031 (P1); record code review 4 when it reports
