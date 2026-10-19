@@ -38,11 +38,11 @@
 | Cross-source market data (Yahoo vs SEC / computed) | ±5% |
 | Stored valuations vs `qa/oracle/valuation_oracle.py` | ±0.5% |
 
-## Oracles (to build in discovery units)
+## Oracles
 
-- `qa/oracle/valuation_oracle.py`: independent re-implementation of the six models from
+- `qa/oracle/valuation_oracle.py` (built in iteration 4; run with `--db PATH [--level 1|2|both] [TICKERS]`): independent re-implementation of the five models from
   `docs/superpowers/specs/2026-07-13-valuation-layer-design.md` and `2026-07-14-owner-earnings-design.md`.
-  Reads raw inputs from the DB; never imports `src.valuation`.
+  Reads raw inputs from the DB; never imports `src.valuation`. Level 1 = formula from stored assumptions; Level 2 = inputs re-derived from raw tables. Owner earnings isn't covered yet (VAL-06).
 - `qa/oracle/sec_oracle.py`: independent parse of SEC companyfacts (requests + json) for revenue, net income,
   assets, liabilities, equity, OCF, capex and diluted shares; compared with the DB.
 - Hand checks: 3 companies against their filed 10-K numbers (source URLs and dates recorded below).

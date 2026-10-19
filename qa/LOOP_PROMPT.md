@@ -75,11 +75,12 @@ Done (section 9) holds.
    `gh pr checks` if a PR exists. If the `qa/` state files are missing, this is the bootstrap: do section 5 and stop.
 2. **Pick ONE unit**, in this priority order:
    1. A red gate locally or on CI: fix it.
-   2. The highest-severity OPEN bug (P0 > P1 > P2 > P3), oldest first. A fix unit is one bug, or at most 3 closely
-      related P3s.
+   2. The highest-severity OPEN P0–P2 bug (P0 > P1 > P2), oldest first. A fix unit is one bug.
    3. A discovery unit: up to 5 related TODO matrix items, riskiest area first: VAL > VALID > MATCH > GATHER >
       STORE > SEC > API > UI > CLI > CODE > OPS > DOCS > PKG > UX.
-   4. If nothing is TODO or OPEN: a convergence sweep (section 9).
+   4. Open P3 bugs, up to 3 closely related ones per unit. They wait until discovery is done so cosmetic fixes never
+      delay finding serious bugs; they must still be fixed or WONTFIX before section 9. (Changed in iteration 4.)
+   5. If nothing is TODO or OPEN: a convergence sweep (section 9).
 3. **Execute.**
    - **Discovery:** test each item with its method and oracle. Record PASS or FAIL with evidence. Every FAIL gets a
      BUG entry with a minimal repro. Don't fix during discovery; the next iteration will.

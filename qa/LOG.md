@@ -60,3 +60,25 @@ Gates: ruff ✓ mypy ✓ pytest 859 passed (1 known warning) | CI: pending
 Commit: (this commit) fix(exporters): CSV summaries keep every collected ticker
 Next: no P0–P2 bugs open, so a discovery unit in the riskiest area: VAL-01..05 (build `qa/oracle/valuation_oracle.py`
 and check the five models on the golden basket).
+
+## Iteration 4: 2026-10-20 02:10: discovery
+Picked: VAL-01..05 (riskiest area; no P0–P2 open). Prompt tuned first: §4.2 now ranks open P3 bugs *after*
+discovery, so cosmetic fixes can't delay finding serious bugs. CI was green: `gh pr checks` "pending 0" just meant
+a run in progress.
+Did: Built `qa/oracle/valuation_oracle.py` from the spec (SQLite only, never imports `src`). Level 1 re-runs each
+model's formula from its stored assumptions; Level 2 re-derives the inputs from raw tables (≤10-FY windows, median
+3-yr FCF, CAPM discount, TTM dividends, reported diluted EPS on today's basis via declared splits, FY-end prices).
+Three oracle bugs fixed along the way: EPS is now reported diluted EPS (handles preferred dividends); the share basis
+is judged from implied shares when weighted shares are missing (GOOGL); rows with undefined spec inputs are listed,
+not skipped.
+Evidence: `qa/evidence/iter04-val-{golden,realcopy}.txt`
+Result: Level 1: **0 of 579 applicable rows differ** (golden 60, real 519). Projection, fade, Gordon terminal value,
+scenario spreads (not re-clamped, as the spec words it), Graham, Lynch and the multiples band all match. Level 2
+(real data): 67 of 486 rows differ by more than 0.5%, and 33 more were valued despite undefined spec inputs. New
+bugs: **BUG-005 (P0)** DDM CAGR window 22–63 yrs (40/106 rows, up to 24%); **BUG-008 (P1)** analyst-only fallback
+(31 rows, quarterly growth up to 1,368%); **BUG-006 (P2)** split factor taken from share jumps; **BUG-007 (P2)**
+Graham bear ignores loss years (needs a decision). Q2 (NEEDS-USER): "analyst growth" is a quarterly YoY figure.
+Leads L6–L9. VAL-01..04 FAIL; VAL-05 Level 1 ✓, still TODO pending L6.
+Gates: no `src` change; oracle passes ruff | CI: green on 451b529 and e51c4f8; 42f8a01 in progress
+Commit: (this commit) chore(qa): valuation oracle and VAL-01..05 findings
+Next: BUG-005 (P0), the highest-severity open bug.

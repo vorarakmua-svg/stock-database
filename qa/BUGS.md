@@ -4,7 +4,9 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 2 · NEEDS-USER 2 · Verified: 2
+**Open:** P0 1 · P1 1 · P2 2 · P3 2 · NEEDS-USER 3 · Verified: 2
+
+Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
 ---
 
@@ -43,6 +45,46 @@ Actual: each run overwrites it with only that run's tickers. Golden: 4 of 19 (AR
 Root cause: both CSV writers opened their file with mode `'w'` and wrote only the current run's `List[StockData]`. `financial_history.csv` had the same overwrite. `StockData.to_summary()` added each section's keys only when the section was non-empty, and the columns were the union of *this run's* keys. Fix: `to_summary()` always emits every key (None when empty); `export()` and `export_financial_history()` merge with the existing file (a ticker or ticker-year replaces the same one; everything else is kept; same rule as the JSON merge), sorted. An unreadable old file logs a warning and falls back to this run's data. Evidence: RED `qa/evidence/iter03-bug004-red.txt` (5 failures), GREEN `iter03-bug004-green.txt`. Live CLI: `stock-data KO` then `stock-data JPM` into one dir gives summary.csv with JPM **and** KO and all 7 calc_* columns, and financial_history.csv with both (39 rows).
 Notes: **NEEDS-USER:** the fix doesn't repair your existing `data/output/csv/summary.csv` (still 2 of 127 tickers). Future runs merge into it, but a complete file needs a one-off rebuild from the 127 JSON files, which writes to the real data, so it's the user's call.
 
+### BUG-005 [P0][VAL] DDM dividend growth uses the whole dividend history, not the spec's ≤10 years
+Status: OPEN
+Found: iteration 4 via VAL-02 (`qa/oracle/valuation_oracle.py` Level 2) | Fixed: — | Regression test: —
+Repro: `python qa/oracle/valuation_oracle.py --db <realcopy> --level 2`, or read `valuations.assumptions` for model ddm.
+Expected: spec "Dividend growth = min(hist dividend CAGR (≤10 yrs), analyst growth), clamped [0%, 10%]".
+Actual: `cagr_years` 22–63 (KO 63, XOM 63, NEE 52, JPM 41, AAPL 38 spanning its 1995–2012 suspension). 40 of 106 DDM rows in the real DB differ from the ≤10-yr oracle by more than 0.5%, in both directions: JPM 111.6 → 137.9 (+24%), KO 53.15 → 42.29 (−20%), XOM 91.14 → 79.62 (−13%), AAPL 22.94 → 20.30 (−12%).
+Root cause: to confirm. The DCF and Lynch windows are correct (`cagr_years` 9), so only the DDM history isn't truncated.
+Notes: evidence `qa/evidence/iter04-val-{golden,realcopy}.txt`. Explains lead L4 (AAPL `years_of_data` 39.2).
+
+### BUG-006 [P2][VAL] Split adjustment of per-share history uses observed share-count jumps, not declared split ratios
+Status: OPEN
+Found: iteration 4 via VAL-04 | Fixed: — | Regression test: —
+Repro: AAPL Lynch: stored `hist_cagr` 14.64% vs 15.26% with the declared 4:1 split (FY2016 EPS 8.31/4 = 2.08 → FY2025 7.46).
+Expected: per-share values moved to today's basis with the `split_events` ratios.
+Actual: the implied factor is 3.808 = FY2018 weighted shares 20.0B (restated) ÷ FY2017 5.252B, which includes buybacks. Lynch base AAPL 109.18 vs 111.90 (−2.4%); NEE −2.0%, WMT −2.5% (all recent splitters).
+Root cause: to confirm in the fix iteration. The stored history also mixes bases within one year (AAPL FY2018: weighted shares restated, shares_outstanding not), see VALID-04.
+Notes: may also explain some multiples mismatches (lead L6).
+
+### BUG-007 [P2][VAL] Graham bear case ignores loss years
+Status: OPEN, needs a decision (NEEDS-USER on the intended behavior)
+Found: iteration 4 via VAL-03 | Fixed: — | Regression test: —
+Repro: BA EPS FY2023 −3.67, FY2024 −18.36, FY2025 +2.48 → stored eps_bear = eps_base = eps_bull = 2.48.
+Expected: spec "bear = min(EPS over last 3 FYs)" = −18.36, so Graham's bear value is undefined (√ of a negative).
+Actual: loss years are dropped, so the bear case equals the base case. 8 companies affected (ALL BA BMY GEV MRVL MU VRTX WDC).
+Notes: decide whether the bear should be N/A (excluded from the bear median) or 0 when a loss year is in the window.
+
+### BUG-008 [P1][VAL] When the historical CAGR is undefined, growth falls back to a quarterly "analyst" figure
+Status: OPEN
+Found: iteration 4 via VAL-01 / VAL-04 | Fixed: — | Regression test: —
+Repro: DELL Lynch `growth_source: analyst_only`, `hist_cagr: None`, `analyst_growth: 2.825`, giving growth 15% (cap) and base $130.2. With DELL's 6 years of EPS (2020→2026: 6.3%/yr) the oracle gets $54.3.
+Expected: spec growth = min(hist CAGR, analyst), conservative by design; it never says to use analyst growth alone.
+Actual: 31 rows (15 DCF, 16 Lynch) use analyst-only growth: MU 1,368.5%, CEG 1,091%, CVX 322.9%, PLTR 325%, DELL 282.5% (all → 15% cap); UBER −84.6%, COP −20.2%, TSLA −3% (→ 0%). The oracle lists 33 rows whose spec inputs are undefined but were still valued.
+Root cause: to confirm. The CAGR is None when the window starts on a missing or non-positive value (DELL EPS null for 2017–2019; negative early FCF), and the code then falls back to analyst-only growth.
+Notes: fix direction: compute the CAGR over the available positive history (≥4 FYs) or fall back conservatively; never let a quarterly spike set long-term growth. See Q2.
+
+### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
+Status: NEEDS-USER
+Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
+Proposal: use a forward growth estimate if one is available, or drop the analyst term and rely on the clamped historical CAGR. This is a policy change, so it's the user's call.
+
 ### Q1 [UX] NEEDS-USER: show all companies on /screener before a filter is chosen
 Status: NEEDS-USER
 Context: `src/webapp/static/screener.js` auto-runs only when the URL has a query string, so a bare `/screener` shows filters and no rows, which looks broken.
@@ -56,4 +98,8 @@ Proposal: run the default (unfiltered) screen on load. Small effort, low risk. A
 - L2 [GATHER] SPY: Yahoo answered 404 "No fundamentals data" 3 times, yet the run recorded 0 warnings / 0 errors (silent gap). (iter 1)
 - L3 [CLI] A batch containing a failed ticker (ZZZZ, errors=1) still exited 0. Check the intended exit-code semantics. (iter 1)
 - L5 [MATCH] Web UPDATE DATA jobs export SQLite only (`src/webapp/jobs.py:246`, `formats=["sqlite"]`), so JSON and the CSVs go stale after web updates. Possibly by design; confirm in MATCH-05. (iter 3)
+- L6 [VAL] Multiples/Lynch Level-2 mismatches not yet explained: ANET APH AVGO LRCX NOW (recent splits), WDC (Sandisk spin-off), SCCO (stock dividends), SPGI, GE (1:8 reverse split + spin-offs; Lynch 92%), T (Lynch 28%). Adjudicate oracle vs code. (iter 4)
+- L7 [VALID] `eps_diluted` is null for early FYs while net income and shares exist (DELL 2015–2019, SCCO 2014–2018; GOOGL weighted shares before 2022): canonical mapping gap. (iter 4)
+- L8 [VAL] Graham/P/B BVPS uses weighted diluted shares and total equity including preferred (JPM basis $130.30 vs about $124 common). The spec is ambiguous. (iter 4)
+- L9 [VAL] KKR graham/multiples: the oracle can't derive the inputs; check the data. (iter 4)
 - L4 [VAL/VALID] `dividend_history.years_of_data` is the span from the first to the last payment (`yahoo_handler.py:710`): AAPL shows 39.2 years, including its 1995–2012 suspension. Check whether DDM or anything else treats it as an unbroken record. (iter 2)

@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 108 · PASS 1 · FAIL 0 · N-A 0 · BLOCKED 0 · NEEDS-USER 0  
+**Status counts:** TODO 104 · PASS 1 · FAIL 4 · N-A 0 · BLOCKED 0 · NEEDS-USER 0  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -11,11 +11,11 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
-| VAL-01 | DCF (two-stage FCF) | TODO | |  |
-| VAL-02 | DDM (multi-stage) | TODO | |  |
-| VAL-03 | Graham Number | TODO | |  |
-| VAL-04 | Peter Lynch | TODO | |  |
-| VAL-05 | Historical multiples band | TODO | |  |
+| VAL-01 | DCF (two-stage FCF) | FAIL→BUG-008 | iter 4 | Level 1 formula ✓ (100/100 rows); inputs ✓ except 16 rows on analyst-only growth (BUG-008) |
+| VAL-02 | DDM (multi-stage) | FAIL→BUG-005 | iter 4 | Level 1 ✓ (121 rows); CAGR window 22–63 yrs vs ≤10; 40/106 real rows off by more than 0.5% |
+| VAL-03 | Graham Number | FAIL→BUG-007 | iter 4 | Level 1 ✓ (124 rows); EPS = reported diluted EPS ✓; bear ignores loss years (8 cos) |
+| VAL-04 | Peter Lynch | FAIL→BUG-006, BUG-008 | iter 4 | Level 1 ✓ (103 rows); split factor from share jumps (AAPL −2.4%); analyst-only fallback (16 rows) |
+| VAL-05 | Historical multiples band | TODO | iter 4 | Level 1 ✓ (131 rows); 8 unexplained Level-2 mismatches among recent splitters and spin-offs, see lead L6 |
 | VAL-06 | Owner earnings | TODO | |  |
 | VAL-07 | Summary | TODO | |  |
 | VAL-08 | Invariant scan over the whole real-DB copy | TODO | |  |
