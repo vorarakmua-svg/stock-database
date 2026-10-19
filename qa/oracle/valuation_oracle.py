@@ -292,21 +292,30 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         # Growth compares full years (BUG-009, BUG-017). Each end is judged by the cadence of the (up to 3) years
         # next to it, since a payer can change frequency (PGR and TSM: annual, then quarterly from 2019). A first
         # year with fewer payments than those is partial (a dividend started, paused or restarted, or an ex-date
-        # slipped a year back), unless the year before it had as many: then it continues a lower-frequency
-        # schedule. An end year with exactly one payment more, each within 1.5x of the adjacent year's typical
-        # payment, holds one that slipped across the year boundary (O 2025's Dec 31 ex-date), so it counts at
-        # the usual number; a special is larger and counts in full (Q3), and a higher frequency pays less each.
+        # slipped a year back), unless it continues a lower-frequency schedule: the year before paid as often,
+        # and each payment is larger than the later years' typical one (an annual payment is several quarterly
+        # ones; a suspension restarted with the same count pays the same size, BUG-017's third fix). An end year
+        # with exactly one payment more, next to a year still on the usual schedule and each within 1.5x of that
+        # year's typical payment, holds one that slipped across the year boundary (O 2025's Dec 31 ex-date), so
+        # it counts at the usual number. A neighbour that already pays more often means the schedule changed (KO
+        # semiannual from 2024); a special is larger and counts in full (Q3); a higher frequency pays less each.
         def cadence(years: List[Tuple[int, float, int]]) -> float:
             return median([float(n) for _, _, n in years])
 
+        def lower_frequency(first: Tuple[int, float, int], later: List[Tuple[int, float, int]]) -> bool:
+            typical = median([a for y, _, _ in later for a in by_year[y]])
+            return (len(by_year.get(first[0] - 1, [])) == first[2]
+                    and all(a >= 1.5 * typical for a in by_year[first[0]]))
+
         while (len(window) >= 2 and window[0][2] < cadence(window[1:4])
-               and len(by_year.get(window[0][0] - 1, [])) != window[0][2]):
+               and not lower_frequency(window[0], window[1:4])):
             window = window[1:]
         for end, adjacent, near in ((0, 1, window[1:4]), (-1, -2, window[-4:-1])):
             if len(window) >= 2:
                 year, total, n = window[end]
                 usual, typical = cadence(near), median(by_year[window[adjacent][0]])
-                if n == usual + 1 and all(typical / 1.5 < a < typical * 1.5 for a in by_year[year]):
+                if (n == usual + 1 and window[adjacent][2] <= usual
+                        and all(typical / 1.5 < a < typical * 1.5 for a in by_year[year])):
                     window[end] = (year, total * usual / n, n)
         # The spec's historical CAGR "requires >= 4 FYs" (BUG-010): fewer full years measure nothing.
         span = window[-1][0] - window[0][0] if len(window) >= 4 else None
