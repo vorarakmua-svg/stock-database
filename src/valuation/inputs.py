@@ -9,6 +9,7 @@ period-end closing price — so the models themselves never touch the database.
 
 import math
 import sqlite3
+import statistics
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -31,6 +32,10 @@ MAX_SPLIT_RATIO = 50.0
 #: declared ratio is the exact one; a jump nowhere near any declared ratio keeps
 #: the detected value (the only evidence there is).
 DECLARED_SPLIT_TOLERANCE = 1.25
+
+#: A "dividend" at least this many times the payments around it, on a day the
+#: split history records a spin-off price factor, is the spun-off shares' value.
+SPIN_OFF_DIVIDEND_MULTIPLE = 5.0
 
 
 def _declared_ratio(observed: float, period_end: Optional[str],
@@ -232,6 +237,31 @@ def _apply_later_splits(records: List[FYRecord], splits: Sequence[Tuple[str, flo
             rec.shares *= factor
 
 
+def _drop_spin_off_dividends(dividends: List[Tuple[str, float]],
+                             splits: Sequence[Tuple[str, float]]) -> List[Tuple[str, float]]:
+    """Cash dividends only: drop a spin-off that Yahoo also records as a dividend.
+
+    Yahoo records some spin-offs twice: a price factor in the split history and,
+    the same day, a "dividend" worth the distributed shares (DHR's 2016 Fortive
+    spin-off: 1.319 and $24.56, 228x its regular payment; ETN 2001, ABT 2004).
+    Both signals are needed: stock dividends also leave small factors in the
+    split history beside ordinary cash dividends (SCCO), and a large payment on
+    any other day is a special dividend, not a spin-off.
+    """
+    spin_off_days = {str(when)[:10] for when, ratio in splits
+                     if ratio and ratio != 1.0 and 1.0 / SPLIT_JUMP_THRESHOLD < ratio < SPLIT_JUMP_THRESHOLD}
+    kept = []
+    for when, amount in dividends:
+        day = str(when)[:10]
+        if day in spin_off_days:
+            others = [a for w, a in dividends if str(w)[:10] != day and abs(
+                (date.fromisoformat(str(w)[:10]) - date.fromisoformat(day)).days) <= 400]
+            if others and amount > SPIN_OFF_DIVIDEND_MULTIPLE * statistics.median(others):
+                continue
+        kept.append((when, amount))
+    return kept
+
+
 def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     """Build the ValuationInputs bundle for *ticker*.
 
@@ -313,14 +343,14 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         "WHERE ticker = ? ORDER BY collected_at DESC LIMIT 1",
         (ticker,),
     ).fetchone()
-    dividends = [
+    dividends = _drop_spin_off_dividends([
         (r["date"], r["amount"])
         for r in conn.execute(
             "SELECT date, amount FROM dividend_events "
             "WHERE ticker = ? AND amount IS NOT NULL ORDER BY date ASC",
             (ticker,),
         ).fetchall()
-    ]
+    ], splits)
 
     fy_end_prices: Dict[int, float] = {}
     for rec in records:

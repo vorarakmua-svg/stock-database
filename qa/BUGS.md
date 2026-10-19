@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 4 · P3 2 · NEEDS-USER 7 · Verified: 10
+**Open:** P0 0 · P1 0 · P2 3 · P3 3 · NEEDS-USER 7 · Verified: 11
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -98,12 +98,12 @@ Actual: `value_ddm` passes any ≥ 2 complete years to `derive_growth`. DCF and 
 Fix: with fewer than 4 full years left after BUG-009's first-year rule, `value_ddm` hands `derive_growth` no history, so no CAGR is measured (`_cagr_span` now returns None for an empty history instead of raising IndexError). Applicability is unchanged: the DDM section's "N/A when < 3 calendar years" still decides it. The oracle took the spec's rule in its own commit first and flagged exactly BKNG, CRM, DELL and TMUS against the pre-fix code (`qa/evidence/iter10-oracle-before-fix.txt`); after the fix it agrees on every DDM row. Impact (`qa/evidence/iter10-bug010-impact.txt`), under today's flat fallback for an unmeasured CAGR (which BUG-016 may revert): BKNG −34%, CRM −16%, DELL −34%, TMUS −21%; META unchanged; no median moves, no verdict flips.
 
 ### BUG-011 [P2][DATA] DHR's 2016 Fortive spin-off is stored as a $24.56 cash dividend (and as a 1.319 split)
-Status: OPEN
-Found: iteration 8 via VAL-02 | Fixed: — | Regression test: —
+Status: VERIFIED (valuation); the web dividend panel still shows the record: BUG-019
+Found: iteration 8 via VAL-02 | Fixed: iteration 14 (see LOG) | Regression tests: `tests/test_valuation_inputs.py::test_a_spin_off_recorded_as_a_dividend_is_not_a_dividend`, `::test_cash_dividends_stay_even_on_unusual_days` (SCCO's dividend beside a stock dividend; a COST-style special)
 Repro: `dividend_events` DHR 2016-07-05 24.56, between regular payments of about 0.11; `split_events` DHR 2016-07-05 ratio 1.319 (the same spin-off).
 Expected: a spin-off is not a cash dividend; DHR's 2016 total ≈ 0.44.
 Actual: the 2016 total is 25.0, so DHR's 10-year dividend CAGR is −28.1% and DDM growth clamps to 0% (≈ 10% without it; the error is in the conservative direction).
-Root cause: to confirm (Yahoo's dividend series vs the collector).
+Root cause: upstream, confirmed: Yahoo's own dividend series (DHR.json from the 2026-08-04 run) carries `2016-07-05 24.56`, and its split history carries the same day's 1.319 price factor; the collector stores both. The program's defect: the DDM took every `dividend_events` row as a cash dividend. A scan of both data copies found 22 dividends dated on a split-history day: spin-off values many times the nearby payments (DHR 2016 ×228, ETN 2001 ×24, ABT 2004 ×12) and ordinary dividends beside stock dividends (SCCO 2024–2026, SPG 2009, HON 1965–67, TSM 2004–09). Fix: `_drop_spin_off_dividends` in `load_inputs` drops a dividend more than 5× the median payment within 400 days when it falls on a day with a spin-off price factor (a ratio between 2:3 and 3:2); both signals are required. The oracle took the rule first (bffce5f) and flagged exactly DHR's DDM against the unfixed code. Impact (`qa/evidence/iter14-bug011-impact.txt`): DHR DDM $22.66 → $34.86 (growth 0% → 10%, the cap); nothing else changes.
 Notes: a "dividend" dated the same day as a non-integer split is the spin-off signature. DHR's 2023 Veralto spin-off appears only as a 1.128 split.
 
 ### BUG-012 [P1][GATHER] CB's stored dividends are missing the Sep and Dec 2025 payments
@@ -166,6 +166,14 @@ Found: iteration 10 by code review 1, from the code (`csv_exporter.py` replaces 
 Repro: collect AAPL, then re-collect it while Yahoo and SEC fail: the run's mostly empty summary replaces AAPL's good row.
 Expected: the JSON merge's rule, which keeps `company_info` and financials when a re-collection fails.
 Actual: `rows.update(new_rows)` replaces the row. Invalid tickers (ZZZZ) also keep a permanent row, and columns dropped from `to_summary` stay in the file.
+
+### BUG-019 [P3][UI] The web dividend panel shows DHR's 2016 spin-off as a $24.56 dividend
+Status: OPEN
+Found: iteration 14 while fixing BUG-011 | Fixed: — | Regression test: —
+Repro: the DVD panel's payments table and annual bar chart for DHR read `dividend_events` as stored, so 2016 shows a $24.56 payment (an annual total of about $25 against $0.44 in the years around it).
+Expected: the spin-off shown as such, or left out the way the valuation now leaves it out.
+Actual: the raw Yahoo record is shown as a cash dividend. The panel's CAGR uses the first and last years of the whole history, so it isn't affected.
+Notes: cosmetic; the valuation side is fixed (BUG-011). ETN 2001 and ABT 2004 show the same pattern.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

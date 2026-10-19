@@ -273,6 +273,44 @@ def test_later_split_events_that_are_not_pending_splits_change_nothing(tmp_path,
     assert latest.eps_diluted == pytest.approx(30.37)
 
 
+def _dividend_db(tmp_path, extra_dividends, splits):
+    """Quarterly 0.11 dividends 2015-2017, plus *extra_dividends* and *splits* as (date, value)."""
+    db_path = tmp_path / "dividends.db"
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('DH', 'general')")
+    regular = [(f"{y}-{m}-28", 0.11) for y in (2015, 2016, 2017) for m in ("03", "06", "09", "12")]
+    for date_str, amount in regular + extra_dividends:
+        conn.execute("INSERT INTO dividend_events (ticker, date, amount) VALUES ('DH', ?, ?)", (date_str, amount))
+    for date_str, ratio in splits:
+        conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('DH', ?, ?)", (date_str, ratio))
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_a_spin_off_recorded_as_a_dividend_is_not_a_dividend(tmp_path):
+    # Yahoo records DHR's 2016 Fortive spin-off twice: a 1.319 price factor in its split history and a
+    # $24.56 "dividend" the same day, 228x the regular payment. Only cash dividends belong in the DDM.
+    conn = _connect(_dividend_db(tmp_path, [("2016-07-05", 24.56)], [("2016-07-05", 1.319)]))
+    amounts = [amount for _, amount in load_inputs(conn, "DH").dividends]
+    conn.close()
+    assert 24.56 not in amounts
+    assert len(amounts) == 12
+
+
+@pytest.mark.parametrize("extra, splits", [
+    ([("2016-07-05", 0.11)], [("2016-07-05", 1.008)]),  # SCCO: a regular dividend beside a stock dividend
+    ([("2016-07-05", 7.00)], []),                       # COST: a special dividend, no spin-off that day
+])
+def test_cash_dividends_stay_even_on_unusual_days(tmp_path, extra, splits):
+    conn = _connect(_dividend_db(tmp_path, extra, splits))
+    amounts = [amount for _, amount in load_inputs(conn, "DH").dividends]
+    conn.close()
+    assert len(amounts) == 13
+
+
 def test_split_detected_from_net_income_over_eps_when_shares_null(split_db):
     """GOOGL case: weighted_avg_shares_diluted is NULL; derive shares = NI / EPS."""
     conn = _connect(split_db)

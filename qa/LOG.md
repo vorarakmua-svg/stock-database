@@ -279,3 +279,24 @@ Gates: ruff ✓ mypy ✓ pytest 880 passed (1 known warning; 3 flat-rule tests r
 Commit: chore(qa) oracle reading (630b52f), then (this commit) fix(valuation): restore the plan's growth fallback
 pending a decision
 Next: code review 2 is due (5 fixes past abed57a), dispatched in the background; then BUG-011 (P2, oldest open P2)
+
+## Iteration 14: 2026-10-20 02:55: fix
+Picked: BUG-011 (P2), the oldest open P2 (CI: e8c3aa1 running). Code review 2 was still running.
+Did: Root cause: upstream; Yahoo's dividend series itself has DHR's `2016-07-05 24.56`, beside the same day's 1.319
+split-history factor. A scan of both copies found 22 dividends dated on a split-history day: spin-off values many
+times the nearby payments (DHR ×228, ETN ×24, ABT ×12) and ordinary dividends beside stock dividends (SCCO, SPG,
+HON, TSM), so a date-only rule would have dropped SCCO's current dividends. Oracle first (bffce5f): it drops a
+payment over 5× the median within 400 days on a day with a factor between 2:3 and 3:2, and now builds the TTM and
+yearly totals in Python; against the unfixed code its only new finding was DHR's DDM. Tests first: the DHR case
+failed (24.56 still among the dividends); guards for SCCO's dividend beside a stock dividend and for a COST-style
+special passed before and after. Fix: `_drop_spin_off_dividends` in `load_inputs`. Mutants (large payments dropped
+on any day; any payment dropped on a factor day) each fail a guard; restored byte-identical.
+Evidence: `qa/evidence/iter14-bug011-{red,green,mutants,impact}.txt`, `iter14-oracle-before-fix-{golden,real}.txt`,
+`iter14-oracle-{golden,real}.txt`
+Result: BUG-011 VERIFIED for the valuation. Real copy: Level 1 0/519, Level 2 the known 12; golden 0/57. Impact:
+DHR DDM $22.66 → $34.86 (growth 0% → 10%, the cap); nothing else changes. New: BUG-019 (P3, the web dividend panel
+still shows the $24.56).
+Gates: ruff ✓ mypy ✓ pytest 883 passed (1 known warning) | CI: pending for this push
+Commit: chore(qa) oracle rule (bffce5f), then (this commit) fix(valuation): a spin-off recorded as a dividend stays
+out of the DDM
+Next: record code review 2's findings when it reports; then BUG-013 (P2, the oldest open P2)

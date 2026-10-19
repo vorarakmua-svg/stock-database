@@ -12,7 +12,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
 | VAL-01 | DCF (two-stage FCF) | NEEDS-USER | iter 13 | Level 1 ✓ and Level 2 ✓ on every derivable DCF row; the 16 rows with an unmeasurable CAGR follow the plan's analyst-only fallback, which the spec doesn't define: Q5 |
-| VAL-02 | DDM (multi-stage) | FAIL→BUG-011 | iter 10 | BUG-005, BUG-009 and BUG-010 fixed (oracle agrees on every DDM row); open: DHR spin-off stored as a dividend (BUG-011); CB's missing payments are upstream and flagged (BUG-012), the DDM's handling is Q4; specials policy: Q3 |
+| VAL-02 | DDM (multi-stage) | FAIL→BUG-017 | iter 14 | BUG-005, BUG-009, BUG-010 and BUG-011 fixed (the oracle agrees on every derivable DDM row); open: a 13-payment last year inflates growth (BUG-017); 7 rows without a measurable CAGR aren't derivable from the spec (Q5); CB's missing payments: Q4; specials: Q3 |
 | VAL-03 | Graham Number | FAIL→BUG-007 | iter 11 | Level 1 ✓; BUG-014 fixed (KLAC on today's basis; oracle agrees); left: the bear case ignores loss years (BUG-007, NEEDS-USER) and XOM's Level-2 mismatch (lead L6) |
 | VAL-04 | Peter Lynch | TODO | iter 13 | BUG-006 and BUG-014 fixed; BUG-016 restored the plan's rule, so 16 Lynch rows use the analyst figure again (not derivable from the spec: Q5); left: SCCO and DELL Level-2 mismatches (leads L6, L7) |
 | VAL-05 | Historical multiples band | TODO | iter 11 | Level 1 ✓; BUG-006 resolved ANET/APH/AVGO/LRCX; SCCO, SPGI and WDC were the oracle's spin-off handling (fixed in iteration 11); NOW remains: lead L6 |
