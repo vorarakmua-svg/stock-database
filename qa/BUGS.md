@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 1 · P1 1 · P2 2 · P3 2 · NEEDS-USER 3 · Verified: 2
+**Open:** P0 0 · P1 1 · P2 3 · P3 2 · NEEDS-USER 3 · Verified: 3
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -46,12 +46,12 @@ Root cause: both CSV writers opened their file with mode `'w'` and wrote only th
 Notes: **NEEDS-USER:** the fix doesn't repair your existing `data/output/csv/summary.csv` (still 2 of 127 tickers). Future runs merge into it, but a complete file needs a one-off rebuild from the 127 JSON files, which writes to the real data, so it's the user's call.
 
 ### BUG-005 [P0][VAL] DDM dividend growth uses the whole dividend history, not the spec's ≤10 years
-Status: OPEN
-Found: iteration 4 via VAL-02 (`qa/oracle/valuation_oracle.py` Level 2) | Fixed: — | Regression test: —
+Status: VERIFIED
+Found: iteration 4 via VAL-02 (`qa/oracle/valuation_oracle.py` Level 2) | Fixed: iteration 5 (see LOG) | Regression test: `tests/test_valuation_models.py::test_value_ddm_cagr_uses_only_the_last_10_years`
 Repro: `python qa/oracle/valuation_oracle.py --db <realcopy> --level 2`, or read `valuations.assumptions` for model ddm.
 Expected: spec "Dividend growth = min(hist dividend CAGR (≤10 yrs), analyst growth), clamped [0%, 10%]".
 Actual: `cagr_years` 22–63 (KO 63, XOM 63, NEE 52, JPM 41, AAPL 38 spanning its 1995–2012 suspension). 40 of 106 DDM rows in the real DB differ from the ≤10-yr oracle by more than 0.5%, in both directions: JPM 111.6 → 137.9 (+24%), KO 53.15 → 42.29 (−20%), XOM 91.14 → 79.62 (−13%), AAPL 22.94 → 20.30 (−12%).
-Root cause: to confirm. The DCF and Lynch windows are correct (`cagr_years` 9), so only the DDM history isn't truncated.
+Root cause: `value_ddm` (`src/valuation/models.py`) built the CAGR from every complete calendar year of dividends; only FY records were truncated to 10 (`inputs.py`, `_MAX_FY_HISTORY`). Fix: `DIVIDEND_CAGR_YEARS = 10`, a calendar window `anchor.year - 10 <= year < anchor.year` (the same 10-value / 9-year span as the FY models), keeping the calendar-span exponent. Verified: backfill of fresh copies with the fixed code, then the oracle: DDM mismatches 41 → 0 (real), 7 → 0 (golden). Impact on the real data: 41/106 DDM values move (C +38%, JPM +24%, DHR −35%, WFC −29%), the 5-model median moves for 10/127 companies, and no verdict flips (`qa/evidence/iter05-bug005-impact.txt`).
 Notes: evidence `qa/evidence/iter04-val-{golden,realcopy}.txt`. Explains lead L4 (AAPL `years_of_data` 39.2).
 
 ### BUG-006 [P2][VAL] Split adjustment of per-share history uses observed share-count jumps, not declared split ratios
@@ -79,6 +79,15 @@ Expected: spec growth = min(hist CAGR, analyst), conservative by design; it neve
 Actual: 31 rows (15 DCF, 16 Lynch) use analyst-only growth: MU 1,368.5%, CEG 1,091%, CVX 322.9%, PLTR 325%, DELL 282.5% (all → 15% cap); UBER −84.6%, COP −20.2%, TSLA −3% (→ 0%). The oracle lists 33 rows whose spec inputs are undefined but were still valued.
 Root cause: to confirm. The CAGR is None when the window starts on a missing or non-positive value (DELL EPS null for 2017–2019; negative early FCF), and the code then falls back to analyst-only growth.
 Notes: fix direction: compute the CAGR over the available positive history (≥4 FYs) or fall back conservatively; never let a quarterly spike set long-term growth. See Q2.
+
+### BUG-009 [P2][VAL] DDM growth treats a dividend's initiation year (or a one-off special payment) as a full year
+Status: OPEN
+Found: iteration 5 while verifying BUG-005 (VAL-02) | Fixed: — | Regression test: —
+Repro: TMUS: one regular payment in 2023 (initiation, $0.65), then 4 a year → stored `hist_cagr` 137% over 2 years. Its 2013 $4.06 is a one-off merger distribution, not a regular dividend.
+Expected: growth from comparable full years (skip a partial first year; exclude special payments).
+Actual: CAGR 2023→2025 = (3.66 / 0.65)^(1/2) − 1 = 137%. Masked here by min() with analyst 5.3%, but without analyst growth it would hit the 10% cap. Special payments also inflate `ttm_dps` when they fall in the window.
+Root cause: `_annual_dividend_totals` sums every event per calendar year; there's no notion of partial or special years.
+Notes: fix direction: drop the first calendar year when it has fewer payments than the steady cadence; detect specials as outliers vs the regular amount (needs care). Edge case for VAL-09.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

@@ -82,3 +82,20 @@ Leads L6–L9. VAL-01..04 FAIL; VAL-05 Level 1 ✓, still TODO pending L6.
 Gates: no `src` change; oracle passes ruff | CI: green on 451b529 and e51c4f8; 42f8a01 in progress
 Commit: (this commit) chore(qa): valuation oracle and VAL-01..05 findings
 Next: BUG-005 (P0), the highest-severity open bug.
+
+## Iteration 5: 2026-10-20 02:45: fix
+Picked: BUG-005 (P0), the only open P0 (CI: 42f8a01 ✓; 0ee32b9 running, QA docs only)
+Did: Root cause in `value_ddm`: its CAGR history was every complete calendar year of dividends; only FY records
+were truncated to 10 (`inputs.py`). Test first: `test_value_ddm_cagr_uses_only_the_last_10_years` (12%/yr until
+2013, then 3%/yr) failed with `cagr_years` 31 ≠ 9. Fix: `DIVIDEND_CAGR_YEARS = 10`, a calendar window
+`anchor.year - 10 <= year < anchor.year`. The oracle's DDM window was also wrong (last 10 *payment years* reached
+back to TMUS's 2013 special distribution), so it now uses the spec's calendar window and span.
+Evidence: `qa/evidence/iter05-bug005-{red,green,impact}.txt`, `iter05-oracle-{golden,real}.txt`. Backfilled
+fresh copies with the fixed code: oracle DDM mismatches 41 → 0 (real), 7 → 0 (golden); Level 1 still 0/579.
+Impact on the real data: 41/106 DDM values move (C +38%, JPM +24%, DHR −35%, WFC −29%); the 5-model median moves
+for 10/127 companies; no verdict flips.
+Result: BUG-005 VERIFIED. New **BUG-009 (P2)**: the DDM initiation year (and special payments) count as full years
+(TMUS 137% CAGR, masked by analyst growth). VAL-02 → FAIL→BUG-009.
+Gates: ruff ✓ mypy ✓ pytest 860 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(valuation): DDM dividend growth uses at most 10 years
+Next: BUG-008 (P1), the highest-severity open bug.

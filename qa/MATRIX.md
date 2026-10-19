@@ -12,7 +12,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
 | VAL-01 | DCF (two-stage FCF) | FAIL→BUG-008 | iter 4 | Level 1 formula ✓ (100/100 rows); inputs ✓ except 16 rows on analyst-only growth (BUG-008) |
-| VAL-02 | DDM (multi-stage) | FAIL→BUG-005 | iter 4 | Level 1 ✓ (121 rows); CAGR window 22–63 yrs vs ≤10; 40/106 real rows off by more than 0.5% |
+| VAL-02 | DDM (multi-stage) | FAIL→BUG-009 | iter 5 | BUG-005 fixed (≤10-yr window; oracle DDM mismatches 41 → 0); open edge case: partial initiation year / special payments (BUG-009) |
 | VAL-03 | Graham Number | FAIL→BUG-007 | iter 4 | Level 1 ✓ (124 rows); EPS = reported diluted EPS ✓; bear ignores loss years (8 cos) |
 | VAL-04 | Peter Lynch | FAIL→BUG-006, BUG-008 | iter 4 | Level 1 ✓ (103 rows); split factor from share jumps (AAPL −2.4%); analyst-only fallback (16 rows) |
 | VAL-05 | Historical multiples band | TODO | iter 4 | Level 1 ✓ (131 rows); 8 unexplained Level-2 mismatches among recent splitters and spin-offs, see lead L6 |

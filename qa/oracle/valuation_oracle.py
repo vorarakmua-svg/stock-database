@@ -236,13 +236,17 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
                          "and date>date(?,'-365 days') and date<=?", (ticker, anchor, anchor)).fetchone()[0]
         years = db.execute("select substr(date,1,4) y, sum(amount) from dividend_events where ticker=? and "
                            "substr(date,1,4) < substr(?,1,4) group by y order by y", (ticker, anchor)).fetchall()
-        window = [v for _y, v in years][-10:]
-        g = x.growth(cagr(window), 0.10)
+        # The spec's "<= 10 yrs" is a calendar window (complete years before the anchor year), and the
+        # exponent is the calendar span, so a payment gap can't stretch or shrink the growth rate.
+        window = [(int(y), v) for y, v in years if int(y) >= int(anchor[:4]) - 10]
+        span = window[-1][0] - window[0][0] if len(window) >= 2 else 0
+        hist = (window[-1][1] / window[0][1]) ** (1 / span) - 1 if span and window[0][1] > 0 else None
+        g = x.growth(hist, 0.10)
         _, r = x.discount()
         if g is None or not ttm:
-            return {"inputs": {"ttm_dps": ttm, "hist_cagr": cagr(window), "cagr_years": len(window) - 1}}
+            return {"inputs": {"ttm_dps": ttm, "hist_cagr": hist, "cagr_years": span}}
         vals = [ddm_per_share(ttm, gi, ri) for gi, ri in scenarios(g, r, 0.10, False)]
-        return {"inputs": {"ttm_dps": ttm, "hist_cagr": cagr(window), "cagr_years": len(window) - 1,
+        return {"inputs": {"ttm_dps": ttm, "hist_cagr": hist, "cagr_years": span,
                            "growth_base": g, "discount_base": r}, "values": vals}
     eps = x.eps_series()
     if model == "graham":

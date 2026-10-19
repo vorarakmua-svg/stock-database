@@ -201,6 +201,20 @@ def test_value_ddm_cagr_uses_calendar_years():
     assert res.assumptions["hist_cagr"] == pytest.approx(0.05)
 
 
+def test_value_ddm_cagr_uses_only_the_last_10_years():
+    # Spec: dividend growth uses a <= 10-year CAGR. 12%/yr growth until 2013, 3%/yr since: as of
+    # mid-2026 the window is 2016-2025, so growth is 3%, not a blend dominated by decades-old growth.
+    divs = []
+    total = 1.0
+    for year in range(1994, 2026):
+        if year > 1994:
+            total *= 1.12 if year <= 2013 else 1.03
+        divs += [(f"{year}-{month:02d}-15", total / 4) for month in (3, 6, 9, 12)]
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 7, 1)))
+    assert res.assumptions["cagr_years"] == 9
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.03)
+
+
 def test_value_ddm_na_too_short():
     divs = _quarterly_dividends(2022, 2023, 1.0, 0.0)
     res = value_ddm(_inputs(sector_class="bank", dividends=divs))

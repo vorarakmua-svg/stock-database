@@ -32,6 +32,11 @@ DCF_SECTORS = ("general", "utility", "energy")
 #: missed annual payment plus a grace quarter) is treated as having stopped.
 DIVIDEND_STALE_DAYS = 456
 
+#: Dividend growth uses at most this many complete calendar years (the spec's
+#: "hist dividend CAGR (<= 10 yrs)", the same window as the FY-based models):
+#: decades-old growth says little about the next five years.
+DIVIDEND_CAGR_YEARS = 10
+
 
 @dataclass
 class ValuationResult:
@@ -164,8 +169,10 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
     if ttm <= 0:
         return _na("ddm", "no dividends in trailing 12 months")
 
-    # CAGR over complete calendar years only (the anchor year is likely partial).
-    complete_years = [(year, total) for year, total in annual if year < anchor.year]
+    # CAGR over the last DIVIDEND_CAGR_YEARS complete calendar years only (the
+    # anchor year is likely partial).
+    complete_years = [(year, total) for year, total in annual
+                      if anchor.year - DIVIDEND_CAGR_YEARS <= year < anchor.year]
     complete = [total for _, total in complete_years]
     growth, gmeta = derive_growth(complete, inputs.analyst_growth, cap=DDM_GROWTH_CAP,
                                   periods=[year for year, _ in complete_years])
