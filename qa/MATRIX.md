@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 103 · PASS 1 · FAIL 4 · N-A 0 · BLOCKED 0 · NEEDS-USER 1  
+**Status counts:** TODO 103 · PASS 1 · FAIL 3 · N-A 0 · BLOCKED 0 · NEEDS-USER 2  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -12,7 +12,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
 | VAL-01 | DCF (two-stage FCF) | NEEDS-USER | iter 13 | Level 1 ✓ and Level 2 ✓ on every derivable DCF row; the 16 rows with an unmeasurable CAGR follow the plan's analyst-only fallback, which the spec doesn't define: Q5 |
-| VAL-02 | DDM (multi-stage) | FAIL→BUG-017 | iter 14 | BUG-005, BUG-009, BUG-010 and BUG-011 fixed (the oracle agrees on every derivable DDM row); open: a 13-payment last year inflates growth (BUG-017); 7 rows without a measurable CAGR aren't derivable from the spec (Q5); CB's missing payments: Q4; specials: Q3 |
+| VAL-02 | DDM (multi-stage) | NEEDS-USER | iter 16 | BUG-005, -009, -010, -011 and -017 fixed; the oracle agrees on every derivable DDM row. Left for the user: growth when no CAGR is measurable (Q5, 7 rows), CB's missing payments (Q4), special dividends (Q3) |
 | VAL-03 | Graham Number | FAIL→BUG-007 | iter 11 | Level 1 ✓; BUG-014 fixed (KLAC on today's basis; oracle agrees); left: the bear case ignores loss years (BUG-007, NEEDS-USER) and XOM's Level-2 mismatch (lead L6) |
 | VAL-04 | Peter Lynch | TODO | iter 13 | BUG-006 and BUG-014 fixed; BUG-016 restored the plan's rule, so 16 Lynch rows use the analyst figure again (not derivable from the spec: Q5); left: SCCO and DELL Level-2 mismatches (leads L6, L7) |
 | VAL-05 | Historical multiples band | TODO | iter 11 | Level 1 ✓; BUG-006 resolved ANET/APH/AVGO/LRCX; SCCO, SPGI and WDC were the oracle's spin-off handling (fixed in iteration 11); NOW remains: lead L6 |

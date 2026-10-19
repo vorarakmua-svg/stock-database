@@ -320,3 +320,22 @@ fields.
 Gates: ruff ✓ mypy ✓ pytest 886 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(parsers): a duration field never takes a point-in-time fact
 Next: record code review 2's findings when it reports; then BUG-017 (P2) or BUG-018 (P2), oldest first: BUG-017
+
+## Iteration 16: 2026-10-20 03:35: fix
+Picked: BUG-017 (P2), the oldest open P2 (CI: 0940188 running). Code review 2 was still running.
+Did: Measured both endings on the real-data copy: only O (a 13-payment 2025) and PGR (three annual-only years at the
+start) change. Oracle first (3dd48f1): every short leading year skipped, and a last year with extra payments counted
+at the usual count; against the unfixed code it flagged exactly O's DDM. Tests first: the restart case failed (7
+years, not 6) and the O case failed (3.92%, not 3%). Fix in `value_ddm`: a `while` over short leading years, and a
+last year above the usual count scaled to it. A guard written after the fix (a short last year stays as it is) and
+three mutants (one leading year only, no scaling, short years scaled too) each fail their test; restored
+byte-identical.
+Evidence: `qa/evidence/iter16-bug017-{red,green,mutants,impact}.txt`, `iter16-oracle-before-fix-{golden,real}.txt`,
+`iter16-oracle-{golden,real}.txt`
+Result: BUG-017 VERIFIED. Real copy: Level 1 0/519, Level 2 the known 12; golden 0/57. Impact: O DDM $66.19 → $63.57
+(growth 4.58% → 3.66%); PGR's measured CAGR 27.98% → 9.68% with its growth still the analyst's 5%; no median moves.
+VAL-02 → NEEDS-USER (only Q3, Q4 and Q5 remain).
+Gates: ruff ✓ mypy ✓ pytest 889 passed (1 known warning) | CI: pending for this push
+Commit: chore(qa) oracle rule (3dd48f1), then (this commit) fix(valuation): DDM growth compares full years at both
+ends
+Next: record code review 2's findings when it reports; then BUG-018 (P2, the last open P2)

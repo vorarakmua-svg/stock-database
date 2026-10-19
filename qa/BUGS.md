@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 2 · P3 4 · NEEDS-USER 7 · Verified: 12
+**Open:** P0 0 · P1 0 · P2 1 · P3 4 · NEEDS-USER 7 · Verified: 13
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -153,12 +153,13 @@ Result: `derive_growth` and its test file are byte-identical to before f7feea4; 
 Notes: the comment at `models.py:273` matches the plan's rule again. An edit to the oracle's Lynch-branch comment was denied by the auto-mode permission classifier ("Modify Shared Resources"); it wasn't needed, since that branch already returns no values when `growth()` is None, but its comment still describes iteration 6's rule.
 
 ### BUG-017 [P2][VAL] A 13-payment last year inflates DDM growth (O)
-Status: OPEN
-Found: iteration 10 by code review 1; verified on the real-data copy | Fixed: — | Regression test: —
+Status: VERIFIED
+Found: iteration 10 by code review 1; verified on the real-data copy | Fixed: iteration 16 (see LOG) | Regression tests: `tests/test_valuation_models.py::test_value_ddm_scales_a_last_year_with_an_extra_payment_to_the_usual_count`, `::test_value_ddm_cagr_skips_every_short_year_at_the_start`, `::test_value_ddm_keeps_a_short_last_year_as_it_is`
 Repro: Realty Income pays monthly; its 2025 has 13 ex-dates because the 2025-12-31 ex-date belongs to January's payment (the next is 2026-01-30). Stored `hist_cagr` is 4.58% over 9 years; with a 12-payment 2025 it's 3.66%, so the DDM base is about 4% high.
 Expected: comparable full years at both ends of the CAGR.
 Actual: BUG-009's rule fixes only a short FIRST year; a long LAST year still counts as one year.
 Notes: a short last year is deliberately kept (it can be a real cut), but a long one inflates growth. The review also notes that a partial year, then a suspension, then a partial restart year measures growth from the restart (synthetic: 20.6%, capped at 10%).
+Fix: `value_ddm` skips every leading year below the window's usual payment count (not just the first), and counts a last year with extra payments at the usual count (its total × usual ÷ payments); a short last year stays as it is. The oracle took both rules first (3dd48f1) and flagged exactly O's DDM against the unfixed code. Impact (`qa/evidence/iter16-bug017-impact.txt`): O DDM $66.19 → $63.57 (growth 4.58% → 3.66%); PGR's measured CAGR 27.98% → 9.68% (its annual-only years before 2019 are skipped), but its growth stays at the analyst's 5%; no median moves.
 
 ### BUG-018 [P2][STORE] The CSV merge lets a failed re-collection blank a good row
 Status: OPEN

@@ -174,15 +174,21 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
     # anchor year is likely partial).
     complete_years = [(year, total) for year, total in annual
                       if anchor.year - DIVIDEND_CAGR_YEARS <= year < anchor.year]
-    # The first of those years can be partial too: a dividend started or
-    # restarted mid-year (MU: 2 payments in 2021, then 4 a year), or an ex-date
-    # slipped into the year before (BMY). Growth measured from it counts
-    # payments, not raises (MU read 23%/yr on a flat dividend), so it starts at
-    # the next year when the first has fewer payments than the usual cadence.
+    # Growth compares full years. The first years can be partial: a dividend
+    # started, paused or restarted mid-year (MU: 2 payments in 2021, then 4 a
+    # year), or an ex-date slipped into the year before (BMY). Growth measured
+    # from one counts payments, not raises (MU read 23%/yr on a flat dividend),
+    # so every leading year below the usual cadence is skipped. A last year with
+    # an extra payment holds one that belongs to the next year (O's 2025-12-31
+    # ex-date for January), so it counts at the usual cadence; a short last year
+    # stays as it is, since it can be a real cut.
     payments = Counter(int(d[:4]) for d, _ in inputs.dividends)
-    if len(complete_years) >= 2 and payments[complete_years[0][0]] < statistics.median(
-            payments[year] for year, _ in complete_years):
+    usual = statistics.median(payments[year] for year, _ in complete_years) if complete_years else 0
+    while len(complete_years) >= 2 and payments[complete_years[0][0]] < usual:
         complete_years = complete_years[1:]
+    if complete_years and payments[complete_years[-1][0]] > usual:
+        last_year, last_total = complete_years[-1]
+        complete_years[-1] = (last_year, last_total * usual / payments[last_year])
     # The spec's historical CAGR "requires >= 4 FYs" (DCF and Lynch are N/A
     # below that). DDM stays applicable from 3 calendar years, so with fewer
     # full years no CAGR is measured (TMUS's 2 full years read 29%/yr from a

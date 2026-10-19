@@ -224,6 +224,34 @@ def test_value_ddm_cagr_starts_at_the_first_full_year_of_payments():
     assert res.assumptions["hist_cagr"] == pytest.approx(0.10)
 
 
+def test_value_ddm_cagr_skips_every_short_year_at_the_start():
+    # A partial first year, a year without dividends, then a partial restart: growth starts at the first
+    # full year, not at the restart (code review 1: 20.6% on a synthetic 10%/yr series).
+    divs = [("2016-11-15", 0.10), ("2018-11-15", 0.10)] + _quarterly_dividends(2019, 2025, 2.0, 0.10)
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    assert res.assumptions["cagr_years"] == 6
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.10)
+
+
+def test_value_ddm_scales_a_last_year_with_an_extra_payment_to_the_usual_count():
+    # Realty Income pays monthly. January 2026's payment went ex-dividend on 2025-12-31, so 2025 holds
+    # 13 payments, and growth read 4.58% instead of 3.66%. That year counts as its usual 12.
+    rate = {y: 0.25 * 1.03 ** (y - 2016) for y in range(2016, 2027)}
+    divs = [(f"{y}-{m:02d}-01", rate[y]) for y in range(2016, 2026) for m in range(1, 13)]
+    divs += [("2025-12-31", rate[2025])] + [(f"2026-{m:02d}-01", rate[2026]) for m in range(2, 8)]
+    res = value_ddm(_inputs(dividends=sorted(divs), as_of=date(2026, 8, 4)))
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.03)
+
+
+def test_value_ddm_keeps_a_short_last_year_as_it_is():
+    # Two payments in the last full year can be a real cut, so that year isn't scaled up.
+    divs = [d for d in _quarterly_dividends(2016, 2025, 2.0, 0.10) if d[0] < "2025-07-01"]
+    divs += [("2026-03-15", 0.5), ("2026-06-15", 0.5)]
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    half_of_2025 = 2.0 * 1.1 ** 9 / 2
+    assert res.assumptions["hist_cagr"] == pytest.approx((half_of_2025 / 2.0) ** (1 / 9) - 1)
+
+
 def test_value_ddm_keeps_a_full_first_year_when_a_later_year_has_a_special():
     # COST: 2017 adds a $7 special to 4 regular payments. A first year is partial against the
     # window's usual cadence, not against a neighbour that a special pushed to 5 payments.
