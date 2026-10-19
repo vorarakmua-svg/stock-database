@@ -626,3 +626,18 @@ Result: BUG-034 VERIFIED; the review's scenario shows the three stores agreeing.
 Gates: ruff ✓ mypy ✓ pytest 927 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(exporters): summary.csv keeps company fields a run lacked, as the JSON and SQLite do
 Next: BUG-035 (P2, MRVL's share-class gap)
+
+## Iteration 33: 2026-10-20 04:57: fix
+Picked: BUG-035 (P2), the oldest open P2 (CI: f75ce66 running).
+Did: Measured first (`iter33-share-rule-scan.txt`): the review's 25% bound would also move SPG (17%, its FY count
+excludes partnership units) and so decide the unit question; every gap of 5% or more is a class or units, so the
+bound is 5%. Oracle first (73d4a15): a gap under 5% is settled by whichever figure is nearer the latest FY count; it
+flagged exactly MRVL's DCF against the unfixed code. Tests: the MRVL shape RED; PLTR and SPG guards. Fix in
+`_total_shares` (`SHARE_SOURCE_GAP`); three mutants each fail a test; restored byte-identical.
+Evidence: `qa/evidence/iter33-{share-rule-scan,bug035-red,bug035-green,bug035-mutants,bug035-impact}.txt`,
+`iter33-oracle-before-fix-{real,golden}.txt`, `iter33-oracle-{real,golden}.txt`
+Result: BUG-035 VERIFIED. One row moves: MRVL's DCF base $10.59 → $10.85 (median $12.97 → $13.10). Oracle: real the 8
+BUG-007 rows, golden 0/57. VAL-01 → FAIL→BUG-039 (P3 left).
+Gates: ruff ✓ mypy ✓ pytest 930 passed (1 known warning) | CI: pending for this push
+Commit: oracle 73d4a15, then (this commit) fix(valuation): a small share-count gap is settled by the filings' count
+Next: BUG-036 (P2, the post-filing split check)

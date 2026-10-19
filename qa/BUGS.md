@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 3 · P3 13 · NEEDS-USER 7 · Verified: 22
+**Open:** P0 0 · P1 0 · P2 2 · P3 13 · NEEDS-USER 7 · Verified: 23
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -302,12 +302,13 @@ Notes: no current value is affected; it appears on future runs. Fix: merge the c
 Fix (iteration 32): the CSV merge keeps each company column's earlier value when the run lacked it, as it does for the identifiers, so company details merge field by field like the JSON's company_info and SQLite's companies row; every other section keeps the section rule. The regression test exports two runs through all three stores and compares them; a mutant restoring the old rule fails it. The review's scenario now shows the three stores agreeing (`qa/evidence/iter32-bug034-e2e.txt`).
 
 ### BUG-035 [P2][VAL] The 2% share-class gap takes market cap ÷ price for single-class MRVL (DCF −2.4%)
-Status: OPEN
-Found: iteration 29 by code review 4, re-checked on the real-data copy | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 33)
+Found: iteration 29 by code review 4, re-checked on the real-data copy | Fixed: iteration 33 (see LOG) | Regression test: `tests/test_valuation_inputs.py::test_per_share_values_count_every_share_class` (MRVL, PLTR and SPG shapes added)
 Repro: MRVL's Yahoo count 0.8758B, market cap ÷ price 0.8975B (1.0249x), FY2026 diluted 0.8697B. `_total_shares` takes 0.8975B, so the DCF is $10.59 instead of $10.85 (−2.4%) and the median base $12.97 instead of $13.10 (its owner earnings are N/A).
 Expected: market cap ÷ price only when Yahoo's count misses a class or units.   Actual: any gap over 2% counts as a missing class. On the real copy 112 of 127 companies sit within ±0.5%; MA is 1.0075; PLD, MRVL, KKR, PLTR and BLK 1.02–1.05; 9 above 1.05.
 Root cause: `src/valuation/inputs.py` `_total_shares` (`SHARE_CLASS_GAP = 1.02`); the oracle copies the threshold, so it couldn't catch this. BUG-022's "stale count (BLK, MRVL)" was wrong (corrected there).
 Notes: fix direction (review): for gaps under about 25%, take whichever count is nearer the latest FY count on today's basis; keep market cap ÷ price when the FY count is unknown or the gap is large (BX, BRK-B, GOOGL). Whether unit-inclusive counts (BX, SPG, PLD, BLK) are right is a design question.
+Fix (iteration 33): `_total_shares` settles a gap under 5% (`SHARE_SOURCE_GAP`) by whichever of Yahoo's two figures is nearer the latest FY's count on today's basis; wider gaps keep market cap ÷ price. The review's 25% bound was not taken: on the real-data copy every gap of 5% or more is a class or units (APP 10%, V 10%, META 15%, SPG 17%, BX 65%), and at 17% SPG's FY count excludes its partnership units, so a wider bound would decide the unit question for it (`qa/evidence/iter33-share-rule-scan.txt`). Between 2% and 5% the FY count keeps market cap ÷ price for PLTR and BLK and takes Yahoo's count for MRVL and KKR (and the golden copy's PLD). The oracle took the rule first (73d4a15) and flagged exactly MRVL's DCF against the unfixed code. Tests: the MRVL shape RED, PLTR and SPG guards; three mutants (no settling, no 5% ceiling, the farther figure) each fail one. Impact (`iter33-bug035-impact.txt`): one row of 762, MRVL's DCF $9.77 / $10.59 / $13.49 -> $10.01 / $10.85 / $13.83, its median base $12.97 -> $13.10; KKR, SPG and PLD values don't depend on the count (no applicable DCF or owner earnings); golden unchanged. Oracle: real Level 2 the 8 BUG-007 rows, golden 0/57.
 
 ### BUG-036 [P2][VAL] The post-filing split check can refuse a real split
 Status: OPEN

@@ -11,7 +11,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
-| VAL-01 | DCF (two-stage FCF) | FAIL→BUG-035 | iter 29 | Level 1 ✓ and Level 2 ✓ on every derivable row; MRVL's count comes from market cap ÷ price over a 2.5% gap (BUG-035: DCF −2.4%; the oracle copies the threshold); 16 rows rest on Q5; also BUG-039 (P3) |
+| VAL-01 | DCF (two-stage FCF) | FAIL→BUG-039 | iter 33 | Level 1 ✓ and Level 2 ✓ on every derivable row; BUG-035 fixed (a share-count gap under 5% is settled by the filings: MRVL's DCF $10.59 -> $10.85); 16 rows rest on Q5; left: BUG-039 (P3, no Yahoo count) |
 | VAL-02 | DDM (multi-stage) | FAIL→BUG-040 | iter 31 | BUG-017 fixed a third time (an adjacent-schedule and a payment-size condition); the oracle agrees on every derivable row and no real row moves; left: BUG-040 (P3: a regular-size extra at a window end is scaled, which partly decides Q3; a slip next to a big raise); user questions Q3, Q4, Q5 |
 | VAL-03 | Graham Number | NEEDS-USER | iter 26 | Level 1 ✓; Level 2 ✓ on every derivable row (XOM and KKR derived with the period-end count since 0f47b5f); left: the bear case with loss years (BUG-007, NEEDS-USER, 8 rows) |
 | VAL-04 | Peter Lynch | NEEDS-USER | iter 28 | Level 1 ✓; Level 2 ✓ on every derivable row (SCCO was the oracle's positional window, e4b6a1f); 16 rows incl. DELL rest on Q5 (growth when the CAGR can't be measured); BUG-032 fixed: once re-collected, SCCO measures FY2016–25 (20.2%, capped at 15% as before) |

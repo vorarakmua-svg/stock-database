@@ -356,6 +356,9 @@ def _shares_db(tmp_path, snapshot, market_cap_shares, fy_diluted, price=100.0):
     (0.317e9, 0.317e9, 0.643e9, 0.643e9, "financials_annual"),      # HON: count and market cap both halved
     (14.594e9, 14.594e9, 15.005e9, 14.594e9, "market_snapshot"),    # AAPL: one class, buybacks since the FY
     (0.613e9, 0.613e9, 0.541e9, 0.613e9, "market_snapshot"),        # COF: shares issued since the FY
+    (0.8758e9, 0.8975e9, 0.8697e9, 0.8758e9, "market_snapshot"),    # MRVL: one class, Yahoo's figures 2.5% apart
+    (2.2961e9, 2.3973e9, 2.5652e9, 2.3973e9, "market_cap / price"),  # PLTR: 4.4% apart, the filings side with it
+    (0.3243e9, 0.3800e9, 0.3264e9, 0.3800e9, "market_cap / price"),  # SPG: 17% apart, units (still undecided)
 ])
 def test_per_share_values_count_every_share_class(tmp_path, snapshot, market_cap_shares, fy_diluted, shares, source):
     # DCF and owner earnings divide by the share count so the result compares with the price; Yahoo's

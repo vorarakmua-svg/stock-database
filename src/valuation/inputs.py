@@ -41,6 +41,11 @@ SPIN_OFF_DIVIDEND_MULTIPLE = 5.0
 #: the count misses a share class (or units) that the market cap includes.
 SHARE_CLASS_GAP = 1.02
 
+#: Below this factor the gap can also be Yahoo's two figures disagreeing (MRVL,
+#: one class, 2.5%), so the one nearer the latest FY's count is taken. Every
+#: wider gap in the data is a class or units (APP 10%, META 15%, BX 65%).
+SHARE_SOURCE_GAP = 1.05
+
 #: A share count under this share of the latest FY's diluted shares (on today's
 #: basis) is incomplete: buybacks don't shrink a company by a quarter in a year.
 MIN_SHARE_COUNT_RATIO = 0.75
@@ -299,12 +304,16 @@ def _total_shares(snapshot: Optional[float], market_cap: Optional[float], price:
     of 12.23B shares), while market cap / price counts them all, the way Yahoo
     values the company. A count still under MIN_SHARE_COUNT_RATIO of the latest
     FY's diluted shares on today's basis is incomplete too (HON, whose market cap
-    is halved as well), so that FY count is used instead.
+    is halved as well), so that FY count is used instead. A small gap is settled
+    by that FY count: whichever of Yahoo's two figures is nearer it wins.
     """
-    count, source = snapshot, "market_snapshot"
-    if snapshot and market_cap and price and market_cap / price > SHARE_CLASS_GAP * snapshot:
-        count, source = market_cap / price, "market_cap / price"
     latest = next((r.shares for r in reversed(records) if r.shares and r.shares > 0), None)
+    count, source = snapshot, "market_snapshot"
+    by_value = market_cap / price if market_cap and price else None
+    if snapshot and by_value and by_value > SHARE_CLASS_GAP * snapshot and not (
+            latest and by_value < SHARE_SOURCE_GAP * snapshot
+            and abs(math.log(snapshot / latest)) < abs(math.log(by_value / latest))):
+        count, source = by_value, "market_cap / price"
     if count and latest and count < MIN_SHARE_COUNT_RATIO * latest:
         count, source = latest, "financials_annual"
     return count, source
