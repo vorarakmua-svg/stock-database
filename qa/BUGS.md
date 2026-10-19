@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 4 · P3 13 · NEEDS-USER 7 · Verified: 21
+**Open:** P0 0 · P1 0 · P2 3 · P3 13 · NEEDS-USER 7 · Verified: 22
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -293,12 +293,13 @@ Notes: nothing changes until a refresh fails. Fix direction: a snapshot (either 
 Fix (iteration 30): a market snapshot needs this run's price on both paths. `SQLiteStore.export` writes one only with `current_price` (replacing iteration 24's `_MARKET_COLUMNS` test, which the moving averages passed), and `upsert_quote` checks the fresh price before carrying anything forward. `YahooHandler.fetch_quote` returns `{"error": "Yahoo returned no price"}` when its extractors came back without a price, so the job counts the failure and keeps each failed ticker's message in its summary (`errors`), and the stock page's status says "Refresh failed: Yahoo returned no price" instead of "Quote refreshed.". Five mutants each fail a test. On fresh golden copies the review's scenarios now keep AAPL's latest snapshot (343.03) and its API price, verdict and upside (`qa/evidence/iter30-bug033-e2e.txt`); a successful refresh still writes one market and one analyst row and nothing else (19 tables, `iter30-gather13-only-snapshot.txt`).
 
 ### BUG-034 [P2][STORE] summary.csv blanks company fields a successful run lacked, unlike the JSON and SQLite
-Status: OPEN
-Found: iteration 29 by code review 4, re-checked at 1810180 | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 32)
+Found: iteration 29 by code review 4, re-checked at 1810180 | Fixed: iteration 32 (see LOG) | Regression test: `tests/test_csv_exporter.py::test_company_fields_a_run_lacked_keep_their_earlier_values_in_every_store`
 Repro: export a stock with full company info through the JSON, CSV and SQLite stores, then a second successful run whose Yahoo info omits industry, country, employees and website: the JSON and SQLite keep 'Software', 'United States', 1200 and the website, summary.csv shows them empty.
 Expected: the stores agree (MATCH-05): a field the run lacked keeps its earlier value, as the JSON merge ("use latest but preserve missing fields") and SQLite's COALESCE do.   Actual: the CSV replaces the whole `company_info` section whenever it is non-empty.
 Root cause: 23fb062 (BUG-018's CSV part) keeps earlier values per section (`SUMMARY_SECTIONS`), while the JSON and SQLite keep `company_info` field by field; the `SUMMARY_SECTIONS` comment's claim that the CSV mirrors the JSON is wrong for that section. A regression: at e945cee all three stores agree on this repro.
 Notes: no current value is affected; it appears on future runs. Fix: merge the company columns field by field, with a test that compares the three stores.
+Fix (iteration 32): the CSV merge keeps each company column's earlier value when the run lacked it, as it does for the identifiers, so company details merge field by field like the JSON's company_info and SQLite's companies row; every other section keeps the section rule. The regression test exports two runs through all three stores and compares them; a mutant restoring the old rule fails it. The review's scenario now shows the three stores agreeing (`qa/evidence/iter32-bug034-e2e.txt`).
 
 ### BUG-035 [P2][VAL] The 2% share-class gap takes market cap ÷ price for single-class MRVL (DCF −2.4%)
 Status: OPEN

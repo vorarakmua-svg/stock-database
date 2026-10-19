@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Optional, Tuple
 #: The StockData section each ``to_summary`` column comes from. A CSV merge keeps a column's
 #: earlier value only when a run got nothing for its section (a failed or partial fetch), the
 #: way the JSON merge keeps a whole section; a section the run did get replaces it, empty
-#: values included.
+#: values included. Company details are the exception: like the JSON's company_info and
+#: SQLite's companies row, they keep each earlier value the run lacked.
 SUMMARY_SECTIONS: Dict[str, Tuple[str, ...]] = {
     "company_info": ("sector", "industry", "country", "employees", "website"),
     "market_data": ("current_price", "market_cap", "volume", "beta", "52_week_high", "52_week_low",

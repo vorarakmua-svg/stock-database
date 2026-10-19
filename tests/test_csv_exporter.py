@@ -188,3 +188,33 @@ def test_every_summary_column_belongs_to_a_section_the_identity_or_the_run() -> 
     mapped += list(SUMMARY_IDENTITY_COLUMNS) + list(SUMMARY_RUN_COLUMNS)
     assert sorted(mapped) == sorted(_stock("AAA").to_summary())
 
+
+def test_company_fields_a_run_lacked_keep_their_earlier_values_in_every_store(tmp_path: Path) -> None:
+    # Yahoo's info sometimes omits a few company fields. The JSON and SQLite keep each earlier value, field by
+    # field; summary.csv replaced the whole company section and blanked them (a regression from 23fb062).
+    import json
+    import sqlite3
+
+    from src.exporters.json_exporter import JSONExporter
+    from src.exporters.sqlite_store import SQLiteStore
+
+    stores = (JSONExporter(tmp_path / "json"), CSVExporter(tmp_path / "csv"),
+              SQLiteStore(db_path=tmp_path / "stock.db"))
+    full = {"sector": "Technology", "industry": "Software", "country": "United States",
+            "full_time_employees": 1200, "website": "https://aaa.example"}
+    for info in (full, {**full, "industry": None, "country": None, "full_time_employees": None, "website": None}):
+        stock = _stock("AAA")
+        stock.company_info = dict(info)
+        for store in stores:
+            store.export([stock])
+    company = json.loads((tmp_path / "json" / "AAA.json").read_text(encoding="utf-8"))["company_info"]
+    (row,) = _rows(tmp_path / "csv" / "summary.csv")
+    conn = sqlite3.connect(tmp_path / "stock.db")
+    db_row = conn.execute("SELECT industry, country, employees, website FROM companies WHERE ticker = 'AAA'").fetchone()
+    conn.close()
+    assert tuple(company[k] for k in ("industry", "country", "full_time_employees", "website")) == (
+        "Software", "United States", 1200, "https://aaa.example")
+    assert db_row == ("Software", "United States", 1200, "https://aaa.example")
+    assert (row["industry"], row["country"], row["employees"], row["website"]) == (
+        "Software", "United States", "1200", "https://aaa.example")
+

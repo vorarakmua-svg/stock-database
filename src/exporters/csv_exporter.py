@@ -61,7 +61,9 @@ class CSVExporter:
 
             # This run's values replace the earlier ones for the same tickers. Only a section the
             # run got nothing for (a failed or partial fetch) keeps its earlier values, as the JSON
-            # merge does, and so do identifiers the run lacks; the run's own columns are always new.
+            # merge does. Identifiers and company details the run lacks keep theirs field by field,
+            # as the JSON's company_info and SQLite's companies row do; the run's own columns are
+            # always new.
             existing_columns, existing_rows = self._read_existing(filepath)
             new_rows = {stock.ticker: self._clean_for_csv(stock.to_summary()) for stock in data}
             rows = {row["ticker"]: row for row in existing_rows}
@@ -70,7 +72,8 @@ class CSVExporter:
                 if old_row:
                     kept = [c for section, columns in SUMMARY_SECTIONS.items()
                             if not getattr(stock, section) for c in columns]
-                    kept += [c for c in SUMMARY_IDENTITY_COLUMNS if new_row.get(c) in ("", None)]
+                    kept += [c for c in SUMMARY_IDENTITY_COLUMNS + SUMMARY_SECTIONS["company_info"]
+                             if new_row.get(c) in ("", None)]
                     new_row = {**new_row, **{c: old_row[c] for c in kept if c in old_row}}
                 rows[stock.ticker] = new_row
 

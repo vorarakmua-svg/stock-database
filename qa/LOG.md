@@ -613,3 +613,16 @@ Gates: ruff ✓ mypy ✓ pytest 926 passed (1 known warning) | CI: pending for t
 Commit: oracle 0345344, then (this commit) fix(valuation): a schedule change next to a DDM window end is no slipped
 payment
 Next: BUG-034 (P2, the oldest open P2)
+
+## Iteration 32: 2026-10-20 04:50: fix
+Picked: BUG-034 (P2), the oldest open P2 (CI: e84da96 running).
+Did: The JSON merges company_info field by field and SQLite COALESCEs the companies row, while the CSV's section rule
+(iteration 24) replaced the whole company section. Test first, across all three stores: two runs, the second
+lacking industry, country, employees and website: the JSON and SQLite kept them, the CSV blanked them (RED). Fix: the
+CSV keeps each company column's earlier value the run lacked, as it does for identifiers; the other sections keep
+the section rule. A mutant restoring the old rule fails the test; restored byte-identical.
+Evidence: `qa/evidence/iter32-bug034-{red,green,mutants,e2e}.txt`
+Result: BUG-034 VERIFIED; the review's scenario shows the three stores agreeing. MATCH-05 → FAIL→BUG-038 (P3 left).
+Gates: ruff ✓ mypy ✓ pytest 927 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(exporters): summary.csv keeps company fields a run lacked, as the JSON and SQLite do
+Next: BUG-035 (P2, MRVL's share-class gap)

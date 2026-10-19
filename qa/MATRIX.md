@@ -50,7 +50,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | MATCH-02 | Cross-source fundamentals | TODO | |  |
 | MATCH-03 | Market math | TODO | |  |
 | MATCH-04 | Price history | TODO | |  |
-| MATCH-05 | Store consistency | FAIL→BUG-034 | iter 29 | summary.csv blanks company fields a run lacked while the JSON and SQLite keep them (BUG-034, a regression from 23fb062); EV and rate differ after a failed run (BUG-038, P3) |
+| MATCH-05 | Store consistency | FAIL→BUG-038 | iter 32 | after merge re-runs the JSON, CSV and SQLite agree on company fields (BUG-034 fixed, tested across all three stores) and on sections a run lacked (BUG-018); left: EV and rate differ after a failed run (BUG-038, P3) |
 | MATCH-06 | UI vs DB | TODO | |  |
 | MATCH-07 | Peers and sector medians are computed within the right sector and the medians are correct.… | TODO | |  |
 | MATCH-08 | Dedup | TODO | |  |
