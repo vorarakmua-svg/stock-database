@@ -62,3 +62,6 @@ htmlcov/
 
 # Brainstorming visual-companion sessions
 .superpowers/
+
+# QA loop evidence (screenshots, logs)
+qa/evidence/
