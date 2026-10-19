@@ -561,3 +561,20 @@ VALID-01 → TODO (the coverage_report run is left).
 Gates: ruff ✓ mypy ✓ pytest 917 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(parsers): EPS and share counts filed as BasicAndDiluted fill both fields
 Next: no P0–P2 is open: discovery VAL-09, VAL-12, VAL-13; record code review 4 when it reports
+
+## Iteration 29: 2026-10-20 04:27: discovery (code review 4)
+Picked: recording code review 4, which reported after iteration 28 (no P0–P2 bug was open) (CI: a8fb8e4 ✓; 1810180
+running).
+Did: Read each of the review's repro scripts, then ran adapted copies against the current code (1810180) on fresh
+scratch copies, with yfinance mocked and no network: a failed quote refresh writes a price-less latest snapshot and
+reports success; summary.csv blanks company fields a run lacked; a BX-like and a KLAC-like post-filing split are refused;
+the DDM cadence cases misread frequency changes and a same-count restart; MRVL's count comes from market cap ÷ price.
+Read the spec and code for the rate provenance and the missing-count path.
+Evidence: `qa/evidence/iter29-review4-checks.txt` (the review's scripts and outputs are under SCRATCH/review4; the adapted copies wrote to SCRATCH/iter29)
+Result: New: BUG-033 (P1), BUG-034–037 (P2), BUG-038–039 (P3); BUG-017 reopened (P2); BUG-018 and BUG-022 notes
+corrected. VAL-01 → FAIL→BUG-035, VAL-02 → FAIL→BUG-017, VAL-09 → FAIL→BUG-036, VAL-10 → FAIL→BUG-037, MATCH-05 →
+FAIL→BUG-034, GATHER-13 → FAIL→BUG-033. The review also confirmed the baseline gates, iteration 25's oracle results,
+VAL-07, VAL-08 and VAL-11, and the code's and oracle's share counts on 146 companies.
+Gates: ruff ✓ mypy ✓ pytest 917 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) chore(qa): record code review 4 findings
+Next: BUG-033 (P1); then the P2s oldest first (BUG-017, BUG-034, BUG-035, BUG-036, BUG-037)

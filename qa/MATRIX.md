@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 96 · PASS 7 · FAIL 2 · N-A 0 · BLOCKED 0 · NEEDS-USER 4  
+**Status counts:** TODO 93 · PASS 6 · FAIL 8 · N-A 0 · BLOCKED 0 · NEEDS-USER 2  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -11,16 +11,16 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
-| VAL-01 | DCF (two-stage FCF) | NEEDS-USER | iter 20 | Level 1 ✓ and Level 2 ✓ on every derivable DCF row, with every share class counted (BUG-022 fixed); left: the rows without a measurable CAGR follow the plan's fallback, which the spec doesn't define (Q5) |
-| VAL-02 | DDM (multi-stage) | NEEDS-USER | iter 25 | BUG-017 fixed again: each end of the dividend CAGR is judged by its neighbours' cadence, so frequency changes, specials and slipped payments are handled; the oracle agrees on every derivable row (golden 0/57; real: the known 12 are other models); user questions: Q3, Q4, Q5 |
+| VAL-01 | DCF (two-stage FCF) | FAIL→BUG-035 | iter 29 | Level 1 ✓ and Level 2 ✓ on every derivable row; MRVL's count comes from market cap ÷ price over a 2.5% gap (BUG-035: DCF −2.4%; the oracle copies the threshold); 16 rows rest on Q5; also BUG-039 (P3) |
+| VAL-02 | DDM (multi-stage) | FAIL→BUG-017 | iter 29 | BUG-017 reopened by code review 4: a frequency change whose adjacent year already pays on the new schedule, and a suspension restarted with the same count, are misread (no current row; the oracle shares the rule); user questions Q3, Q4, Q5 |
 | VAL-03 | Graham Number | NEEDS-USER | iter 26 | Level 1 ✓; Level 2 ✓ on every derivable row (XOM and KKR derived with the period-end count since 0f47b5f); left: the bear case with loss years (BUG-007, NEEDS-USER, 8 rows) |
 | VAL-04 | Peter Lynch | NEEDS-USER | iter 28 | Level 1 ✓; Level 2 ✓ on every derivable row (SCCO was the oracle's positional window, e4b6a1f); 16 rows incl. DELL rest on Q5 (growth when the CAGR can't be measured); BUG-032 fixed: once re-collected, SCCO measures FY2016–25 (20.2%, capped at 15% as before) |
 | VAL-05 | Historical multiples band | PASS | iter 27 | Level 1 ✓ and Level 2 ✓ on every derivable row, real and golden (`qa/evidence/iter27-oracle-*.txt`): P/E, P/B for banks and insurers, P/FFO for REITs over the last 5 FYs, prices at each FY end, at least 3 years; BUG-031 fixed (NOW's split-mixed band) |
 | VAL-06 | Owner earnings | PASS | iter 26 | 127 real and 19 golden rows: every N/A reason and the 8-of-10 gate match the spec recomputed from raw tables; volatility fields, buy_below = 0.70 × base, discount = max(rf, 7%), no beta, no SBC add-back; excluded from the median (it would move 81 summaries); the API's verdict follows the spec for all; values recompute exactly (iter 22). UX note for REPORT: UBER's 'insufficient history' is decided either way (5 of 9 years positive) (`qa/evidence/iter26-val06.txt`) |
 | VAL-07 | Summary | PASS | iter 22 | summary rows equal the medians of the applicable models (127 real, 19 golden; 32 with an even count); the screener's upside, verdict and Buffett verdict equal the valuation API's for every company (126, 14), and sorting by upside ranks by those numbers; the verdict rule matches the spec (code read); `qa/evidence/iter22-discovery-val.txt` |
 | VAL-08 | Invariant scan over the whole real-DB copy | PASS | iter 22 | over 762 real and 114 golden rows: bear ≤ base ≤ bull, no missing/NaN/infinite value, na_reason exactly when not applicable, DCF/Lynch/owner earnings only for general/utility/energy, assumptions JSON parses; values recompute from their assumptions (oracle Level 1: 519 rows; owner earnings: 81), none beyond 0.5%; `qa/evidence/iter22-discovery-val.txt` |
-| VAL-09 | Edge cases | TODO | iter 8 | partial first dividend year covered (BUG-009 tests); rest untested |
-| VAL-10 | Rates | PASS | iter 22 | risk-free rates stored as decimals (0.0419–0.0475); every DCF/DDM discount equals clamp(rf + β × 4.5%, 8%, 14%) with the snapshot's rf (196 real, 25 golden); fallbacks flagged (`rf_fallback`/`beta_fallback`); owner earnings uses max(rf, 7%); the ERP is in the spec and in every assumptions record; `qa/evidence/iter22-discovery-val.txt` |
+| VAL-09 | Edge cases | FAIL→BUG-036 | iter 29 | a real split after the latest filing can be refused (BUG-036); partial first dividend year covered (BUG-009 tests); the rest untested |
+| VAL-10 | Rates | FAIL→BUG-037 | iter 29 | units, floors and caps ✓ (iter 22); the rate's as-of date isn't stored and the static estimate isn't flagged (BUG-037) |
 | VAL-11 | Reproducibility | PASS | iter 22 | a second backfill reproduces all 889 valuation and summary rows exactly; the post-collection path (`compute_and_store` with the collected tickers) gives the backfill's rows; `qa/evidence/iter22-discovery-val.txt` |
 | VAL-12 | Presentation | TODO | iter 22 | the screener's upside, verdict and Buffett verdict equal the API's (see VAL-07); the VAL tab and the DCF sensitivity grid are untested |
 | VAL-13 | Hand-worked examples (a general company, a bank, a dividend payer) | TODO | |  |
@@ -50,7 +50,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | MATCH-02 | Cross-source fundamentals | TODO | |  |
 | MATCH-03 | Market math | TODO | |  |
 | MATCH-04 | Price history | TODO | |  |
-| MATCH-05 | Store consistency | TODO | iter 24 | the CSV and the JSON now agree after a successful run (BUG-018 fixed); JSON vs SQLite vs CSV values otherwise untested |
+| MATCH-05 | Store consistency | FAIL→BUG-034 | iter 29 | summary.csv blanks company fields a run lacked while the JSON and SQLite keep them (BUG-034, a regression from 23fb062); EV and rate differ after a failed run (BUG-038, P3) |
 | MATCH-06 | UI vs DB | TODO | |  |
 | MATCH-07 | Peers and sector medians are computed within the right sector and the medians are correct.… | TODO | |  |
 | MATCH-08 | Dedup | TODO | |  |
@@ -71,7 +71,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | GATHER-10 | `--workers 1` and `--workers 4` produce identical DB content apart from timestamps.… | TODO | |  |
 | GATHER-11 | Flag combinations | TODO | |  |
 | GATHER-12 | Web jobs on a scratch server | TODO | |  |
-| GATHER-13 | Quote refresh (`POST /api/stocks/{T}/refresh-quote`) writes only the snapshot; `STOCK_WEB_… | TODO | |  |
+| GATHER-13 | Quote refresh (`POST /api/stocks/{T}/refresh-quote`) writes only the snapshot; `STOCK_WEB_… | FAIL→BUG-033 | iter 29 | a failed refresh writes a price-less latest snapshot and reports success (BUG-033); the rest untested |
 
 ## STORE: Persistence and queries
 
