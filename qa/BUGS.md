@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 2 · P2 1 · P3 13 · NEEDS-USER 7 · Verified: 26
+**Open:** P0 0 · P1 1 · P2 1 · P3 14 · NEEDS-USER 8 · Verified: 28
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -355,23 +355,38 @@ Fix: the row with the latest date is taken, whatever the feed's order, and its d
 Notes: the user's database used FRED (its JSON records `"source": "fred"`), so its values are unaffected; any run without a key, including this loop's golden collection, was affected. The golden DB in SCRATCH still holds 0.0419: re-collect it in the next sweep.
 
 ### BUG-042 [P1][GATHER] XOM resolves to ExxonMobil Holdings Corp's new CIK, which has no financial history
-Status: OPEN
-Found: iteration 37 via VAL-09 (lead L1; `qa/evidence/iter37-val09.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 38): the gap is explained by name; whether to keep the predecessor's history is Q6
+Found: iteration 37 via VAL-09 (lead L1; `qa/evidence/iter37-val09.txt`) | Fixed: iteration 38 (see LOG) | Regression tests: `tests/test_fetcher_concurrency.py::test_a_filer_without_annual_financials_is_explained`, `::test_a_failed_facts_request_is_not_explained_as_missing_data`, `tests/test_xbrl_parser.py::test_an_empty_sec_record_says_why`, `tests/test_web_workstation.py::test_the_fa_and_val_tabs_say_why_sec_gave_no_annual_financials`
 Repro: SEC's company_tickers.json, fetched for the golden collection of 2026-10-20, maps XOM to CIK 2115436, "ExxonMobil Holdings Corp", whose filings start 2026-07-01 (S-8 POS and 8-K; no 10-K or 10-Q yet) and whose companyfacts hold 94 us-gaap concepts. The golden collection stored no annual financials for XOM (6 quarters), so every XOM model that needs fiscal years is N/A; the only hint is the generic "[data-quality/high] No annual financial data extracted." The user's August collection used Exxon Mobil Corp's CIK 34088 (20 fiscal years, cached in `data/cache`).
 Expected: a ticker that moved to a new registrant keeps its predecessor's history, or the gap is explained by name.   Actual: a fresh collection has no XOM fundamentals; re-collecting into an existing database keeps the old rows but switches the stored CIK to 2115436.
-Notes: options: also read the predecessor's facts when the resolved CIK has no 10-K (the CIK already stored for the ticker, or a small successor map), or warn with both CIKs. The choice is a design question; the data is recorded here.
+Fix: when a filer's SEC data gives no annual financials, the run adds a warning naming the ticker, CIK, registrant and reason: "SEC EDGAR: no annual financials for XOM from CIK 0002115436 (ExxonMobil Holdings Corp): it has filed no annual report (10-K) yet (its filings listed from 2026-07-01)". `collection_runs` keeps each run's warnings (a new `warnings` column, added in place by the store's migration), and the FA and VAL tabs show the latest run's note. On the real-DB copy, re-collecting XOM keeps its 20 stored years and shows the note (`qa/evidence/iter38-bug042-e2e.txt`).
+Notes: following the predecessor's history (a successor map, or the CIK already stored for the ticker) is a design choice, put to the user as Q6. Until the new registrant files its first 10-K, a fresh collection has no XOM fundamentals.
 
 ### BUG-043 [P1][GATHER] ARM's 20-F filings report in US GAAP, but only 10-K forms are read
 Status: OPEN
 Found: iteration 37 via VAL-09 (lead L1) | Fixed: — | Regression test: —
 Repro: `src/parsers/xbrl_parser.py` reads `_ANNUAL_FORMS = {"10-K", "10-K/A"}` and `_QUARTERLY_FORMS` (10-Q and 10-K). ARM files 20-F with us-gaap facts (288 concepts; its revenue and net-income facts come from 20-F (18) and 6-K (60) filings), so its golden collection stored no annual or quarterly financials and no SEC-based model can value it.
 Expected: a 20-F (or 40-F) filer that tags us-gaap facts gets its annual financials.   Actual: none, and no warning (BUG-044).
+Notes: since iteration 38 the run says why: "it files as a foreign issuer (20-F, 6-K); only 10-K and 10-Q filings are read".
 
 ### BUG-044 [P2][GATHER] A filer whose SEC data yields no financials gets no explanation (TSM, ARM)
-Status: OPEN
-Found: iteration 37 via VAL-09 (lead L1) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 38)
+Found: iteration 37 via VAL-09 (lead L1) | Fixed: iteration 38, with BUG-042 (see LOG) | Regression tests: `tests/test_xbrl_parser.py::test_an_empty_sec_record_says_why`, `::test_a_10k_filer_whose_facts_cover_no_full_year_gets_the_last_reason`, `tests/test_sqlite_store.py::test_a_collection_run_keeps_its_warnings`, `tests/test_web_workstation.py::test_the_fa_and_val_tabs_say_why_sec_gave_no_annual_financials`, `::test_the_tabs_render_on_a_database_from_before_runs_kept_warnings`, `tests/test_web_api_quality.py::test_runs_give_their_warnings_as_a_list`
 Repro: TSM files 20-F in IFRS (`ifrs-full`, 334 concepts; no `us-gaap`), which the canonical map doesn't cover, so its golden collection stored no SEC financials and recorded no warning at all; ARM likewise (BUG-043), and XOM's warning is the generic data-quality one (BUG-042).
 Expected: GATHER-02's "graceful, explained gap", e.g. "SEC financials not mapped: IFRS filer (20-F)", naming the form and taxonomy.   Actual: an empty FA tab and N/A models with only "insufficient history" as the reason.
+Fix: BUG-042's warning names the cause: "it reports in IFRS (20-F, 6-K), which isn't mapped" (TSM), "it files as a foreign issuer (20-F, 6-K); only 10-K and 10-Q filings are read" (ARM), "SEC has no XBRL financial statements for it", "its companyfacts request failed (…)", or as a last resort "its 10-K facts give no full fiscal year of a mapped concept". It reaches the run's JSON warnings, `collection_runs.warnings` (a list in `GET /api/quality/runs`; databases without the column still render), and the FA and VAL tabs: checked live on port 8765 and in Chrome (`iter38-bug042-e2e.txt`). Twelve mutants each fail a test (`iter38-bug042-mutants.txt`).
+
+### BUG-045 [P2][GATHER] A failed companyfacts or submissions request is not recorded as an error
+Status: OPEN
+Found: iteration 38 while fixing BUG-042 | Fixed: — | Regression test: —
+Repro: `SECHandler.fetch_all` stores a failed request's message as `company_facts_error` or `submissions_error` (a 403 for a blocked User-Agent, a 5xx, a timeout), but nothing reads those keys: `StockData.merge_sec_data` handles only `error`, `cik` and `submissions`. The ticker's record is empty, its `errors` list stays empty, and the run summary counts it under "Successfully fetched" (`summary["successful"]` counts tickers without errors). Since iteration 38 a failed companyfacts request at least shows as a warning ("its companyfacts request failed (…)"); a failed submissions request is still silent.
+Expected (GATHER-06): a failed request is an error for that ticker, and the summary is honest.   Actual: a success, with at most a warning.
+
+### BUG-046 [P3][CLI] `stock-web --help` starts the server instead of printing usage
+Status: OPEN
+Found: iteration 38 (looking up the server's settings) | Fixed: — | Regression test: —
+Repro: `stock-web --help`, or any argument, is ignored: uvicorn starts on 127.0.0.1:8000 against the default database. The settings exist only as `STOCK_WEB_*` environment variables (`src/webapp/settings.py`), which nothing on the command line lists; the `__main__` docstring names four of the five (not `STOCK_WEB_ALLOW_QUOTE_REFRESH`).
+Expected: `--help` prints usage with the environment variables, and unknown arguments are refused.   Actual: a server starts. (This loop's lookup started one against the user's database; it served no request, was stopped, and `stock.db` and its WAL are unmodified.)
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
@@ -397,6 +412,11 @@ Options: (a) keep the Yahoo TTM and rely on the data-quality warning (today); (b
 Status: NEEDS-USER
 Context: the CAGR is undefined when the 10-FY window starts on a loss or negative FCF (DELL, CVX, MU, PLTR, AMD and others). The plan uses yfinance's one-quarter "analyst" figure alone, clamped to the cap (seen from −85% to +1,369%). Iteration 6 switched to flat 0%, with Lynch N/A; BUG-016 restores the plan until you decide. The switch moved 31 valuations (CVX DCF $293 → $124). It also governs 7 DDM rows with fewer than 4 full years of dividends (BUG-010): BKNG, CRM, DELL, GEV, GOOGL, META, TMUS; under (a) CRM's DDM takes its 52.2% one-quarter figure capped at 10% ($32.25, against $25.16 from its measured 4.0%). Once you decide, a DDM test with an analyst figure will pin the choice.
 Options: (a) the plan's analyst-only fallback; (b) flat 0% (iteration 6); (c) measure from the first profitable year when at least 4 FYs remain (DELL 6.3%; CVX's FCF would hit the 15% cap again). Related: Q2 (what the "analyst" figure is).
+
+### Q6 [GATHER] NEEDS-USER: should XOM keep Exxon Mobil Corp's history now that SEC maps the ticker to a new registrant?
+Status: NEEDS-USER
+Context: SEC's ticker map now sends XOM to ExxonMobil Holdings Corp (CIK 2115436), which has filed only 10-Qs since 2026-07; the 20 fiscal years of history are under Exxon Mobil Corp (CIK 34088). A fresh collection therefore has no XOM fundamentals, and every model that needs fiscal years is N/A; re-collecting into your existing database keeps the stored years. Since iteration 38 the gap is explained in the run, the database and the FA and VAL tabs (BUG-042).
+Options: (a) a small, explicit successor map in the code (2115436 → 34088), reading the predecessor's facts for the years the new registrant lacks: safe, but each reorganization needs an entry; (b) fall back automatically to the CIK already stored for the ticker when the new one has no 10-K: no upkeep, but a reassigned ticker could mix two unrelated companies, and a fresh database has no stored CIK; (c) keep the explanation only and wait for the new registrant's first 10-K. Recommendation: (a).
 
 ---
 

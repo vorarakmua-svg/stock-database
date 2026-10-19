@@ -19,9 +19,39 @@ _QUARTER_MAX_DAYS = 100
 # Forms that carry quarterly and annual statement facts.
 _QUARTERLY_FORMS = {"10-Q", "10-Q/A", "10-K", "10-K/A"}
 _ANNUAL_FORMS = {"10-K", "10-K/A"}
-
+#: Forms of filers reporting as foreign private issuers.
+_FOREIGN_FORMS = {"20-F", "20-F/A", "40-F", "40-F/A", "6-K"}
 _FRAME_YEAR_RE = re.compile(r"CY(\d{4})")
 _FRAME_QUARTER_RE = re.compile(r"^CY(\d{4})Q(\d)")
+
+
+def explain_no_annual_financials(facts: Optional[Dict[str, Any]],
+                                 first_filing: Optional[str] = None) -> str:
+    """Why a filer's SEC data yields no annual financials, for the run's warnings.
+
+    An empty record otherwise reads like a short history: XOM's new holding
+    company had filed only 10-Qs, TSM reports in IFRS, and ARM files its US-GAAP
+    accounts on 20-F. ``first_filing`` is the date its filings are listed from,
+    when that is known.
+    """
+    taxonomies = (facts or {}).get("facts", {})
+
+    def forms(taxonomy: str) -> List[str]:
+        return sorted({entry["form"] for tag in taxonomies.get(taxonomy, {}).values()
+                       for unit in tag.get("units", {}).values() for entry in unit if entry.get("form")})
+
+    if not taxonomies.get("us-gaap"):
+        if taxonomies.get("ifrs-full"):
+            return f"it reports in IFRS ({', '.join(forms('ifrs-full'))}), which isn't mapped"
+        return "SEC has no XBRL financial statements for it"
+    us_gaap_forms = set(forms("us-gaap"))
+    if not us_gaap_forms & _ANNUAL_FORMS:
+        if us_gaap_forms & _FOREIGN_FORMS:
+            return (f"it files as a foreign issuer ({', '.join(sorted(us_gaap_forms))}); "
+                    "only 10-K and 10-Q filings are read")
+        since = f" (its filings listed from {first_filing})" if first_filing else ""
+        return f"it has filed no annual report (10-K) yet{since}"
+    return "its 10-K facts give no full fiscal year of a mapped concept"
 
 
 class XBRLParser:

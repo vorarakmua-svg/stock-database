@@ -7,6 +7,7 @@ from the SQLite store — this is the SQL-injection guard for series endpoints.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import statistics
 from pathlib import Path
@@ -22,6 +23,15 @@ _SNAPSHOT_COL_SET: FrozenSet[str] = frozenset(_SNAPSHOT_COLUMNS)  # reserved for
 
 # Valid ``holder_type`` values for the ``holders`` table (guards SQL interpolation).
 _HOLDER_TYPES: FrozenSet[str] = frozenset({"institutional", "mutualfund"})
+
+
+def _warning_list(text: Optional[str]) -> List[str]:
+    """A ``collection_runs.warnings`` value (JSON text) as a list of strings."""
+    try:
+        warnings = json.loads(text) if text else []
+    except ValueError:
+        return []
+    return [w for w in warnings if isinstance(w, str)] if isinstance(warnings, list) else []
 
 
 class Reader:
@@ -722,7 +732,11 @@ class Reader:
         sql += " ORDER BY collected_at DESC LIMIT ?"
         params.append(limit)
         cur = self._conn.execute(sql, params)
-        return [dict(row) for row in cur.fetchall()]
+        runs = [dict(row) for row in cur.fetchall()]
+        for run in runs:
+            if "warnings" in run:  # absent from databases older than the column
+                run["warnings"] = _warning_list(run["warnings"])
+        return runs
 
     def latest_collection_runs(self) -> List[Dict[str, Any]]:
         """Most-recent ``collection_runs`` row per ticker, ordered by ticker.
@@ -752,6 +766,21 @@ class Reader:
         """
         cur = self._conn.execute(sql)
         return [dict(row) for row in cur.fetchall()]
+
+    def latest_run_warnings(self, ticker: str) -> List[str]:
+        """The warnings of the ticker's latest collection run.
+
+        Empty when there is no run, or when the database predates the
+        ``warnings`` column (the Reader is read-only, so it can't add it).
+        """
+        row = self._conn.execute(
+            "SELECT * FROM collection_runs WHERE ticker = ? "
+            "ORDER BY collected_at DESC, rowid DESC LIMIT 1",
+            (ticker,),
+        ).fetchone()
+        if row is None or "warnings" not in row.keys():
+            return []
+        return _warning_list(row["warnings"])
 
     def coverage_by_sector(self) -> List[Dict[str, Any]]:
         """Per-``sector_class`` summary: n_companies and median quality_score.

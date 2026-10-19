@@ -1,3 +1,6 @@
+{% if gap_note %}
+<p class="text-muted text-sm mb-3" role="note">{{ gap_note }}</p>
+{% endif %}
 {% if not has_rows %}
 <div class="empty-state">
   No valuations computed yet — click UPDATE DATA above.

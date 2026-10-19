@@ -18,7 +18,7 @@ from ..parsers.derived_fields import apply_derivations
 from ..parsers.share_scale import normalize_share_scale
 from ..parsers.ttm import compute_ttm
 from ..parsers.unmapped import detect_unmapped
-from ..parsers.xbrl_parser import XBRLParser
+from ..parsers.xbrl_parser import XBRLParser, explain_no_annual_financials
 from ..validation.integrity import (
     check_cashflow_reconciliation,
     check_dividend_completeness,
@@ -30,6 +30,9 @@ from ..validation.quality import assess_annual, score_for
 from .fred_handler import FREDHandler
 from .sec_handler import SECHandler
 from .yahoo_handler import YahooHandler
+
+#: How the run's warning for a filer whose SEC data gave no annual financials begins.
+NO_ANNUAL_FINANCIALS = "SEC EDGAR: no annual financials"
 
 
 class StockDataFetcher:
@@ -140,6 +143,7 @@ class StockDataFetcher:
                 stock.merge_sec_data(sec_data)
 
                 # Parse XBRL financials if company facts available
+                annual: Dict[str, Any] = {}
                 if "company_facts" in sec_data and sec_data["company_facts"]:
                     facts = sec_data["company_facts"]
 
@@ -160,6 +164,10 @@ class StockDataFetcher:
                     # taxonomy evolution / firm tag variability never silently
                     # drops data.
                     stock.unmapped_facts = detect_unmapped(facts)
+
+                # An empty record otherwise reads like a short history: say why.
+                if sec_data.get("cik") and not annual:
+                    stock.add_warning(self._no_annual_financials(ticker, sec_data))
 
                 # Get insider transactions
                 if stock.cik:
@@ -277,6 +285,22 @@ class StockDataFetcher:
 
         if stock.financials_quarterly:
             stock.financials_ttm = compute_ttm(stock.financials_quarterly)
+
+    @staticmethod
+    def _no_annual_financials(ticker: str, sec_data: Dict[str, Any]) -> str:
+        """The run's warning for a filer whose SEC data gave no annual financials."""
+        submissions = sec_data.get("submissions") or {}
+        filings = submissions.get("filings") or []
+        dates = sorted(f["filingDate"] for f in filings if f.get("filingDate"))
+        # SECHandler keeps the latest 100 filings: their first date is the filer's
+        # first only when there are fewer than that.
+        first = dates[0] if dates and len(filings) < 100 else None
+        if sec_data.get("company_facts_error"):
+            reason = f"its companyfacts request failed ({sec_data['company_facts_error']})"
+        else:
+            reason = explain_no_annual_financials(sec_data.get("company_facts"), first)
+        name = submissions.get("name") or "name unknown"
+        return f"{NO_ANNUAL_FINANCIALS} for {ticker} from CIK {sec_data['cik']} ({name}): {reason}"
 
     def _assess(self, stock: StockData) -> None:
         """Attach a data-quality report: sector checks + integrity checks + score.

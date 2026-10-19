@@ -60,7 +60,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
 | GATHER-01 | Yahoo | TODO | |  |
-| GATHER-02 | SEC CIK resolution | FAIL→BUG-042 | iter 37 | XOM now resolves to a new holding-company CIK without history (BUG-042, P1); ARM's US-GAAP 20-F isn't read (BUG-043, P1); TSM's IFRS gap is unexplained (BUG-044, P2); dual-class, punctuated, renamed, delisted, ETF and index cases untested |
+| GATHER-02 | SEC CIK resolution | FAIL→BUG-043 | iter 38 | XOM's new registrant (BUG-042) and TSM's IFRS filings (BUG-044) now get a named explanation in the run, the database and the FA and VAL tabs; ARM's US-GAAP 20-F still isn't read (BUG-043, P1); keeping XOM's predecessor history is Q6; dual-class, punctuated, renamed, delisted, ETF and index cases untested |
 | GATHER-03 | companyfacts parsing | TODO | |  |
 | GATHER-04 | Rates | TODO | iter 36 | without a FRED key: Treasury.gov's latest day (BUG-041) with its day and source, and the static estimate flagged (BUG-037), checked live; the FRED-key path and January's prior-year fallback are untested |
 | GATHER-05 | Rate limiting and retries | TODO | |  |

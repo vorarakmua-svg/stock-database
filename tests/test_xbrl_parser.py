@@ -1,6 +1,8 @@
 """Tests for XBRLParser — in particular the fiscal-year grouping regression (A1)."""
 
-from src.parsers.xbrl_parser import XBRLParser
+import pytest
+
+from src.parsers.xbrl_parser import XBRLParser, explain_no_annual_financials
 from tests.conftest import usd
 
 
@@ -198,4 +200,29 @@ def test_the_separate_basic_and_diluted_concepts_win_over_the_combined_one():
     year = annual["2024"]
     assert (year["eps_basic"], year["eps_diluted"]) == (1.02, 1.00)
     assert (year["weighted_avg_shares_basic"], year["weighted_avg_shares_diluted"]) == (773e6, 780e6)
+
+
+def _facts_from(taxonomy, form, tag="Revenues"):
+    return {"facts": {taxonomy: {tag: {"units": {"USD": [usd(1.0e9, start="2025-01-01", end="2025-12-31",
+                                                             fy=2025, form=form, filed="2026-03-01")]}}}}}
+
+
+@pytest.mark.parametrize("facts, reason", [
+    (None, "SEC has no XBRL financial statements for it"),
+    (_facts_from("ifrs-full", "20-F"), "it reports in IFRS (20-F), which isn't mapped"),
+    (_facts_from("us-gaap", "20-F"), "it files as a foreign issuer (20-F); only 10-K and 10-Q filings are read"),
+    (_facts_from("us-gaap", "10-Q"), "it has filed no annual report (10-K) yet"),
+])
+def test_an_empty_sec_record_says_why(facts, reason):
+    # TSM (IFRS), ARM (US GAAP on 20-F) and XOM's new holding company (10-Qs only) came back with no annual
+    # financials and no word on why.
+    assert explain_no_annual_financials(facts) == reason
+
+
+def test_a_10k_filer_whose_facts_cover_no_full_year_gets_the_last_reason():
+    # Only a quarter-length fact from a 10-K: the parser finds no fiscal year, and the reason says so.
+    facts = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        usd(2.5e8, start="2025-10-01", end="2025-12-31", fy=2025, form="10-K", filed="2026-02-20")]}}}}}
+    assert XBRLParser().extract_annual_financials(facts) == {}
+    assert explain_no_annual_financials(facts) == "its 10-K facts give no full fiscal year of a mapped concept"
 

@@ -709,3 +709,30 @@ Gates: ruff ✓ mypy ✓ pytest 942 passed (1 known warning) | CI: pending for t
 Commit: (this commit) chore(qa): discovery VAL-09 and VAL-12 pass; XOM, ARM and TSM gathering gaps
 Next: BUG-042 or BUG-043 (P1, oldest first: BUG-042, whose fix direction is a design question); record code review 5
 when it reports
+
+## Iteration 38: 2026-10-20 06:11: fix
+Picked: BUG-042, the oldest open P1. Its "explained by name" outcome is the mechanism BUG-044 needs, so one change
+fixes both; keeping the predecessor's history is a design choice, put to the user as Q6. CI: ce6e232 running at the
+start.
+Did: TDD (12 tests, each RED first). `explain_no_annual_financials` (xbrl_parser) says why SEC data gave no annual
+financials: no XBRL, IFRS, a foreign issuer's forms, no 10-K yet (with the first filing date), or no full year in the
+10-K facts. The fetcher adds it as a warning naming the ticker, CIK and registrant, or says the companyfacts request
+failed. `collection_runs` gains a `warnings` column (JSON), added in place by the store's migration: on a fresh
+real-DB copy, twice, 19 tables and 1,337,302 rows unchanged, integrity ok. The Reader returns the latest run's
+warnings (none on databases without the column), `GET /api/quality/runs` returns them as a list, and the FA and VAL
+tabs show the note. 12 mutants each fail a test. Live: offline collections from the golden SEC cache (XOM, TSM, ARM
+and AAPL into a fresh DB; XOM into the real-DB copy), then a server on port 8765: each note shows on the FA and VAL
+tabs, none for AAPL or JPM, and XOM keeps its 20 stored years. In Chrome the note is one muted line above the empty
+table, with no console errors and no sideways scroll (screenshots timed out twice, so the DOM was read instead).
+Found: BUG-045 (P2: a failed companyfacts or submissions request is not an error) and BUG-046 (P3: `stock-web
+--help` starts the server). My lookup started one on port 8000 against the user's database; it served no request
+and was stopped; `stock.db` and its WAL are unmodified (the `-shm` index changed at 05:48 from this iteration's
+read-only backup, before the server started at 05:50). Code review 5 reported (61f8a56..f0db42a): saved to
+`qa/evidence/review5-report.md`; its findings (I1–I3 P2, M1–M8 P3) are recorded next iteration, after re-running
+their key claims.
+Evidence: `qa/evidence/iter38-bug042-{red,green,green2,mutants,migration,e2e}.txt`, `qa/evidence/review5-report.md`
+Result: BUG-042 VERIFIED (explained gap; the history is Q6), BUG-044 VERIFIED; new BUG-045, BUG-046 and Q6.
+GATHER-02 → FAIL→BUG-043.
+Gates: ruff ✓ mypy ✓ pytest 953 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(fetchers): say why a filer's SEC data gave no annual financials
+Next: record code review 5 (re-run I1–I3 first), then BUG-043 (P1). Fixes since review 5's range: 2 (8feac32, this).

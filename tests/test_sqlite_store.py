@@ -1,5 +1,6 @@
 """Tests for the SQLite store: schema, upserts, and cross-company screening."""
 
+import json
 import sqlite3
 from datetime import datetime
 
@@ -396,4 +397,16 @@ def test_a_snapshot_keeps_the_rates_day_and_source(tmp_path):
                         "WHERE ticker = 'AAA' ORDER BY collected_at").fetchall()
     conn.close()
     assert rows == [(0.0515, "2026-10-19", "treasury_gov")] * 2
+
+
+def test_a_collection_run_keeps_its_warnings(tmp_path):
+    # The runs table kept only their count, so the reason for an empty record (BUG-044) never reached the web app.
+    stock = StockData(ticker="TSM", cik="0001046179", collected_at=datetime(2026, 10, 20, 9, 30))
+    stock.add_warning("[data-quality/high] No annual financial data extracted.")
+    stock.add_warning("SEC EDGAR: no annual financials for TSM from CIK 0001046179 (TSMC): it reports in IFRS")
+    SQLiteStore(tmp_path / "s.db").export([stock])
+    conn = sqlite3.connect(tmp_path / "s.db")
+    rows = conn.execute("SELECT warning_count, warnings FROM collection_runs").fetchall()
+    conn.close()
+    assert [(count, json.loads(text)) for count, text in rows] == [(2, stock.warnings)]
 

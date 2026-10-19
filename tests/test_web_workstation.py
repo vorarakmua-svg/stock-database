@@ -17,6 +17,7 @@ test modules assert exact company counts against it).
 """
 from __future__ import annotations
 
+import sqlite3
 from datetime import date, timedelta
 
 import pandas as pd
@@ -845,3 +846,61 @@ def test_base_page_carries_allow_collect_flag(collection_enabled_client):
     resp = collection_enabled_client.get("/")
     assert resp.status_code == 200
     assert 'data-allow-collect="1"' in resp.text
+
+
+# ---------------------------------------------------------------------------
+# A company whose SEC record gave no annual financials (BUG-044)
+# ---------------------------------------------------------------------------
+
+_TSM_NOTE = ("SEC EDGAR: no annual financials for TSM from CIK 0001046179 (TAIWAN SEMICONDUCTOR MANUFACTURING CO "
+             "LTD): it reports in IFRS (20-F, 6-K), which isn't mapped")
+
+
+def _db_after_a_run_with(tmp_path, warnings):
+    from datetime import datetime
+
+    from src.exporters.sqlite_store import SQLiteStore
+    from src.models.stock_data import StockData
+
+    db_path = tmp_path / "gap.db"
+    tsm = StockData(ticker="TSM", cik="0001046179", company_name="Taiwan Semiconductor",
+                    collected_at=datetime(2026, 10, 20))
+    for warning in warnings:
+        tsm.add_warning(warning)
+    SQLiteStore(db_path).export([tsm])
+    return db_path
+
+
+def _client_for(db_path):
+    from fastapi.testclient import TestClient
+
+    from src.webapp import create_app
+
+    return TestClient(create_app(db_path=db_path))
+
+
+def test_the_fa_and_val_tabs_say_why_sec_gave_no_annual_financials(tmp_path):
+    # TSM's FA tab was empty and its models N/A with no reason given; the run's explanation stayed in the JSON.
+    from markupsafe import escape
+
+    client = _client_for(_db_after_a_run_with(tmp_path, ["[data-quality/high] No annual financial data extracted.",
+                                                         _TSM_NOTE]))
+    for tab in ("fa", "val"):
+        body = client.get(f"/ui/stocks/TSM/{tab}").text
+        assert str(escape(_TSM_NOTE)) in body, tab
+        assert "No annual financial data extracted" not in body, tab
+
+
+def test_the_tabs_render_on_a_database_from_before_runs_kept_warnings(tmp_path):
+    # The web app opens the user's database read-only, so it can't add the column.
+    db_path = _db_after_a_run_with(tmp_path, [_TSM_NOTE])
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE collection_runs DROP COLUMN warnings")
+    conn.commit()
+    conn.close()
+    client = _client_for(db_path)
+    for tab in ("fa", "val"):
+        resp = client.get(f"/ui/stocks/TSM/{tab}")
+        assert resp.status_code == 200, tab
+        assert "no annual financials" not in resp.text, tab
+

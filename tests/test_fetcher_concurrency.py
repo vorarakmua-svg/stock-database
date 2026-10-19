@@ -255,3 +255,38 @@ def test_assess_quarterly_only_company_scores_zero(tmp_path):
     fetcher._compute_metrics(stock)
     fetcher._assess(stock)
     assert stock.data_quality["score"] == 0
+
+
+def _collect_from_sec(tmp_path, monkeypatch, sec):
+    fetcher = _make_fetcher(tmp_path, 1)
+    monkeypatch.setattr(fetcher.sec_handler, "fetch_all", lambda ticker: sec)
+    monkeypatch.setattr(fetcher.fred_handler, "get_risk_free_rate_details", lambda maturity="10y": None)
+    monkeypatch.setattr(fetcher.fred_handler, "get_market_risk_premium", lambda: {})
+    return fetcher.fetch_ticker(sec["ticker"], include_yahoo=False)
+
+
+def test_a_filer_without_annual_financials_is_explained(tmp_path, monkeypatch):
+    # SEC moved XOM to ExxonMobil Holdings Corp (CIK 2115436), which has filed 10-Qs but no 10-K yet; the run
+    # recorded no annual financials and only a generic data-quality warning.
+    entry = {"val": 1.0e9, "start": "2026-04-01", "end": "2026-06-30", "fy": 2026, "fp": "Q2", "form": "10-Q",
+             "filed": "2026-08-01"}
+    stock = _collect_from_sec(tmp_path, monkeypatch, {
+        "cik": "0002115436", "ticker": "XOM", "source": "sec_edgar",
+        "company_facts": {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [entry]}}}}},
+        "submissions": {"name": "ExxonMobil Holdings Corp",
+                        "filings": [{"form": "10-Q", "filingDate": "2026-08-01"},
+                                    {"form": "8-K", "filingDate": "2026-07-01"}]}})
+    assert stock.financials_annual == {}
+    assert ("SEC EDGAR: no annual financials for XOM from CIK 0002115436 (ExxonMobil Holdings Corp): it has filed "
+            "no annual report (10-K) yet (its filings listed from 2026-07-01)") in stock.warnings
+
+
+def test_a_failed_facts_request_is_not_explained_as_missing_data(tmp_path, monkeypatch):
+    # A 403 or a timeout on companyfacts also leaves the record empty: the reason is the request, not the filer.
+    stock = _collect_from_sec(tmp_path, monkeypatch, {
+        "cik": "0000034088", "ticker": "XOM", "source": "sec_edgar",
+        "company_facts_error": "403 Client Error: Forbidden",
+        "submissions": {"name": "EXXON MOBIL CORP", "filings": []}})
+    assert ("SEC EDGAR: no annual financials for XOM from CIK 0000034088 (EXXON MOBIL CORP): its companyfacts "
+            "request failed (403 Client Error: Forbidden)") in stock.warnings
+

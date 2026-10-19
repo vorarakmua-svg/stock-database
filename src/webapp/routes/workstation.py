@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
+from ...fetchers.stock_data_fetcher import NO_ANNUAL_FINANCIALS
 from ...valuation.assumptions import DISCOUNT_SPREAD, GROWTH_CAP
 from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
 from ...valuation.models import ValuationResult, dcf_per_share
@@ -371,6 +372,11 @@ def gp_fragment(
 # ---------------------------------------------------------------------------
 
 
+def _sec_gap_note(r: Reader, ticker: str) -> Optional[str]:
+    """Why the latest collection got no annual financials from SEC, if it said."""
+    return next((w for w in r.latest_run_warnings(ticker) if w.startswith(NO_ANNUAL_FINANCIALS)), None)
+
+
 @router.get("/ui/stocks/{ticker}/fa", response_class=HTMLResponse)
 def fa_fragment(
     ticker: str,
@@ -401,6 +407,7 @@ def fa_fragment(
             "ticker": ticker,
             "columns": columns,
             "rows": display_rows,
+            "gap_note": _sec_gap_note(r, ticker),
         },
     )
 
@@ -1035,6 +1042,7 @@ def val_fragment(
             "sensitivity": sensitivity,
             "oe": oe_ctx,
             "computed_at": computed_at,
+            "gap_note": _sec_gap_note(r, ticker),
             # Same XSS defense-in-depth as gp_fragment's cfg_json/ern_fragment's
             # ern_cfg_json/dvd_fragment's dvd_cfg_json: escape "</" so a literal
             # "</script>" can't break out of the inline <script> block. Today's

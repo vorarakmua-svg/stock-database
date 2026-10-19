@@ -248,6 +248,7 @@ class SQLiteStore:
                 warning_count INTEGER,
                 error_count INTEGER,
                 quality_score INTEGER,
+                warnings TEXT,
                 PRIMARY KEY (ticker, collected_at)
             );
 
@@ -330,6 +331,7 @@ class SQLiteStore:
             "metrics_annual": {c: "REAL" for c in _METRIC_COLUMNS},
             "market_snapshots": {**{c: "REAL" for c in _SNAPSHOT_COLUMNS},
                                  **{c: "TEXT" for c in _SNAPSHOT_TEXT_COLUMNS}},
+            "collection_runs": {"warnings": "TEXT"},
         }
         for table, columns in expected.items():
             self._ensure_columns(conn, table, columns)
@@ -535,6 +537,8 @@ class SQLiteStore:
             "warning_count": len(stock.warnings),
             "error_count": len(stock.errors),
             "quality_score": quality_score,
+            # The text too: the web app shows why a record came back empty.
+            "warnings": json.dumps(stock.warnings),
         })
 
         # unmapped_facts (tags not yet in the canonical registry; tag is a row value)
