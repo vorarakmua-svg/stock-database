@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 103 · PASS 1 · FAIL 3 · N-A 0 · BLOCKED 0 · NEEDS-USER 2  
+**Status counts:** TODO 99 · PASS 5 · FAIL 3 · N-A 0 · BLOCKED 0 · NEEDS-USER 2  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -16,13 +16,13 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | VAL-03 | Graham Number | FAIL→BUG-007 | iter 11 | Level 1 ✓; BUG-014 fixed (KLAC on today's basis; oracle agrees); left: the bear case ignores loss years (BUG-007, NEEDS-USER) and XOM's Level-2 mismatch (lead L6) |
 | VAL-04 | Peter Lynch | TODO | iter 13 | BUG-006 and BUG-014 fixed; BUG-016 restored the plan's rule, so 16 Lynch rows use the analyst figure again (not derivable from the spec: Q5); left: SCCO and DELL Level-2 mismatches (leads L6, L7) |
 | VAL-05 | Historical multiples band | TODO | iter 11 | Level 1 ✓; BUG-006 resolved ANET/APH/AVGO/LRCX; SCCO, SPGI and WDC were the oracle's spin-off handling (fixed in iteration 11); NOW remains: lead L6 |
-| VAL-06 | Owner earnings | TODO | iter 20 | per-share values now count every share class (BUG-022); the oracle doesn't check this model yet |
-| VAL-07 | Summary | TODO | |  |
-| VAL-08 | Invariant scan over the whole real-DB copy | TODO | |  |
+| VAL-06 | Owner earnings | TODO | iter 22 | values recompute exactly from their assumptions with the oracle's projection (81 real, 8 golden; `qa/evidence/iter22-discovery-val.txt`); every share class counted (BUG-022); the predictability gate, volatility fields and own verdict are untested |
+| VAL-07 | Summary | PASS | iter 22 | summary rows equal the medians of the applicable models (127 real, 19 golden; 32 with an even count); the screener's upside, verdict and Buffett verdict equal the valuation API's for every company (126, 14), and sorting by upside ranks by those numbers; the verdict rule matches the spec (code read); `qa/evidence/iter22-discovery-val.txt` |
+| VAL-08 | Invariant scan over the whole real-DB copy | PASS | iter 22 | over 762 real and 114 golden rows: bear ≤ base ≤ bull, no missing/NaN/infinite value, na_reason exactly when not applicable, DCF/Lynch/owner earnings only for general/utility/energy, assumptions JSON parses; values recompute from their assumptions (oracle Level 1: 519 rows; owner earnings: 81), none beyond 0.5%; `qa/evidence/iter22-discovery-val.txt` |
 | VAL-09 | Edge cases | TODO | iter 8 | partial first dividend year covered (BUG-009 tests); rest untested |
-| VAL-10 | Rates | TODO | |  |
-| VAL-11 | Reproducibility | TODO | |  |
-| VAL-12 | Presentation | TODO | |  |
+| VAL-10 | Rates | PASS | iter 22 | risk-free rates stored as decimals (0.0419–0.0475); every DCF/DDM discount equals clamp(rf + β × 4.5%, 8%, 14%) with the snapshot's rf (196 real, 25 golden); fallbacks flagged (`rf_fallback`/`beta_fallback`); owner earnings uses max(rf, 7%); the ERP is in the spec and in every assumptions record; `qa/evidence/iter22-discovery-val.txt` |
+| VAL-11 | Reproducibility | PASS | iter 22 | a second backfill reproduces all 889 valuation and summary rows exactly; the post-collection path (`compute_and_store` with the collected tickers) gives the backfill's rows; `qa/evidence/iter22-discovery-val.txt` |
+| VAL-12 | Presentation | TODO | iter 22 | the screener's upside, verdict and Buffett verdict equal the API's (see VAL-07); the VAL tab and the DCF sensitivity grid are untested |
 | VAL-13 | Hand-worked examples (a general company, a bank, a dividend payer) | TODO | |  |
 
 ## VALID: Data validation (parsing, standardization, quality)

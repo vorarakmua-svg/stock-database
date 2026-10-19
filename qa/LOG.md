@@ -438,3 +438,18 @@ splits still applied; the oracle is unchanged (golden 0, real the known 12). No 
 Gates: ruff ✓ mypy ✓ pytest 901 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(valuation): a post-filing split must show in the share count
 Next: record code review 3 when it reports; then discovery (§4.2.3), riskiest area first: VAL
+
+## Iteration 22: 2026-10-20 05:35: discovery
+Picked: VAL-07, VAL-08, VAL-10, VAL-11 (no P0–P2 bug open; the riskiest area first; CI: c6678d0 ✓, 4998ec8
+running). Code review 3 was still running.
+Did: One scan over fresh backfilled copies (real and golden) using the code's own definitions and the app's APIs
+in-process (`create_app(db_path=copy)`): VAL-11 backfilled twice and through the post-collection path; VAL-08
+checked ordering, finiteness, reasons, sector rules and JSON on every row; VAL-07 recomputed every summary and
+compared the screener with the valuation API ticker by ticker; VAL-10 checked rate units, the CAPM clamp, the ERP,
+rf provenance and fallback flags. Owner earnings, which the oracle's Level 1 skips, was recomputed from its stored
+assumptions with the oracle's own projection.
+Evidence: `qa/evidence/iter22-discovery-val.txt`
+Result: VAL-07, VAL-08, VAL-10, VAL-11 PASS; no new bug. VAL-06 and VAL-12 got partial evidence and stay TODO.
+Gates: ruff ✓ mypy ✓ pytest 901 passed (no code change) | CI: pending for this push
+Commit: (this commit) chore(qa): discovery VAL-07, VAL-08, VAL-10, VAL-11 pass
+Next: record code review 3 when it reports; then discovery VAL-06, VAL-09, VAL-12, VAL-13
