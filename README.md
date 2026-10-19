@@ -187,7 +187,7 @@ Each ticker JSON file contains:
     "dividend_yield": 0.0041,
     "payout_ratio": 0.157,
     "dividend_cagr": 0.078,
-    "years_of_dividends": 12,
+    "years_of_data": 12.4,
     "dividend_payments": [ /* full history */ ]
   },
 

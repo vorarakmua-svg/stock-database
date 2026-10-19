@@ -2,7 +2,7 @@
 
 - **Golden scratch DB:** `%LOCALAPPDATA%\Temp\stockdb-qa\golden\output\stock.db` (live-collected in iteration 1, 2026-10-20; JSON/CSV alongside)
 - **Real-DB copy:** `%LOCALAPPDATA%\Temp\stockdb-qa\realcopy\stock.db` (SQLite backup API from a `mode=ro` connection; integrity_check ok; 127 companies; 135 MB)
-- Batch logs: `qa/evidence/iter01-golden-batch{1..4}.log` (4 batches, `--workers 2`). Rows still _pending_ were running at the bootstrap commit; the next iteration records them.
+- Batch logs: `qa/evidence/iter01-golden-batch{1..4}.log` (4 batches, `--workers 2`). All 4 batches exit 0 (128 s, 77 s, 77 s, 52 s); per-ticker results recorded in iteration 2.
 - Re-collect a golden ticker only when testing gathering changes (prompt §7).
 
 ## Basket
@@ -18,16 +18,16 @@
 | PGR | Insurer: loss and combined ratios; P/B multiples | ok, 2 warnings |
 | PLD | REIT: FFO/AFFO, P/FFO multiples | ok, 6 warnings (to triage) |
 | XOM | Energy: cyclical, energy-specific inventory tags | ok, 1 warning; **lead:** sources lack `calculated_metrics` (every other ticker has it); investigate in GATHER-01 / VALID |
-| NEE | Utility | _pending_ |
-| KO | Steady dividends (DDM) | _pending_ |
-| GOOGL | Older filings lack cash-flow D&A tags (owner earnings not applicable) | _pending_ |
-| BRK-B | Class share with punctuation; insurer conglomerate | _pending_ |
-| MCD | Negative equity | _pending_ |
-| TSLA | No dividend; high growth | _pending_ |
-| ARM | Recent IPO (short history) | _pending_ |
-| TSM | Foreign filer (20-F, IFRS taxonomy) | _pending_ |
-| SPY | ETF (no company fundamentals) | _pending_ |
-| ZZZZ | Invalid ticker (must fail gracefully) | _pending_ |
+| NEE | Utility | ok, 6 warnings (to triage) |
+| KO | Steady dividends (DDM) | ok, 3 warnings |
+| GOOGL | Older filings lack cash-flow D&A tags (owner earnings not applicable) | ok, 0 warnings |
+| BRK-B | Class share with punctuation; insurer conglomerate | ok, 6 warnings (to triage) |
+| MCD | Negative equity | ok, 9 warnings (to triage) |
+| TSLA | No dividend; high growth | ok, 5 warnings (to triage) |
+| ARM | Recent IPO (short history) | ok, 0 warnings; **lead:** no `calculated_metrics` in sources |
+| TSM | Foreign filer (20-F, IFRS taxonomy) | ok, 0 warnings; **lead:** no `calculated_metrics` in sources (IFRS 20-F filer: expected?) |
+| SPY | ETF (no company fundamentals) | **lead:** Yahoo 404 "No fundamentals data" ×3, yet recorded as 0 warnings / 0 errors (silent gap; GATHER-02/06) |
+| ZZZZ | Invalid ticker (must fail gracefully) | errors=1 as expected (Yahoo 404, no SEC); **lead:** batch 4 still exited 0 with a failed ticker (CLI-01 exit-code semantics) |
 
 ## Tolerances
 

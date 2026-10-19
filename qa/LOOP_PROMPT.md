@@ -89,6 +89,9 @@ Done (section 9) holds.
    read-only discovery sweeps in parallel (superpowers:dispatching-parallel-agents): `model: "sonnet"` for routine
    checks, `model: "opus"` for valuation math audits, tricky debugging and code review. Apply fixes one at a time,
    never two workers editing at once. Re-run a worker's key command yourself before recording its claim.
+   **Background subagents can't be awaited inside an iteration:** ending your turn fires the Ralph stop hook and
+   starts the next iteration while the worker is still running. Dispatch only when you have enough parallel work of
+   your own to fill the time until they report back; otherwise work inline. (Learned in iteration 2.)
 5. **Gates, commit, push.** Run the three gates, commit the fix together with the `qa/` updates (or `chore(qa):`
    alone for discovery), then `git push`. On the first push, open a **draft** PR against `main` titled
    "QA loop: full-spectrum testing fixes". If PR #27 (`fix/palette-commands`) is still open, say this branch builds

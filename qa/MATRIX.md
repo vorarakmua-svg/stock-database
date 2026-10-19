@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 109 · PASS 0 · FAIL 0 · N-A 0 · BLOCKED 0 · NEEDS-USER 0  
+**Status counts:** TODO 107 · PASS 1 · FAIL 1 · N-A 0 · BLOCKED 0 · NEEDS-USER 0  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -50,7 +50,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | MATCH-02 | Cross-source fundamentals | TODO | |  |
 | MATCH-03 | Market math | TODO | |  |
 | MATCH-04 | Price history | TODO | |  |
-| MATCH-05 | Store consistency | TODO | |  |
+| MATCH-05 | Store consistency | FAIL→BUG-004 | iter 2 | summary.csv holds only the last run's tickers (real 2/127, golden 4/19); columns vary by run |
 | MATCH-06 | UI vs DB | TODO | |  |
 | MATCH-07 | Peers and sector medians are computed within the right sector and the medians are correct.… | TODO | |  |
 | MATCH-08 | Dedup | TODO | |  |
@@ -176,7 +176,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
 | DOCS-01 | README | TODO | |  |
-| DOCS-02 | USAGE_GUIDE | TODO | |  |
+| DOCS-02 | USAGE_GUIDE | PASS | iter 2 | `tests/test_docs_usage_guide.py` runs every block against the current export; RED→GREEN in `qa/evidence/iter02-bug001-*` (BUG-001) |
 | DOCS-03 | Quantitative claims (e.g. "100% core coverage for a 41-company basket") are reproducible.… | TODO | |  |
 | DOCS-04 | In-app help, tooltips and the HELP overlay match actual behavior.… | TODO | |  |
 

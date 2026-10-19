@@ -24,3 +24,21 @@ Gates: ruff ✓ mypy ✓ pytest 852 passed | CI: pending first push
 Commit: (this commit) chore(qa): bootstrap QA loop state
 Next: (1) record the remaining golden results (batches 2–4 logs) in GOLDEN.md and triage the per-ticker warnings
 into leads; (2) fix BUG-001, the highest-severity open bug (P2, docs-only, doesn't need the golden data).
+
+## Iteration 2: 2026-10-20 00:55: fix
+Picked: BUG-001, the highest-severity open bug (P2), plus iteration 1's carry-over (record golden results)
+Did: Recorded all 19 golden results (4 batches, exit 0) and four leads (L1–L4 in BUGS.md). Wrote
+`tests/test_docs_usage_guide.py`: it runs USAGE_GUIDE's 28 code blocks notebook-style against a trimmed real export
+(`tests/fixtures/usage_guide/AAPL.json`, 77 KB, key presence identical to the full export) and a `summary.csv`
+written by the current CSVExporter. A tracking `json.load` records missing-key lookups, and blocks needing
+streamlit/plotly/openpyxl are skipped when absent (openpyxl isn't in CI). Fixed 12 lookups and the stale section
+list in USAGE_GUIDE, plus README's sample `years_of_dividends`.
+Evidence: `qa/evidence/iter02-bug001-red.txt` (12 missing keys; KeyError in Dividend History and Graham Number),
+`iter02-bug001-green.txt` (2 passed), `iter02-bug001-real-output.txt` (real AAPL: revenue $416.16B, NI $112.01B).
+Mutation: planting `"Revenue"` in the fixture fails the guard; restored byte-identical.
+Result: BUG-001 VERIFIED; DOCS-02 PASS. **New BUG-004 (P1):** summary.csv holds only the last run's tickers (your
+real data: 2 of 127) and its columns vary by run, so MATCH-05 FAIL. Lead L4: `years_of_data` spans dividend gaps.
+Prompt: §4.4 now says background subagents can't be awaited inside an iteration (this iteration worked inline).
+Gates: ruff ✓ mypy ✓ pytest 854 passed (1 known warning) | CI: PR #28 bootstrap run pending at start
+Commit: (this commit) docs: USAGE_GUIDE examples use the export's real field names
+Next: BUG-004 (P1), the highest-severity open bug.
