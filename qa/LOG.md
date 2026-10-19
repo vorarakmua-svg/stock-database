@@ -676,3 +676,19 @@ DB still holds the stale 0.0419: re-collect it in the next sweep.
 Gates: ruff ✓ mypy ✓ pytest 935 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(fetchers): the key-less risk-free rate is Treasury.gov's latest day, not January 2's
 Next: BUG-037 (P2: carry the rate's date and source into the stores and assumptions)
+
+## Iteration 36: 2026-10-20 05:23: fix
+Picked: BUG-037 (P2), the last open P2 (CI: f0db42a running). Code review 5 is running (dispatched at the end of
+iteration 35: six fixes since review 4).
+Did: Traced the rate from the fetch to the assumptions: the handler returned a bare float and the fetcher labelled
+every key-less rate "fallback". Tests first across the four layers (handler, snapshot, inputs, models), all RED. Fix:
+the rate travels with its day and source into the JSON, two new snapshot columns (carried by quote refreshes), the
+valuation inputs, and the DCF, DDM and owner-earnings assumptions (`rf_estimate` for the static estimate); the
+inputs read the snapshot with `SELECT *` because the backfill doesn't migrate. Six mutants each fail a test; all
+restored byte-identical. One live key-less collection of AAPL (golden basket) checked it end to end.
+Evidence: `qa/evidence/iter36-bug037-{red,green,mutants,e2e,impact}.txt`
+Result: BUG-037 VERIFIED; no P0–P2 bug is open. VAL-10 → PASS; GATHER-04 stays TODO (FRED path, January fallback).
+No existing value moves.
+Gates: ruff ✓ mypy ✓ pytest 942 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(valuation): valuations record the risk-free rate's day and source
+Next: record code review 5 when it reports; otherwise discovery (VAL-09, VAL-12, VAL-13)

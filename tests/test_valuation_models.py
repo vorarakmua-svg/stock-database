@@ -634,3 +634,23 @@ def test_owner_earnings_volatility_caps_a_swing_to_a_loss_at_100pct():
     evidence, which defeats the point of showing it."""
     vol = owner_earnings_volatility([10.0, -24.0, 10.0, 10.0])
     assert vol["worst_drop"] == 1.0
+
+
+@pytest.mark.parametrize("source, flagged", [("treasury_gov", False), ("estimate", True)])
+def test_rate_using_models_record_the_rates_day_and_source(source, flagged):
+    # Spec: "the assumption JSON stores the rate and its as-of date so staleness is visible in the UI" (the
+    # VAL tab lists every assumption); the static estimate, which has no day, is flagged.
+    rate = dict(risk_free_rate=0.0515, risk_free_rate_date=None if flagged else "2026-10-19",
+                risk_free_rate_source=source)
+    results = [
+        value_dcf(_inputs(fy_records=[_fy(fy, fcf=100.0 * 1.05 ** i) for i, fy in enumerate(range(2019, 2024))],
+                          **rate)),
+        value_ddm(_inputs(dividends=_quarterly_dividends(2019, 2023, 1.00, 0.05), **rate)),
+        value_owner_earnings(_inputs(fy_records=[_oe_fy(fy) for fy in range(2016, 2026)], **rate)),
+    ]
+    for res in results:
+        assert res.applicable, res.model
+        assert (res.assumptions["risk_free_rate_as_of"], res.assumptions["risk_free_rate_source"]) == (
+            rate["risk_free_rate_date"], source), res.model
+        assert res.assumptions.get("rf_estimate", False) is flagged, res.model
+

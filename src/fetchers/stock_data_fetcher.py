@@ -174,14 +174,18 @@ class StockDataFetcher:
 
         # Fetch risk-free rate from FRED (for WACC calculation)
         try:
-            risk_free = self.fred_handler.get_risk_free_rate(maturity="10y")
+            rate = self.fred_handler.get_risk_free_rate_details(maturity="10y") or {}
+            risk_free = rate.get("rate")
             market_premium = self.fred_handler.get_market_risk_premium()
 
+            # Where the rate came from (FRED, Treasury.gov or the static estimate) and the
+            # day it is for travel with it, so the valuations can show a stale or estimated rate.
             rate_data = {
                 "risk_free_rate": risk_free,
                 "risk_free_rate_10y": risk_free,
                 "market_risk_premium": market_premium.get("current_estimate"),
-                "source": "fred" if self.fred_handler.api_key else "fallback",
+                "source": rate.get("source") or ("fred" if self.fred_handler.api_key else "fallback"),
+                "date": rate.get("date"),
             }
             stock.merge_risk_free_rate(rate_data)
         except Exception as e:

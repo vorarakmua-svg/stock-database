@@ -57,6 +57,25 @@ class ValuationResult:
     basis_fiscal_year: Optional[int] = None
 
 
+def _rate_provenance(inputs: ValuationInputs) -> Dict[str, Any]:
+    """The risk-free rate's day and source, for the models that discount with it.
+
+    The spec stores "the rate and its as-of date so staleness is visible in the
+    UI" (the VAL tab lists every assumption). The static estimate the rate falls
+    back to when FRED and Treasury.gov both fail is flagged; with no rate at all,
+    the model's ``rf_fallback`` already says so.
+    """
+    if inputs.risk_free_rate is None:
+        return {}
+    meta: Dict[str, Any] = {
+        "risk_free_rate_as_of": inputs.risk_free_rate_date,
+        "risk_free_rate_source": inputs.risk_free_rate_source,
+    }
+    if inputs.risk_free_rate_source == "estimate":
+        meta["rf_estimate"] = True
+    return meta
+
+
 def _na(model: str, reason: str,
         basis_fy: Optional[int] = None) -> ValuationResult:
     return ValuationResult(model=model, applicable=False, na_reason=reason,
@@ -113,6 +132,7 @@ def value_dcf(inputs: ValuationInputs) -> ValuationResult:
     assumptions: Dict[str, Any] = {}
     assumptions.update(gmeta)
     assumptions.update(dmeta)
+    assumptions.update(_rate_provenance(inputs))
     assumptions.update({
         "fcf_basis": basis,
         "fcf_years": len(fcf_hist),
@@ -234,6 +254,7 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
     assumptions: Dict[str, Any] = {}
     assumptions.update(gmeta)
     assumptions.update(dmeta)
+    assumptions.update(_rate_provenance(inputs))
     assumptions.update({
         "ttm_dps": ttm,
         "ttm_anchor": anchor.isoformat(),
@@ -536,6 +557,7 @@ def value_owner_earnings(inputs: ValuationInputs) -> ValuationResult:
     })
     if rf_fallback:
         assumptions["rf_fallback"] = True
+    assumptions.update(_rate_provenance(inputs))
     return ValuationResult(
         model="owner_earnings",
         applicable=True,

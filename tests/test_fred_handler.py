@@ -37,3 +37,19 @@ def test_the_treasury_feed_takes_its_latest_date_in_either_order(monkeypatch):
 def test_a_feed_row_without_yields_gives_no_rate(monkeypatch):
     # A dated row whose yields don't parse is no rate: the caller then tries the prior year or the estimate.
     assert _handler(monkeypatch, ["10/19/2026,N/A,N/A,N/A,N/A"])._fetch_treasury_gov_year(2026) is None
+
+
+def test_the_rate_comes_with_its_day_and_source(monkeypatch):
+    # The spec keeps the rate "and its as-of date so staleness is visible"; key-less runs recorded only
+    # "fallback", whether the rate was Treasury.gov's or the static estimate.
+    details = _handler(monkeypatch, _ROWS).get_risk_free_rate_details("10y")
+    assert details == {"rate": pytest.approx(0.0515), "date": "2026-10-19", "source": "treasury_gov"}
+
+
+def test_the_static_estimate_says_so_and_has_no_day(monkeypatch):
+    handler = _handler(monkeypatch, _ROWS)
+    monkeypatch.setattr(handler, "_fetch_treasury_gov_year", lambda year: None)
+    details = handler.get_risk_free_rate_details("10y")
+    assert (details["source"], details["date"]) == ("estimate", None)
+    assert details["rate"] == pytest.approx(0.0435)
+

@@ -615,3 +615,33 @@ def test_split_normalization_leaves_da_and_capex_alone():
     assert survivors[0].eps_diluted == 2.0           # per-share restated
     assert survivors[0].depreciation_amortization == 40.0   # absolute, untouched
     assert survivors[0].capex == -60.0                      # absolute, untouched
+
+
+def test_the_rates_day_and_source_reach_the_inputs(tmp_path):
+    db_path = _shares_db(tmp_path, 1.0e9, 1.0e9, 1.0e9)
+    conn = sqlite3.connect(db_path)
+    conn.execute("UPDATE market_snapshots SET risk_free_rate = 0.0515, risk_free_rate_date = '2026-10-19', "
+                 "risk_free_rate_source = 'treasury_gov' WHERE ticker = 'SHR'")
+    conn.commit()
+    conn.close()
+    conn = _connect(db_path)
+    inputs = load_inputs(conn, "SHR")
+    conn.close()
+    assert (inputs.risk_free_rate, inputs.risk_free_rate_date, inputs.risk_free_rate_source) == (
+        0.0515, "2026-10-19", "treasury_gov")
+
+
+def test_inputs_load_from_a_database_without_the_rate_columns(tmp_path):
+    # The backfill reads the database without migrating it, so a database written before the rate's day and
+    # source were stored must still load (the valuations of every ticker used to fail on a missing column).
+    db_path = _shares_db(tmp_path, 1.0e9, 1.0e9, 1.0e9)
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE market_snapshots DROP COLUMN risk_free_rate_date")
+    conn.execute("ALTER TABLE market_snapshots DROP COLUMN risk_free_rate_source")
+    conn.commit()
+    conn.close()
+    conn = _connect(db_path)
+    inputs = load_inputs(conn, "SHR")
+    conn.close()
+    assert (inputs.shares_outstanding, inputs.risk_free_rate_date, inputs.risk_free_rate_source) == (1.0e9, None, None)
+

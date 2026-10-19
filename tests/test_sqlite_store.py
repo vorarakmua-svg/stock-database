@@ -379,3 +379,21 @@ def test_a_run_with_only_price_history_writes_no_snapshot(tmp_path):
     store.export([partial])
     assert _latest_price_and_count(tmp_path / "stock.db", "AAA") == ((150.0,), 1)
 
+
+def test_a_snapshot_keeps_the_rates_day_and_source(tmp_path):
+    # The rate's day and source reach the valuations through the snapshot. A quote refresh fetches no rate,
+    # so it carries them forward with the rate.
+    store = SQLiteStore(db_path=tmp_path / "stock.db")
+    stock = _company("AAA", revenue=1.0e9, roic=0.12)
+    stock.market_data = {"current_price": 150.0}
+    stock.collected_at = datetime(2026, 10, 20, 9, 0)
+    stock.merge_risk_free_rate({"risk_free_rate": 0.0515, "source": "treasury_gov", "date": "2026-10-19"})
+    store.export([stock])
+    store.upsert_quote("AAA", {"market_data": {"current_price": 151.0}, "valuation": {}, "shareholders": {},
+                               "analyst_estimates": {}}, "2026-10-20T15:00:00")
+    conn = sqlite3.connect(tmp_path / "stock.db")
+    rows = conn.execute("SELECT risk_free_rate, risk_free_rate_date, risk_free_rate_source FROM market_snapshots "
+                        "WHERE ticker = 'AAA' ORDER BY collected_at").fetchall()
+    conn.close()
+    assert rows == [(0.0515, "2026-10-19", "treasury_gov")] * 2
+

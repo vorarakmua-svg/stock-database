@@ -127,6 +127,10 @@ class ValuationInputs:
     shares_source: str = "market_snapshot"
     beta: Optional[float] = None
     risk_free_rate: Optional[float] = None
+    #: The day the rate is for, and where it came from ("fred", "treasury_gov" or
+    #: "estimate"); None for snapshots written before they were recorded.
+    risk_free_rate_date: Optional[str] = None
+    risk_free_rate_source: Optional[str] = None
     analyst_growth: Optional[float] = None
     dividends: List[Tuple[str, float]] = field(default_factory=list)
     fy_end_prices: Dict[int, float] = field(default_factory=dict)
@@ -397,12 +401,14 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     ]
     records, history_truncated = _normalize_splits(records, shares_detect, splits)
 
+    # SELECT *: a database not yet migrated lacks the rate's date and source columns,
+    # and the backfill reads it without migrating.
     snap = conn.execute(
-        "SELECT shares_outstanding, market_cap, current_price, beta, risk_free_rate, collected_at "
-        "FROM market_snapshots "
+        "SELECT * FROM market_snapshots "
         "WHERE ticker = ? ORDER BY collected_at DESC LIMIT 1",
         (ticker,),
     ).fetchone()
+    snap_columns = set(snap.keys()) if snap is not None else set()
     # Today's count of every class, as Yahoo has it, to confirm a split after the filing.
     yahoo_counts = [snap["shares_outstanding"]] if snap and snap["shares_outstanding"] else []
     if snap and snap["market_cap"] and snap["current_price"]:
@@ -455,6 +461,8 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         shares_source=shares_source,
         beta=snap["beta"] if snap else None,
         risk_free_rate=snap["risk_free_rate"] if snap else None,
+        risk_free_rate_date=snap["risk_free_rate_date"] if "risk_free_rate_date" in snap_columns else None,
+        risk_free_rate_source=snap["risk_free_rate_source"] if "risk_free_rate_source" in snap_columns else None,
         analyst_growth=analyst["earnings_growth"] if analyst else None,
         dividends=dividends,
         fy_end_prices=fy_end_prices,

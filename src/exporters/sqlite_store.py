@@ -60,7 +60,7 @@ _SNAPSHOT_COLUMNS = [
 ]
 
 # Snapshot columns that are text, not numeric (kept separate so _cols_ddl can type them).
-_SNAPSHOT_TEXT_COLUMNS = ["ex_dividend_date"]
+_SNAPSHOT_TEXT_COLUMNS = ["ex_dividend_date", "risk_free_rate_date", "risk_free_rate_source"]
 
 # One row per collection: analyst price targets / recommendations (from analyst_estimates).
 _ANALYST_COLUMNS = [
@@ -519,6 +519,8 @@ class SQLiteStore:
         snapshot["ev_to_fcf"] = cm.get("ev_to_fcf")
         snapshot["fcf_yield"] = cm.get("fcf_yield")
         snapshot["risk_free_rate"] = rf.get("risk_free_rate")
+        snapshot["risk_free_rate_date"] = rf.get("date")
+        snapshot["risk_free_rate_source"] = rf.get("source")
         # Only record a snapshot when the run got a price: the latest snapshot is where the
         # price, verdict and upside come from. A Yahoo failure still gets a risk-free rate,
         # and the price history (the moving averages) can work while the quote fails.
@@ -773,8 +775,8 @@ class SQLiteStore:
                     # return them.
                     prev = self._latest_snapshot_row(conn, ticker)
                     if prev is not None:
-                        for col in ("ma_50", "ma_200", "beta",
-                                    "ev_to_fcf", "fcf_yield", "risk_free_rate"):
+                        for col in ("ma_50", "ma_200", "beta", "ev_to_fcf", "fcf_yield",
+                                    "risk_free_rate", "risk_free_rate_date", "risk_free_rate_source"):
                             if snapshot.get(col) is None:
                                 snapshot[col] = prev.get(col)
                     self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)

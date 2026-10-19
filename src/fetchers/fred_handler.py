@@ -143,6 +143,17 @@ class FREDHandler:
         Returns:
             Risk-free rate as decimal (e.g., 0.045 for 4.5%)
         """
+        details = self.get_risk_free_rate_details(maturity)
+        return details["rate"] if details else None
+
+    def get_risk_free_rate_details(self, maturity: str = "10y") -> Optional[Dict[str, Any]]:
+        """The risk-free rate with the day it is for and where it came from.
+
+        Returns ``{"rate": <decimal>, "date": "YYYY-MM-DD" or None, "source": ...}``,
+        ``source`` being "fred", "treasury_gov" or "estimate" (the static last
+        resort, which has no date), so a stale or estimated rate can be shown as
+        such with the valuations that use it.
+        """
         series_id = self.TREASURY_SERIES.get(maturity)
         if not series_id:
             self.logger.error(f"Invalid maturity: {maturity}")
@@ -152,12 +163,13 @@ class FREDHandler:
             fallback = self._get_fallback_yields()
             rate = fallback.get(f"treasury_{maturity}")
             if rate:
-                return rate / 100  # Convert percentage to decimal
+                # Convert percentage to decimal
+                return {"rate": rate / 100, "date": fallback.get("date"), "source": fallback.get("source")}
             return None
 
         data = self.get_series_latest(series_id)
         if data and data.get("value"):
-            return data["value"] / 100  # Convert percentage to decimal
+            return {"rate": data["value"] / 100, "date": data.get("date"), "source": "fred"}
         return None
 
     def get_series_latest(self, series_id: str) -> Optional[Dict[str, Any]]:
