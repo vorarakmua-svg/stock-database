@@ -453,3 +453,18 @@ Result: VAL-07, VAL-08, VAL-10, VAL-11 PASS; no new bug. VAL-06 and VAL-12 got p
 Gates: ruff ✓ mypy ✓ pytest 901 passed (no code change) | CI: pending for this push
 Commit: (this commit) chore(qa): discovery VAL-07, VAL-08, VAL-10, VAL-11 pass
 Next: record code review 3 when it reports; then discovery VAL-06, VAL-09, VAL-12, VAL-13
+
+## Iteration 23: 2026-10-20 05:55: code review 3 recorded
+Started a discovery unit (VAL-06, VAL-09, VAL-12), but code review 3 reported with open P1/P2 findings, which come
+first (§4.2), so this iteration records it; the discovery unit waits.
+Review: an opus reviewer covered e8c3aa1..8dc494b (5 fixes). No critical issues; it reproduced every recorded
+impact (DDM, parser, spin-off rule, BUG-026) and confirmed the oracle-first order. I re-ran its three key repros on
+the current code (`qa/evidence/iter23-review3-checks.txt`): all three hold.
+Recorded: BUG-018 reopened (P1): a Yahoo failure with a rate still fetched writes a price-less latest snapshot
+(AAPL DCF $127.45 → $140.06), and the CSV's per-field rule keeps stale values after successful runs (P/E 25 beside
+a loss). BUG-017 reopened (P2): a payment-frequency increase reads as extra payments (true 5% → −5% to −10%, growth
+0%; no current row). New: BUG-029 (P3, values a re-parse empties stay in SQLite); BUG-019, L14 extended; L16 (the
+JSON's in-place write). VAL-02, MATCH-05, GATHER-06, STORE-06 → FAIL. My iteration-17 claim that BUG-018 was fixed
+in every store was wrong; its repro lacked the rate a real failed run still fetches.
+Review 4 is due after 5 fixes past 8dc494b (3 so far: 2d92381, c6678d0, 4998ec8).
+Next: BUG-018 (P1)
