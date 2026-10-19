@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 3 · P2 4 · P3 2 · NEEDS-USER 7 · Verified: 8
+**Open:** P0 0 · P1 2 · P2 4 · P3 2 · NEEDS-USER 7 · Verified: 9
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -125,12 +125,12 @@ Root cause: to confirm: the SEC parser's choice of duration context for `CommonS
 Notes: the valuations don't use it; whether the web app displays it is unverified (MATCH-06). The dividend completeness check reads it only to confirm a shortfall, so a too-low figure can hide a finding but can't create one.
 
 ### BUG-014 [P1][VAL] Splits after the latest fiscal year are never applied, so per-share models value KLAC and BKNG on the pre-split basis
-Status: OPEN
-Found: iteration 10 by code review 1; verified on the real-data copy | Fixed: — | Regression test: —
+Status: VERIFIED
+Found: iteration 10 by code review 1; verified on the real-data copy | Fixed: iteration 11 (see LOG) | Regression tests: `tests/test_valuation_inputs.py::test_split_after_the_latest_filing_moves_every_year_to_todays_basis`, `::test_later_split_events_that_are_not_pending_splits_change_nothing` (a split before the filing; a spin-off factor)
 Repro: KLAC split 10:1 on 2026-06-12 and its latest FY ended 2025-06-30: Graham base $154.83 and Lynch $446.44 against a price of $191.50 (post-split: $15.48 and $44.64, which would move the 5-model median from $70.00 to about $44.64). BKNG split 25:1 on 2026-04-06 (latest FY 2025-12-31): Lynch $2,483.55 against $193.64 (≈ $99.34; median $216.36 → ≈ $147.64).
 Expected: per-share inputs on the same basis as today's price; the `FYRecord` docstring promises "the same convention Yahoo's adjusted price bars use".
 Actual: `_normalize_splits` restates history onto the latest FY record's basis, so a split dated after that FY's period end is never applied.
-Root cause: `src/valuation/inputs.py` (`_normalize_splits`, `load_inputs`): "current basis" means the latest FY's, not today's.
+Root cause: `src/valuation/inputs.py` (`_normalize_splits`, `load_inputs`): "current basis" meant the latest FY's, not today's, and filings restate per-share figures only for splits made before they are issued. Fix: `_apply_later_splits` moves every year by the declared share splits (at least 3-for-2 or 1-for-2) dated after the latest row's `filed_date`; a split between the year end and the filing is already restated, and smaller ratios are spin-off factors or stock dividends. The oracle switched first, in its own commit (c5f6e72), to today's share count from `market_snapshots` and flagged exactly these three values against the unfixed code; after the fix it agrees (`qa/evidence/iter11-oracle-*.txt`). Impact (`qa/evidence/iter11-bug014-impact.txt`): KLAC Graham $154.83 → $15.48 and Lynch $446.44 → $44.64, BKNG Lynch $2,483.55 → $99.34; medians KLAC $70.00 → $44.64, BKNG $216.36 → $147.64; no verdict changes.
 Notes: the review calls it P0-class (wrong numbers on screen); by the iteration-4 valuation calibration (large errors for some tickers) it's P1, and every company that splits shows it until its next annual report. The oracle shares the reading (`to_current_basis` aims at the latest FY's share count), so it couldn't catch this. Other declared "splits" after the latest FY: CRWD 4:1 (only its DCF applies, and that uses current shares), HON 0.9535 and SPGI 1.057 (spin-off price factors, see L12), SCCO 1.008 and 1.01 (stock dividends).
 
 ### BUG-015 [P1][STORE] The CSV merge can silently drop every accumulated row
@@ -199,7 +199,7 @@ Options: (a) the plan's analyst-only fallback; (b) flat 0% (iteration 6); (c) me
 - L2 [GATHER] SPY: Yahoo answered 404 "No fundamentals data" 3 times, yet the run recorded 0 warnings / 0 errors (silent gap). (iter 1)
 - L3 [CLI] A batch containing a failed ticker (ZZZZ, errors=1) still exited 0. Check the intended exit-code semantics. (iter 1)
 - L5 [MATCH] Web UPDATE DATA jobs export SQLite only (`src/webapp/jobs.py:246`, `formats=["sqlite"]`), so JSON and the CSVs go stale after web updates. Possibly by design; confirm in MATCH-05. (iter 3)
-- L6 [VAL] Level-2 mismatches not yet explained: NOW multiples (271%), WDC multiples (Sandisk spin-off), SCCO Lynch + multiples (stock dividends; EPS gaps, see L7), SPGI Lynch + multiples, GE Lynch (1:8 reverse split + spin-offs; 94%), T Lynch (28%). ANET/APH/AVGO/LRCX were BUG-006, fixed in iteration 7. Adjudicate oracle vs code. (iter 4, updated iter 7)
+- L6 [VAL] Level-2 mismatches not yet explained: NOW multiples (271%), SCCO Lynch (EPS gaps, see L7) and XOM Graham. ANET/APH/AVGO/LRCX were BUG-006 (fixed in iteration 7). GE and T Lynch, SCCO Graham and multiples, SPGI Lynch and multiples, and WDC multiples were the oracle treating spin-off factors as splits (fixed in the oracle in iteration 11). Adjudicate oracle vs code. (iter 4, updated iter 11)
 - L10 [VAL] APP: a split was detected and applied though `split_events` declares none, and AppLovin has never split. Possible false positive rescaling its EPS history. (iter 7; review 1: BX, CRWD, LIN, PLTR and UBER also keep a jump with no declared split, likely IPO, merger or conversion seams)
 - L7 [VALID] `eps_diluted` is null for early FYs while net income and shares exist (DELL 2015–2019, SCCO 2014–2018; GOOGL weighted shares before 2022): canonical mapping gap. (iter 4)
 - L8 [VAL] Graham/P/B BVPS uses weighted diluted shares and total equity including preferred (JPM basis $130.30 vs about $124 common). The spec is ambiguous. (iter 4)
@@ -207,5 +207,5 @@ Options: (a) the plan's analyst-only fallback; (b) flat 0% (iteration 6); (c) me
 - L4 [VAL/VALID] `dividend_history.years_of_data` is the span from the first to the last payment (`yahoo_handler.py:710`): AAPL shows 39.2 years, including its 1995–2012 suspension. Check whether DDM or anything else treats it as an unbroken record. (iter 2)
 - L12 [VAL] `split_events` mixes share splits with spin-off price factors (GE 1.281/1.253, DHR 1.319/1.128, HON 0.9535, SPGI 1.057, RTX 1.589), and `_declared_ratio` treats them alike: RTX's 1.589 was applied at its 2020 merger seam (observed 1.5717). Also: with no `period_end` every split ever recorded is a candidate; one declared split can match more than one seam; CRWD's IPO seam (3.12) only just misses its 2026 4:1 split; no tests for reverse splits or a missing `period_end`. (review 1, iter 10)
 - L13 [GATHER] `stock_data_fetcher.py:398-407`: `results["csv"].append` raises KeyError when the summary export returns None (e.g. Excel has the file locked), which also skips the SQLite export and the valuation recompute. (review 1, iter 10)
-- L14 [QA] Oracle independence: besides BUG-014's basis, the oracle shares the code's reading of spin-off ratios as splits, takes the DDM `ttm_anchor` from the stored output, and buckets dividends by the ex-date's calendar year. Oracle rule changes now go in their own commit first (loop prompt §7). (review 1, iter 10)
+- L14 [QA] Oracle independence: the oracle still takes the DDM `ttm_anchor` from the stored output and buckets dividends by the ex-date's calendar year, like the code. Fixed in iteration 11: it now takes today's basis from `market_snapshots` and ignores spin-off factors. Oracle rule changes go in their own commit first (loop prompt §7). (review 1, iter 10; updated iter 11)
 - L15 [CODE] `tests/test_docs_usage_guide.py` would run the guide's `fig.show()`, opening a browser during pytest, if plotly were installed (it isn't here). (review 1, iter 10)

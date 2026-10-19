@@ -57,7 +57,8 @@ class FYRecord:
     """One fiscal year of fundamentals relevant to valuation.
 
     Per-share figures (``eps_diluted``, ``ffo_per_share``) and ``shares`` are
-    normalized onto the CURRENT (latest-year) share basis by ``load_inputs`` —
+    normalized onto TODAY's share basis by ``load_inputs`` (the latest year's,
+    moved by any split after its filing) —
     the same convention Yahoo's adjusted price bars use — so that multi-year
     per-share series and price/EPS multiples are comparable across a split.
     ``split_factor`` records the factor that was applied to this year (1.0 =
@@ -198,6 +199,39 @@ def _normalize_splits(records: List[FYRecord],
     return records, False
 
 
+def _apply_later_splits(records: List[FYRecord], splits: Sequence[Tuple[str, float]],
+                        filed: Optional[str]) -> None:
+    """Move every year onto today's basis when a split came after the latest filing.
+
+    Filings restate per-share figures only for splits made before they are
+    issued, so ``_normalize_splits`` reaches the latest FY's basis and no
+    further. KLAC's FY2025 10-K (filed 2025-08-08) predates its 10:1 split of
+    2026-06-12: every stored EPS is pre-split while the price is post-split.
+    Only share splits count (at least 3-for-2 or 1-for-2): Yahoo's split
+    history also holds spin-off price factors and stock dividends (HON 0.9535).
+    Without a filing date nothing moves, because a split between the year end
+    and the filing is already restated in it.
+    """
+    if not filed:
+        return
+    factor = 1.0
+    for when, ratio in splits:
+        if ratio and str(when)[:10] > str(filed)[:10] and (
+                SPLIT_JUMP_THRESHOLD <= ratio <= MAX_SPLIT_RATIO
+                or 1.0 / MAX_SPLIT_RATIO <= ratio <= 1.0 / SPLIT_JUMP_THRESHOLD):
+            factor *= ratio
+    if factor == 1.0:
+        return
+    for rec in records:
+        rec.split_factor *= factor
+        if rec.eps_diluted is not None:
+            rec.eps_diluted /= factor
+        if rec.ffo_per_share is not None:
+            rec.ffo_per_share /= factor
+        if rec.shares is not None:
+            rec.shares *= factor
+
+
 def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     """Build the ValuationInputs bundle for *ticker*.
 
@@ -210,7 +244,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     sector = (row["sector_class"] if row is not None else None) or "general"
 
     fy_rows = conn.execute(
-        "SELECT fa.fiscal_year, fa.period_end, fa.net_income, fa.total_equity, "
+        "SELECT fa.fiscal_year, fa.period_end, fa.filed_date, fa.net_income, fa.total_equity, "
         "fa.eps_diluted, fa.weighted_avg_shares_diluted, fa.shares_outstanding, "
         "fa.depreciation_amortization, fa.capex, "
         "ma.levered_fcf, ma.free_cash_flow, ma.ffo_per_share "
@@ -260,6 +294,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         ).fetchall()
     ]
     records, history_truncated = _normalize_splits(records, shares_detect, splits)
+    _apply_later_splits(records, splits, fy_rows[-1]["filed_date"] if fy_rows else None)
 
     snap = conn.execute(
         "SELECT shares_outstanding, beta, risk_free_rate, collected_at "

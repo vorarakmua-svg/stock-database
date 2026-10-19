@@ -13,9 +13,9 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 |---|---|---|---|---|
 | VAL-01 | DCF (two-stage FCF) | TODO | iter 10 | PASS withdrawn: the 16 rows with an unmeasured CAGR agreed only because the oracle took the same unapproved rule (BUG-016); re-verify after BUG-016 |
 | VAL-02 | DDM (multi-stage) | FAIL→BUG-011 | iter 10 | BUG-005, BUG-009 and BUG-010 fixed (oracle agrees on every DDM row); open: DHR spin-off stored as a dividend (BUG-011); CB's missing payments are upstream and flagged (BUG-012), the DDM's handling is Q4; specials policy: Q3 |
-| VAL-03 | Graham Number | FAIL→BUG-014 | iter 10 | Level 1 ✓ (124 rows); EPS = reported diluted EPS ✓; KLAC on the pre-split basis (BUG-014); the bear case ignores loss years (BUG-007, NEEDS-USER) |
-| VAL-04 | Peter Lynch | FAIL→BUG-014 | iter 10 | KLAC and BKNG on the pre-split basis (BUG-014); 4 unexplained Level-2 mismatches (GE, SCCO, SPGI, T): lead L6 |
-| VAL-05 | Historical multiples band | TODO | iter 7 | Level 1 ✓; BUG-006 fix resolved ANET/APH/AVGO/LRCX; 4 unexplained (NOW, SCCO, SPGI, WDC): lead L6 |
+| VAL-03 | Graham Number | FAIL→BUG-007 | iter 11 | Level 1 ✓; BUG-014 fixed (KLAC on today's basis; oracle agrees); left: the bear case ignores loss years (BUG-007, NEEDS-USER) and XOM's Level-2 mismatch (lead L6) |
+| VAL-04 | Peter Lynch | FAIL→BUG-016 | iter 11 | BUG-006, BUG-008 and BUG-014 fixed (KLAC, BKNG on today's basis); the 16 Lynch N/As from BUG-008 depend on BUG-016/Q5; SCCO's Level-2 mismatch is lead L6 |
+| VAL-05 | Historical multiples band | TODO | iter 11 | Level 1 ✓; BUG-006 resolved ANET/APH/AVGO/LRCX; SCCO, SPGI and WDC were the oracle's spin-off handling (fixed in iteration 11); NOW remains: lead L6 |
 | VAL-06 | Owner earnings | TODO | |  |
 | VAL-07 | Summary | TODO | |  |
 | VAL-08 | Invariant scan over the whole real-DB copy | TODO | |  |

@@ -231,6 +231,48 @@ def test_declared_ratio_matches_a_run_of_splits_and_ignores_unrelated_ones():
     assert _declared_ratio(3.81, "2023-01-01", [("2022-06-01", 4.0)]) == 3.81  # split predates the seam
 
 
+def _post_filing_split_db(tmp_path, split_date, ratio):
+    """KLAC-like: FY2023-2025 as filed on 2025-08-08 (old basis), then one declared split."""
+    db_path = tmp_path / "post_filing_split.db"
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('KLA', 'general')")
+    for fy, eps in [(2023, 25.00), (2024, 20.28), (2025, 30.37)]:
+        conn.execute(
+            "INSERT INTO financials_annual (ticker, fiscal_year, period_end, filed_date, net_income, total_equity, "
+            "eps_diluted, weighted_avg_shares_diluted) VALUES ('KLA', ?, ?, '2025-08-08', ?, 4.0e9, ?, 1.3375e8)",
+            (fy, f"{fy}-06-30", eps * 1.3375e8, eps),
+        )
+    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('KLA', ?, ?)", (split_date, ratio))
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_split_after_the_latest_filing_moves_every_year_to_todays_basis(tmp_path):
+    # KLAC's FY2025 10-K (filed 2025-08-08) predates its 10:1 split of 2026-06-12: every stored
+    # per-share figure is pre-split, while today's price is post-split.
+    conn = _connect(_post_filing_split_db(tmp_path, "2026-06-12", 10.0))
+    by_fy = {r.fiscal_year: r for r in load_inputs(conn, "KLA").fy_records}
+    conn.close()
+    assert [by_fy[fy].split_factor for fy in (2023, 2024, 2025)] == [10.0, 10.0, 10.0]
+    assert by_fy[2025].eps_diluted == pytest.approx(3.037)
+    assert by_fy[2025].shares == pytest.approx(1.3375e9)
+
+
+@pytest.mark.parametrize("split_date, ratio", [
+    ("2025-07-15", 10.0),    # between the year end and the filing: the 10-K already restated it
+    ("2026-06-29", 0.9535),  # HON's spin-off price factor, not a share split
+])
+def test_later_split_events_that_are_not_pending_splits_change_nothing(tmp_path, split_date, ratio):
+    conn = _connect(_post_filing_split_db(tmp_path, split_date, ratio))
+    latest = load_inputs(conn, "KLA").fy_records[-1]
+    conn.close()
+    assert latest.split_factor == 1.0
+    assert latest.eps_diluted == pytest.approx(30.37)
+
+
 def test_split_detected_from_net_income_over_eps_when_shares_null(split_db):
     """GOOGL case: weighted_avg_shares_diluted is NULL; derive shares = NI / EPS."""
     conn = _connect(split_db)

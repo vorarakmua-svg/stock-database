@@ -1,7 +1,7 @@
 # Golden Basket and Oracles
 
-- **Golden scratch DB:** `%LOCALAPPDATA%\Temp\stockdb-qa\golden\output\stock.db` (live-collected in iteration 1, 2026-10-20; JSON/CSV alongside)
-- **Real-DB copy:** `%LOCALAPPDATA%\Temp\stockdb-qa\realcopy\stock.db` (SQLite backup API from a `mode=ro` connection; integrity_check ok; 127 companies; 135 MB)
+- **Golden scratch DB:** `%LOCALAPPDATA%\stockdb-qa\golden\output\stock.db` (re-collected live in iteration 11, 2026-10-20, after the `Temp` copy was deleted: 4 batches, all exit 0 (87, 79, 106 and 79 s), 19 companies, errors only for the invalid ZZZZ, and SPY's three Yahoo 404s again counted as 0 warnings (lead L2); JSON/CSV alongside; logs `qa/evidence/iter11-golden-batch{1..4}.log`)
+- **Real-DB copy:** `%LOCALAPPDATA%\stockdb-qa\realcopy\stock.db` (rebuilt in iteration 11; SQLite backup API from a `mode=ro` connection; integrity_check ok; 127 companies; 135 MB)
 - Batch logs: `qa/evidence/iter01-golden-batch{1..4}.log` (4 batches, `--workers 2`). All 4 batches exit 0 (128 s, 77 s, 77 s, 52 s); per-ticker results recorded in iteration 2.
 - Re-collect a golden ticker only when testing gathering changes (prompt §7).
 

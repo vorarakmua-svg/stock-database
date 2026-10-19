@@ -211,3 +211,29 @@ growth), BUG-018 (P2, a failed re-collection blanks a CSV row), Q5, leads L12–
 withdrawn until BUG-016 is resolved. Loop prompt §7: oracle rule changes go in their own commit, before the fix.
 Review 2 is due after 5 fixes past abed57a (2 so far: 9c22ef8 and BUG-010's).
 Next: BUG-014 (P1, the largest wrong numbers on screen), then BUG-015, then BUG-016
+
+## Iteration 11: 2026-10-20 02:30: fix
+Picked: BUG-014 (P1), the oldest open P1 (CI: d162b1f running at the start).
+Environment: around 02:00 every file under `%LOCALAPPDATA%\Temp\stockdb-qa` was deleted (golden DB, real-DB copy,
+every iteration copy; the folders stayed). It wasn't this session: a copy read fine minutes earlier, and nothing in
+between touched it; most likely Windows' scheduled maintenance. The real data and the repo are untouched. SCRATCH
+moved to `%LOCALAPPDATA%\stockdb-qa` (loop prompt §3); the real-DB copy was rebuilt (integrity ok, 127 companies),
+and the golden basket was re-collected live: 4 batches, all exit 0 (87, 79, 106 and 79 s), 19 companies, errors only for the invalid ZZZZ, and SPY's three Yahoo 404s again counted as 0 warnings (lead L2).
+Did: Root cause: `_normalize_splits` stops at the latest FY's basis, and filings restate per-share figures only
+for splits before they're issued (KLAC's FY2025 10-K, filed 2025-08-08, predates its 2026-06-12 10:1 split). Oracle
+first (c5f6e72, per §7): today's basis is today's share count from `market_snapshots`, and only ratios of at least
+3:2 (or 1:2) are share splits. On the unfixed code it flagged exactly KLAC Graham and Lynch and BKNG Lynch, and
+seven L6 mismatches disappeared (they were the oracle's own spin-off handling). Tests first: the KLAC case failed
+with [1.0, 1.0, 1.0]; two guards (a split before the filing; HON's 0.9535 spin-off factor) passed before and after.
+Fix: `_apply_later_splits` applies declared share splits dated after the latest row's `filed_date` to every year.
+Three mutants (period end instead of filing date, any ratio counts, only the latest year moves) each fail their
+test; restored byte-identical.
+Evidence: `qa/evidence/iter11-bug014-{red,green,mutants,impact}.txt`, `iter11-oracle-before-fix-real.txt`,
+`iter11-oracle-real.txt`, `iter11-oracle-golden.txt`, `iter11-golden-batch{1..4}.log`
+Result: BUG-014 VERIFIED. Real copy: Level 1 0/503; Level 2 11 left (BUG-007's 8 Graham bears, NOW multiples, SCCO
+Lynch, XOM Graham). Golden: Level 1 and Level 2 0/59 after a backfill with the fix. Impact: KLAC Graham $154.83 → $15.48 and Lynch $446.44 → $44.64, BKNG
+Lynch $2,483.55 → $99.34; medians KLAC $70.00 → $44.64, BKNG $216.36 → $147.64; no verdict changes.
+Gates: ruff ✓ mypy ✓ pytest 879 passed (1 known warning) | CI: pending for this push
+Commit: chore(qa) oracle basis (c5f6e72), then (this commit) fix(valuation): per-share history follows splits after
+the latest filing
+Next: BUG-015 (P1, the CSV merge can drop every row), then BUG-016

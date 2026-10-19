@@ -54,7 +54,7 @@ Done (section 9) holds.
 
 ## 3. Workspace and state
 
-- `SCRATCH` = `%LOCALAPPDATA%\Temp\stockdb-qa` (Git Bash: `"$LOCALAPPDATA/Temp/stockdb-qa"`), outside the repo.
+- `SCRATCH` = `%LOCALAPPDATA%\stockdb-qa` (Git Bash: `"$LOCALAPPDATA/stockdb-qa"`), outside the repo. (Moved out of `Temp` in iteration 11: around 02:00 on 2026-10-20 every file under `Temp\stockdb-qa` was deleted, most likely by Windows' scheduled maintenance.)
   Subfolders: `golden/` (live-collected golden basket DB + JSON), `realcopy/` (backup-API copy of the real DB),
   `venv/`, and per-test throwaway folders.
 - Loop state lives in `qa/` and is committed on the branch:
