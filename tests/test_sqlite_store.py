@@ -305,3 +305,16 @@ def test_upsert_quote_carries_forward_computed_snapshot_fields(tmp_path):
     finally:
         conn.close()
     assert row == (10.0, 12.0, 1.1, 15.0, 0.07, 0.045, 99.0)
+
+
+def test_a_failed_recollection_keeps_the_company_details(tmp_path):
+    # A re-collection that got no company info used to overwrite the companies row with NULLs,
+    # so the web header lost the name and sector.
+    store = SQLiteStore(db_path=tmp_path / "stock.db")
+    store.export([_company("AAA", revenue=1.0e9, roic=0.12)])
+    store.export([StockData(ticker="AAA", errors=["Yahoo Finance: HTTP 429 Too Many Requests"])])
+    conn = sqlite3.connect(tmp_path / "stock.db")
+    row = conn.execute("SELECT company_name, cik, sector FROM companies WHERE ticker = 'AAA'").fetchone()
+    conn.close()
+    assert row == ("AAA Inc.", "000", "Technology")
+

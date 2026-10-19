@@ -59,14 +59,16 @@ class CSVExporter:
         try:
             filepath = self.output_dir / filename
 
-            # This run's summaries replace earlier rows for the same tickers
+            # This run's values replace the earlier ones for the same tickers, but a value it
+            # didn't get (empty after a failed fetch) keeps the earlier one, as the JSON does.
             existing_columns, existing_rows = self._read_existing(filepath)
             new_rows = {
                 summary["ticker"]: self._clean_for_csv(summary)
                 for summary in (stock.to_summary() for stock in data)
             }
-            rows = {row["ticker"]: row for row in existing_rows if row["ticker"] not in new_rows}
-            rows.update(new_rows)
+            rows = {row["ticker"]: row for row in existing_rows}
+            for ticker, new_row in new_rows.items():
+                rows[ticker] = {**rows.get(ticker, {}), **{k: v for k, v in new_row.items() if v != ""}}
 
             # Determine all columns (union of all keys)
             all_columns = set(existing_columns)

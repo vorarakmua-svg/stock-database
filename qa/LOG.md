@@ -339,3 +339,20 @@ Gates: ruff ✓ mypy ✓ pytest 889 passed (1 known warning) | CI: pending for t
 Commit: chore(qa) oracle rule (3dd48f1), then (this commit) fix(valuation): DDM growth compares full years at both
 ends
 Next: record code review 2's findings when it reports; then BUG-018 (P2, the last open P2)
+
+## Iteration 17: 2026-10-20 04:00: fix
+Picked: BUG-018 (P2), the last open P2 (CI: 83495c2 running). Code review 2 reported mid-iteration (recorded below).
+Did: Reproduced on all three stores rather than the CSV alone: a good AAPL, then a failed re-collection, (a)
+everything failed, (b) Yahoo failed but SEC worked. Every store lost data: the JSON its company info and market data,
+and in (a) all 20 annual years (its merge starts from the new run); the CSV row was blanked; SQLite's `companies` row
+got NULL name, CIK, sector and industry. The ledger's premise (the JSON merge keeps data) was wrong, so BUG-018 was
+widened and upgraded to P1. Tests first, one per store, each RED for the right reason ('' == 'AAA Inc.'; None ==
+'Test Co.'; (None, None, None)). Fix: data a run didn't get keeps its earlier value in each store (CSV empty fields,
+JSON empty sections plus the quality report of kept financials, SQLite `companies` via COALESCE); the run's own
+diagnostics stay the new run's. Four mutants each fail their test; restored byte-identical.
+Evidence: `qa/evidence/iter17-bug018-{repro,red,green,mutants,e2e}.txt` (e2e notes a key error in the repro
+script's JSON line, re-checked directly)
+Result: BUG-018 VERIFIED; both failure shapes now keep everything in all three stores. MATCH-05 → TODO (its value
+comparison is still untested). No valuation changes.
+Gates: ruff ✓ mypy ✓ pytest 892 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(exporters): a failed re-collection never erases stored data

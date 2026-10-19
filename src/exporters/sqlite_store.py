@@ -338,12 +338,19 @@ class SQLiteStore:
 
     @staticmethod
     def _upsert(conn: sqlite3.Connection, table: str, keys: Sequence[str],
-                row: Dict[str, Any]) -> None:
-        """Insert or update ``row`` in ``table`` keyed on ``keys``."""
+                row: Dict[str, Any], keep_existing: bool = False) -> None:
+        """Insert or update ``row`` in ``table`` keyed on ``keys``.
+
+        With ``keep_existing``, a NULL in ``row`` leaves the stored value as it is: a
+        run that didn't get a field (a failed fetch) mustn't erase it.
+        """
         columns = list(row.keys())
         placeholders = ", ".join("?" for _ in columns)
         col_list = ", ".join(f'"{c}"' for c in columns)
-        updates = ", ".join(f'"{c}"=excluded."{c}"' for c in columns if c not in keys)
+        updates = ", ".join(
+            f'"{c}"=COALESCE(excluded."{c}", "{c}")' if keep_existing else f'"{c}"=excluded."{c}"'
+            for c in columns if c not in keys
+        )
         conflict = ", ".join(f'"{k}"' for k in keys)
         sql = (
             f'INSERT INTO {table} ({col_list}) VALUES ({placeholders}) '
@@ -418,7 +425,7 @@ class SQLiteStore:
             "hq_city": info.get("hq_city") or info.get("city"),
             "hq_state": info.get("hq_state") or info.get("state"),
             "updated_at": collected_at,
-        })
+        }, keep_existing=True)
 
         # financials_annual + metrics_annual
         historical = (stock.calculated_metrics or {}).get("historical", {})

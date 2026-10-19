@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 103 · PASS 1 · FAIL 3 · N-A 0 · BLOCKED 0 · NEEDS-USER 2  
+**Status counts:** TODO 104 · PASS 1 · FAIL 2 · N-A 0 · BLOCKED 0 · NEEDS-USER 2  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -50,7 +50,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | MATCH-02 | Cross-source fundamentals | TODO | |  |
 | MATCH-03 | Market math | TODO | |  |
 | MATCH-04 | Price history | TODO | |  |
-| MATCH-05 | Store consistency | FAIL→BUG-018 | iter 12 | BUG-004 and BUG-015 fixed (the CSVs accumulate across runs and survive Excel re-saves); open: a failed re-collection blanks a row (BUG-018); JSON vs SQLite vs CSV values untested |
+| MATCH-05 | Store consistency | TODO | iter 17 | BUG-004, BUG-015 and BUG-018 fixed (the stores accumulate across runs, survive Excel re-saves, and keep data a failed re-collection didn't get); JSON vs SQLite vs CSV values untested |
 | MATCH-06 | UI vs DB | TODO | |  |
 | MATCH-07 | Peers and sector medians are computed within the right sector and the medians are correct.… | TODO | |  |
 | MATCH-08 | Dedup | TODO | |  |

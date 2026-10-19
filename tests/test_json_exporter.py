@@ -69,3 +69,28 @@ def test_collection_history_capped_at_50(tmp_path):
     merged = exporter._merge_data(existing, new)
     assert len(merged["collection_history"]) == 50
     assert merged["collection_history"][-1]["collected_at"] == "latest"
+
+
+def test_a_failed_recollection_keeps_the_earlier_sections(tmp_path, sample_stock_data):
+    # A re-collection that got nothing used to replace the file's company info, market data,
+    # financials and quality report with empty ones. Sections the run didn't get keep the earlier
+    # data (and so does the quality report that describes those financials); the run's own
+    # diagnostics are the new run's.
+    exporter = JSONExporter(output_dir=tmp_path)
+    good = sample_stock_data
+    good.company_info = {"sector": "Technology", "industry": "Software"}
+    good.data_quality = {"score": 100, "findings": []}
+    exporter.export([good])
+    failed = StockData(ticker="TEST", errors=["Yahoo Finance: HTTP 429 Too Many Requests"])
+    failed.data_quality = {"score": 0, "findings": [{"code": "no_financials"}]}
+    exporter.export([failed])
+    with open(tmp_path / "TEST.json", encoding="utf-8") as f:
+        data = json.load(f)
+    assert data["company_name"] == "Test Co."
+    assert data["company_info"] == {"sector": "Technology", "industry": "Software"}
+    assert data["market_data"]["current_price"] == 100.0
+    assert set(data["financials_annual"]) == {"2024"}
+    assert data["data_quality"]["score"] == 100
+    assert data["errors"] == ["Yahoo Finance: HTTP 429 Too Many Requests"]
+    assert data["data_sources"] == []
+

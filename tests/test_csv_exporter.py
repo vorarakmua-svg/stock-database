@@ -131,3 +131,15 @@ def test_a_failure_mid_write_leaves_the_old_summary_whole(tmp_path: Path, monkey
     assert path.read_bytes() == before
     assert not list(tmp_path.glob("*.tmp"))
 
+
+def test_a_failed_recollection_keeps_the_earlier_values(tmp_path: Path) -> None:
+    # Re-collecting AAA while Yahoo and SEC fail yields an almost empty summary, which used to replace
+    # the good row. Values the run didn't get keep the earlier ones; what it did get (the error) wins.
+    exporter = CSVExporter(tmp_path)
+    exporter.export([_stock("AAA", price=12.5)])
+    exporter.export([StockData(ticker="AAA", errors=["Yahoo Finance: HTTP 429 Too Many Requests"])])
+    (row,) = _rows(tmp_path / "summary.csv")
+    assert row["company_name"] == "AAA Inc."
+    assert row["current_price"] == "12.5000"
+    assert row["error_count"] == "1"
+

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 4 · NEEDS-USER 7 · Verified: 13
+**Open:** P0 0 · P1 0 · P2 0 · P3 4 · NEEDS-USER 7 · Verified: 14
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -161,12 +161,15 @@ Actual: BUG-009's rule fixes only a short FIRST year; a long LAST year still cou
 Notes: a short last year is deliberately kept (it can be a real cut), but a long one inflates growth. The review also notes that a partial year, then a suspension, then a partial restart year measures growth from the restart (synthetic: 20.6%, capped at 10%).
 Fix: `value_ddm` skips every leading year below the window's usual payment count (not just the first), and counts a last year with extra payments at the usual count (its total × usual ÷ payments); a short last year stays as it is. The oracle took both rules first (3dd48f1) and flagged exactly O's DDM against the unfixed code. Impact (`qa/evidence/iter16-bug017-impact.txt`): O DDM $66.19 → $63.57 (growth 4.58% → 3.66%); PGR's measured CAGR 27.98% → 9.68% (its annual-only years before 2019 are skipped), but its growth stays at the analyst's 5%; no median moves.
 
-### BUG-018 [P2][STORE] The CSV merge lets a failed re-collection blank a good row
-Status: OPEN
-Found: iteration 10 by code review 1, from the code (`csv_exporter.py` replaces a ticker's row with this run's summary unconditionally); not reproduced yet | Fixed: — | Regression test: —
-Repro: collect AAPL, then re-collect it while Yahoo and SEC fail: the run's mostly empty summary replaces AAPL's good row.
-Expected: the JSON merge's rule, which keeps `company_info` and financials when a re-collection fails.
-Actual: `rows.update(new_rows)` replaces the row. Invalid tickers (ZZZZ) also keep a permanent row, and columns dropped from `to_summary` stay in the file.
+### BUG-018 [P1][STORE] A failed re-collection erased earlier data in every store (upgraded from P2 in iteration 17)
+Status: VERIFIED
+Found: iteration 10 by code review 1 (CSV only); reproduced and widened in iteration 17 (`qa/evidence/iter17-bug018-repro.txt`) | Fixed: iteration 17 (see LOG) | Regression tests: `tests/test_csv_exporter.py::test_a_failed_recollection_keeps_the_earlier_values`, `tests/test_json_exporter.py::test_a_failed_recollection_keeps_the_earlier_sections`, `tests/test_sqlite_store.py::test_a_failed_recollection_keeps_the_company_details`
+Repro: export a good AAPL (golden JSON) through the JSON, CSV and SQLite stores, then a failed re-collection: (a) everything failed, (b) Yahoo failed but SEC worked (the common case: a rate limit).
+Expected: data a run didn't get keeps its earlier value; the run's own diagnostics (errors, sources, time) are the new run's.
+Actual: the JSON lost its company info and market data, and in (a) all 20 annual years too (`_merge_data` starts from the new run and merged a section only when both runs had it); the CSV row was blanked; the SQLite `companies` row was overwritten with NULL name, CIK, sector and industry (`_upsert` sets every column). Annual rows and market snapshots survived.
+Root cause: every store took "the run didn't get it" for "it is now empty". The iteration-10 entry assumed the JSON merge kept data; it didn't.
+Fix: CSV, a re-collected ticker's empty fields keep the earlier values; JSON, a section the new run didn't get keeps the earlier one (and the quality report stays with kept financials), except `collected_at`, `data_sources`, `errors` and `warnings`; SQLite, `_upsert(..., keep_existing=True)` for `companies` (COALESCE). Verified: both repro shapes now keep everything in all three stores (`qa/evidence/iter17-bug018-e2e.txt`); four mutants each fail their test.
+Notes: a value that truly became empty (a dividend yield after a suspension) now keeps its last value in the CSV and JSON, as the JSON's company-info merge already did. Invalid tickers (ZZZZ) still get a row, matching the JSON's file per ticker; columns dropped from `to_summary` still stay in the CSV.
 
 ### BUG-019 [P3][UI] The web dividend panel shows DHR's 2016 spin-off as a $24.56 dividend
 Status: OPEN
