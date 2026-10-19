@@ -468,3 +468,22 @@ JSON's in-place write). VAL-02, MATCH-05, GATHER-06, STORE-06 → FAIL. My itera
 in every store was wrong; its repro lacked the rate a real failed run still fetches.
 Review 4 is due after 5 fixes past 8dc494b (3 so far: 2d92381, c6678d0, 4998ec8).
 Next: BUG-018 (P1)
+
+## Iteration 24: 2026-10-20 06:15: fix
+Picked: BUG-018 (P1, reopened by code review 3) (CI: ce126a8 ✓; e945cee running).
+Did: Two parts, tested separately. Snapshot: `SQLiteStore.export` wrote a snapshot whenever any snapshot column had
+a value, and the risk-free rate (fetched even when Yahoo fails) counted, so a rate-only row became the latest.
+Now it needs a Yahoo market column (`_MARKET_COLUMNS`). CSV: the per-field keep rule kept stale values after
+successful runs. Now a column keeps its earlier value only when its whole section came back empty
+(`SUMMARY_SECTIONS`, mirroring the JSON), identifiers are kept when missing, and run columns are always new. Tests
+first: a rate-only failed run left a price-less latest snapshot; a successful run kept P/E 25 and yield 2.1%
+beside a loss; the section map didn't exist (all RED). Four mutants (any column makes a snapshot; keep every
+section; keep none; drop identifier keeping) each fail a test; restored byte-identical. Review 3's two repros now
+behave.
+Evidence: `qa/evidence/iter24-bug018-{red,green,mutants,e2e}.txt`
+Result: BUG-018 VERIFIED (reopened parts). New: BUG-030 (P3, the JSON's price-history snapshot label after a
+failed run, moved out of BUG-018). MATCH-05 and GATHER-06 → TODO; STORE-06 → FAIL→BUG-027 (P3).
+Gates: ruff ✓ mypy ✓ pytest 904 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(exporters): a failed fetch keeps the latest snapshot, and the CSV keeps only sections
+it didn't get
+Next: BUG-017 (P2, reopened: payment-frequency increases)

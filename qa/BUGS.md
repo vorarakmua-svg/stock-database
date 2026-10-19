@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 1 · P2 1 · P3 9 · NEEDS-USER 7 · Verified: 16
+**Open:** P0 0 · P1 0 · P2 1 · P3 10 · NEEDS-USER 7 · Verified: 17
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -163,7 +163,7 @@ Fix: `value_ddm` skips every leading year below the window's usual payment count
 Reopened (code review 3, re-checked in `qa/evidence/iter23-review3-checks.txt`): the last year is compared with the whole window's median count, taken before the leading years are skipped, so a payer that raises its frequency has its last full year scaled down. With true growth of 5%/yr: quarterly → monthly −5.1% to −7.1%, semiannual → quarterly −2.3% to −2.8%, annual → quarterly −10.0%; growth clamps to 0% in each (before 83495c2 all read 5.0%). Backtest: PGR (annual → quarterly in 2019) as of 2021-08-04 reads 5.8% instead of 23.4%. The leading skip has the mirror problem (PGR's full annual years 2016–18 dropped as partial). No current row is affected, and the oracle copies the same rule. Fix direction (review): scale only an excess over the adjacent full year, recompute the usual count after the skip, and add cadence-change tests. Also: only the last year is normalised, so a long FIRST year (BMY's 5 ex-dates in 2020; COST's 2017 special once the anchor reaches 2027) counts in full, and scaling a last year that holds a special partly decides Q3.
 
 ### BUG-018 [P1][STORE] A failed re-collection erased earlier data in every store (upgraded from P2 in iteration 17)
-Status: OPEN (reopened in iteration 23 by code review 3: the latest market snapshot, and the CSV's per-field rule)
+Status: VERIFIED (iteration 24; reopened in iteration 23 by code review 3 for the latest market snapshot and the CSV's per-field rule)
 Found: iteration 10 by code review 1 (CSV only); reproduced and widened in iteration 17 (`qa/evidence/iter17-bug018-repro.txt`) | Fixed: iteration 17 (see LOG) | Regression tests: `tests/test_csv_exporter.py::test_a_failed_recollection_keeps_the_earlier_values`, `tests/test_json_exporter.py::test_a_failed_recollection_keeps_the_earlier_sections`, `tests/test_sqlite_store.py::test_a_failed_recollection_keeps_the_company_details`
 Repro: export a good AAPL (golden JSON) through the JSON, CSV and SQLite stores, then a failed re-collection: (a) everything failed, (b) Yahoo failed but SEC worked (the common case: a rate limit).
 Expected: data a run didn't get keeps its earlier value; the run's own diagnostics (errors, sources, time) are the new run's.
@@ -171,7 +171,8 @@ Actual: the JSON lost its company info and market data, and in (a) all 20 annual
 Root cause: every store took "the run didn't get it" for "it is now empty". The iteration-10 entry assumed the JSON merge kept data; it didn't.
 Fix: CSV, a re-collected ticker's empty fields keep the earlier values; JSON, a section the new run didn't get keeps the earlier one (and the quality report stays with kept financials), except `collected_at`, `data_sources`, `errors` and `warnings`; SQLite, `_upsert(..., keep_existing=True)` for `companies` (COALESCE). Verified: both repro shapes now keep everything in all three stores (`qa/evidence/iter17-bug018-e2e.txt`); four mutants each fail their test.
 Reopened (code review 3, re-checked in `qa/evidence/iter23-review3-checks.txt`): (1) the market snapshot: without FRED_API_KEY the rate handler always returns a rate (Treasury.gov or the 4.35% estimate), so a Yahoo failure (a 429, or `--no-yahoo`) writes a `market_snapshots` row holding only `risk_free_rate`. That row is the latest one, which the web header, the screener and `load_inputs` read: AAPL's price, market cap, beta and shares become NULL, and its DCF moves $127.45 → $140.06, DDM $18.28 → $15.50, owner earnings $243.58 → $236.92. Iteration 17's repro built the failed run without a rate, so it missed this. (2) The CSV rule keeps an empty field's old value in every run, not just for data a failed run didn't get: after a successful run where a company swings to a loss and suspends its dividend, the CSV keeps P/E 25.0 and yield 2.1% beside EPS −1.50 (the JSON, which replaces the section, shows None), and a new FY without total liabilities sits beside FY2024's. The run's own fields (`data_sources`, counts) aren't exempt either. Fix directions (review): write a full-collection snapshot only when a Yahoo-sourced column is present (or carry values forward as `upsert_quote` does), test with the fetcher's real failure shape; in the CSV keep a column only when its whole source group is empty, and always take the run's own fields from the new run.
-Notes: the earlier note here ("the JSON also keeps a suspended yield") was wrong: the JSON replaces a section the new run has. After a failed run keeps the old `price_history`, the next run files those old stats under the failed run's `collected_at` (review 3, minor). The review suggests a per-section collected_at. Invalid tickers (ZZZZ) still get a row, matching the JSON's file per ticker; columns dropped from `to_summary` still stay in the CSV.
+Fix (iteration 24): `SQLiteStore.export` writes a full-collection snapshot only when the run got a Yahoo market column (`_MARKET_COLUMNS`: not the risk-free rate, nor the ratios computed from market cap), so the previous snapshot stays the latest and the run is still recorded in `collection_runs`; the CSV keeps a column's earlier value only when the run got nothing for its section (`SUMMARY_SECTIONS` in `stock_data.py`, mirroring the JSON's section rule), keeps identifiers the run lacks, and always takes the run's own columns. A guard test fails if a new summary column has no section. Regression tests: `tests/test_sqlite_store.py::test_a_run_without_market_data_writes_no_snapshot`, `tests/test_csv_exporter.py::test_a_successful_recollection_clears_values_that_went_empty`, `::test_every_summary_column_belongs_to_a_section_the_identity_or_the_run`. Review 3's repros now hold (`qa/evidence/iter24-bug018-e2e.txt`): AAPL's latest snapshot and all six values unchanged after a Yahoo-failed run with a rate; after a successful run the CSV clears P/E and yield like the JSON.
+Notes: the earlier note here ("the JSON also keeps a suspended yield") was wrong: the JSON replaces a section the new run has, and the CSV now does the same. The price-history label issue review 3 raised is BUG-030.
 
 ### BUG-019 [P3][UI] The web dividend panel shows DHR's 2016 spin-off as a $24.56 dividend
 Status: OPEN
@@ -255,6 +256,12 @@ Status: OPEN
 Found: iteration 23 by code review 3 (verified there) | Fixed: — | Regression test: —
 Repro: after BUG-013, a re-parse leaves DIS FY2024–25 dividends per share (and AMGN 2011–15, AMT, ABBV, DELL, 21 zero impairments) empty, but `_canonical_values` upserts only the keys present, so `financials_annual` and the vintages keep the old values. The JSON and financial_history.csv do clear them.
 Expected: a canonical column absent from a re-parsed period is written as NULL (or the limitation is documented).
+
+### BUG-030 [P3][STORE] After a failed run, the JSON files old price statistics under the failed run's time
+Status: OPEN
+Found: iteration 23 by code review 3 (moved out of BUG-018 in iteration 24) | Fixed: — | Regression test: —
+Repro: a failed run keeps the earlier `price_history` section (BUG-018's rule); the next run's merge moves that section into `price_history_snapshots` labelled with the failed run's `collected_at`.
+Expected: kept data keeps its own time (the review suggests a per-section collected_at, or a last-good timestamp).
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

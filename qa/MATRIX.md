@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 97 · PASS 5 · FAIL 6 · N-A 0 · BLOCKED 0 · NEEDS-USER 1  
+**Status counts:** TODO 99 · PASS 5 · FAIL 4 · N-A 0 · BLOCKED 0 · NEEDS-USER 1  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -50,7 +50,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | MATCH-02 | Cross-source fundamentals | TODO | |  |
 | MATCH-03 | Market math | TODO | |  |
 | MATCH-04 | Price history | TODO | |  |
-| MATCH-05 | Store consistency | FAIL→BUG-018 | iter 23 | the CSV keeps old values the JSON clears after a successful run (BUG-018 reopened); JSON vs SQLite vs CSV values otherwise untested |
+| MATCH-05 | Store consistency | TODO | iter 24 | the CSV and the JSON now agree after a successful run (BUG-018 fixed); JSON vs SQLite vs CSV values otherwise untested |
 | MATCH-06 | UI vs DB | TODO | |  |
 | MATCH-07 | Peers and sector medians are computed within the right sector and the medians are correct.… | TODO | |  |
 | MATCH-08 | Dedup | TODO | |  |
@@ -64,7 +64,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | GATHER-03 | companyfacts parsing | TODO | |  |
 | GATHER-04 | Rates | TODO | |  |
 | GATHER-05 | Rate limiting and retries | TODO | |  |
-| GATHER-06 | Failure modes (mocked) | FAIL→BUG-018 | iter 23 | a Yahoo failure with a rate still fetched writes a snapshot with no price (BUG-018 reopened); a locked summary.csv is fixed (BUG-026) |
+| GATHER-06 | Failure modes (mocked) | TODO | iter 24 | a failed run no longer erases stored data or writes a price-less snapshot (BUG-018), and a locked summary.csv no longer stops the export (BUG-026); the rest of the item is untested |
 | GATHER-07 | SEC cache | TODO | |  |
 | GATHER-08 | Idempotency | TODO | |  |
 | GATHER-09 | Ticker input | TODO | |  |
@@ -82,7 +82,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | STORE-03 | WAL handling | TODO | |  |
 | STORE-04 | The web Reader (`mode=ro`) never writes; per-request connections survive threadpool hoppin… | TODO | |  |
 | STORE-05 | The as-of API and UI equal `AsOfReader`; edge dates (before the first filing, today, the f… | TODO | |  |
-| STORE-06 | CSV exports | FAIL→BUG-018 | iter 23 | the per-field keep rule keeps stale values after successful runs (BUG-018 reopened); kept copies can collide (BUG-027) |
+| STORE-06 | CSV exports | FAIL→BUG-027 | iter 24 | BUG-004, -015, -018 and -021 fixed; left: kept copies can collide within a second (BUG-027, P3) |
 | STORE-07 | The real-DB copy passes `PRAGMA integrity_check` and `foreign_key_check`.… | TODO | | Bootstrap: integrity_check ok on realcopy, but the schema declares no foreign keys (0 of 19 tables), so foreign_key_check is vacuous; needs an orphan-row join check. |
 
 ## API: HTTP API (`/docs`, every `/api/*` route)

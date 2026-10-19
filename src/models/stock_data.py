@@ -3,7 +3,33 @@
 import json
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+#: The StockData section each ``to_summary`` column comes from. A CSV merge keeps a column's
+#: earlier value only when a run got nothing for its section (a failed or partial fetch), the
+#: way the JSON merge keeps a whole section; a section the run did get replaces it, empty
+#: values included.
+SUMMARY_SECTIONS: Dict[str, Tuple[str, ...]] = {
+    "company_info": ("sector", "industry", "country", "employees", "website"),
+    "market_data": ("current_price", "market_cap", "volume", "beta", "52_week_high", "52_week_low",
+                    "ma_50", "ma_200"),
+    "valuation": ("pe_trailing", "pe_forward", "peg_ratio", "eps_trailing", "eps_forward", "price_to_book",
+                  "dividend_yield", "profit_margin", "operating_margin", "return_on_equity", "return_on_assets",
+                  "revenue_growth", "total_revenue", "ebitda", "net_income", "total_cash", "total_debt",
+                  "debt_to_equity", "free_cash_flow"),
+    "shareholders": ("shares_outstanding", "float_shares", "insider_percent", "institutional_percent",
+                     "short_ratio"),
+    "financials_annual": ("sec_revenue", "sec_net_income", "sec_total_assets", "sec_total_liabilities",
+                          "sec_stockholders_equity", "sec_operating_cash_flow", "sec_fiscal_year"),
+    "price_history": ("cagr_5y", "annual_volatility", "max_drawdown", "sharpe_ratio", "total_return_5y"),
+    "calculated_metrics": ("calc_ebitda", "calc_fcf", "calc_roic", "calc_net_debt", "calc_interest_coverage",
+                           "calc_ev", "calc_ev_to_ebitda"),
+    "risk_free_rate": ("risk_free_rate_10y", "treasury_yield_source"),
+}
+#: Identifiers a merge keeps from an earlier run when a run lacks them.
+SUMMARY_IDENTITY_COLUMNS: Tuple[str, ...] = ("ticker", "cik", "company_name")
+#: The run's own columns: always the latest run's.
+SUMMARY_RUN_COLUMNS: Tuple[str, ...] = ("collected_at", "data_sources", "warning_count", "error_count")
 
 
 @dataclass

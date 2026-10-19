@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..models.stock_data import StockData
+from ..models.stock_data import SUMMARY_IDENTITY_COLUMNS, SUMMARY_SECTIONS, StockData
 
 
 class CSVExporter:
@@ -59,16 +59,20 @@ class CSVExporter:
         try:
             filepath = self.output_dir / filename
 
-            # This run's values replace the earlier ones for the same tickers, but a value it
-            # didn't get (empty after a failed fetch) keeps the earlier one, as the JSON does.
+            # This run's values replace the earlier ones for the same tickers. Only a section the
+            # run got nothing for (a failed or partial fetch) keeps its earlier values, as the JSON
+            # merge does, and so do identifiers the run lacks; the run's own columns are always new.
             existing_columns, existing_rows = self._read_existing(filepath)
-            new_rows = {
-                summary["ticker"]: self._clean_for_csv(summary)
-                for summary in (stock.to_summary() for stock in data)
-            }
+            new_rows = {stock.ticker: self._clean_for_csv(stock.to_summary()) for stock in data}
             rows = {row["ticker"]: row for row in existing_rows}
-            for ticker, new_row in new_rows.items():
-                rows[ticker] = {**rows.get(ticker, {}), **{k: v for k, v in new_row.items() if v != ""}}
+            for stock in data:
+                new_row, old_row = new_rows[stock.ticker], rows.get(stock.ticker)
+                if old_row:
+                    kept = [c for section, columns in SUMMARY_SECTIONS.items()
+                            if not getattr(stock, section) for c in columns]
+                    kept += [c for c in SUMMARY_IDENTITY_COLUMNS if new_row.get(c) in ("", None)]
+                    new_row = {**new_row, **{c: old_row[c] for c in kept if c in old_row}}
+                rows[stock.ticker] = new_row
 
             # Determine all columns (union of all keys)
             all_columns = set(existing_columns)

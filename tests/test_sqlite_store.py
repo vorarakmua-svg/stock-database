@@ -1,6 +1,7 @@
 """Tests for the SQLite store: schema, upserts, and cross-company screening."""
 
 import sqlite3
+from datetime import datetime
 
 from src.exporters.sqlite_store import SQLiteStore
 from src.models.stock_data import StockData
@@ -317,4 +318,26 @@ def test_a_failed_recollection_keeps_the_company_details(tmp_path):
     row = conn.execute("SELECT company_name, cik, sector FROM companies WHERE ticker = 'AAA'").fetchone()
     conn.close()
     assert row == ("AAA Inc.", "000", "Technology")
+
+
+def test_a_run_without_market_data_writes_no_snapshot(tmp_path):
+    # A Yahoo failure still gets a risk-free rate (Treasury.gov or the fixed estimate), and the rate alone
+    # used to make a snapshot: the latest one, with no price, market cap, beta or shares, read by the web
+    # header, the screener and the valuations.
+    store = SQLiteStore(db_path=tmp_path / "stock.db")
+    good = _company("AAA", revenue=1.0e9, roic=0.12)
+    good.market_data = {"current_price": 150.0, "market_cap": 1.5e11, "beta": 1.1}
+    good.collected_at = datetime(2026, 8, 4, 12, 0)
+    store.export([good])
+    failed = StockData(ticker="AAA", collected_at=datetime(2026, 10, 20, 9, 0))
+    failed.add_error("Yahoo Finance: HTTP 429 Too Many Requests")
+    failed.merge_risk_free_rate({"risk_free_rate": 0.0435, "source": "fallback"})
+    store.export([failed])
+    conn = sqlite3.connect(tmp_path / "stock.db")
+    latest = conn.execute("SELECT current_price FROM market_snapshots WHERE ticker = 'AAA' "
+                          "ORDER BY collected_at DESC LIMIT 1").fetchone()
+    runs = conn.execute("SELECT count(*) FROM collection_runs WHERE ticker = 'AAA'").fetchone()[0]
+    conn.close()
+    assert latest == (150.0,)
+    assert runs == 2  # the failed run is still recorded
 

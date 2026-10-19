@@ -164,3 +164,27 @@ def test_a_summary_without_a_ticker_column_is_kept_aside(tmp_path: Path, rewrite
     assert [kept.read_bytes() for kept in tmp_path.glob("summary.unreadable-*.csv")] == [saved]
     assert [r["ticker"] for r in _rows(path)] == ["CCC"]
 
+
+def test_a_successful_recollection_clears_values_that_went_empty(tmp_path: Path) -> None:
+    # Only a section the run didn't get keeps its earlier values. After a successful run in which the
+    # company swung to a loss and suspended its dividend, the old P/E and yield used to stay beside the
+    # new EPS, and FY2024's liabilities beside FY2025.
+    exporter = CSVExporter(tmp_path)
+    first = _stock("AAA", annual={"2024": {"fiscal_year": 2024, "revenue": 1e9, "total_liabilities": 5e8}})
+    first.valuation = {"pe_trailing": 25.0, "dividend_yield": 0.021, "eps_trailing": 4.0}
+    exporter.export([first])
+    second = _stock("AAA", annual={"2025": {"fiscal_year": 2025, "revenue": 8e8}})
+    second.valuation = {"pe_trailing": None, "dividend_yield": None, "eps_trailing": -1.5}
+    exporter.export([second])
+    (row,) = _rows(tmp_path / "summary.csv")
+    assert (row["eps_trailing"], row["pe_trailing"], row["dividend_yield"]) == ("-1.5000", "", "")
+    assert (row["sec_fiscal_year"], row["sec_total_liabilities"]) == ("2025", "")
+
+
+def test_every_summary_column_belongs_to_a_section_the_identity_or_the_run() -> None:
+    # The CSV merge decides per section; a new summary column without one would never be kept or cleared.
+    from src.models.stock_data import SUMMARY_IDENTITY_COLUMNS, SUMMARY_RUN_COLUMNS, SUMMARY_SECTIONS
+    mapped = [c for columns in SUMMARY_SECTIONS.values() for c in columns]
+    mapped += list(SUMMARY_IDENTITY_COLUMNS) + list(SUMMARY_RUN_COLUMNS)
+    assert sorted(mapped) == sorted(_stock("AAA").to_summary())
+

@@ -61,6 +61,12 @@ _SNAPSHOT_COLUMNS = [
 
 # Snapshot columns that are text, not numeric (kept separate so _cols_ddl can type them).
 _SNAPSHOT_TEXT_COLUMNS = ["ex_dividend_date"]
+#: Snapshot columns only a market-data fetch (Yahoo) fills: not the risk-free rate, which a run
+#: gets even when Yahoo fails, nor the ratios computed downstream from market cap.
+_MARKET_COLUMNS = [
+    c for c in _SNAPSHOT_COLUMNS
+    if c not in ("risk_free_rate", "enterprise_value", "ev_to_ebitda", "ev_to_fcf", "fcf_yield")
+] + _SNAPSHOT_TEXT_COLUMNS
 
 # One row per collection: analyst price targets / recommendations (from analyst_estimates).
 _ANALYST_COLUMNS = [
@@ -519,8 +525,9 @@ class SQLiteStore:
         snapshot["ev_to_fcf"] = cm.get("ev_to_fcf")
         snapshot["fcf_yield"] = cm.get("fcf_yield")
         snapshot["risk_free_rate"] = rf.get("risk_free_rate")
-        # Only record a snapshot if we have any market data.
-        if any(snapshot.get(c) is not None for c in _SNAPSHOT_COLUMNS + _SNAPSHOT_TEXT_COLUMNS):
+        # Only record a snapshot when the run got market data. A Yahoo failure still gets a
+        # risk-free rate, and a rate-only row would become the latest snapshot, with no price.
+        if any(snapshot.get(c) is not None for c in _MARKET_COLUMNS):
             self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)
 
         # collection_runs
