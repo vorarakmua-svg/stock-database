@@ -140,6 +140,12 @@ def cagr(window: List[Tuple[int, float]]) -> Optional[float]:
     return (window[-1][1] / window[0][1]) ** (1 / (window[-1][0] - window[0][0])) - 1
 
 
+def simple_ratio(ratio: float) -> bool:
+    """A share split's ratio is a simple fraction (2:1, 3:2, 9:4, 1:8, 10:1); Yahoo's spin-off and merger price
+    factors aren't. On the real-data copy all 430 simple factors of 3:2 or more are splits."""
+    return any(abs(r * d - round(r * d)) < 1e-9 * max(1.0, r * d) for r in (ratio, 1 / ratio) for d in (1, 2, 3, 4))
+
+
 def median(xs: List[float]) -> float:
     s = sorted(xs)
     n = len(s)
@@ -163,6 +169,9 @@ class Inputs:
         self.annual = db.execute("select fiscal_year, period_end, net_income, total_equity, shares_outstanding, "
                                  "weighted_avg_shares_diluted, eps_diluted from financials_annual where ticker=? "
                                  "order by fiscal_year", (ticker,)).fetchall()
+        row = db.execute("select filed_date from financials_annual where ticker=? and fiscal_year is not null "
+                         "order by fiscal_year desc limit 1", (ticker,)).fetchone()
+        self.last_filed = row[0] if row and row[0] else None
         # Per-share values divide by every share class (BUG-022). Yahoo's share count can cover one class of
         # several (GOOGL's class A: 5.87B of 12.23B), while market cap / price counts them all; and a count still
         # under 3/4 of the latest FY's diluted shares on today's basis is incomplete too (HON, whose market cap is
@@ -195,17 +204,24 @@ class Inputs:
         """Shares in today's split basis (declared splits after period_end, only if not yet restated)."""
         if not shares:
             return None
-        factor = 1.0
+        factor, unrestated = 1.0, 1.0
         for date, ratio in self.splits:
             # Share splits are at least 3-for-2 (or 1-for-2 reversed). Smaller ratios in Yahoo's split
             # history are spin-off price factors or stock dividends (HON 0.9535, SPGI 1.057; lead L12),
             # which don't change the share count.
             if date > period_end and ratio and (ratio >= 1.5 or ratio <= 1 / 1.5):
-                factor *= ratio
+                # A simple ratio dated after the latest filing is a share split no filing has restated yet
+                # (KLAC's 10:1): it applies whatever today's count says, since that count can lag a split
+                # (BUG-036). Spin-off and merger factors aren't simple (ABT 2.0842, DELL 1.806, RTX 1.589).
+                if self.last_filed and date[:10] > self.last_filed[:10] and simple_ratio(ratio):
+                    unrestated *= ratio
+                else:
+                    factor *= ratio
         # Today's basis is today's share count (the latest market snapshot: the basis the price is quoted on).
         # The latest FY's count is still pre-split when a split came after its filing (KLAC, BKNG; BUG-014),
         # so it is only the fallback when there is no snapshot.
         latest = self.snap_shares or next((r[5] for r in reversed(self.annual) if r[5]), None)
+        shares *= unrestated
         if factor == 1.0 or not latest:
             return shares
         return min((shares, shares * factor), key=lambda s: abs(math.log(s / latest)))
