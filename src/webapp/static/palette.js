@@ -35,6 +35,7 @@
     { label: 'Dividends', code: 'DVD', suffix: '?tab=dvd' },
     { label: 'Holders', code: 'HDS', suffix: '?tab=hds' },
     { label: 'Insiders', code: 'INS', suffix: '?tab=ins' },
+    { label: 'Valuation', code: 'VAL', suffix: '?tab=val' },
   ];
   var CODE_ALIASES = { STATS: 'STAT', PRICES: 'HP', HISTORY: 'HP', CHART: 'GP', OVERVIEW: 'DES', FINANCIALS: 'FA', EARNINGS: 'ERN', STATISTICS: 'STAT', DIVIDENDS: 'DVD', HOLDERS: 'HDS', INSIDERS: 'INS' };
   var PAGES = [
@@ -202,7 +203,12 @@
             group: 'Actions'
           });
         }
-        setItems(tickerRows.concat(mode ? [] : staticRows.filter(function (r) { return r.score >= 0; })));
+        var pageRows = staticRows.filter(function (r) { return r.score >= 0; });
+        // An exact global code (SCR, HELP, …) is a command: its page outranks company matches and the Fetch offer
+        var exact = pageRows.filter(function (r) { return r.code === q.toUpperCase(); });
+        setItems(exact.length
+          ? exact.concat(pageRows.filter(function (r) { return exact.indexOf(r) < 0; }), tickerRows)
+          : tickerRows.concat(pageRows));
       });
   }
 
