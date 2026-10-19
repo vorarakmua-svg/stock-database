@@ -1,16 +1,18 @@
 /**
  * Test driver for src/webapp/static/palette.js (used by tests/test_web_palette.py).
  *
- * Runs the real palette.js against a minimal stand-in for the browser DOM,
- * types each query into the palette, lets the company search settle, presses
- * Enter, and records the outcome: the URL the palette navigates to, "#help"
- * when Enter opened the HELP overlay, or null when Enter did nothing.
+ * Plays scripted keyboard scenarios against the real palette.js in a minimal
+ * stand-in for the browser DOM (with a fake company-search API) and records
+ * each outcome: the URL the palette navigated to, "#help" when the HELP
+ * overlay opened, or null when nothing happened.
  *
  * Usage:  node palette_driver.js <path/to/palette.js>  < spec.json
- * spec:   {"queries": ["AAPL GP", ...],
+ * spec:   {"scenarios": [[["open"], ["type", "AAPL GP"], ["settle"], ["enter"]], ...],
  *          "searchHits": {"<query>": [{"ticker": ..., "company_name": ...}]},
  *          "allowCollect": true|false}   // the page's data-allow-collect flag
- * Prints: a JSON array with one outcome per query.
+ * Steps:  open | type <text> | settle (let the input debounce and the company
+ *         search finish) | enter | escape. Every scenario ends with a settle.
+ * Prints: a JSON array with one outcome per scenario.
  */
 'use strict';
 
@@ -37,14 +39,15 @@ function fakeElement(tagName) {
   };
 }
 
-async function outcomeFor(source, query, spec) {
+async function play(source, steps, spec) {
   const elements = {
     'palette-overlay': fakeElement('div'),
     'palette-input': fakeElement('input'),
     'palette-results': fakeElement('div'),
     'help-overlay': fakeElement('div'),
   };
-  const timers = [];
+  const timers = new Map();
+  let nextTimer = 0;
   const storage = new Map();
   let navigatedTo = null;
 
@@ -54,8 +57,8 @@ async function outcomeFor(source, query, spec) {
       get href() { return navigatedTo; },
       set href(url) { navigatedTo = url; },
     },
-    setTimeout(fn) { timers.push(fn); return timers.length; },
-    clearTimeout() {},
+    setTimeout(fn) { timers.set(++nextTimer, fn); return nextTimer; },
+    clearTimeout(id) { timers.delete(id); },
   };
   vm.runInNewContext(source, {
     window,
@@ -76,13 +79,22 @@ async function outcomeFor(source, query, spec) {
     },
   });
 
-  window.Palette.open();
   const input = elements['palette-input'];
-  input.value = query;
-  input.fire('input');
-  while (timers.length) timers.shift()(); // flush the input debounce
-  await new Promise((resolve) => setImmediate(resolve)); // let the company search settle
-  input.fire('keydown', { key: 'Enter' });
+  async function settle() {
+    do {
+      for (const [id, fn] of [...timers]) { timers.delete(id); fn(); }
+      await new Promise((resolve) => setImmediate(resolve)); // let company searches answer
+    } while (timers.size);
+  }
+  const actions = {
+    open: () => window.Palette.open(),
+    type: (text) => { input.value = text; input.fire('input'); },
+    settle,
+    enter: () => input.fire('keydown', { key: 'Enter' }),
+    escape: () => input.fire('keydown', { key: 'Escape' }),
+  };
+  for (const [name, arg] of steps) await actions[name](arg);
+  await settle();
   if (navigatedTo !== null) return navigatedTo;
   return elements['help-overlay'].hidden ? null : '#help';
 }
@@ -91,6 +103,6 @@ async function outcomeFor(source, query, spec) {
   const source = fs.readFileSync(process.argv[2], 'utf8');
   const spec = JSON.parse(fs.readFileSync(0, 'utf8'));
   const outcomes = [];
-  for (const query of spec.queries) outcomes.push(await outcomeFor(source, query, spec));
+  for (const steps of spec.scenarios) outcomes.push(await play(source, steps, spec));
   console.log(JSON.stringify(outcomes));
 })();

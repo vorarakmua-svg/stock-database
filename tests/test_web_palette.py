@@ -2,8 +2,8 @@
 
 palette.js is plain browser JavaScript, so these tests run the real file under
 Node through ``tests/js/palette_driver.js`` (a minimal DOM stand-in with a fake
-company-search API): type a query, press Enter, and check where the palette
-goes. Skipped when Node isn't installed.
+company-search API): play keystrokes, and check where the palette goes.
+Skipped when Node isn't installed.
 """
 from __future__ import annotations
 
@@ -24,25 +24,37 @@ PALETTE_JS = Path(__file__).resolve().parents[1] / "src" / "webapp" / "static" /
 DRIVER = Path(__file__).resolve().parent / "js" / "palette_driver.js"
 
 Hits = List[Dict[str, str]]
+Steps = List[List[str]]
 
 
-def navigate(
-    *queries: str, search_hits: Optional[Dict[str, Hits]] = None, allow_collect: bool = False
+def outcomes(
+    *scenarios: Steps, search_hits: Optional[Dict[str, Hits]] = None, allow_collect: bool = False
 ) -> List[Optional[str]]:
-    """Type each query into the palette and press Enter; return each outcome.
+    """Play each scenario on a fresh page; return where each one ends up.
 
-    An outcome is the URL the palette navigates to, ``"#help"`` when Enter opened
-    the HELP overlay, or ``None`` when Enter did nothing. ``search_hits`` stands in
-    for the company-search API (query -> hits); ``allow_collect`` is the page's
-    ``data-allow-collect`` flag (collection is on by default in the real app).
+    Steps are ``["open"]``, ``["type", text]``, ``["settle"]`` (let the input
+    debounce and the company search finish), ``["enter"]`` and ``["escape"]``;
+    pending work settles once more at the end. An outcome is the URL the palette
+    navigated to, ``"#help"`` when the HELP overlay opened, or ``None``.
+    ``search_hits`` stands in for the company-search API (query -> hits);
+    ``allow_collect`` is the page's ``data-allow-collect`` flag (collection is on
+    by default in the real app).
     """
-    spec = {"queries": list(queries), "searchHits": search_hits or {}, "allowCollect": allow_collect}
+    spec = {"scenarios": list(scenarios), "searchHits": search_hits or {}, "allowCollect": allow_collect}
     result = subprocess.run(
         [NODE, str(DRIVER), str(PALETTE_JS)],
         input=json.dumps(spec), capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
+
+
+def navigate(
+    *queries: str, search_hits: Optional[Dict[str, Hits]] = None, allow_collect: bool = False
+) -> List[Optional[str]]:
+    """Type each query, let its results arrive, press Enter; return where each one goes."""
+    scenarios = [[["open"], ["type", query], ["settle"], ["enter"]] for query in queries]
+    return outcomes(*scenarios, search_hits=search_hits, allow_collect=allow_collect)
 
 
 @pytest.mark.parametrize("code, key", [(code, key) for _, code, key in TABS], ids=[code for _, code, _ in TABS])
@@ -89,3 +101,34 @@ def test_other_words_still_go_to_tickers_first(query: str, hits: Hits, destinati
     # Only an exact global code jumps the queue: a prefix of one ("SC") still
     # opens the matching company, and an unknown ticker still offers the fetch.
     assert navigate(query, search_hits={query: hits}, allow_collect=True) == [destination]
+
+
+@pytest.mark.parametrize(
+    "query, hits, destination",
+    [
+        ("QM", [], "/quality"),
+        ("AAPL GP", [], "/stocks/AAPL?tab=gp"),
+        ("AAPL", [{"ticker": "AAPL", "company_name": "Apple Inc."}], "/stocks/AAPL"),
+    ],
+    ids=["global-code", "ticker-code", "ticker"],
+)
+def test_enter_right_after_typing_acts_on_what_was_typed(query: str, hits: Hits, destination: str) -> None:
+    # Enter lands before the input debounce fires and before the company search
+    # answers; the palette must act on the typed text, not the list it was showing.
+    typed_fast = [["open"], ["type", query], ["enter"]]
+    assert outcomes(typed_fast, search_hits={query: hits}, allow_collect=True) == [destination]
+
+
+def test_closing_the_palette_cancels_a_waiting_enter() -> None:
+    # Escape closes the palette while that Enter still waits for search results;
+    # reopening it and typing the same text must not navigate on its own.
+    steps = [["open"], ["type", "AAPL"], ["enter"], ["escape"], ["open"], ["type", "AAPL"]]
+    hits = {"AAPL": [{"ticker": "AAPL", "company_name": "Apple Inc."}]}
+    assert outcomes(steps, search_hits=hits) == [None]
+
+
+def test_early_enter_only_acts_on_the_text_it_was_pressed_for() -> None:
+    # Enter waits on "AAPL", then the user keeps typing: that Enter must not
+    # fire on "AAPL GP", which was never confirmed.
+    steps = [["open"], ["type", "AAPL"], ["enter"], ["type", "AAPL GP"]]
+    assert outcomes(steps) == [None]

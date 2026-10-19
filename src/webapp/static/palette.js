@@ -75,6 +75,8 @@
   }
 
   var items = [];      // [{type:'ticker'|'page'|'function', label, sub, code, href, ticker}]
+  var itemsQuery = ''; // the input text `items` were built for
+  var enterQuery = null; // Enter beat this text's results; run the top one when they land
   var selected = 0;
   var mode = null;     // null | {mode:'add', onPick:fn}
   var debounceTimer = null;
@@ -91,6 +93,7 @@
   function close() {
     overlay.hidden = true;
     mode = null;
+    enterQuery = null;
     reqSeq++;
   }
 
@@ -133,10 +136,15 @@
     });
   }
 
-  function setItems(list) {
+  function setItems(list, query) {
     items = list;
+    itemsQuery = query;
     selected = 0;
     render();
+    if (enterQuery !== null && enterQuery === query) {
+      enterQuery = null;
+      execute(items[0]);
+    }
   }
 
   function build(query) {
@@ -161,7 +169,7 @@
         return true;
       }).map(function (x) {
         return { type: 'function', ticker: tick, sub: x.f.label, code: x.f.code, href: '/stocks/' + encodeURIComponent(tick) + x.f.suffix, group: 'Functions' };
-      }));
+      }), query);
       return;
     }
 
@@ -178,7 +186,7 @@
       var recentRows = getRecents().map(function (t) {
         return { type: 'ticker', ticker: t, sub: '', code: '', href: '/stocks/' + encodeURIComponent(t), group: 'Recent' };
       });
-      setItems(recentRows.concat(mode ? [] : staticRows));
+      setItems(recentRows.concat(mode ? [] : staticRows), query);
       return;
     }
 
@@ -208,7 +216,7 @@
         var exact = pageRows.filter(function (r) { return r.code === q.toUpperCase(); });
         setItems(exact.length
           ? exact.concat(pageRows.filter(function (r) { return exact.indexOf(r) < 0; }), tickerRows)
-          : tickerRows.concat(pageRows));
+          : tickerRows.concat(pageRows), query);
       });
   }
 
@@ -230,6 +238,15 @@
     window.location.href = item.href;
   }
 
+  // Enter acts on what is typed: if its results aren't in yet (Enter beat the
+  // input debounce or the company search), the top result runs when they land.
+  function enter() {
+    if (itemsQuery === input.value) { execute(items[selected]); return; }
+    window.clearTimeout(debounceTimer);
+    enterQuery = input.value;
+    build(input.value);
+  }
+
   // ---- Events ----
   input.addEventListener('input', function () {
     window.clearTimeout(debounceTimer);
@@ -238,7 +255,7 @@
   input.addEventListener('keydown', function (evt) {
     if (evt.key === 'ArrowDown') { evt.preventDefault(); selected = Math.min(selected + 1, items.length - 1); render(); }
     else if (evt.key === 'ArrowUp') { evt.preventDefault(); selected = Math.max(selected - 1, 0); render(); }
-    else if (evt.key === 'Enter') { evt.preventDefault(); execute(items[selected]); }
+    else if (evt.key === 'Enter') { evt.preventDefault(); enter(); }
     else if (evt.key === 'Escape') { close(); }
   });
   resultsEl.addEventListener('click', function (evt) {
