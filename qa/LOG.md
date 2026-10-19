@@ -593,3 +593,23 @@ Result: BUG-033 VERIFIED. GATHER-13 → PASS.
 Gates: ruff ✓ mypy ✓ pytest 921 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(exporters): a market snapshot needs a price, and a failed quote refresh says so
 Next: BUG-017 (P2, the oldest open P2; a third fix attempt, oracle rule first)
+
+## Iteration 31: 2026-10-20 04:46: fix
+Picked: BUG-017 (P2), the oldest open P2; its third fix attempt (CI: 5e64093 ✓).
+Did: Weighed the design first (systematic-debugging 4.5): two heuristic fixes each exposed new end-of-window shapes;
+the alternatives (SEC dividends per share, or only the initiation-year rule) change the spec's input or bring back
+the slip bias, so this attempt is the review's bounded two-condition rule, with the alternatives recorded for the
+user if it fails. Oracle first (0345344): on a golden copy with KO, MSFT, AAPL and XOM rewritten into the review's
+shapes it flagged exactly those four DDM rows (the old oracle passed them). Tests: three cadence shapes and a
+same-count restart RED; an HWM guard added. Fix in `value_ddm`; four mutants each fail a test; restored
+byte-identical.
+Evidence: `qa/evidence/iter31-bug017-{red,green,mutants,impact}.txt`, `iter31-cadence-db.txt`,
+`iter31-oracle-old-rule-cadence.txt`, `iter31-oracle-before-fix-{cadence,real,golden}.txt`,
+`iter31-oracle-{cadence,golden,real}.txt`
+Result: BUG-017 VERIFIED. No real or golden valuation or summary row moves; the demo rows return to the growth of their
+untouched records. Oracle: demo and golden 0/57, real the 8 BUG-007 rows. New: BUG-040 (P3, review 4's #7 and #8,
+moved out of BUG-017). VAL-02 → FAIL→BUG-040.
+Gates: ruff ✓ mypy ✓ pytest 926 passed (1 known warning) | CI: pending for this push
+Commit: oracle 0345344, then (this commit) fix(valuation): a schedule change next to a DDM window end is no slipped
+payment
+Next: BUG-034 (P2, the oldest open P2)

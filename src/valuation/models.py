@@ -185,13 +185,16 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
     # restarted mid-year (MU: 2 payments in 2021, then 4 a year), or an ex-date
     # slipped into the year before (BMY). Growth measured from one counts
     # payments, not raises (MU read 23%/yr on a flat dividend), so it is
-    # skipped, unless the year before it had as many payments: then it carries
-    # on a lower-frequency schedule. An end year with exactly one payment more
-    # than its neighbours, all of regular size, holds one that slipped across
-    # the year boundary (O's 2025-12-31 ex-date for January), so it counts at
-    # their cadence. A special is larger and counts in full (whether it should
-    # is the user's call), and a short last year stays as it is, since it can
-    # be a real cut.
+    # skipped, unless it carries on a lower-frequency schedule: the year before
+    # paid as often, and each payment is larger than the later years' typical
+    # one (a dividend restarted after a suspension pays the same size). An end
+    # year with exactly one payment more than its neighbours, next to a year
+    # still on that schedule and all of regular size, holds one that slipped
+    # across the year boundary (O's 2025-12-31 ex-date for January), so it
+    # counts at their cadence; a neighbour that already pays more often means
+    # the schedule changed. A special is larger and counts in full (whether it
+    # should is the user's call), and a short last year stays as it is, since
+    # it can be a real cut.
     paid: Dict[int, List[float]] = {}
     for day, amount in inputs.dividends:
         paid.setdefault(int(day[:4]), []).append(amount)
@@ -199,17 +202,23 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
     def cadence(years: List[Tuple[int, float]]) -> float:
         return statistics.median(len(paid[year]) for year, _ in years)
 
+    def lower_frequency(year: int, later: List[Tuple[int, float]]) -> bool:
+        typical = statistics.median(a for later_year, _ in later for a in paid[later_year])
+        return (len(paid.get(year - 1, [])) == len(paid[year])
+                and all(a >= typical * REGULAR_PAYMENT_RANGE for a in paid[year]))
+
     while (len(complete_years) >= 2
            and len(paid[complete_years[0][0]]) < cadence(complete_years[1:4])
-           and len(paid.get(complete_years[0][0] - 1, [])) != len(paid[complete_years[0][0]])):
+           and not lower_frequency(complete_years[0][0], complete_years[1:4])):
         complete_years = complete_years[1:]
     for end, adjacent, near in ((0, 1, complete_years[1:4]), (-1, -2, complete_years[-4:-1])):
         if len(complete_years) < 2:
             break
         year, total = complete_years[end]
         usual, regular = cadence(near), statistics.median(paid[complete_years[adjacent][0]])
-        if len(paid[year]) == usual + 1 and all(
-                regular / REGULAR_PAYMENT_RANGE < a < regular * REGULAR_PAYMENT_RANGE for a in paid[year]):
+        if (len(paid[year]) == usual + 1 and len(paid[complete_years[adjacent][0]]) <= usual
+                and all(regular / REGULAR_PAYMENT_RANGE < a < regular * REGULAR_PAYMENT_RANGE
+                        for a in paid[year])):
             complete_years[end] = (year, total * usual / len(paid[year]))
     # The spec's historical CAGR "requires >= 4 FYs" (DCF and Lynch are N/A
     # below that). DDM stays applicable from 3 calendar years, so with fewer

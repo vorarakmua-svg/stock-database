@@ -261,6 +261,9 @@ def _cadence_dividends(counts_by_year, growth=0.05):
     {y: 1 if y <= 2018 else 4 for y in range(2016, 2027)},   # PGR: annual years, then quarterly
     {y: 4 if y <= 2016 else 12 for y in range(2015, 2027)},  # the window opens on the last quarterly year
     {y: 1 if y <= 2024 else 2 for y in range(2016, 2027)},   # annual -> semiannual in the last full year
+    {y: 1 if y <= 2023 else 2 for y in range(2016, 2027)},   # ... in the last two full years (review 4)
+    {y: 2 if y <= 2017 else 1 for y in range(2016, 2027)},   # semiannual -> annual after two years
+    {y: 4 if y <= 2017 else 3 for y in range(2016, 2027)},   # quarterly -> three a year
 ])
 def test_value_ddm_growth_survives_a_payment_frequency_change(counts):
     # Paying the same yearly amount more often makes neither a partial first year nor a long last
@@ -268,6 +271,31 @@ def test_value_ddm_growth_survives_a_payment_frequency_change(counts):
     res = value_ddm(_inputs(dividends=_cadence_dividends(counts), as_of=date(2026, 8, 4)))
     assert res.assumptions["cagr_years"] == 9
     assert res.assumptions["hist_cagr"] == pytest.approx(0.05)
+
+
+def test_value_ddm_skips_a_restart_year_with_as_many_payments_as_the_suspension_year():
+    # A flat quarterly dividend suspended after June 2015 and restarted in September 2016: both years hold
+    # 2 payments, so 2016 passed as a lower-frequency year and growth read 8%/yr on a flat dividend. A lower
+    # frequency pays more each time; a restart pays the same.
+    def quarterly(year, months):
+        return [(f"{year}-{m:02d}-15", 0.25) for m in months]
+
+    divs = quarterly(2014, (3, 6, 9, 12)) + quarterly(2015, (3, 6)) + quarterly(2016, (9, 12))
+    for year in range(2017, 2026):
+        divs += quarterly(year, (3, 6, 9, 12))
+    divs += quarterly(2026, (3, 6))
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    assert res.assumptions["cagr_years"] == 8
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.0)
+
+
+def test_value_ddm_skips_a_first_year_that_opens_the_record_with_one_larger_payment():
+    # HWM's record starts in November 2016 with one payment 1.5x its later quarterly ones (the dividend was
+    # cut after a separation): nothing paid the year before, so it is a partial year, not an annual schedule.
+    divs = [("2016-11-15", 1.0)] + _quarterly_dividends(2017, 2025, 2.0, 0.10)
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    assert res.assumptions["cagr_years"] == 8
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.10)
 
 
 def test_value_ddm_counts_a_first_year_with_a_slipped_payment_at_its_usual_count():
