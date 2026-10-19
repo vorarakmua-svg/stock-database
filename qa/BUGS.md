@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 2 · P3 13 · NEEDS-USER 7 · Verified: 23
+**Open:** P0 0 · P1 0 · P2 1 · P3 13 · NEEDS-USER 7 · Verified: 24
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -311,12 +311,13 @@ Notes: fix direction (review): for gaps under about 25%, take whichever count is
 Fix (iteration 33): `_total_shares` settles a gap under 5% (`SHARE_SOURCE_GAP`) by whichever of Yahoo's two figures is nearer the latest FY's count on today's basis; wider gaps keep market cap ÷ price. The review's 25% bound was not taken: on the real-data copy every gap of 5% or more is a class or units (APP 10%, V 10%, META 15%, SPG 17%, BX 65%), and at 17% SPG's FY count excludes its partnership units, so a wider bound would decide the unit question for it (`qa/evidence/iter33-share-rule-scan.txt`). Between 2% and 5% the FY count keeps market cap ÷ price for PLTR and BLK and takes Yahoo's count for MRVL and KKR (and the golden copy's PLD). The oracle took the rule first (73d4a15) and flagged exactly MRVL's DCF against the unfixed code. Tests: the MRVL shape RED, PLTR and SPG guards; three mutants (no settling, no 5% ceiling, the farther figure) each fail one. Impact (`iter33-bug035-impact.txt`): one row of 762, MRVL's DCF $9.77 / $10.59 / $13.49 -> $10.01 / $10.85 / $13.83, its median base $12.97 -> $13.10; KKR, SPG and PLD values don't depend on the count (no applicable DCF or owner earnings); golden unchanged. Oracle: real Level 2 the 8 BUG-007 rows, golden 0/57.
 
 ### BUG-036 [P2][VAL] The post-filing split check can refuse a real split
-Status: OPEN
-Found: iteration 29 by code review 4, re-checked at 1810180 | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 34)
+Found: iteration 29 by code review 4, re-checked at 1810180 | Fixed: iteration 34 (see LOG) | Regression tests: `tests/test_valuation_inputs.py::test_a_simple_split_after_the_filing_applies_while_yahoos_count_lags`, `::test_a_split_factor_either_yahoo_count_confirms_applies` (with `::test_a_post_filing_ratio_the_share_count_does_not_show_is_not_a_split` as the guard)
 Repro: (a) BX-like: FY2022–25 filed on 2026-02-25 at 0.78B diluted shares, a declared 2:1 on 2026-06-01, Yahoo's count 1.50B (post-split) while market cap ÷ price is 2.49B (it includes Holdings units): the split is refused (split factor 1, EPS 3.6 instead of 1.8; Graham $28.82 at a $70 price). (b) KLAC-like: a declared 10:1 after the filing while Yahoo's count and market cap still show the pre-split 133M at a post-split $100 price: refused too (Graham $142.95, DCF $308.46, about ten times too high).
 Expected: (a) a split that either Yahoo count confirms is applied.   (b) a trade-off: until Yahoo's count catches up, the counts can't confirm it.
 Root cause: `src/valuation/inputs.py` `_apply_later_splits` confirms with `max(yahoo_counts)` only.
 Notes: no current value is affected. Fix: confirm when either count is within tolerance. For (b) the review suggests accepting simple ratios (2, 3, 4, 10, 1/10) without confirmation, since spin-off factors (2.084, 1.806, 1.589) aren't simple ratios: a design choice to weigh. How often Yahoo lags can't be checked offline.
+Fix (iteration 34): measured first: on the real-data copy all 430 simple factors of 3:2 or more in the split history (2:1, 3:2, 9:4, 1:8, 10:1, 25:1...) are share splits, and the 9 others are spin-off, merger or class dividend price factors (ABT 2.084, DELL 1.806 and 1.973, RTX 1.589, SO, DUK, LMT, GOOGL's 1.998 of 2014; EQIX's 1:32 is simple). So `_apply_later_splits` applies a simple ratio (`_simple_ratio`) after the latest filing without a count, which settles (b), and a factor that isn't simple needs either of Yahoo's counts to have moved by it, which settles (a). The oracle anchored each year's basis on today's count, so it shared the lag; it took the simple-ratio rule first (f1dbf87) and, on a scratch DB with a lagging KLA-like and a BX-like company, flagged KLA's DCF, Graham and Lynch against the unfixed code (it flagged BXL already). Tests: both shapes RED; three mutants (every factor needs a count, none does, only the larger count) each fail one. Impact (`qa/evidence/iter34-bug036-impact.txt`): no real or golden row moves (KLAC's, BKNG's and CRWD's counts already confirm); on the demo KLA's DCF $308.46 -> $30.67 and Graham $142.95 -> $14.30 at a $100 price, and BXL's Graham $28.82 -> $14.41. Oracle: demo 0/6, golden 0/57, real the 8 BUG-007 rows.
 
 ### BUG-037 [P2][VAL] Valuations don't record the risk-free rate's date or a static-estimate fallback
 Status: OPEN

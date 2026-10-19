@@ -641,3 +641,21 @@ BUG-007 rows, golden 0/57. VAL-01 → FAIL→BUG-039 (P3 left).
 Gates: ruff ✓ mypy ✓ pytest 930 passed (1 known warning) | CI: pending for this push
 Commit: oracle 73d4a15, then (this commit) fix(valuation): a small share-count gap is settled by the filings' count
 Next: BUG-036 (P2, the post-filing split check)
+
+## Iteration 34: 2026-10-20 05:06: fix
+Picked: BUG-036 (P2), the oldest open P2 (CI: 5ed05dc ✓).
+Did: Weighed (b) with data: all 430 simple factors of 3:2 or more in the real split history are share splits and the
+9 others are spin-off or merger price factors, so a simple ratio after the latest filing is a split even while
+Yahoo's count lags; a non-simple factor needs either count to confirm it. Oracle first (f1dbf87): on a scratch DB
+with a lagging KLA-like and a BX-like company it flagged KLA's three per-share rows against the unfixed code (the
+old oracle shared the lag). Tests: both shapes RED; ABT's spin-off guard kept. Fix in `_apply_later_splits`
+(`_simple_ratio`, `today_counts`); three mutants each fail a test; restored byte-identical.
+Evidence: `qa/evidence/iter34-{bug036-red,bug036-green,bug036-mutants,bug036-impact}.txt`,
+`iter34-oracle-old-rule-splits.txt`, `iter34-oracle-before-fix-{splits,real,golden}.txt`,
+`iter34-oracle-{splits,golden,real}.txt`
+Result: BUG-036 VERIFIED. No real or golden row moves; the demo's KLA and BXL now value on the post-split basis.
+Oracle: demo 0/6, golden 0/57, real the 8 BUG-007 rows. VAL-09 → TODO (BUG-036 fixed; the rest untested).
+Gates: ruff ✓ mypy ✓ pytest 932 passed (1 known warning) | CI: pending for this push
+Commit: oracle f1dbf87, then (this commit) fix(valuation): a split after the latest filing applies while Yahoo's
+count lags
+Next: BUG-037 (P2, the last open P2: the rate's date and static-estimate flag)

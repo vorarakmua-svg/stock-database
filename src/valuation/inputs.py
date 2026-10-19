@@ -12,6 +12,7 @@ import sqlite3
 import statistics
 from dataclasses import dataclass, field
 from datetime import date
+from fractions import Fraction
 from typing import Dict, List, Optional, Sequence, Tuple
 
 _MAX_FY_HISTORY = 10
@@ -231,8 +232,16 @@ def _normalize_splits(records: List[FYRecord],
     return records, False
 
 
+def _simple_ratio(ratio: float) -> bool:
+    """True for a share split's ratio, a simple fraction (2:1, 3:2, 9:4, 1:8,
+    10:1). The spin-off and merger price factors in Yahoo's split history are
+    not (ABT's 2.0842 for AbbVie, DELL's 1.806, RTX's 1.589); on the real-data
+    copy every simple factor of 3:2 or more is a share split."""
+    return any(abs(float(Fraction(r).limit_denominator(4)) - r) <= 1e-9 * r for r in (ratio, 1.0 / ratio))
+
+
 def _apply_later_splits(records: List[FYRecord], splits: Sequence[Tuple[str, float]],
-                        filed: Optional[str], today_shares: Optional[float] = None) -> None:
+                        filed: Optional[str], today_counts: Sequence[float] = ()) -> None:
     """Move every year onto today's basis when a split came after the latest filing.
 
     Filings restate per-share figures only for splits made before they are
@@ -243,23 +252,29 @@ def _apply_later_splits(records: List[FYRecord], splits: Sequence[Tuple[str, flo
     history also holds spin-off price factors and stock dividends (HON 0.9535).
     Without a filing date nothing moves, because a split between the year end
     and the filing is already restated in it. Spin-off and merger factors of
-    3:2 or more sit in the split history too (ABT's 2.084 for AbbVie), so
-    when ``today_shares`` is known the share count must have moved by the
-    ratio, within DECLARED_SPLIT_TOLERANCE (KLAC: 133.75M filed, 1.31B today).
+    3:2 or more sit in the split history too (ABT's 2.084 for AbbVie), but
+    their ratios aren't simple (``_simple_ratio``): such a factor applies only
+    when one of Yahoo's counts (``today_counts``) moved by it, within
+    DECLARED_SPLIT_TOLERANCE (its own count, when market cap / price also
+    counts units). A simple ratio is a split even before Yahoo's count catches
+    up with it (KLAC: 133.75M filed, 1.31B today).
     """
     if not filed:
         return
     factor = 1.0
+    needs_count = False
     for when, ratio in splits:
         if ratio and str(when)[:10] > str(filed)[:10] and (
                 SPLIT_JUMP_THRESHOLD <= ratio <= MAX_SPLIT_RATIO
                 or 1.0 / MAX_SPLIT_RATIO <= ratio <= 1.0 / SPLIT_JUMP_THRESHOLD):
             factor *= ratio
+            needs_count = needs_count or not _simple_ratio(ratio)
     if factor == 1.0:
         return
     filed_shares = next((r.shares for r in reversed(records) if r.shares and r.shares > 0), None)
-    if today_shares and filed_shares and abs(
-            math.log(today_shares / (filed_shares * factor))) > math.log(DECLARED_SPLIT_TOLERANCE):
+    if needs_count and filed_shares and today_counts and not any(
+            abs(math.log(count / (filed_shares * factor))) <= math.log(DECLARED_SPLIT_TOLERANCE)
+            for count in today_counts):
         return
     for rec in records:
         rec.split_factor *= factor
@@ -393,7 +408,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     if snap and snap["market_cap"] and snap["current_price"]:
         yahoo_counts.append(snap["market_cap"] / snap["current_price"])
     _apply_later_splits(records, splits, fy_rows[-1]["filed_date"] if fy_rows else None,
-                        max(yahoo_counts) if yahoo_counts else None)
+                        yahoo_counts)
     shares, shares_source = _total_shares(
         snap["shares_outstanding"] if snap else None,
         snap["market_cap"] if snap else None,

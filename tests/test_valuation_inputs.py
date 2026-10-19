@@ -231,9 +231,9 @@ def test_declared_run_matches_a_run_of_splits_and_ignores_unrelated_ones():
     assert _declared_run(3.81, "2023-01-01", [("2022-06-01", 4.0)]) == []  # split predates the seam
 
 
-def _post_filing_split_db(tmp_path, split_date, ratio, snapshot_shares=None):
+def _post_filing_split_db(tmp_path, split_date, ratio, snapshot_shares=None, market_cap_shares=None):
     """KLAC-like: FY2023-2025 as filed on 2025-08-08 (old basis), then one declared split, and
-    optionally today's share count in a market snapshot."""
+    optionally today's share count in a market snapshot (and a market cap counting other shares)."""
     db_path = tmp_path / "post_filing_split.db"
     store = SQLiteStore(db_path=db_path)
     conn = store._connect()
@@ -249,7 +249,7 @@ def _post_filing_split_db(tmp_path, split_date, ratio, snapshot_shares=None):
     if snapshot_shares is not None:
         conn.execute("INSERT INTO market_snapshots (ticker, collected_at, shares_outstanding, market_cap, "
                      "current_price) VALUES ('KLA', '2026-08-04T12:00:00', ?, ?, 100.0)",
-                     (snapshot_shares, snapshot_shares * 100.0))
+                     (snapshot_shares, (market_cap_shares or snapshot_shares) * 100.0))
     conn.commit()
     conn.close()
     return db_path
@@ -271,6 +271,27 @@ def test_a_post_filing_split_the_share_count_confirms_still_applies(tmp_path):
     latest = load_inputs(conn, "KLA").fy_records[-1]
     conn.close()
     assert latest.split_factor == 10.0
+
+
+def test_a_simple_split_after_the_filing_applies_while_yahoos_count_lags(tmp_path):
+    # Yahoo can show the pre-split count (and so market cap) for a while at the post-split price. A simple
+    # ratio is a share split (all 430 simple factors in the real data are), so it needs no confirmation:
+    # refusing it valued every per-share model ten times too high.
+    conn = _connect(_post_filing_split_db(tmp_path, "2026-06-12", 10.0, snapshot_shares=1.33e8))
+    latest = load_inputs(conn, "KLA").fy_records[-1]
+    conn.close()
+    assert latest.split_factor == 10.0
+
+
+def test_a_split_factor_either_yahoo_count_confirms_applies(tmp_path):
+    # A factor that isn't a simple ratio (GOOGL's 1.998 class-C dividend of 2014) needs a count that moved by
+    # it. Yahoo's own count does here; market cap / price also counts partnership units (BX), and checking
+    # only the larger figure refused the split.
+    conn = _connect(_post_filing_split_db(tmp_path, "2026-06-12", 1.998, snapshot_shares=2.67e8,
+                                          market_cap_shares=4.4e8))
+    latest = load_inputs(conn, "KLA").fy_records[-1]
+    conn.close()
+    assert latest.split_factor == 1.998
 
 
 def test_split_after_the_latest_filing_moves_every_year_to_todays_basis(tmp_path):
