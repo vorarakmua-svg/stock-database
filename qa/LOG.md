@@ -198,3 +198,16 @@ rows). Impact under today's flat fallback (BUG-016 may revert it): BKNG −34%, 
 median or verdict changes.
 Gates: ruff ✓ mypy ✓ pytest 876 passed (1 known warning) | CI: pending for this push
 Commit: chore(qa): the oracle rule, then (this commit) fix(valuation): DDM growth needs 4 full years of dividends
+
+## Iteration 10 (continued): code review 1 recorded
+Review: an opus reviewer covered e51c4f8..abed57a (6 fixes since the bootstrap; it was due after the fifth). No
+critical issues in the range; it called 112aba5's declared-ratio snapping and the CSV's stable columns sound. Each
+finding was re-checked before recording: the KLAC/BKNG values on the real-data copy, the BOM data loss in scratch,
+the plan's fallback and the oracle's history in git, and O's 13-payment year.
+Recorded: BUG-014 (P1, splits after the latest FY never applied: KLAC Graham/Lynch ×10, BKNG Lynch ×25), BUG-015
+(P1, the CSV merge drops every row after an Excel UTF-8 save), BUG-016 (P1, iteration 6 changed the plan's growth
+fallback without the user's decision: restore it, decision Q5), BUG-017 (P2, O's 13-payment last year inflates DDM
+growth), BUG-018 (P2, a failed re-collection blanks a CSV row), Q5, leads L12–L15, L10 extended. VAL-01's PASS is
+withdrawn until BUG-016 is resolved. Loop prompt §7: oracle rule changes go in their own commit, before the fix.
+Review 2 is due after 5 fixes past abed57a (2 so far: 9c22ef8 and BUG-010's).
+Next: BUG-014 (P1, the largest wrong numbers on screen), then BUG-015, then BUG-016

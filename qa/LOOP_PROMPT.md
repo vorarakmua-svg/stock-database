@@ -275,6 +275,7 @@ misbehaves for reasons outside this program, swap in an equivalent and say why i
 - `qa/oracle/valuation_oracle.py`: re-implements every model from the specs, reading raw inputs from the DB. Output: per ticker and model, oracle vs stored value and the diff.
 - `qa/oracle/sec_oracle.py`: parses SEC companyfacts JSON on its own (requests + json, not `src.parsers`) for revenue, net income, assets, liabilities, equity, OCF, capex and diluted shares, then compares with the DB.
 - Hand checks: for 3 companies, check the oracle itself against the filed 10-K numbers (record source URLs and dates).
+- Oracle rule changes go in their own commit, citing the spec, before the code fix they verify, and that commit shows the oracle flagging the unfixed code. An oracle changed in the same commit as the code proves nothing. (Added in iteration 10 after code review 1.)
 - **Tolerances:** SEC-reported values exact after unit normalization; derived sums ±1%; cross-source market data ±5%; valuations ±0.5% vs the oracle.
 
 ## 8. Templates and seeded bugs

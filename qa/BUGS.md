@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 2 · P3 2 · NEEDS-USER 6 · Verified: 8
+**Open:** P0 0 · P1 3 · P2 4 · P3 2 · NEEDS-USER 7 · Verified: 8
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -61,7 +61,7 @@ Repro: AAPL Lynch: stored `hist_cagr` 14.64% vs 15.26% with the declared 4:1 spl
 Expected: per-share values moved to today's basis with the `split_events` ratios.
 Actual: the implied factor is 3.808 = FY2018 weighted shares 20.0B (restated) ÷ FY2017 5.252B, which includes buybacks. Lynch base AAPL 109.18 vs 111.90 (−2.4%); NEE −2.0%, WMT −2.5% (all recent splitters).
 Root cause: `_normalize_splits` (`src/valuation/inputs.py`) multiplied in the observed seam ratio (newer ÷ older share count), which includes that year's buybacks or issuance. Its docstring said `split_events` was 'empty for most tickers'; that is stale: 107 of 127 companies have rows, and 17 of the 18 companies with a detected split have declared ratios. Detection is kept (the seam is where the stored data switches basis, not the split date), but a declared ratio, or run of consecutive ratios, after the older year within ±25% of the jump now replaces it; otherwise the jump is kept. Verified on a backfilled copy: golden Level 2 now 0 mismatches; real 26 → 18 (AAPL/NEE/WMT/RTX Lynch and ANET/APH/AVGO/LRCX multiples resolved). Six values move 0.7–3.5% (AAPL Lynch 109.18 → 111.90, the oracle's value); `qa/evidence/iter07-bug006-impact.txt`.
-Notes: it did: four of the eight L6 multiples mismatches were this bug. Mixed bases within one year (AAPL FY2018: weighted shares restated, shares_outstanding not) remain a VALID-04 topic.
+Notes: it did: four of the eight L6 multiples mismatches were this bug. Mixed bases within one year (AAPL FY2018: weighted shares restated, shares_outstanding not) remain a VALID-04 topic. Code review 1 (iteration 10): splits dated after the latest fiscal year are never applied at all (KLAC, BKNG): BUG-014. RTX's "resolved" Lynch is agreement on a shared reading (its 1.589 is a spin-off price factor; see L12), not proof.
 
 ### BUG-007 [P2][VAL] Graham bear case ignores loss years
 Status: NEEDS-USER (decide the intended bear case; parked in iteration 8 so the priority rule stops picking it)
@@ -72,7 +72,7 @@ Actual: loss years are dropped, so the bear case equals the base case. 8 compani
 Notes: decide whether the bear should be N/A (excluded from the bear median) or 0 when a loss year is in the window.
 
 ### BUG-008 [P1][VAL] When the historical CAGR is undefined, growth falls back to a quarterly "analyst" figure
-Status: VERIFIED
+Status: VERIFIED, but the fix changed a planned rule without the user's decision: BUG-016 restores the plan's rule and Q5 asks
 Found: iteration 4 via VAL-01 / VAL-04 | Fixed: iteration 6 (see LOG) | Regression tests: `tests/test_valuation_assumptions.py::test_derive_growth_never_uses_analyst_growth_alone`, `tests/test_valuation_models.py::test_value_dcf_growth_is_flat_when_fcf_history_starts_negative`, `::test_value_lynch_na_when_eps_history_starts_with_losses`
 Repro: DELL Lynch `growth_source: analyst_only`, `hist_cagr: None`, `analyst_growth: 2.825`, giving growth 15% (cap) and base $130.2. With DELL's 6 years of EPS (2020→2026: 6.3%/yr) the oracle gets $54.3.
 Expected: spec growth = min(hist CAGR, analyst), conservative by design; it never says to use analyst growth alone.
@@ -124,6 +124,48 @@ Actual: one period's amount. V's quarterly ladder shows the same pattern: 0.59 f
 Root cause: to confirm: the SEC parser's choice of duration context for `CommonStockDividendsPerShareDeclared` vs how these filers tag it.
 Notes: the valuations don't use it; whether the web app displays it is unverified (MATCH-06). The dividend completeness check reads it only to confirm a shortfall, so a too-low figure can hide a finding but can't create one.
 
+### BUG-014 [P1][VAL] Splits after the latest fiscal year are never applied, so per-share models value KLAC and BKNG on the pre-split basis
+Status: OPEN
+Found: iteration 10 by code review 1; verified on the real-data copy | Fixed: — | Regression test: —
+Repro: KLAC split 10:1 on 2026-06-12 and its latest FY ended 2025-06-30: Graham base $154.83 and Lynch $446.44 against a price of $191.50 (post-split: $15.48 and $44.64, which would move the 5-model median from $70.00 to about $44.64). BKNG split 25:1 on 2026-04-06 (latest FY 2025-12-31): Lynch $2,483.55 against $193.64 (≈ $99.34; median $216.36 → ≈ $147.64).
+Expected: per-share inputs on the same basis as today's price; the `FYRecord` docstring promises "the same convention Yahoo's adjusted price bars use".
+Actual: `_normalize_splits` restates history onto the latest FY record's basis, so a split dated after that FY's period end is never applied.
+Root cause: `src/valuation/inputs.py` (`_normalize_splits`, `load_inputs`): "current basis" means the latest FY's, not today's.
+Notes: the review calls it P0-class (wrong numbers on screen); by the iteration-4 valuation calibration (large errors for some tickers) it's P1, and every company that splits shows it until its next annual report. The oracle shares the reading (`to_current_basis` aims at the latest FY's share count), so it couldn't catch this. Other declared "splits" after the latest FY: CRWD 4:1 (only its DCF applies, and that uses current shares), HON 0.9535 and SPGI 1.057 (spin-off price factors, see L12), SCCO 1.008 and 1.01 (stock dividends).
+
+### BUG-015 [P1][STORE] The CSV merge can silently drop every accumulated row
+Status: OPEN
+Found: iteration 10 by code review 1; the BOM case reproduced in scratch (`qa/evidence/iter10-review-csv-bom.txt`) | Fixed: — | Regression test: —
+Repro: export AAA and BBB; save `summary.csv` from Excel as "CSV UTF-8" (which adds a byte-order mark); export CCC: the file now holds only CCC.
+Expected: earlier rows kept (BUG-004's guarantee), or, when the old file can't be read, the file left untouched with an error.
+Actual: `_read_existing` reads with `utf-8`, so the BOM turns the header into `\ufeffticker` and `row.get("ticker")` drops every row. Per the review, an Excel ANSI (cp1252) save with one non-ASCII character logs a warning and is overwritten with this run's rows, and an exception mid-write leaves a truncated file.
+Root cause: `src/exporters/csv_exporter.py` (`_read_existing`, `export`; BUG-004's fix, 42f8a01): BOM-intolerant read, overwrite when unreadable, non-atomic write.
+Notes: before BUG-004's fix a failure lost one run; now the file holds every run, so a failure loses all of them (rebuildable from SQLite or JSON, but nothing says so). Fix direction (review): read with `utf-8-sig`; back up or refuse instead of overwriting an unreadable file; write to a temp file and `os.replace`.
+
+### BUG-016 [P1][VAL] Iteration 6 changed a planned valuation rule without the user's decision (loop rule 6)
+Status: OPEN
+Found: iteration 10 by code review 1; verified against the plan and the oracle's history | Fixed: — | Regression test: —
+Repro: the plan (`docs/superpowers/plans/2026-07-13-valuation-layer.md`, lines 390–396 and 485–489) specifies and tests an analyst-only fallback when the historical CAGR is undefined. f7feea4 (BUG-008) replaced it with flat 0% ("none") and, in the same commit, changed the oracle's `growth()` from "not derivable" (None) to 0.0, so its "16 DCF rows now match" evidence was circular.
+Expected: loop rule 6: valuation policy is recorded as NEEDS-USER and not changed. The spec is silent on this case, so the plan's rule stands until the user decides.
+Actual: the change is on the branch and moved 31 valuations (CVX DCF $293 → $124, five owner-earnings values −58%, Lynch N/A for 16 companies). Iteration 6's summary flagged it, but the loop made the change before asking.
+Fix: restore the plan's fallback, its test and the oracle's "not derivable" reading; the decision is Q5. The change can be re-applied from f7feea4 if the user approves it.
+Notes: the stale comment at `models.py:273` and the `analyst_only` rows in existing databases follow whatever Q5 decides.
+
+### BUG-017 [P2][VAL] A 13-payment last year inflates DDM growth (O)
+Status: OPEN
+Found: iteration 10 by code review 1; verified on the real-data copy | Fixed: — | Regression test: —
+Repro: Realty Income pays monthly; its 2025 has 13 ex-dates because the 2025-12-31 ex-date belongs to January's payment (the next is 2026-01-30). Stored `hist_cagr` is 4.58% over 9 years; with a 12-payment 2025 it's 3.66%, so the DDM base is about 4% high.
+Expected: comparable full years at both ends of the CAGR.
+Actual: BUG-009's rule fixes only a short FIRST year; a long LAST year still counts as one year.
+Notes: a short last year is deliberately kept (it can be a real cut), but a long one inflates growth. The review also notes that a partial year, then a suspension, then a partial restart year measures growth from the restart (synthetic: 20.6%, capped at 10%).
+
+### BUG-018 [P2][STORE] The CSV merge lets a failed re-collection blank a good row
+Status: OPEN
+Found: iteration 10 by code review 1, from the code (`csv_exporter.py` replaces a ticker's row with this run's summary unconditionally); not reproduced yet | Fixed: — | Regression test: —
+Repro: collect AAPL, then re-collect it while Yahoo and SEC fail: the run's mostly empty summary replaces AAPL's good row.
+Expected: the JSON merge's rule, which keeps `company_info` and financials when a re-collection fails.
+Actual: `rows.update(new_rows)` replaces the row. Invalid tickers (ZZZZ) also keep a permanent row, and columns dropped from `to_summary` stay in the file.
+
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
@@ -144,6 +186,11 @@ Status: NEEDS-USER
 Context: the dividend completeness check (BUG-012) flags CB FY2025: Yahoo lacks its Sep and Dec 2025 payments, so the DDM's TTM dividend is $1.99 instead of ≈ $3.93 and CB's DDM is about half. The spec bases the DDM on TTM dividends from `dividend_events` (Yahoo).
 Options: (a) keep the Yahoo TTM and rely on the data-quality warning (today); (b) when the check fires, use SEC's declared dividends per share for the trailing four quarters (needs BUG-013 fixed first); (c) make DDM N/A ("dividend history incomplete") for flagged companies. (b) and (c) change the spec's DDM basis or N/A rules, so it's the user's call.
 
+### Q5 [VAL] NEEDS-USER: when a model's historical growth can't be measured, what growth should it use?
+Status: NEEDS-USER
+Context: the CAGR is undefined when the 10-FY window starts on a loss or negative FCF (DELL, CVX, MU, PLTR, AMD and others). The plan uses yfinance's one-quarter "analyst" figure alone, clamped to the cap (seen from −85% to +1,369%). Iteration 6 switched to flat 0%, with Lynch N/A; BUG-016 restores the plan until you decide. The switch moved 31 valuations (CVX DCF $293 → $124).
+Options: (a) the plan's analyst-only fallback; (b) flat 0% (iteration 6); (c) measure from the first profitable year when at least 4 FYs remain (DELL 6.3%; CVX's FCF would hit the 15% cap again). Related: Q2 (what the "analyst" figure is).
+
 ---
 
 ## Leads (unconfirmed; discovery units confirm or drop them)
@@ -153,8 +200,12 @@ Options: (a) keep the Yahoo TTM and rely on the data-quality warning (today); (b
 - L3 [CLI] A batch containing a failed ticker (ZZZZ, errors=1) still exited 0. Check the intended exit-code semantics. (iter 1)
 - L5 [MATCH] Web UPDATE DATA jobs export SQLite only (`src/webapp/jobs.py:246`, `formats=["sqlite"]`), so JSON and the CSVs go stale after web updates. Possibly by design; confirm in MATCH-05. (iter 3)
 - L6 [VAL] Level-2 mismatches not yet explained: NOW multiples (271%), WDC multiples (Sandisk spin-off), SCCO Lynch + multiples (stock dividends; EPS gaps, see L7), SPGI Lynch + multiples, GE Lynch (1:8 reverse split + spin-offs; 94%), T Lynch (28%). ANET/APH/AVGO/LRCX were BUG-006, fixed in iteration 7. Adjudicate oracle vs code. (iter 4, updated iter 7)
-- L10 [VAL] APP: a split was detected and applied though `split_events` declares none, and AppLovin has never split. Possible false positive rescaling its EPS history. (iter 7)
+- L10 [VAL] APP: a split was detected and applied though `split_events` declares none, and AppLovin has never split. Possible false positive rescaling its EPS history. (iter 7; review 1: BX, CRWD, LIN, PLTR and UBER also keep a jump with no declared split, likely IPO, merger or conversion seams)
 - L7 [VALID] `eps_diluted` is null for early FYs while net income and shares exist (DELL 2015–2019, SCCO 2014–2018; GOOGL weighted shares before 2022): canonical mapping gap. (iter 4)
 - L8 [VAL] Graham/P/B BVPS uses weighted diluted shares and total equity including preferred (JPM basis $130.30 vs about $124 common). The spec is ambiguous. (iter 4)
 - L9 [VAL] KKR graham/multiples: the oracle can't derive the inputs; check the data. (iter 4)
 - L4 [VAL/VALID] `dividend_history.years_of_data` is the span from the first to the last payment (`yahoo_handler.py:710`): AAPL shows 39.2 years, including its 1995–2012 suspension. Check whether DDM or anything else treats it as an unbroken record. (iter 2)
+- L12 [VAL] `split_events` mixes share splits with spin-off price factors (GE 1.281/1.253, DHR 1.319/1.128, HON 0.9535, SPGI 1.057, RTX 1.589), and `_declared_ratio` treats them alike: RTX's 1.589 was applied at its 2020 merger seam (observed 1.5717). Also: with no `period_end` every split ever recorded is a candidate; one declared split can match more than one seam; CRWD's IPO seam (3.12) only just misses its 2026 4:1 split; no tests for reverse splits or a missing `period_end`. (review 1, iter 10)
+- L13 [GATHER] `stock_data_fetcher.py:398-407`: `results["csv"].append` raises KeyError when the summary export returns None (e.g. Excel has the file locked), which also skips the SQLite export and the valuation recompute. (review 1, iter 10)
+- L14 [QA] Oracle independence: besides BUG-014's basis, the oracle shares the code's reading of spin-off ratios as splits, takes the DDM `ttm_anchor` from the stored output, and buckets dividends by the ex-date's calendar year. Oracle rule changes now go in their own commit first (loop prompt §7). (review 1, iter 10)
+- L15 [CODE] `tests/test_docs_usage_guide.py` would run the guide's `fig.show()`, opening a browser during pytest, if plotly were installed (it isn't here). (review 1, iter 10)

@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 104 · PASS 2 · FAIL 3 · N-A 0 · BLOCKED 0 · NEEDS-USER 0  
+**Status counts:** TODO 103 · PASS 1 · FAIL 5 · N-A 0 · BLOCKED 0 · NEEDS-USER 0  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -11,10 +11,10 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
-| VAL-01 | DCF (two-stage FCF) | PASS | iter 6 | Level 1 ✓ and Level 2 ✓ on every applicable DCF row (real + golden) after BUG-008; `qa/evidence/iter06-oracle-*.txt` |
+| VAL-01 | DCF (two-stage FCF) | TODO | iter 10 | PASS withdrawn: the 16 rows with an unmeasured CAGR agreed only because the oracle took the same unapproved rule (BUG-016); re-verify after BUG-016 |
 | VAL-02 | DDM (multi-stage) | FAIL→BUG-011 | iter 10 | BUG-005, BUG-009 and BUG-010 fixed (oracle agrees on every DDM row); open: DHR spin-off stored as a dividend (BUG-011); CB's missing payments are upstream and flagged (BUG-012), the DDM's handling is Q4; specials policy: Q3 |
-| VAL-03 | Graham Number | FAIL→BUG-007 | iter 8 | Level 1 ✓ (124 rows); EPS = reported diluted EPS ✓; bear ignores loss years (8 cos): BUG-007 awaits the user's decision |
-| VAL-04 | Peter Lynch | TODO | iter 7 | BUG-006 and BUG-008 fixed; 4 unexplained Level-2 mismatches (GE, SCCO, SPGI, T): lead L6 |
+| VAL-03 | Graham Number | FAIL→BUG-014 | iter 10 | Level 1 ✓ (124 rows); EPS = reported diluted EPS ✓; KLAC on the pre-split basis (BUG-014); the bear case ignores loss years (BUG-007, NEEDS-USER) |
+| VAL-04 | Peter Lynch | FAIL→BUG-014 | iter 10 | KLAC and BKNG on the pre-split basis (BUG-014); 4 unexplained Level-2 mismatches (GE, SCCO, SPGI, T): lead L6 |
 | VAL-05 | Historical multiples band | TODO | iter 7 | Level 1 ✓; BUG-006 fix resolved ANET/APH/AVGO/LRCX; 4 unexplained (NOW, SCCO, SPGI, WDC): lead L6 |
 | VAL-06 | Owner earnings | TODO | |  |
 | VAL-07 | Summary | TODO | |  |
@@ -50,7 +50,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | MATCH-02 | Cross-source fundamentals | TODO | |  |
 | MATCH-03 | Market math | TODO | |  |
 | MATCH-04 | Price history | TODO | |  |
-| MATCH-05 | Store consistency | TODO | iter 3 | BUG-004 fixed (CSVs now accumulate across runs); the full JSON vs SQLite vs CSV value comparison is still to do; see lead L5 |
+| MATCH-05 | Store consistency | FAIL→BUG-015 | iter 10 | BUG-004 fixed (CSVs accumulate across runs), but the merge can drop every row (BUG-015) or blank one (BUG-018); JSON vs SQLite vs CSV values untested |
 | MATCH-06 | UI vs DB | TODO | |  |
 | MATCH-07 | Peers and sector medians are computed within the right sector and the medians are correct.… | TODO | |  |
 | MATCH-08 | Dedup | TODO | |  |
