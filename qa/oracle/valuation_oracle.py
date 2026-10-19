@@ -167,9 +167,9 @@ class Inputs:
 
     def growth(self, hist: Optional[float], cap: float) -> Optional[float]:
         if hist is None:
-            # Spec gap: no measurable CAGR. Analyst growth never stands alone (it's a quarterly YoY
-            # figure; BUG-008), so growth is the conservative flat 0%. Lynch treats this as N/A instead.
-            return 0.0
+            # Spec gap (Q5): with no measurable CAGR the spec doesn't say what growth to use, so the row is
+            # not derivable from it. (The code follows the plan's analyst-only fallback until the user decides.)
+            return None
         raw = min(hist, self.analyst) if self.analyst is not None else hist
         return clamp(raw, 0.0, cap)
 
