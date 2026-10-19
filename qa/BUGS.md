@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 13 · NEEDS-USER 7 · Verified: 24
+**Open:** P0 0 · P1 0 · P2 1 · P3 13 · NEEDS-USER 7 · Verified: 25
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -324,7 +324,7 @@ Status: OPEN
 Found: iteration 29 by code review 4, re-checked at 1810180 | Fixed: — | Regression test: —
 Repro: the DCF and owner-earnings assumptions hold `risk_free_rate` but no as-of date (DDM's `ttm_anchor` is the dividend window), and `market_snapshots` stores the rate without its source or date. When Treasury.gov fails, `fred_handler` returns static estimates (`source: "estimate"`, 10-year 4.35%), but `stock_data_fetcher` labels every rate fetched without a FRED key `"fallback"`, so the estimate can't be told from Treasury.gov data; `rf_fallback` fires only when no rate exists.
 Expected: the spec's "the assumption JSON stores the rate and its as-of date so staleness is visible in the UI" (2026-07-13 design, Failure handling) and VAL-10's "fallback sources flagged in assumptions".   Actual: neither.
-Notes: no current row uses the 4.35% estimate (real rates are 0.0440–0.0475). VAL-10's PASS (iteration 22) checked units, floors and caps, not this.
+Notes: no current row uses the 4.35% estimate (real rates are 0.0440–0.0475). VAL-10's PASS (iteration 22) checked units, floors and caps, not this. Iteration 35: tracing this found BUG-041 (the key-less rate was January 2's); its fix puts the Treasury.gov row's date in the fallback yields (`date`), but nothing carries it, or the source, into the stores or the assumptions yet.
 
 ### BUG-038 [P3][STORE] After a failed Yahoo run, the CSV and JSON show no EV while SQLite keeps the last one
 Status: OPEN
@@ -343,6 +343,15 @@ Found: iteration 29 by code review 4 (#7, #8), re-checked at 1810180 (`qa/eviden
 Repro: (a) four regular payments plus a 1.2x extra in the last full year: the extra is scaled as if it had slipped, so growth reads 5.46%, between 5.00% without it and 8.11% with it. The iteration-25 demo's MSFT "slipped" payment was such an extra, and SCCO's 2019 (5 payments, 4 in each neighbouring year) will be scaled once it opens the window (anchor 2029). (b) a slipped ex-date in a year whose payments rose by more than half: the size test fails, so the extra payment counts in full (8.01% against a true 5.36%).
 Expected: (a) under today's rule that every payment counts (Q3), only a payment shown to have slipped (a neighbouring year one short, or an ex-date at the year boundary) is scaled; (b) the slip is scaled.
 Notes: no current value is affected. Until (a) is fixed, the rule partly decides Q3 for extras up to 1.5x.
+
+### BUG-041 [P0][GATHER] Without a FRED key, every valuation used the year's first trading-day rate, not the latest
+Status: VERIFIED (iteration 35)
+Found: iteration 35 while tracing BUG-037 (`qa/evidence/iter35-treasury-feed-order.txt`) | Fixed: iteration 35 (see LOG) | Regression tests: `tests/test_fred_handler.py::test_the_keyless_rate_is_the_feeds_latest_day`, `::test_the_treasury_feed_takes_its_latest_date_in_either_order`, `::test_a_feed_row_without_yields_gives_no_rate`
+Repro: without `FRED_API_KEY`, `FREDHandler` falls back to Treasury.gov's daily yield curve CSV for the year and read its last row as the latest. The feed lists the year newest first (fetched 2026-10-20: first row 10/19/2026, 10-year 5.15%; last row 01/02/2026, 4.19%), so every key-less run used January 2's rate; in early January, with the current year's feed empty, the prior year's January 2. The golden collection of 2026-10-20 stored 0.0419 for every ticker.
+Expected: the latest day's rate (5.15% on 2026-10-19).   Actual: 4.19%, so CAPM discount rates were about a point low and DCF and DDM values too high: on the golden copy 13 of 114 valuation rows and 7 of 19 summaries move with the right rate, AAPL's DCF base $140.53 -> $121.67, MSFT's $221.32 -> $191.62, SPY's DDM $142.23 -> $122.89 (`qa/evidence/iter35-bug041-impact.txt`); owner earnings didn't move (their 7% floor is above both rates).
+Root cause: `src/fetchers/fred_handler.py` `_fetch_treasury_gov_year` took `lines[-1]`. There were no FREDHandler tests at all.
+Fix: the row with the latest date is taken, whatever the feed's order, and its date is kept in the yields (`date`); a dated row without yields counts as no rate. Three mutants (the last row, the first row, the old metadata count) each fail a test. Live, the key-less fallback now returns 2026-10-19's 5.15% (`iter35-bug041-live.txt`).
+Notes: the user's database used FRED (its JSON records `"source": "fred"`), so its values are unaffected; any run without a key, including this loop's golden collection, was affected. The golden DB in SCRATCH still holds 0.0419: re-collect it in the next sweep.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

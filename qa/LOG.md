@@ -659,3 +659,20 @@ Gates: ruff ✓ mypy ✓ pytest 932 passed (1 known warning) | CI: pending for t
 Commit: oracle f1dbf87, then (this commit) fix(valuation): a split after the latest filing applies while Yahoo's
 count lags
 Next: BUG-037 (P2, the last open P2: the rate's date and static-estimate flag)
+
+## Iteration 35: 2026-10-20 05:13: fix
+Picked: BUG-037 (P2, the last open P2) (CI: 3fef75b running), then switched to BUG-041 (P0) found while tracing it:
+the priority rule puts a P0 first.
+Did: `_fetch_treasury_gov_year` read the feed's last row as the latest. Without network the stored rates couldn't
+settle the order (the user's data came from FRED), so one fetch of the 2026 feed did: newest first (10/19/2026 5.15%
+... 01/02/2026 4.19%), and the golden run's 0.0419 is January 2's. Tests first in a new `tests/test_fred_handler.py`
+(the handler had none): the newest-first feed gave 0.0419 (RED), and the row's date wasn't kept (RED). Fix: the
+latest-dated row, whatever the order, with its date; a dated row without yields is no rate. Three mutants each fail
+a test; restored byte-identical. Live: 2026-10-19's 5.15%.
+Evidence: `qa/evidence/iter35-{treasury-feed-order,bug041-red,bug041-green,bug041-mutants,bug041-live,bug041-impact}.txt`
+Result: BUG-041 (P0) found and VERIFIED. With the right rate the golden copy moves 13 of 114 rows and 7 of 19 summaries
+(AAPL's DCF base $140.53 → $121.67); the user's FRED-sourced data is unaffected. GATHER-04 → FAIL→BUG-037. The golden
+DB still holds the stale 0.0419: re-collect it in the next sweep.
+Gates: ruff ✓ mypy ✓ pytest 935 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(fetchers): the key-less risk-free rate is Treasury.gov's latest day, not January 2's
+Next: BUG-037 (P2: carry the rate's date and source into the stores and assumptions)

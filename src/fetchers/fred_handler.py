@@ -7,7 +7,7 @@ FRED API is free but requires registration at https://fred.stlouisfed.org/docs/a
 import logging
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -295,6 +295,14 @@ class FREDHandler:
             "treasury_30y": 4.55,
         }
 
+    @staticmethod
+    def _feed_date(line: str) -> Optional[datetime]:
+        """The date in a Treasury feed row's first column (MM/DD/YYYY), or None."""
+        try:
+            return datetime.strptime(line.split(',')[0].strip().strip('"'), "%m/%d/%Y")
+        except ValueError:
+            return None
+
     def _fetch_treasury_gov_year(self, year: int) -> Optional[Dict[str, Any]]:
         """Fetch the daily Treasury yield curve CSV for a calendar ``year``.
 
@@ -314,11 +322,23 @@ class FREDHandler:
                 lines = response.text.strip().split('\n')
                 if len(lines) > 1:
                     headers = lines[0].split(',')
-                    latest = lines[-1].split(',')
+                    # The feed lists the year newest first, so the latest day is the row with the
+                    # latest date, not the last row: that was the year's first trading day (January
+                    # 2's 4.19% stood in for October 19's 5.15% on 2026-10-20).
+                    dated: List[Tuple[datetime, str]] = []
+                    for line in lines[1:]:
+                        day = self._feed_date(line)
+                        if day is not None:
+                            dated.append((day, line))
+                    if not dated:
+                        return None
+                    latest_day, latest_line = max(dated, key=lambda item: item[0])
+                    latest = latest_line.split(',')
 
                     yields = {
                         "fetched_at": datetime.now().isoformat(),
                         "source": "treasury_gov",
+                        "date": latest_day.date().isoformat(),
                     }
 
                     col_map = {
@@ -337,7 +357,7 @@ class FREDHandler:
                             except (ValueError, IndexError):
                                 pass
 
-                    if len(yields) > 2:  # More than just fetched_at and source
+                    if len(yields) > 3:  # More than just fetched_at, source and date
                         return yields
 
         except Exception as e:
