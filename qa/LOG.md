@@ -692,3 +692,20 @@ No existing value moves.
 Gates: ruff ✓ mypy ✓ pytest 942 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(valuation): valuations record the risk-free rate's day and source
 Next: record code review 5 when it reports; otherwise discovery (VAL-09, VAL-12, VAL-13)
+
+## Iteration 37: 2026-10-20 05:29: discovery
+Picked: VAL-12 and VAL-09, because no P0–P2 bug was open and VAL comes first (CI: f0db42a ✓; 8feac32 running). Code
+review 5 is still running.
+Did: VAL-12: rendered every company's VAL tab in-process on the iteration-36 copies and compared each number with the
+API, both formatted by the app's formatters, and checked each DCF sensitivity grid's centre and corners. VAL-09:
+swept both copies for every listed edge case against the spec's N/A, sector, cap and flag rules. The short-history
+case surfaced three gathering gaps, read from the golden SEC cache: XOM now maps to ExxonMobil Holdings Corp's new
+CIK (filings since 2026-07, no 10-K yet); ARM files US-GAAP 20-Fs, which the parser skips; TSM files IFRS; and none
+of the three is explained.
+Evidence: `qa/evidence/iter37-{val12,val09}.txt`
+Result: VAL-12 PASS (0 differences over 146 tabs, 579 model rows, 100 grids); VAL-09 PASS (0 problems). New: BUG-042 (P1),
+BUG-043 (P1), BUG-044 (P2); lead L1 resolved. GATHER-02 → FAIL→BUG-042.
+Gates: ruff ✓ mypy ✓ pytest 942 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) chore(qa): discovery VAL-09 and VAL-12 pass; XOM, ARM and TSM gathering gaps
+Next: BUG-042 or BUG-043 (P1, oldest first: BUG-042, whose fix direction is a design question); record code review 5
+when it reports

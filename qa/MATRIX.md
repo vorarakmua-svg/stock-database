@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 94 · PASS 8 · FAIL 5 · N-A 0 · BLOCKED 0 · NEEDS-USER 2  
+**Status counts:** TODO 91 · PASS 10 · FAIL 6 · N-A 0 · BLOCKED 0 · NEEDS-USER 2  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -19,10 +19,10 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | VAL-06 | Owner earnings | PASS | iter 26 | 127 real and 19 golden rows: every N/A reason and the 8-of-10 gate match the spec recomputed from raw tables; volatility fields, buy_below = 0.70 × base, discount = max(rf, 7%), no beta, no SBC add-back; excluded from the median (it would move 81 summaries); the API's verdict follows the spec for all; values recompute exactly (iter 22). UX note for REPORT: UBER's 'insufficient history' is decided either way (5 of 9 years positive) (`qa/evidence/iter26-val06.txt`) |
 | VAL-07 | Summary | PASS | iter 22 | summary rows equal the medians of the applicable models (127 real, 19 golden; 32 with an even count); the screener's upside, verdict and Buffett verdict equal the valuation API's for every company (126, 14), and sorting by upside ranks by those numbers; the verdict rule matches the spec (code read); `qa/evidence/iter22-discovery-val.txt` |
 | VAL-08 | Invariant scan over the whole real-DB copy | PASS | iter 22 | over 762 real and 114 golden rows: bear ≤ base ≤ bull, no missing/NaN/infinite value, na_reason exactly when not applicable, DCF/Lynch/owner earnings only for general/utility/energy, assumptions JSON parses; values recompute from their assumptions (oracle Level 1: 519 rows; owner earnings: 81), none beyond 0.5%; `qa/evidence/iter22-discovery-val.txt` |
-| VAL-09 | Edge cases | TODO | iter 34 | BUG-036 fixed (a split after the latest filing applies while Yahoo's count lags, and a non-simple factor confirms with either count); partial first dividend year covered (BUG-009 tests); the rest untested |
+| VAL-09 | Edge cases | PASS | iter 37 | over 146 companies every edge case follows the spec: banks, insurers and REITs never get DCF, Lynch or owner earnings and get P/B or P/FFO; negative 3-year FCF -> DCF N/A (7); equity <= 0 -> Graham N/A (10, MCD among them); growth within its caps and Lynch's P/E within 5-25 (NVDA and 33 others capped); fewer than 4 FYs -> DCF and Lynch N/A; no beta -> 1.0 flagged; no analyst growth -> historical; splits restated inside the window agree with the oracle (32 companies); every row ordered and finite (`qa/evidence/iter37-val09.txt`). It surfaced the data gaps BUG-042..044 (GATHER-02) |
 | VAL-10 | Rates | PASS | iter 36 | units, floors, caps and the ERP ✓ (iter 22); key-less runs take Treasury.gov's latest day (BUG-041); the assumptions record the rate's day and source and flag the static estimate (BUG-037); live 2026-10-19 5.15% on the VAL tab (`qa/evidence/iter36-bug037-e2e.txt`) |
 | VAL-11 | Reproducibility | PASS | iter 22 | a second backfill reproduces all 889 valuation and summary rows exactly; the post-collection path (`compute_and_store` with the collected tickers) gives the backfill's rows; `qa/evidence/iter22-discovery-val.txt` |
-| VAL-12 | Presentation | TODO | iter 22 | the screener's upside, verdict and Buffett verdict equal the API's (see VAL-07); the VAL tab and the DCF sensitivity grid are untested |
+| VAL-12 | Presentation | PASS | iter 37 | 146 companies' VAL tabs equal /api/stocks/{T}/valuation: verdict pill, median, price, upside, 579 model rows, 89 owner-earnings chips with buy-below; all 100 DCF sensitivity grids have the base at their centre and the bear and bull at their corners; the screener matches the API (iter 22) (`qa/evidence/iter37-val12.txt`) |
 | VAL-13 | Hand-worked examples (a general company, a bank, a dividend payer) | TODO | |  |
 
 ## VALID: Data validation (parsing, standardization, quality)
@@ -60,7 +60,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
 | GATHER-01 | Yahoo | TODO | |  |
-| GATHER-02 | SEC CIK resolution | TODO | |  |
+| GATHER-02 | SEC CIK resolution | FAIL→BUG-042 | iter 37 | XOM now resolves to a new holding-company CIK without history (BUG-042, P1); ARM's US-GAAP 20-F isn't read (BUG-043, P1); TSM's IFRS gap is unexplained (BUG-044, P2); dual-class, punctuated, renamed, delisted, ETF and index cases untested |
 | GATHER-03 | companyfacts parsing | TODO | |  |
 | GATHER-04 | Rates | TODO | iter 36 | without a FRED key: Treasury.gov's latest day (BUG-041) with its day and source, and the static estimate flagged (BUG-037), checked live; the FRED-key path and January's prior-year fallback are untested |
 | GATHER-05 | Rate limiting and retries | TODO | |  |

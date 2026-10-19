@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 13 · NEEDS-USER 7 · Verified: 26
+**Open:** P0 0 · P1 2 · P2 1 · P3 13 · NEEDS-USER 7 · Verified: 26
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -354,6 +354,25 @@ Root cause: `src/fetchers/fred_handler.py` `_fetch_treasury_gov_year` took `line
 Fix: the row with the latest date is taken, whatever the feed's order, and its date is kept in the yields (`date`); a dated row without yields counts as no rate. Three mutants (the last row, the first row, the old metadata count) each fail a test. Live, the key-less fallback now returns 2026-10-19's 5.15% (`iter35-bug041-live.txt`).
 Notes: the user's database used FRED (its JSON records `"source": "fred"`), so its values are unaffected; any run without a key, including this loop's golden collection, was affected. The golden DB in SCRATCH still holds 0.0419: re-collect it in the next sweep.
 
+### BUG-042 [P1][GATHER] XOM resolves to ExxonMobil Holdings Corp's new CIK, which has no financial history
+Status: OPEN
+Found: iteration 37 via VAL-09 (lead L1; `qa/evidence/iter37-val09.txt`) | Fixed: — | Regression test: —
+Repro: SEC's company_tickers.json, fetched for the golden collection of 2026-10-20, maps XOM to CIK 2115436, "ExxonMobil Holdings Corp", whose filings start 2026-07-01 (S-8 POS and 8-K; no 10-K or 10-Q yet) and whose companyfacts hold 94 us-gaap concepts. The golden collection stored no annual financials for XOM (6 quarters), so every XOM model that needs fiscal years is N/A; the only hint is the generic "[data-quality/high] No annual financial data extracted." The user's August collection used Exxon Mobil Corp's CIK 34088 (20 fiscal years, cached in `data/cache`).
+Expected: a ticker that moved to a new registrant keeps its predecessor's history, or the gap is explained by name.   Actual: a fresh collection has no XOM fundamentals; re-collecting into an existing database keeps the old rows but switches the stored CIK to 2115436.
+Notes: options: also read the predecessor's facts when the resolved CIK has no 10-K (the CIK already stored for the ticker, or a small successor map), or warn with both CIKs. The choice is a design question; the data is recorded here.
+
+### BUG-043 [P1][GATHER] ARM's 20-F filings report in US GAAP, but only 10-K forms are read
+Status: OPEN
+Found: iteration 37 via VAL-09 (lead L1) | Fixed: — | Regression test: —
+Repro: `src/parsers/xbrl_parser.py` reads `_ANNUAL_FORMS = {"10-K", "10-K/A"}` and `_QUARTERLY_FORMS` (10-Q and 10-K). ARM files 20-F with us-gaap facts (288 concepts; its revenue and net-income facts come from 20-F (18) and 6-K (60) filings), so its golden collection stored no annual or quarterly financials and no SEC-based model can value it.
+Expected: a 20-F (or 40-F) filer that tags us-gaap facts gets its annual financials.   Actual: none, and no warning (BUG-044).
+
+### BUG-044 [P2][GATHER] A filer whose SEC data yields no financials gets no explanation (TSM, ARM)
+Status: OPEN
+Found: iteration 37 via VAL-09 (lead L1) | Fixed: — | Regression test: —
+Repro: TSM files 20-F in IFRS (`ifrs-full`, 334 concepts; no `us-gaap`), which the canonical map doesn't cover, so its golden collection stored no SEC financials and recorded no warning at all; ARM likewise (BUG-043), and XOM's warning is the generic data-quality one (BUG-042).
+Expected: GATHER-02's "graceful, explained gap", e.g. "SEC financials not mapped: IFRS filer (20-F)", naming the form and taxonomy.   Actual: an empty FA tab and N/A models with only "insufficient history" as the reason.
+
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
@@ -383,7 +402,7 @@ Options: (a) the plan's analyst-only fallback; (b) flat 0% (iteration 6); (c) me
 
 ## Leads (unconfirmed; discovery units confirm or drop them)
 
-- L1 [GATHER/VALID] XOM, TSM and ARM finished without `calculated_metrics` in their sources (every other golden ticker has it). XOM is a plain US 10-K filer. (iter 1)
+- L1 [GATHER/VALID] XOM, TSM and ARM finished without `calculated_metrics` in their sources (every other golden ticker has it). XOM is a plain US 10-K filer. (iter 1) Iteration 37: RESOLVED into BUG-042 (XOM's new holding-company CIK), BUG-043 (ARM's US-GAAP 20-F not read) and BUG-044 (no explanation for TSM's IFRS gap).
 - L2 [GATHER] SPY: Yahoo answered 404 "No fundamentals data" 3 times, yet the run recorded 0 warnings / 0 errors (silent gap). (iter 1)
 - L3 [CLI] A batch containing a failed ticker (ZZZZ, errors=1) still exited 0. Check the intended exit-code semantics. (iter 1)
 - L5 [MATCH] Web UPDATE DATA jobs export SQLite only (`src/webapp/jobs.py:246`, `formats=["sqlite"]`), so JSON and the CSVs go stale after web updates. Possibly by design; confirm in MATCH-05. (iter 3)
