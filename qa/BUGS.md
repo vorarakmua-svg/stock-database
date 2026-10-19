@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 3 · P3 23 · NEEDS-USER 10 · Verified: 29
+**Open:** P0 0 · P1 0 · P2 2 · P3 23 · NEEDS-USER 10 · Verified: 30
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -382,11 +382,13 @@ Fix: BUG-042's warning names the cause: "it reports in IFRS (20-F, 6-K), which i
 
 Iteration 40: with 20-F read (BUG-043), ARM's reason is gone; a 6-K-only filer reads "it has filed no annual report (20-F) yet", and a filer reporting in another currency "it reports in CNY (20-F), which isn't converted to dollars".
 ### BUG-045 [P2][GATHER] A failed companyfacts or submissions request is not recorded as an error
-Status: OPEN
-Found: iteration 38 while fixing BUG-042 | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 41)
+Found: iteration 38 while fixing BUG-042 | Fixed: iteration 41 (see LOG) | Regression tests: `tests/test_fetcher_concurrency.py::test_a_failed_sec_request_is_an_error` (companyfacts, submissions), `::test_the_run_summary_counts_a_failed_sec_request_as_an_error`, `tests/test_sec_cache.py::test_a_failed_request_is_not_logged_as_a_success`
 Repro: `SECHandler.fetch_all` stores a failed request's message as `company_facts_error` or `submissions_error` (a 403 for a blocked User-Agent, a 5xx, a timeout), but nothing reads those keys: `StockData.merge_sec_data` handles only `error`, `cik` and `submissions`. The ticker's record is empty, its `errors` list stays empty, and the run summary counts it under "Successfully fetched" (`summary["successful"]` counts tickers without errors). Since iteration 38 a failed companyfacts request at least shows as a warning ("its companyfacts request failed (…)"); a failed submissions request is still silent.
 Expected (GATHER-06): a failed request is an error for that ticker, and the summary is honest.   Actual: a success, with at most a warning.
 
+Fix: `StockData.merge_sec_data` records each failed part as an error ("SEC EDGAR companyfacts: …", "SEC EDGAR submissions: …"), so `error_count` and the run summary count it, and `SECHandler.fetch_all` logs "SEC data for T is incomplete" instead of "Successfully fetched SEC data" after a failed part. The exporters don't branch on errors, so nothing else changes. The real CLI (`src.main.main`) with companyfacts blocked by a stubbed 403 now prints "Successfully fetched: 0 / With errors: 1" (before: 1 and 0), stores `error_count` 1 and the error in the JSON, and the FA note names the 403 (`qa/evidence/iter41-bug045-e2e.txt`). Three mutants each fail a test.
+Notes: that run still exits 0 with every ticker failed: lead L18 (CLI-01).
 ### BUG-046 [P3][CLI] `stock-web --help` starts the server instead of printing usage
 Status: OPEN
 Found: iteration 38 (looking up the server's settings) | Fixed: — | Regression test: —
@@ -526,3 +528,4 @@ Options: (a) always count every class and unit (market cap ÷ price whenever it 
 - L15 [CODE] `tests/test_docs_usage_guide.py` would run the guide's `fig.show()`, opening a browser during pytest, if plotly were installed (it isn't here). (review 1, iter 10)
 - L16 [STORE] The JSON export writes in place, and an unreadable existing JSON is silently replaced, losing its history (the CSV analogue was BUG-015). Pre-existing. (review 3, iter 23)
 - L17 [VALID] HON's latest FY diluted count, on today's basis, is 2.03× Yahoo's count (`t_bug035/fy_vs_yahoo.py` on the real copy, iteration 39): check for a missed reverse split or a wrong Yahoo count.
+- L18 [CLI] `stock-data` exits 0 when every ticker has errors (iteration 41's run with companyfacts blocked: "Successfully fetched: 0", exit 0). CLI-01 decides what partial and total failure should return.

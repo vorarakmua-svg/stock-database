@@ -347,6 +347,11 @@ class StockData:
 
         self.add_source("sec_edgar")
 
+        # A failed request (403, 5xx, timeout) leaves its part empty: an error, not a quiet gap.
+        for key, endpoint in (("company_facts_error", "companyfacts"), ("submissions_error", "submissions")):
+            if sec_data.get(key):
+                self.add_error(f"SEC EDGAR {endpoint}: {sec_data[key]}")
+
         # CIK
         if "cik" in sec_data:
             self.cik = sec_data["cik"]

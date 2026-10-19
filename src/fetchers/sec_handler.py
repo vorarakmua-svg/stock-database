@@ -198,7 +198,10 @@ class SECHandler:
             self.logger.error(f"Error fetching submissions: {e}")
             data["submissions_error"] = str(e)
 
-        self.logger.info(f"Successfully fetched SEC data for {ticker}")
+        if "company_facts_error" in data or "submissions_error" in data:
+            self.logger.warning(f"SEC data for {ticker} is incomplete (see the error above)")
+        else:
+            self.logger.info(f"Successfully fetched SEC data for {ticker}")
         return data
 
     def ticker_to_cik(self, ticker: str) -> Optional[str]:

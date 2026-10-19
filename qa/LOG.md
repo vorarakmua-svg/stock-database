@@ -777,3 +777,20 @@ Gates: ruff ✓ mypy ✓ pytest 958 passed (1 known warning) | CI: pending for t
 Commit: (this commit) fix(parsers): read a foreign issuer's annual report (20-F, 40-F)
 Next: BUG-047 or BUG-048 (P2, oldest first: BUG-047; for BUG-048 the oracle rule changes first), then BUG-045. Fixes
 since review 5's range: 3 (8feac32, 98013f4, this); review 6 after two more.
+
+## Iteration 41: 2026-10-20 06:45: fix
+Picked: BUG-045, the oldest open P2 (iteration 40's "Next" put BUG-047 first, against the oldest-first rule; corrected
+here). CI: 9892af9 ✓, 14ac7c6 running at the start.
+Did: TDD (4 tests, RED first: the summary read 1 successful and 0 with errors). `merge_sec_data` records a failed
+companyfacts or submissions request as an error, and the SEC handler stops logging "Successfully fetched SEC data"
+after one. The exporters don't branch on a run's errors, so only the counts and the summary change. Three mutants
+each fail a test. Real app: the `stock-data` CLI entry point run with companyfacts blocked by a stubbed 403 (no
+request sent to SEC) prints "Successfully fetched: 0 / With errors: 1", stores `error_count` 1 and the error in the
+JSON, logs "SEC data for AAPL is incomplete", and the FA note names the 403. It also exits 0 with every ticker
+failed: lead L18 for CLI-01.
+Evidence: `qa/evidence/iter41-bug045-{red,green,mutants,e2e}.txt`
+Result: BUG-045 VERIFIED. Open: P2 2 (BUG-047, BUG-048), P3 23.
+Gates: ruff ✓ mypy ✓ pytest 962 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(fetchers): a failed SEC request is an error, not a success
+Next: BUG-047 (P2), then BUG-048 (P2; the oracle rule changes first). Fixes since review 5's range: 4 (8feac32,
+98013f4, 14ac7c6, this); review 6 after the next fix.

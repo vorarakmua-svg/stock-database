@@ -3,6 +3,8 @@
 import sqlite3
 import time
 
+import pytest
+
 from src.config import AppConfig, StorageConfig
 from src.fetchers.stock_data_fetcher import StockDataFetcher
 from src.models.stock_data import StockData
@@ -257,12 +259,16 @@ def test_assess_quarterly_only_company_scores_zero(tmp_path):
     assert stock.data_quality["score"] == 0
 
 
-def _collect_from_sec(tmp_path, monkeypatch, sec):
+def _sec_only_fetcher(tmp_path, monkeypatch, sec):
     fetcher = _make_fetcher(tmp_path, 1)
     monkeypatch.setattr(fetcher.sec_handler, "fetch_all", lambda ticker: sec)
     monkeypatch.setattr(fetcher.fred_handler, "get_risk_free_rate_details", lambda maturity="10y": None)
     monkeypatch.setattr(fetcher.fred_handler, "get_market_risk_premium", lambda: {})
-    return fetcher.fetch_ticker(sec["ticker"], include_yahoo=False)
+    return fetcher
+
+
+def _collect_from_sec(tmp_path, monkeypatch, sec):
+    return _sec_only_fetcher(tmp_path, monkeypatch, sec).fetch_ticker(sec["ticker"], include_yahoo=False)
 
 
 def test_a_filer_without_annual_financials_is_explained(tmp_path, monkeypatch):
@@ -290,3 +296,18 @@ def test_a_failed_facts_request_is_not_explained_as_missing_data(tmp_path, monke
     assert ("SEC EDGAR: no annual financials for XOM from CIK 0000034088 (EXXON MOBIL CORP): its companyfacts "
             "request failed (403 Client Error: Forbidden)") in stock.warnings
 
+
+@pytest.mark.parametrize("part, endpoint", [("company_facts", "companyfacts"), ("submissions", "submissions")])
+def test_a_failed_sec_request_is_an_error(tmp_path, monkeypatch, part, endpoint):
+    # SECHandler keeps a failed request's message (a 403, a 5xx, a timeout), but nothing read it, so the ticker's
+    # empty record counted as "Successfully fetched".
+    stock = _collect_from_sec(tmp_path, monkeypatch, {"cik": "0000034088", "ticker": "XOM", "source": "sec_edgar",
+                                                      f"{part}_error": "403 Client Error: Forbidden"})
+    assert f"SEC EDGAR {endpoint}: 403 Client Error: Forbidden" in stock.errors
+
+
+def test_the_run_summary_counts_a_failed_sec_request_as_an_error(tmp_path, monkeypatch):
+    fetcher = _sec_only_fetcher(tmp_path, monkeypatch, {"cik": "0000034088", "ticker": "XOM", "source": "sec_edgar",
+                                                        "submissions_error": "Read timed out. (read timeout=30)"})
+    summary = fetcher.fetch_and_export(["XOM"], include_yahoo=False, formats=["json"])
+    assert (summary["successful"], summary["with_errors"]) == (0, 1)

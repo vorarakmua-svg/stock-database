@@ -64,7 +64,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | GATHER-03 | companyfacts parsing | TODO | |  |
 | GATHER-04 | Rates | FAIL→BUG-052 | iter 39 | without a FRED key: Treasury.gov's latest day (BUG-041) with its day and source, and the static estimate flagged (BUG-037), checked live; the FRED-key path and January's prior-year fallback are untested; code review 5 (stubbed): any failure of the current-year request falls back to last year's year-end rate, and a blank latest 10-year gives no rate (BUG-052, P3) |
 | GATHER-05 | Rate limiting and retries | TODO | |  |
-| GATHER-06 | Failure modes (mocked) | TODO | iter 24 | a failed run no longer erases stored data or writes a price-less snapshot (BUG-018), and a locked summary.csv no longer stops the export (BUG-026); the rest of the item is untested |
+| GATHER-06 | Failure modes (mocked) | TODO | iter 41 | a failed run no longer erases stored data or writes a price-less snapshot (BUG-018), and a locked summary.csv no longer stops the export (BUG-026); the rest of the item is untested; a failed SEC companyfacts or submissions request is now an error for its ticker, and the summary counts it (BUG-045) |
 | GATHER-07 | SEC cache | TODO | |  |
 | GATHER-08 | Idempotency | TODO | |  |
 | GATHER-09 | Ticker input | TODO | |  |
