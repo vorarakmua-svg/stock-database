@@ -179,9 +179,15 @@ class Inputs:
             return None
         factor = 1.0
         for date, ratio in self.splits:
-            if date > period_end and ratio:
+            # Share splits are at least 3-for-2 (or 1-for-2 reversed). Smaller ratios in Yahoo's split
+            # history are spin-off price factors or stock dividends (HON 0.9535, SPGI 1.057; lead L12),
+            # which don't change the share count.
+            if date > period_end and ratio and (ratio >= 1.5 or ratio <= 1 / 1.5):
                 factor *= ratio
-        latest = next((r[5] for r in reversed(self.annual) if r[5]), None)  # weighted diluted shares
+        # Today's basis is today's share count (the latest market snapshot: the basis the price is quoted on).
+        # The latest FY's count is still pre-split when a split came after its filing (KLAC, BKNG; BUG-014),
+        # so it is only the fallback when there is no snapshot.
+        latest = self.snap_shares or next((r[5] for r in reversed(self.annual) if r[5]), None)
         if factor == 1.0 or not latest:
             return shares
         return min((shares, shares * factor), key=lambda s: abs(math.log(s / latest)))
