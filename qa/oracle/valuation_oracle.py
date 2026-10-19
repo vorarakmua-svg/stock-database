@@ -166,14 +166,18 @@ class Inputs:
         # Per-share values divide by every share class (BUG-022). Yahoo's share count can cover one class of
         # several (GOOGL's class A: 5.87B of 12.23B), while market cap / price counts them all; and a count still
         # under 3/4 of the latest FY's diluted shares on today's basis is incomplete too (HON, whose market cap is
-        # halved as well).
-        if self.snap_shares and market_cap and self.price and market_cap / self.price > 1.02 * self.snap_shares:
-            self.snap_shares = market_cap / self.price
-        latest_fy = next(((r[5], r[1]) for r in reversed(self.annual) if r[5]), None)
-        if self.snap_shares and latest_fy:
-            fy_today = self.to_current_basis(latest_fy[0], latest_fy[1])
-            if fy_today and self.snap_shares < 0.75 * fy_today:
-                self.snap_shares = fy_today
+        # halved as well). A gap under 5% can be Yahoo's two figures disagreeing (MRVL, one class, 2.5%), so the
+        # one nearer the latest FY's count wins (BUG-035); every wider gap in the data is a class or units
+        # Yahoo's count leaves out (META 15%, BX 65%). The FY count is the diluted one, else the period-end one.
+        latest_fy = next(((r[5] or r[4], r[1]) for r in reversed(self.annual) if r[5] or r[4]), None)
+        fy_today = self.to_current_basis(latest_fy[0], latest_fy[1]) if self.snap_shares and latest_fy else None
+        by_value = market_cap / self.price if market_cap and self.price else None
+        if self.snap_shares and by_value and by_value > 1.02 * self.snap_shares and not (
+                fy_today and by_value < 1.05 * self.snap_shares
+                and abs(math.log(self.snap_shares / fy_today)) < abs(math.log(by_value / fy_today))):
+            self.snap_shares = by_value
+        if self.snap_shares and fy_today and self.snap_shares < 0.75 * fy_today:
+            self.snap_shares = fy_today
 
     def discount(self) -> Tuple[float, float]:
         raw = self.rf + (self.beta if self.beta is not None else 1.0) * ERP
