@@ -223,12 +223,12 @@ def test_split_factor_falls_back_to_the_share_jump_without_declared_splits(tmp_p
     assert by_fy[2021].split_factor == pytest.approx(400.0 / 105.0)
 
 
-def test_declared_ratio_matches_a_run_of_splits_and_ignores_unrelated_ones():
-    from src.valuation.inputs import _declared_ratio
+def test_declared_run_matches_a_run_of_splits_and_ignores_unrelated_ones():
+    from src.valuation.inputs import _declared_run
     nvda = [("2021-07-20", 4.0), ("2024-06-10", 10.0)]
-    assert _declared_ratio(38.1, "2020-01-26", nvda) == 40.0  # seam restated for both splits
-    assert _declared_ratio(3.81, "2020-01-26", [("2022-06-01", 2.0)]) == 3.81  # 2:1 is nowhere near
-    assert _declared_ratio(3.81, "2023-01-01", [("2022-06-01", 4.0)]) == 3.81  # split predates the seam
+    assert _declared_run(38.1, "2020-01-26", nvda) == nvda  # seam restated for both splits
+    assert _declared_run(3.81, "2020-01-26", [("2022-06-01", 2.0)]) == []  # 2:1 is nowhere near
+    assert _declared_run(3.81, "2023-01-01", [("2022-06-01", 4.0)]) == []  # split predates the seam
 
 
 def _post_filing_split_db(tmp_path, split_date, ratio, snapshot_shares=None):
@@ -390,8 +390,8 @@ def test_ordinary_issuance_below_threshold_is_not_a_split(split_db):
     assert recs[0].eps_diluted == pytest.approx(4.00)
 
 
-def _seam_db(tmp_path, name, rows):
-    """Build a 5-FY ticker 'SPL' from (fy, net_income, eps, shares) rows."""
+def _seam_db(tmp_path, name, rows, splits=()):
+    """Build a 5-FY ticker 'SPL' from (fy, net_income, eps, shares) rows and declared (date, ratio) splits."""
     db_path = tmp_path / name
     store = SQLiteStore(db_path=db_path)
     conn = store._connect()
@@ -404,6 +404,8 @@ def _seam_db(tmp_path, name, rows):
             "VALUES ('SPL', ?, ?, ?, ?, ?, ?)",
             (fy, f"{fy}-12-31", ni, 800.0, eps, shares),
         )
+    for date_str, ratio in splits:
+        conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('SPL', ?, ?)", (date_str, ratio))
     conn.commit()
     conn.close()
     return db_path
@@ -497,6 +499,56 @@ def test_ordinary_issuance_and_buyback_are_not_splits(tmp_path):
     assert all(r.split_factor == 1.0 for r in inputs.fy_records)
     assert inputs.fy_records[0].eps_diluted == pytest.approx(1.0)
     assert len(inputs.fy_records) == 5
+
+
+def test_a_declared_split_applies_even_when_eps_rose_across_its_seam(tmp_path):
+    # NOW: the FY2025 10-K restated FY2023-24 for the 5:1 split of 2025-12-18, and a $723M tax benefit
+    # lifted 2023 EPS past the ratio (1.60 -> 1.68), so the EPS-direction test vetoed the declared split
+    # and FY2016-22 stayed on the pre-split basis beside split-adjusted prices.
+    db = _seam_db(tmp_path, "eps_rose.db", [
+        (2019, 300.0, 1.50, 200.0),
+        (2020, 320.0, 1.60, 200.0),
+        (2021, 1700.0, 1.70, 1000.0),
+        (2022, 1800.0, 1.80, 1000.0),
+        (2023, 1900.0, 1.90, 1000.0),
+    ], splits=[("2023-06-01", 5.0)])
+    conn = _connect(db)
+    by_fy = {r.fiscal_year: r for r in load_inputs(conn, "SPL").fy_records}
+    conn.close()
+    assert [by_fy[fy].split_factor for fy in range(2019, 2024)] == [5.0, 5.0, 1.0, 1.0, 1.0]
+    assert by_fy[2020].eps_diluted == pytest.approx(0.32)
+
+
+def test_an_undeclared_share_jump_without_an_eps_drop_is_not_a_split(tmp_path):
+    # An acquisition paid in shares brings its own earnings: shares x1.74 while EPS rose (BX's FY2018
+    # seam). No declared split explains it, so the per-share history stays as reported.
+    db = _seam_db(tmp_path, "acquisition.db", [
+        (2019, 100.0, 1.00, 100.0),
+        (2020, 110.0, 1.10, 100.0),
+        (2021, 200.0, 1.15, 174.0),
+        (2022, 215.0, 1.24, 174.0),
+        (2023, 230.0, 1.32, 174.0),
+    ])
+    conn = _connect(db)
+    recs = load_inputs(conn, "SPL").fy_records
+    conn.close()
+    assert all(r.split_factor == 1.0 for r in recs)
+
+
+def test_a_declared_split_explains_one_seam_only(tmp_path):
+    # A 2:1 split in 2021 shows at the FY2020 -> FY2021 seam. An older acquisition that doubled the share
+    # count (EPS up, FY2018) dates before the same split, but the split can't explain both seams.
+    db = _seam_db(tmp_path, "one_seam.db", [
+        (2017, 100.0, 1.00, 100.0),
+        (2018, 210.0, 1.05, 200.0),
+        (2019, 230.0, 1.15, 200.0),
+        (2020, 250.0, 1.25, 200.0),
+        (2021, 270.0, 0.675, 400.0),
+    ], splits=[("2021-06-01", 2.0)])
+    conn = _connect(db)
+    by_fy = {r.fiscal_year: r for r in load_inputs(conn, "SPL").fy_records}
+    conn.close()
+    assert [by_fy[fy].split_factor for fy in range(2017, 2022)] == [2.0, 2.0, 2.0, 2.0, 1.0]
 
 
 def test_fyrecord_eps_and_bvps_fallbacks():

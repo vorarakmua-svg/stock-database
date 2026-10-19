@@ -530,3 +530,18 @@ NOW), 39 not derivable (Q5); golden 0/57. Leads L6, L7 and L9 resolved. New: BUG
 Gates: ruff ✓ mypy ✓ pytest 912 passed (1 known warning) | CI: 61f8a56 ✓; pending for this push
 Commit: oracle e4b6a1f and 0f47b5f, then (this commit) chore(qa): discovery VAL-03 to VAL-06
 Next: BUG-031 (P1); record code review 4 when it reports
+
+## Iteration 27: 2026-10-20 04:13: fix
+Picked: BUG-031 (P1), the only open P0–P1 (CI: 5bb51b4 running). Code review 4 is still running.
+Did: No oracle change was needed (it already gave NOW's expected band). Tests first: NOW's shape (a declared 5:1
+matching a seam where EPS rose) failed, and so did a guard (a declared 2:1 must not also explain an older acquisition
+seam): FY2017 came out 4x, which exposed a second defect, the EPS test reading the newer year after it was already
+rescaled. A third test pins the EPS test for undeclared jumps (none existed). Fix in `_normalize_splits`: declared
+matches skip the EPS test, the test reads as-reported EPS, and each declared split explains one seam. Five mutants
+each fail a test; restored byte-identical.
+Evidence: `qa/evidence/iter27-bug031-{red,green,mutants,impact,api}.txt`, `iter27-oracle-{real,golden}.txt`
+Result: BUG-031 VERIFIED. One row of 762 changes (NOW multiples $153.19 → $258.45 base); no summary, verdict or golden
+row moves. Oracle: real Level 2 8 beyond 0.5% (BUG-007 only), golden 0/57. VAL-05 → PASS.
+Gates: ruff ✓ mypy ✓ pytest 915 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(valuation): a declared split counts even when EPS rose across its seam
+Next: BUG-032 (P2); record code review 4 when it reports

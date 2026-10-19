@@ -46,22 +46,23 @@ SHARE_CLASS_GAP = 1.02
 MIN_SHARE_COUNT_RATIO = 0.75
 
 
-def _declared_ratio(observed: float, period_end: Optional[str],
-                    splits: Sequence[Tuple[str, float]]) -> float:
-    """The declared split ratio, or run of consecutive ratios, dated after
-    *period_end* that is closest to the *observed* seam ratio, if within
-    DECLARED_SPLIT_TOLERANCE of it; otherwise *observed*. A run covers a seam
-    that spans two splits (e.g. restated for both NVDA's 4:1 and 10:1)."""
-    later = [ratio for when, ratio in splits
+def _declared_run(observed: float, period_end: Optional[str],
+                  splits: Sequence[Tuple[str, float]]) -> List[Tuple[str, float]]:
+    """The declared split, or run of consecutive splits, dated after
+    *period_end* whose ratio is closest to the *observed* seam ratio, if within
+    DECLARED_SPLIT_TOLERANCE of it; otherwise none. A run covers a seam that
+    spans two splits (e.g. restated for both NVDA's 4:1 and 10:1)."""
+    later = [(when, ratio) for when, ratio in splits
              if ratio and ratio > 0 and (period_end is None or str(when)[:10] > str(period_end)[:10])]
-    best, best_gap = observed, math.log(DECLARED_SPLIT_TOLERANCE)
+    best: List[Tuple[str, float]] = []
+    best_gap = math.log(DECLARED_SPLIT_TOLERANCE)
     for start in range(len(later)):
         run = 1.0
-        for ratio in later[start:]:
-            run *= ratio
+        for end in range(start, len(later)):
+            run *= later[end][1]
             gap = abs(math.log(observed / run))
             if gap <= best_gap:
-                best, best_gap = run, gap
+                best, best_gap = later[start:end + 1], gap
     return best
 
 
@@ -138,7 +139,9 @@ def _eps_moved_inversely(ratio: float, eps_older: Optional[float],
     one). An acquisition-scale share issuance — the real hazard near the 1.5
     threshold, e.g. Realty Income's 1.48x VEREIT merger — brings its own
     earnings with it and does not invert EPS, so the share jump alone would
-    otherwise be enough to rescale a whole history wrongly.
+    otherwise be enough to rescale a whole history wrongly. Both figures are
+    as reported, and the test only judges seams no declared split explains:
+    earnings can outgrow a split's ratio in its year (NOW 2023).
 
     The comparison is on MAGNITUDE, not signed value: a split rescales EPS
     multiplicatively whatever its sign, so a loss-making company's per-share
@@ -166,7 +169,7 @@ def _normalize_splits(records: List[FYRecord],
     hard discontinuity where the stored data switches basis — not at the split
     date itself. Splits are therefore detected from the share-count series.
     When ``split_events`` declares a ratio close to a detected jump, that exact
-    ratio is applied (see ``_declared_ratio``), since the jump also carries a
+    ratio is applied (see ``_declared_run``), since the jump also carries a
     year of buybacks or issuance. Walking newest -> oldest, each seam's ratio
     ``shares[i + 1] / shares[i]`` is classified:
 
@@ -188,6 +191,12 @@ def _normalize_splits(records: List[FYRecord],
     correct.
     """
     factor = 1.0
+    # The walk rescales each year as it goes, so the EPS test reads the figures
+    # as reported, on the basis the share counts are.
+    reported_eps = [rec.eps_diluted for rec in records]
+    # Each declared split explains one seam: an older jump (an acquisition paid
+    # in shares) can't take a split a newer seam already used.
+    unused = list(splits)
     for i in range(len(records) - 2, -1, -1):
         older, newer = shares_detect[i], shares_detect[i + 1]
         if older and newer and older > 0 and newer > 0:
@@ -197,10 +206,13 @@ def _normalize_splits(records: List[FYRecord],
             if ratio > MAX_SPLIT_RATIO or ratio < 1.0 / MAX_SPLIT_RATIO:
                 # Unit discontinuity: the pre-seam years are uncomparable.
                 return records[i + 1:], True
-            if (forward or reverse) and _eps_moved_inversely(
-                ratio, records[i].eps_diluted, records[i + 1].eps_diluted
-            ):
-                factor *= _declared_ratio(ratio, records[i].period_end, splits)
+            if forward or reverse:
+                run = _declared_run(ratio, records[i].period_end, unused)
+                if run:
+                    unused = [split for split in unused if split not in run]
+                    factor *= math.prod(split_ratio for _, split_ratio in run)
+                elif _eps_moved_inversely(ratio, reported_eps[i], reported_eps[i + 1]):
+                    factor *= ratio
         rec = records[i]
         rec.split_factor = factor
         if factor == 1.0:
