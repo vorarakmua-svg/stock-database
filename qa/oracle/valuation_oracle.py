@@ -215,11 +215,13 @@ class Inputs:
 
     def eps_series(self) -> List[Tuple[int, float]]:
         """Reported diluted EPS (it nets out preferred dividends) moved to today's split basis;
-        net income / diluted shares only when EPS wasn't reported."""
+        net income / shares only when EPS wasn't reported."""
         out = []
-        for fy, pe, ni, _eq, _so, wd, eps in self.annual:
-            # No share count reported (e.g. GOOGL before FY2022): judge the basis from implied shares.
-            basis_shares = wd or (ni / eps if ni and eps else None)
+        for fy, pe, ni, _eq, so, wd, eps in self.annual:
+            # No share count reported (e.g. GOOGL before FY2022): judge the basis from implied shares. With neither
+            # EPS nor a diluted count, the spec's "EPS = net income / shares" takes the period-end count (DELL
+            # FY2017-19, when it reported EPS only per tracking-stock class).
+            basis_shares = wd or (ni / eps if ni and eps else None) or so
             sh = self.to_current_basis(basis_shares, pe)
             if eps is not None:
                 out.append((fy, eps * (basis_shares / sh) if basis_shares and sh else eps))
@@ -229,7 +231,9 @@ class Inputs:
 
     def bvps(self, fy_row: Tuple, which: str) -> Optional[float]:
         fy, pe, _ni, eq, so, wd, _eps = fy_row
-        sh = self.to_current_basis(wd if which == "diluted" else so, pe)
+        # The spec's BVPS is "equity / shares". A filer that reports no diluted count (XOM since FY2014: its
+        # diluted EPS equals basic) leaves the period-end count for the diluted reading too.
+        sh = self.to_current_basis((wd or so) if which == "diluted" else so, pe)
         return eq / sh if eq is not None and sh else None
 
     def fy_end_price(self, period_end: str) -> Optional[float]:
