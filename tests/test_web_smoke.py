@@ -179,6 +179,18 @@ def test_palette_js_served_200(client: TestClient) -> None:
     assert "text/javascript" in resp.headers["content-type"] or "javascript" in resp.headers["content-type"]
 
 
+def test_static_files_are_revalidated_instead_of_reused_stale(client: TestClient) -> None:
+    # With no Cache-Control, browsers cache JS/CSS heuristically and keep running
+    # an old copy after an update (a stale palette.js needed a hard refresh).
+    first = client.get("/static/palette.js")
+    assert first.headers.get("cache-control") == "no-cache"
+    # The 304 answer to a revalidation must say so too, or the cached copy goes
+    # back to being reused without asking.
+    again = client.get("/static/palette.js", headers={"If-None-Match": first.headers["etag"]})
+    assert again.status_code == 304
+    assert again.headers.get("cache-control") == "no-cache"
+
+
 def test_home_contains_help_overlay_content(client: TestClient) -> None:
     resp = client.get("/")
     assert resp.status_code == 200
