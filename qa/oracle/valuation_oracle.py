@@ -275,15 +275,25 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         # The spec's "<= 10 yrs" is a calendar window (complete years before the anchor year), and the
         # exponent is the calendar span, so a payment gap can't stretch or shrink the growth rate.
         window = [(y, sum(v), len(v)) for y, v in sorted(by_year.items()) if y >= int(anchor[:4]) - 10]
-        # Growth compares full years (BUG-009, BUG-017). Leading years with fewer payments than the window's
-        # usual count are partial (a dividend started, paused or restarted, or an ex-date slipped a year back);
-        # a last year with more holds a payment that belongs to the next year (O 2025's Dec 31 ex-date), so it
-        # is scaled to the usual count.
-        usual = median([n for _, _, n in window]) if window else 0
-        while len(window) >= 2 and window[0][2] < usual:
+        # Growth compares full years (BUG-009, BUG-017). Each end is judged by the cadence of the (up to 3) years
+        # next to it, since a payer can change frequency (PGR and TSM: annual, then quarterly from 2019). A first
+        # year with fewer payments than those is partial (a dividend started, paused or restarted, or an ex-date
+        # slipped a year back), unless the year before it had as many: then it continues a lower-frequency
+        # schedule. An end year with exactly one payment more, each within 1.5x of the adjacent year's typical
+        # payment, holds one that slipped across the year boundary (O 2025's Dec 31 ex-date), so it counts at
+        # the usual number; a special is larger and counts in full (Q3), and a higher frequency pays less each.
+        def cadence(years: List[Tuple[int, float, int]]) -> float:
+            return median([float(n) for _, _, n in years])
+
+        while (len(window) >= 2 and window[0][2] < cadence(window[1:4])
+               and len(by_year.get(window[0][0] - 1, [])) != window[0][2]):
             window = window[1:]
-        if window and window[-1][2] > usual:
-            window[-1] = (window[-1][0], window[-1][1] * usual / window[-1][2], window[-1][2])
+        for end, adjacent, near in ((0, 1, window[1:4]), (-1, -2, window[-4:-1])):
+            if len(window) >= 2:
+                year, total, n = window[end]
+                usual, typical = cadence(near), median(by_year[window[adjacent][0]])
+                if n == usual + 1 and all(typical / 1.5 < a < typical * 1.5 for a in by_year[year]):
+                    window[end] = (year, total * usual / n, n)
         # The spec's historical CAGR "requires >= 4 FYs" (BUG-010): fewer full years measure nothing.
         span = window[-1][0] - window[0][0] if len(window) >= 4 else None
         hist = (window[-1][1] / window[0][1]) ** (1 / span) - 1 if span and window[0][1] > 0 else None
