@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 99 · PASS 5 · FAIL 4 · N-A 0 · BLOCKED 0 · NEEDS-USER 1  
+**Status counts:** TODO 99 · PASS 5 · FAIL 3 · N-A 0 · BLOCKED 0 · NEEDS-USER 2  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -12,7 +12,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
 | VAL-01 | DCF (two-stage FCF) | NEEDS-USER | iter 20 | Level 1 ✓ and Level 2 ✓ on every derivable DCF row, with every share class counted (BUG-022 fixed); left: the rows without a measurable CAGR follow the plan's fallback, which the spec doesn't define (Q5) |
-| VAL-02 | DDM (multi-stage) | FAIL→BUG-017 | iter 23 | BUG-017 reopened: a payment-frequency increase reads as extra payments (growth to 0%; no current row); otherwise the oracle agrees on every derivable row; user questions: Q3, Q4, Q5 |
+| VAL-02 | DDM (multi-stage) | NEEDS-USER | iter 25 | BUG-017 fixed again: each end of the dividend CAGR is judged by its neighbours' cadence, so frequency changes, specials and slipped payments are handled; the oracle agrees on every derivable row (golden 0/57; real: the known 12 are other models); user questions: Q3, Q4, Q5 |
 | VAL-03 | Graham Number | FAIL→BUG-007 | iter 11 | Level 1 ✓; BUG-014 fixed (KLAC on today's basis; oracle agrees); left: the bear case ignores loss years (BUG-007, NEEDS-USER) and XOM's Level-2 mismatch (lead L6) |
 | VAL-04 | Peter Lynch | TODO | iter 13 | BUG-006 and BUG-014 fixed; BUG-016 restored the plan's rule, so 16 Lynch rows use the analyst figure again (not derivable from the spec: Q5); left: SCCO and DELL Level-2 mismatches (leads L6, L7) |
 | VAL-05 | Historical multiples band | TODO | iter 11 | Level 1 ✓; BUG-006 resolved ANET/APH/AVGO/LRCX; SCCO, SPGI and WDC were the oracle's spin-off handling (fixed in iteration 11); NOW remains: lead L6 |

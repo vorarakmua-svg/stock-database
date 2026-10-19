@@ -8,7 +8,6 @@ A model that does not apply returns ``applicable=False`` with a user-facing
 
 import math
 import statistics
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -37,6 +36,11 @@ DIVIDEND_STALE_DAYS = 456
 #: "hist dividend CAGR (<= 10 yrs)", the same window as the FY-based models):
 #: decades-old growth says little about the next five years.
 DIVIDEND_CAGR_YEARS = 10
+
+#: Payments within this factor of a neighbouring year's typical payment are
+#: regular ones. A special is larger, and a different schedule pays a
+#: different amount each time (a semiannual payment is twice a quarterly one).
+REGULAR_PAYMENT_RANGE = 1.5
 
 
 @dataclass
@@ -174,21 +178,39 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
     # anchor year is likely partial).
     complete_years = [(year, total) for year, total in annual
                       if anchor.year - DIVIDEND_CAGR_YEARS <= year < anchor.year]
-    # Growth compares full years. The first years can be partial: a dividend
-    # started, paused or restarted mid-year (MU: 2 payments in 2021, then 4 a
-    # year), or an ex-date slipped into the year before (BMY). Growth measured
-    # from one counts payments, not raises (MU read 23%/yr on a flat dividend),
-    # so every leading year below the usual cadence is skipped. A last year with
-    # an extra payment holds one that belongs to the next year (O's 2025-12-31
-    # ex-date for January), so it counts at the usual cadence; a short last year
-    # stays as it is, since it can be a real cut.
-    payments = Counter(int(d[:4]) for d, _ in inputs.dividends)
-    usual = statistics.median(payments[year] for year, _ in complete_years) if complete_years else 0
-    while len(complete_years) >= 2 and payments[complete_years[0][0]] < usual:
+    # Growth compares full years, judging each end of the window by the cadence
+    # of the (up to 3) years next to it, since a payer can change how often it
+    # pays (PGR and TSM paid yearly until 2018, then quarterly). A first year
+    # with fewer payments than those is partial: a dividend started, paused or
+    # restarted mid-year (MU: 2 payments in 2021, then 4 a year), or an ex-date
+    # slipped into the year before (BMY). Growth measured from one counts
+    # payments, not raises (MU read 23%/yr on a flat dividend), so it is
+    # skipped, unless the year before it had as many payments: then it carries
+    # on a lower-frequency schedule. An end year with exactly one payment more
+    # than its neighbours, all of regular size, holds one that slipped across
+    # the year boundary (O's 2025-12-31 ex-date for January), so it counts at
+    # their cadence. A special is larger and counts in full (whether it should
+    # is the user's call), and a short last year stays as it is, since it can
+    # be a real cut.
+    paid: Dict[int, List[float]] = {}
+    for day, amount in inputs.dividends:
+        paid.setdefault(int(day[:4]), []).append(amount)
+
+    def cadence(years: List[Tuple[int, float]]) -> float:
+        return statistics.median(len(paid[year]) for year, _ in years)
+
+    while (len(complete_years) >= 2
+           and len(paid[complete_years[0][0]]) < cadence(complete_years[1:4])
+           and len(paid.get(complete_years[0][0] - 1, [])) != len(paid[complete_years[0][0]])):
         complete_years = complete_years[1:]
-    if complete_years and payments[complete_years[-1][0]] > usual:
-        last_year, last_total = complete_years[-1]
-        complete_years[-1] = (last_year, last_total * usual / payments[last_year])
+    for end, adjacent, near in ((0, 1, complete_years[1:4]), (-1, -2, complete_years[-4:-1])):
+        if len(complete_years) < 2:
+            break
+        year, total = complete_years[end]
+        usual, regular = cadence(near), statistics.median(paid[complete_years[adjacent][0]])
+        if len(paid[year]) == usual + 1 and all(
+                regular / REGULAR_PAYMENT_RANGE < a < regular * REGULAR_PAYMENT_RANGE for a in paid[year]):
+            complete_years[end] = (year, total * usual / len(paid[year]))
     # The spec's historical CAGR "requires >= 4 FYs" (DCF and Lynch are N/A
     # below that). DDM stays applicable from 3 calendar years, so with fewer
     # full years no CAGR is measured (TMUS's 2 full years read 29%/yr from a

@@ -243,6 +243,51 @@ def test_value_ddm_scales_a_last_year_with_an_extra_payment_to_the_usual_count()
     assert res.assumptions["hist_cagr"] == pytest.approx(0.03)
 
 
+def _cadence_dividends(counts_by_year, growth=0.05):
+    """Yearly totals growing by *growth*, paid in counts_by_year[y] equal installments, plus 2026's
+    payments through July (the TTM window as of 2026-08-04)."""
+    divs = []
+    for year, n in sorted(counts_by_year.items()):
+        total = 2.0 * (1 + growth) ** (year - 2016)
+        paid = max(1, n * 7 // 12) if year == 2026 else n
+        divs += [(f"{year}-{1 + 12 * k // n:02d}-15", total / n) for k in range(paid)]
+    return divs
+
+
+@pytest.mark.parametrize("counts", [
+    {y: 4 if y <= 2020 else 12 for y in range(2016, 2027)},  # quarterly -> monthly
+    {y: 2 if y <= 2020 else 4 for y in range(2016, 2027)},   # semiannual -> quarterly
+    {y: 1 if y <= 2022 else 4 for y in range(2016, 2027)},   # annual -> quarterly
+    {y: 1 if y <= 2018 else 4 for y in range(2016, 2027)},   # PGR: annual years, then quarterly
+    {y: 4 if y <= 2016 else 12 for y in range(2015, 2027)},  # the window opens on the last quarterly year
+    {y: 1 if y <= 2024 else 2 for y in range(2016, 2027)},   # annual -> semiannual in the last full year
+])
+def test_value_ddm_growth_survives_a_payment_frequency_change(counts):
+    # Paying the same yearly amount more often makes neither a partial first year nor a long last
+    # one; the last full year used to be scaled down (or the early years dropped), and 5% read as 0%.
+    res = value_ddm(_inputs(dividends=_cadence_dividends(counts), as_of=date(2026, 8, 4)))
+    assert res.assumptions["cagr_years"] == 9
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.05)
+
+
+def test_value_ddm_counts_a_first_year_with_a_slipped_payment_at_its_usual_count():
+    # BMY's 2020 holds 5 ex-dates: one payment slipped across the year boundary. As the first year
+    # of the window it counted in full and understated growth; it counts as its usual 4.
+    divs = sorted(_quarterly_dividends(2016, 2025, 2.0, 0.10) + [("2016-01-04", 0.5)])
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    assert res.assumptions["cagr_years"] == 9
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.10)
+
+
+def test_value_ddm_leaves_a_special_in_the_last_year_as_it_is():
+    # A long last year is scaled only for one extra regular-size payment (O's slipped ex-date). A
+    # special dividend stays as it is: whether specials count is the user's question (Q3).
+    divs = sorted(_quarterly_dividends(2016, 2025, 2.0, 0.10) + [("2025-07-01", 7.0)])
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    total_2025 = 2.0 * 1.1 ** 9 + 7.0
+    assert res.assumptions["hist_cagr"] == pytest.approx((total_2025 / 2.0) ** (1 / 9) - 1)
+
+
 def test_value_ddm_keeps_a_short_last_year_as_it_is():
     # Two payments in the last full year can be a real cut, so that year isn't scaled up.
     divs = [d for d in _quarterly_dividends(2016, 2025, 2.0, 0.10) if d[0] < "2025-07-01"]

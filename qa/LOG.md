@@ -487,3 +487,26 @@ Gates: ruff ✓ mypy ✓ pytest 904 passed (1 known warning) | CI: pending for t
 Commit: (this commit) fix(exporters): a failed fetch keeps the latest snapshot, and the CSV keeps only sections
 it didn't get
 Next: BUG-017 (P2, reopened: payment-frequency increases)
+
+## Iteration 25: 2026-10-20 03:44: fix
+Picked: BUG-017 (P2, reopened by code review 3), the only open P2 (CI: 23fb062 ✓).
+Did: Measured candidate rules on every payer first (`iter25-rule-design{,-2}.txt`): judging each end of the window
+by the cadence of the 3 years next to it keeps O's 13-payment 2025 scaled and restores PGR's and TSM's annual years;
+a size-only test misread HWM's first year, so a lower-frequency year is one whose year before had as many payments.
+Oracle first (e21a0b0): on a golden copy whose KO pays monthly from 2021, XOM has a 2025 special, MSFT a slipped
+2016 payment and AAPL annual 2016-18 payments, it flagged exactly those four DDM rows against the unfixed code (the
+old oracle passed them). Tests: 8 RED against the unfixed code (six cadences, a slipped first-year payment, a
+last-year special). Fix in `value_ddm`; seven mutants each fail a test; restored byte-identical.
+Evidence: `qa/evidence/iter25-bug017-{red,green,mutants,impact}.txt`, `iter25-cadence-db.txt`,
+`iter25-oracle-old-rule-cadence.txt`, `iter25-oracle-before-fix-{cadence,golden,real}.txt`,
+`iter25-oracle-{cadence,golden,real}.txt`
+Result: BUG-017 VERIFIED. Oracle after the fix: demo and golden Level 1 0/60, Level 2 0/57; real Level 1 0/519,
+Level 2 the known 12 (identical list). Impact: no value changes on real or golden data; PGR's measured CAGR 9.68%
+(6y) → 20.90% (9y), TSM's 12.84% (5y) → 14.41% (9y), growth unchanged. Demo: KO $32.19 → $38.87, AAPL $18.76 →
+$20.30 (= the untouched copy), MSFT and XOM likewise. VAL-02 → NEEDS-USER (Q3, Q4, Q5). Note: the oracle commit's
+first gate run hid pytest's summary (`-q` twice); re-run on that tree: 904 passed, exit 0.
+Gates: ruff ✓ mypy ✓ pytest 912 passed (1 known warning) | CI: pending for this push
+Commit: chore(qa) oracle cadence rule (e21a0b0), then (this commit) fix(valuation): DDM growth survives a change in
+how often a company pays
+Review 4 is due (5 fixes past 8dc494b: 2d92381, c6678d0, 4998ec8, 23fb062 and this commit): dispatched to opus.
+Next: record code review 4 when it reports; meanwhile discovery VAL-06, VAL-09, VAL-12, VAL-13
