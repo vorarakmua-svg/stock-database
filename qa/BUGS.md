@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 1 · P2 3 · P3 21 · NEEDS-USER 10 · Verified: 28
+**Open:** P0 0 · P1 0 · P2 3 · P3 23 · NEEDS-USER 10 · Verified: 29
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -365,12 +365,14 @@ Fix: when a filer's SEC data gives no annual financials, the run adds a warning 
 Notes: following the predecessor's history (a successor map, or the CIK already stored for the ticker) is a design choice, put to the user as Q6. Until the new registrant files its first 10-K, a fresh collection has no XOM fundamentals.
 
 ### BUG-043 [P1][GATHER] ARM's 20-F filings report in US GAAP, but only 10-K forms are read
-Status: OPEN
-Found: iteration 37 via VAL-09 (lead L1) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 40)
+Found: iteration 37 via VAL-09 (lead L1) | Fixed: iteration 40 (see LOG) | Regression tests: `tests/test_xbrl_parser.py::test_a_foreign_issuers_annual_report_is_read` (20-F, 20-F/A, 40-F), `::test_a_filer_reporting_in_another_currency_gets_no_record_and_a_reason`, `::test_an_empty_sec_record_says_why`, `tests/test_unmapped.py::test_a_foreign_issuers_annual_report_is_scanned_too`
 Repro: `src/parsers/xbrl_parser.py` reads `_ANNUAL_FORMS = {"10-K", "10-K/A"}` and `_QUARTERLY_FORMS` (10-Q and 10-K). ARM files 20-F with us-gaap facts (288 concepts; its revenue and net-income facts come from 20-F (18) and 6-K (60) filings), so its golden collection stored no annual or quarterly financials and no SEC-based model can value it.
 Expected: a 20-F (or 40-F) filer that tags us-gaap facts gets its annual financials.   Actual: none, and no warning (BUG-044).
 Notes: since iteration 38 the run says why: "it files as a foreign issuer (20-F, 6-K); only 10-K and 10-Q filings are read".
 
+Fix: a foreign issuer's annual report (20-F, 20-F/A, 40-F, 40-F/A) counts as annual for the annual record, the vintages and the unmapped-tag worklist. A filer reporting in another currency would then resolve only its share counts (the parser reads each field in its dollar unit, so nothing is mixed), so a record without a single dollar figure is dropped and the run explains it: "it reports in CNY (20-F), which isn't converted to dollars". A 6-K-only filer reads "it has filed no annual report (20-F) yet". Impact (`qa/evidence/iter40-bug043-impact.txt`): of 143 cached companyfacts files (the user's 126 and the golden basket's), 142 records are unchanged and ARM goes from 0 to 6 fiscal years. A live ARM collection (`iter40-bug043-e2e.txt`) stores FY2021–26 (FY2025: revenue $4,007M, net income $792M, diluted EPS 0.75, as reported) and values it: DCF $15.27, Graham $12.18, Lynch $10.21, multiples $151.28 (median $13.73 against $228.05); the oracle agrees at both levels (0 of 4 beyond 0.5%), and the FA tab shows the six years with no gap note. Six mutants each fail a test.
+Notes: ARM's 6-K interim reports still aren't read, so it has no quarterly or TTM rows (BUG-058).
 ### BUG-044 [P2][GATHER] A filer whose SEC data yields no financials gets no explanation (TSM, ARM)
 Status: VERIFIED (iteration 38)
 Found: iteration 37 via VAL-09 (lead L1) | Fixed: iteration 38, with BUG-042 (see LOG) | Regression tests: `tests/test_xbrl_parser.py::test_an_empty_sec_record_says_why`, `::test_a_10k_filer_whose_facts_cover_no_full_year_gets_the_last_reason`, `tests/test_sqlite_store.py::test_a_collection_run_keeps_its_warnings`, `tests/test_web_workstation.py::test_the_fa_and_val_tabs_say_why_sec_gave_no_annual_financials`, `::test_the_tabs_render_on_a_database_from_before_runs_kept_warnings`, `tests/test_web_api_quality.py::test_runs_give_their_warnings_as_a_list`
@@ -378,6 +380,7 @@ Repro: TSM files 20-F in IFRS (`ifrs-full`, 334 concepts; no `us-gaap`), which t
 Expected: GATHER-02's "graceful, explained gap", e.g. "SEC financials not mapped: IFRS filer (20-F)", naming the form and taxonomy.   Actual: an empty FA tab and N/A models with only "insufficient history" as the reason.
 Fix: BUG-042's warning names the cause: "it reports in IFRS (20-F, 6-K), which isn't mapped" (TSM), "it files as a foreign issuer (20-F, 6-K); only 10-K and 10-Q filings are read" (ARM), "SEC has no XBRL financial statements for it", "its companyfacts request failed (…)", or as a last resort "its 10-K facts give no full fiscal year of a mapped concept". It reaches the run's JSON warnings, `collection_runs.warnings` (a list in `GET /api/quality/runs`; databases without the column still render), and the FA and VAL tabs: checked live on port 8765 and in Chrome (`iter38-bug042-e2e.txt`). Twelve mutants each fail a test (`iter38-bug042-mutants.txt`).
 
+Iteration 40: with 20-F read (BUG-043), ARM's reason is gone; a 6-K-only filer reads "it has filed no annual report (20-F) yet", and a filer reporting in another currency "it reports in CNY (20-F), which isn't converted to dollars".
 ### BUG-045 [P2][GATHER] A failed companyfacts or submissions request is not recorded as an error
 Status: OPEN
 Found: iteration 38 while fixing BUG-042 | Fixed: — | Regression test: —
@@ -455,6 +458,18 @@ Status: OPEN
 Found: iteration 39 by code review 5 (M8), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
 Repro (`t_bug033/case_check.py`): for a failed AAPL quote job, `/ui/stocks/AAPL/refresh-status/<job>` says "Refresh failed" but `/ui/stocks/aapl/refresh-status/<job>` says "Quote refreshed". Not reachable from the UI: the lowercase stock page, DES and refresh-quote routes return 404.
 Expected: the same answer in either case (or a 404).   Actual: a false success.
+
+### BUG-057 [P3][VALID] A period without a deciding SEC frame takes its calendar label in hash order
+Status: OPEN
+Found: iteration 40, while measuring BUG-043's impact (`qa/evidence/iter40-bug043-impact.txt`) | Fixed: — | Regression test: —
+Repro: `XBRLParser._calendar_from_frames` returns the first entry of a list built from a set of SEC frames, so with no full-year frame (annual) or several quarter frames (quarterly) the choice follows Python's per-process string hashing. Over the 143 cached companyfacts files: 13 of 8,615 vintage periods and 8,192 of 9,789 quarterly periods get a run-dependent `frame` label (the JSON export writes it), and 3 vintage periods a run-dependent stored `calendar_year`: WMT's FY2012 vintage (accession 0001193125-12-134679, in both caches) and TJX's (0001193125-15-114276) come out 2011 or 2012 (candidates CY2011Q4I and CY2012Q4I; SEC's convention gives 2011). Annual records are unaffected (0 of 2,581).
+Expected: the same input gives the same record (prefer the frame matching the period end, then a sorted order).   Actual: re-collecting can change those vintages' `calendar_year` and the exported frame labels.
+
+### BUG-058 [P3][GATHER] A 20-F filer's 6-K interim reports aren't read: ARM has no quarterly or TTM rows, and no word on why
+Status: OPEN
+Found: iteration 40, in BUG-043's live check (`qa/evidence/iter40-bug043-e2e.txt`) | Fixed: — | Regression test: —
+Repro: since BUG-043's fix ARM has six fiscal years, but its interim statements (6-K: 2,756 us-gaap facts) aren't read (`_QUARTERLY_FORMS` holds 10-Q and 10-K), so it stores 0 quarterly and 0 TTM rows, and its FA tab's Quarterly view says "No data available for this period." with no warning.
+Expected: a foreign issuer's interim figures are read when it tags them (6-K ladders, with the 20-F as the year), or the gap is explained.   Actual: empty and unexplained.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

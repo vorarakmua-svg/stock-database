@@ -756,3 +756,24 @@ Gates: ruff ✓ mypy ✓ pytest 953 passed (1 known warning); no code changed | 
 Commit: (this commit) chore(qa): record code review 5; the DDM cadence design goes to the user
 Next: BUG-043 (P1: read ARM's US-GAAP 20-F), then BUG-047 and BUG-048 (P2, oracle commit first for BUG-048), then
 BUG-045. Fixes since review 5's range: 2 (8feac32, 98013f4).
+
+## Iteration 40: 2026-10-20 06:38: fix
+Picked: BUG-043, the only open P1. CI: 98013f4 ✓, 9892af9 (records only) running at the start.
+Did: TDD (7 tests, RED first). A foreign issuer's annual report (20-F, 20-F/A, 40-F, 40-F/A) now counts as annual for
+the annual record, the vintages and the unmapped-tag worklist. Since the parser reads each field in its dollar unit,
+a filer reporting in another currency would resolve only its share counts; such a record is dropped, and the run says
+"it reports in CNY (20-F), which isn't converted to dollars". The explanation's 20-F wording was updated (a 6-K-only
+filer: "no annual report (20-F) yet"). Impact over all 143 cached companyfacts files (the user's 126 and the golden
+basket's): 142 records unchanged, ARM 0 → 6 fiscal years. Measuring that needed a deterministic digest: two runs of
+the unchanged code disagreed, which traced to BUG-057 (a set-ordered frame choice). Six mutants each fail a test. Live:
+ARM collected (Yahoo live, SEC from the golden cache) has FY2021–26 matching its reports, four applicable models
+(median $13.73 against $228.05), the oracle agreeing at both levels, and an FA tab with six years.
+Found: BUG-057 (P3: calendar labels in hash order; 3 vintage periods' stored calendar_year flips, WMT and TJX FY2012)
+and BUG-058 (P3: a 20-F filer's 6-K interims aren't read, so ARM has no quarterly or TTM rows).
+Evidence: `qa/evidence/iter40-bug043-{red,green,mutants,impact,e2e}.txt`
+Result: BUG-043 VERIFIED; no P0 or P1 open. GATHER-02 → TODO (its foreign-filer cases done; the other ticker kinds
+untested). New BUG-057, BUG-058.
+Gates: ruff ✓ mypy ✓ pytest 958 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): read a foreign issuer's annual report (20-F, 40-F)
+Next: BUG-047 or BUG-048 (P2, oldest first: BUG-047; for BUG-048 the oracle rule changes first), then BUG-045. Fixes
+since review 5's range: 3 (8feac32, 98013f4, this); review 6 after two more.

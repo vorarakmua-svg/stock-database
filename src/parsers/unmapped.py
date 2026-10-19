@@ -13,8 +13,9 @@ from typing import Any, Dict, List, Optional
 
 from ..mappings.canonical import ALL_MAPPED_TAGS
 
-# Forms that carry statement facts; ignore other filing types (8-K, etc.).
-_STATEMENT_FORMS = {"10-K", "10-K/A", "10-Q", "10-Q/A"}
+# Forms that carry statement facts, a foreign issuer's annual report included;
+# ignore other filing types (8-K, etc.).
+_STATEMENT_FORMS = {"10-K", "10-K/A", "10-Q", "10-Q/A", "20-F", "20-F/A", "40-F", "40-F/A"}
 
 # Defaults bounding the long tail: only material, recent USD facts.
 _DEFAULT_MIN_VALUE = 1_000_000.0

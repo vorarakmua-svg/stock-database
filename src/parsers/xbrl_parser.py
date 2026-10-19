@@ -4,7 +4,7 @@ import logging
 import re
 from collections import defaultdict
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, DURATION, INSTANT, SIGN_ABS
 
@@ -16,13 +16,21 @@ _FULL_YEAR_MAX_DAYS = 380
 _QUARTER_MIN_DAYS = 80
 _QUARTER_MAX_DAYS = 100
 
-# Forms that carry quarterly and annual statement facts.
+# Forms that carry quarterly and annual statement facts. A foreign issuer's annual
+# report (20-F, 40-F) counts as annual; its 6-K interim reports aren't read.
 _QUARTERLY_FORMS = {"10-Q", "10-Q/A", "10-K", "10-K/A"}
-_ANNUAL_FORMS = {"10-K", "10-K/A"}
+_ANNUAL_FORMS = {"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"}
 #: Forms of filers reporting as foreign private issuers.
 _FOREIGN_FORMS = {"20-F", "20-F/A", "40-F", "40-F/A", "6-K"}
 _FRAME_YEAR_RE = re.compile(r"CY(\d{4})")
 _FRAME_QUARTER_RE = re.compile(r"^CY(\d{4})Q(\d)")
+#: Fields reported in dollars: a filer reporting in another currency resolves none.
+_DOLLAR_FIELDS = frozenset(f.key for f in CANONICAL_FIELDS if f.xbrl_unit.startswith("USD"))
+
+
+def _in_dollars(periods: Iterable[Dict[str, Any]]) -> bool:
+    """Whether any period holds a dollar figure, not just share counts."""
+    return any(_DOLLAR_FIELDS & period.keys() for period in periods)
 
 
 def explain_no_annual_financials(facts: Optional[Dict[str, Any]],
@@ -30,9 +38,8 @@ def explain_no_annual_financials(facts: Optional[Dict[str, Any]],
     """Why a filer's SEC data yields no annual financials, for the run's warnings.
 
     An empty record otherwise reads like a short history: XOM's new holding
-    company had filed only 10-Qs, TSM reports in IFRS, and ARM files its US-GAAP
-    accounts on 20-F. ``first_filing`` is the date its filings are listed from,
-    when that is known.
+    company had filed only 10-Qs, and TSM reports in IFRS. ``first_filing`` is
+    the date its filings are listed from, when that is known.
     """
     taxonomies = (facts or {}).get("facts", {})
 
@@ -46,12 +53,15 @@ def explain_no_annual_financials(facts: Optional[Dict[str, Any]],
         return "SEC has no XBRL financial statements for it"
     us_gaap_forms = set(forms("us-gaap"))
     if not us_gaap_forms & _ANNUAL_FORMS:
-        if us_gaap_forms & _FOREIGN_FORMS:
-            return (f"it files as a foreign issuer ({', '.join(sorted(us_gaap_forms))}); "
-                    "only 10-K and 10-Q filings are read")
+        report = "20-F" if us_gaap_forms & _FOREIGN_FORMS else "10-K"
         since = f" (its filings listed from {first_filing})" if first_filing else ""
-        return f"it has filed no annual report (10-K) yet{since}"
-    return "its 10-K facts give no full fiscal year of a mapped concept"
+        return f"it has filed no annual report ({report}) yet{since}"
+    currencies = {unit for tag in taxonomies["us-gaap"].values() for unit in tag.get("units", {})
+                  if re.fullmatch(r"[A-Z]{3}", unit)}
+    if currencies and "USD" not in currencies:
+        return (f"it reports in {', '.join(sorted(currencies))} ({', '.join(sorted(us_gaap_forms))}), "
+                "which isn't converted to dollars")
+    return "its annual-report facts give no full fiscal year of a mapped concept"
 
 
 class XBRLParser:
@@ -194,6 +204,8 @@ class XBRLParser:
             period_key_fn=annual_fy,
             quarterly=False,
         )
+        if not _in_dollars(data.values()):
+            return {}  # share counts alone aren't a record; the run explains the gap
 
         sorted_years = sorted(data.keys(), reverse=True)
         if years_back:
@@ -211,7 +223,7 @@ class XBRLParser:
         value per period), this keeps one period dict per *filing* (accession), so a
         restated year retains both its original and restated vintages. Reads the
         already-fetched ``companyfacts`` (every historical instance carries its own
-        ``accn``/``filed``); no extra network. Annual (10-K) only.
+        ``accn``/``filed``); no extra network. Annual reports (10-K, 20-F, 40-F) only.
         """
         us_gaap = facts.get("facts", {}).get("us-gaap", {})
         if not us_gaap:
@@ -248,6 +260,8 @@ class XBRLParser:
                                            priority, tag, entry)
 
         self._apply_calendar(data, period_frames, quarterly=False)
+        if not _in_dollars(data.values()):
+            return {}
 
         nested: Dict[str, Dict[str, Dict[str, Any]]] = {}
         for (fy, accn), period_dict in data.items():

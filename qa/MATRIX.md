@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 90 · PASS 9 · FAIL 7 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
+**Status counts:** TODO 91 · PASS 9 · FAIL 6 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -60,7 +60,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
 | GATHER-01 | Yahoo | TODO | |  |
-| GATHER-02 | SEC CIK resolution | FAIL→BUG-043 | iter 38 | XOM's new registrant (BUG-042) and TSM's IFRS filings (BUG-044) now get a named explanation in the run, the database and the FA and VAL tabs; ARM's US-GAAP 20-F still isn't read (BUG-043, P1); keeping XOM's predecessor history is Q6; dual-class, punctuated, renamed, delisted, ETF and index cases untested |
+| GATHER-02 | SEC CIK resolution | TODO | iter 40 | done: foreign filers: ARM's US-GAAP 20-F is read (BUG-043), TSM's IFRS and XOM's new registrant are explained by name (BUG-044, BUG-042; keeping XOM's history is Q6), and a 6-K interim gap remains (BUG-058, P3); untested: dual-class and punctuated tickers, renamed, delisted, ETF and index cases |
 | GATHER-03 | companyfacts parsing | TODO | |  |
 | GATHER-04 | Rates | FAIL→BUG-052 | iter 39 | without a FRED key: Treasury.gov's latest day (BUG-041) with its day and source, and the static estimate flagged (BUG-037), checked live; the FRED-key path and January's prior-year fallback are untested; code review 5 (stubbed): any failure of the current-year request falls back to last year's year-end rate, and a blank latest 10-year gives no rate (BUG-052, P3) |
 | GATHER-05 | Rate limiting and retries | TODO | |  |

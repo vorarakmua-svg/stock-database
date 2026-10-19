@@ -210,12 +210,11 @@ def _facts_from(taxonomy, form, tag="Revenues"):
 @pytest.mark.parametrize("facts, reason", [
     (None, "SEC has no XBRL financial statements for it"),
     (_facts_from("ifrs-full", "20-F"), "it reports in IFRS (20-F), which isn't mapped"),
-    (_facts_from("us-gaap", "20-F"), "it files as a foreign issuer (20-F); only 10-K and 10-Q filings are read"),
+    (_facts_from("us-gaap", "6-K"), "it has filed no annual report (20-F) yet"),
     (_facts_from("us-gaap", "10-Q"), "it has filed no annual report (10-K) yet"),
 ])
 def test_an_empty_sec_record_says_why(facts, reason):
-    # TSM (IFRS), ARM (US GAAP on 20-F) and XOM's new holding company (10-Qs only) came back with no annual
-    # financials and no word on why.
+    # TSM (IFRS) and XOM's new holding company (10-Qs only) came back with no annual financials and no word on why.
     assert explain_no_annual_financials(facts) == reason
 
 
@@ -224,5 +223,33 @@ def test_a_10k_filer_whose_facts_cover_no_full_year_gets_the_last_reason():
     facts = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [
         usd(2.5e8, start="2025-10-01", end="2025-12-31", fy=2025, form="10-K", filed="2026-02-20")]}}}}}
     assert XBRLParser().extract_annual_financials(facts) == {}
-    assert explain_no_annual_financials(facts) == "its 10-K facts give no full fiscal year of a mapped concept"
+    assert explain_no_annual_financials(facts) == "its annual-report facts give no full fiscal year of a mapped concept"
+
+
+def _fy_to_march(val, form, unit="USD"):
+    entry = usd(val, start="2024-04-01", end="2025-03-31", fy=2025, form=form, filed="2025-05-28")
+    return {"units": {unit: [entry]}}
+
+
+@pytest.mark.parametrize("form", ["20-F", "20-F/A", "40-F"])
+def test_a_foreign_issuers_annual_report_is_read(form):
+    # ARM files its US-GAAP accounts on 20-F (fiscal year to March), but only 10-K facts were read: no financials.
+    year = XBRLParser().extract_annual_financials({"facts": {"us-gaap": {
+        "Revenues": _fy_to_march(4.0e9, form),
+        "WeightedAverageNumberOfDilutedSharesOutstanding": _fy_to_march(1.06e9, form, unit="shares"),
+    }}})["2025"]
+    assert (year["revenue"], year["weighted_avg_shares_diluted"]) == (4.0e9, 1.06e9)
+
+
+def test_a_filer_reporting_in_another_currency_gets_no_record_and_a_reason():
+    # Alibaba-style: US GAAP on 20-F, in renminbi. Only the share counts would resolve, a record of nothing else;
+    # an empty one lets the run say why.
+    facts = {"facts": {"us-gaap": {
+        "Revenues": _fy_to_march(9.96e11, "20-F", unit="CNY"),
+        "WeightedAverageNumberOfDilutedSharesOutstanding": _fy_to_march(2.4e10, "20-F", unit="shares"),
+    }}}
+    parser = XBRLParser()
+    assert parser.extract_annual_financials(facts) == {}
+    assert parser.extract_annual_vintages(facts) == {}
+    assert explain_no_annual_financials(facts) == "it reports in CNY (20-F), which isn't converted to dollars"
 
