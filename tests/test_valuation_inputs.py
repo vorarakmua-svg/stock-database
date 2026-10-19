@@ -645,3 +645,37 @@ def test_inputs_load_from_a_database_without_the_rate_columns(tmp_path):
     conn.close()
     assert (inputs.shares_outstanding, inputs.risk_free_rate_date, inputs.risk_free_rate_source) == (1.0e9, None, None)
 
+
+def _merger_then_split_db(tmp_path):
+    """FY2016-2025, each filed the February after: a stock-paid merger doubles the share count in FY2020 while
+    EPS keeps rising, and a 2:1 split follows the FY2025 10-K."""
+    db_path = tmp_path / "merger_then_split.db"
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('MRG', 'general')")
+    for fy in range(2016, 2026):
+        shares = 1.0e8 if fy < 2020 else 2.0e8
+        eps = 2.0 + 0.1 * (fy - 2016) if fy < 2020 else 2.6 + 0.1 * (fy - 2020)
+        conn.execute(
+            "INSERT INTO financials_annual (ticker, fiscal_year, period_end, filed_date, net_income, total_equity, "
+            "eps_diluted, weighted_avg_shares_diluted) VALUES ('MRG', ?, ?, ?, ?, 1.0e9, ?, ?)",
+            (fy, f"{fy}-12-31", f"{fy + 1}-02-20", eps * shares, eps, shares),
+        )
+    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('MRG', '2026-06-01', 2.0)")
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, shares_outstanding, market_cap, current_price) "
+                 "VALUES ('MRG', '2026-10-20T09:00:00', 4.0e8, 1.2e10, 30.0)")
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_a_split_after_the_latest_filing_never_explains_an_older_seam(tmp_path):
+    # Code review 5 (I1): the 2:1 split of 2026-06-01, made after the FY2025 10-K, also explained the FY2019 ->
+    # FY2020 merger seam, so FY2016-19 were split twice (factor 4.0, EPS 0.50-0.575) and Lynch read 13.4% growth.
+    conn = _connect(_merger_then_split_db(tmp_path))
+    records = load_inputs(conn, "MRG").fy_records
+    conn.close()
+    assert [(r.fiscal_year, r.split_factor, round(r.eps_diluted, 3)) for r in records[:5]] == [
+        (2016, 2.0, 1.0), (2017, 2.0, 1.05), (2018, 2.0, 1.1), (2019, 2.0, 1.15), (2020, 2.0, 1.3)]
+

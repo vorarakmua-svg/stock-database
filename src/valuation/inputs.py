@@ -399,7 +399,12 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
             "SELECT date, ratio FROM split_events WHERE ticker = ? ORDER BY date", (ticker,)
         ).fetchall()
     ]
-    records, history_truncated = _normalize_splits(records, shares_detect, splits)
+    filed = fy_rows[-1]["filed_date"] if fy_rows else None
+    # A split made after the latest filing restated nothing stored, so it can't
+    # explain a seam (an older merger's would take it); _apply_later_splits
+    # moves every year by it instead.
+    restated = [s for s in splits if not filed or str(s[0])[:10] <= str(filed)[:10]]
+    records, history_truncated = _normalize_splits(records, shares_detect, restated)
 
     # SELECT *: a database not yet migrated lacks the rate's date and source columns,
     # and the backfill reads it without migrating.
@@ -413,8 +418,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     yahoo_counts = [snap["shares_outstanding"]] if snap and snap["shares_outstanding"] else []
     if snap and snap["market_cap"] and snap["current_price"]:
         yahoo_counts.append(snap["market_cap"] / snap["current_price"])
-    _apply_later_splits(records, splits, fy_rows[-1]["filed_date"] if fy_rows else None,
-                        yahoo_counts)
+    _apply_later_splits(records, splits, filed, yahoo_counts)
     shares, shares_source = _total_shares(
         snap["shares_outstanding"] if snap else None,
         snap["market_cap"] if snap else None,

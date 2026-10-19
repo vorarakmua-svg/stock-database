@@ -794,3 +794,21 @@ Gates: ruff ✓ mypy ✓ pytest 962 passed (1 known warning) | CI: pending for t
 Commit: (this commit) fix(fetchers): a failed SEC request is an error, not a success
 Next: BUG-047 (P2), then BUG-048 (P2; the oracle rule changes first). Fixes since review 5's range: 4 (8feac32,
 98013f4, 14ac7c6, this); review 6 after the next fix.
+
+## Iteration 42: 2026-10-20 06:53: fix
+Picked: BUG-047, the oldest open P2 with BUG-048 (both iteration 39; lower number first). CI: 522da04 running at the
+start (14ac7c6 ✓).
+Did: TDD (the review's merger-then-split shape through `load_inputs`, RED: FY2016 split factor 4.0, EPS 0.50).
+`load_inputs` now offers `_normalize_splits` only the splits dated on or before the latest filing, the complement of
+`_apply_later_splits`, so a post-filing split moves every year once. Two mutants each fail a test. The review's case
+end to end: Lynch $7.75 on 5.0% (was $18.60 on 13.4%), and the oracle, which flagged it, now agrees at both levels.
+Impact: fresh copies of the user's database and the golden one, backfilled with 9892af9's code and with the fix: 0 of
+762 and 0 of 114 valuation rows change. The review's variant (a split whose own seam lies before the window) is a
+different mechanism and still reproduces: split off as BUG-059 (P2), with per-field filing dates from the vintages as
+the fix direction; a scan finds no current case (NOW's genuine seam is the only match the EPS test would refuse).
+Evidence: `qa/evidence/iter42-bug047-{red,green,mutants,e2e,impact}.txt`, `qa/evidence/iter42-bug059-scan.txt`
+Result: BUG-047 VERIFIED; new BUG-059. VAL-09 → FAIL→BUG-048.
+Gates: ruff ✓ mypy ✓ pytest 963 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(valuation): a split after the latest filing never explains an older seam
+Next: code review 6 (five fixes since review 5's range: 8feac32, 98013f4, 14ac7c6, 522da04, this), dispatched in the
+background after this push; then BUG-048 (P2; the oracle rule changes first), then BUG-059.

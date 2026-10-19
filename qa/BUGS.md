@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 2 · P3 23 · NEEDS-USER 10 · Verified: 30
+**Open:** P0 0 · P1 0 · P2 2 · P3 23 · NEEDS-USER 10 · Verified: 31
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -396,13 +396,15 @@ Repro: `stock-web --help`, or any argument, is ignored: uvicorn starts on 127.0.
 Expected: `--help` prints usage with the environment variables, and unknown arguments are refused.   Actual: a server starts. (This loop's lookup started one against the user's database; it served no request, was stopped, and `stock.db` and its WAL are unmodified.)
 
 ### BUG-047 [P2][VAL] A declared split made after the latest 10-K can explain an older merger or IPO seam, and is then applied twice
-Status: OPEN
-Found: iteration 39 by code review 5 (I1), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 42)
+Found: iteration 39 by code review 5 (I1), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: iteration 42 (see LOG) | Regression test: `tests/test_valuation_inputs.py::test_a_split_after_the_latest_filing_never_explains_an_older_seam`
 Repro: shares double in FY2020 through a stock-paid merger while EPS keeps rising (2.3 → 2.6), and a 2:1 split follows the FY2025 10-K (`review5/demo_double_split.py`): FY2016–19 get split_factor 4.0 and EPS 0.50–0.575, against 2.0 and 1.00–1.15 at 61f8a56. End to end (`t_split/build_db.py`), Lynch's base is $18.60 on 13.4% growth against $7.75 on 5.0%, and the oracle flags it (L2 MISMATCH, 58.3%). Variant (`demo_old_split.py`): a split whose own seam lies before the 10-FY window is taken by a merger seam in the window's first year (FY2016's EPS halved, 2.0 → 1.0); there the oracle's closeness heuristic agrees with the code.
 Expected: a split restates only the years filed before it; a merger seam stays a merger.   Actual: `_declared_run` offers every split dated after the older year's period end, and since a8fb8e4 (BUG-031's fix) a declared match skips the EPS-direction test; `_apply_later_splits` then applies the post-filing split a second time.
 Impact today: none. No post-filing split matches a seam on the real or golden copies; CRWD is the near miss (IPO seam 3.122 against its 4:1 of 2026-07-02: ×1.281, tolerance ×1.25).
 Notes: the review's trial patch (drop splits dated after the latest FY filing before `_normalize_splits`) fixes the main case with no current value moving. The variant needs another guard: row-level `filed_date` can't decide it (13 of 23 real matched seams fall outside the two years' filing dates).
 
+Fix: `load_inputs` offers `_normalize_splits` only the splits dated on or before the latest filing, the complement of what `_apply_later_splits` applies, so a post-filing split moves every year once and never explains a seam. The review's case end to end (`t_split/build_db.py`): Lynch $7.75 on 5.0% growth (was $18.60 on 13.4%), and the oracle agrees at both levels (it flagged 58.3% before). Impact: 0 of 762 real and 0 of 114 golden valuation rows change (both copies backfilled with 9892af9's code and with the fix; `qa/evidence/iter42-bug047-impact.txt`). Two mutants each fail a test.
+Notes: the variant, a split whose own seam lies before the window, is a different mechanism: BUG-059.
 ### BUG-048 [P2][VAL] After a failed quote, a split made since the last priced snapshot moves per-share values off the shown price's basis
 Status: OPEN
 Found: iteration 39 by code review 5 (I2), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
@@ -472,6 +474,14 @@ Status: OPEN
 Found: iteration 40, in BUG-043's live check (`qa/evidence/iter40-bug043-e2e.txt`) | Fixed: — | Regression test: —
 Repro: since BUG-043's fix ARM has six fiscal years, but its interim statements (6-K: 2,756 us-gaap facts) aren't read (`_QUARTERLY_FORMS` holds 10-Q and 10-K), so it stores 0 quarterly and 0 TTM rows, and its FA tab's Quarterly view says "No data available for this period." with no warning.
 Expected: a foreign issuer's interim figures are read when it tags them (6-K ladders, with the 20-F as the year), or the gap is explained.   Actual: empty and unexplained.
+
+### BUG-059 [P2][VAL] A declared split whose own seam lies before the 10-FY window can explain a merger or IPO seam inside it
+Status: OPEN
+Found: iteration 39 by code review 5 (I1's variant); split off in iteration 42 | Fixed: — | Regression test: —
+Repro (`review5/demo_old_split.py`): a 2:1 split in March 2017, restated by the FY2017 10-K, so every stored year from FY2016 is on the post-split basis, and a stock-paid merger that doubles the share count in FY2017 while EPS rises (2.0 → 2.1). `_declared_run` offers the split to the FY2016 → FY2017 seam (it is dated after FY2016's period end), and since a8fb8e4 a declared match skips the EPS-direction test, so FY2016's EPS is halved (2.0 → 1.0), still after BUG-047's fix; 61f8a56 kept it. End to end (`t_split/build_db_v2.py`, per the review): Lynch $34.80 against $14.50. The oracle's closeness heuristic agrees with the code, so it can't catch this.
+Expected: a seam the split can't have made stays unadjusted.   Actual: the merger seam takes the split.
+Impact today: none. On the real and golden copies the only declared match the EPS test would refuse is NOW's genuine 5:1 seam (FY2022 → FY2023: its EPS grew about 5× that year, the reason for a8fb8e4, BUG-031) (`qa/evidence/iter42-bug059-scan.txt`).
+Notes: fix direction: per-field filing dates. The vintages hold each field's filing, so a split can explain a seam only if the older year's share count was last filed before the split: that keeps NOW (FY2022 last filed early 2025, before December 2025's split) and refuses the variant (FY2016 last filed in 2019, after March 2017's). The oracle rule changes first.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
