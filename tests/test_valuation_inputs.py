@@ -231,8 +231,9 @@ def test_declared_ratio_matches_a_run_of_splits_and_ignores_unrelated_ones():
     assert _declared_ratio(3.81, "2023-01-01", [("2022-06-01", 4.0)]) == 3.81  # split predates the seam
 
 
-def _post_filing_split_db(tmp_path, split_date, ratio):
-    """KLAC-like: FY2023-2025 as filed on 2025-08-08 (old basis), then one declared split."""
+def _post_filing_split_db(tmp_path, split_date, ratio, snapshot_shares=None):
+    """KLAC-like: FY2023-2025 as filed on 2025-08-08 (old basis), then one declared split, and
+    optionally today's share count in a market snapshot."""
     db_path = tmp_path / "post_filing_split.db"
     store = SQLiteStore(db_path=db_path)
     conn = store._connect()
@@ -245,9 +246,31 @@ def _post_filing_split_db(tmp_path, split_date, ratio):
             (fy, f"{fy}-06-30", eps * 1.3375e8, eps),
         )
     conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('KLA', ?, ?)", (split_date, ratio))
+    if snapshot_shares is not None:
+        conn.execute("INSERT INTO market_snapshots (ticker, collected_at, shares_outstanding, market_cap, "
+                     "current_price) VALUES ('KLA', '2026-08-04T12:00:00', ?, ?, 100.0)",
+                     (snapshot_shares, snapshot_shares * 100.0))
     conn.commit()
     conn.close()
     return db_path
+
+
+def test_a_post_filing_ratio_the_share_count_does_not_show_is_not_a_split(tmp_path):
+    # Yahoo's split history also holds spin-off factors of 3:2 or more (ABT 2.084 for AbbVie). ABT's
+    # share count didn't move, so applying the factor as a split after the filing would halve every
+    # per-share figure; a real split shows in today's share count.
+    conn = _connect(_post_filing_split_db(tmp_path, "2026-01-02", 2.084, snapshot_shares=1.34e8))
+    latest = load_inputs(conn, "KLA").fy_records[-1]
+    conn.close()
+    assert latest.split_factor == 1.0
+
+
+def test_a_post_filing_split_the_share_count_confirms_still_applies(tmp_path):
+    # KLAC: 133.75M shares filed, 1.31B today after its 10:1 split (buybacks make up the rest).
+    conn = _connect(_post_filing_split_db(tmp_path, "2026-06-12", 10.0, snapshot_shares=1.306e9))
+    latest = load_inputs(conn, "KLA").fy_records[-1]
+    conn.close()
+    assert latest.split_factor == 10.0
 
 
 def test_split_after_the_latest_filing_moves_every_year_to_todays_basis(tmp_path):

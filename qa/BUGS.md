@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 8 · NEEDS-USER 7 · Verified: 17
+**Open:** P0 0 · P1 0 · P2 0 · P3 8 · NEEDS-USER 7 · Verified: 18
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -206,12 +206,13 @@ Root cause: Yahoo's `sharesOutstanding` counts a single class for multi-class co
 Fix: `load_inputs` computes the count once (`_total_shares`): the snapshot count, or market cap ÷ price when that is more than 2% larger (every class, the way Yahoo values the company), or the latest FY's diluted shares on today's basis when the count is still under 3/4 of them (HON); the source is recorded as `shares_source` in the DCF and owner-earnings assumptions. Measured first over 124 companies: only DELL, GOOGL and HON sit under 3/4 (≈ 0.48; next is 0.857), and market cap ÷ price corrects 15 counts, all multi-class or with units (APP, BRK-B, BX, DELL, GOOGL, META, PLTR, SPCX, V, SPG, PLD, KKR) or a stale count (BLK, MRVL); counts above the FY figure (issuance: INTC, COF, CEG, PANW) stay. The oracle took its own implementation first (a285446) and flagged the DCF of APP, GOOGL, HON, META, MRVL and V against the unfixed code; after the fix it agrees. Impact (`qa/evidence/iter20-bug022-impact.txt`): DCF GOOGL $277.59 → $133.18, DELL $316.92 → $159.43, HON $182.45 → $89.93, META −13.4%, APP −9.0%, V −8.7%, PLTR −4.2%, MRVL −2.4%; owner earnings DELL, HON, META, V likewise; 6 medians move; no verdict changes.
 
 ### BUG-023 [P2][VAL] Spin-off and merger factors of 3:2 or more in `split_events` pass as share splits
-Status: OPEN
-Found: iteration 17 by code review 2; the ratios re-checked on the real-data copy | Fixed: — | Regression test: —
+Status: VERIFIED for the post-filing rule; the historical seams are lead L12
+Found: iteration 17 by code review 2; the ratios re-checked on the real-data copy | Fixed: iteration 21 (see LOG) | Regression tests: `tests/test_valuation_inputs.py::test_a_post_filing_ratio_the_share_count_does_not_show_is_not_a_split`, `::test_a_post_filing_split_the_share_count_confirms_still_applies`
 Repro: `split_events` ABT 2013-01-02 2.084 (AbbVie spin-off), DELL 2018-12-28 1.806 and 2021-11-02 1.973 (Class V exchange, VMware spin-off), RTX 2020-04-03 1.589 (merger and spin-offs).
 Expected: only share splits move per-share history (BUG-014's post-filing rule and the oracle both assume ratios of 3:2 or more are splits).
 Actual: replaying filing vintages, the post-filing rule would have mis-scaled ABT, RTX and TMUS for 1.5–10 months after those events (their share counts moved ×1.000, ×1.000 and ×1.467, not by the ratio). Nothing is affected today, since no such factor falls after a latest filing now.
-Notes: fix direction (review): confirm a declared split against the share count's own change (market cap ÷ price), which counts every class (not `shares_outstanding`: it would veto GOOGL's and DELL's real splits, see BUG-022).
+Fix: `_apply_later_splits` applies a post-filing split only when today's share count (the larger of Yahoo's count and market cap ÷ price, so every class) is within DECLARED_SPLIT_TOLERANCE of the filed count times the ratio; with no count to compare it applies as before. The oracle needed no change: its basis choice already follows today's share count (since iteration 20). Verified on the real-data copy: no valuation changes, and BKNG ×25, KLAC ×10 and CRWD ×4 are still applied (`qa/evidence/iter21-bug023-impact.txt`).
+Notes: the historical seams are a separate question: `_normalize_splits` starts from a real share-count jump and can snap a merger seam to a spin-off factor (RTX 2020: observed 1.5717, declared 1.589), which lead L12 covers.
 
 ### BUG-024 [P3][VAL] Post-filing splits are still offered as seam candidates
 Status: OPEN

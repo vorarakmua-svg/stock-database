@@ -422,3 +422,19 @@ Gates: ruff ✓ mypy ✓ pytest 899 passed (1 known warning) | CI: pending for t
 Commit: chore(qa) oracle share count (a285446), then (this commit) fix(valuation): per-share values count every share
 class
 Next: record code review 3 when it reports; then BUG-023 (P2, the only open P2)
+
+## Iteration 21: 2026-10-20 05:20: fix
+Picked: BUG-023 (P2), the only open P2 (CI: 2d92381 ✓; c6678d0 running). Code review 3 was still running.
+Did: The risk is latent (no spin-off or merger factor sits after a latest filing today), so the test is synthetic:
+an ABT-like 2.084 after the filing, with today's share count unchanged, was applied as a split (RED); a KLAC-like
+10:1 confirmed by 1.31B shares today is the guard. Fix: `_apply_later_splits` requires today's share count (the
+larger of Yahoo's count and market cap ÷ price) within DECLARED_SPLIT_TOLERANCE of the filed count × the ratio, and
+applies as before when no count exists. The snapshot query moved ahead of it in `load_inputs`. Mutants (no
+confirmation; a check that never accepts) each fail one test; restored byte-identical. The oracle needed no change:
+its basis already follows today's share count.
+Evidence: `qa/evidence/iter21-bug023-{red,green,mutants,impact}.txt`, `iter21-oracle-{golden,real}.txt`
+Result: BUG-023 VERIFIED for the post-filing rule: zero valuation changes on the real-data copy, BKNG/KLAC/CRWD's
+splits still applied; the oracle is unchanged (golden 0, real the known 12). No P0–P2 bug is open now.
+Gates: ruff ✓ mypy ✓ pytest 901 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(valuation): a post-filing split must show in the share count
+Next: record code review 3 when it reports; then discovery (§4.2.3), riskiest area first: VAL

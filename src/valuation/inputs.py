@@ -215,7 +215,7 @@ def _normalize_splits(records: List[FYRecord],
 
 
 def _apply_later_splits(records: List[FYRecord], splits: Sequence[Tuple[str, float]],
-                        filed: Optional[str]) -> None:
+                        filed: Optional[str], today_shares: Optional[float] = None) -> None:
     """Move every year onto today's basis when a split came after the latest filing.
 
     Filings restate per-share figures only for splits made before they are
@@ -225,7 +225,10 @@ def _apply_later_splits(records: List[FYRecord], splits: Sequence[Tuple[str, flo
     Only share splits count (at least 3-for-2 or 1-for-2): Yahoo's split
     history also holds spin-off price factors and stock dividends (HON 0.9535).
     Without a filing date nothing moves, because a split between the year end
-    and the filing is already restated in it.
+    and the filing is already restated in it. Spin-off and merger factors of
+    3:2 or more sit in the split history too (ABT's 2.084 for AbbVie), so
+    when ``today_shares`` is known the share count must have moved by the
+    ratio, within DECLARED_SPLIT_TOLERANCE (KLAC: 133.75M filed, 1.31B today).
     """
     if not filed:
         return
@@ -236,6 +239,10 @@ def _apply_later_splits(records: List[FYRecord], splits: Sequence[Tuple[str, flo
                 or 1.0 / MAX_SPLIT_RATIO <= ratio <= 1.0 / SPLIT_JUMP_THRESHOLD):
             factor *= ratio
     if factor == 1.0:
+        return
+    filed_shares = next((r.shares for r in reversed(records) if r.shares and r.shares > 0), None)
+    if today_shares and filed_shares and abs(
+            math.log(today_shares / (filed_shares * factor))) > math.log(DECLARED_SPLIT_TOLERANCE):
         return
     for rec in records:
         rec.split_factor *= factor
@@ -353,7 +360,6 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         ).fetchall()
     ]
     records, history_truncated = _normalize_splits(records, shares_detect, splits)
-    _apply_later_splits(records, splits, fy_rows[-1]["filed_date"] if fy_rows else None)
 
     snap = conn.execute(
         "SELECT shares_outstanding, market_cap, current_price, beta, risk_free_rate, collected_at "
@@ -361,6 +367,12 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         "WHERE ticker = ? ORDER BY collected_at DESC LIMIT 1",
         (ticker,),
     ).fetchone()
+    # Today's count of every class, as Yahoo has it, to confirm a split after the filing.
+    yahoo_counts = [snap["shares_outstanding"]] if snap and snap["shares_outstanding"] else []
+    if snap and snap["market_cap"] and snap["current_price"]:
+        yahoo_counts.append(snap["market_cap"] / snap["current_price"])
+    _apply_later_splits(records, splits, fy_rows[-1]["filed_date"] if fy_rows else None,
+                        max(yahoo_counts) if yahoo_counts else None)
     shares, shares_source = _total_shares(
         snap["shares_outstanding"] if snap else None,
         snap["market_cap"] if snap else None,
