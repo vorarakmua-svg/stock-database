@@ -67,3 +67,17 @@ def test_years_back_trims_to_recent():
 
 def test_empty_facts_returns_empty():
     assert XBRLParser().extract_annual_vintages({}) == {}
+
+
+def test_a_vintage_ignores_point_in_time_facts_under_a_duration_tag():
+    # BAC files each quarterly dividend declaration as a point-in-time fact under the preferred tag;
+    # the year's 0.92 sits under the fallback tag, and that is the vintage's value.
+    declared = [usd(v, end=e, fy=2023, filed="2024-02-20") for v, e in [(0.22, "2023-04-26"), (0.24, "2023-10-18")]]
+    cash_paid = [usd(0.92, "2023-01-01", "2023-12-31", fy=2023, filed="2024-02-20")]
+    facts = {"facts": {"us-gaap": {
+        "CommonStockDividendsPerShareDeclared": {"units": {"USD/shares": declared}},
+        "CommonStockDividendsPerShareCashPaid": {"units": {"USD/shares": cash_paid}},
+    }}}
+    vintages = XBRLParser().extract_annual_vintages(facts)
+    assert [p["dividends_per_share"] for p in vintages["2023"].values()] == [0.92]
+

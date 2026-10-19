@@ -138,3 +138,35 @@ def test_period_year_uses_end_then_frame():
     # Frame is only a fallback when end is absent.
     assert parser._period_year({"frame": "CY2020Q4I"}) == 2020
     assert parser._period_year({}) is None
+
+
+def _dividend_facts(declared, cash_paid):
+    """Dividends per share under its two tags (USD/shares facts)."""
+    us_gaap = {}
+    if declared:
+        us_gaap["CommonStockDividendsPerShareDeclared"] = {"units": {"USD/shares": declared}}
+    if cash_paid:
+        us_gaap["CommonStockDividendsPerShareCashPaid"] = {"units": {"USD/shares": cash_paid}}
+    return {"facts": {"us-gaap": us_gaap}}
+
+
+def test_a_duration_field_ignores_point_in_time_facts():
+    # BAC tags each quarterly declaration as a point-in-time fact under the preferred tag, while the
+    # fallback tag covers the year: the last declaration (0.24) became FY2023's dividends per share,
+    # against 0.92 paid in the year.
+    declared = [usd(v, end=e, fy=2023, filed="2024-02-20")
+                for v, e in [(0.22, "2023-02-01"), (0.22, "2023-04-26"), (0.24, "2023-07-19"), (0.24, "2023-10-18")]]
+    cash_paid = [usd(0.92, start="2023-01-01", end="2023-12-31", fy=2023, filed="2024-02-20")]
+    annual = XBRLParser().extract_annual_financials(_dividend_facts(declared, cash_paid))
+    assert annual["2023"]["dividends_per_share"] == 0.92
+    assert annual["2023"]["_source_tags"]["dividends_per_share"] == "CommonStockDividendsPerShareCashPaid"
+
+
+def test_a_duration_field_with_only_point_in_time_facts_stays_empty():
+    # DIS reports each semiannual payment as a point-in-time fact. No fact covers the year, so there is
+    # no annual value (one payment, half the year's dividends, used to stand in for it).
+    cash_paid = [usd(0.5, end="2025-01-16", fy=2025, filed="2025-11-20"),
+                 usd(0.5, end="2025-07-23", fy=2025, filed="2025-11-20")]
+    annual = XBRLParser().extract_annual_financials(_dividend_facts([], cash_paid))
+    assert "dividends_per_share" not in annual.get("2025", {})
+

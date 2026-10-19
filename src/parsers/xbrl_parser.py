@@ -112,6 +112,17 @@ class XBRLParser:
             return True  # instant fact
         return _FULL_YEAR_MIN_DAYS <= span <= _FULL_YEAR_MAX_DAYS
 
+    @staticmethod
+    def _matches_kind(field: Any, entry: Dict[str, Any]) -> bool:
+        """A flow (duration) field needs a fact that covers a period.
+
+        ``_is_full_year`` accepts instant facts for the balance sheet, but under a
+        duration tag an instant is a single event, not the year's value: BAC tags
+        each quarterly dividend declaration that way, and the last one (0.24)
+        outranked the full-year 0.92 filed under the fallback tag.
+        """
+        return field.kind != DURATION or bool(entry.get("start"))
+
     def _is_quarter(self, entry: Dict[str, Any]) -> bool:
         """True for instant facts and for duration facts spanning ~one quarter."""
         span = self._span_days(entry)
@@ -188,7 +199,7 @@ class XBRLParser:
                 for entry in tag_data.get("units", {}).get(field.xbrl_unit, []):
                     if entry.get("form", "") not in _ANNUAL_FORMS:
                         continue
-                    if not self._is_full_year(entry):
+                    if not self._matches_kind(field, entry) or not self._is_full_year(entry):
                         continue
                     fy = self._fiscal_year_from_end(entry.get("end")) or self._period_year(entry)
                     accn = entry.get("accn")
@@ -460,7 +471,7 @@ class XBRLParser:
                 for entry in tag_data.get("units", {}).get(unit_key, []):
                     if entry.get("form", "") not in form_set:
                         continue
-                    if not valid_fn(entry):
+                    if not self._matches_kind(field, entry) or not valid_fn(entry):
                         continue
 
                     period = period_key_fn(entry)

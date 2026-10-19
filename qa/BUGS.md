@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 3 · P3 3 · NEEDS-USER 7 · Verified: 11
+**Open:** P0 0 · P1 0 · P2 2 · P3 4 · NEEDS-USER 7 · Verified: 12
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -116,12 +116,12 @@ Root cause: upstream, confirmed. The collector stores Yahoo's full dividend seri
 Notes: the first version also flagged MU FY2021 (a first dividend declared before the year ended and paid after it, following a gap since 1996), so the gap must now begin near the year. Re-collecting CB won't help while Yahoo lacks the payments, and CB's DDM stays about half until Q4 is decided. The iteration-8 scan's other gap (SCCO Feb → Aug 2024, probably a dividend paid in shares) isn't flagged.
 
 ### BUG-013 [P2][VALID] SEC annual dividends per share holds one quarter's (or half-year's) amount for some filers
-Status: OPEN
-Found: iteration 9 while calibrating the dividend completeness check (`qa/evidence/iter09-dividend-prototype.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED for the parser defect (BAC, DIS and 9 more); the filers' own tagging (V, CEG, PLD) is BUG-020
+Found: iteration 9 while calibrating the dividend completeness check (`qa/evidence/iter09-dividend-prototype.txt`) | Fixed: iteration 15 (see LOG) | Regression tests: `tests/test_xbrl_parser.py::test_a_duration_field_ignores_point_in_time_facts`, `::test_a_duration_field_with_only_point_in_time_facts_stays_empty`, `tests/test_xbrl_vintages.py::test_a_vintage_ignores_point_in_time_facts_under_a_duration_tag`
 Repro: real-data copy, `financials_annual.dividends_per_share` vs the year's Yahoo payments: V FY2023–2025 0.45/0.52/0.59 vs 1.80/2.08/2.36 (exactly ×4); CEG FY2023–2025 ×4; BAC FY2023 0.24 vs 0.92; DIS FY2024–2025 ×2 (a semiannual payer); PLD FY2024 0.01 and FY2025 0.03 vs ≈ 3.84 and 4.04.
 Expected: the fiscal year's declared dividends per share (V FY2025 ≈ 2.36).
 Actual: one period's amount. V's quarterly ladder shows the same pattern: 0.59 for the quarter ending 2024-12-31, then 0.0 for the following quarters (YTD differences).
-Root cause: to confirm: the SEC parser's choice of duration context for `CommonStockDividendsPerShareDeclared` vs how these filers tag it.
+Root cause: two, read from the cached companyfacts. (1) The parser: `_is_full_year` accepts point-in-time facts (meant for balance-sheet fields), and `_resolve_canonical` and `extract_annual_vintages` applied it to every field, so under a duration tag a single event counted as the year. BAC tags each quarterly declaration that way under the preferred tag, so the last one (0.24) outranked the full-year 0.92 under the fallback; DIS files each semiannual payment so. Fix: `_matches_kind` makes a duration field require a fact with a start. (2) The filers: V and CEG tag each quarter's rate with a full-year context, and PLD files a tiny "declared" figure (0.01) beside the real one (3.84 paid): BUG-020. Impact over 129 cached filings (`qa/evidence/iter15-bug013-impact.txt`): 60 values in 17 fields change. Dividends per share: 15 corrections (BAC FY2014–2023, e.g. 0.24 → 0.92; JNJ FY2020 1.01 → 3.98; PFE, SPG, SCCO, AMGN FY2020) and 9 years with only point-in-time facts now empty (AMGN, AMT, ABBV, DELL, DIS) instead of one payment. GS FY2008, 13 fields: a start-less copy of the one-month transition period (Dec 2008, net loss $780M) had replaced the fiscal year; FY2008 net income is now its $2.322B. Impairment: 21 zero values filed point-in-time now empty (MSFT, AMZN, DUK, V, BLK; nothing downstream reads the field). Stored data changes on the next collection.
 Notes: the valuations don't use it; whether the web app displays it is unverified (MATCH-06). The dividend completeness check reads it only to confirm a shortfall, so a too-low figure can hide a finding but can't create one.
 
 ### BUG-014 [P1][VAL] Splits after the latest fiscal year are never applied, so per-share models value KLAC and BKNG on the pre-split basis
@@ -174,6 +174,14 @@ Repro: the DVD panel's payments table and annual bar chart for DHR read `dividen
 Expected: the spin-off shown as such, or left out the way the valuation now leaves it out.
 Actual: the raw Yahoo record is shown as a cash dividend. The panel's CAGR uses the first and last years of the whole history, so it isn't affected.
 Notes: cosmetic; the valuation side is fixed (BUG-011). ETN 2001 and ABT 2004 show the same pattern.
+
+### BUG-020 [P3][VALID] Some filers tag a quarter's dividend, or a stray figure, as the year's dividends per share
+Status: OPEN
+Found: iteration 15 while fixing BUG-013 | Fixed: — | Regression test: —
+Repro: cached companyfacts: V tags 0.45/0.52/0.59 under both dividend tags with full-year contexts for FY2023–2025 (it paid 4 × those); CEG tags 0.282/0.3525/0.3878 the same way; PLD tags `CommonStockDividendsPerShareDeclared` 0.01 (FY2024) and 0.03 (FY2025) beside `...CashPaid` 3.84 and 4.04.
+Expected: the year's dividends per share.
+Actual: the parser stores what was filed: V, CEG at a quarter of the year, PLD at 0.01/0.03 (the preferred tag).
+Notes: not used by the valuations; the exports carry it, and the dividend completeness check (BUG-012) reads it, where a too-low figure can only hide a finding. Options: prefer `CashPaid` when both tags have a full-year fact and they differ more than 2× (PLD); flag a year whose SEC figure is about a quarter of Yahoo's payments (V, CEG); or WONTFIX as the filers' own data.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

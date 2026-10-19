@@ -33,7 +33,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | VALID-02 | Accounting identities | TODO | |  |
 | VALID-03 | Sign conventions | TODO | |  |
 | VALID-04 | Units and scale | TODO | |  |
-| VALID-05 | Periods | FAIL→BUG-013 | iter 9 | annual dividends per share is one period's amount for V, CEG, BAC (×4), DIS (×2) and PLD; the rest of the item is untested |
+| VALID-05 | Periods | FAIL→BUG-020 | iter 15 | BUG-013 fixed (point-in-time facts no longer stand in for a duration field's year; GS FY2008 and 15 dividend years corrected); left: V/CEG/PLD's own tagging (BUG-020, P3); the rest of the item is untested |
 | VALID-06 | Quarterly ladder | TODO | |  |
 | VALID-07 | Integrity checks (`validation/integrity.py`, `quality.py`) | TODO | iter 9 | new dividend completeness check (BUG-012): of 109 dividend payers only CB FY2025 fires; README row added; the other four checks are untested |
 | VALID-08 | Sector classification by SIC | TODO | |  |

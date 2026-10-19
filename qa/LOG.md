@@ -300,3 +300,23 @@ Gates: ruff ✓ mypy ✓ pytest 883 passed (1 known warning) | CI: pending for t
 Commit: chore(qa) oracle rule (bffce5f), then (this commit) fix(valuation): a spin-off recorded as a dividend stays
 out of the DDM
 Next: record code review 2's findings when it reports; then BUG-013 (P2, the oldest open P2)
+
+## Iteration 15: 2026-10-20 03:15: fix
+Picked: BUG-013 (P2), the oldest open P2 (CI: eb63f81 running). Code review 2 was still running.
+Did: Root cause from cached companyfacts (golden cache for PLD; the user's `data/cache`, read-only, for V, CEG,
+BAC and DIS). Two causes. Parser: `_is_full_year` passes point-in-time facts (meant for the balance sheet) and was
+applied to every field, so BAC's per-declaration facts (last: 0.24) outranked its full-year 0.92 under the
+fallback tag, and DIS's semiannual payments stood in for the year. Filers: V and CEG tag each quarter's rate with
+a full-year context; PLD files a stray 0.01 "declared". Tests first: two annual-path tests failed (0.24 == 0.92; a
+0.5 where there should be nothing); a vintage test, written after the fix to the second path, failed when its
+guard was removed. Fix: `_matches_kind` (a duration field needs a fact with a start) in `_resolve_canonical` and
+`extract_annual_vintages`. Impact measured by parsing all 129 cached filings before and after.
+Evidence: `qa/evidence/iter15-bug013-{red,green,mutants,impact}.txt`
+Result: BUG-013 VERIFIED for the parser defect: 60 values change, all corrections or honest gaps (15 dividend
+years corrected, e.g. BAC FY2023 0.24 → 0.92, JNJ FY2020 1.01 → 3.98; 9 now empty; GS FY2008's 13 fields no
+longer show the one-month transition loss, so net income is $2.322B; 21 point-in-time zero impairments empty).
+New: BUG-020 (P3, the filers' own tagging). Stored data changes on the next collection; no valuation reads these
+fields.
+Gates: ruff ✓ mypy ✓ pytest 886 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): a duration field never takes a point-in-time fact
+Next: record code review 2's findings when it reports; then BUG-017 (P2) or BUG-018 (P2), oldest first: BUG-017
