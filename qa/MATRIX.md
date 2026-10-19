@@ -12,14 +12,14 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
 | VAL-01 | DCF (two-stage FCF) | PASS | iter 6 | Level 1 ✓ and Level 2 ✓ on every applicable DCF row (real + golden) after BUG-008; `qa/evidence/iter06-oracle-*.txt` |
-| VAL-02 | DDM (multi-stage) | FAIL→BUG-009 | iter 5 | BUG-005 fixed (≤10-yr window; oracle DDM mismatches 41 → 0); open edge case: partial initiation year / special payments (BUG-009) |
-| VAL-03 | Graham Number | FAIL→BUG-007 | iter 4 | Level 1 ✓ (124 rows); EPS = reported diluted EPS ✓; bear ignores loss years (8 cos) |
+| VAL-02 | DDM (multi-stage) | FAIL→BUG-010 | iter 8 | BUG-005 and BUG-009 fixed (oracle agrees on every DDM row); open: CAGR from < 4 FYs (BUG-010), DHR spin-off stored as a dividend (BUG-011), CB missing payments (BUG-012); specials policy: Q3 |
+| VAL-03 | Graham Number | FAIL→BUG-007 | iter 8 | Level 1 ✓ (124 rows); EPS = reported diluted EPS ✓; bear ignores loss years (8 cos): BUG-007 awaits the user's decision |
 | VAL-04 | Peter Lynch | TODO | iter 7 | BUG-006 and BUG-008 fixed; 4 unexplained Level-2 mismatches (GE, SCCO, SPGI, T): lead L6 |
 | VAL-05 | Historical multiples band | TODO | iter 7 | Level 1 ✓; BUG-006 fix resolved ANET/APH/AVGO/LRCX; 4 unexplained (NOW, SCCO, SPGI, WDC): lead L6 |
 | VAL-06 | Owner earnings | TODO | |  |
 | VAL-07 | Summary | TODO | |  |
 | VAL-08 | Invariant scan over the whole real-DB copy | TODO | |  |
-| VAL-09 | Edge cases | TODO | |  |
+| VAL-09 | Edge cases | TODO | iter 8 | partial first dividend year covered (BUG-009 tests); rest untested |
 | VAL-10 | Rates | TODO | |  |
 | VAL-11 | Reproducibility | TODO | |  |
 | VAL-12 | Presentation | TODO | |  |

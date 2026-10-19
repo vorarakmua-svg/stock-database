@@ -225,6 +225,24 @@ def test_value_ddm_cagr_uses_only_the_last_10_years():
     assert res.assumptions["hist_cagr"] == pytest.approx(0.03)
 
 
+def test_value_ddm_cagr_starts_at_the_first_full_year_of_payments():
+    # MU restarted its dividend late in 2021 (2 payments), then paid 4 a year; measuring from that
+    # short year reported 23%/yr on a flat dividend. Here 2019 has one payment, then 10%/yr.
+    divs = [("2019-11-15", 0.10)] + _quarterly_dividends(2020, 2025, 2.0, 0.10)
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    assert res.assumptions["cagr_years"] == 5
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.10)
+
+
+def test_value_ddm_keeps_a_full_first_year_when_a_later_year_has_a_special():
+    # COST: 2017 adds a $7 special to 4 regular payments. A first year is partial against the
+    # window's usual cadence, not against a neighbour that a special pushed to 5 payments.
+    divs = sorted(_quarterly_dividends(2016, 2025, 2.0, 0.10) + [("2017-07-01", 7.0)])
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    assert res.assumptions["cagr_years"] == 9
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.10)
+
+
 def test_value_ddm_na_too_short():
     divs = _quarterly_dividends(2022, 2023, 1.0, 0.0)
     res = value_ddm(_inputs(sector_class="bank", dividends=divs))

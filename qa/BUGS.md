@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 2 · P3 2 · NEEDS-USER 3 · Verified: 5
+**Open:** P0 0 · P1 1 · P2 2 · P3 2 · NEEDS-USER 5 · Verified: 6
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -64,7 +64,7 @@ Root cause: `_normalize_splits` (`src/valuation/inputs.py`) multiplied in the ob
 Notes: it did: four of the eight L6 multiples mismatches were this bug. Mixed bases within one year (AAPL FY2018: weighted shares restated, shares_outstanding not) remain a VALID-04 topic.
 
 ### BUG-007 [P2][VAL] Graham bear case ignores loss years
-Status: OPEN, needs a decision (NEEDS-USER on the intended behavior)
+Status: NEEDS-USER (decide the intended bear case; parked in iteration 8 so the priority rule stops picking it)
 Found: iteration 4 via VAL-03 | Fixed: — | Regression test: —
 Repro: BA EPS FY2023 −3.67, FY2024 −18.36, FY2025 +2.48 → stored eps_bear = eps_base = eps_bull = 2.48.
 Expected: spec "bear = min(EPS over last 3 FYs)" = −18.36, so Graham's bear value is undefined (√ of a negative).
@@ -81,13 +81,39 @@ Root cause: `derive_growth` (`src/valuation/assumptions.py`) had an `analyst_onl
 Notes: alternative the user may prefer: start the CAGR at the first profitable year when at least 4 FYs remain (DELL would get 6.3%). Rejected here because a post-loss trough start inflates growth (CVX FCF would hit the 15% cap again). See Q2 for the analyst figure itself.
 
 ### BUG-009 [P2][VAL] DDM growth treats a dividend's initiation year (or a one-off special payment) as a full year
-Status: OPEN
-Found: iteration 5 while verifying BUG-005 (VAL-02) | Fixed: — | Regression test: —
+Status: VERIFIED for the partial first year; the special-payment half moved to Q3
+Found: iteration 5 while verifying BUG-005 (VAL-02) | Fixed: iteration 8 (see LOG) | Regression tests: `tests/test_valuation_models.py::test_value_ddm_cagr_starts_at_the_first_full_year_of_payments`, `::test_value_ddm_keeps_a_full_first_year_when_a_later_year_has_a_special`
 Repro: TMUS: one regular payment in 2023 (initiation, $0.65), then 4 a year → stored `hist_cagr` 137% over 2 years. Its 2013 $4.06 is a one-off merger distribution, not a regular dividend.
 Expected: growth from comparable full years (skip a partial first year; exclude special payments).
 Actual: CAGR 2023→2025 = (3.66 / 0.65)^(1/2) − 1 = 137%. Masked here by min() with analyst 5.3%, but without analyst growth it would hit the 10% cap. Special payments also inflate `ttm_dps` when they fall in the window.
-Root cause: `_annual_dividend_totals` sums every event per calendar year; there's no notion of partial or special years.
-Notes: fix direction: drop the first calendar year when it has fewer payments than the steady cadence; detect specials as outliers vs the regular amount (needs care). Edge case for VAL-09.
+Root cause: `value_ddm` measured growth from calendar-year totals (`_annual_dividend_totals`) with no notion of a partial year. The first window year is partial when a dividend started or restarted mid-year (TMUS, GOOGL, MU, GEV, DELL, HWM) or an ex-date slipped into the year before (BMY 2016: 3 payments, 2015: 5). Fix: when the first window year has fewer payments than the window's median count, growth starts at the next year. Comparing with the next year instead would drop COST's full 2016, because its 2017 special makes 5 payments (a guard test covers this). Verified on backfilled copies: the oracle applies the rule independently and agrees on every DDM row (real and golden). Impact (`qa/evidence/iter08-bug009-impact.txt`): MU growth 10% → 1.1% (DDM −29%), BMY 9.0% → 6.0% (−12%); GOOGL and GEV have one full year, so no measurable growth: 10% → flat (−34%, −35%). TMUS, DELL, HWM and PGR keep their growth (cap- or analyst-bound). The 5-model median moves only for MU; no verdict flips.
+Notes: special payments are a policy question, now Q3. A short LAST year is deliberately not dropped: it can be a real cut or suspension, and hiding it would overstate growth.
+
+### BUG-010 [P2][VAL] DDM dividend CAGR is computed from fewer than 4 fiscal years
+Status: OPEN
+Found: iteration 8 via VAL-02 (while fixing BUG-009) | Fixed: — | Regression test: —
+Repro: TMUS has full dividend years 2024 and 2025 only → stored `hist_cagr` 29.3% over 1 year. BKNG, CRM and META also span 1 year, DELL 2.
+Expected: spec, shared assumptions: the historical CAGR "uses up to 10 FYs of the model's basis metric (FCF for DCF, dividends for DDM, EPS for Lynch); requires ≥ 4 FYs". With fewer, the CAGR is undefined, so growth is flat 0% (BUG-008's rule).
+Actual: `value_ddm` passes any ≥ 2 complete years to `derive_growth`. DCF and Lynch enforce ≥ 4 FYs; DDM doesn't (the plan left it out, and the oracle shares the gap).
+Notes: 5 DDM rows today would go flat: BKNG 9.7%, CRM 4.0%, DELL 10.0% (18.4% capped), TMUS 5.3%, META (already 0%). Applicability is unchanged: the DDM section's "N/A when < 3 calendar years" still decides it.
+
+### BUG-011 [P2][DATA] DHR's 2016 Fortive spin-off is stored as a $24.56 cash dividend (and as a 1.319 split)
+Status: OPEN
+Found: iteration 8 via VAL-02 | Fixed: — | Regression test: —
+Repro: `dividend_events` DHR 2016-07-05 24.56, between regular payments of about 0.11; `split_events` DHR 2016-07-05 ratio 1.319 (the same spin-off).
+Expected: a spin-off is not a cash dividend; DHR's 2016 total ≈ 0.44.
+Actual: the 2016 total is 25.0, so DHR's 10-year dividend CAGR is −28.1% and DDM growth clamps to 0% (≈ 10% without it; the error is in the conservative direction).
+Root cause: to confirm (Yahoo's dividend series vs the collector).
+Notes: a "dividend" dated the same day as a non-integer split is the spin-off signature. DHR's 2023 Veralto spin-off appears only as a 1.128 split.
+
+### BUG-012 [P1][GATHER] CB's stored dividends are missing the Sep and Dec 2025 payments
+Status: OPEN
+Found: iteration 8 (dividend-gap scan, `qa/evidence/iter08-dividend-gaps.txt`) | Fixed: — | Regression test: —
+Repro: `dividend_events` CB: 2025-03-14 0.91, 2025-06-13 0.97, then 2026-03-13 0.97, 2026-06-12 1.02: a 273-day gap where the usual is 91. Every other year in the window has 4 payments.
+Expected: 4 payments a year; TTM ≈ $3.93.
+Actual: TTM dividends are $1.99, so CB's DDM (the primary model for insurers) is about half; 2025 has 2 payments.
+Root cause: to confirm: Yahoo's data at collection time vs the collector's dividend merge.
+Notes: the scan found one other gap (SCCO Feb → Aug 2024), probably the 2024 dividend it paid in shares rather than cash.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
@@ -98,6 +124,11 @@ Proposal: use a forward growth estimate if one is available, or drop the analyst
 Status: NEEDS-USER
 Context: `src/webapp/static/screener.js` auto-runs only when the URL has a query string, so a bare `/screener` shows filters and no rows, which looks broken.
 Proposal: run the default (unfiltered) screen on load. Small effort, low risk. Awaiting the user's decision.
+
+### Q3 [VAL] NEEDS-USER: how should DDM treat special and variable dividends?
+Status: NEEDS-USER
+Context: `value_ddm` counts every payment in the TTM basis and the yearly totals. Today: PGR's TTM is $13.90, of which $13.60 is one January 2026 payment (its annual variable dividend; the regular one is $0.10 a quarter), and DDM is the primary model for insurers. NVDA's latest payment is $0.25 after years of $0.01 (a raise or a special?). COST ($7, $10, $15), PSA ($13.15) and COP specials sit mid-window, so they affect neither the CAGR nor the TTM today, but would at a window edge. (DHR's spin-off is a data bug: BUG-011.)
+Options: (a) keep every payment (today); (b) exclude one-off outliers (e.g. > 3× the surrounding regular payments) from the TTM and the CAGR endpoints; (c) like (b), but keep recurring variable dividends such as PGR's. This is policy, so it's the user's call.
 
 ---
 

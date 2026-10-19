@@ -236,11 +236,15 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
             return None
         ttm = db.execute("select coalesce(sum(amount),0) from dividend_events where ticker=? "
                          "and date>date(?,'-365 days') and date<=?", (ticker, anchor, anchor)).fetchone()[0]
-        years = db.execute("select substr(date,1,4) y, sum(amount) from dividend_events where ticker=? and "
-                           "substr(date,1,4) < substr(?,1,4) group by y order by y", (ticker, anchor)).fetchall()
+        years = db.execute("select substr(date,1,4) y, sum(amount), count(*) from dividend_events where ticker=? "
+                           "and substr(date,1,4) < substr(?,1,4) group by y order by y", (ticker, anchor)).fetchall()
         # The spec's "<= 10 yrs" is a calendar window (complete years before the anchor year), and the
         # exponent is the calendar span, so a payment gap can't stretch or shrink the growth rate.
-        window = [(int(y), v) for y, v in years if int(y) >= int(anchor[:4]) - 10]
+        window = [(int(y), v, n) for y, v, n in years if int(y) >= int(anchor[:4]) - 10]
+        # Growth compares full years (BUG-009): a first year with fewer payments than the window's usual
+        # count is partial (dividend started or restarted mid-year, or an ex-date slipped a year back).
+        if len(window) >= 2 and window[0][2] < median([n for _, _, n in window]):
+            window = window[1:]
         span = window[-1][0] - window[0][0] if len(window) >= 2 else 0
         hist = (window[-1][1] / window[0][1]) ** (1 / span) - 1 if span and window[0][1] > 0 else None
         g = x.growth(hist, 0.10)

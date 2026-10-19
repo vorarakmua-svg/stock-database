@@ -136,3 +136,24 @@ Gates: ruff ✓ mypy ✓ pytest 866 passed (1 known warning) | CI: pending for t
 Commit: (this commit) fix(valuation): split adjustment uses declared split ratios
 Next: BUG-007 (P2) needs a user decision on the bear case, so take BUG-009 (P2) next; BUG-007 is recorded as
 NEEDS-USER.
+
+## Iteration 8: 2026-10-20 04:25: fix
+Picked: BUG-009 (P2). BUG-007 (P2) needs a user decision, so it's now NEEDS-USER instead of OPEN, so the
+priority rule stops picking it (CI: f7feea4 ✓, 112aba5 ✓)
+Did: Measured first: 8 DDM rows start their CAGR on a short year: initiations or restarts (TMUS GOOGL MU GEV DELL
+HWM), a slipped ex-date (BMY 2016: 3 payments) and PGR's annual-only years. Rule: when the first window year has
+fewer payments than the window's median count, growth starts at the next year. Rejected: comparing with the next
+year. COST's 2017 special makes 5 payments, so that rule would drop COST's full 2016; a guard test covers it, and
+the next-year mutant fails it. The first RED test (TMUS's 2 full years) was rewritten on a longer history so it
+stays valid under BUG-010. RED (6 ≠ 5) on HEAD's models.py → GREEN; mutant red; restored byte-identical. The oracle
+applies the rule independently (payment counts per year in SQL).
+Evidence: `qa/evidence/iter08-bug009-{red,green,impact}.txt`, `iter08-oracle-{golden,real}.txt`,
+`iter08-dividend-gaps.txt`
+Result: BUG-009 VERIFIED for the partial first year. Oracle: golden L1/L2 0/59; real L1 0/503, L2 still 18 (no DDM
+rows; the same Graham/Lynch/multiples set). Impact: MU growth 10% → 1.1% (DDM −29%), BMY 9.0% → 6.0% (−12%), GOOGL
+and GEV → flat (−34%, −35%); the median moves only for MU; no verdict flips. Specials split out as Q3 (policy:
+PGR's $13.60 variable dividend dominates its TTM). New: BUG-010 (P2, DDM CAGR from < 4 FYs, 5 rows), BUG-011 (P2,
+DHR spin-off stored as a $24.56 dividend), BUG-012 (P1, CB missing two 2025 payments: TTM $1.99 vs ≈ $3.93).
+Gates: ruff ✓ mypy ✓ pytest 868 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(valuation): DDM growth starts at the first full year of dividends
+Next: BUG-012 (P1), the only open P1

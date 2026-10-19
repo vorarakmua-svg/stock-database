@@ -8,6 +8,7 @@ A model that does not apply returns ``applicable=False`` with a user-facing
 
 import math
 import statistics
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -173,6 +174,15 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
     # anchor year is likely partial).
     complete_years = [(year, total) for year, total in annual
                       if anchor.year - DIVIDEND_CAGR_YEARS <= year < anchor.year]
+    # The first of those years can be partial too: a dividend started or
+    # restarted mid-year (MU: 2 payments in 2021, then 4 a year), or an ex-date
+    # slipped into the year before (BMY). Growth measured from it counts
+    # payments, not raises (MU read 23%/yr on a flat dividend), so it starts at
+    # the next year when the first has fewer payments than the usual cadence.
+    payments = Counter(int(d[:4]) for d, _ in inputs.dividends)
+    if len(complete_years) >= 2 and payments[complete_years[0][0]] < statistics.median(
+            payments[year] for year, _ in complete_years):
+        complete_years = complete_years[1:]
     complete = [total for _, total in complete_years]
     growth, gmeta = derive_growth(complete, inputs.analyst_growth, cap=DDM_GROWTH_CAP,
                                   periods=[year for year, _ in complete_years])
