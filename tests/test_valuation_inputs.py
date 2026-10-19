@@ -311,6 +311,39 @@ def test_cash_dividends_stay_even_on_unusual_days(tmp_path, extra, splits):
     assert len(amounts) == 13
 
 
+def _shares_db(tmp_path, snapshot, market_cap_shares, fy_diluted, price=100.0):
+    """One FY of diluted shares and a market snapshot with its own share count and market cap."""
+    db_path = tmp_path / "shares.db"
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('SHR', 'general')")
+    conn.execute("INSERT INTO financials_annual (ticker, fiscal_year, period_end, filed_date, net_income, "
+                 "eps_diluted, weighted_avg_shares_diluted) "
+                 "VALUES ('SHR', 2025, '2025-12-31', '2026-02-10', ?, 1.0, ?)", (fy_diluted, fy_diluted))
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, shares_outstanding, market_cap, current_price) "
+                 "VALUES ('SHR', '2026-08-04T12:00:00', ?, ?, ?)", (snapshot, market_cap_shares * price, price))
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+@pytest.mark.parametrize("snapshot, market_cap_shares, fy_diluted, shares, source", [
+    (5.867e9, 12.229e9, 12.230e9, 12.229e9, "market_cap / price"),  # GOOGL: Yahoo counts class A only
+    (0.317e9, 0.317e9, 0.643e9, 0.643e9, "financials_annual"),      # HON: count and market cap both halved
+    (14.594e9, 14.594e9, 15.005e9, 14.594e9, "market_snapshot"),    # AAPL: one class, buybacks since the FY
+    (0.613e9, 0.613e9, 0.541e9, 0.613e9, "market_snapshot"),        # COF: shares issued since the FY
+])
+def test_per_share_values_count_every_share_class(tmp_path, snapshot, market_cap_shares, fy_diluted, shares, source):
+    # DCF and owner earnings divide by the share count so the result compares with the price; Yahoo's
+    # count can miss whole classes (GOOGL's DCF read about twice its value).
+    conn = _connect(_shares_db(tmp_path, snapshot, market_cap_shares, fy_diluted))
+    inputs = load_inputs(conn, "SHR")
+    conn.close()
+    assert inputs.shares_outstanding == pytest.approx(shares)
+    assert inputs.shares_source == source
+
+
 def test_split_detected_from_net_income_over_eps_when_shares_null(split_db):
     """GOOGL case: weighted_avg_shares_diluted is NULL; derive shares = NI / EPS."""
     conn = _connect(split_db)

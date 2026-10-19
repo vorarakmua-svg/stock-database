@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 1 · P2 1 · P3 8 · NEEDS-USER 7 · Verified: 16
+**Open:** P0 0 · P1 0 · P2 1 · P3 8 · NEEDS-USER 7 · Verified: 17
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -197,13 +197,13 @@ Root cause: `src/exporters/csv_exporter.py` `_read_existing`: a file that parses
 Fix: `_read_existing` treats a file whose header has no `ticker` column like an unparsable one: it's moved aside as `<name>.unreadable-<timestamp>.csv` with a warning that quotes the header, and the run writes its own rows. Both CSV exports use that path. Verified with review 2's repro (`qa/evidence/iter19-bug021-e2e.txt`): both variants now keep the earlier file aside instead of dropping it.
 
 ### BUG-022 [P1][VAL] DCF and owner earnings divide by a single-class share count for GOOGL and DELL (and a halved one for HON)
-Status: OPEN
-Found: iteration 17 by code review 2 (declined as a spec question); re-checked on the real-data copy (`qa/evidence/iter17-review2-checks.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED
+Found: iteration 17 by code review 2 (declined as a spec question); re-checked on the real-data copy (`qa/evidence/iter17-review2-checks.txt`) | Fixed: iteration 20 (see LOG) | Regression test: `tests/test_valuation_inputs.py::test_per_share_values_count_every_share_class` (GOOGL, HON, AAPL and COF shapes)
 Repro: `market_snapshots.shares_outstanding` vs market cap ÷ price vs the latest FY's diluted shares: GOOGL 5.867B / 12.229B / 12.230B; DELL 0.325B / 0.646B / 0.684B; HON 0.317B / 0.317B / 0.643B (Yahoo's market cap is halved too); AAPL 14.594B / 14.594B / 15.005B (control).
 Expected: equity value per share of all classes (the spec's "shares outstanding"), so the per-share value compares with the price.
 Actual: the DCF uses one class for GOOGL and DELL, so their DCF values are about twice too high (GOOGL $277.59 against $374.82, ≈ $133 on all shares; DELL $316.92); HON's is about double on halved Yahoo data. Owner earnings takes the same count.
 Root cause: Yahoo's `sharesOutstanding` counts a single class for multi-class companies (and is wrong for HON); the spec names that field for per-share DCF.
-Notes: needs the oracle to take an independent share count first (it uses the same field: L14). Candidates: market cap ÷ price (all classes for GOOGL and DELL, but not HON), or the latest FY's diluted shares on today's basis (BUG-014), with a cross-check between them.
+Fix: `load_inputs` computes the count once (`_total_shares`): the snapshot count, or market cap ÷ price when that is more than 2% larger (every class, the way Yahoo values the company), or the latest FY's diluted shares on today's basis when the count is still under 3/4 of them (HON); the source is recorded as `shares_source` in the DCF and owner-earnings assumptions. Measured first over 124 companies: only DELL, GOOGL and HON sit under 3/4 (≈ 0.48; next is 0.857), and market cap ÷ price corrects 15 counts, all multi-class or with units (APP, BRK-B, BX, DELL, GOOGL, META, PLTR, SPCX, V, SPG, PLD, KKR) or a stale count (BLK, MRVL); counts above the FY figure (issuance: INTC, COF, CEG, PANW) stay. The oracle took its own implementation first (a285446) and flagged the DCF of APP, GOOGL, HON, META, MRVL and V against the unfixed code; after the fix it agrees. Impact (`qa/evidence/iter20-bug022-impact.txt`): DCF GOOGL $277.59 → $133.18, DELL $316.92 → $159.43, HON $182.45 → $89.93, META −13.4%, APP −9.0%, V −8.7%, PLTR −4.2%, MRVL −2.4%; owner earnings DELL, HON, META, V likewise; 6 medians move; no verdict changes.
 
 ### BUG-023 [P2][VAL] Spin-off and merger factors of 3:2 or more in `split_events` pass as share splits
 Status: OPEN

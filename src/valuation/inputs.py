@@ -37,6 +37,14 @@ DECLARED_SPLIT_TOLERANCE = 1.25
 #: split history records a spin-off price factor, is the spun-off shares' value.
 SPIN_OFF_DIVIDEND_MULTIPLE = 5.0
 
+#: Market cap / price more than this factor above the snapshot share count means
+#: the count misses a share class (or units) that the market cap includes.
+SHARE_CLASS_GAP = 1.02
+
+#: A share count under this share of the latest FY's diluted shares (on today's
+#: basis) is incomplete: buybacks don't shrink a company by a quarter in a year.
+MIN_SHARE_COUNT_RATIO = 0.75
+
 
 def _declared_ratio(observed: float, period_end: Optional[str],
                     splits: Sequence[Tuple[str, float]]) -> float:
@@ -108,6 +116,8 @@ class ValuationInputs:
     sector_class: str = "general"
     fy_records: List[FYRecord] = field(default_factory=list)
     shares_outstanding: Optional[float] = None
+    #: Where ``shares_outstanding`` came from (see ``_total_shares``).
+    shares_source: str = "market_snapshot"
     beta: Optional[float] = None
     risk_free_rate: Optional[float] = None
     analyst_growth: Optional[float] = None
@@ -262,6 +272,25 @@ def _drop_spin_off_dividends(dividends: List[Tuple[str, float]],
     return kept
 
 
+def _total_shares(snapshot: Optional[float], market_cap: Optional[float], price: Optional[float],
+                  records: List[FYRecord]) -> Tuple[Optional[float], str]:
+    """Shares of every class, for per-share values that are compared with the price.
+
+    Yahoo's share count can cover one class of several (GOOGL's class A: 5.87B
+    of 12.23B shares), while market cap / price counts them all, the way Yahoo
+    values the company. A count still under MIN_SHARE_COUNT_RATIO of the latest
+    FY's diluted shares on today's basis is incomplete too (HON, whose market cap
+    is halved as well), so that FY count is used instead.
+    """
+    count, source = snapshot, "market_snapshot"
+    if snapshot and market_cap and price and market_cap / price > SHARE_CLASS_GAP * snapshot:
+        count, source = market_cap / price, "market_cap / price"
+    latest = next((r.shares for r in reversed(records) if r.shares and r.shares > 0), None)
+    if count and latest and count < MIN_SHARE_COUNT_RATIO * latest:
+        count, source = latest, "financials_annual"
+    return count, source
+
+
 def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     """Build the ValuationInputs bundle for *ticker*.
 
@@ -327,11 +356,17 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     _apply_later_splits(records, splits, fy_rows[-1]["filed_date"] if fy_rows else None)
 
     snap = conn.execute(
-        "SELECT shares_outstanding, beta, risk_free_rate, collected_at "
+        "SELECT shares_outstanding, market_cap, current_price, beta, risk_free_rate, collected_at "
         "FROM market_snapshots "
         "WHERE ticker = ? ORDER BY collected_at DESC LIMIT 1",
         (ticker,),
     ).fetchone()
+    shares, shares_source = _total_shares(
+        snap["shares_outstanding"] if snap else None,
+        snap["market_cap"] if snap else None,
+        snap["current_price"] if snap else None,
+        records,
+    )
     as_of = date.today()
     if snap is not None and snap["collected_at"]:
         try:
@@ -368,7 +403,8 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         ticker=ticker,
         sector_class=sector,
         fy_records=records,
-        shares_outstanding=snap["shares_outstanding"] if snap else None,
+        shares_outstanding=shares,
+        shares_source=shares_source,
         beta=snap["beta"] if snap else None,
         risk_free_rate=snap["risk_free_rate"] if snap else None,
         analyst_growth=analyst["earnings_growth"] if analyst else None,

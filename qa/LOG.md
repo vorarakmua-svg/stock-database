@@ -402,3 +402,23 @@ Result: BUG-021 VERIFIED. STORE-06 → FAIL→BUG-027 (P3, same-second kept copi
 Gates: ruff ✓ mypy ✓ pytest 895 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(exporters): a CSV without a ticker column is kept aside, not dropped
 Next: record code review 3 when it reports; then BUG-022 (P1, single-class share counts in the DCF)
+
+## Iteration 20: 2026-10-20 05:00: fix
+Picked: BUG-022 (P1), the only open P1 (CI: 2d92381 running). Code review 3 was still running.
+Did: Measured first, over 124 companies: snapshot / latest-FY-diluted ratios put DELL, GOOGL and HON at ≈ 0.48 and
+everyone else at 0.857 or above; market cap ÷ price exceeds the snapshot count for multi-class companies and
+partnership units too (META 15%, APP 10%, V 10%, PLTR 4%). Oracle first (a285446): total shares are market cap ÷
+price when more than 2% above the snapshot, or the latest FY's diluted count on today's basis when still under
+3/4 of it; against the unfixed code it flagged the DCF of APP, GOOGL, HON, META, MRVL and V and nothing else.
+Tests first, four shapes (GOOGL, HON, and AAPL/COF guards): RED. Fix: `_total_shares` in `load_inputs` plus a
+`shares_source` input that DCF and owner earnings record. Mutants (no market-cap check; no FY check; FY count
+whenever larger) each fail; restored byte-identical.
+Evidence: `qa/evidence/iter20-bug022-{red,green,mutants,impact}.txt`, `iter20-oracle-before-fix-{golden,real}.txt`,
+`iter20-oracle-{golden,real}.txt`
+Result: BUG-022 VERIFIED. Real copy: Level 1 0/519, Level 2 the known 12; golden 0/57. Impact: DCF GOOGL $277.59 →
+$133.18, DELL $316.92 → $159.43, HON $182.45 → $89.93, META −13%, APP −9%, V −9%, PLTR −4%, MRVL −2%; owner earnings
+for DELL, HON, META and V likewise; 6 medians move; no verdict changes. VAL-01 → NEEDS-USER (only Q5 left).
+Gates: ruff ✓ mypy ✓ pytest 899 passed (1 known warning) | CI: pending for this push
+Commit: chore(qa) oracle share count (a285446), then (this commit) fix(valuation): per-share values count every share
+class
+Next: record code review 3 when it reports; then BUG-023 (P2, the only open P2)

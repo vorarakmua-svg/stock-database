@@ -91,7 +91,7 @@ def value_dcf(inputs: ValuationInputs) -> ValuationResult:
     if basis <= 0:
         return _na("dcf", "median 3-year FCF is not positive", basis_fy=basis_fy)
     shares = inputs.shares_outstanding
-    shares_source = "market_snapshot"
+    shares_source = inputs.shares_source
     if not shares or shares <= 0:
         shares = None
         for r in reversed(recs):
@@ -450,7 +450,7 @@ def value_owner_earnings(inputs: ValuationInputs) -> ValuationResult:
                    "median 3-year owner earnings is not positive", basis_fy=basis_fy)
 
     shares = inputs.shares_outstanding
-    shares_source = "market_snapshot"
+    shares_source = inputs.shares_source
     if not shares or shares <= 0:
         shares = None
         for r in reversed(recs):
