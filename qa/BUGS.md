@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 1 · P2 4 · P3 2 · NEEDS-USER 7 · Verified: 10
+**Open:** P0 0 · P1 0 · P2 4 · P3 2 · NEEDS-USER 7 · Verified: 10
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -72,7 +72,7 @@ Actual: loss years are dropped, so the bear case equals the base case. 8 compani
 Notes: decide whether the bear should be N/A (excluded from the bear median) or 0 when a loss year is in the window.
 
 ### BUG-008 [P1][VAL] When the historical CAGR is undefined, growth falls back to a quarterly "analyst" figure
-Status: VERIFIED, but the fix changed a planned rule without the user's decision: BUG-016 restores the plan's rule and Q5 asks
+Status: REVERTED in iteration 13 (BUG-016): the plan's analyst-only fallback is back until the user decides Q5
 Found: iteration 4 via VAL-01 / VAL-04 | Fixed: iteration 6 (see LOG) | Regression tests: `tests/test_valuation_assumptions.py::test_derive_growth_never_uses_analyst_growth_alone`, `tests/test_valuation_models.py::test_value_dcf_growth_is_flat_when_fcf_history_starts_negative`, `::test_value_lynch_na_when_eps_history_starts_with_losses`
 Repro: DELL Lynch `growth_source: analyst_only`, `hist_cagr: None`, `analyst_growth: 2.825`, giving growth 15% (cap) and base $130.2. With DELL's 6 years of EPS (2020→2026: 6.3%/yr) the oracle gets $54.3.
 Expected: spec growth = min(hist CAGR, analyst), conservative by design; it never says to use analyst growth alone.
@@ -143,13 +143,14 @@ Root cause: `src/exporters/csv_exporter.py` (`_read_existing`, `export`; BUG-004
 Notes: before BUG-004's fix a failure lost one run; now the file holds every run, so a failure loses all of them (rebuildable from SQLite or JSON, but nothing says so). Fix direction (review): read with `utf-8-sig`; back up or refuse instead of overwriting an unreadable file; write to a temp file and `os.replace`.
 
 ### BUG-016 [P1][VAL] Iteration 6 changed a planned valuation rule without the user's decision (loop rule 6)
-Status: OPEN
-Found: iteration 10 by code review 1; verified against the plan and the oracle's history | Fixed: — | Regression test: —
+Status: VERIFIED
+Found: iteration 10 by code review 1; verified against the plan and the oracle's history | Fixed: iteration 13 (see LOG) | Regression test: `tests/test_valuation_assumptions.py::test_derive_growth_sources` (the plan's `analyst_only` assertion, restored)
 Repro: the plan (`docs/superpowers/plans/2026-07-13-valuation-layer.md`, lines 390–396 and 485–489) specifies and tests an analyst-only fallback when the historical CAGR is undefined. f7feea4 (BUG-008) replaced it with flat 0% ("none") and, in the same commit, changed the oracle's `growth()` from "not derivable" (None) to 0.0, so its "16 DCF rows now match" evidence was circular.
 Expected: loop rule 6: valuation policy is recorded as NEEDS-USER and not changed. The spec is silent on this case, so the plan's rule stands until the user decides.
 Actual: the change is on the branch and moved 31 valuations (CVX DCF $293 → $124, five owner-earnings values −58%, Lynch N/A for 16 companies). Iteration 6's summary flagged it, but the loop made the change before asking.
 Fix: restore the plan's fallback, its test and the oracle's "not derivable" reading; the decision is Q5. The change can be re-applied from f7feea4 if the user approves it.
-Notes: the stale comment at `models.py:273` and the `analyst_only` rows in existing databases follow whatever Q5 decides.
+Result: `derive_growth` and its test file are byte-identical to before f7feea4; the two tests that asserted the flat rule are gone. The oracle went first (630b52f): with no measurable CAGR a row is "not derivable from the spec" again, as before iteration 6. On the real-data copy that lists 16 DCF, 7 DDM and 15 Lynch rows; Level 1 0/519, Level 2 12 (the 11 known plus DELL Lynch, lead L7). Impact (`qa/evidence/iter13-bug016-impact.txt`): iteration 6 undone (11 DCF values up, e.g. CVX $124 → $293; 5 owner-earnings values +141%; Lynch applicable again for 16 companies), and 6 DDM rows whose CAGR is unmeasurable (BUG-009/BUG-010) take the analyst figure capped at 10%; 19 medians move, no verdict changes.
+Notes: the comment at `models.py:273` matches the plan's rule again. An edit to the oracle's Lynch-branch comment was denied by the auto-mode permission classifier ("Modify Shared Resources"); it wasn't needed, since that branch already returns no values when `growth()` is None, but its comment still describes iteration 6's rule.
 
 ### BUG-017 [P2][VAL] A 13-payment last year inflates DDM growth (O)
 Status: OPEN
@@ -201,7 +202,7 @@ Options: (a) the plan's analyst-only fallback; (b) flat 0% (iteration 6); (c) me
 - L5 [MATCH] Web UPDATE DATA jobs export SQLite only (`src/webapp/jobs.py:246`, `formats=["sqlite"]`), so JSON and the CSVs go stale after web updates. Possibly by design; confirm in MATCH-05. (iter 3)
 - L6 [VAL] Level-2 mismatches not yet explained: NOW multiples (271%), SCCO Lynch (EPS gaps, see L7) and XOM Graham. ANET/APH/AVGO/LRCX were BUG-006 (fixed in iteration 7). GE and T Lynch, SCCO Graham and multiples, SPGI Lynch and multiples, and WDC multiples were the oracle treating spin-off factors as splits (fixed in the oracle in iteration 11). Adjudicate oracle vs code. (iter 4, updated iter 11)
 - L10 [VAL] APP: a split was detected and applied though `split_events` declares none, and AppLovin has never split. Possible false positive rescaling its EPS history. (iter 7; review 1: BX, CRWD, LIN, PLTR and UBER also keep a jump with no declared split, likely IPO, merger or conversion seams)
-- L7 [VALID] `eps_diluted` is null for early FYs while net income and shares exist (DELL 2015–2019, SCCO 2014–2018; GOOGL weighted shares before 2022): canonical mapping gap. (iter 4)
+- L7 [VALID] `eps_diluted` is null for early FYs while net income and shares exist (DELL 2015–2019, SCCO 2014–2018; GOOGL weighted shares before 2022): canonical mapping gap. (iter 4) Iteration 13: this is DELL's Lynch Level-2 mismatch. The code's `eps()` uses net income ÷ shares outstanding for FY2016–2019 (losses, so no CAGR and the analyst figure: $130.20); the oracle skips years without diluted figures (6.26% from FY2020: $54.33).
 - L8 [VAL] Graham/P/B BVPS uses weighted diluted shares and total equity including preferred (JPM basis $130.30 vs about $124 common). The spec is ambiguous. (iter 4)
 - L9 [VAL] KKR graham/multiples: the oracle can't derive the inputs; check the data. (iter 4)
 - L4 [VAL/VALID] `dividend_history.years_of_data` is the span from the first to the last payment (`yahoo_handler.py:710`): AAPL shows 39.2 years, including its 1995–2012 suspension. Check whether DDM or anything else treats it as an unbroken record. (iter 2)

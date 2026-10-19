@@ -78,12 +78,6 @@ def derive_growth(
 ) -> Tuple[float, Dict[str, Any]]:
     """Base growth = min(hist CAGR, analyst), clamped to [0, cap].
 
-    The analyst figure only ever caps a measured historical CAGR; it is never
-    used alone. It is yfinance ``earningsGrowth``, a one-quarter year-over-year
-    change (seen from -85% to +1,369%), not a long-term growth rate, so when the
-    CAGR is undefined (history starting on a loss or a gap) the conservative
-    answer is no growth, not a quarterly spike clamped to the cap.
-
     Callers enforce their own minimum-history applicability rules BEFORE
     calling; with no usable candidate this conservatively returns 0.0
     (flat projection) with ``growth_source: "none"`` — a caller that cannot
@@ -93,12 +87,16 @@ def derive_growth(
     """
     hist = list(history)
     cagr = historical_cagr(hist, periods=periods)
+    candidates = [g for g in (cagr, analyst_growth) if g is not None]
     if cagr is not None and analyst_growth is not None:
-        raw, source = min(cagr, analyst_growth), "min(hist,analyst)"
+        source = "min(hist,analyst)"
     elif cagr is not None:
-        raw, source = cagr, "hist_only"
+        source = "hist_only"
+    elif analyst_growth is not None:
+        source = "analyst_only"
     else:
-        raw, source = 0.0, "none"
+        source = "none"
+    raw = min(candidates) if candidates else 0.0
     base = min(max(raw, 0.0), cap)
     meta: Dict[str, Any] = {
         "growth_base": base,

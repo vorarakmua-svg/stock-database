@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 103 · PASS 1 · FAIL 5 · N-A 0 · BLOCKED 0 · NEEDS-USER 0  
+**Status counts:** TODO 103 · PASS 1 · FAIL 4 · N-A 0 · BLOCKED 0 · NEEDS-USER 1  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -11,10 +11,10 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
-| VAL-01 | DCF (two-stage FCF) | TODO | iter 10 | PASS withdrawn: the 16 rows with an unmeasured CAGR agreed only because the oracle took the same unapproved rule (BUG-016); re-verify after BUG-016 |
+| VAL-01 | DCF (two-stage FCF) | NEEDS-USER | iter 13 | Level 1 ✓ and Level 2 ✓ on every derivable DCF row; the 16 rows with an unmeasurable CAGR follow the plan's analyst-only fallback, which the spec doesn't define: Q5 |
 | VAL-02 | DDM (multi-stage) | FAIL→BUG-011 | iter 10 | BUG-005, BUG-009 and BUG-010 fixed (oracle agrees on every DDM row); open: DHR spin-off stored as a dividend (BUG-011); CB's missing payments are upstream and flagged (BUG-012), the DDM's handling is Q4; specials policy: Q3 |
 | VAL-03 | Graham Number | FAIL→BUG-007 | iter 11 | Level 1 ✓; BUG-014 fixed (KLAC on today's basis; oracle agrees); left: the bear case ignores loss years (BUG-007, NEEDS-USER) and XOM's Level-2 mismatch (lead L6) |
-| VAL-04 | Peter Lynch | FAIL→BUG-016 | iter 11 | BUG-006, BUG-008 and BUG-014 fixed (KLAC, BKNG on today's basis); the 16 Lynch N/As from BUG-008 depend on BUG-016/Q5; SCCO's Level-2 mismatch is lead L6 |
+| VAL-04 | Peter Lynch | TODO | iter 13 | BUG-006 and BUG-014 fixed; BUG-016 restored the plan's rule, so 16 Lynch rows use the analyst figure again (not derivable from the spec: Q5); left: SCCO and DELL Level-2 mismatches (leads L6, L7) |
 | VAL-05 | Historical multiples band | TODO | iter 11 | Level 1 ✓; BUG-006 resolved ANET/APH/AVGO/LRCX; SCCO, SPGI and WDC were the oracle's spin-off handling (fixed in iteration 11); NOW remains: lead L6 |
 | VAL-06 | Owner earnings | TODO | |  |
 | VAL-07 | Summary | TODO | |  |

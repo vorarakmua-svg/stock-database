@@ -256,3 +256,26 @@ Result: BUG-015 VERIFIED. MATCH-05 → FAIL→BUG-018 (a failed re-collection st
 Gates: ruff ✓ mypy ✓ pytest 883 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(exporters): the CSV merge never loses earlier rows
 Next: BUG-016 (P1, restore the plan's growth fallback until the user decides Q5)
+
+## Iteration 13: 2026-10-20 02:35: fix
+Picked: BUG-016 (P1), the only open P1 (CI: 694f135 ✓; d946d18 running).
+Did: Restored the plan's growth fallback that iteration 6 replaced without the user's decision. Oracle first
+(630b52f): its `growth()` goes back to "not derivable" for an unmeasurable CAGR, which is BUG-016's recorded fix. A
+first attempt instead taught the oracle the plan's analyst-only rule; the auto-mode permission classifier then
+denied a second edit to the oracle's Lynch branch ("Modify Shared Resources"). Re-reading BUG-016, the
+"not derivable" reading was the right call anyway (the spec is silent, so the oracle shouldn't encode either
+rule), and only the `growth()` line was needed. Tests first: the plan's `analyst_only` assertion, restored, failed
+('none' == 'analyst_only'); `derive_growth` restored byte-for-byte; the two flat-rule model tests removed (their
+expectation is the unapproved rule).
+Evidence: `qa/evidence/iter13-bug016-{red,impact}.txt`, `iter13-oracle-before-fix-real.txt`,
+`iter13-oracle-{golden,real}.txt`
+Result: BUG-016 VERIFIED; BUG-008 REVERTED (decision: Q5). Real copy: Level 1 0/519; Level 2 12 (the 11 known plus
+DELL Lynch, lead L7); not derivable 40 (16 DCF, 7 DDM, 15 Lynch rows on the plan's rule, plus KKR). Golden: Level 1
+and Level 2 0 mismatches; not derivable: TSLA DCF and Lynch, GOOGL DDM. Impact: iteration 6 undone (11 DCF values
+up, e.g. CVX $124 → $293; 5 owner-earnings values +141%; Lynch applicable again for 16), and the 6 DDM rows that
+BUG-009/BUG-010 left without a CAGR take the analyst figure capped at 10%; 19 medians move, no verdict changes.
+VAL-01 → NEEDS-USER (Q5); VAL-04 → TODO.
+Gates: ruff ✓ mypy ✓ pytest 880 passed (1 known warning; 3 flat-rule tests removed) | CI: pending for this push
+Commit: chore(qa) oracle reading (630b52f), then (this commit) fix(valuation): restore the plan's growth fallback
+pending a decision
+Next: code review 2 is due (5 fixes past abed57a), dispatched in the background; then BUG-011 (P2, oldest open P2)
