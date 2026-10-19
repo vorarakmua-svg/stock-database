@@ -372,3 +372,19 @@ FAIL→BUG-026, STORE-06 → FAIL→BUG-021. Not acted on: the stale oracle Lync
 the permission classifier in iteration 13).
 Review 3 is due after 5 fixes past e8c3aa1 (4 so far: eb63f81, 0940188, 83495c2 and BUG-018's).
 Next: BUG-026 (P0)
+
+## Iteration 18: 2026-10-20 04:20: fix
+Picked: BUG-026 (P0), the only open P0 (CI: 83495c2 ✓; 0850065 running).
+Did: Root cause (confirmed in iteration 17): `StockDataFetcher.export` set `results["csv"]` only when the summary
+export succeeded, then appended the history file's path to it. Test first: with the summary export returning None,
+`fetcher.export(..., formats=["csv", "sqlite"])` raised KeyError: 'csv'. Fix: `results.setdefault("csv", [])`. The
+mutant (the old append) raises again; restored byte-identical. Real path: with `os.replace` refused for summary.csv
+(as Windows does while Excel has it open), the export logs the CSV error and returns json, financial_history.csv and
+sqlite, with the database written.
+Evidence: `qa/evidence/iter18-bug026-{red,green,mutants,e2e}.txt`
+Result: BUG-026 VERIFIED. GATHER-06 → TODO (the rest of its failure modes are untested).
+Gates: ruff ✓ mypy ✓ pytest 893 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(fetchers): a failed summary CSV no longer stops the other exports
+Review cadence: 5 fixes past e8c3aa1 (eb63f81, 0940188, 83495c2, 2aba934 and this one), so code review 3 is
+dispatched in the background on e8c3aa1..HEAD.
+Next: BUG-021 (P1, the oldest open P1), then BUG-022

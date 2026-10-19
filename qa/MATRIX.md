@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 102 · PASS 1 · FAIL 5 · N-A 0 · BLOCKED 0 · NEEDS-USER 1  
+**Status counts:** TODO 103 · PASS 1 · FAIL 4 · N-A 0 · BLOCKED 0 · NEEDS-USER 1  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -64,7 +64,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | GATHER-03 | companyfacts parsing | TODO | |  |
 | GATHER-04 | Rates | TODO | |  |
 | GATHER-05 | Rate limiting and retries | TODO | |  |
-| GATHER-06 | Failure modes (mocked) | FAIL→BUG-026 | iter 17 | a failed re-collection no longer erases stored data (BUG-018 fixed); a locked summary.csv crashes the export before SQLite (BUG-026, P0) |
+| GATHER-06 | Failure modes (mocked) | TODO | iter 18 | BUG-018 and BUG-026 fixed (a failed re-collection keeps stored data; a locked summary.csv no longer stops the SQLite export); the rest of the item is untested |
 | GATHER-07 | SEC cache | TODO | |  |
 | GATHER-08 | Idempotency | TODO | |  |
 | GATHER-09 | Ticker input | TODO | |  |

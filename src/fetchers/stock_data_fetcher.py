@@ -403,12 +403,13 @@ class StockDataFetcher:
             if csv_path:
                 results["csv"] = [csv_path]
 
-            # Also export financial history
+            # Also export financial history. The summary can fail on its own (Windows
+            # won't replace a file Excel has open), and that must not stop the rest.
             history_path = self.csv_exporter.export_financial_history(
                 data, filename="financial_history.csv"
             )
             if history_path:
-                results["csv"].append(history_path)
+                results.setdefault("csv", []).append(history_path)
 
         if "sqlite" in formats:
             db_path = self.sqlite_store.export(data)

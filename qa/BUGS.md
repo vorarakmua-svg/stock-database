@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 1 · P1 2 · P2 1 · P3 8 · NEEDS-USER 7 · Verified: 14
+**Open:** P0 0 · P1 2 · P2 1 · P3 8 · NEEDS-USER 7 · Verified: 15
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -227,13 +227,14 @@ Repro: (1) the usual interval is the whole-history median, so DIS (94 days overa
 Notes: all unlikely with today's inputs (strftime dates, floats).
 
 ### BUG-026 [P0][GATHER] An export with `summary.csv` open in Excel crashes the run before the SQLite export
-Status: OPEN
-Found: lead L13 (code review 1); reproduced in iteration 17 (`qa/evidence/iter17-l13-check.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED
+Found: lead L13 (code review 1); reproduced in iteration 17 (`qa/evidence/iter17-l13-check.txt`) | Fixed: iteration 18 (see LOG) | Regression test: `tests/test_fetcher_concurrency.py::test_a_failed_summary_csv_still_writes_the_other_exports`
 Repro: export once, then make `summary.csv` impossible to replace (Windows refuses while Excel has it open) and export json, csv and sqlite: `KeyError: 'csv'`, and the SQLite store is not written.
 Expected: a CSV that can't be written is reported, and the other formats and the valuation recompute still run.
 Actual: `StockDataFetcher.export` sets `results["csv"]` only when the summary export succeeds, then appends the history file's path to it; the KeyError escapes `fetch_and_export`, so SQLite and the valuations are skipped (JSON is already written).
 Root cause: `src/fetchers/stock_data_fetcher.py` (the csv branch of `export`). It predates the QA branch; BUG-015's fix added paths that reach it (a read error or a failed move-aside also returns None).
 Notes: P0 under the ledger's scale (a crash on a main flow); opening the summary in Excel during a collection is a common way to hit it.
+Fix: the history file's path goes into `results.setdefault("csv", [])`, so a failed summary only loses itself (its error is still logged). Verified on the real path: with `os.replace` refused for summary.csv, the export returns json, financial_history.csv and sqlite, and the database is written (`qa/evidence/iter18-bug026-e2e.txt`).
 
 ### BUG-027 [P3][STORE] Two unreadable CSVs moved aside in the same second overwrite each other
 Status: OPEN

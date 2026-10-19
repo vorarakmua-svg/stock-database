@@ -140,6 +140,19 @@ def test_assess_flags_dividend_payments_missing_from_yahoo(tmp_path):
     assert any("dividend" in w for w in stock.warnings)
 
 
+def test_a_failed_summary_csv_still_writes_the_other_exports(tmp_path, monkeypatch):
+    # Windows refuses to replace summary.csv while Excel has it open, so its export returns None. The
+    # history file's path was then appended to a list that didn't exist (KeyError: 'csv'), and the run
+    # stopped before the SQLite export and the valuations.
+    fetcher = _make_fetcher(tmp_path, workers=1)
+    monkeypatch.setattr(fetcher.csv_exporter, "export", lambda data, filename="summary.csv": None)
+    stock = StockData(ticker="AAA", cik="000", company_name="A Inc.")
+    stock.financials_annual = {"2024": {"fiscal_year": 2024, "revenue": 1.0e9}}
+    results = fetcher.export([stock], formats=["csv", "sqlite"])
+    assert [p.name for p in results["csv"]] == ["financial_history.csv"]
+    assert results["sqlite"][0].exists()
+
+
 def test_benchmark_bars_exported_once_per_run(tmp_path, monkeypatch):
     """fetch_and_export calls fetch_benchmark_bars once and writes ^GSPC bars, no companies row."""
     fetcher = _make_fetcher(tmp_path, workers=1)
