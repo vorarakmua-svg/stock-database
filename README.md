@@ -484,7 +484,7 @@ the `inventory` line resolves from energy-specific tags
 
 ### Integrity checks (data-quality score)
 
-Beyond required-field and accounting-identity checks, the quality layer runs four
+Beyond required-field and accounting-identity checks, the quality layer runs five
 **flag-only** integrity checks (they surface issues via findings + the 0–100 score; they
 never alter data):
 
@@ -494,6 +494,7 @@ never alter data):
 | Cash-flow consistency | the cash-flow statement's reported net change != its own sections + FX effect (a continuing-only statement reconciles once the separately-reported `cash_from_discontinued_operations` line is added) | residual > 1% both bases | −10 |
 | Quarterly-sum | discrete quarters that don't sum to the annual figure; event-driven flows (debt issuance/repayment, buybacks, M&A, impairments/restructuring) are excluded, as for the magnitude-outlier check | per-field > 1% | −10 |
 | Ratio bounds | a computed metric outside its plausible range (e.g. >100% gross margin); roe/roic are not flagged when the equity base is negligible or negative (a buyback-depleted denominator makes the ratio meaningless, not wrong) | impossibility bounds | −3 |
+| Dividend completeness | Yahoo's dividend history missing payments that SEC filings declare: a gap in the payment schedule that begins near the fiscal year, and Yahoo's payments for that year well short of the SEC-declared dividends per share (a December declaration paid in January, a suspension SEC confirms, a first dividend paid after the year ends, and years before a split are not flagged) | interval > 1.7× the usual one and payments < 80% of declared | −10 |
 
 Thresholds are deliberately wide (a $1M materiality floor; the most recent 5 fiscal years are
 scored), so clean filings keep a score of 100. Findings appear in `data_quality.findings` and,

@@ -21,6 +21,7 @@ from ..parsers.unmapped import detect_unmapped
 from ..parsers.xbrl_parser import XBRLParser
 from ..validation.integrity import (
     check_cashflow_reconciliation,
+    check_dividend_completeness,
     check_field_outliers,
     check_quarterly_sums,
     check_ratio_bounds,
@@ -292,6 +293,9 @@ class StockDataFetcher:
             report.findings.extend(check_cashflow_reconciliation(annual, scored_years))
             report.findings.extend(check_quarterly_sums(annual, quarterly, scored_years))
             report.findings.extend(check_ratio_bounds(historical, annual, scored_years))
+            report.findings.extend(check_dividend_completeness(
+                annual, (stock.dividend_history or {}).get("dividend_payments") or [],
+                stock.splits or [], scored_years))
             report.score = score_for(report.findings)
 
         stock.data_quality = report.as_dict()

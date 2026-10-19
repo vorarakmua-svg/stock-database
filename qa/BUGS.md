@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 1 · P2 2 · P3 2 · NEEDS-USER 5 · Verified: 6
+**Open:** P0 0 · P1 0 · P2 3 · P3 2 · NEEDS-USER 6 · Verified: 7
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -107,13 +107,22 @@ Root cause: to confirm (Yahoo's dividend series vs the collector).
 Notes: a "dividend" dated the same day as a non-integer split is the spin-off signature. DHR's 2023 Veralto spin-off appears only as a 1.128 split.
 
 ### BUG-012 [P1][GATHER] CB's stored dividends are missing the Sep and Dec 2025 payments
-Status: OPEN
-Found: iteration 8 (dividend-gap scan, `qa/evidence/iter08-dividend-gaps.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED for detection; the gap itself is upstream, and the DDM's handling of it is Q4 (NEEDS-USER)
+Found: iteration 8 (dividend-gap scan, `qa/evidence/iter08-dividend-gaps.txt`) | Fixed: iteration 9 (see LOG) | Regression tests: `tests/test_integrity.py::test_dividend_check_flags_payments_yahoo_is_missing` plus 4 guard tests, `tests/test_fetcher_concurrency.py::test_assess_flags_dividend_payments_missing_from_yahoo`
 Repro: `dividend_events` CB: 2025-03-14 0.91, 2025-06-13 0.97, then 2026-03-13 0.97, 2026-06-12 1.02: a 273-day gap where the usual is 91. Every other year in the window has 4 payments.
 Expected: 4 payments a year; TTM ≈ $3.93.
 Actual: TTM dividends are $1.99, so CB's DDM (the primary model for insurers) is about half; 2025 has 2 payments.
-Root cause: to confirm: Yahoo's data at collection time vs the collector's dividend merge.
-Notes: the scan found one other gap (SCCO Feb → Aug 2024), probably the 2024 dividend it paid in shares rather than cash.
+Root cause: upstream, confirmed. The collector stores Yahoo's full dividend series on every run (upsert; `yahoo_handler._get_dividend_history` → yfinance `Ticker.dividends` = `history(period="max")`, repair off), and CB's 2026-08-04 JSON export has the same gap, so none of its three runs (Jun 28, Jul 16, Aug 4 2026) received the payments. A read-only live check on 2026-10-20 (2 requests) shows Yahoo still lacks them in both the max and the 2-year series. Three independent sources show CB paid: SEC declared $3.82/share for FY2025 (0.91 + 3 × 0.97), Yahoo's own cash-flow statement (dividends paid $390M in Q3 and $384M in Q4 2025) and its dividend rate ($4.08). The program's defect was silence: nothing compared the series with the SEC figure it already stores. Fix: a flag-only integrity check, `check_dividend_completeness`, raises a MEDIUM finding (−10) when a gap in Yahoo's payment schedule begins near a fiscal year and Yahoo's payments for that year are below 80% of the SEC-declared dividends per share. Verified: on the real-data copy it fires for CB FY2025 only (109 dividend payers checked); re-assessing CB's real export offline drops its quality score 100 → 90 and adds a collection warning.
+Notes: the first version also flagged MU FY2021 (a first dividend declared before the year ended and paid after it, following a gap since 1996), so the gap must now begin near the year. Re-collecting CB won't help while Yahoo lacks the payments, and CB's DDM stays about half until Q4 is decided. The iteration-8 scan's other gap (SCCO Feb → Aug 2024, probably a dividend paid in shares) isn't flagged.
+
+### BUG-013 [P2][VALID] SEC annual dividends per share holds one quarter's (or half-year's) amount for some filers
+Status: OPEN
+Found: iteration 9 while calibrating the dividend completeness check (`qa/evidence/iter09-dividend-prototype.txt`) | Fixed: — | Regression test: —
+Repro: real-data copy, `financials_annual.dividends_per_share` vs the year's Yahoo payments: V FY2023–2025 0.45/0.52/0.59 vs 1.80/2.08/2.36 (exactly ×4); CEG FY2023–2025 ×4; BAC FY2023 0.24 vs 0.92; DIS FY2024–2025 ×2 (a semiannual payer); PLD FY2024 0.01 and FY2025 0.03 vs ≈ 3.84 and 4.04.
+Expected: the fiscal year's declared dividends per share (V FY2025 ≈ 2.36).
+Actual: one period's amount. V's quarterly ladder shows the same pattern: 0.59 for the quarter ending 2024-12-31, then 0.0 for the following quarters (YTD differences).
+Root cause: to confirm: the SEC parser's choice of duration context for `CommonStockDividendsPerShareDeclared` vs how these filers tag it.
+Notes: the valuations don't use it; whether the web app displays it is unverified (MATCH-06). The dividend completeness check reads it only to confirm a shortfall, so a too-low figure can hide a finding but can't create one.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
@@ -129,6 +138,11 @@ Proposal: run the default (unfiltered) screen on load. Small effort, low risk. A
 Status: NEEDS-USER
 Context: `value_ddm` counts every payment in the TTM basis and the yearly totals. Today: PGR's TTM is $13.90, of which $13.60 is one January 2026 payment (its annual variable dividend; the regular one is $0.10 a quarter), and DDM is the primary model for insurers. NVDA's latest payment is $0.25 after years of $0.01 (a raise or a special?). COST ($7, $10, $15), PSA ($13.15) and COP specials sit mid-window, so they affect neither the CAGR nor the TTM today, but would at a window edge. (DHR's spin-off is a data bug: BUG-011.)
 Options: (a) keep every payment (today); (b) exclude one-off outliers (e.g. > 3× the surrounding regular payments) from the TTM and the CAGR endpoints; (c) like (b), but keep recurring variable dividends such as PGR's. This is policy, so it's the user's call.
+
+### Q4 [VAL] NEEDS-USER: what should DDM do when Yahoo's dividend history is missing payments?
+Status: NEEDS-USER
+Context: the dividend completeness check (BUG-012) flags CB FY2025: Yahoo lacks its Sep and Dec 2025 payments, so the DDM's TTM dividend is $1.99 instead of ≈ $3.93 and CB's DDM is about half. The spec bases the DDM on TTM dividends from `dividend_events` (Yahoo).
+Options: (a) keep the Yahoo TTM and rely on the data-quality warning (today); (b) when the check fires, use SEC's declared dividends per share for the trailing four quarters (needs BUG-013 fixed first); (c) make DDM N/A ("dividend history incomplete") for flagged companies. (b) and (c) change the spec's DDM basis or N/A rules, so it's the user's call.
 
 ---
 

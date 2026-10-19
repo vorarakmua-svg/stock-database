@@ -3,10 +3,13 @@
 Catches confidently-wrong values that per-period validation in ``quality.py``
 cannot: magnitude outliers vs a field's own history, cash-flow statements that
 don't reconcile to the change in balance-sheet cash, discrete quarters that
-don't sum to the annual figure, and metrics outside plausible bounds. Every
-check is FLAG-ONLY — it emits Findings and never mutates data.
+don't sum to the annual figure, metrics outside plausible bounds, and Yahoo
+dividend histories missing payments that SEC filings declare. Every check is
+FLAG-ONLY — it emits Findings and never mutates data.
 """
 
+import statistics
+from datetime import date, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, CASHFLOW, DURATION, INCOME, UNIT_USD
@@ -54,6 +57,12 @@ _OUTLIER_FACTOR = 100.0
 _CASH_TOL = 0.01
 _CASH_GROSS_TOL = 0.05
 _QUARTERLY_TOL = 0.01
+# Dividend completeness: an interval this many times the usual one between Yahoo payments
+# means a payment is missing; a fiscal-year total under this share of SEC's declared
+# dividends per share confirms it. Below 4 intervals there is no usual interval.
+_DIVIDEND_GAP_FACTOR = 1.7
+_DIVIDEND_SHORTFALL = 0.8
+_DIVIDEND_MIN_INTERVALS = 4
 
 
 def check_field_outliers(
@@ -268,4 +277,64 @@ def check_ratio_bounds(
                     f"'{metric}' = {float(v):.4f} is outside its plausible range.",
                     year,
                 ))
+    return findings
+
+def check_dividend_completeness(
+    annual: Dict[str, Dict[str, Any]],
+    dividend_payments: Iterable[Dict[str, Any]],
+    splits: Iterable[Dict[str, Any]],
+    scored_years: Iterable[str],
+) -> List[Finding]:
+    """Flag a fiscal year whose Yahoo dividend payments miss what SEC filings declare.
+
+    Two independent signals must agree: a gap in Yahoo's payment schedule that overlaps
+    the year, and Yahoo's total for the year falling well short of the SEC-declared
+    dividends per share. Either alone is noise: a large December declaration paid in
+    January (PGR) shows a shortfall without a gap, and a real suspension shows a gap
+    that SEC's figure confirms. The gap must also begin near the year: after years
+    without a dividend, a first one declared before the year ends and paid after it
+    is an initiation, not a missing payment (MU FY2021). Years with a later split are
+    skipped, because Yahoo's amounts are split-adjusted and SEC's are as filed. (CB: no
+    payment between 2025-06-13 and 2026-03-13, so FY2025 sums to 1.88 against 3.82.)
+    """
+    paid = sorted(
+        (str(p["date"])[:10], float(p["amount"]))
+        for p in dividend_payments
+        if p.get("date") and isinstance(p.get("amount"), (int, float))
+    )
+    intervals = [
+        (date.fromisoformat(later) - date.fromisoformat(earlier)).days
+        for (earlier, _), (later, _) in zip(paid, paid[1:])
+    ]
+    if len(intervals) < _DIVIDEND_MIN_INTERVALS:
+        return []
+    usual = statistics.median(intervals)
+    gaps = [
+        (paid[i][0], paid[i + 1][0])
+        for i, days in enumerate(intervals)
+        if days > _DIVIDEND_GAP_FACTOR * usual
+    ]
+    split_dates = [str(s["date"])[:10] for s in splits if s.get("date")]
+    findings: List[Finding] = []
+    for year in sorted(set(scored_years)):
+        period = annual.get(year) or {}
+        declared = _num(period, "dividends_per_share")
+        end = str(period.get("period_end") or "")[:10]
+        if declared is None or declared <= 0 or not end:
+            continue
+        start_day = date.fromisoformat(end) - timedelta(days=365)
+        start = start_day.isoformat()
+        recent = (start_day - timedelta(days=_DIVIDEND_GAP_FACTOR * usual)).isoformat()
+        if any(d > start for d in split_dates):
+            continue
+        gap = next(((a, b) for a, b in gaps if recent <= a < end and b > start), None)
+        total = sum(amount for d, amount in paid if start < d <= end)
+        if gap is not None and total < _DIVIDEND_SHORTFALL * declared:
+            findings.append(Finding(
+                MEDIUM, "dividend_payments_missing",
+                f"Yahoo's dividend payments sum to {total:.2f}/share, but SEC filings declare "
+                f"{declared:.2f}; there is no payment between {gap[0]} and {gap[1]} (usual "
+                f"interval {usual:.0f} days), so Yahoo's dividend history is likely missing payments.",
+                year,
+            ))
     return findings

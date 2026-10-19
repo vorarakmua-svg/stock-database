@@ -117,6 +117,29 @@ def test_assess_clean_company_scores_100(tmp_path):
     assert stock.data_quality["score"] == 100
 
 
+def test_assess_flags_dividend_payments_missing_from_yahoo(tmp_path):
+    # CB: Yahoo's history has no payment between 2025-06-13 and 2026-03-13, while its SEC
+    # filings declare a full year of dividends for FY2025.
+    fetcher = _make_fetcher(tmp_path, workers=1)
+    stock = StockData(ticker="CB", cik="000", company_name="CB Inc.")
+    stock.financials_annual = {
+        str(y): {"fiscal_year": y, "period_end": f"{y}-12-31", "dividends_per_share": 3.88,
+                 "revenue": 1.0e9, "net_income": 1.0e8, "operating_income": 1.5e8,
+                 "total_assets": 2.0e9, "total_liabilities": 1.0e9, "total_equity": 1.0e9,
+                 "operating_cash_flow": 2.0e8}
+        for y in (2023, 2024, 2025)
+    }
+    stock.dividend_history = {"dividend_payments": [
+        {"date": f"{y}-{m}-13", "amount": 0.97}
+        for y in range(2021, 2027) for m in ("03", "06", "09", "12")
+        if not ("2025-09" <= f"{y}-{m}" <= "2025-12" or f"{y}-{m}" > "2026-06")
+    ]}
+    fetcher._assess(stock)
+    findings = [f for f in stock.data_quality["findings"] if f["code"] == "dividend_payments_missing"]
+    assert [f["period"] for f in findings] == ["2025"]
+    assert any("dividend" in w for w in stock.warnings)
+
+
 def test_benchmark_bars_exported_once_per_run(tmp_path, monkeypatch):
     """fetch_and_export calls fetch_benchmark_bars once and writes ^GSPC bars, no companies row."""
     fetcher = _make_fetcher(tmp_path, workers=1)

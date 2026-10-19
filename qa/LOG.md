@@ -157,3 +157,28 @@ DHR spin-off stored as a $24.56 dividend), BUG-012 (P1, CB missing two 2025 paym
 Gates: ruff ✓ mypy ✓ pytest 868 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(valuation): DDM growth starts at the first full year of dividends
 Next: BUG-012 (P1), the only open P1
+
+## Iteration 9: 2026-10-20 05:10: fix
+Picked: BUG-012 (P1), the only open P1 (CI: 112aba5 ✓, abed57a ✓). Review cadence: 6 fixes since the bootstrap
+and no review yet, so an opus reviewer was dispatched in the background on e51c4f8..abed57a; its findings are
+recorded when they arrive.
+Did: Root cause: upstream. The collector stores Yahoo's full dividend series on every run (upsert), CB's 2026-08-04
+JSON has the same gap, and a read-only live check today (2 requests) shows Yahoo still lacks the Sep and Dec 2025
+payments in both the max and the 2-year series. Three sources confirm CB paid: SEC declared $3.82 for FY2025,
+Yahoo's own cash-flow statement ($390M and $384M paid in Q3/Q4 2025) and its dividend rate ($4.08). The program's
+defect: nothing compared the series with the SEC figure it already stores. Prototype over 300 FYs: amounts alone
+can't separate CB (0.49) from PGR's December-declared, January-paid variable dividend (0.23–0.35), so the check needs
+two signals: a gap in the payment schedule near the year, and payments < 80% of declared. Tests first: the wiring
+test failed `[] == ['2025']`, and the unit tests failed at import. Real data then showed MU FY2021 (a first dividend
+declared before the year ended and paid after it, following a gap since 1996): a test, RED, then the "gap begins
+near the year" guard. Four mutants (shortfall alone, gap alone, no split skip, gap from any time) each fail their
+guard test; restored byte-identical.
+Evidence: `qa/evidence/iter09-bug012-{red,red-mu,green,mutants,realcopy,e2e}.txt`, `iter09-cb-yahoo-live.txt`,
+`iter09-dividend-prototype.txt`
+Result: BUG-012 VERIFIED for detection. On the real-data copy the check fires for CB FY2025 only (109 dividend
+payers); re-assessing CB's real export offline: quality score 100 → 90 plus a collection warning. The README's
+integrity table gains a fifth row. The DDM's handling is Q4 (NEEDS-USER); CB's DDM stays about half until then.
+New: BUG-013 (P2, SEC annual dividends per share is one period's amount for V/CEG/BAC/DIS/PLD; VALID-05 FAIL).
+Gates: ruff ✓ mypy ✓ pytest 874 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(validation): flag dividend payments missing from Yahoo against SEC filings
+Next: record the reviewer's findings (if they arrived), then BUG-010 (P2, oldest open P2)
