@@ -99,3 +99,22 @@ Result: BUG-005 VERIFIED. New **BUG-009 (P2)**: the DDM initiation year (and spe
 Gates: ruff ✓ mypy ✓ pytest 860 passed (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(valuation): DDM dividend growth uses at most 10 years
 Next: BUG-008 (P1), the highest-severity open bug.
+
+## Iteration 6: 2026-10-20 03:20: fix
+Picked: BUG-008 (P1), the highest-severity open bug (CI: 0ee32b9 ✓; 563cf05 running)
+Did: Root cause: `derive_growth`'s `analyst_only` branch. A 10-FY window starting on a loss (DELL FY2017–2019 via
+`FYRecord.eps()`'s net income ÷ shares fallback; negative early FCF) made the CAGR undefined, and yfinance's
+one-quarter YoY figure (up to 1,368%) stood in for it, clamped to 15% or 0%. That branch was deliberate (an existing
+test asserted it), so this reverses an earlier design choice: it contradicts the spec's min(hist, analyst) and the
+module's "not overpaying" principle. Tests first: 3 new tests failed with 0.15 / applicable. Fix: undefined CAGR →
+`growth_source: none` (flat 0% for DCF/DDM/owner earnings; Lynch N/A on its existing path). The old assertion was
+replaced by a dedicated test. Oracle: an undefined CAGR now means flat 0% (Lynch N/A), mirroring the documented rule.
+Evidence: `qa/evidence/iter06-bug008-{red,green,impact}.txt`, `iter06-oracle-{golden,real}.txt`. Backfilled copies:
+no row uses analyst-only growth; all 16 DCF rows re-derive and match; Level 1 still 0 mismatches (503 real, 59 golden).
+Impact: Lynch N/A for 16 companies; 11 DCF values −27% to −58% (CVX $293 → $124); 5 owner-earnings values −58%
+(AVGO AMD HWM MU VRTX); the median moves for 19/127; no verdict flips.
+Result: BUG-008 VERIFIED; VAL-01 PASS; VAL-04 → FAIL→BUG-006. Alternative noted in BUGS.md (CAGR from the first
+profitable year) for the user.
+Gates: ruff ✓ mypy ✓ pytest 863 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(valuation): analyst growth never stands in for a missing growth history
+Next: no P0/P1 open → BUG-006 (P2, oldest open P2)

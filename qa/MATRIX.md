@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 104 · PASS 1 · FAIL 4 · N-A 0 · BLOCKED 0 · NEEDS-USER 0  
+**Status counts:** TODO 104 · PASS 2 · FAIL 3 · N-A 0 · BLOCKED 0 · NEEDS-USER 0  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -11,10 +11,10 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
-| VAL-01 | DCF (two-stage FCF) | FAIL→BUG-008 | iter 4 | Level 1 formula ✓ (100/100 rows); inputs ✓ except 16 rows on analyst-only growth (BUG-008) |
+| VAL-01 | DCF (two-stage FCF) | PASS | iter 6 | Level 1 ✓ and Level 2 ✓ on every applicable DCF row (real + golden) after BUG-008; `qa/evidence/iter06-oracle-*.txt` |
 | VAL-02 | DDM (multi-stage) | FAIL→BUG-009 | iter 5 | BUG-005 fixed (≤10-yr window; oracle DDM mismatches 41 → 0); open edge case: partial initiation year / special payments (BUG-009) |
 | VAL-03 | Graham Number | FAIL→BUG-007 | iter 4 | Level 1 ✓ (124 rows); EPS = reported diluted EPS ✓; bear ignores loss years (8 cos) |
-| VAL-04 | Peter Lynch | FAIL→BUG-006, BUG-008 | iter 4 | Level 1 ✓ (103 rows); split factor from share jumps (AAPL −2.4%); analyst-only fallback (16 rows) |
+| VAL-04 | Peter Lynch | FAIL→BUG-006 | iter 6 | BUG-008 fixed (16 rows now N/A for no measurable growth); split factor still from share jumps (AAPL/NEE/WMT) |
 | VAL-05 | Historical multiples band | TODO | iter 4 | Level 1 ✓ (131 rows); 8 unexplained Level-2 mismatches among recent splitters and spin-offs, see lead L6 |
 | VAL-06 | Owner earnings | TODO | |  |
 | VAL-07 | Summary | TODO | |  |

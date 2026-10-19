@@ -65,11 +65,18 @@ def test_derive_growth_clamps_to_cap_and_floor():
 def test_derive_growth_sources():
     _, meta = derive_growth([100.0, 110.0], None)
     assert meta["growth_source"] == "hist_only"
-    _, meta = derive_growth([-1.0, 5.0], 0.07)  # cagr None -> analyst only
-    assert meta["growth_source"] == "analyst_only"
     base, meta = derive_growth([-1.0, 5.0], None)
     assert base == 0.0
     assert meta["growth_source"] == "none"
+
+
+def test_derive_growth_never_uses_analyst_growth_alone():
+    # Spec: growth = min(historical CAGR, analyst). The analyst figure (yfinance earningsGrowth, a
+    # one-quarter YoY change) only caps a measured CAGR; with no measurable history growth is flat.
+    base, meta = derive_growth([-1.0, 5.0], 2.825)
+    assert base == 0.0
+    assert meta["growth_source"] == "none"
+    assert meta["analyst_growth"] == 2.825  # still recorded for provenance
 
 
 def test_derive_discount_capm_and_clamps():

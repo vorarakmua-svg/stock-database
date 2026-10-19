@@ -167,7 +167,9 @@ class Inputs:
 
     def growth(self, hist: Optional[float], cap: float) -> Optional[float]:
         if hist is None:
-            return None
+            # Spec gap: no measurable CAGR. Analyst growth never stands alone (it's a quarterly YoY
+            # figure; BUG-008), so growth is the conservative flat 0%. Lynch treats this as N/A instead.
+            return 0.0
         raw = min(hist, self.analyst) if self.analyst is not None else hist
         return clamp(raw, 0.0, cap)
 
@@ -266,9 +268,9 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         window = [e for _fy, e in eps][-10:]
         if len(window) < 4 or window[-1] <= 0:
             return None
-        g = x.growth(cagr(window), 0.15)
-        if g is None:
+        if cagr(window) is None:  # Lynch publishes nothing without a measurable growth rate
             return {"inputs": {"hist_cagr": None}}
+        g = x.growth(cagr(window), 0.15)
         trio = [max(g - SPREAD_G, 0.0), g, min(g + SPREAD_G, 0.15)]
         return {"inputs": {"eps_base": window[-1], "hist_cagr": cagr(window), "cagr_years": len(window) - 1,
                            "growth_base": g}, "values": [clamp(gi * 100, 5, 25) * window[-1] for gi in trio]}

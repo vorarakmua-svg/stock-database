@@ -64,6 +64,16 @@ def test_value_dcf_happy_path_scenario_ordering():
     assert res.assumptions["hist_cagr"] == pytest.approx(0.05)
 
 
+def test_value_dcf_growth_is_flat_when_fcf_history_starts_negative():
+    # Negative early FCF leaves the CAGR undefined; a quarterly "analyst growth" (323% for CVX) must not
+    # set long-term growth on its own, so the projection is flat.
+    recs = [_fy(2019 + i, fcf=f) for i, f in enumerate([-50.0, 80.0, 90.0, 100.0, 110.0])]
+    res = value_dcf(_inputs(fy_records=recs, analyst_growth=3.229))
+    assert res.applicable is True
+    assert res.assumptions["growth_base"] == 0.0
+    assert res.assumptions["growth_source"] == "none"
+
+
 def test_value_dcf_na_wrong_sector():
     res = value_dcf(_inputs(sector_class="bank"))
     assert res.applicable is False
@@ -249,6 +259,16 @@ def test_value_graham_na_no_data():
 
 
 # ---- Peter Lynch ----
+def test_value_lynch_na_when_eps_history_starts_with_losses():
+    # DELL-like: three loss years, then profits. The 10-FY CAGR is undefined, and a quarterly "analyst
+    # growth" of 282% must not stand in for it (it used to, capped to 15%: fair P/E 15).
+    eps = [-1.5, -3.8, -3.1, 6.03, 4.22, 3.24, 4.6, 6.38, 8.68]
+    recs = [_fy(2018 + i, eps=e) for i, e in enumerate(eps)]
+    res = value_lynch(_inputs(fy_records=recs, analyst_growth=2.825))
+    assert res.applicable is False
+    assert res.na_reason == "no usable earnings-growth history"
+
+
 def test_value_lynch_hand_computed():
     # EPS CAGR 10%/yr; analyst 12% -> min is hist 10%.
     # fair P/E = growth*100 clamped [5,25]: bear 7 -> base 10 -> bull 13.

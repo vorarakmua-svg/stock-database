@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 1 · P2 3 · P3 2 · NEEDS-USER 3 · Verified: 3
+**Open:** P0 0 · P1 0 · P2 3 · P3 2 · NEEDS-USER 3 · Verified: 4
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -72,13 +72,13 @@ Actual: loss years are dropped, so the bear case equals the base case. 8 compani
 Notes: decide whether the bear should be N/A (excluded from the bear median) or 0 when a loss year is in the window.
 
 ### BUG-008 [P1][VAL] When the historical CAGR is undefined, growth falls back to a quarterly "analyst" figure
-Status: OPEN
-Found: iteration 4 via VAL-01 / VAL-04 | Fixed: — | Regression test: —
+Status: VERIFIED
+Found: iteration 4 via VAL-01 / VAL-04 | Fixed: iteration 6 (see LOG) | Regression tests: `tests/test_valuation_assumptions.py::test_derive_growth_never_uses_analyst_growth_alone`, `tests/test_valuation_models.py::test_value_dcf_growth_is_flat_when_fcf_history_starts_negative`, `::test_value_lynch_na_when_eps_history_starts_with_losses`
 Repro: DELL Lynch `growth_source: analyst_only`, `hist_cagr: None`, `analyst_growth: 2.825`, giving growth 15% (cap) and base $130.2. With DELL's 6 years of EPS (2020→2026: 6.3%/yr) the oracle gets $54.3.
 Expected: spec growth = min(hist CAGR, analyst), conservative by design; it never says to use analyst growth alone.
 Actual: 31 rows (15 DCF, 16 Lynch) use analyst-only growth: MU 1,368.5%, CEG 1,091%, CVX 322.9%, PLTR 325%, DELL 282.5% (all → 15% cap); UBER −84.6%, COP −20.2%, TSLA −3% (→ 0%). The oracle lists 33 rows whose spec inputs are undefined but were still valued.
-Root cause: to confirm. The CAGR is None when the window starts on a missing or non-positive value (DELL EPS null for 2017–2019; negative early FCF), and the code then falls back to analyst-only growth.
-Notes: fix direction: compute the CAGR over the available positive history (≥4 FYs) or fall back conservatively; never let a quarterly spike set long-term growth. See Q2.
+Root cause: `derive_growth` (`src/valuation/assumptions.py`) had an `analyst_only` branch for an undefined CAGR. The CAGR is undefined when the 10-FY window starts on a loss: DELL FY2017–2019 net losses enter through `FYRecord.eps()`'s net income ÷ shares fallback; negative early FCF does the same for DCF. That branch was deliberate (a test asserted it), so this fix **reverses an earlier design choice**, on the grounds that it contradicts the spec (growth = min(hist, analyst); only the reverse fallback is specified) and the module's own principle ('biased toward not overpaying'). Fix: no measurable CAGR gives `growth_source: none`, so DCF, DDM and owner earnings project flat 0%, and Lynch is N/A ('no usable earnings-growth history', its existing path). Verified on a backfilled copy: no row uses analyst-only growth; all 16 DCF rows now re-derive and match the oracle. Impact (`qa/evidence/iter06-bug008-impact.txt`): Lynch N/A for 16 companies; 11 DCF values drop 27–58% (CVX $293 → $124, DELL $317 → $142); 5 owner-earnings values drop 58%; the median moves for 19/127; no verdict flips.
+Notes: alternative the user may prefer: start the CAGR at the first profitable year when at least 4 FYs remain (DELL would get 6.3%). Rejected here because a post-loss trough start inflates growth (CVX FCF would hit the 15% cap again). See Q2 for the analyst figure itself.
 
 ### BUG-009 [P2][VAL] DDM growth treats a dividend's initiation year (or a one-off special payment) as a full year
 Status: OPEN
