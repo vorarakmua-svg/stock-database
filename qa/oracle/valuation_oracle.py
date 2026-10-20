@@ -367,12 +367,18 @@ class Inputs:
 
     def yahoo_dividend_factors(self) -> List[Tuple[str, float]]:
         """Yahoo's dividend factors [(ex-date, factor)], newest first. The stored close before an ex-date already
-        carries the later dividends' factors, so each factor is solved with them: f = 1 / (1 + d * later / close)."""
+        carries the later dividends' factors, so each factor is solved with them: f = 1 / (1 + d * later / close).
+        Yahoo adjusted the stored bars for the dividends it knew when it served them, which the last such bar dates:
+        a dividend after it (a later run's, whose bar request failed) was never in them (BUG-084)."""
         if getattr(self, "_yahoo_factors", None) is None:
             factors: List[Tuple[str, float]] = []
             later = 1.0
+            flagged = "dividend_adjusted" in {r[1] for r in self.db.execute("pragma table_info(price_bars)")}
+            served = self.db.execute("select max(date) from price_bars where ticker=?" +
+                                     (" and dividend_adjusted" if flagged else ""), (self.t,)).fetchone()[0]
             for ex, amount in self.db.execute("select substr(date,1,10), amount from dividend_events where ticker=? "
-                                              "and amount > 0 order by date desc", (self.t,)).fetchall():
+                                              "and amount > 0 and substr(date,1,10) <= ? order by date desc",
+                                              (self.t, str(served or "")[:10])).fetchall():
                 prev = self.db.execute("select close from price_bars where ticker=? and date<? order by date desc "
                                        "limit 1", (self.t, ex)).fetchone()
                 if prev and prev[0]:
