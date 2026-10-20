@@ -288,3 +288,144 @@ def test_a_filer_reporting_in_another_currency_keeps_no_share_only_quarters():
                                    "CommonStockSharesOutstanding": {"units": {"shares": shares}}}}}
     assert XBRLParser().extract_quarterly_financials(facts) == {}
 
+
+def _filed_years(tag, unit, by_fy, instant=False):
+    """One tag's facts: {fy: [(filed, value), ...]}, each a calendar fiscal year (or its year-end instant)."""
+    return {tag: {"units": {unit: [usd(v, start=None if instant else f"{fy}-01-01", end=f"{fy}-12-31", fy=fy,
+                                       filed=filed) for fy, filings in by_fy.items() for filed, v in filings]}}}
+
+
+def _annual(*tags):
+    facts = {"facts": {"us-gaap": {k: v for tag in tags for k, v in tag.items()}}}
+    return XBRLParser().extract_annual_financials(facts)
+
+
+def test_a_later_filings_scale_typo_keeps_the_figure_earlier_filings_report():
+    # BUG-061: STX's FY2024 10-K tagged FY2022's dividend per share as 2,770,000; the 10-Ks of 2022 and 2023 said 2.77.
+    annual = _annual(_filed_years("CommonStockDividendsPerShareDeclared", "USD/shares", {
+        2021: [("2021-08-06", 2.68)],
+        2022: [("2022-08-05", 2.77), ("2023-08-04", 2.77), ("2024-08-02", 2770000.0)],
+        2023: [("2023-08-04", 2.80), ("2024-08-02", 2.80)]}))
+    assert annual["2022"]["dividends_per_share"] == 2.77
+    assert [(r["field"], r["kind"], r["dropped"]) for r in annual["2022"]["_repairs"]] == [
+        ("dividends_per_share", "scale x10^6", 2770000.0)]
+
+
+def test_a_later_filing_that_corrects_a_scale_typo_wins():
+    # BRK-B's 10-Ks of 2011 and 2012 agreed on 1.6 trillion weighted shares for FY2010; the 2013 one corrected it.
+    annual = _annual(_filed_years("WeightedAverageNumberOfSharesOutstandingBasic", "shares", {
+        2009: [("2010-02-26", 1.55e6)],
+        2010: [("2011-02-28", 1.636e12), ("2012-02-24", 1.636e12), ("2013-03-01", 1.636e6)],
+        2011: [("2012-02-24", 1.65e6)]}),
+        _filed_years("Revenues", "USD", {2009: [("2010-02-26", 1.12e11)], 2010: [("2011-02-28", 1.36e11)],
+                                         2011: [("2012-02-24", 1.43e11)]}))
+    assert annual["2010"]["weighted_avg_shares_basic"] == 1.636e6
+    assert "_repairs" not in annual["2010"]
+
+
+def test_a_later_filings_zero_keeps_the_reported_total():
+    # BAC's 10-K filed 2011-02-25 tagged FY2008's total assets as 0; three earlier filings say $1,817.9B.
+    annual = _annual(_filed_years("Assets", "USD", {
+        2007: [("2009-02-27", 1.716e12)],
+        2008: [("2009-02-27", 1.818e12), ("2009-08-07", 1.818e12), ("2010-02-26", 1.818e12), ("2011-02-25", 0.0)],
+        2009: [("2010-02-26", 2.224e12)]}, instant=True))
+    assert annual["2008"]["total_assets"] == 1.818e12
+
+
+
+def test_a_later_zero_for_a_line_item_is_kept():
+    # T-Mobile's 2014 10-K reports T-Mobile USA's FY2012 after the reverse merger: no long-term debt repaid, where
+    # MetroPCS's own 10-K had $25M. Only a total can't be zero.
+    annual = _annual(_filed_years("RepaymentsOfLongTermDebt", "USD", {
+        2010: [("2011-03-01", 1.6e7)], 2011: [("2012-02-29", 2.429e7)],
+        2012: [("2013-03-01", 2.539e7), ("2015-02-19", 0.0)],
+        2013: [("2015-02-19", 9.0e6)], 2014: [("2015-02-19", 1.0e9)]}))
+    assert (annual["2012"]["debt_repaid"], "_repairs" in annual["2012"]) == (0.0, False)
+
+
+@pytest.mark.parametrize("fy2022, kept", [(1.549e9, 1.546e9), (-2.0e8, -1.546e9)])
+def test_a_sign_flip_goes_back_only_when_the_neighbouring_years_agree(fy2022, kept):
+    # DIS's 2023 10-K tagged FY2021's interest expense negative beside two filings and the years around it.
+    annual = _annual(_filed_years("InterestExpense", "USD", {
+        2020: [("2021-11-23", 1.491e9)],
+        2021: [("2021-11-23", 1.546e9), ("2022-11-29", 1.546e9), ("2023-11-21", -1.546e9)],
+        2022: [("2023-11-21", fy2022)]}))
+    assert annual["2021"]["interest_expense"] == kept
+
+
+def test_flipped_cash_flow_sections_go_back_when_the_year_then_adds_up():
+    # AMD's 2024 10-K tagged FY2021's investing and financing cash flows positive: the year no longer summed to its
+    # $0.94B change in cash.
+    def year(tag, by_filing):
+        return _filed_years(tag, "USD", {2021: list(zip(("2022-02-03", "2023-02-27", "2024-01-31"), by_filing))})
+
+    annual = _annual(year("NetCashProvidedByUsedInOperatingActivities", (3.521e9,) * 3),
+                     year("NetCashProvidedByUsedInInvestingActivities", (-0.686e9, -0.686e9, 0.686e9)),
+                     year("NetCashProvidedByUsedInFinancingActivities", (-1.895e9, -1.895e9, 1.895e9)),
+                     year("CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecrease"
+                          "IncludingExchangeRateEffect", (0.940e9,) * 3))
+    assert (annual["2021"]["investing_cash_flow"], annual["2021"]["financing_cash_flow"]) == (-0.686e9, -1.895e9)
+
+
+def test_a_ten_for_one_restatement_is_left_alone():
+    # NVDA's 2025 10-K restated FY2023's 2.487B shares for its 10:1 split: a split, not a typo, even where the years
+    # before it, counting fewer shares, would side with the earlier filings.
+    annual = _annual(_filed_years("WeightedAverageNumberOfSharesOutstandingBasic", "shares", {
+        2021: [("2022-03-18", 2.40e9)], 2022: [("2023-02-24", 2.45e9)],
+        2023: [("2023-02-24", 2.487e9), ("2024-02-21", 2.487e9), ("2025-02-26", 2.487e10)]}),
+        _filed_years("Revenues", "USD", {2023: [("2024-02-21", 2.7e10)]}))
+    assert (annual["2023"]["weighted_avg_shares_basic"], "_repairs" in annual["2023"]) == (2.487e10, False)
+
+
+def test_earlier_filings_that_disagree_leave_the_latest_figure():
+    # TJX's filings for FY2012 operating income went -16.6M, +16.6M, -16.6M: no figure is agreed on.
+    annual = _annual(_filed_years("OperatingIncomeLoss", "USD", {
+        2011: [("2012-03-27", 1.03e7)],
+        2012: [("2012-03-27", -1.66e7), ("2013-04-02", 1.66e7), ("2014-04-01", -1.66e7)],
+        2013: [("2014-04-01", 3.442e9)], 2014: [("2015-03-31", 3.68e9)]}))
+    assert annual["2012"]["operating_income"] == -1.66e7
+
+
+def test_a_later_filing_that_misscales_two_years_has_both_put_back():
+    # Each year's error stands beside the other's: the two years on each side outvote it.
+    annual = _annual(_filed_years("CommonStockDividendsPerShareDeclared", "USD/shares", {
+        2020: [("2020-08-04", 2.58)], 2021: [("2021-08-06", 2.66)],
+        2022: [("2022-08-05", 2.77), ("2024-08-02", 2.77e6)],
+        2023: [("2023-08-04", 2.80), ("2024-08-02", 2.80e6)],
+        2024: [("2024-08-02", 2.80)], 2025: [("2025-08-01", 2.88)]}))
+    assert (annual["2022"]["dividends_per_share"], annual["2023"]["dividends_per_share"]) == (2.77, 2.80)
+
+
+def test_a_fourth_quarter_comes_from_the_restored_year():
+    # AMD's Q4 FY2021 is the year less nine months; with the 2024 10-K's flipped year its investing cash flow read
+    # +$0.99B.
+    start, filings = "2020-12-27", ("2022-02-03", "2023-02-27", "2024-01-31")
+
+    def section(tag, ytd, year):
+        rungs = [usd(v, start, end, fy=2021, fp=fp, form="10-Q", filed=f)
+                 for v, end, fp, f in zip(ytd, ("2021-03-27", "2021-06-26", "2021-09-25"), ("Q1", "Q2", "Q3"),
+                                          ("2021-05-05", "2021-08-04", "2021-11-03"))]
+        return {tag: {"units": {"USD": rungs + [usd(v, start, "2021-12-25", fy=2021, filed=f)
+                                                for v, f in zip(year, filings)]}}}
+
+    facts = {"facts": {"us-gaap": {
+        **section("NetCashProvidedByUsedInOperatingActivities", (0.995e9, 1.947e9, 2.618e9), (3.521e9,) * 3),
+        **section("NetCashProvidedByUsedInInvestingActivities", (-0.1e9, -0.2e9, -0.3e9),
+                  (-0.686e9, -0.686e9, 0.686e9)),
+        **section("NetCashProvidedByUsedInFinancingActivities", (-0.3e9, -0.6e9, -1.2e9),
+                  (-1.895e9, -1.895e9, 1.895e9)),
+        **section("CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncluding"
+                  "ExchangeRateEffect", (0.595e9, 1.147e9, 1.118e9), (0.940e9,) * 3)}}}
+    q4 = XBRLParser().extract_quarterly_financials(facts)["2021-12-25"]
+    assert (round(q4["investing_cash_flow"]), round(q4["financing_cash_flow"])) == (-386000000, -695000000)
+
+
+def test_a_year_end_balance_comes_from_the_restored_year():
+    # BAC's 2011 10-K put total assets at 2008-12-31 at 0, which the quarterly checkpoints read too.
+    annual = _filed_years("Assets", "USD", {
+        2007: [("2009-02-27", 1.716e12)],
+        2008: [("2009-02-27", 1.818e12), ("2010-02-26", 1.818e12), ("2011-02-25", 0.0)],
+        2009: [("2010-02-26", 2.224e12)]}, instant=True)
+    quarterly = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": annual}})
+    assert quarterly["2008-12-31"]["total_assets"] == 1.818e12
+

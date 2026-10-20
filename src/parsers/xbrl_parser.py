@@ -1,7 +1,9 @@
 """XBRL data parser for SEC EDGAR financial data."""
 
 import logging
+import math
 import re
+import statistics
 from collections import defaultdict
 from datetime import date, datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -51,6 +53,80 @@ def _reporting_currency(us_gaap: Dict[str, Any]) -> Optional[str]:
 def _foreign_currency(us_gaap: Dict[str, Any]) -> bool:
     """Whether the filer reports in a currency other than dollars."""
     return _reporting_currency(us_gaap) not in (None, "USD")
+
+
+#: A later filing's figure for a year can be a tagging error of the figure the earlier
+#: filings agree on: its negative, a zero, or it times 10^3 or more (STX's FY2024 10-K put
+#: FY2022's 2.77 dividend a share at 2,770,000; BUG-061). x10 and x100 are left alone, as
+#: a 10:1 split restates by exactly that.
+_MIN_SCALE_ERROR = 3
+#: Years on each side whose figures decide between the later filing and the earlier ones.
+_NEIGHBOUR_YEARS = 2
+#: Figures within this fraction of each other agree (filings round differently).
+_AGREE = 0.005
+#: A year's cash-flow sections, which its net change in cash checks.
+_CASH_SECTIONS = ("operating_cash_flow", "investing_cash_flow", "financing_cash_flow")
+#: Totals no company reports as zero (BAC's 2011 10-K put FY2008's total assets at 0).
+#: A later zero for a line item can be a restatement: T-Mobile's history replaced
+#: MetroPCS's after the reverse merger, and Prologis's FY2018 lease liability was off the
+#: balance sheet before ASC 842.
+_NEVER_ZERO = frozenset({"total_assets", "current_assets", "total_liabilities",
+                         "current_liabilities", "total_equity"})
+
+
+def _agree(a: float, b: float) -> bool:
+    return abs(a - b) <= _AGREE * max(abs(a), abs(b))
+
+
+def _tagging_error(earlier: float, latest: float, key: str) -> Optional[str]:
+    """What a later filing's figure for *key* is of the one the earlier filings agree
+    on, when it can be a tagging error: "sign flip", "zero" (of a total) or
+    "scale x10^k"; else None."""
+    if earlier == 0 or _agree(earlier, latest):
+        return None
+    if latest == 0:
+        return "zero" if key in _NEVER_ZERO else None
+    if _agree(earlier, -latest):
+        return "sign flip"
+    ratio = latest / earlier
+    if ratio > 0:
+        k = round(math.log10(ratio))
+        if abs(k) >= _MIN_SCALE_ERROR and _agree(ratio, 10.0 ** k):
+            return f"scale x10^{k}"
+    return None
+
+
+def _years_side_with_earlier(kind: str, earlier: float, latest: float,
+                             neighbours: List[float]) -> bool:
+    """Whether the years around a conflicting figure side with the earlier filings.
+
+    For a sign flip, every one of them has the earlier figure's sign; for a zero or a
+    scale, the earlier figure is within a factor of ten of their median and the later
+    one isn't. Fewer than two years decide nothing.
+    """
+    if len(neighbours) < 2:
+        return False
+    if kind == "sign flip":
+        return all(v != 0 and (v > 0) == (earlier > 0) for v in neighbours)
+    if kind == "zero" and 0 in neighbours:
+        return False  # the figure is zero in other years too
+    logs = [math.log10(abs(v)) for v in neighbours if v != 0]
+    if len(logs) < 2:
+        return False
+    mid = statistics.median(logs)
+    return abs(math.log10(abs(earlier)) - mid) <= 1 and (
+        latest == 0 or abs(math.log10(abs(latest)) - mid) > 1)
+
+
+def _cash_adds_up(sections: List[float], period: Dict[str, Any]) -> bool:
+    """Whether a year's cash-flow sections sum to its net change in cash, within 1% of
+    the largest, with or without the FX effect and discontinued operations (filers
+    differ on which the sections include)."""
+    fx = period.get("fx_effect_on_cash") or 0.0
+    discontinued = period.get("cash_from_discontinued_operations") or 0.0
+    scale = max(abs(s) for s in sections) or 1.0
+    return any(abs(sum(sections) + extra - period["net_change_in_cash"]) <= 0.01 * scale
+               for extra in (0.0, fx, discontinued, fx + discontinued))
 
 
 def explain_no_annual_financials(facts: Optional[Dict[str, Any]],
@@ -198,7 +274,9 @@ class XBRLParser:
 
         Each period dict uses canonical keys (see ``mappings/canonical.py``) so the
         same concept is comparable across companies regardless of which XBRL tag a
-        filer used. A ``_source_tags`` map records the tag each value came from.
+        filer used. A ``_source_tags`` map records the tag each value came from, and
+        a ``_repairs`` list any later filing's tagging error put right (see
+        ``_restore_agreed_figures``).
 
         Args:
             facts: Raw company facts
@@ -212,16 +290,7 @@ class XBRLParser:
         if not us_gaap or _foreign_currency(us_gaap):
             return {}
 
-        def annual_fy(entry: Dict[str, Any]) -> Optional[int]:
-            return self._fiscal_year_from_end(entry.get("end")) or self._period_year(entry)
-
-        data = self._resolve_canonical(
-            us_gaap,
-            form_set=_ANNUAL_FORMS,
-            valid_fn=self._is_full_year,
-            period_key_fn=annual_fy,
-            quarterly=False,
-        )
+        data = self._annual_periods(us_gaap)
         if not _in_dollars(data.values()):
             return {}  # share counts alone aren't a record; the run explains the gap
 
@@ -319,9 +388,13 @@ class XBRLParser:
 
         periods: Dict[str, Dict[str, Any]] = {}
         frames: Dict[str, set] = {}
+        # A year-end figure the annual record puts back (see _restore_agreed_figures) is
+        # read the same here: {(field, period end): (the later filing's figure, the one kept)}.
+        restored = {(r["field"], r["period_end"]): (r["dropped"], r["kept"])
+                    for period in self._annual_periods(us_gaap).values() for r in period.get("_repairs", [])}
 
-        self._collect_instant_checkpoints(us_gaap, periods, frames)
-        self._collect_discrete_flows(us_gaap, periods, frames)
+        self._collect_instant_checkpoints(us_gaap, periods, frames, restored)
+        self._collect_discrete_flows(us_gaap, periods, frames, restored)
         self._apply_quarter_calendar(periods, frames)
 
         sorted_ends = sorted(periods.keys(), reverse=True)
@@ -331,9 +404,10 @@ class XBRLParser:
 
     def _collect_instant_checkpoints(
         self, us_gaap: Dict[str, Any], periods: Dict[str, Dict[str, Any]],
-        frames: Dict[str, set],
+        frames: Dict[str, set], restored: Dict[Tuple[str, str], Tuple[float, float]],
     ) -> None:
-        """Balance-sheet (instant) values at every quarter-end (10-Q and 10-K)."""
+        """Balance-sheet (instant) values at every quarter-end (10-Q and 10-K), with the
+        year-end figures the annual record puts back (*restored*)."""
         best: Dict[Tuple[str, str], Tuple[int, str]] = {}
         for field in CANONICAL_FIELDS:
             if field.kind != INSTANT:
@@ -360,10 +434,14 @@ class XBRLParser:
                     pd_ = periods.setdefault(end, {"period_end": end})
                     pd_[field.key] = entry.get("val")
                     pd_.setdefault("_source_tags", {})[field.key] = tag
+        for (key, end), (dropped, kept) in restored.items():
+            value = periods.get(end, {}).get(key)
+            if isinstance(value, (int, float)) and _agree(value, dropped):
+                periods[end][key] = kept
 
     def _collect_discrete_flows(
         self, us_gaap: Dict[str, Any], periods: Dict[str, Dict[str, Any]],
-        frames: Dict[str, set],
+        frames: Dict[str, set], restored: Dict[Tuple[str, str], Tuple[float, float]],
     ) -> None:
         """Discrete quarterly flows via cumulative-ladder differencing.
 
@@ -371,7 +449,8 @@ class XBRLParser:
         the fiscal-period ``start``. Within each cumulative ladder (a start group with
         >= 2 points) difference consecutive year-to-date values into 3-month figures,
         guarding that each increment spans ~one quarter so missing rungs don't produce
-        multi-quarter blobs.
+        multi-quarter blobs. A full-year rung reads the figure the annual record puts
+        back (*restored*), so the fourth quarter is the restored year less nine months.
         """
         for field in CANONICAL_FIELDS:
             if field.kind != DURATION:
@@ -398,6 +477,16 @@ class XBRLParser:
                     ):
                         continue
                     chosen[key] = (priority, filed, entry.get("val"))
+            for (start, end), (priority, filed, val) in list(chosen.items()):
+                fix = restored.get((field.key, end))
+                span = self._span(start, end)
+                if fix is None or not isinstance(val, (int, float)) or span is None or span < _FULL_YEAR_MIN_DAYS:
+                    continue
+                dropped, kept = fix  # magnitudes for a SIGN_ABS field; the rung keeps its sign
+                if field.sign == SIGN_ABS and _agree(abs(val), dropped):
+                    chosen[(start, end)] = (priority, filed, math.copysign(kept, val))
+                elif field.sign != SIGN_ABS and _agree(val, dropped):
+                    chosen[(start, end)] = (priority, filed, kept)
 
             # Group by fiscal-period start -> cumulative ladders.
             ladders: Dict[str, List[Tuple[str, Any]]] = defaultdict(list)
@@ -566,6 +655,101 @@ class XBRLParser:
 
         self._apply_calendar(data, period_frames, quarterly)
         return data
+
+    def _annual_fy(self, entry: Dict[str, Any]) -> Optional[int]:
+        """The fiscal year an annual report's fact covers (see ``_fiscal_year_from_end``)."""
+        return self._fiscal_year_from_end(entry.get("end")) or self._period_year(entry)
+
+    def _annual_periods(self, us_gaap: Dict[str, Any]) -> Dict[Any, Dict[str, Any]]:
+        """Every fiscal year's figures from the annual reports, keyed by fiscal year,
+        with a later filing's tagging errors put right."""
+        data = self._resolve_canonical(
+            us_gaap,
+            form_set=_ANNUAL_FORMS,
+            valid_fn=self._is_full_year,
+            period_key_fn=self._annual_fy,
+            quarterly=False,
+        )
+        self._restore_agreed_figures(us_gaap, data, self._annual_fy)
+        return data
+
+    def _annual_filings(self, us_gaap: Dict[str, Any], field: Any, tag: str,
+                        period_key_fn) -> Dict[Any, List[Tuple[str, float, str]]]:
+        """Each annual report's figure for *field* under *tag*, as ``_resolve_canonical``
+        reads them: ``{period: [(filed, value, end), ...]}`` in filing order."""
+        filings: Dict[Any, List[Tuple[str, float, str]]] = defaultdict(list)
+        for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
+            value = entry.get("val")
+            if entry.get("form", "") not in _ANNUAL_FORMS or not isinstance(value, (int, float)):
+                continue
+            if not self._matches_kind(field, entry) or not self._is_full_year(entry):
+                continue
+            period = period_key_fn(entry)
+            if period is not None:
+                filings[period].append((entry.get("filed") or "",
+                                        float(abs(value) if field.sign == SIGN_ABS else value),
+                                        entry.get("end") or ""))
+        for values in filings.values():
+            values.sort(key=lambda filing: filing[0])
+        return filings
+
+    def _restore_agreed_figures(self, us_gaap: Dict[str, Any],
+                                data: Dict[Any, Dict[str, Any]], period_key_fn) -> None:
+        """Put back the figure the earlier filings agree on where a later filing's
+        comparative reads as a tagging error of it (see ``_tagging_error``), and record
+        each in the period's ``_repairs``.
+
+        The latest filing wins otherwise, as a restatement should. A year's own net
+        change in cash decides for its cash-flow sections (AMD's 2024 10-K flipped
+        FY2021's investing and financing cash flows, and the year no longer added up);
+        the years around it decide the rest, so a later filing that corrects an earlier
+        error keeps its figure (BRK-B's FY2010 share count, LLY's FY2008 D&A).
+        """
+        conflicts: List[Tuple[Any, str, str, float, float, str, str]] = []
+        for field in CANONICAL_FIELDS:
+            years_by_tag: Dict[str, List[Any]] = defaultdict(list)
+            for fy, period in data.items():
+                if isinstance(period.get(field.key), (int, float)):
+                    years_by_tag[period["_source_tags"][field.key]].append(fy)
+            for tag, years in years_by_tag.items():
+                filings = self._annual_filings(us_gaap, field, tag, period_key_fn)
+                for fy in years:
+                    history = filings.get(fy, [])
+                    latest = float(data[fy][field.key])
+                    filed, _, end = history[-1] if history else ("", 0.0, "")
+                    earlier = [value for when, value, _ in history if when < filed]
+                    if not earlier or not all(_agree(value, latest) for when, value, _ in history
+                                              if when == filed):
+                        continue
+                    if not all(_agree(value, earlier[-1]) for value in earlier):
+                        continue  # the earlier filings disagree among themselves
+                    kind = _tagging_error(earlier[-1], latest, field.key)
+                    if kind:
+                        conflicts.append((fy, field.key, kind, earlier[-1], latest, filed, end))
+
+        agreed_cash: Dict[Any, Dict[str, float]] = defaultdict(dict)
+        for fy, key, _, earlier_value, *_ in conflicts:
+            if key in _CASH_SECTIONS:
+                agreed_cash[fy][key] = earlier_value
+        restored = []
+        for conflict in conflicts:
+            fy, key, kind, earlier_value, latest, *_ = conflict
+            period = data[fy]
+            sections = [period.get(k) for k in _CASH_SECTIONS]
+            if key in _CASH_SECTIONS and all(isinstance(v, (int, float))
+                                             for v in sections + [period.get("net_change_in_cash")]):
+                agreed = [agreed_cash[fy].get(k, v) for k, v in zip(_CASH_SECTIONS, sections)]
+                if not _cash_adds_up(sections, period) and _cash_adds_up(agreed, period):
+                    restored.append(conflict)
+                continue
+            neighbours = [data[y][key] for y in range(fy - _NEIGHBOUR_YEARS, fy + _NEIGHBOUR_YEARS + 1)
+                          if y != fy and isinstance(data.get(y, {}).get(key), (int, float))]
+            if _years_side_with_earlier(kind, earlier_value, latest, neighbours):
+                restored.append(conflict)
+        for fy, key, kind, earlier_value, latest, filed, end in restored:
+            data[fy][key] = earlier_value
+            data[fy].setdefault("_repairs", []).append({"field": key, "kind": kind, "kept": earlier_value,
+                                                        "dropped": latest, "filed": filed, "period_end": end})
 
     @staticmethod
     def _init_period_meta(period: Any, quarterly: bool) -> Dict[str, Any]:

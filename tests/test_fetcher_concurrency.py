@@ -350,3 +350,21 @@ def test_a_json_only_store_also_keeps_the_sector(tmp_path, monkeypatch):
     stock = fetcher.fetch_ticker("RIT", include_yahoo=False)
     assert stock.sector_class == "reit"
 
+
+def test_a_tagging_error_put_right_is_a_warning(tmp_path, monkeypatch):
+    def fy(val, year, filed):
+        return {"val": val, "start": f"{year}-01-01", "end": f"{year}-12-31", "fy": year, "fp": "FY", "form": "10-K",
+                "filed": filed, "accn": filed}
+
+    dps = [fy(2.68, 2021, "2021-08-06"), fy(2.77, 2022, "2022-08-05"), fy(2.77, 2022, "2023-08-04"),
+           fy(2770000.0, 2022, "2024-08-02"), fy(2.80, 2023, "2024-08-02")]
+    stock = _collect_from_sec(tmp_path, monkeypatch, {
+        "cik": "0001137789", "ticker": "STX", "source": "sec_edgar",
+        "company_facts": {"facts": {"us-gaap": {
+            "CommonStockDividendsPerShareDeclared": {"units": {"USD/shares": dps}},
+            "Revenues": {"units": {"USD": [fy(1.0e10, y, f"{y + 1}-08-01") for y in (2021, 2022, 2023)]}}}}},
+        "submissions": {"name": "Seagate Technology Holdings plc", "filings": []}})
+    assert stock.financials_annual["2022"]["dividends_per_share"] == 2.77
+    assert ("SEC EDGAR: STX FY2022 dividends_per_share is 2.77, as earlier filings report; the filing of "
+            "2024-08-02 reports 2.77e+06, which looks like a tagging error (scale x10^6)") in stock.warnings
+

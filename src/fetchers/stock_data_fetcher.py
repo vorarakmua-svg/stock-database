@@ -152,6 +152,13 @@ class StockDataFetcher:
                     annual = self.xbrl_parser.extract_annual_financials(
                         facts, years_back=years_back
                     )
+                    # A later filing's tagging error the parser put right (BUG-061).
+                    for fy, period in annual.items():
+                        for r in period.pop("_repairs", []):
+                            stock.add_warning(
+                                f"SEC EDGAR: {ticker} FY{fy} {r['field']} is {r['kept']:.4g}, as earlier "
+                                f"filings report; the filing of {r['filed']} reports {r['dropped']:.4g}, "
+                                f"which looks like a tagging error ({r['kind']})")
                     quarterly = self.xbrl_parser.extract_quarterly_financials(
                         facts, quarters_back=(years_back * 4 if years_back else None)
                     )
