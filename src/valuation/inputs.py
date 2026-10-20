@@ -368,7 +368,8 @@ def _undo_splits_after_price(records: List[FYRecord], splits: Sequence[Tuple[str
             rec.shares /= factor
 
 
-def _yahoo_dividend_factors(conn: sqlite3.Connection, ticker: str, flagged: bool) -> List[Tuple[str, float]]:
+def _yahoo_dividend_factors(conn: sqlite3.Connection, ticker: str, flagged: bool,
+                             splits: Sequence[Tuple[str, float]]) -> List[Tuple[str, float]]:
     """Yahoo's dividend adjustment as ``[(ex_date, factor)]``, newest first.
 
     Yahoo lowers every price before an ex-date by 1 - d / (the close before it), so
@@ -381,7 +382,10 @@ def _yahoo_dividend_factors(conn: sqlite3.Connection, ticker: str, flagged: bool
     Yahoo adjusted the stored bars for the dividends it knew when it served them,
     which the last such bar dates (the last flagged one, or any bar of a database
     from before the flag): a dividend after it, a later run's whose bar request
-    failed, was never in them, so it isn't undone (BUG-084).
+    failed, was never in them, so it isn't undone (BUG-084). Each payment goes onto the
+    bars' split basis first, from the day Yahoo served it: a later run that stored a split
+    and its dividends on the new basis while its bar request failed left post-split amounts
+    beside pre-split closes, and KO's FY-end prices came out up to 12.8% low (BUG-104).
     """
     served = conn.execute(
         "SELECT max(date) FROM price_bars WHERE ticker = ?" + (" AND dividend_adjusted" if flagged else ""),
@@ -389,8 +393,9 @@ def _yahoo_dividend_factors(conn: sqlite3.Connection, ticker: str, flagged: bool
     ).fetchone()[0]
     factors: List[Tuple[str, float]] = []
     later = 1.0
-    for ex, amount in conn.execute(
-        "SELECT substr(date, 1, 10), amount FROM dividend_events "
+    dated = "served_on" in {r[1] for r in conn.execute("PRAGMA table_info(dividend_events)")}
+    for ex, amount, paid in conn.execute(
+        "SELECT substr(date, 1, 10), amount, " + ("served_on" if dated else "NULL") + " FROM dividend_events "
         "WHERE ticker = ? AND amount > 0 AND substr(date, 1, 10) <= ? ORDER BY date DESC",
         (ticker, str(served or "")[:10]),
     ).fetchall():
@@ -400,34 +405,35 @@ def _yahoo_dividend_factors(conn: sqlite3.Connection, ticker: str, flagged: bool
         ).fetchone()
         if prev is None or not prev[0]:
             continue
-        factor = 1.0 / (1.0 + amount * later / prev[0])
+        factor = 1.0 / (1.0 + amount * _dividend_onto(splits, served, paid) * later / prev[0])
         factors.append((ex, factor))
         later *= factor
     return factors
 
 
-def _dividend_to_price(splits: Sequence[Tuple[str, float]], priced_on: Optional[str],
-                       served_on: Optional[str]) -> float:
-    """The factor that puts a dividend Yahoo served on *served_on* on the basis of the price
-    of *priced_on*.
+def _dividend_onto(splits: Sequence[Tuple[str, float]], onto: Optional[str],
+                   served_on: Optional[str]) -> float:
+    """The factor that puts a dividend Yahoo served on *served_on* onto the split basis of
+    the day *onto*: the price's (BUG-103), or the stored bars' last day (BUG-104).
 
     Yahoo adjusts a payment for every split up to the day it serves it, so a split between
-    that day and the price's is in one of them only: a later run whose dividend request
-    failed keeps the payments from before a split it stored, beside a price after it, and
-    DDM read ten times its value (BUG-103). The bars' rule (``bars_to_price``), payment by
-    payment. A payment without a served day is on the basis of every stored split, as
-    before: until BUG-103's fix a run stored no split without the dividends from the same
-    chart request. Without a price nothing moves.
+    that day and *onto* is in one of them only: a later run whose dividend request failed
+    keeps the payments from before a split it stored, beside a price after it, and DDM read
+    ten times its value (BUG-103). The bars' rule (``bars_to_price``), payment by payment. A
+    payment without a served day is on the basis of every stored split, as before: until
+    BUG-103's fix a run stored no split without the dividends from the same chart request.
+    Without *onto* (no price, no bars) nothing moves.
     """
-    if not priced_on:
+    if not onto:
         return 1.0
+    target = str(onto)[:10]
     served = str(served_on)[:10] if served_on else None
     factor = 1.0
     for when, ratio in splits:
         day = str(when)[:10]
-        if ratio and priced_on < day and (served is None or day <= served):
+        if ratio and target < day and (served is None or day <= served):
             factor *= ratio
-        elif ratio and served is not None and served < day <= priced_on:
+        elif ratio and served is not None and served < day <= target:
             factor /= ratio
     return factor
 
@@ -658,7 +664,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         (ticker,),
     ).fetchall()
     served_on = {r["date"]: r["served_on"] for r in payments}
-    dividends = [(day, amount * _dividend_to_price(splits, priced_on, served_on.get(day)))
+    dividends = [(day, amount * _dividend_onto(splits, priced_on, served_on.get(day)))
                  for day, amount in _drop_spin_off_dividends([(r["date"], r["amount"]) for r in payments], splits)]
 
     # A bar from yfinance's default history is Yahoo's dividend-adjusted price,
@@ -680,7 +686,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         close = bar["close"]
         if not flagged or bar["dividend_adjusted"]:
             if factors is None:
-                factors = _yahoo_dividend_factors(conn, ticker, flagged)
+                factors = _yahoo_dividend_factors(conn, ticker, flagged, splits)
             close /= math.prod(f for ex, f in factors if ex > str(bar["date"])[:10])
         fy_end_prices[rec.fiscal_year] = close * bars_to_price
 

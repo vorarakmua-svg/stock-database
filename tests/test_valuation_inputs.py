@@ -1061,6 +1061,42 @@ def test_a_dividend_on_the_last_adjusted_bars_day_is_undone(tmp_path):
     assert {fy: round(price, 6) for fy, price in inputs.fy_end_prices.items()} == {2021: 100.0, 2022: 99.0}
 
 
+def _payer_after_a_split(tmp_path, split_day, served_on, halve=False, bars_too=False):
+    """The payer with a 2:1 split on *split_day*, its payments as served on *served_on* (halved: the new basis), and
+    with *bars_too* its adjusted bars restated for the split, as Yahoo serves them after it."""
+    db_path = _dividend_payer_db(tmp_path, "flagged")
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('PAY', ?, 2.0)", (split_day,))
+    conn.execute("UPDATE dividend_events SET amount = amount / ?, served_on = ?", (2.0 if halve else 1.0, served_on))
+    if bars_too:
+        conn.execute("UPDATE price_bars SET close = close / 2.0")
+    conn.commit()
+    conn.close()
+    conn = _connect(db_path)
+    inputs = load_inputs(conn, "PAY")
+    conn.close()
+    return {fy: round(price, 6) for fy, price in inputs.fy_end_prices.items()}
+
+
+@pytest.mark.parametrize("served_on", ["2023-03-01", None])
+def test_dividends_restated_for_a_split_after_the_bars_go_onto_their_basis(tmp_path, served_on):
+    # BUG-104 (code review 10): a later run stored a split and its dividends on the new basis while its bar request
+    # failed, and the rebuild took the post-split amounts against the pre-split closes: each dividend counted at half
+    # its size, and KO's FY-end prices came out 12.8% to 0.7% low. A payment without a served day is on every stored
+    # split's basis.
+    assert _payer_after_a_split(tmp_path, "2023-02-01", served_on, halve=True) == {2021: 100.0, 2022: 100.0}
+
+
+def test_dividends_served_before_a_split_go_onto_the_basis_of_bars_served_after_it(tmp_path):
+    # The other way: the bars Yahoo served after a split are restated for it, the payments from before it aren't.
+    assert _payer_after_a_split(tmp_path, "2022-12-01", "2022-11-01", bars_too=True) == {2021: 50.0, 2022: 50.0}
+
+
+def test_dividends_on_the_bars_basis_stay_as_they_are(tmp_path):
+    # Served with the bars, before a later split: nothing to move.
+    assert _payer_after_a_split(tmp_path, "2023-02-01", "2022-12-30") == {2021: 100.0, 2022: 100.0}
+
+
 def test_an_ads_ratio_is_read_against_every_class(tmp_path):
     # Code review 7 (I2): Yahoo counts one class of several (GOOGL's class A, 5.867B of 12.23B), so a two-class 20-F
     # filer read as an ADS of 2 and its Graham and Lynch values doubled. Market cap / price counts every class.

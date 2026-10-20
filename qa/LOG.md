@@ -1410,3 +1410,18 @@ Gates: ruff ✓ mypy ✓ pytest 1098 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(valuation): a run whose dividend request fails keeps its splits
 Next: the P2s, oldest first: BUG-104, then BUG-106. Fixes since review 10's range: 5, so code review 11 is due
 (a26e1a7..this commit: BUG-102, BUG-100, BUG-103).
+
+## Iteration 75: 2026-10-20 18:30: fix
+Picked: BUG-104, the oldest open P2 (no P0 or P1 open; code review 11 running). CI: 6715f99 ✓.
+Did: oracle first, in its own commit (5c5f7c3): its rebuild puts each dividend onto the bars' split basis, from the
+day Yahoo served it, before solving the factor; it flags the unfixed code's KO band on code review 10's two databases
+(37.51 against 38.47, 75.03 against 76.94) and is unchanged on 14 others. Then TDD (three tests RED, both directions;
+one guard): the engine's rebuild does the same through `_dividend_onto`, BUG-103's rule now taking any day's basis.
+Four mutants, each failing a test. Code review 10's scenario on fresh copies of the user's data: KO's FY2016-25 prices
+exact either way, the band as expected; 0 of 762 real and 0 of 114 golden rows move, unmigrated or migrated.
+Evidence: `qa/evidence/iter75-bug104-{red,green,mutants,e2e,impact}.txt`, `iter75-oracle-rebuild-basis.txt`
+Result: BUG-104 VERIFIED; VAL-05 → PASS.
+Gates: ruff ✓ mypy ✓ pytest 1102 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(valuation): the market-close rebuild puts each dividend on the bars' basis
+Next: record code review 11 when it reports; otherwise BUG-106 (P2), the last open P2. Fixes since review 11's range
+(6715f99): 1.
