@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 91 · PASS 9 · FAIL 6 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
+**Status counts:** TODO 90 · PASS 10 · FAIL 6 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -23,7 +23,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | VAL-10 | Rates | PASS | iter 36 | units, floors, caps and the ERP ✓ (iter 22); key-less runs take Treasury.gov's latest day (BUG-041); the assumptions record the rate's day and source and flag the static estimate (BUG-037); live 2026-10-19 5.15% on the VAL tab (`qa/evidence/iter36-bug037-e2e.txt`) |
 | VAL-11 | Reproducibility | PASS | iter 22 | a second backfill reproduces all 889 valuation and summary rows exactly; the post-collection path (`compute_and_store` with the collected tickers) gives the backfill's rows; `qa/evidence/iter22-discovery-val.txt` |
 | VAL-12 | Presentation | PASS | iter 37 | 146 companies' VAL tabs equal /api/stocks/{T}/valuation: verdict pill, median, price, upside, 579 model rows, 89 owner-earnings chips with buy-below; all 100 DCF sensitivity grids have the base at their centre and the bear and bull at their corners; the screener matches the API (iter 22) (`qa/evidence/iter37-val12.txt`) |
-| VAL-13 | Hand-worked examples (a general company, a bank, a dividend payer) | TODO | |  |
+| VAL-13 | Hand-worked examples (a general company, a bank, a dividend payer) | PASS | iter 46 | AAPL (general), JPM (bank) and KO (dividend payer) worked step by step from the raw tables with the specs' formulas (no `src`, no oracle): all 14 applicable models' bear, base and bull values and the three summaries equal the stored ones (0.000%); the readings where the specs are silent (reported EPS, BVPS on diluted shares, an unclamped ±1pp discount spread) are written down in `qa/GOLDEN.md` (`qa/evidence/iter46-val13-handworked.txt`) |
 
 ## VALID: Data validation (parsing, standardization, quality)
 

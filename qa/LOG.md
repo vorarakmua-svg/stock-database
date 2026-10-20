@@ -873,3 +873,19 @@ Commits: 5070282 chore(qa): oracle takes a split restated after the price's day 
 fix(valuation): a split restated after the price's day is taken back out
 Next: record code review 6 when it reports; otherwise a discovery unit (VAL-13 hand-worked examples, then VALID).
 Fixes since review 6's range (f0db42a..f9bbc91): 3 (65a0602, 72568ea, this).
+
+## Iteration 46: 2026-10-20 07:34: discovery
+Picked: VAL-13, the last TODO in VAL (no P0-P2 bug open). CI: 144dcdf queued at the start. Code review 6 is still
+running.
+Did: worked AAPL (general), JPM (bank) and KO (dividend payer) step by step from the golden copy's raw tables
+(financials, vintages for the split basis, snapshot, analyst, dividends, price bars), with the formulas taken from the
+two specs' text and nothing imported from `src` or the oracle. Every applicable model (AAPL 6, JPM 3, KO 6; JPM's DCF,
+Lynch and owner earnings correctly N/A as a bank) and every summary equals the stored values to 0.000%. The specs leave
+four readings open; the stored values follow these, each recorded since iteration 4 and now written into GOLDEN.md:
+reported diluted EPS (JPM's preferred dividends), BVPS on diluted weighted shares (L8), a ±1pp scenario discount not
+re-clamped to 8-14% (KO's bull runs at 7%), and year-end discounting with a linear fade.
+Evidence: `qa/evidence/iter46-val13-handworked.txt`; `qa/GOLDEN.md` → Reference values
+Result: VAL-13 PASS. No new bugs.
+Gates: ruff ✓ mypy ✓ pytest 969 passed (1 known warning); no code changed | CI: pending for this push
+Commit: (this commit) chore(qa): discovery VAL-13 passes; hand-worked AAPL, JPM and KO
+Next: record code review 6 when it reports; otherwise discovery in VALID (riskiest TODO area after VAL).
