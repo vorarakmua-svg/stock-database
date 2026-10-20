@@ -1516,3 +1516,16 @@ Gates: ruff ✓ mypy ✓ pytest 1123 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(store): a run's dividends are dated on Yahoo's calendar
 Next: BUG-118 (P2, the last open). Code review 12 dispatched after this commit (opus, background) over 6715f99..this
 commit: 5 fixes since review 11's range.
+
+## Iteration 82: 2026-10-20 20:05: fix
+Picked: BUG-118, the last open P2 (no P0 or P1 open). CI: f87638f ✓. Code review 12 is running.
+Did: TDD (one test RED: after a run whose dividends' request failed, the file's history became the error alone): the
+JSON merge counts a handler's failure alone as nothing the run got, so the section keeps the earlier data, as every
+other section a run didn't get does (BUG-018). Three mutants, each failing the test. Real app: code review 11's
+scenario keeps FILER.json's 46 payments (0 before). Lead L26 opened: the kept payments carry no served day.
+Evidence: `qa/evidence/iter82-bug118-{red,green,mutants,e2e}.txt`
+Result: BUG-118 VERIFIED; MATCH-05 back to FAIL→BUG-038 (P3). No P0, P1 or P2 open.
+Gates: ruff ✓ mypy ✓ pytest 1124 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(export): a failed dividend request keeps the JSON's dividend history
+Next: record code review 12 when it reports; until then discovery over the TODO rows, riskiest first (MATCH-01..04,
+-06..08). Fixes since review 12's range (f87638f): 1.

@@ -13,7 +13,9 @@ _RUN_FIELDS = frozenset({"collected_at", "data_sources", "errors", "warnings"})
 
 
 def _is_empty(value: Any) -> bool:
-    return value is None or value == "" or value == {} or value == []
+    """Nothing the run got: no value, or a handler's failure alone, ``{"error": ...}`` (BUG-118)."""
+    return value is None or value == "" or value == {} or value == [] or (
+        isinstance(value, dict) and value.keys() == {"error"})
 
 
 class JSONExporter:

@@ -94,3 +94,19 @@ def test_a_failed_recollection_keeps_the_earlier_sections(tmp_path, sample_stock
     assert data["errors"] == ["Yahoo Finance: HTTP 429 Too Many Requests"]
     assert data["data_sources"] == []
 
+
+def test_a_failed_dividend_request_keeps_the_earlier_history(tmp_path, sample_stock_data):
+    # BUG-118 (code review 11): a run whose dividends' request failed carries the handler's failure, an error alone,
+    # as its section, and the merge took that for data: the file's payments became the error until the next good run.
+    exporter = JSONExporter(output_dir=tmp_path)
+    history = {"dividend_payments": [{"date": "2026-05-15", "amount": 0.5}], "total_payments": 1}
+    sample_stock_data.dividend_history = history
+    exporter.export(sample_stock_data)
+    failed = StockData(ticker="TEST", warnings=["Yahoo Finance: dividend history unavailable (boom)"])
+    failed.dividend_history = {"error": "boom"}
+    exporter.export(failed)
+    with open(tmp_path / "TEST.json", encoding="utf-8") as f:
+        data = json.load(f)
+    assert data["dividend_history"] == history
+    assert data["warnings"] == ["Yahoo Finance: dividend history unavailable (boom)"]
+
