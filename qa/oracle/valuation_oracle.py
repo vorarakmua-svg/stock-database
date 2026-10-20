@@ -152,14 +152,21 @@ def median(xs: List[float]) -> float:
     return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
 
 
-def ads_ratio(ratio: float) -> float:
-    """The ADS ratio a filed-to-Yahoo share-count ratio shows: a whole number n >= 2 of shares per ADS (or of ADSs
-    per share) within 5%, else 1."""
+def ads_ratio(ratio: float) -> Optional[float]:
+    """The ADS ratio a filed-to-market share-count ratio shows, or None when it can't be read (BUG-065, BUG-076).
+
+    A ratio in [0.8, 1.25] is a 1:1 listing: buybacks and issuance drift a filed count that far from today's. Any
+    other is a whole number n >= 2 of shares per ADS (or of ADSs per share) within 5% and a quarter of a share, so a
+    drifted 8-share ADS doesn't read as 9. This is a threshold, and the code shares it: probed on the real copy, where
+    no company has an ADS, the period-end count drifts a median 1.0% from market cap / price (15 of 124 beyond 5%);
+    for an n-share ADS it would misread 1-8 of the 124 and leave 2-23 unreadable (`iter57-bug076-probe.txt`)."""
+    if 0.8 <= ratio <= 1.25:
+        return 1.0
     for candidate, per_ads in ((ratio, True), (1 / ratio, False)):
         n = round(candidate)
-        if n >= 2 and abs(candidate / n - 1) <= 0.05:
+        if n >= 2 and abs(candidate - n) <= min(0.05 * n, 0.25):
             return float(n) if per_ads else 1 / n
-    return 1.0
+    return None
 
 
 class Inputs:
@@ -220,14 +227,25 @@ class Inputs:
         latest_fy = next(((r[5] or r[4], r[1], self.filed_of(r[0], "weighted_avg_shares_diluted" if r[5]
                                                              else "shares_outstanding"))
                           for r in reversed(self.annual) if r[5] or r[4]), None)
-        self.ads_ratio = 1.0
+        self.ads_ratio, self.ads_unreadable = 1.0, None
         fy_today = self.to_current_basis(*latest_fy) if self.snap_shares and latest_fy else None
         # A foreign issuer's filings count ordinary shares, while the price is per ADS and Yahoo counts
         # ADS-equivalents (TSM: 25.93B ordinary, 5.186B ADS; BUG-065), so per-share values sit on the ADS basis
-        # (VAL-03's same share basis): a filed count within 5% of a whole multiple of Yahoo's gives the ratio.
-        if self.last_form[:4] in ("20-F", "40-F") and self.snap_shares and fy_today:
-            self.ads_ratio = ads_ratio(fy_today / self.snap_shares)
-            fy_today /= self.ads_ratio
+        # (VAL-03's same share basis). The ratio is the latest FY's period-end count (else its diluted one), on
+        # today's basis, over market cap / price: on the price's basis and over every class, where Yahoo's count can
+        # be one class of several (GOOGL's 5.87B of 12.23B would read as an ADS of 2; BUG-076). One that can't be
+        # read leaves the models on filed per-share figures or counts underivable.
+        market_count = market_cap / self.price if market_cap and self.price else self.snap_shares
+        if self.last_form[:4] in ("20-F", "40-F") and market_count and fy_today:
+            last = next(r for r in reversed(self.annual) if r[5] or r[4])
+            filed_count = (self.to_current_basis(last[4], last[1], self.filed_of(last[0], "shares_outstanding"))
+                           if last[4] else fy_today)
+            read = ads_ratio(filed_count / market_count)
+            if read is None:
+                self.ads_unreadable = filed_count / market_count
+            else:
+                self.ads_ratio = read
+                fy_today /= read
         by_value = market_cap / self.price if market_cap and self.price else None
         if self.snap_shares and by_value and by_value > 1.02 * self.snap_shares and not (
                 fy_today and by_value < 1.05 * self.snap_shares
@@ -368,6 +386,9 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
     x = Inputs(db, ticker)
     if model in ("dcf", "ddm", "lynch") and x.rf is None:
         return None
+    if x.ads_unreadable is not None and model in ("dcf", "graham", "lynch"):
+        return None  # a foreign issuer whose ADS ratio can't be read: its filed per-share basis isn't the price's
+
     if model == "dcf":
         rows = db.execute("select fiscal_year, coalesce(levered_fcf, free_cash_flow) from metrics_annual where "
                           "ticker=? and coalesce(levered_fcf, free_cash_flow) is not null order by fiscal_year",
