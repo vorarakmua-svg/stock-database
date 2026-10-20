@@ -1363,3 +1363,18 @@ failed dividend request drops
 Next: BUG-102 (P1) at once. Until it's fixed: after a company splits, if a collection warns "quote unavailable",
 collect it in full again rather than refreshing its quote. Then the P2s, oldest first: BUG-100, BUG-103, BUG-104,
 BUG-106. Fixes since review 10's range: 2.
+
+## Iteration 72: 2026-10-20 16:09: fix
+Picked: BUG-102, the only open P1. CI: 4fc00ca ✓.
+Did: TDD (three tests RED: a split a later collection stored while its quote failed, and one it never stored because
+all its Yahoo requests failed, after the stored price and on its day): the refusal now reads the valuations' basis
+as the engine does, from the latest snapshot's price, so a split after that price's day is refused stored or not,
+and a missing one from that day or the last collection with Yahoo, whichever is earlier. Four guards, BUG-093's seven
+cases unchanged, seven mutants each failing a test. The message drops "since the last full collection". Real app:
+code review 10's three scenarios through the app's own route are refused, the page stays at -47.8%; iteration 64's
+end-to-end check still refuses after the split and saves after a full collection.
+Evidence: `qa/evidence/iter72-bug102-{red,green,mutants,e2e}.txt`
+Result: BUG-102 VERIFIED; GATHER-13 → FAIL→BUG-106 (P2, the stock-dividend refusal, left). No P0 or P1 open.
+Gates: ruff ✓ mypy ✓ pytest 1084 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(web): a refresh after a split the stored price predates is refused
+Next: the P2s, oldest first: BUG-100, BUG-103, BUG-104, BUG-106. Fixes since review 10's range: 3.

@@ -360,6 +360,97 @@ def test_a_refresh_without_a_split_since_the_last_collection_saves_the_quote(
     assert _snapshot_count(web_db, "AAA") == before + 1
 
 
+def _later_run(web_db: Path, day: str = "2024-10-01", price: Optional[float] = None) -> None:
+    """A later collection of AAA with Yahoo on *day*: its quote failed (no snapshot) unless it priced AAA at *price*."""
+    conn = sqlite3.connect(web_db)
+    conn.execute("INSERT INTO collection_runs (ticker, collected_at, data_sources) VALUES ('AAA', ?, ?)",
+                 (f"{day}T09:00:00", "yahoo_finance, sec_edgar"))
+    if price is not None:
+        conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price) VALUES ('AAA', ?, ?)",
+                     (f"{day}T09:00:00", price))
+    conn.commit()
+    conn.close()
+
+
+def _refresh_summary(client: TestClient, ticker: str = "AAA") -> Dict[str, Any]:
+    return _wait_until_done(client, client.post(f"/api/stocks/{ticker}/refresh-quote").json()["job_id"])["summary"]
+
+
+@pytest.mark.parametrize("split_day, stored", [
+    ("2024-07-01", True),   # the later run stored the split (and its bars and dividends), but no price
+    ("2024-07-01", False),  # every Yahoo request of the later run failed, yet its run row names Yahoo
+    ("2024-06-15", False),  # the same, for a split on the stored price's day
+])
+def test_a_refresh_after_a_split_the_stored_price_predates_keeps_the_stored_quote(
+        web_db: Path, split_day: str, stored: bool) -> None:
+    # BUG-102 (code review 10): the refusal looked only for splits missing from `split_events` since the last run that
+    # names Yahoo. So a collection after the split whose quote failed (storing the split) or all of whose Yahoo requests
+    # failed (storing nothing) let the refresh save the post-split price beside valuations on the stored price's basis:
+    # +411.2% and "cheap", where a backfill gives -48.6%.
+    _later_run(web_db)
+    split = {"date": split_day, "ratio": 10.0}
+    before = _snapshot_count(web_db, "AAA")
+    client = _quote_with_splits_client(web_db, [{"date": "2023-06-01", "ratio": 2.0}, split], [split] if stored else [])
+    summary = _refresh_summary(client)
+    assert (summary["successful"], summary["with_errors"]) == (0, 1)
+    assert _snapshot_count(web_db, "AAA") == before
+
+
+def test_a_refresh_after_a_collection_that_priced_the_split_saves_the_quote(web_db: Path) -> None:
+    # The collection after the split got Yahoo's quote too: the stored price and valuations are on the new basis.
+    _later_run(web_db, price=11.0)
+    split = {"date": "2024-07-01", "ratio": 10.0}
+    before = _snapshot_count(web_db, "AAA")
+    client = _quote_with_splits_client(web_db, [{"date": "2023-06-01", "ratio": 2.0}, split], [split])
+    assert _refresh_summary(client)["successful"] == 1
+    assert _snapshot_count(web_db, "AAA") == before + 1
+
+
+def test_a_split_yahoo_lists_late_is_refused_after_a_refresh_saved_before_it(web_db: Path) -> None:
+    # Yahoo can list a split days after it: a refresh saved the post-split price on 2024-07-10, before the 2024-07-01
+    # split was listed, so the stored price postdates the split while the valuations, from the last collection with
+    # Yahoo (2024-06-15), don't.
+    conn = sqlite3.connect(web_db)
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price) VALUES ('AAA', ?, ?)",
+                 ("2024-07-10T09:00:00", 11.0))
+    conn.commit()
+    conn.close()
+    before = _snapshot_count(web_db, "AAA")
+    client = _quote_with_splits_client(
+        web_db, [{"date": "2023-06-01", "ratio": 2.0}, {"date": "2024-07-01", "ratio": 10.0}])
+    summary = _refresh_summary(client)
+    assert (summary["successful"], summary["with_errors"]) == (0, 1)
+    assert _snapshot_count(web_db, "AAA") == before
+
+
+def test_a_latest_snapshot_without_a_price_leaves_a_stored_split_alone(web_db: Path) -> None:
+    # The engine reads no price when the latest snapshot has none (one written before BUG-033's fix), and then applies
+    # every stored split, so a stored one is no reason to refuse.
+    conn = sqlite3.connect(web_db)
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price) VALUES ('AAA', ?, NULL)",
+                 ("2024-10-01T09:00:00",))
+    conn.commit()
+    conn.close()
+    split = {"date": "2024-10-05", "ratio": 10.0}
+    client = _quote_with_splits_client(web_db, [{"date": "2023-06-01", "ratio": 2.0}, split], [split])
+    assert _refresh_summary(client)["successful"] == 1
+
+
+def test_a_ticker_without_a_stored_price_is_checked_against_its_last_collection(web_db: Path) -> None:
+    # EEE has no snapshot: a split since its last collection with Yahoo is still refused.
+    conn = sqlite3.connect(web_db)
+    conn.execute("INSERT INTO collection_runs (ticker, collected_at, data_sources) VALUES ('EEE', ?, ?)",
+                 ("2024-06-15T09:00:00", "yahoo_finance, sec_edgar"))
+    conn.commit()
+    conn.close()
+    client = _make_client(web_db)
+    canned = {**_CANNED_QUOTE, "splits": [{"date": "2024-07-01", "ratio": 10.0}]}
+    client.app.state.job_manager.quote_fetcher_factory = lambda config: FakeQuoteHandler(canned)
+    summary = _refresh_summary(client, "EEE")
+    assert (summary["successful"], summary["with_errors"]) == (0, 1)
+    assert _snapshot_count(web_db, "EEE") == 0
+
+
 def test_a_quote_carries_yahoos_split_history(monkeypatch) -> None:
     # What the quote job checks a refresh against (BUG-093): the split history from Yahoo's chart request.
     import pandas as pd

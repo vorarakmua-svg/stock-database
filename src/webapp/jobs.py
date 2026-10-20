@@ -46,13 +46,13 @@ def _now_iso() -> str:
 
 
 def _split_since_collection(ticker: str, splits: List[Dict[str, Any]]) -> str:
-    """Why a quote after a split since the last full collection isn't saved (BUG-093)."""
+    """Why a quote after a split the stored valuations don't reflect isn't saved (BUG-093, BUG-102)."""
     def ratio(r: float) -> str:
         return f"{r:g}-for-1" if r >= 1 else f"1-for-{1 / r:g}"
 
     seen = ", ".join(f"a {ratio(float(s['ratio']))} split on {str(s['date'])[:10]}" for s in splits)
-    return (f"Yahoo shows {seen} since the last full collection, and the stored valuations are on the old "
-            f"basis, so the quote wasn't saved. Collect {ticker} in full to update them.")
+    return (f"Yahoo shows {seen} that the stored valuations don't reflect, so the quote wasn't saved. "
+            f"Collect {ticker} in full to update them.")
 
 
 def _collected_at_now() -> str:
@@ -322,9 +322,9 @@ class CollectionJobManager:
                     self._jobs[job_id].current_ticker = ticker
 
                 quote = handler.fetch_quote(ticker)
-                # A split since the last full collection: the price would sit beside
-                # everything stored on another basis, which only a full collection
-                # brings over (BUG-093).
+                # A split the stored valuations don't reflect: the price would sit
+                # beside them on another basis, which only a full collection brings
+                # over (BUG-093, BUG-102).
                 new_splits = (store.splits_since_collection(ticker, quote.get("splits") or [])
                               if "error" not in quote else [])
                 if "error" in quote:

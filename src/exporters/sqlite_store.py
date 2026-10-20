@@ -765,11 +765,16 @@ class SQLiteStore:
 
     def splits_since_collection(self, ticker: str, splits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Of *splits* (Yahoo's ``{date, ratio}`` history for *ticker*), those the
-        stored record can't have seen: missing from ``split_events`` and dated on or
-        after the ticker's last collection with Yahoo, where its splits, bars and
-        dividends come from (a split that day may have come after it). The stored
-        prices, dividends, bars and valuations are on the basis before such a split,
-        so a quote after it would sit beside them on another (BUG-093).
+        stored valuations aren't on the basis of, so a quote after them would sit
+        beside them on another (BUG-093).
+
+        The valuations are compared with the latest snapshot's price, as the engine
+        reads it (``inputs.load_inputs``' ``priced_on``), so a split dated after that
+        price's day is refused even when stored: a later collection whose quote
+        failed stores the split but keeps the older price (BUG-102). A split missing
+        from ``split_events`` is refused from the price's day, or from the ticker's
+        last collection with Yahoo if that is earlier (Yahoo can list a split days
+        after a refresh priced it): a split on either day may have come after it.
         """
         candidates = [s for s in splits if s.get("date") and s.get("ratio") and float(s["ratio"]) != 1.0]
         if not candidates:
@@ -781,6 +786,9 @@ class SQLiteStore:
         try:
             known = {str(d)[:10] for (d,) in conn.execute(
                 "SELECT date FROM split_events WHERE ticker = ?", (ticker,))}
+            snap = conn.execute("SELECT collected_at, current_price FROM market_snapshots WHERE ticker = ? "
+                                "ORDER BY collected_at DESC LIMIT 1", (ticker,)).fetchone()
+            priced_on = str(snap[0])[:10] if snap and snap[0] and snap[1] is not None else None
             since = None
             # The last collection with Yahoo: its run row, else (no such row) its
             # latest price bar, which only Yahoo gives.
@@ -795,9 +803,12 @@ class SQLiteStore:
             return []
         finally:
             conn.close()
-        if since is None:
+        starts = [day for day in (priced_on, since) if day]
+        if not starts:
             return []
-        return [s for s in candidates if str(s["date"])[:10] not in known and str(s["date"])[:10] >= since]
+        return [s for s in candidates
+                if (priced_on and str(s["date"])[:10] > priced_on)
+                or (str(s["date"])[:10] not in known and str(s["date"])[:10] >= min(starts))]
 
     def upsert_quote(self, ticker: str, quote: Dict[str, Any], collected_at: str) -> None:
         """Write ONE ``market_snapshots`` row + ONE ``analyst_snapshots`` row from
