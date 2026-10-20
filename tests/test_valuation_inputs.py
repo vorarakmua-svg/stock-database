@@ -714,6 +714,25 @@ def test_a_split_before_the_latest_price_leaves_yahoos_figures_as_they_are(tmp_p
     assert inputs.fy_end_prices == {2025: 60.0}
 
 
+@pytest.mark.parametrize("annual_rows", ["none", "without a filing date"])
+def test_a_split_after_the_latest_price_takes_yahoos_series_back_whatever_the_sec_record_holds(tmp_path, annual_rows):
+    # BUG-078 (code review 7): Yahoo's dividends and bars went back to the price's basis only when the latest annual
+    # row had a filing date, so a company without SEC annual financials (an IFRS filer like TSM, whose only model is
+    # DDM) kept Yahoo's split-adjusted dividends beside the older price, and its DDM came out a tenth of its value.
+    db_path = _post_filing_split_db(tmp_path, "2026-09-01", 10.0, snapshot_shares=1.3375e8)
+    conn = sqlite3.connect(db_path)
+    conn.execute("DELETE FROM financials_annual" if annual_rows == "none"
+                 else "UPDATE financials_annual SET filed_date = NULL")
+    conn.commit()
+    conn.close()
+    conn = _connect(_with_yahoo_series(db_path))
+    inputs = load_inputs(conn, "KLA")
+    conn.close()
+    assert [(day, round(amount, 6)) for day, amount in inputs.dividends] == [("2025-05-15", 1.9)]
+    assert {fy: round(price, 6) for fy, price in inputs.fy_end_prices.items()} == (
+        {} if annual_rows == "none" else {2025: 600.0})
+
+
 def _restating_filings_db(tmp_path, split_date, shares_by_fy, eps_by_fy):
     """FY2016-2025 with every 10-K's view of each year in the vintages: the 10-K for FY f, filed the February after,
     reports FY f-2 to f, restated for a split made before it. *shares_by_fy* and *eps_by_fy* are on the post-split

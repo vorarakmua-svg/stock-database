@@ -584,8 +584,10 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
                 rec.ffo_per_share *= ads
             if rec.shares is not None:
                 rec.shares /= ads
+    # Yahoo's series need no filing to go back: a company without SEC annual
+    # financials (an IFRS filer's DDM) kept them a split ahead of its price (BUG-078).
     unpriced = math.prod(ratio for when, ratio in splits
-                         if ratio and filed and priced_on and str(when)[:10] > priced_on)
+                         if ratio and priced_on and str(when)[:10] > priced_on)
     shares, shares_source = _total_shares(
         snap["shares_outstanding"] if snap else None,
         snap["market_cap"] if snap else None,

@@ -1166,3 +1166,19 @@ Commit: (this commit) fix(store): the dividend-adjusted flags arrive with their 
 Next: the P2s, oldest first: BUG-078, BUG-082, BUG-084. The user's database can take a collection again; a run whose
 price history fails beside new dividends still inflates FY-end prices about 0.5% (BUG-084). Fixes since review 8's
 range: 4 (2bb2a24, 80ea6d9, 0b061c0, this).
+
+## Iteration 61: 2026-10-20 11:30: fix
+Picked: BUG-078, the oldest open P2 (no P0 or P1 open). CI: 1d762ba ✓.
+Did: the oracle first (2d9b9dc): Yahoo's series go back to the price's basis whatever the SEC record holds. On
+code review 7's scenario valued by the unfixed code it flags the DDM (41.84 stored, 418.4 derived), and its output
+on the real, golden and ten earlier scenario databases is unchanged. Then TDD (2 tests RED: no annual rows, and
+rows without a filing date): the step back no longer needs a filing date. Three mutants each fail a test. The
+scenario's DDM is now 418.38, through the backfill CLI, the valuation API and the VAL tab of a scratch server;
+0 of 762 valuation rows move on the user's copy and 0 of 114 on the golden basket.
+Evidence: `qa/evidence/iter61-bug078-{oracle,red,green,mutants,impact}.txt`
+Result: BUG-078 VERIFIED; VAL-09 noted, still FAIL→BUG-050 (P3).
+Gates: ruff ✓ mypy ✓ pytest 1031 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: 2d9b9dc chore(qa): oracle takes Yahoo's series back to the price's basis without a filing date; (this
+commit) fix(valuation): Yahoo's series go back to the price's basis without a filing date
+Next: BUG-082 (P2), then BUG-084 (P2). This is the fifth fix since review 8's range (2bb2a24, 80ea6d9, 0b061c0,
+1d762ba, this), so code review 9 (fea2b70..this commit) runs in the background; record it when it reports.
