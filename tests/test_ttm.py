@@ -38,6 +38,7 @@ def test_ttm_skips_when_gap_breaks_continuity():
     del q["2024-09-30"]
     ttm = compute_ttm(q)
     assert "2024-12-31" not in ttm  # window would skip a quarter
+    assert "2025-03-31" not in ttm  # the one window of four left spans the six-month gap
 
 
 def test_ttm_empty():
@@ -67,4 +68,13 @@ def test_a_trailing_year_across_a_split_is_on_its_latest_quarters_basis():
     assert ttm["2025-03-31"]["weighted_avg_shares_diluted"] == pytest.approx((3 * 500e6 * 20 + 10.1e9) / 4)
     assert ttm["2025-03-31"]["net_income"] == 20 + 30 + 40 + 50  # dollars as they are
     assert ttm["2024-12-31"]["eps_diluted"] == 5.0 + 6.0 + 6.0 + 6.0  # one basis already
+
+
+def test_a_trailing_year_runs_over_a_sixteen_week_quarter():
+    # BUG-095: the trailing years took consecutive quarter-ends to be at most 100 days apart, and a 12-12-12-16-week
+    # year steps 112 days into its fourth quarter, so COST and PEP had none.
+    ends = ["2023-11-26", "2024-02-18", "2024-05-12", "2024-09-01", "2024-11-24"]
+    q = {e: {"period_end": e, "net_income": ni} for e, ni in zip(ends, (100, 120, 110, 170, 105))}
+    ttm = compute_ttm(q)
+    assert (ttm["2024-09-01"]["net_income"], ttm["2024-11-24"]["net_income"]) == (500, 505)
 

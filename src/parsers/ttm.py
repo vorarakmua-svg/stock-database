@@ -18,8 +18,10 @@ _AVERAGE_KEYS = frozenset(f.key for f in CANONICAL_FIELDS if f.kind == DURATION 
 #: Per-share figures, which a share split restates like the counts (BUG-082).
 _PER_SHARE_KEYS = frozenset(f.key for f in CANONICAL_FIELDS if f.kind == DURATION and f.xbrl_unit == "USD/shares")
 
+#: Consecutive quarter-ends lie 12 to 17 weeks apart: a 12-12-12-16-week year (COST, PEP) steps 112 or 119 days
+#: into its fourth quarter (BUG-095); a missing quarter leaves 160 or more.
 _QUARTER_MIN_DAYS = 80
-_QUARTER_MAX_DAYS = 100
+_QUARTER_MAX_DAYS = 120
 
 
 def _parse(d: str) -> Optional[date]:

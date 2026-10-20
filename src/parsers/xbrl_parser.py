@@ -15,11 +15,13 @@ from .share_scale import _best_scale
 
 # Duration bounds (in days) used to distinguish annual vs quarterly periods.
 # A "full year" span is ~365 days; a quarter is ~91 days. Bounds are generous
-# to absorb 52/53-week fiscal calendars.
+# to absorb 52/53-week fiscal calendars, whose quarters run 12 to 17 weeks: a
+# 12-12-12-16-week year ends on a 16- or 17-week fourth quarter (COST, PEP: 112
+# and 119 days; BUG-095). Two quarters, a gap in the rungs, run 160 or more.
 _FULL_YEAR_MIN_DAYS = 350
 _FULL_YEAR_MAX_DAYS = 380
 _QUARTER_MIN_DAYS = 80
-_QUARTER_MAX_DAYS = 100
+_QUARTER_MAX_DAYS = 120
 
 # Forms that carry quarterly and annual statement facts. A foreign issuer's annual
 # report (20-F, 40-F) counts as annual; its 6-K interim reports aren't read.

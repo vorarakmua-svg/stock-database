@@ -1288,3 +1288,18 @@ Commit: db4820b chore(qa): oracle reads the stored bars' split basis from the da
 fix(valuation): Yahoo's stored series stay on one split basis when a run's requests fail
 Next: this is the fifth fix since review 9's range (51091ce, 6ebfe38, 341f785, 51b90e0, this): code review 10
 (f0690bc..this commit) runs in the background. Then BUG-095 (P2), the last open P2.
+
+## Iteration 68: 2026-10-20 14:46: fix
+Picked: BUG-095, the last open P2 (no P0 or P1 open; code review 10 running). CI: 8c34a86 ✓.
+Did: TDD (two tests RED: a COST-like 12-12-12-16-week ladder derived no Q4, and no trailing year crossed its
+112-day step): a quarter runs up to 120 days in the ladder and the trailing years, which takes a 17-week quarter
+and leaves out two quarters (160 days or more). A guard test keeps a missing rung from making a two-quarter figure,
+and the existing gap test, whose assertion could never fail, now pins the window over the gap. Four mutants, each
+failing a test. Over 126 cached filers only COST and PEP change: 17 and 18 fourth quarters, 64 and 68 trailing years
+with net income, every FY2023-25 adding up.
+Evidence: `qa/evidence/iter68-bug095-{red,green,mutants,impact}.txt`
+Result: BUG-095 VERIFIED; VALID-06 → FAIL→BUG-096 (P3). No P0, P1 or P2 open.
+Gates: ruff ✓ mypy ✓ pytest 1063 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): a 16-week fourth quarter is a quarter
+Next: record code review 10 when it reports (fixes since review 9's range: 5, reviewed). With no P0-P2 open, a
+discovery unit over the TODO rows, riskiest area first (section 4.2.3: VAL > VALID > MATCH > GATHER > ...).

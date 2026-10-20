@@ -93,6 +93,34 @@ def test_quarterly_ladder_differencing_and_q4():
     assert sum(q[e]["net_income"] for e in q) == 600
 
 
+def test_a_sixteen_week_fourth_quarter_is_derived():
+    # BUG-095 (code review 9): COST's and PEP's years run 12-12-12-16 weeks, and the ladder took a quarter to span at
+    # most 100 days, so their 112- and 119-day fourth quarters were never derived: no Q4, and no trailing year.
+    s = "2023-09-04"
+    ladder = [
+        usd(100, s, "2023-11-26", fy=2024, fp="Q1", form="10-Q", filed="2023-12-15"),
+        usd(220, s, "2024-02-18", fy=2024, fp="Q2", form="10-Q", filed="2024-03-08"),
+        usd(330, s, "2024-05-12", fy=2024, fp="Q3", form="10-Q", filed="2024-05-31"),
+        usd(500, s, "2024-09-01", fy=2024, fp="FY", form="10-K", filed="2024-10-04"),
+    ]
+    q = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": {"NetIncomeLoss": {"units": {"USD": ladder}}}}})
+    assert (q["2024-09-01"]["net_income"], q["2024-09-01"]["fiscal_quarter"]) == (170, 4)
+
+
+def test_a_missing_rung_derives_no_two_quarter_figure():
+    # A quarter runs 12 to 17 weeks: with the half year missing, the nine months less the first quarter is two quarters,
+    # no quarter's figure.
+    s = "2023-10-01"
+    ladder = [
+        usd(100, s, "2023-12-30", fy=2024, fp="Q1", form="10-Q", filed="2024-02-01"),
+        usd(430, s, "2024-06-29", fy=2024, fp="Q3", form="10-Q", filed="2024-08-01"),
+        usd(600, s, "2024-09-28", fy=2024, fp="FY", form="10-K", filed="2024-11-01"),
+    ]
+    q = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": {"NetIncomeLoss": {"units": {"USD": ladder}}}}})
+    assert "net_income" not in q.get("2024-06-29", {})
+    assert q["2024-09-28"]["net_income"] == 170
+
+
 def test_quarterly_cashflow_from_ytd_only_ladder():
     """Cash flow is YTD-only in 10-Qs (no standalone 3-month facts); differencing
     must still recover discrete quarters and Q4."""
