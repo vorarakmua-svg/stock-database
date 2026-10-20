@@ -1565,3 +1565,18 @@ Commit: (this commit) fix(parsers): a year's first quarter comes from its own 10
 Next: record code review 12 (reported during this iteration: no P0 or P1, two proposed P2s, one on BUG-111's rule
 for acquisitions; saved as `qa/evidence/review12-report.md`, claims to re-run first), then BUG-125 (P1). Fixes since
 review 12's range (f87638f): 2.
+
+## Iteration 85: 2026-10-20 20:56: review
+Picked: code review 12's record (6715f99..f87638f, reported in iteration 84), before the next fix. CI: eb0aec3 ✓.
+Did: re-ran its claims on eb0aec3 with its own scripts: the acquisitions quarters around a negative year-to-date
+total (30 at 19 filers; GE's 2013 facts read by hand: capex positive beside acquisitions of -$6.383B, -$6.187B,
++$1.617B), the spin-off refresh against a full collection (1.253 and 1.324), the far-east fallback, the as-of
+checks on a fresh collection and the user's copy, the stale docstrings, the 3:2 rule beside the valuation's, and its
+six meaningful surviving mutants against the whole suite. Every claim holds; no P0 or P1. BUG-111's GE example was
+a real outflow: its entry is corrected.
+Evidence: `qa/evidence/iter85-review12-rerun.txt`, `review12-report.md`
+Result: BUG-127 (P2, I1), BUG-128 (P2, I2), BUG-129-132 (P3: M1+M7, M2, M3, M4+M5) opened; M6 appended to BUG-121;
+corrections on BUG-111 and BUG-117. VALID-06 FAIL→BUG-127, GATHER-13 PASS→FAIL→BUG-128.
+Gates: ruff ✓ mypy ✓ pytest 1131 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) chore(qa): record code review 12
+Next: BUG-125 (P1), then BUG-126, BUG-127, BUG-128 (P2). Fixes since review 12's range (f87638f): 2.
