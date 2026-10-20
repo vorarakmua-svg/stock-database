@@ -568,6 +568,13 @@ pipeline is designed so this never breaks ingestion or silently loses data:
   concept, never by raw tag — a taxonomy change can't break the schema or queries.
 - **Firm variability is resolved** by ordered candidate-tag lists in
   `src/mappings/canonical.py` (both revenue tags → `revenue`).
+- **One revenue figure per year.** Revenue takes the first of its tags a year has, the
+  totals first (`Revenues`, then revenue net of interest expense, then the contract-revenue
+  and sales tags). Of two figures for a year 25% or more apart, one the year's income
+  statement doesn't add up to (operating income plus operating expenses, or cost of revenue
+  plus gross profit) gives way to one it does; where it adds up to neither, a zero gives way
+  to a positive figure, and one below the year's cost of revenue to one that isn't. Revenue
+  including excise taxes only fills a year with no other figure.
 - **Nothing is silently dropped.** Any *material* fact under a tag not yet in the registry
   (a new taxonomy element or an unanticipated tag) is captured in the **`unmapped_facts`**
   table (the tag stored as a row value) — so the data is preserved and visible even before

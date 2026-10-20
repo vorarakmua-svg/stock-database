@@ -7,7 +7,7 @@ import statistics
 from collections import Counter, defaultdict
 from datetime import date, datetime
 from fractions import Fraction
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, DURATION, INSTANT, SIGN_ABS
 from .share_scale import _TOLERANCE as _SCALE_TOLERANCE
@@ -33,6 +33,7 @@ _FRAME_YEAR_RE = re.compile(r"CY(\d{4})")
 _FRAME_QUARTER_RE = re.compile(r"^CY(\d{4})Q(\d)")
 #: Fields reported in dollars: a filer reporting in another currency resolves none.
 _DOLLAR_FIELDS = frozenset(f.key for f in CANONICAL_FIELDS if f.xbrl_unit.startswith("USD"))
+_FIELDS = {f.key: f for f in CANONICAL_FIELDS}
 
 
 def _in_dollars(periods: Iterable[Dict[str, Any]]) -> bool:
@@ -109,6 +110,12 @@ _CASH_SECTIONS = ("operating_cash_flow", "investing_cash_flow", "financing_cash_
 #: balance sheet before ASC 842.
 _NEVER_ZERO = frozenset({"total_assets", "current_assets", "total_liabilities",
                          "current_liabilities", "total_equity"})
+#: Two of a year's revenue figures this far apart can't both be its revenue (BUG-099); closer
+#: ones are a restatement or a presentation, which the tag order settles.
+_REVENUE_GAP = 1.25
+#: Contract revenue including excise taxes only fills a year with no other revenue figure
+#: (PM's $75.0B for FY2016 beside $26.7B net of the taxes).
+_REVENUE_WITH_TAXES = "RevenueFromContractWithCustomerIncludingAssessedTax"
 
 
 def _agree(a: float, b: float) -> bool:
@@ -445,6 +452,7 @@ class XBRLParser:
         data: Dict[Any, Dict[str, Any]] = {}
         best: Dict[Any, Tuple[int, str]] = {}
         period_frames: Dict[Any, set] = {}
+        set_aside = self._revenue_set_aside(us_gaap)
 
         for field in CANONICAL_FIELDS:
             for priority, tag in enumerate(field.tags):
@@ -469,8 +477,9 @@ class XBRLParser:
                         "filed_date": entry.get("filed"), "period_end": entry.get("end"),
                         "form": entry.get("form"),
                     }
+                    rank = priority + len(field.tags) if (field.key, tag, fy) in set_aside else priority
                     self._assign_if_better(data, best, period, seed, field,
-                                           priority, tag, entry)
+                                           rank, tag, entry)
 
         self._apply_calendar(data, period_frames, quarterly=False)
         if not _in_dollars(data.values()):
@@ -526,7 +535,7 @@ class XBRLParser:
             (lambda filed: math.prod(ratio for _, after, ratio in splits if after <= filed)) if splits else None)
 
         instants_filed = self._collect_instant_checkpoints(us_gaap, periods, frames, restored)
-        self._collect_discrete_flows(us_gaap, periods, frames, restored, level)
+        self._collect_discrete_flows(us_gaap, periods, frames, restored, level, self._revenue_set_aside(us_gaap))
         if level is not None:
             self._instants_on_year_basis(periods, instants_filed, level)
         self._apply_quarter_calendar(periods, frames)
@@ -663,6 +672,7 @@ class XBRLParser:
         self, us_gaap: Dict[str, Any], periods: Dict[str, Dict[str, Any]],
         frames: Dict[str, set], restored: Dict[Tuple[str, str], Tuple[float, float]],
         level: Optional[Callable[[str], float]] = None,
+        set_aside: FrozenSet[Tuple[str, str, Any]] = frozenset(),
     ) -> None:
         """Discrete quarterly flows via cumulative-ladder differencing.
 
@@ -673,7 +683,8 @@ class XBRLParser:
         multi-quarter blobs. A full-year rung reads the figure the annual record puts
         back (*restored*), so the fourth quarter is the restored year less nine months.
         With *level* (the split basis of a filing date), per-share figures and counts go
-        onto their year's basis first.
+        onto their year's basis first. A full-year figure in *set_aside* (``(field, tag,
+        fiscal year)``, see ``_revenue_set_aside``) ranks after every other tag.
         """
         oracle_rungs: Dict[str, Dict[Tuple[str, str], Any]] = {}  # net income's and EPS's, for the counts' scale
         for field in CANONICAL_FIELDS:
@@ -693,14 +704,17 @@ class XBRLParser:
                         continue  # ignore multi-year facts
                     if entry.get("frame"):
                         frames.setdefault(end, set()).add(entry["frame"])
+                    rank = priority
+                    if span >= _FULL_YEAR_MIN_DAYS and (field.key, tag, self._annual_fy(entry)) in set_aside:
+                        rank += len(field.tags)  # a revenue figure that isn't the year's (never a count)
                     filed = entry.get("filed") or ""
                     key = (start, end)
                     cur = chosen.get(key)
                     if cur is not None and not (
-                        priority < cur[0] or (priority == cur[0] and filed >= cur[1])
+                        rank < cur[0] or (rank == cur[0] and filed >= cur[1])
                     ):
                         continue
-                    chosen[key] = (priority, filed, entry.get("val"))
+                    chosen[key] = (rank, filed, entry.get("val"))
             for (start, end), (priority, filed, val) in list(chosen.items()):
                 fix = restored.get((field.key, end))
                 span = self._span(start, end)
@@ -872,12 +886,14 @@ class XBRLParser:
         valid_fn,
         period_key_fn,
         quarterly: bool,
+        set_aside: FrozenSet[Tuple[str, str, Any]] = frozenset(),
     ) -> Dict[Any, Dict[str, Any]]:
         """Resolve every canonical field for every period from raw us-gaap facts.
 
         For each canonical field, candidate tags are tried in priority order; the
         highest-priority tag with data for a period wins, and within a tag the
-        most-recently-filed value wins (so restatements supersede originals).
+        most-recently-filed value wins (so restatements supersede originals). A
+        ``(field, tag, period)`` in *set_aside* ranks after every other tag.
         """
         data: Dict[Any, Dict[str, Any]] = {}
         # (period, canonical_key) -> (tag_priority, filed). Tracks the basis for the
@@ -913,8 +929,9 @@ class XBRLParser:
                         period_frames.setdefault(period, set()).add(frame)
 
                     seed = self._init_period_meta(period, quarterly)
+                    rank = priority + len(field.tags) if (field.key, tag, period) in set_aside else priority
                     if not self._assign_if_better(
-                        data, best, period, seed, field, priority, tag, entry
+                        data, best, period, seed, field, rank, tag, entry
                     ):
                         continue
 
@@ -946,6 +963,7 @@ class XBRLParser:
             valid_fn=self._is_full_year,
             period_key_fn=self._annual_fy,
             quarterly=False,
+            set_aside=self._revenue_set_aside(us_gaap),
         )
         self._restore_agreed_figures(us_gaap, data, self._annual_fy)
         return data
@@ -969,6 +987,50 @@ class XBRLParser:
         for values in filings.values():
             values.sort(key=lambda filing: filing[0])
         return filings
+
+    def _revenue_set_aside(self, us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
+        """The revenue figures, as ``("revenue", tag, fiscal year)``, that aren't the year's
+        revenue (BUG-099).
+
+        Revenue takes a year's first tag, and a figure named here ranks after every other. It gives
+        way to one 25% or more away from it that the year's income statement adds up to while
+        it doesn't (operating income plus operating expenses, or cost of revenue plus gross
+        profit): BLK's FY2022-24 ``Revenues``, $11-13B, beside the $17.9-20.4B its operating
+        income and expenses make, while MA's net revenue stays beside the gross it tags as
+        contract revenue. Where the statement adds up to none of the year's figures, one at or
+        below zero gives way to a positive one (ETN's FY2011-16 zeros), and one below the year's
+        cost of revenue to one that isn't (PG's FY2012-14 ``Revenues`` of $28-29B beside net
+        sales of $74-82B and a cost of sales of $39-41B). Figures closer than that are a
+        restatement or a presentation, which the tag order settles.
+        """
+        def year_figures(key: str, tags: Iterable[str]) -> Dict[Any, Dict[str, float]]:
+            figures: Dict[Any, Dict[str, float]] = defaultdict(dict)
+            for tag in tags:
+                for fy, filings in self._annual_filings(us_gaap, _FIELDS[key], tag, self._annual_fy).items():
+                    figures[fy][tag] = filings[-1][1]  # the latest filing's
+            return figures
+
+        def first(key: str) -> Dict[Any, float]:  # each year's figure under its first tag
+            return {fy: next(iter(by_tag.values())) for fy, by_tag in year_figures(key, _FIELDS[key].tags).items()}
+
+        revenue = year_figures("revenue", (t for t in _FIELDS["revenue"].tags if t != _REVENUE_WITH_TAXES))
+        cost, gross, income, expenses = (first(key) for key in ("cost_of_revenue", "gross_profit",
+                                                                "operating_income", "operating_expenses"))
+        aside: Set[Tuple[str, str, Any]] = set()
+        for fy, figures in revenue.items():
+            totals = [a + b for a, b in ((income.get(fy), expenses.get(fy)), (cost.get(fy), gross.get(fy)))
+                      if a is not None and b is not None]
+            adds_up = {tag for tag, value in figures.items() if any(_agree(value, total) for total in totals)}
+            floor = cost.get(fy)
+            for tag, value in figures.items():
+                for other, against in figures.items():
+                    if not (value <= 0 < against or 0 < value * _REVENUE_GAP <= against
+                            or 0 < against * _REVENUE_GAP <= value):
+                        continue
+                    if (other in adds_up and tag not in adds_up if adds_up else
+                            value <= 0 < against or (floor is not None and value < floor <= against)):
+                        aside.add(("revenue", tag, fy))
+        return frozenset(aside)
 
     def _restore_agreed_figures(self, us_gaap: Dict[str, Any],
                                 data: Dict[Any, Dict[str, Any]], period_key_fn) -> None:

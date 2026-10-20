@@ -78,15 +78,18 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         "revenue", "Revenue", INCOME, UNIT_USD, DURATION,
         (
             "Revenues",
+            # A total too: banks, broker-dealers and card issuers present revenue net of interest expense,
+            # of which their contract revenue is a part (AXP's $41.30B of $72.23B for FY2025, BUG-099).
+            "RevenuesNetOfInterestExpense",
             "RevenueFromContractWithCustomerExcludingAssessedTax",
             "RevenueFromContractWithCustomerIncludingAssessedTax",
             "SalesRevenueNet",
             "SalesRevenueGoodsNet",
-            # Banks/broker-dealers present total revenue net of interest expense.
-            "RevenuesNetOfInterestExpense",
         ),
         description="Total net revenue / sales. For banks, derived from net interest "
-                    "income + noninterest income when no single tag is filed.",
+                    "income + noninterest income when no single tag is filed. A figure "
+                    "the year's other figures show isn't its revenue gives way "
+                    "(XBRLParser._revenue_set_aside).",
     ),
     CanonicalField(
         "cost_of_revenue", "Cost of Revenue", INCOME, UNIT_USD, DURATION,
@@ -402,7 +405,8 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "noninterest_income", "Noninterest Income", INCOME, UNIT_USD, DURATION,
-        ("NoninterestIncome", "RevenuesNetOfInterestExpense"),
+        # Not the total net of interest expense, which holds the net interest income (BUG-099).
+        ("NoninterestIncome",),
         sectors=(BANK,),
     ),
     CanonicalField(

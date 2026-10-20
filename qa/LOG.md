@@ -1320,3 +1320,24 @@ Result: VALID-01 → FAIL→BUG-099, VALID-08 → FAIL→BUG-101, VALID-09 → F
 Gates: ruff ✓ mypy ✓ pytest 1063 passed, 1 skipped (1 known warning); no code changed | CI: pending for this push
 Commit: (this commit) chore(qa): discovery VALID-01, -08, -09; AXP's revenue is a part, derived liabilities hold the NCI
 Next: BUG-099 (P2), unless code review 10 reports first; then BUG-100.
+
+## Iteration 70: 2026-10-20 15:43: fix
+Picked: BUG-099, the older of the two open P2s (no P0 or P1 open). CI: 143cfba ✓. Code review 10 reported during the
+iteration (C1 a proposed P1); it is recorded next, its claims re-run first.
+Did: rule probes over the 126 cached filers' 2,132 filer-years before any code: the largest figure, filing support and
+the latest filing's tags each broke right figures (MA's net revenue, PM's net of excise taxes, restatements), and the
+year's own income statement told every case apart. TDD (8 tests RED, 6 guards): the totals first in revenue's tags;
+of two figures 25% or more apart, one the income statement doesn't add up to gives way to one it does, else a zero or
+a figure below cost of revenue to one that isn't; a figure set aside ranks last (a filing with no other keeps it) in
+the annual record, the vintages and the quarterly ladder; `noninterest_income` drops the net-revenue tag. The fix
+found the same defect at PG FY2012-14 and ETN FY2011-16 (negative gross profit and Q4s). 14 mutants, each failing a
+test; the first digest caught two regressions (vintages losing their only revenue, a total 1% off set aside), put
+right by the pairwise rule and the ranking. Real app: stock-web on an offline-collected scratch database.
+Evidence: `qa/evidence/iter70-bug099-{red,green,mutants,rules,impact,app}.txt`; code review 10's report,
+`qa/evidence/review10-report.md`
+Result: BUG-099 VERIFIED; VALID-01 PASS. Leads L23 (19 negative quarterly revenues, mostly a restated rung less one
+as first filed) and L24 (`qa/oracle/sec_oracle.py` was never written).
+Gates: ruff ✓ mypy ✓ pytest 1077 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): a year's revenue is its total, not a part of it
+Next: record code review 10 (C1, a proposed P1, then I1 and I2, P2s), re-running each claim first; then the
+highest-severity open bug (C1 if confirmed, else BUG-100). Fixes since review 10's range: 2.

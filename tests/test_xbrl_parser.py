@@ -809,3 +809,139 @@ def test_a_filer_that_switched_from_dollars_keeps_its_dollar_years_and_says_why_
     assert explain_stale_annual_financials(facts, annual["2022"]["period_end"]) == (
         "later annual reports are in TWD (20-F), which isn't converted to dollars")
 
+
+def _one_year(fy, filed, **figures):
+    """One fiscal year's figures, each under its own tag, filed together."""
+    return [_filed_years(tag, "USD", {fy: [(filed, value)]}) for tag, value in figures.items()]
+
+
+def test_the_total_net_of_interest_expense_is_the_revenue_not_its_contract_revenue():
+    # BUG-099: AXP files its income statement's total, total revenues net of interest expense, beside its ASC 606
+    # contract revenue, a part of it; the contract-revenue tag came first, so FY2025 read $41.30B of $72.23B.
+    annual = _annual(*_one_year(2025, "2026-02-06", RevenueFromContractWithCustomerExcludingAssessedTax=41.304e9,
+                                RevenuesNetOfInterestExpense=72.229e9))
+    assert (annual["2025"]["revenue"], annual["2025"]["_source_tags"]["revenue"]) == (
+        72.229e9, "RevenuesNetOfInterestExpense")
+
+
+def test_a_revenues_figure_the_income_statement_doesnt_add_up_to_gives_way():
+    # BUG-099: BLK's FY2024 10-K tags `Revenues` of $12.79B beside its total revenue, $20.41B under the contract-revenue
+    # tag, which its operating income and expenses add up to.
+    annual = _annual(*_one_year(2024, "2025-02-25", Revenues=12.794e9,
+                                RevenueFromContractWithCustomerExcludingAssessedTax=20.407e9,
+                                OperatingExpenses=12.833e9, OperatingIncomeLoss=7.574e9))
+    assert annual["2024"]["revenue"] == 20.407e9
+
+
+def test_net_revenue_the_income_statement_adds_up_to_stays_beside_a_gross_contract_figure():
+    # MA tags its gross revenue, before rebates and incentives, as contract revenue ($21.83B for FY2018) beside its net
+    # revenue ($14.95B), which its operating income and expenses add up to.
+    annual = _annual(*_one_year(2018, "2019-02-13", Revenues=14.950e9,
+                                RevenueFromContractWithCustomerExcludingAssessedTax=21.831e9,
+                                OperatingExpenses=7.668e9, OperatingIncomeLoss=7.282e9))
+    assert annual["2018"]["revenue"] == 14.950e9
+
+
+def test_a_revenue_figure_below_its_own_cost_of_revenue_gives_way():
+    # BUG-099: PG's FY2014 10-K tags `Revenues` of $28.4B for FY2012 beside net sales of $82.0B and a cost of products
+    # sold of $41.4B: revenue read $28.4B, and the derived gross profit -$13.0B.
+    annual = _annual(*_one_year(2012, "2014-08-08", Revenues=28.4e9, SalesRevenueNet=82.006e9,
+                                CostOfGoodsAndServicesSold=41.411e9))
+    assert annual["2012"]["revenue"] == 82.006e9
+
+
+def test_a_figure_below_cost_gives_way_only_to_one_that_isnt():
+    # Of $1.0B, $1.3B and $1.45B against a cost of revenue of $1.4B, the first gives way to the third; the second stays,
+    # as the third is too close to it to tell, and the order puts it first.
+    annual = _annual(*_one_year(2022, "2023-02-28", Revenues=1.0e9,
+                                RevenueFromContractWithCustomerExcludingAssessedTax=1.3e9, SalesRevenueNet=1.45e9,
+                                CostOfRevenue=1.4e9))
+    assert annual["2022"]["revenue"] == 1.3e9
+
+
+def test_figures_all_below_cost_of_revenue_keep_the_tag_order():
+    # A filer selling below cost (a young carmaker's first deliveries) has every revenue figure under its cost of
+    # revenue, and none of them gives way.
+    annual = _annual(*_one_year(2022, "2023-02-28", Revenues=1.658e9,
+                                RevenueFromContractWithCustomerExcludingAssessedTax=1.2e9, CostOfRevenue=4.633e9))
+    assert annual["2022"]["revenue"] == 1.658e9
+
+
+def test_a_part_far_from_the_totals_leaves_two_close_totals_to_the_tag_order():
+    # DELL's FY2017 holds $48.7B of goods sales beside two totals 0.8% apart, $61.6B and $62.2B: the part gives way,
+    # and the order settles the totals (one as first filed, one restated), even where the income statement adds up to
+    # the second.
+    annual = _annual(*_one_year(2017, "2018-03-29", Revenues=61.642e9,
+                                RevenueFromContractWithCustomerExcludingAssessedTax=62.164e9,
+                                SalesRevenueGoodsNet=48.706e9, CostOfRevenue=49.205e9, GrossProfit=12.959e9))
+    assert annual["2017"]["revenue"] == 61.642e9
+
+
+def test_a_filing_keeps_its_own_revenue_figure_when_it_has_no_other():
+    # PM's FY2016 10-K reports only its revenue including excise taxes ($75.0B, as net sales); its next 10-K adds the
+    # figure net of the taxes ($26.7B), which the year's record takes. The first filing's vintage keeps its own figure.
+    first, second = "2017-02-15", "2018-02-13"
+    us_gaap = {k: v for tag in _one_year(2016, second, RevenueFromContractWithCustomerExcludingAssessedTax=26.685e9,
+                                         SalesRevenueNet=74.953e9, CostOfRevenue=9.391e9, GrossProfit=17.294e9)
+               for k, v in tag.items()}
+    us_gaap["SalesRevenueNet"]["units"]["USD"].append(usd(74.953e9, "2016-01-01", "2016-12-31", fy=2016, filed=first))
+    parser, facts = XBRLParser(), {"facts": {"us-gaap": us_gaap}}
+    vintages = parser.extract_annual_vintages(facts)["2016"]
+    assert (parser.extract_annual_financials(facts)["2016"]["revenue"], vintages[first]["revenue"],
+            vintages[second]["revenue"]) == (26.685e9, 74.953e9, 26.685e9)
+
+
+def test_a_zero_revenue_gives_way_to_a_positive_one():
+    # BUG-099: ETN's 10-Ks tag `Revenues` of 0 for FY2011-16 beside net sales of $16-22B.
+    annual = _annual(*_one_year(2013, "2014-02-26", Revenues=0.0, SalesRevenueNet=22.046e9))
+    assert annual["2013"]["revenue"] == 22.046e9
+
+
+def test_revenue_stays_net_of_excise_taxes_the_filer_also_reports():
+    # PM reports its revenue both net of excise taxes ($26.7B for FY2016) and including them ($75.0B, under the
+    # contract-revenue tag that includes assessed taxes). The second only fills a year with no other figure, even
+    # where the income statement adds up to it (its expenses then including the taxes).
+    annual = _annual(*_one_year(2016, "2017-02-15", RevenueFromContractWithCustomerExcludingAssessedTax=26.685e9,
+                                RevenueFromContractWithCustomerIncludingAssessedTax=74.953e9,
+                                OperatingExpenses=64.050e9, OperatingIncomeLoss=10.903e9))
+    assert annual["2016"]["revenue"] == 26.685e9
+
+
+def test_revenue_figures_less_than_a_quarter_apart_keep_the_tag_order():
+    # Figures under 25% apart are a restatement or a presentation (GE's FY2017 in the cached filings: `Revenues`
+    # $99.3B, net sales $113.2B), which the tag order settles, even where the income statement adds up to the other.
+    annual = _annual(*_one_year(2017, "2019-02-26", Revenues=99.279e9, SalesRevenueNet=113.192e9,
+                                OperatingExpenses=105.0e9, OperatingIncomeLoss=8.192e9))
+    assert annual["2017"]["revenue"] == 99.279e9
+
+
+def test_a_fourth_quarter_is_the_years_revenue_less_nine_months():
+    # BUG-099: BLK's Q4 2024 read -$1.94B, the `Revenues` part of its year ($12.79B) less nine months of its revenue.
+    start, filed = "2024-01-01", "2025-02-25"
+    ytd = [usd(v, start, end, fy=2024, fp=fp, form="10-Q", filed=f) for v, end, fp, f in (
+        (4.73e9, "2024-03-31", "Q1", "2024-05-03"), (9.54e9, "2024-06-30", "Q2", "2024-08-02"),
+        (14.73e9, "2024-09-30", "Q3", "2024-11-01"))]
+    year = {"Revenues": 12.794e9, "RevenueFromContractWithCustomerExcludingAssessedTax": 20.407e9,
+            "OperatingExpenses": 12.833e9, "OperatingIncomeLoss": 7.574e9}
+    us_gaap = {tag: {"units": {"USD": ([*ytd] if tag == "Revenues" else []) + [usd(v, start, "2024-12-31", fy=2024,
+                                                                                 filed=filed)]}}
+               for tag, v in year.items()}
+    q4 = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": us_gaap}})["2024-12-31"]
+    assert q4["revenue"] == pytest.approx(20.407e9 - 14.73e9)
+
+
+def test_a_filings_vintage_takes_the_years_revenue_not_its_part():
+    # BUG-099: the as-of view reads each filing's own figures, and BLK's FY2024 10-K holds both.
+    filed = "2025-02-25"
+    facts = {"facts": {"us-gaap": {k: v for tag in _one_year(
+        2024, filed, Revenues=12.794e9, RevenueFromContractWithCustomerExcludingAssessedTax=20.407e9,
+        OperatingExpenses=12.833e9, OperatingIncomeLoss=7.574e9) for k, v in tag.items()}}}
+    assert XBRLParser().extract_annual_vintages(facts)["2024"][filed]["revenue"] == 20.407e9
+
+
+def test_net_revenue_is_no_noninterest_income():
+    # BUG-099: `noninterest_income` listed the total net of interest expense, which holds the net interest income, so a
+    # bank filing no `NoninterestIncome` would count that twice in its efficiency ratio. No cached filer does.
+    annual = _annual(*_one_year(2025, "2026-02-06", InterestIncomeExpenseNet=17.364e9,
+                                RevenuesNetOfInterestExpense=72.229e9))
+    assert "noninterest_income" not in annual["2025"]
