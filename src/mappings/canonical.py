@@ -42,9 +42,13 @@ INSTANT = "instant"
 
 # Sign normalization. "as_reported" keeps the filed value; "abs" stores the
 # magnitude so outflow concepts (capex, dividends, buybacks, repayments) are
-# comparable regardless of whether a filer signs them negative.
+# comparable regardless of whether a filer signs them negative. "net" is an
+# outflow net of an inflow (acquisitions, net of the cash acquired), stored as
+# paid: positive pays, negative brings cash in. A filing that signs its gross
+# outflows negative has it turned back (BUG-127).
 SIGN_AS_REPORTED = "as_reported"
 SIGN_ABS = "abs"
+SIGN_NET = "net"
 
 
 @dataclass(frozen=True)
@@ -395,7 +399,7 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     CanonicalField(
         "acquisitions", "Acquisitions (net of cash)", CASHFLOW, UNIT_USD, DURATION,
         ("PaymentsToAcquireBusinessesNetOfCashAcquired",),
-        sign=SIGN_ABS, description="Stored as a positive magnitude (cash outflow).",
+        sign=SIGN_NET, description="Stored as paid: negative where the cash acquired exceeds the price.",
     ),
 
     # ---------------- Bank-specific ----------------

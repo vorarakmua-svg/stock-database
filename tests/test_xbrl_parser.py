@@ -232,6 +232,104 @@ def test_a_lone_first_quarter_figure_makes_no_quarter_of_its_own():
     assert "2026-04-04" not in XBRLParser().extract_quarterly_financials(facts)
 
 
+ACQUISITIONS, CAPEX, BUYBACKS = ("PaymentsToAcquireBusinessesNetOfCashAcquired",
+                                 "PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsForRepurchaseOfCommonStock")
+
+
+def _acquisition_quarters(values, capex_signs=(1, 1, 1, 1)):
+    """Acquisitions' 2013 year-to-date ladder (three 10-Qs, then the 10-K; None leaves a rung out), each filing with
+    capex of the given sign beside it, its sign convention; and the derived quarters."""
+    ends = ("2013-03-31", "2013-06-30", "2013-09-30", "2013-12-31")
+    forms, filed = ("10-Q", "10-Q", "10-Q", "10-K"), ("2013-05-02", "2013-08-01", "2013-10-31", "2014-02-27")
+    acquisitions = [usd(v, "2013-01-01", end, form=form, filed=day)
+                    for v, end, form, day in zip(values, ends, forms, filed) if v is not None]
+    capex = [usd(sign * 100.0 * n, "2013-01-01", end, form=form, filed=day)
+             for n, (sign, end, form, day) in enumerate(zip(capex_signs, ends, forms, filed), 1)]
+    q = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": {
+        ACQUISITIONS: {"units": {"USD": acquisitions}}, CAPEX: {"units": {"USD": capex}}}}})
+    return [q.get(end, {}).get("acquisitions") for end in ends]
+
+
+def test_acquisitions_are_net_so_a_total_below_zero_brought_cash_in():
+    # BUG-127 (code review 12): acquisitions are net of the cash acquired, and a total below zero is a net inflow as
+    # filed. GE's 2013 10-Qs give -$6.383B and -$6.187B, then +$1.617B for nine months, beside capex paid: read by
+    # size, Q1 was a $6.383B outflow and Q3's $7.804B (Lufkin and Avio) a shrinking total, dropped.
+    assert _acquisition_quarters((-6383.0, -6187.0, 1617.0, None)) == [-6383.0, 196.0, 7804.0, None]
+
+
+def test_a_years_acquisition_quarters_add_up_to_its_figure():
+    # COP FY2021: -$382M for nine months (the cash acquired with Concho), then +$8.290B for the year: Q4 paid $8.672B,
+    # where sizes gave $7.908B. CB 2023: Q3 brought in $468M and Q4 paid $250M.
+    assert _acquisition_quarters((-100.0, -250.0, -382.0, 8290.0)) == [-100.0, -150.0, -132.0, 8672.0]
+    assert _acquisition_quarters((100.0, 252.0, -216.0, 34.0)) == [100.0, 152.0, -468.0, 250.0]
+
+
+def test_acquisitions_in_a_filing_that_tags_its_payments_negative_are_turned_back():
+    # LLY's 2008 10-Qs tag every outflow negative and its 10-K positive: a sign convention, not an inflow.
+    assert _acquisition_quarters((-10.0, -20.0, -44.4, 6083.0), capex_signs=(-1, -1, -1, 1)) == pytest.approx(
+        [10.0, 10.0, 24.4, 6038.6])
+
+
+def test_a_lone_first_quarter_that_brought_cash_in_reads_below_zero():
+    # BUG-124's lone first quarters read acquisitions as filed too.
+    year, q1 = ("2025-01-01", "2025-12-31"), ("2026-01-01", "2026-03-31")
+    facts = {"facts": {"us-gaap": {
+        ACQUISITIONS: {"units": {"USD": [
+            usd(400.0, *year, form="10-K", filed="2026-01-29"), usd(-50.0, *q1, form="10-Q", filed="2026-04-30")]}},
+        CAPEX: {"units": {"USD": [
+            usd(80.0, *year, form="10-K", filed="2026-01-29"), usd(20.0, *q1, form="10-Q", filed="2026-04-30")]}},
+        "Assets": {"units": {"USD": [usd(900.0, None, "2026-03-31", form="10-Q", filed="2026-04-30")]}},
+    }}}
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2026-03-31"]
+    assert (quarter.get("capex"), quarter.get("acquisitions")) == (20.0, -50.0)
+
+
+def _annual_record(*filings):
+    """The annual record of 10-Ks, each (filed, {tag: {fiscal year: value}}), calendar years."""
+    us_gaap = {}
+    for filed, tagged in filings:
+        for tag, years in tagged.items():
+            us_gaap.setdefault(tag, {"units": {"USD": []}})["units"]["USD"].extend(
+                usd(v, f"{fy}-01-01", f"{fy}-12-31", fy=int(filed[:4]), form="10-K", filed=filed)
+                for fy, v in years.items())
+    return XBRLParser().extract_annual_financials({"facts": {"us-gaap": us_gaap}})
+
+
+def test_a_year_whose_acquisitions_brought_cash_in_reads_below_zero():
+    # BUG-127: WFC's FY2008 10-K gives -$11.203B, the cash acquired with Wachovia, beside capex paid; read by size it
+    # was an $11.203B outflow (ADI's FY2021 -$2.451B with Maxim, USB's FY2009 -$3.074B likewise).
+    years = _annual_record(("2009-02-27", {ACQUISITIONS: {2008: -11203.0}, CAPEX: {2008: 3000.0}}))
+    assert years["2008"]["acquisitions"] == -11203.0
+
+
+def test_a_10k_that_tags_its_payments_negative_keeps_its_acquisitions_paid():
+    tagged = {ACQUISITIONS: {2008: -400.0}, CAPEX: {2008: -3000.0}, "PaymentsOfDividends": {2008: -500.0}}
+    years = _annual_record(("2009-02-27", tagged))
+    assert (years["2008"]["acquisitions"], years["2008"]["capex"]) == (400.0, 3000.0)
+    facts = {"facts": {"us-gaap": {tag: {"units": {"USD": [usd(v, "2008-01-01", "2008-12-31", fy=2008, form="10-K",
+                                                                filed="2009-02-27") for v in by_year.values()]}}
+                                   for tag, by_year in tagged.items()}}}
+    vintage = XBRLParser().extract_annual_vintages(facts)["2008"]["2009-02-27"]
+    assert vintage["acquisitions"] == 400.0  # each filing's own view, as the as-of reader shows it
+
+
+def test_a_later_10k_that_flips_a_years_acquisitions_is_put_right():
+    # GE's 2015 10-K tags FY2012-14's acquisitions negative (its capex positive, its buybacks negative), where its 2013
+    # and 2014 10-Ks agree on FY2012's +$1.456B: a sign flip the years around it side against, so FY2012 stays paid.
+    # Its 2016 10-K has the same mix of signs with its acquisitions paid: a tie isn't a filing's convention.
+    years = _annual_record(
+        ("2013-02-26", {ACQUISITIONS: {2011: 11202.0, 2012: 1456.0}, CAPEX: {2011: 100.0, 2012: 100.0}}),
+        ("2014-02-27", {ACQUISITIONS: {2012: 1456.0, 2013: 1642.0}, CAPEX: {2012: 100.0, 2013: 100.0}}),
+        ("2015-02-27", {ACQUISITIONS: {2012: -1456.0, 2013: -1642.0, 2014: -2639.0},
+                        CAPEX: {2012: 100.0, 2013: 100.0, 2014: 100.0},
+                        BUYBACKS: {2012: -50.0, 2013: -50.0, 2014: -50.0}}),
+        ("2016-02-26", {ACQUISITIONS: {2013: 8026.0, 2014: 2091.0, 2015: 12027.0},
+                        CAPEX: {2013: 100.0, 2014: 100.0, 2015: 100.0},
+                        BUYBACKS: {2013: -50.0, 2014: -50.0, 2015: -50.0}}))
+    assert [years[fy]["acquisitions"] for fy in ("2011", "2012", "2013", "2014", "2015")] == [
+        11202.0, 1456.0, 8026.0, 2091.0, 12027.0]
+
+
 def _year_end_debt(**tagged):
     """A 2025 balance sheet holding the given debt tags (tag=value), and its long-term debt as (value, tag)."""
     facts = {"facts": {"us-gaap": {

@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 from fractions import Fraction
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
-from ..mappings.canonical import CANONICAL_FIELDS, DURATION, INSTANT, SIGN_ABS
+from ..mappings.canonical import CANONICAL_FIELDS, DURATION, INSTANT, SIGN_ABS, SIGN_NET
 from .share_scale import _TOLERANCE as _SCALE_TOLERANCE
 from .share_scale import _best_scale
 
@@ -91,6 +91,43 @@ def _dollar_filings(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
         if units:
             kept[name] = {**tag, "units": units}
     return kept
+
+
+def _net_outflows_as_paid(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+    """*us_gaap* with its net outflows (``SIGN_NET``: acquisitions, net of the cash acquired)
+    as paid: positive a payment, negative cash brought in, as the taxonomy has them. A filing
+    whose gross outflows (capex, dividends, buybacks, debt repaid) are mostly below zero signs
+    its outflows negative (LLY's and TXN's 2008 10-Qs), and its net outflows are turned back.
+    Read by size, a net inflow was an outflow: WFC's FY2008 -$11.2B with Wachovia (BUG-127)."""
+    votes: Dict[str, int] = defaultdict(int)
+    for field in CANONICAL_FIELDS:
+        if field.sign != SIGN_ABS:
+            continue
+        for tag in field.tags:
+            for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
+                value = entry.get("val")
+                if entry.get("start") and entry.get("accn") and isinstance(value, (int, float)) and value:
+                    votes[entry["accn"]] += 1 if value < 0 else -1
+    negated = {accn for accn, vote in votes.items() if vote > 0}
+    if not negated:
+        return us_gaap
+
+    def as_paid(entry: Dict[str, Any]) -> Dict[str, Any]:
+        value = entry.get("val")
+        if entry.get("accn") in negated and isinstance(value, (int, float)) and value:
+            return {**entry, "val": -value}
+        return entry
+
+    turned = dict(us_gaap)
+    for field in CANONICAL_FIELDS:
+        if field.sign != SIGN_NET:
+            continue
+        for tag in field.tags:
+            units = us_gaap.get(tag, {}).get("units", {})
+            if field.xbrl_unit in units:
+                entries = [as_paid(entry) for entry in units[field.xbrl_unit]]
+                turned[tag] = {**us_gaap[tag], "units": {**units, field.xbrl_unit: entries}}
+    return turned
 
 
 #: A later filing's figure for a year can be a tagging error of the figure the earlier
@@ -425,7 +462,7 @@ class XBRLParser:
         Returns:
             Dictionary organized by fiscal year (string keys).
         """
-        us_gaap = _dollar_filings(facts.get("facts", {}).get("us-gaap", {}))
+        us_gaap = _net_outflows_as_paid(_dollar_filings(facts.get("facts", {}).get("us-gaap", {})))
         if not us_gaap:
             return {}
 
@@ -451,7 +488,7 @@ class XBRLParser:
         already-fetched ``companyfacts`` (every historical instance carries its own
         ``accn``/``filed``); no extra network. Annual reports (10-K, 20-F, 40-F) only.
         """
-        us_gaap = _dollar_filings(facts.get("facts", {}).get("us-gaap", {}))
+        us_gaap = _net_outflows_as_paid(_dollar_filings(facts.get("facts", {}).get("us-gaap", {})))
         if not us_gaap:
             return {}
 
@@ -523,7 +560,7 @@ class XBRLParser:
         Returns:
             Dictionary organized by period end date.
         """
-        us_gaap = _dollar_filings(facts.get("facts", {}).get("us-gaap", {}))
+        us_gaap = _net_outflows_as_paid(_dollar_filings(facts.get("facts", {}).get("us-gaap", {})))
         if not us_gaap:
             return {}
 
@@ -692,8 +729,9 @@ class XBRLParser:
         onto their year's basis first. A full-year figure in *set_aside* (``(field, tag,
         fiscal year)``, see ``_revenue_set_aside``) ranks after every other tag. An outflow
         stored as a size differences the totals' sizes, and a total that shrinks gives no
-        quarter (BUG-111). A year's ladder is one rung until its second 10-Q, its first quarter's
-        own 3-month figure, which fills that quarter after every ladder (BUG-124).
+        quarter (BUG-111); a net outflow's totals, as paid, difference as filed (BUG-127). A
+        year's ladder is one rung until its second 10-Q, its first quarter's own 3-month
+        figure, which fills that quarter after every ladder (BUG-124).
         """
         oracle_rungs: Dict[str, Dict[Tuple[str, str], Any]] = {}  # net income's and EPS's, for the counts' scale
         for field in CANONICAL_FIELDS:

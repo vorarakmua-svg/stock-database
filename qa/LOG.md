@@ -1609,3 +1609,20 @@ Gates: ruff ✓ mypy ✓ pytest 1142 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(store): a quote refresh keeps our enterprise value
 Next: BUG-127 (P2, the oldest), then BUG-128 and BUG-134; after the next fix, code review 13 (5 fixes since
 review 12's range, f87638f).
+
+## Iteration 88: 2026-10-20 21:57: fix
+Picked: BUG-127, the oldest open P2 (no P0 or P1 open). CI: 4c74cbf ✓.
+Did: measured the cached companyfacts first (126 of 130 acquisitions rungs below zero are net inflows in filings
+that tag their outflows positive; whole years too: 36 at 23 filers stored as outflows), then TDD (four tests RED,
+three guards): acquisitions have their own sign rule, as paid, read as filed except where a filing tags most of its
+gross outflows negative; one pass per extraction, so years, vintages and quarters agree, and a later filing's flip
+is put right by BUG-061's repair. Decided an inflow is stored below zero, not empty, so quarters add up to the year.
+Ten mutants, each failing a test (the tie rule pinned by GE's 2016 10-K). Real data: only acquisitions move (36
+years, 180 quarters, 361 trailing years, 90 vintages), 744 of 744 four-quarter years add up; stock-web serves WFC's
+FY2008 -$11.203B. Notes added to BUG-057 (seen again) and BUG-085 (GE's flip now visible as of 2015).
+Evidence: `qa/evidence/iter88-bug127-{red,green,mutants,realdata,e2e}.txt`
+Result: BUG-127 VERIFIED; VALID-06 FAIL→BUG-096.
+Gates: ruff ✓ mypy ✓ pytest 1149 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): acquisitions are read as paid, net of the cash acquired
+Next: code review 13 (5 fixes since review 12's range, f87638f: 9144791, eb0aec3, 5d2d996, 4c74cbf and this
+commit); then BUG-128 (P2, the oldest) and BUG-134.
