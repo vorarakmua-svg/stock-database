@@ -962,3 +962,33 @@ Commits: 8d8154c chore(qa): oracle values a foreign issuer's per-share figures p
 a foreign issuer is valued per ADS, and convenience translations aren't dollars
 Next: code review 7 (five fixes since review 6's range: 65a0602, 72568ea, 144dcdf, e87da0e, this), dispatched in the
 background after this push; then BUG-061 (P2), BUG-066 (P2).
+
+## Iteration 51: 2026-10-20 08:58: fix
+Picked: BUG-061, the oldest open P2 (no P0 or P1 open; code review 7 running in the background). CI: 0ab5c81 running
+at the start.
+Did: TDD (5 tests RED, 3 controls green): the parser keeps the latest filing's figure for a year unless it is a
+tagging error of the one every earlier filing reported (its negative, x10^3 or more, or a zero of a total), and the
+year's net change in cash (its cash-flow sections) or the two years on each side (the rest) side with the earlier
+filings. Each figure put back becomes a run warning. A first scan put back 20 figures; two were later filings' genuine
+zeros (T-Mobile's reverse merger, Prologis before ASC 842), so a zero counts only for a total (6 fewer). The quarterly
+ladder had the same error in its year-end rung (AMD's Q4 cash flows, BAC's 2008 checkpoint): 2 tests RED, then it
+reads the restored figure. Relaxing the earlier-filings-agree rule adds one case (TJX's -, +, - filings), kept as a
+test with two other guard tests; twelve mutants each fail a test. Impact: 14 figures at 12 of 143 cached filers, each
+triaged; 14 annual and 13 quarterly digests change, no vintages; through the fetcher offline, TTM rows and four
+companies' metrics follow (WMT's 2009 ROIC 25.1% to 16.5%); no valuation input changes. Found on the way: eight
+fetcher tests (mine, iterations 41-51) made a live SEC request through an unstubbed insider lookup; an autouse guard
+now fails any test that connects off the machine (RED: 8 errors), and the helper stubs the lookup (BUG-073). Found:
+quarterly weighted-average share counts are year-to-date differences (BUG-074, P2: AAPL's Q2-Q4 read about -0.05B).
+Code review 7 reported after the work was done; recording it is the next unit.
+Evidence: `qa/evidence/iter51-bug061-{red,red-quarterly,green,mutants,repairs,relaxed,impact-parser,impact-records,
+impact-valuation}.txt`, `iter51-bug073-{netguard,red,green}.txt`, `iter51-bug074-repro.txt`
+Result: BUG-061 and BUG-073 VERIFIED; BUG-074 new (P2). VALID-12 → PASS; VALID-02 → FAIL→BUG-062; VALID-04 →
+FAIL→BUG-020; VALID-06 → FAIL→BUG-074.
+Gates: ruff ✓ mypy ✓ pytest 989 passed at 2964555, 990 at this commit (1 known warning; the network guard on) |
+CI: pending for this push
+Commits: 2964555 fix(parsers): a later filing's tagging error doesn't override the figure earlier filings agree on;
+(this commit) test: the suite refuses the network, and fetcher tests stop calling SEC
+Next: record code review 7 (f9bbc91..0ab5c81), verifying each claim: it proposes a P0 (the FY-end prices behind the
+multiples band are Yahoo's dividend-adjusted closes) and four P2s (ADS-ratio drift, a two-class 20-F read as an ADS,
+the reporting currency decided over a filer's whole history, Yahoo's split undo needing a filing date); then by
+priority.

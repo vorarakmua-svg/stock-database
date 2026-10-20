@@ -262,6 +262,7 @@ def test_assess_quarterly_only_company_scores_zero(tmp_path):
 def _sec_only_fetcher(tmp_path, monkeypatch, sec):
     fetcher = _make_fetcher(tmp_path, 1)
     monkeypatch.setattr(fetcher.sec_handler, "fetch_all", lambda ticker: sec)
+    monkeypatch.setattr(fetcher.sec_handler, "get_insider_transactions", lambda cik, limit=50: [])
     monkeypatch.setattr(fetcher.fred_handler, "get_risk_free_rate_details", lambda maturity="10y": None)
     monkeypatch.setattr(fetcher.fred_handler, "get_market_risk_premium", lambda: {})
     return fetcher

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 2 · P3 30 · NEEDS-USER 11 · Verified: 38
+**Open:** P0 0 · P1 0 · P2 2 · P3 30 · NEEDS-USER 11 · Verified: 39
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -578,6 +578,13 @@ Repro: on 3eee7b6 both mutants pass the full suite (969 passed each): `<=` → `
 Expected: a test that fails for each.   Actual: none.
 
 Iteration 50: BUG-065's tests now cover an ADR and a convenience-translating reporter; the two surviving mutants remain.
+### BUG-073 [P3][CODE] Eight fetcher tests make a live SEC request, and the suite never notices
+Status: VERIFIED (iteration 51)
+Found: iteration 51, checking BUG-061's fetcher test (`qa/evidence/iter51-bug073-{netguard,red}.txt`) | Fixed: iteration 51 (see LOG) | Regression test: the autouse `no_network` guard in `tests/conftest.py`, and `tests/test_no_network.py::test_a_connection_off_this_machine_is_refused`
+Repro: `python -m pytest tests/test_fetcher_concurrency.py -k tagging_error_put_right -o log_cli=true --log-cli-level=DEBUG` logs `GET /submissions/CIK0001137789.json HTTP/1.1 200`: the tests' `_sec_only_fetcher` stubs `fetch_all` but not `get_insider_transactions`, which fetches the filer's submissions. A run with every outbound connection refused lists eight tests that tried one (all built on that helper, from iterations 41 to 51) and still passes: the fetcher logs the failure, after four retried attempts each, and records an error no test asserts against.
+Expected: no test touches the network (`tests/conftest.py`: "No fixture here performs network I/O").   Actual: every run, CI's included, sends eight requests to data.sec.gov, and the tests' outcome doesn't depend on them.
+Fix: the helper stubs the insider lookup, and an autouse fixture refuses any connection off this machine and fails the test that tried one (RED: the eight tests error at teardown; GREEN: they pass, and the whole suite runs under the guard).
+
 ### BUG-074 [P2][VALID] Quarterly weighted-average share counts are differences of year-to-date averages
 Status: OPEN
 Found: iteration 51, checking BUG-061's impact on MRK's TTM rows (`qa/evidence/iter51-bug074-repro.txt`) | Fixed: — | Regression test: —
