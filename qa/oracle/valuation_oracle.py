@@ -387,12 +387,10 @@ class Inputs:
         per-share consistency). Yahoo adjusts its dividends for every split it knew when it served them, so a split
         between that day and the price's is in one of them only: a later run whose dividend request failed kept the
         payments from before a split it stored, beside a price after it (BUG-103). The bars' rule, row by row. A row
-        without a served day (a database from before `dividend_events.served_on`) takes the bars' last day, and with
-        no bars every split, as Yahoo's latest basis."""
+        without a served day (a database from before `dividend_events.served_on`) is on the basis of every stored
+        split, as before: until BUG-103's fix a run stored no split without the dividends from the same chart."""
         if not self.priced_on:
             return 1.0
-        if served is None:
-            served = self.db.execute("select max(date) from price_bars where ticker=?", (self.t,)).fetchone()[0]
         day = str(served)[:10] if served else None
         factor = 1.0
         for date, ratio in self.splits:
