@@ -630,13 +630,17 @@ SQLite-only (not in the per-ticker JSON).
 
 ### Point-in-time as-of queries
 
-To read fundamentals **as they were known on a given date** (no look-ahead), resolve each
-year to the latest filing made on or before that date. In SQL:
+To read fundamentals **as they were known on a given date** (no look-ahead), take each
+figure from the latest filing made on or before that date that reports it. A 10-K repeats
+only part of each earlier year (two years of income and cash-flow statements, one balance
+sheet, the equity statement's opening balances), so a later filing's row for a year is
+mostly empty, and a figure it leaves out keeps the value last filed. In SQL, for one figure:
 
 ```sql
 -- Net income for FY2019 as it was known on 2020-06-30:
-SELECT * FROM financials_annual_vintages
+SELECT net_income, filed_date, accn FROM financials_annual_vintages
 WHERE ticker = 'PRU' AND fiscal_year = 2019 AND filed_date <= '2020-06-30'
+  AND net_income IS NOT NULL
 ORDER BY filed_date DESC, accn DESC LIMIT 1;
 ```
 
@@ -652,7 +656,9 @@ with AsOfReader("data/output/stock.db") as r:
 ```
 
 `as_of_date` accepts an ISO `YYYY-MM-DD` string or a `datetime.date`. A year not yet filed
-as of that date resolves to `None` (and is absent from `history_as_of`).
+as of that date resolves to `None` (and is absent from `history_as_of`). A period carries the
+latest filing's `accn`, `filed_date` and `form`, and `carried_from` names the filing of each
+figure last filed earlier (`{"revenue": {"accn": ..., "filed_date": ..., "form": ...}}`).
 
 For point-in-time **ratios** (computed on the as-of financials), use `PointInTimeMetrics`:
 

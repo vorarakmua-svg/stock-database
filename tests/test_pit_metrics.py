@@ -190,3 +190,18 @@ def test_history_metrics_captures_per_year_errors(tmp_path):
     assert set(hist.keys()) == {2018, 2019, 2020}
     for fy in (2018, 2019, 2020):
         assert hist[fy] == {"error": "boom"}              # captured, not raised
+
+
+def test_ratios_read_each_figure_as_last_filed(tmp_path):
+    # BUG-110: a later 10-K holding only the year's opening equity left every ratio empty.
+    def period(accn, filed, **figures):
+        return {"fiscal_year": 2016, "accn": accn, "filed_date": filed, "period_end": "2016-06-30",
+                "form": "10-K", "calendar_year": 2016, **figures}
+    db = _build_db(tmp_path, {"2016": {
+        "k18": period("k18", "2018-08-03", revenue=91.2e9, net_income=20.5e9),
+        "k19": period("k19", "2019-08-01", total_equity=83.1e9),
+    }}, ticker="MSFT")
+    with PointInTimeMetrics.from_path(db) as pm:
+        m = pm.metrics_as_of("MSFT", 2016, "2026-01-01")
+    assert m["net_margin"] == pytest.approx(20.5 / 91.2)
+    assert m["roe"] == pytest.approx(20.5 / 83.1)

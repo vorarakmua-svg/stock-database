@@ -1457,3 +1457,20 @@ Gates: ruff ✓ mypy ✓ pytest 1108 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) chore(qa): discovery VALID-07, -10, -11; the as-of view loses most years' figures
 Next: BUG-110 (P1), then BUG-111 (P2); record code review 11 when it reports. Fixes since review 11's range
 (6715f99): 2.
+
+## Iteration 78: 2026-10-20 19:24: fix
+Picked: BUG-110, the only open P1. CI: 4f768b8 ✓.
+Did: TDD (six tests RED: the figures a later filing leaves out came back empty, `carried_from` absent): each figure
+of the as-of view is the one last filed on or before the date, with the latest filing's provenance and `carried_from`
+naming the earlier filings; the explorer dates a carried figure and the README's SQL reads one figure that way. Seven
+mutants, each failing a test. Real data: all 23,097 and 23,079 as-of answers equal an independent reading of the
+vintages, nothing an earlier filing reported is empty as of today, point-in-time ROE for 2,074 of 2,318 years (436),
+99.4% of 73,531 carried figures equal the annual record; stock-web on a copy of the user's data reads MSFT FY2016's
+revenue as filed at each date. The rest opened BUG-116 (P3) and a re-run note on BUG-085 (9 more errors served).
+Code review 11 reported (saved as `qa/evidence/review11-report.md`; to be recorded next, claims re-run first).
+Evidence: `qa/evidence/iter78-bug110-{red,green,mutants,realdata,e2e}.txt`
+Result: BUG-110 VERIFIED; VALID-10 FAIL→BUG-113; BUG-116 opened (P3).
+Gates: ruff ✓ mypy ✓ pytest 1114 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(query): the as-of view keeps each figure as last filed
+Next: record code review 11 (re-run each claim; I1 and I2 proposed P2), then BUG-111 (P2). Fixes since review 11's
+range (6715f99): 3.

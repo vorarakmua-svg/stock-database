@@ -409,9 +409,12 @@ def asof_result_fragment(
     # Build curated rows
     fin_rows: List[Dict[str, Any]] = []
     if filing is not None:
+        carried = filing.get("carried_from") or {}
         for label, key, kind in _ASOF_FINANCIALS_ROWS:
             val = filing.get(key)
-            fin_rows.append({"label": label, "value": fmt_value(val, kind)})
+            # A figure the latest filing leaves out shows the date it was last filed (BUG-110).
+            fin_rows.append({"label": label, "value": fmt_value(val, kind),
+                             "filed": (carried.get(key) or {}).get("filed_date")})
 
     ratio_rows: List[Dict[str, Any]] = []
     if ratios is not None:

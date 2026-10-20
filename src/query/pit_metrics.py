@@ -1,7 +1,7 @@
 """Point-in-time metrics: the fundamental ratio suite computed on as-of-date financials.
 
 A pure-read composition layer. ``AsOfReader`` (see ``query/asof.py``) supplies each
-annual period as it was known on a date ``D`` (the latest filing made on or before ``D``);
+annual period as it was known on a date ``D`` (each figure as last filed on or before ``D``);
 ``CalculatedMetrics`` (see ``parsers/calculated_metrics.py``) computes the ratios. So the
 metrics for a year as of ``D`` are ``calculate_all(as_of_annual(ticker, fy, D), sector=...)``
 — the same engine the pipeline uses, fed the as-of financials instead of the latest-restated

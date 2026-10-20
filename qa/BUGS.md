@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 1 · P2 1 · P3 51 · NEEDS-USER 12 · Verified: 59
+**Open:** P0 0 · P1 0 · P2 1 · P3 52 · NEEDS-USER 12 · Verified: 60
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -683,6 +683,7 @@ Repro: `AsOfReader` returns the latest vintage filed on or before the date, and 
 Expected: the as-of view says the figure is as filed, or applies the repair the filings known on that date support.   Actual: the known error, unmarked.
 
 Re-run in iteration 63 (code review 9's M6: iteration 59 re-ran AMD only): on 51091ce, STX's FY2022 dividend a share reads 2,770,000 as of 2024-08-02 through 2025-07-31 (2.77 the day before), and BAC's FY2008 total assets 0 as of 2011-02-25 through 2012-02-22 (1.818T the day before); after each range the as-of value is None (lead L22) (`qa/evidence/iter63-review9-rerun.txt`).
+Re-run in iteration 78 (BUG-110's fix, `qa/evidence/iter78-bug110-realdata.txt`): a figure the latest filing leaves out now keeps its last filed value, so these errors also stand after their ranges. As of 2026-12-31 the as-of view serves the error for 11 of the annual record's 14 repairs on a fresh collection, 9 of them newly carried where they read None (BAC's FY2008 total assets 0, STX's FY2022 dividend 2,770,000, BRK-B's FY2008 basic shares x10^6, and GE's, PEP's, RTX's, WMT's, WELL's and NOW's sign flips), and AMD's two as before.
 ### BUG-086 [P3][VALID] BUG-061 misses a tagging error every later filing repeats: BRK-B's FY2009 basic shares
 Status: OPEN
 Found: iteration 58 by code review 8 (M2), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
@@ -859,12 +860,13 @@ Repro: `qa/oracle/valuation_oracle.py`'s `bars_to_price_basis` (`:368`) and its 
 Expected: a check of the stored series' basis the code doesn't share: the stored bar on the price's day against the snapshot price, within 0.07% on every real and golden ticker (code review 10's `bars_basis_probe.txt`).   Actual: none.
 
 ### BUG-110 [P1][STORE] The as-of view loses a year's figures once a later filing repeats only part of it: 70% of years read no revenue as of today
-Status: OPEN
-Found: iteration 77 via VALID-10, lead L22 (`qa/evidence/iter77-pit.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 78)
+Found: iteration 77 via VALID-10, lead L22 (`qa/evidence/iter77-pit.txt`) | Fixed: iteration 78 (see LOG) | Regression tests: `tests/test_asof_reader.py::test_a_figure_a_later_filing_leaves_out_keeps_its_last_filed_value`, `::test_a_figure_filed_after_the_date_is_never_carried`, `::test_as_of_value_and_history_read_each_figure_as_last_filed`, `tests/test_pit_metrics.py::test_ratios_read_each_figure_as_last_filed`, `tests/test_web_api_asof.py::test_annual_asof_returns_the_figures_a_later_filing_leaves_out`, `::test_asof_result_fragment_dates_a_figure_last_filed_earlier`
 Repro: a 10-K repeats only part of each earlier year (the income and cash-flow statements of the two years before, the balance sheet of the one before, the opening balances of its equity statement three years back), and each such filing is stored as a vintage of the year holding just those figures. `AsOfReader.as_of_annual` returns the latest vintage filed on or before the date, whole. So as of 2026-01-01 MSFT's FY2016 is the FY2019 10-K's vintage (filed 2019-08-01), with no revenue or net income, where the FY2018 10-K (filed 2018-08-03) restated them to $91.154B and $20.539B. On a fresh offline collection of the 126 cached filers, as of 2026-12-31, 1,629 of 2,318 (ticker, year)s read no revenue that an earlier filing reported (net income 1,655, operating cash flow 1,664, diluted EPS 1,594, total assets 1,771): 104 of the years two before their filer's latest (the balance sheet) and 82 to 125 at each age from three to eighteen. The user's data alike: 1,627 of 2,312.
 Expected: as of a date, each figure as last filed on or before it (the README: fundamentals "as they were known on a given date"): MSFT FY2016 revenue $91.154B as of 2026-01-01.   Actual: None, and so the point-in-time ratios built on it.
 Impact: the as-of explorer, `/api/asof/...`, `AsOfReader` and `PointInTimeMetrics` (backtests); no valuation input (the valuation reads the annual record). The rest of VALID-10 holds: 7,711 vintages, one per (ticker, year, filing), none without a filing date; 23,097 as-of answers (each filing day and the days either side) are each the latest vintage filed on or before the day, none filed after it; MSFT FY2016 reads $85.32B until the FY2018 10-K, then $91.154B; the latest years' point-in-time ratios equal the stored ones (2,160 values) and a hand computation (AAPL, JPM and KO FY2024).
 
+Fix: `AsOfReader.as_of_annual` reads every vintage filed on or before the date and takes each figure from the latest one that holds it, so a figure the latest filing leaves out keeps the value last filed. The provenance stays the latest filing's, and `carried_from` names the filing of each figure last filed earlier (`{field: {accn, filed_date, form}}`); the as-of explorer shows that date beside the figure ("Revenue $91.15B (filed 2018-08-03)"), and the README's SQL example reads one figure that way. Six tests RED on 4f768b8 (the figures empty; `carried_from` absent), seven mutants each failing a test (`qa/evidence/iter78-bug110-{red,green,mutants}.txt`). On a fresh offline collection and a copy of the user's data, every as-of answer (23,097 and 23,079, each filing day and the days either side, 78 figures) equals an independent reading of the vintages, provenance and carried filings included, and as of 2026-12-31 no figure an earlier filing reported comes back empty (1,629 and 1,627 revenues before); point-in-time ROE exists for 2,074 of 2,318 years (436 before) and 94% of the ratios computed equal the stored ones (95.5% of far fewer before). Of the 73,531 carried figures 99.4% equal the annual record; the rest follow BUG-116's rule or BUG-085's errors (`iter78-bug110-realdata.txt`). Through stock-web on a copy of the user's data, MSFT FY2016 reads $85.32B as of 2017-01-01, $91.154B restated as of 2018-08-15, and $91.154B (filed 2018-08-03) as of 2026-01-01, with net margin 22.5% and ROE 24.7% (`iter78-bug110-e2e.txt`).
 ### BUG-111 [P2][VALID] A quarter derived from a falling year-to-date total is stored as a positive outflow: INTU's Q4 capex, GE's Q3 2013 acquisitions ($7.8B)
 Status: OPEN
 Found: iteration 77 via VALID-07 (`qa/evidence/iter77-{quality-sweep,falling-ytd}.txt`) | Fixed: — | Regression test: —
@@ -895,6 +897,12 @@ Status: OPEN
 Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: — | Regression test: —
 Repro: MO deducts both cost of sales and excise taxes on products (`OtherCostOfOperatingRevenue`) from net revenues to reach gross profit, and `cost_of_revenue` takes cost of sales alone, so revenue less cost of revenue overshoots MO's gross profit by the excise taxes ($3.574B FY2024, $3.140B FY2025) and the check fires for FY2021-25 (score 85).
 Expected: the identity holds where a filed cost line explains the gap (or excise taxes count in cost of revenue).   Actual: five LOW findings.
+
+### BUG-116 [P3][STORE] The as-of view and the annual record choose between filings by different rules: a later filing's fallback tag beats an earlier one's preferred tag
+Status: OPEN
+Found: iteration 78 while verifying BUG-110 (`qa/evidence/iter78-bug110-realdata.txt`) | Fixed: — | Regression test: —
+Repro: each vintage resolves its own tags, and the as-of view takes each figure from the latest filing that reports it, while the annual record takes the preferred tag first and the latest filing after. So as of 2026-12-31, on a fresh offline collection of the 126 cached filers, the two differ in 1,250 of the 95,407 figures both hold (823 the latest filing's own, as before BUG-110's fix; 427 carried from an earlier filing), 274 by more than 10% (11 of them BUG-085's): ALL's FY2020 claims reserve $1.028B (its FY2021 10-K) against $27.61B, AMGN's FY2010 long-term debt $13.36B against $10.87B, and total equity with the non-controlling interest (762 years, from the equity statements' opening balances) against the parent's. Either can be the better figure: ADI's FY2018 revenue of $6.225B is the FY2019 10-K's restatement, which the annual record passes over for the $6.201B first filed (BUG-062's mix).
+Expected: one rule for both (for instance each vintage figure stored with its tag, so the as-of view ranks as the annual record does).   Actual: as above.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

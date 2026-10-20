@@ -17,8 +17,11 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from src.exporters.sqlite_store import SQLiteStore
+from src.models.stock_data import StockData
 from src.query.asof import AsOfReader
 from src.query.pit_metrics import PointInTimeMetrics
+from src.webapp import create_app
 
 # Fixture constants derived from conftest.py web_db
 TICKER = "AAA"
@@ -265,3 +268,42 @@ def test_asof_vintages_fragment_returns_200(client: TestClient) -> None:
     # Both filed dates should appear in the table
     assert "2023-02-10" in html
     assert "2023-08-15" in html
+
+
+# ---------------------------------------------------------------------------
+# BUG-110: the figures a later filing leaves out
+# ---------------------------------------------------------------------------
+
+
+def _partial_refilings_client(tmp_path: Path) -> TestClient:
+    """MSFT FY2016, restated by the FY2018 10-K, then only its opening equity in the FY2019 10-K."""
+    def period(accn: str, filed: str, **figures: float) -> dict:
+        return {"fiscal_year": 2016, "accn": accn, "filed_date": filed, "period_end": "2016-06-30",
+                "form": "10-K", "calendar_year": 2016, **figures}
+    s = StockData(ticker="MSFT", cik="789019", company_name="Microsoft")
+    s.financials_annual_vintages = {"2016": {
+        "k18": period("k18", "2018-08-03", revenue=91.2e9, net_income=20.5e9),
+        "k19": period("k19", "2019-08-01", total_equity=83.1e9),
+    }}
+    db = tmp_path / "stock.db"
+    SQLiteStore(db_path=str(db)).export([s])
+    return TestClient(create_app(db_path=db))
+
+
+def test_annual_asof_returns_the_figures_a_later_filing_leaves_out(tmp_path: Path) -> None:
+    resp = _partial_refilings_client(tmp_path).get(
+        "/api/asof/MSFT/annual", params={"fiscal_year": 2016, "date": "2026-01-01"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert (data["revenue"], data["net_income"], data["total_equity"], data["accn"]) == (
+        91.2e9, 20.5e9, 83.1e9, "k19")
+    assert data["carried_from"]["revenue"] == {"accn": "k18", "filed_date": "2018-08-03", "form": "10-K"}
+
+
+def test_asof_result_fragment_dates_a_figure_last_filed_earlier(tmp_path: Path) -> None:
+    resp = _partial_refilings_client(tmp_path).get(
+        "/ui/asof/result", params={"ticker": "MSFT", "fiscal_year": 2016, "date": "2026-01-01"})
+    assert resp.status_code == 200
+    html = resp.text
+    assert "$91.20B" in html and "$20.50B" in html
+    assert "(filed 2018-08-03)" in html
