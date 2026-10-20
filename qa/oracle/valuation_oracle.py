@@ -152,6 +152,16 @@ def median(xs: List[float]) -> float:
     return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
 
 
+def ads_ratio(ratio: float) -> float:
+    """The ADS ratio a filed-to-Yahoo share-count ratio shows: a whole number n >= 2 of shares per ADS (or of ADSs
+    per share) within 5%, else 1."""
+    for candidate, per_ads in ((ratio, True), (1 / ratio, False)):
+        n = round(candidate)
+        if n >= 2 and abs(candidate / n - 1) <= 0.05:
+            return float(n) if per_ads else 1 / n
+    return 1.0
+
+
 class Inputs:
     """Raw-table lookups for one ticker."""
 
@@ -169,9 +179,10 @@ class Inputs:
         self.annual = db.execute("select fiscal_year, period_end, net_income, total_equity, shares_outstanding, "
                                  "weighted_avg_shares_diluted, eps_diluted from financials_annual where ticker=? "
                                  "order by fiscal_year", (ticker,)).fetchall()
-        row = db.execute("select filed_date from financials_annual where ticker=? and fiscal_year is not null "
+        row = db.execute("select filed_date, form from financials_annual where ticker=? and fiscal_year is not null "
                          "order by fiscal_year desc limit 1", (ticker,)).fetchone()
         self.last_filed = row[0] if row and row[0] else None
+        self.last_form = row[1] if row and row[1] else ""
         # Per-share values are compared with the latest price (VAL-07's upside), so they sit on that price's
         # basis (VAL-03 "same share basis", VAL-09 "per-share consistency" across a split). A split dated after
         # both the latest filing and the price's day (a quote failed since; BUG-048) is in neither: no year moves
@@ -209,7 +220,14 @@ class Inputs:
         latest_fy = next(((r[5] or r[4], r[1], self.filed_of(r[0], "weighted_avg_shares_diluted" if r[5]
                                                              else "shares_outstanding"))
                           for r in reversed(self.annual) if r[5] or r[4]), None)
+        self.ads_ratio = 1.0
         fy_today = self.to_current_basis(*latest_fy) if self.snap_shares and latest_fy else None
+        # A foreign issuer's filings count ordinary shares, while the price is per ADS and Yahoo counts
+        # ADS-equivalents (TSM: 25.93B ordinary, 5.186B ADS; BUG-065), so per-share values sit on the ADS basis
+        # (VAL-03's same share basis): a filed count within 5% of a whole multiple of Yahoo's gives the ratio.
+        if self.last_form[:4] in ("20-F", "40-F") and self.snap_shares and fy_today:
+            self.ads_ratio = ads_ratio(fy_today / self.snap_shares)
+            fy_today /= self.ads_ratio
         by_value = market_cap / self.price if market_cap and self.price else None
         if self.snap_shares and by_value and by_value > 1.02 * self.snap_shares and not (
                 fy_today and by_value < 1.05 * self.snap_shares
@@ -275,7 +293,7 @@ class Inputs:
         shares *= unrestated
         if factor != 1.0 and latest:
             shares = min((shares, shares * factor), key=lambda s: abs(math.log(s / latest)))
-        return shares / self.since_price
+        return shares / self.since_price / self.ads_ratio
 
     def last_10_fys(self, series: List[Tuple[int, float]]) -> List[Tuple[int, float]]:
         """The spec's "<= 10-FY CAGR windows": the values of the last 10 fiscal years the filings cover. A year
