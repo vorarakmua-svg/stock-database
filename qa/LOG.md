@@ -1788,3 +1788,22 @@ Commit: (this commit) fix(parsers): a debt total gives way where current debt ho
 Next: record code review 14 (its claims re-run first: I1 a factor refresh's DDM without the payments since the
 collection, I2 note cash components ahead of the restricted total, M1-M6); then the P2s oldest first: BUG-029,
 BUG-142, BUG-149, BUG-150, BUG-151, BUG-159. Fixes since review 14's range (16f3005): 2.
+
+## Iteration 99: 2026-10-21 01:03: review
+Picked: code review 14's record (ef7cc76..16f3005, reported in iteration 98), before the next fix. CI: f2271db ✓.
+Did: re-ran its claims at f2271db (a git archive) with its own scripts on fresh copies: the refresh scenarios after a
+payment (GE-like DDM 252.46 against 337.97, SCCO-like -51.54% against -47.94%) and on the user's copy with f2271db's
+valuations (SCCO's DDM $53.63 against $68.16, HON's median $59.85 against $74.75); PG's, BRK-B's and AXP's cash
+components and the reordered tag's effect (exactly 11 years, 49 quarters, PG's FY2025 net debt $30.32B to $29.06B);
+the five surviving mutants, each through the whole suite (1,183 passed) and three on real output (DDM 418.38 and the
+band 983.37 unrebased; the quarterly filter, which since BUG-141 also undoes 155 quarterly long-term debt cells); the
+locked refresh, the screener's units, the stale unmapped row, diagnose's dollars, the docstring, BUG-134's 74 cells
+(66 and 8) and the as-of cash (2 to 6). Every claim holds; no P0 or P1. One baseline differed: the user's stored
+valuations are 2026-08-04's code, so KO's and GE's DDM matched review 14 only after recomputing with f2271db's engine.
+Evidence: `qa/evidence/iter99-review14-rerun.txt`, `review14-report.md`
+Result: BUG-160, BUG-161 (P2: I1, I2) and BUG-162 to BUG-167 (P3: M1 to M6) opened; notes on BUG-128 (I1), BUG-134,
+BUG-139 and BUG-116 (M6). GATHER-13 PASS→FAIL→BUG-160; VALID-01's note adds BUG-161.
+Gates: ruff ✓ mypy ✓ pytest 1183 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) chore(qa): record code review 14
+Next: the P2s oldest first: BUG-029, BUG-142, BUG-149, BUG-150, BUG-151, BUG-159, BUG-160, BUG-161. Fixes since review
+14's range (16f3005): 2 (BUG-140, BUG-141); review 15 after three more.
