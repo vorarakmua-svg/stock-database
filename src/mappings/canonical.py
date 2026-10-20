@@ -210,7 +210,14 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "long_term_debt", "Long-Term Debt", BALANCE, UNIT_USD, INSTANT,
-        ("LongTermDebtNoncurrent", "LongTermDebt"),
+        # The noncurrent figure or the total, as most filers tag it; then the noncurrent tags of
+        # those who file neither (with finance leases, notes, unsecured or convertible debt: VZ,
+        # ORCL, GS, NOW), and last the notes payable in total (O) (BUG-125). Not
+        # DebtInstrumentCarryingAmount: often one instrument's, on days with no balance sheet
+        # (SLB's $0.5B note at 2020-12-31).
+        ("LongTermDebtNoncurrent", "LongTermDebt", "LongTermDebtAndCapitalLeaseObligations",
+         "LongTermNotesPayable", "UnsecuredLongTermDebt", "ConvertibleLongTermNotesPayable",
+         "NotesPayable"),
     ),
     CanonicalField(
         "short_term_debt", "Short-Term Debt", BALANCE, UNIT_USD, INSTANT,

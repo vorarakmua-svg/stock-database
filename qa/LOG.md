@@ -1580,3 +1580,18 @@ corrections on BUG-111 and BUG-117. VALID-06 FAIL→BUG-127, GATHER-13 PASS→FA
 Gates: ruff ✓ mypy ✓ pytest 1131 passed, 1 skipped (1 known warning) | CI: pending for this push
 Commit: (this commit) chore(qa): record code review 12
 Next: BUG-125 (P1), then BUG-126, BUG-127, BUG-128 (P2). Fixes since review 12's range (f87638f): 2.
+
+## Iteration 86: 2026-10-20 21:13: fix
+Picked: BUG-125, the only open P1. CI: d56405a ✓.
+Did: measured the candidate tags first (their meaning, current or noncurrent, and their days against the balance
+sheets), then TDD (seven tests RED, one guard): `long_term_debt` reads after its two tags the noncurrent ones of
+filers who file neither, and last the notes payable total; `DebtInstrumentCarryingAmount` left out (one instrument's,
+on odd days: it made debt-only quarters that cost BSX and HWM seven trailing years). Five mutants, each failing a
+test. Real data: debt filled in 335 years, 1,587 quarters, 1,500 trailing years, 728 vintages, nothing else moved;
+VZ's debt/EBITDA 0.39 to 3.32, ORCL's ROIC 88% to 12%; total debt within 25% of Yahoo's for 65 of 109 (52); 20 of the
+22 fixed, the rest opened as BUG-133 (P3). stock-web reads VZ's $139.53B.
+Evidence: `qa/evidence/iter86-bug125-{red,green,mutants,realdata,e2e}.txt`
+Result: BUG-125 VERIFIED; VALID-01 FAIL→BUG-119, MATCH-03 FAIL→BUG-126; BUG-133 opened (P3). No P0 or P1 open.
+Gates: ruff ✓ mypy ✓ pytest 1138 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): long-term debt is read from the tags filers use
+Next: BUG-126 (P2, the oldest), then BUG-127, BUG-128. Fixes since review 12's range (f87638f): 3.

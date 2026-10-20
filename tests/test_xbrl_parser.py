@@ -232,6 +232,38 @@ def test_a_lone_first_quarter_figure_makes_no_quarter_of_its_own():
     assert "2026-04-04" not in XBRLParser().extract_quarterly_financials(facts)
 
 
+def _year_end_debt(**tagged):
+    """A 2025 balance sheet holding the given debt tags (tag=value), and its long-term debt as (value, tag)."""
+    facts = {"facts": {"us-gaap": {
+        tag: {"units": {"USD": [usd(val, None, "2025-12-31", fy=2025, fp="FY", form="10-K", filed="2026-02-12")]}}
+        for tag, val in tagged.items()}}}
+    year = XBRLParser().extract_annual_financials(facts).get("2025", {})
+    return year.get("long_term_debt"), year.get("_source_tags", {}).get("long_term_debt")
+
+
+@pytest.mark.parametrize("tag", ["LongTermDebtAndCapitalLeaseObligations", "LongTermNotesPayable",
+                                 "UnsecuredLongTermDebt", "ConvertibleLongTermNotesPayable", "NotesPayable"])
+def test_long_term_debt_is_read_from_the_tag_the_filer_uses(tag):
+    # BUG-125: long-term debt read LongTermDebtNoncurrent and LongTermDebt only, and 22 companies file it otherwise
+    # (VZ's $139.5B under LongTermDebtAndCapitalLeaseObligations, ORCL's $122.3B under LongTermNotesPayable), so
+    # their net debt, debt/EBITDA, ROIC and EV were wrong: ORCL's ROIC read 88%.
+    assert _year_end_debt(**{tag: 139.5e9}) == (139.5e9, tag)
+
+
+def test_the_noncurrent_tags_win_beside_the_fallbacks():
+    # The current portion is short-term debt's: the noncurrent figure before a fallback, a total last.
+    assert _year_end_debt(LongTermDebtNoncurrent=100.0e9, LongTermDebtAndCapitalLeaseObligations=103.0e9) == (
+        100.0e9, "LongTermDebtNoncurrent")
+    assert _year_end_debt(LongTermDebtAndCapitalLeaseObligations=60.5e9, NotesPayable=63.7e9) == (
+        60.5e9, "LongTermDebtAndCapitalLeaseObligations")
+
+
+def test_an_instruments_carrying_amount_is_not_the_years_debt():
+    # DebtInstrumentCarryingAmount is often one instrument's, on days with no balance sheet: SLB's $0.5B note at
+    # 2020-12-31 beside some $16B of debt, BSX's and HWM's debt-only quarters that cost them seven trailing years.
+    assert _year_end_debt(DebtInstrumentCarryingAmount=0.5e9) == (None, None)
+
+
 def _outflow_quarters(tag, field, values, start="2008-01-01", ends=("2008-03-31", "2008-06-30", "2008-09-30",
                                                                   "2008-12-31")):
     """An outflow's year-to-date ladder (three 10-Qs, then the 10-K's year), and its derived quarters."""
