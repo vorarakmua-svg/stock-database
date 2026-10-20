@@ -1341,3 +1341,25 @@ Gates: ruff ✓ mypy ✓ pytest 1077 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(parsers): a year's revenue is its total, not a part of it
 Next: record code review 10 (C1, a proposed P1, then I1 and I2, P2s), re-running each claim first; then the
 highest-severity open bug (C1 if confirmed, else BUG-100). Fixes since review 10's range: 2.
+
+## Iteration 71: 2026-10-20 15:55: review
+Picked: recording code review 10 (f0690bc..8c34a86), which reported during iteration 70 with a proposed P1 (section
+4.6: valid findings become bugs; each claim re-run first). CI: 679a35d running at the start.
+Did: read the reviewer's scripts and the code each finding names, then re-ran every claim on an archive of 679a35d
+with the review's own scripts (copies of the user's data made with the backup API, the network blocked). Since
+8c34a86 only the parser, the TTM step and the canonical mapping changed. All hold: C1 (after a collection whose
+quote failed, or all of whose Yahoo requests did, a refresh shows +411.2% and "cheap" where a backfill gives -48.6%;
+in the second case the backfill stays wrong too), I1 (only the dividend request failing: Graham 634.76 and Lynch
+346.50 against 63.48 and 34.65, +221.8% cheap), I2 (KO's rebuilt FY-end prices 12.80% to 0.66% low, the band 2.48%),
+M1 (16 rungs at 4 filers; GOOGL's counts 664.7M, 13,242M, 658.8M, 13,078M), M2 (SCCO's, HON's and SPGI's refreshes
+refused as splits), M3, M4 (BX's and CEG's dropped counts stay after a re-collection), M5, M6 (see BUG-081) and M7.
+Evidence: `qa/evidence/review10-report.md`, `qa/evidence/iter71-review10-rerun.txt`
+Result: new BUG-102 (P1, C1), BUG-103 and BUG-104 (P2, I1 and I2), BUG-106 (P2, M2), BUG-105, BUG-107, BUG-108 and
+BUG-109 (P3: M1, M3, M5, M7); M4 added to BUG-029 and M6 to BUG-081; lead L25 (pandas 2.1). GATHER-13 → FAIL→BUG-102
+(it was PASS), GATHER-06 → FAIL→BUG-103, VAL-05 → FAIL→BUG-104 (it was PASS); VALID-06's notes take BUG-105.
+Gates: ruff ✓ mypy ✓ pytest 1077 passed, 1 skipped (1 known warning); no code changed | CI: pending for this push
+Commit: (this commit) chore(qa): record code review 10; a refresh after a failed-quote collection, and splits a
+failed dividend request drops
+Next: BUG-102 (P1) at once. Until it's fixed: after a company splits, if a collection warns "quote unavailable",
+collect it in full again rather than refreshing its quote. Then the P2s, oldest first: BUG-100, BUG-103, BUG-104,
+BUG-106. Fixes since review 10's range: 2.

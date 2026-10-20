@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 43 · NEEDS-USER 12 · Verified: 54
+**Open:** P0 0 · P1 1 · P2 4 · P3 47 · NEEDS-USER 12 · Verified: 54
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -262,6 +262,7 @@ Found: iteration 23 by code review 3 (verified there) | Fixed: — | Regression 
 Repro: after BUG-013, a re-parse leaves DIS FY2024–25 dividends per share (and AMGN 2011–15, AMT, ABBV, DELL, 21 zero impairments) empty, but `_canonical_values` upserts only the keys present, so `financials_annual` and the vintages keep the old values. The JSON and financial_history.csv do clear them.
 Expected: a canonical column absent from a re-parsed period is written as NULL (or the limitation is documented).
 
+Code review 10 (M4), re-run in iteration 71: after re-collecting the user's copy offline with 679a35d, the counts BUG-092's fix leaves empty stay as stored: BX's 2017-12-31 diluted count -533.8M, CEG's 2021 quarters' diluted and basic counts 0, and CEG's 2021-12-31 TTM counts 0, where a fresh collection has the rows and no value (`qa/evidence/iter71-review10-rerun.txt`).
 ### BUG-030 [P3][STORE] After a failed run, the JSON files old price statistics under the failed run's time
 Status: OPEN
 Found: iteration 23 by code review 3 (moved out of BUG-018 in iteration 24) | Fixed: — | Regression test: —
@@ -649,6 +650,7 @@ Expected: each fix's rule held by a test.   Actual: these rules are held by none
 Impact today: none; the next change to these rules can break them unseen.
 
 Code review 9 (M5), re-run in iteration 63 on 51091ce, each mutant in a fresh archive with the whole suite (1037 passed each; `qa/evidence/iter63-review9-rerun.txt`): nine more survive. BUG-083's re-check under the lock and its `BEGIN IMMEDIATE` (review 9: without either, the second of two concurrent first runs fails, 3 of 3), and its `except BaseException` (equivalent in practice); `unpriced` with `>=` (no test has a split on the price's day) and counting simple ratios only (none has a spin-off factor after it); BUG-076's ADS count without the split factor (a 1:1 20-F filer with a 4:1 split after its 20-F would read 0.25: Graham 4.63 and Lynch 3.98 against 18.52 and 15.92) and its 1:1 band widened to [0.7, 1.43]; BUG-074's own figures used for flows too (a design choice review 9 left alone) and the basic count summed in TTM (the test sets only the diluted one).
+Code review 10 (M6), re-run in iteration 71: 13 of its 46 mutants of iterations 62-67's fixes survive the whole suite on 679a35d too (1077 passed each): m94_divide_inclusive, m94_simple_ratios_only, m94_info_none_unguarded, m84_served_any_bar, m93_no_bar_fallback, m82_year_basis_latest_rung, m82_own_no_level, m82_range_from_1_2, m92_wide_band, m92_derived_zero_kept, m92_basic_vs_diluted_eps, m92_own_nonpositive, m92_checked_tolerance_50pct. By the review's impact runs (its `survivor_impact.txt`, not re-run), four aren't equivalent: `info = stock.info` without `or {}` (under yfinance 1.0's failure, raising once and then None, the split is dropped: multiples 98.34 against 983.37), the year basis taken from the latest rung (BKNG's FY2025 Q2 EPS 27.38 becomes 1.0952), own 3-month counts kept without their split level (2,220 TTM cells in 28 tickers change, LRCX's 1.286B to 9.994B) and basic counts checked against diluted EPS (BRK-B's basic counts back to x10^6); seven are equivalent on the copies but untested, and two equivalent (`qa/evidence/iter71-review10-rerun.txt`).
 ### BUG-082 [P2][VALID] The quarterly ladder mixes split bases: a split restates the annual figures but not the quarters filed before it
 Status: VERIFIED (iteration 62)
 Found: iteration 56, checking BUG-074's remaining misses (`qa/evidence/iter56-bug082-repro.txt`) | Fixed: iteration 62 (see LOG) | Regression tests: `tests/test_xbrl_parser.py::test_a_years_quarters_are_on_the_split_basis_its_year_is_filed_on`, `::test_a_quarters_share_counts_are_on_its_years_basis`, `::test_a_ratio_one_count_alone_shows_is_no_split`, `::test_a_reverse_mergers_restated_history_is_no_split`, `tests/test_ttm.py::test_a_trailing_year_across_a_split_is_on_its_latest_quarters_basis`, `tests/test_fetcher_concurrency.py::test_a_collected_quarterly_record_and_its_trailing_years_sit_on_one_split_basis`
@@ -793,6 +795,64 @@ Found: iteration 69 via VALID-08 (`qa/evidence/iter69-bankfields.txt`) | Fixed: 
 Repro: `sector_metrics.bank_metrics` divides noninterest expense by net interest income + noninterest income. SCHW files no `NoninterestIncome`, so its efficiency ratio is empty for FY2023-25, although its revenue is its total net revenue ($23.92B for FY2025, as at the banks that file both, where revenue is their sum within 0.5%: BAC, C, COF, GS, JPM, MS, USB, WFC) and its noninterest expense is filed ($12.46B).
 Expected: 52.1% for FY2025 (noninterest expense / net revenue).   Actual: NULL.
 
+### BUG-102 [P1][VAL] BUG-093's refusal misses a split after a collection whose quote failed, or all of whose Yahoo requests did: the refresh puts the new price beside old-basis valuations
+Status: OPEN
+Found: iteration 70 by code review 10 (C1), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: — | Regression test: —
+Repro: review 9's fake market (a 10:1 split on 2026-06-12) through the real fetcher, store, engine and the app's `POST /api/stocks/FILER/refresh-quote` (`review10/scripts/scen.py <root> <work> refresh_after_failed_quote`, `_raises`, `_all_fail`). Run 1 (06-01) works. Run 2 (10-01), after the split: (a) its quote fails (empty or raising) and its chart works, so the split and the post-split dividends and bars are stored while the price stays 1008.86 and the valuations stay on its basis; (b) every Yahoo request fails, so nothing of Yahoo's is stored, yet the run row carries `yahoo_finance`. A refresh on 10-02 then saves 103.00.
+Expected: one basis, as BUG-093's: the refresh refused, or saved and the ticker revalued; the control, a backfill after (a), gives a median of 52.91, -48.6%, expensive.   Actual: the job reports success, and the API and the VAL tab read "Median fair value $526.57 | Price $103.00 | Upside 411.2%", cheap; in (b) even a backfill stays at +376.4%, cheap, since the split never reaches `split_events`.
+Root cause: `SQLiteStore.splits_since_collection` (`src/exporters/sqlite_store.py:766`) never refuses a split already in `split_events`, and dates the last collection with Yahoo by the last run row whose sources name it, which `StockData.merge_yahoo_data` (`src/models/stock_data.py:289`) adds to every fetch without a top-level error, however many of its requests failed. The stored valuations are on the basis of the latest priced snapshot, not of the last run.
+Impact today: none in the user's copy; any split after a ticker's last collection, then a collection whose quote (or every Yahoo request) fails, then a refresh, which that run's own warning ("quote unavailable; the stored price wasn't refreshed") invites. Graded P1, as BUG-093, whose refusal it gets past.
+
+### BUG-103 [P2][VAL] A run whose dividend request fails drops its splits, though its quote and bars are on the new basis: Graham and Lynch ten times their value
+Status: OPEN
+Found: iteration 70 by code review 10 (I1), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: — | Regression test: —
+Repro: the same market, run 2 (10-01) with only the dividends' chart request failing (`scen.py ... combo:dividends_fail`, `dividends_fail_then_ok`): the quote (102.98) and the bars are post-split, but `fetch_all` empties the splits, so nothing records the 10:1 split and the filed per-share figures stay pre-split beside the post-split price.
+Expected: the filed figures and Yahoo's series on the price's basis: Graham 63.48, Lynch 34.65, multiples 98.34 (run 3, everything working, gives a median of 52.91, -48.7%).   Actual: Graham 634.76, Lynch 346.50, median 331.42, +221.8%, cheap. With the bars failing too: multiples 983.37, median 490.63, +376.4%, cheap; with the quote failing instead, multiples 98.34 against 983.37 on the old price's basis (median 382.44, -62.1%). Only all three failing reads right.
+Root cause: BUG-094's fix (`src/fetchers/yahoo_handler.py:97`) drops the splits whenever the dividend history fails, which only helps when the quote failed too. In yfinance 1.0 a failed chart request isn't cached, so `Ticker.splits` asks again and can succeed (code review 10's `yf_retry.txt`).
+Impact today: none in the copy; a split between two runs where the second's dividend request alone fails. A regression of 8c34a86 in the case where the quote and bars work (f0690bc read Graham 63.48 there). Graded P2, as BUG-094.
+
+### BUG-104 [P2][VAL] After a split whose run's bar request failed, the market-close rebuild divides post-split dividends by pre-split closes: FY-end prices up to 12.8% low
+Status: OPEN
+Found: iteration 70 by code review 10 (I2), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `review10/scripts/rebuild_after_split.py` and `rebuild_after_split_values.py` on fresh copies of the user's data (from before the dividend-adjusted flag, so every bar is Yahoo's adjusted close): KO splits 2:1 on 2026-09-15, and a later run stores the split and its dividends rewritten on the new basis while its bar request fails (the bars end 2026-08-04, before the split); its quote works or fails.
+Expected: the FY-end market closes on the price's basis (halved with the quote, unchanged without it), within VAL's 0.5%.   Actual: FY2016-25 rebuilt 12.80% to 0.66% low either way (FY2021 27.766 against 29.605 with the quote, 55.532 against 59.21 without), and the multiples value 2.48% low (37.515 against 38.470; 75.03 against 76.939). The DDM's -24.52% in the quote case is the simulation's: it adds no September payment.
+Root cause: `_yahoo_dividend_factors` (`src/valuation/inputs.py:403`) solves each factor as 1 / (1 + amount x later / close), the amount on the post-split basis and the close on the bars' pre-split one, so each dividend counts at 1/ratio of its size; `bars_to_price` is applied after.
+Impact today: transitional: bars stored before BUG-075's fix (all of the user's, until each ticker is re-collected), a split after them, and a later run whose bar request fails; dividend payers only.
+
+### BUG-105 [P3][VALID] BUG-082 reads unrestated post-split figures as restated, and misses GOOGL's split
+Status: OPEN
+Found: iteration 70 by code review 10 (M1), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `review10/scripts/stale_after_split.py` over the cached filers: of the 28 whose splits the parser detects, 4 have 16 chosen quarterly rungs filed after a split that repeat an earlier filing's old-basis value. ISRG's FY2021 10-K tags the 2020 quarters' EPS at the old values (diluted 2.62, 0.57, 2.60, 3.02), HWM's 2016-18 filings its 2014-16 dividends a share, SBUX's and C's one cent either way. On 8c34a86 (code review 10) ISRG's Q1 2020 EPS reads 2.62 beside 359.4M shares (net income / count gives 0.87) and its Q2 -1.557 on +$68M of net income, and HWM's dividends a share -0.15 (Q4 2014) and -0.06 (Q3 2015). GOOGL's 20:1 split has one restated count pair (and 7 diluted EPS pairs), so the two-count rule misses it: its quarter-end counts read 664.7M, 13,242M, 658.8M, 13,078M (a fresh offline collection with 679a35d). Converting a rung across a split also multiplies the later filing's rounding (BKNG's Q1 2025 EPS 10.00 against the filed 10.07).
+Expected: a figure filed after a split that repeats an earlier filing's value for the same period is on the old basis; restated EPS pairs count toward detection.   Actual: as above.
+Impact today: the next collection's quarterly and TTM rows (statements tab, API, exports); no valuation.
+
+### BUG-106 [P2][UI] A quote refresh is refused for a stock dividend or a spin-off factor, called a split: SCCO's after nearly every quarter
+Status: OPEN
+Found: iteration 70 by code review 10 (M2), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `review10/scripts/stock_dividend_refusal.py` on a fresh copy of the user's data with the real job manager: a new factor after the copy's last collection (2026-08-04) for SCCO (its quarterly stock dividend, 1.01; seven since 2024-08 in the copy), HON (a spin-off, 0.9535) and SPGI (1.057). All three refreshes are refused: "Yahoo shows a 1.01-for-1 split on 2026-08-14 since the last full collection ...", "a 1-for-1.04877 split", "a 1.057-for-1 split".
+Expected: only a factor that moves the stored per-share figures (the parser applies simple ratios of 3:2 or more) is refused, and any other is named for what it is.   Actual: every factor but 1.0 is refused as a split.
+Root cause: `splits_since_collection` takes every ratio but 1.0; `_split_since_collection` (`src/webapp/jobs.py:48`) words each as a split.
+Impact today: SCCO's refreshes refused once its next stock dividend is out, nearly every quarter; HON's and SPGI's around their spin-offs. Graded P2 (a feature degraded for some tickers, with a misleading reason); code review 10 proposed P3.
+
+### BUG-107 [P3][GATHER] yfinance 1.0's failures read as empty histories: an outage says "No dividend history (non-dividend paying stock)" without a warning
+Status: OPEN
+Found: iteration 70 by code review 10 (M3), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `review10/scripts/yf_silent_failure.py <root> <cache> cold|warm`, the installed yfinance with every request failing: with a cold timezone cache KO gets the price-history warning and JNJ and PG only "quote unavailable", and all three read "No dividend history (non-dividend paying stock)" with no dividend warning; with a warm cache all three warnings fire.
+Expected: a failed request is a warning however yfinance reports it (for instance an empty history for a ticker with stored bars or dividends).   Actual: as above.
+Root cause: `_get_dividend_history` (`src/fetchers/yahoo_handler.py:697`) and `_price_bars_and_error` (`:818`) read an empty frame as no history.
+
+### BUG-108 [P3][GATHER] A quote refresh downloads the whole daily price history to read the splits
+Status: OPEN
+Found: iteration 70 by code review 10 (M5), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `review10/scripts/quote_requests.py`: `fetch_quote` makes two requests, the quote's and a chart from 1927-11-15 (`period1=-1329577857`) to now with dividends and splits, for `_get_splits` (`src/fetchers/yahoo_handler.py:883`), which BUG-093's fix added.
+Expected: the splits since the last collection, a short window.   Actual: the whole history for every refreshed ticker (the payload is unmeasured offline).
+
+### BUG-109 [P3][CODE] The oracle's split and dividend basis rules are the code's own, so it passes a run whose split was never stored
+Status: OPEN
+Found: iteration 70 by code review 10 (M7), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `qa/oracle/valuation_oracle.py`'s `bars_to_price_basis` (`:368`) and its dividend cutoff (`:389-403`) are the rules of `src/valuation/inputs.py:386-405` and `:603-611`, reading the same `split_events`: code review 10's oracle run passes BUG-103's database (0 rows beyond 0.5%) with Graham ten times its value. (Their commits, 27ce753 and db4820b, said why section 7's probe didn't apply, and checked the premise on real data.)
+Expected: a check of the stored series' basis the code doesn't share: the stored bar on the price's day against the snapshot price, within 0.07% on every real and golden ticker (code review 10's `bars_basis_probe.txt`).   Actual: none.
+
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
@@ -865,3 +925,4 @@ Options: (a) a bank also needs deposits on its balance sheet, otherwise it is va
 - L22 [STORE/VALID] The as-of view returns None for a figure a year's later filing doesn't repeat: STX's FY2022 dividend a share as of 2025-08-01 and BAC's FY2008 total assets as of 2012-02-23, where the annual record keeps 2.77 and 1.818T. Check whether a later vintage's partial view of a year should hide what earlier filings reported (VALID-10, STORE-05). (iter 63)
 - L23 [VALID] 19 quarterly revenues are negative after BUG-099's fix (29 before), and 13 trailing years' gross profit: BX's and KKR's are real investment losses; the rest look like a restated rung less one as first filed (COP 2011-06-30 -$22.1B, RTX 2018-12-31 -$13.8B, GE 2022-12-31 -$12.1B, ABT 2011-12-31 -$7.1B, HWM 2014-15 and 2018-19, WDC 2023-24, DHR 2014-12-31, SPGI 2010-11, APP 2023-12-31) and PM's Q4 2016 (-$29.1B), its year net of excise taxes less nine months including them. Confirm and file (iteration 70, `qa/evidence/iter70-bug099-impact.txt`); L19 may share the cause.
 - L24 [OPS] `qa/oracle/sec_oracle.py`, the independent parse of SEC companyfacts that LOOP_PROMPT section 7 and `qa/GOLDEN.md` describe, was never written (it has no git history), so section 9's "both oracles" can't be met yet: build it (json, not `src.parsers`) before the convergence sweeps. (iteration 70)
+- L25 [PKG] `requirements.txt` and `pyproject.toml` allow pandas>=2.1.0, but `src/fetchers/yahoo_handler.py:498` and `:747` resample by 'YE', an alias pandas 2.2 added; on 2.1 every dividend history would fail, and by BUG-094's rule drop its run's splits (code review 10, unverified: only pandas 2.2.3 is installed). Confirm in a pandas 2.1 environment, or raise the floor. (iteration 71)
