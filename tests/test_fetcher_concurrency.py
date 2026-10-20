@@ -379,3 +379,15 @@ def test_the_stored_sector_is_found_under_any_folder_name(tmp_path, monkeypatch,
     fetcher.sqlite_store.export([StockData(ticker="RIT", cik="0001045609", sector_class="reit")])
     assert fetcher.fetch_ticker("RIT", include_yahoo=False).sector_class == "reit"
 
+
+def test_a_record_that_stops_where_ifrs_reports_begin_is_a_warning(tmp_path, monkeypatch):
+    # BUG-066: the record was kept, and valued, as if current.
+    from tests.test_xbrl_parser import _switcher_facts
+
+    stock = _collect_from_sec(tmp_path, monkeypatch, {
+        "cik": "0001046179", "ticker": "TSM", "source": "sec_edgar", "company_facts": _switcher_facts(),
+        "submissions": {"name": "TAIWAN SEMICONDUCTOR MANUFACTURING CO LTD", "filings": []}})
+    assert sorted(stock.financials_annual) == ["2015", "2016", "2017", "2018", "2019"]
+    assert ("SEC EDGAR: annual financials stop at FY2019 for TSM: later annual reports are in IFRS (20-F), which "
+            "isn't mapped") in stock.warnings
+

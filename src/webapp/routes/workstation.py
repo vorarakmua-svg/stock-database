@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from ...fetchers.stock_data_fetcher import NO_ANNUAL_FINANCIALS
+from ...fetchers.stock_data_fetcher import NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS
 from ...valuation.assumptions import DISCOUNT_SPREAD, GROWTH_CAP
 from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
 from ...valuation.models import ValuationResult, dcf_per_share
@@ -373,8 +373,10 @@ def gp_fragment(
 
 
 def _sec_gap_note(r: Reader, ticker: str) -> Optional[str]:
-    """Why the latest collection got no annual financials from SEC, if it said."""
-    return next((w for w in r.latest_run_warnings(ticker) if w.startswith(NO_ANNUAL_FINANCIALS)), None)
+    """Why the latest collection got no annual financials from SEC, or why they stop
+    years ago (BUG-066), if it said."""
+    return next((w for w in r.latest_run_warnings(ticker)
+                 if w.startswith((NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS))), None)
 
 
 @router.get("/ui/stocks/{ticker}/fa", response_class=HTMLResponse)

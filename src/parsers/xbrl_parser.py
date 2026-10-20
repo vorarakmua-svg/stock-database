@@ -158,6 +158,23 @@ def explain_no_annual_financials(facts: Optional[Dict[str, Any]],
     return "its annual-report facts give no full fiscal year of a mapped concept"
 
 
+def explain_stale_annual_financials(facts: Optional[Dict[str, Any]],
+                                    latest_period_end: Optional[str]) -> Optional[str]:
+    """Why a filer's annual record stops at the period ending *latest_period_end*,
+    when its later annual reports are in IFRS (a US-GAAP 20-F filer like TSM, or a
+    10-K filer, that moved to IFRS): the record otherwise reads as current. None when
+    no annual report in IFRS covers a later period (comparatives don't count)."""
+    if not latest_period_end:
+        return None
+    ifrs = (facts or {}).get("facts", {}).get("ifrs-full", {})
+    later = sorted({entry["form"] for tag in ifrs.values() for unit in tag.get("units", {}).values()
+                    for entry in unit
+                    if entry.get("form") in _ANNUAL_FORMS and str(entry.get("end") or "") > latest_period_end})
+    if not later:
+        return None
+    return f"later annual reports are in IFRS ({', '.join(later)}), which isn't mapped"
+
+
 class XBRLParser:
     """
     Parser for XBRL financial data from SEC EDGAR Company Facts API.

@@ -904,3 +904,14 @@ def test_the_tabs_render_on_a_database_from_before_runs_kept_warnings(tmp_path):
         assert resp.status_code == 200, tab
         assert "no annual financials" not in resp.text, tab
 
+
+def test_the_fa_and_val_tabs_say_when_annual_financials_stop(tmp_path):
+    # BUG-066: a record that stops where IFRS reports begin read like a current one.
+    from markupsafe import escape
+
+    note = ("SEC EDGAR: annual financials stop at FY2019 for TSM: later annual reports are in IFRS (20-F), which "
+            "isn't mapped")
+    client = _client_for(_db_after_a_run_with(tmp_path, [note]))
+    for tab in ("fa", "val"):
+        assert str(escape(note)) in client.get(f"/ui/stocks/TSM/{tab}").text, tab
+

@@ -1059,3 +1059,19 @@ Gates: ruff ✓ mypy ✓ pytest 1004 passed, 1 skipped ('?' on Windows; 1 known 
 Commit: (this commit) fix(store): read-only connections open a database under any folder name
 Next: the P2s, oldest first: BUG-066, BUG-074, BUG-076, BUG-077, BUG-078. Fixes since review 7's range: 4
 (2964555, 69c5a7e, a80b143, this); code review 8 after the next fix.
+
+## Iteration 55: 2026-10-20 10:03: fix
+Picked: BUG-066, the oldest open P2 (no P0 or P1 open). CI: 57218f1 ✓.
+Did: TDD (4 tests RED: the explainer missing, so the fetcher test failed too, and the tabs without the note; run file
+by file, since the parser test file's import error hid the rest): `explain_stale_annual_financials` reads ifrs-full
+annual-report facts for periods after the record's last one, the run records "annual financials stop at FY... :
+later annual reports are in IFRS (...)", and the FA and VAL tabs show it beside the empty-record note. Five mutants
+each fail a test. No cached filer gets it (TSM, the only one with IFRS facts, has no US-GAAP record). End to end:
+ARM's real facts cut after the FY2024 20-F, the rest moved to ifrs-full, through the fetcher offline, the store, the
+valuation and the web app in-process: FY2021-24 kept, the note recorded, both tabs showing it.
+Evidence: `qa/evidence/iter55-bug066-{red,green,mutants,impact,e2e}.txt`
+Result: BUG-066 VERIFIED; GATHER-02 → FAIL→BUG-076.
+Gates: ruff ✓ mypy ✓ pytest 1009 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(gather): a record that stops where IFRS reports begin says so
+Next: code review 8 (five fixes since review 7's range: 2964555, 69c5a7e, a80b143, 57218f1, this), dispatched in the
+background after this push; then BUG-074, BUG-076, BUG-077, BUG-078 (P2).

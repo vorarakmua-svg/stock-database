@@ -20,7 +20,7 @@ from ..parsers.derived_fields import apply_derivations
 from ..parsers.share_scale import normalize_share_scale
 from ..parsers.ttm import compute_ttm
 from ..parsers.unmapped import detect_unmapped
-from ..parsers.xbrl_parser import XBRLParser, explain_no_annual_financials
+from ..parsers.xbrl_parser import XBRLParser, explain_no_annual_financials, explain_stale_annual_financials
 from ..validation.integrity import (
     check_cashflow_reconciliation,
     check_dividend_completeness,
@@ -35,6 +35,8 @@ from .yahoo_handler import YahooHandler
 
 #: How the run's warning for a filer whose SEC data gave no annual financials begins.
 NO_ANNUAL_FINANCIALS = "SEC EDGAR: no annual financials"
+#: How it begins for a record that stops where the filer's IFRS reports begin.
+STALE_ANNUAL_FINANCIALS = "SEC EDGAR: annual financials stop"
 
 
 class StockDataFetcher:
@@ -177,6 +179,13 @@ class StockDataFetcher:
                 # An empty record otherwise reads like a short history: say why.
                 if sec_data.get("cik") and not annual:
                     stock.add_warning(self._no_annual_financials(ticker, sec_data))
+                elif annual:
+                    # And one that stops where IFRS reports begin reads as current (BUG-066).
+                    latest = max(annual, key=int)
+                    stale = explain_stale_annual_financials(sec_data.get("company_facts"),
+                                                            annual[latest].get("period_end"))
+                    if stale:
+                        stock.add_warning(f"{STALE_ANNUAL_FINANCIALS} at FY{latest} for {ticker}: {stale}")
 
                 # Get insider transactions
                 if stock.cik:

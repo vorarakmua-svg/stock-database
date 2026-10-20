@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.parsers.xbrl_parser import XBRLParser, explain_no_annual_financials
+from src.parsers.xbrl_parser import XBRLParser, explain_no_annual_financials, explain_stale_annual_financials
 from tests.conftest import usd
 
 
@@ -428,4 +428,32 @@ def test_a_year_end_balance_comes_from_the_restored_year():
         2009: [("2010-02-26", 2.224e12)]}, instant=True)
     quarterly = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": annual}})
     assert quarterly["2008-12-31"]["total_assets"] == 1.818e12
+
+
+def _switcher_facts(later_form="20-F"):
+    """US-GAAP 20-Fs through FY2019, then IFRS reports from FY2020, each also restating the two years before."""
+    def fy(val, year, filed, form):
+        return {"val": val, "start": f"{year}-01-01", "end": f"{year}-12-31", "fy": year, "fp": "FY", "form": form,
+                "filed": filed, "accn": filed}
+
+    gaap = [fy(1.0e10 + 1.0e9 * (y - 2015), y, f"{y + 1}-04-15", "20-F") for y in range(2015, 2020)]
+    ifrs = [fy(4.5e11 + 1.0e10 * (y - 2018), y, f"{r + 1}-04-15", later_form)
+            for r in range(2020, 2026) for y in (r - 2, r - 1, r)]
+    return {"facts": {"us-gaap": {"Revenues": {"units": {"USD": gaap}}},
+                      "ifrs-full": {"Revenue": {"units": {"TWD": ifrs}}}}}
+
+
+def test_a_record_that_stops_where_ifrs_reports_begin_is_explained():
+    # Code review 6 (I3): with US-GAAP 20-Fs to FY2019 and IFRS ones after, TSM's FY2015-19 were kept and valued
+    # beside today's price, with nothing saying the figures were years old.
+    assert explain_stale_annual_financials(_switcher_facts(), "2019-12-31") == (
+        "later annual reports are in IFRS (20-F), which isn't mapped")
+
+
+@pytest.mark.parametrize("facts, latest_end", [
+    (_switcher_facts(), "2025-12-31"),            # nothing in IFRS after the record's last year
+    (_switcher_facts(later_form="6-K"), "2019-12-31"),  # later IFRS facts, but no annual report
+])
+def test_ifrs_facts_that_are_no_later_annual_report_say_nothing(facts, latest_end):
+    assert explain_stale_annual_financials(facts, latest_end) is None
 
