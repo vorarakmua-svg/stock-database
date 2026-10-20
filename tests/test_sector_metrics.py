@@ -1,6 +1,55 @@
 """Sector-aware ratio functions and the suppression/orchestration layer."""
 
+import pytest
+
+from src.parsers.calculated_metrics import CalculatedMetrics
 from src.parsers.sector_metrics import apply_sector, bank_metrics, insurer_metrics, reit_metrics
+
+_EV_FAMILY = ("enterprise_value", "ev_to_ebitda", "ev_to_revenue", "ev_to_fcf", "fcf_yield")
+
+
+# Net debt 250, EBITDA 120, FCF 60, revenue 500.
+_YEAR = {"revenue": 500.0, "operating_income": 100.0, "depreciation_amortization": 20.0,
+         "operating_cash_flow": 90.0, "capex": 30.0, "long_term_debt": 300.0, "short_term_debt": 50.0,
+         "cash_and_equivalents": 100.0}
+
+
+def _ev_family(sector):
+    """The EV family of a company with _YEAR's figures at a market cap of 1,000."""
+    metrics = CalculatedMetrics().calculate_all(_YEAR, market_data={"current_price": 10.0, "market_cap": 1000.0},
+                                                sector=sector)
+    return {key: metrics.get(key) for key in _EV_FAMILY}
+
+
+def test_a_general_companys_ev_family_is_computed():
+    assert _ev_family(None) == pytest.approx({"enterprise_value": 1250.0, "ev_to_ebitda": 1250.0 / 120.0,
+                                              "ev_to_revenue": 2.5, "ev_to_fcf": 1250.0 / 60.0, "fcf_yield": 0.06})
+
+
+def test_a_banks_ev_family_goes_with_its_net_debt_ebitda_and_fcf():
+    # BUG-134: a bank's net debt, EBITDA and FCF are suppressed (deposits fund it), but its EV family was computed
+    # from them before the suppression: JPM's EV read $1.03T (Yahoo's $474B) and its FCF yield -15%.
+    assert _ev_family("bank") == dict.fromkeys(_EV_FAMILY)
+
+
+def test_an_insurers_ev_to_ebitda_goes_with_its_ebitda():
+    family = _ev_family("insurance")
+    assert family["ev_to_ebitda"] is None
+    assert (family["enterprise_value"], family["fcf_yield"]) == pytest.approx((1250.0, 0.06))
+
+
+def test_yearly_metrics_without_a_price_gain_no_ev_keys():
+    # The EV family needs a price, which a bank's yearly metrics (`calculate_historical`, the as-of metrics) don't
+    # have: its suppression adds nothing there, as the README has those metrics leave the EV ratios out.
+    metrics = CalculatedMetrics().calculate_historical({"2025": _YEAR}, sector="bank")["2025"]
+    assert not set(_EV_FAMILY) & metrics.keys()
+    assert metrics["net_debt"] is None
+
+
+def test_a_reits_fcf_ratios_go_with_its_fcf():
+    family = _ev_family("reit")
+    assert (family["ev_to_fcf"], family["fcf_yield"]) == (None, None)
+    assert (family["enterprise_value"], family["ev_to_ebitda"]) == pytest.approx((1250.0, 1250.0 / 120.0))
 
 
 def test_bank_metrics_compute_from_canonical_fields():

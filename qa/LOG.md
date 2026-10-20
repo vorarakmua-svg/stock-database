@@ -1643,3 +1643,17 @@ Gates: ruff ✓ mypy ✓ pytest 1156 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(web): a refresh after a price factor values the ticker on it
 Next: record code review 13 when it reports (its claims re-run first), then BUG-134 (P2, the last open one). Fixes
 since review 13's range (ef7cc76): 1.
+
+## Iteration 90: 2026-10-20 22:33: fix
+Picked: BUG-134, the last open P2 (code review 13 still running). CI: 8a90337 ✓.
+Did: TDD (three tests RED, two guards): a ratio built on a suppressed figure goes with it: a bank's whole EV family,
+an insurer's EV/EBITDA, a REIT's EV/FCF and FCF yield; suppression nulls only the keys a dict holds, so the yearly
+metrics (no price) gain no EV keys. No valuation model reads them. Eight mutants, each failing a test. Real data: a
+refresh of every ticker on copies of the user's data empties 74 cells (banks x 4, insurers' EV/EBITDA, REITs' FCF
+pair) and leaves the other 434 identical; stock-web shows JPM's EV/EBITDA as 12.6x before, a dash after.
+Evidence: `qa/evidence/iter90-bug134-{red,green,mutants,realdata,e2e}.txt`
+Result: BUG-134 VERIFIED; MATCH-03 FAIL→BUG-133. No P0, P1 or P2 open.
+Gates: ruff ✓ mypy ✓ pytest 1161 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): a sector's EV ratios go with the figures they're built on
+Next: record code review 13 when it reports (its claims re-run first); otherwise discovery (TODO rows, VAL first).
+Fixes since review 13's range (ef7cc76): 2.

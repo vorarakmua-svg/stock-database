@@ -458,14 +458,15 @@ cross-company screening compares like with like:
 
 | Sector | Added ratios | Suppressed generic ratios (stored `NULL` = not applicable) |
 |---|---|---|
-| **Bank** | net interest margin\*, efficiency ratio, loan-to-deposit | EBITDA family, ROIC/NOPAT/invested capital, interest coverage, gross/operating margin, inventory & receivables turnover, asset turnover, working capital, net/total debt, FCF family |
-| **Insurer** | loss ratio, combined ratio\* | EBITDA family, ROIC/NOPAT/invested capital, inventory turnover, gross margin, asset turnover, working capital |
-| **REIT** | FFO\*, AFFO\*, FFO/share, FFO payout | ROIC/NOPAT/invested capital, inventory & receivables turnover, gross margin, asset turnover, FCF family |
+| **Bank** | net interest margin\*, efficiency ratio, loan-to-deposit | EBITDA family, ROIC/NOPAT/invested capital, interest coverage, gross/operating margin, inventory & receivables turnover, asset turnover, working capital, net/total debt, FCF family, EV family (EV, EV/EBITDA, EV/revenue, EV/FCF, FCF yield) |
+| **Insurer** | loss ratio, combined ratio\* | EBITDA family (with EV/EBITDA), ROIC/NOPAT/invested capital, inventory turnover, gross margin, asset turnover, working capital |
+| **REIT** | FFO\*, AFFO\*, FFO/share, FFO payout | ROIC/NOPAT/invested capital, inventory & receivables turnover, gross margin, asset turnover, FCF family (with EV/FCF and FCF yield) |
 
 General operating companies (and utilities/energy) get the full generic ratio
 suite unchanged. A suppressed ratio is stored as `NULL`, so a screen such as
 `WHERE roic > 0.15` automatically excludes sectors where ROIC is undefined
-instead of returning a misleading value.
+instead of returning a misleading value. A ratio built on a suppressed figure goes
+with it, as the EV family goes with a bank's net debt, EBITDA and FCF.
 
 \* **Proxy** (the registry doesn't split out the exact inputs):
 net interest margin = `net_interest_income / total_assets`;

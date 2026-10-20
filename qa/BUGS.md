@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 62 · NEEDS-USER 12 · Verified: 68
+**Open:** P0 0 · P1 0 · P2 0 · P3 62 · NEEDS-USER 12 · Verified: 69
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1031,11 +1031,12 @@ Repro: after BUG-125's fix 16 companies' latest year still has no long-term debt
 Expected: the noncurrent part (the total less the current maturities the filer tags), or the total under a field of its own.   Actual: none; their total debt is the short-term part alone. Impact: the debt metrics of these companies (ROIC and the EV family are suppressed for banks and insurers).
 
 ### BUG-134 [P2][VALID] A bank's EV, EV/EBITDA, EV/FCF and FCF yield are computed from the net debt, EBITDA and FCF its sector rules suppress: JPM's EV $1.03T, FCF yield -15%
-Status: OPEN
-Found: iteration 87 while fixing BUG-126 (`qa/evidence/iter87-bug126-realdata.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 90)
+Found: iteration 87 while fixing BUG-126 (`qa/evidence/iter87-bug126-realdata.txt`) | Fixed: iteration 90 (see LOG) | Regression tests: `tests/test_sector_metrics.py::test_a_banks_ev_family_goes_with_its_net_debt_ebitda_and_fcf`, `::test_an_insurers_ev_to_ebitda_goes_with_its_ebitda`, `::test_a_reits_fcf_ratios_go_with_its_fcf`; guards `::test_a_general_companys_ev_family_is_computed`, `::test_yearly_metrics_without_a_price_gain_no_ev_keys`
 Repro: `CalculatedMetrics.calculate_all` computes the EV family from net debt, EBITDA and FCF before `apply_sector` nulls those three for a bank (`sector_metrics.SUPPRESSED_BY_SECTOR[BANK]`, as not meaningful with deposits for funding), and the EV family isn't suppressed, so the snapshot keeps it. In the user's data every one of the 13 banks has net debt, EBITDA and FCF empty in `metrics_annual` beside an EV family in `market_snapshots`: JPM EV $1,027.5B (Yahoo's $474.2B), EV/EBITDA 12.62, FCF yield -15.35%; BAC $782.1B, 19.55; GS $314.3B, 3.46; MS $572.5B, 14.68.
 Expected: the EV family suppressed with its inputs for banks, stored NULL as the README's sector table promises for the EBITDA family ("a screen ... excludes sectors where [it] is undefined instead of returning a misleading value").   Actual: values from the suppressed inputs. Impact: the screener's EV columns and the company page for the 13 banks; no valuation input.
 
+Fix: a ratio built on a suppressed figure goes with it (`sector_metrics.SUPPRESSED_BY_SECTOR`): a bank's whole EV family (EV, EV/EBITDA, EV/revenue, EV/FCF, FCF yield) with its net debt, EBITDA and FCF; an insurer's EV/EBITDA with its EBITDA; a REIT's EV/FCF and FCF yield with its FCF. `apply_sector` nulls only the keys a dict holds, so the yearly metrics, which have no price, gain no EV keys (the README leaves EV ratios out of the as-of metrics); every other suppressed key is always computed first, as before. The README's sector table names them. No valuation model reads the EV family (the snapshot, the STAT page, the JSON and CSV exports do; the web screener whitelists none of it). Three tests RED on 8a90337, two guards; eight mutants, each failing a test (`qa/evidence/iter90-bug134-{red,green,mutants}.txt`). On copies of the user's data, a refresh of every ticker at its own collection's market data, before and after: 74 cells empty now (13 banks x 4, 8 insurers' EV/EBITDA, 7 REITs x 2), the other 434 identical; JPM's EV $1,027.5B, EV/EBITDA 12.62 and FCF yield -15.35% gone (`iter90-bug134-realdata.txt`). stock-web on each copy: JPM's STAT page reads EV/EBITDA 12.6x, then "—"; CB's EV and FCF yield and O's EV/EBITDA stay (`iter90-bug134-e2e.txt`). The stored snapshots change at the next collection or refresh.
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
