@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 4 · P3 32 · NEEDS-USER 11 · Verified: 42
+**Open:** P0 0 · P1 0 · P2 4 · P3 32 · NEEDS-USER 11 · Verified: 43
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -587,12 +587,13 @@ Expected: no test touches the network (`tests/conftest.py`: "No fixture here per
 Fix: the helper stubs the insider lookup, and an autouse fixture refuses any connection off this machine and fails the test that tried one (RED: the eight tests error at teardown; GREEN: they pass, and the whole suite runs under the guard).
 
 ### BUG-074 [P2][VALID] Quarterly weighted-average share counts are differences of year-to-date averages
-Status: OPEN
-Found: iteration 51, checking BUG-061's impact on MRK's TTM rows (`qa/evidence/iter51-bug074-repro.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 56)
+Found: iteration 51, checking BUG-061's impact on MRK's TTM rows (`qa/evidence/iter51-bug074-repro.txt`) | Fixed: iteration 56 (see LOG) | Regression tests: `tests/test_xbrl_parser.py::test_a_quarters_weighted_share_count_is_its_own_average`, `::test_a_quarters_own_3_month_share_count_is_used_where_filed`, `::test_a_quarters_own_share_count_fills_a_gap_in_the_year_to_date_rungs`, `tests/test_ttm.py::test_ttm_share_counts_are_the_four_quarters_average`
 Repro: the quarterly ladder (`XBRLParser._collect_discrete_flows`) differences every duration field's year-to-date facts, share counts included: AAPL's Q2-Q4 FY2025 diluted weighted shares read -0.047B, -0.052B and -0.047B, MSFT's -0.001B to -0.006B, MRK's FY2011 +0.002B, -0.004B and -0.008B; only Q1, a 3-month fact, is right. A TTM row sums the four quarters, which telescopes to roughly a count (AAPL 14.703B) without being the trailing year's average.
 Expected: a quarter's weighted-average count is its own 3-month figure (10-Qs tag it), and a TTM count an average of the four, not their sum.   Actual: near-zero and negative counts in `financials_quarterly`, the `/api/companies/{ticker}/financials/quarterly` endpoint and the CSV and JSON exports.
 Impact today: no valuation input (the models read annual rows) and no row of the statements tab (it shows EPS, not share counts); every company's stored quarterly share counts and its TTM count.
 
+Fix: a weighted-average share count isn't additive, so the quarterly ladder no longer differences it. A quarter takes its own 3-month figure, which 10-Qs tag, even where the year-to-date rungs skip it. Where no such figure exists (Q4: 10-Ks don't tag one), the quarter's average is the year-to-date share-days less the previous rung's, over the quarter's days. A TTM count is the four quarters' average, not their sum. The share-days formula, checked first against the filed 3-month figures, put 93.6% of 5,613 quarters within 0.5% of them (median 0.006%), but year-to-date rungs that disagree (a later 10-Q's restatement, a mis-scaled fact) still left 69 beyond 10%. Hence the filed figure first: 99.9% of 5,779 quarters within 0.5%; the 6 still beyond 10% are restatements where the parser takes a later filing's figure (MA's and DUK's splits, TMUS's merger) and a scale mix-up in the check's own pick (`qa/evidence/iter56-bug074-check.txt`). Over every cached filer, quarters more than 2x off their fiscal year's average fall from 5,659 of 7,502 (75.4%) to 253 of 7,615 (3.3%), what's left being split years (BUG-082) and mis-scaled facts. Through the fetcher's pipeline (share-scale step included), for 23 split-heavy tickers, quarters off by 2x fall from 1,086 of 1,529 to 140 of 1,559, and TTM counts beyond 10% of their year's average at fiscal year ends from 42 of 357 to 32 (`qa/evidence/iter56-bug074-impact.txt`). Nothing else moves: no annual value, no metric, no valuation (the models read annual rows); 15 false share-scale rescales of near-zero quarterly counts are gone, and two mis-scaled period-end counts now rescale right (AMT, O). Six mutants each fail a test.
 ### BUG-075 [P0][VAL] The multiples band's FY-end prices are Yahoo's dividend-adjusted closes, not the market's
 Status: VERIFIED (iteration 53)
 Found: iteration 51 by code review 7 (C1), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: iteration 53 (oracle rule 5c1b693, then the fix; see LOG) | Regression tests: `tests/test_yahoo_new_sections.py::test_price_bars_are_market_closes_not_dividend_adjusted`, `tests/test_store_migration.py::test_bars_stored_before_market_closes_are_flagged_dividend_adjusted`, `tests/test_valuation_inputs.py::test_fy_end_prices_are_market_closes` (flagged, before the flag, market closes)
@@ -643,6 +644,13 @@ Found: iteration 51 by code review 7 (M3), re-run in iteration 52 (`qa/evidence/
 Repro: `review7/scripts/mutants.py` on an archive of 69c5a7e, each mutant in a fresh copy with the whole suite (990 passed, 1 warning in 88.70s (0:01:28)): ads 1/n branch returns n; ads tolerance 5% -> 30%; ads: 40-F not foreign; filed_between ignores the newer date; filed_between: non-simple ratios judged too; detect date always the weighted field's; undo: non-simple factors too; unpriced without the filing guard (proposed fix); stored sector: no warning all pass. Code review 7's targeted run also has survivors for the ADS step not moving `split_factor` or `ffo_per_share`, `ads_ratio` stamped on N/A rows, and the `<`/`<=` date boundaries (BUG-072's class). One survivor changes real inputs: `_filed_between` judging non-simple ratios moves RTX's FY2016-19 split factor from 1.589 to 1.5717 on the user's copy, though no value moves at two decimals.
 Expected: each fix's rule held by a test.   Actual: these rules are held by none.
 Impact today: none; the next change to these rules can break them unseen.
+
+### BUG-082 [P2][VALID] The quarterly ladder mixes split bases: a split restates the annual figures but not the quarters filed before it
+Status: OPEN
+Found: iteration 56, checking BUG-074's remaining misses (`qa/evidence/iter56-bug082-repro.txt`) | Fixed: — | Regression test: —
+Repro: each quarter's figures come from its latest filing, and a split restates only the filings after it. AMZN (20:1, June 2022): FY2020's annual EPS is the restated 2.09 and its count 10.198B, while its quarters keep the pre-split EPS 5.01, 10.31 and 12.40 and counts of 0.51B, so Q4 2020's EPS, the year less nine months, reads -25.63 for a profitable quarter. Over every cached filer, 253 of 7,615 quarterly counts stay more than 2x off their fiscal year's average, mostly from such splits (AMZN 2020, NVDA 2009). The annual record's valuation inputs put every year on the price's basis (BUG-047, BUG-048, BUG-059, BUG-060); nothing does that for the quarterly record or the TTM rows built on it.
+Expected: a quarter's per-share figures and counts on one split basis with its year, and a fourth quarter derived from figures on the same basis.   Actual: mixed bases, and a fourth quarter that is the difference of two of them.
+Impact today: the statements tab's quarterly and TTM views, `financials_quarterly` and `financials_ttm`, the API and the exports, for the years around a split; no valuation (the models read annual rows).
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

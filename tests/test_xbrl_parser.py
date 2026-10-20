@@ -457,3 +457,56 @@ def test_a_record_that_stops_where_ifrs_reports_begin_is_explained():
 def test_ifrs_facts_that_are_no_later_annual_report_say_nothing(facts, latest_end):
     assert explain_stale_annual_financials(facts, latest_end) is None
 
+
+def test_a_quarters_weighted_share_count_is_its_own_average():
+    # BUG-074: the ladder differenced year-to-date averages as if they were sums, so AAPL's Q2-Q4 FY2025 diluted counts
+    # read about -0.05B. A quarter's average is the year-to-date share-days less the previous rung's, over its days.
+    start = "2024-09-29"
+    rungs = [("2024-12-28", 15.150e9, "Q1", "10-Q"), ("2025-03-29", 15.100e9, "Q2", "10-Q"),
+             ("2025-06-28", 15.050e9, "Q3", "10-Q"), ("2025-09-27", 15.000e9, "FY", "10-K")]
+    entries = [{"val": v, "start": start, "end": end, "fy": 2025, "fp": fp, "form": form, "filed": end, "accn": end}
+               for end, v, fp, form in rungs]
+    quarterly = XBRLParser().extract_quarterly_financials(
+        {"facts": {"us-gaap": {"WeightedAverageNumberOfDilutedSharesOutstanding": {"units": {"shares": entries}}}}})
+    counts = [quarterly[end]["weighted_avg_shares_diluted"] for end, *_ in rungs]
+    # (15.100 x 181 - 15.150 x 90) / 91, and so on for Q3 and Q4
+    assert counts == [15.150e9, pytest.approx(15.0505e9, rel=1e-5), pytest.approx(14.9505e9, rel=1e-5),
+                      pytest.approx(14.8505e9, rel=1e-5)]
+
+
+def test_a_quarters_own_3_month_share_count_is_used_where_filed():
+    # A 10-Q tags the quarter's own weighted-average count; the year-to-date rungs can disagree with it (GE's restated
+    # nine months beside an unrestated half year read -14.0B for Q3 2020), so it wins; Q4, which 10-Ks don't tag, is
+    # still the year's share-days less the nine months'.
+    start = "2024-09-29"
+    ytd = [("2024-12-28", 15.150e9, "Q1", "10-Q"), ("2025-03-29", 15.100e9, "Q2", "10-Q"),
+           ("2025-06-28", 15.050e9, "Q3", "10-Q"), ("2025-09-27", 15.000e9, "FY", "10-K")]
+    entries = [{"val": v, "start": start, "end": end, "fy": 2025, "fp": fp, "form": form, "filed": end, "accn": end}
+               for end, v, fp, form in ytd]
+    entries.append({"val": 15.060e9, "start": "2024-12-29", "end": "2025-03-29", "fy": 2025, "fp": "Q2",
+                    "form": "10-Q", "filed": "2025-03-29", "accn": "2025-03-29"})
+    quarterly = XBRLParser().extract_quarterly_financials(
+        {"facts": {"us-gaap": {"WeightedAverageNumberOfDilutedSharesOutstanding": {"units": {"shares": entries}}}}})
+    assert [quarterly[end]["weighted_avg_shares_diluted"] for end, *_ in ytd] == [
+        15.150e9, 15.060e9, pytest.approx(14.9505e9, rel=1e-5), pytest.approx(14.8505e9, rel=1e-5)]
+
+
+def test_a_quarters_own_share_count_fills_a_gap_in_the_year_to_date_rungs():
+    # A filer that tagged Q2's 3-month count but no half-year one: the year-to-date ladder skips Q2, its own figure
+    # doesn't.
+    start = "2024-09-29"
+
+    def entry(val, begin, end, fp, form):
+        return {"val": val, "start": begin, "end": end, "fy": 2025, "fp": fp, "form": form, "filed": end, "accn": end}
+
+    shares = [entry(15.150e9, start, "2024-12-28", "Q1", "10-Q"),
+              entry(15.060e9, "2024-12-29", "2025-03-29", "Q2", "10-Q"),
+              entry(15.050e9, start, "2025-06-28", "Q3", "10-Q"), entry(15.000e9, start, "2025-09-27", "FY", "10-K")]
+    income = [entry(v, start, end, fp, form) for v, end, fp, form in (
+        (3.0e10, "2024-12-28", "Q1", "10-Q"), (5.5e10, "2025-03-29", "Q2", "10-Q"),
+        (8.0e10, "2025-06-28", "Q3", "10-Q"), (1.1e11, "2025-09-27", "FY", "10-K"))]
+    quarterly = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": {
+        "WeightedAverageNumberOfDilutedSharesOutstanding": {"units": {"shares": shares}},
+        "NetIncomeLoss": {"units": {"USD": income}}}}})
+    assert quarterly["2025-03-29"]["weighted_avg_shares_diluted"] == 15.060e9
+

@@ -510,6 +510,25 @@ class XBRLParser:
             for (start, end), (_p, _f, val) in chosen.items():
                 ladders[start].append((end, val))
 
+            # A weighted-average share count isn't additive (BUG-074): a quarter's is its
+            # own 3-month figure, which 10-Qs tag, and otherwise (Q4: 10-Ks don't tag it)
+            # the year-to-date share-days less the previous rung's, over the quarter's days.
+            shares = field.xbrl_unit == "shares"
+            own: Dict[str, Tuple[Any, str]] = {}
+            for (start, end), (priority, _f, val) in chosen.items() if shares else ():
+                days = self._span(start, end)
+                if isinstance(val, (int, float)) and days is not None \
+                        and _QUARTER_MIN_DAYS <= days <= _QUARTER_MAX_DAYS:
+                    own[end] = (val, field.tags[priority])
+
+            def assign(end: str, value: Any, source: str, start: str, ladder_fy: Optional[int]) -> None:
+                pd_ = periods.setdefault(end, {"period_end": end})
+                if field.key not in pd_:
+                    pd_[field.key] = value
+                    pd_.setdefault("_source_tags", {})[field.key] = source
+                pd_.setdefault("fiscal_quarter", self._fiscal_quarter_from_span(self._span(start, end)))
+                pd_.setdefault("fiscal_year", ladder_fy)
+
             for start, points in ladders.items():
                 if len(points) < 2:
                     continue  # not a cumulative ladder (isolated 3-month fact)
@@ -518,24 +537,25 @@ class XBRLParser:
                 ladder_fy = self._fiscal_year_from_end(points[-1][0])
                 prev_end, prev_val = start, 0.0
                 for end, val in points:
-                    if not isinstance(val, (int, float)):
-                        prev_end, prev_val = end, val
-                        continue
                     inc_span = self._span(prev_end, end)
-                    if inc_span is None or not (_QUARTER_MIN_DAYS <= inc_span <= _QUARTER_MAX_DAYS):
-                        prev_end, prev_val = end, val  # gap: reset baseline
-                        continue
-                    discrete = val - (prev_val if isinstance(prev_val, (int, float)) else 0.0)
-                    if field.sign == SIGN_ABS:
-                        discrete = abs(discrete)
-                    fq = self._fiscal_quarter_from_span(self._span(start, end))
-                    pd_ = periods.setdefault(end, {"period_end": end})
-                    if field.key not in pd_:
-                        pd_[field.key] = discrete
-                        pd_.setdefault("_source_tags", {})[field.key] = "derived:ytd_diff"
-                    pd_.setdefault("fiscal_quarter", fq)
-                    pd_.setdefault("fiscal_year", ladder_fy)
-                    prev_end, prev_val = end, val
+                    if end in own:
+                        assign(end, *own[end], start, ladder_fy)
+                    elif isinstance(val, (int, float)) and inc_span is not None \
+                            and _QUARTER_MIN_DAYS <= inc_span <= _QUARTER_MAX_DAYS:
+                        prev = prev_val if isinstance(prev_val, (int, float)) else 0.0
+                        if shares:
+                            ytd_days, prev_days = self._span(start, end) or 0, self._span(start, prev_end) or 0
+                            discrete = (val * ytd_days - prev * prev_days) / inc_span
+                        else:
+                            discrete = val - prev
+                        if field.sign == SIGN_ABS:
+                            discrete = abs(discrete)
+                        assign(end, discrete, "derived:ytd_diff", start, ladder_fy)
+                    prev_end, prev_val = end, val  # (a gap resets the baseline)
+            for end, (value, tag) in own.items():  # quarters no year-to-date ladder reaches
+                if end in periods and field.key not in periods[end]:
+                    periods[end][field.key] = value
+                    periods[end].setdefault("_source_tags", {})[field.key] = tag
 
     def _apply_quarter_calendar(
         self, periods: Dict[str, Dict[str, Any]], frames: Dict[str, set],

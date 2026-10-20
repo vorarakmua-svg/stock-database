@@ -1075,3 +1075,19 @@ Gates: ruff ✓ mypy ✓ pytest 1009 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(gather): a record that stops where IFRS reports begin says so
 Next: code review 8 (five fixes since review 7's range: 2964555, 69c5a7e, a80b143, 57218f1, this), dispatched in the
 background after this push; then BUG-074, BUG-076, BUG-077, BUG-078 (P2).
+
+## Iteration 56: 2026-10-20 10:25: fix
+Picked: BUG-074, the oldest open P2 (code review 8 running in the background). CI: fea2b70 ✓.
+Did: TDD (2 tests RED: Q2 read -50M, the TTM count the sum): the ladder stops differencing weighted-average counts,
+and a TTM count is the four quarters' average. Checked against the filed 3-month figures, the share-days formula
+alone put 93.6% of 5,613 quarters within 0.5% but left 69 beyond 10%, where year-to-date rungs disagree, so a third
+test RED: a quarter takes its own filed 3-month figure first (99.9% within 0.5%), with a fourth test for one the
+ladder skips. Through the fetcher's pipeline for 23 split-heavy tickers, quarters off their year's average by 2x
+fall from 1,086 of 1,529 to 140 of 1,559; across every cached filer (parser output) from 75.4% to 3.3%. No annual
+value, metric or valuation moves; 15 false share-scale rescales are gone. Six mutants each fail a test. Found:
+quarters keep each filing's split basis, so AMZN's Q4 2020 EPS reads -25.63 (BUG-082, P2, pre-existing).
+Evidence: `qa/evidence/iter56-bug074-{red,green,mutants,check,impact}.txt`, `qa/evidence/iter56-bug082-repro.txt`
+Result: BUG-074 VERIFIED; BUG-082 new (P2); VALID-06 → FAIL→BUG-082.
+Gates: ruff ✓ mypy ✓ pytest 1013 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): a quarter's weighted-average share count is its own, not a year-to-date difference
+Next: record code review 8 when it reports; then BUG-076, BUG-077, BUG-078, BUG-082 (P2).

@@ -40,3 +40,14 @@ def test_ttm_skips_when_gap_breaks_continuity():
 
 def test_ttm_empty():
     assert compute_ttm({}) == {}
+
+
+def test_ttm_share_counts_are_the_four_quarters_average():
+    # BUG-074: a weighted-average share count isn't additive; summed, AAPL's TTM count was a telescoped near-miss.
+    q = _quarters()
+    for end, count in zip(sorted(q), (4.0e9, 4.1e9, 4.2e9, 4.3e9, 4.4e9)):
+        q[end]["weighted_avg_shares_diluted"] = count
+    ttm = compute_ttm(q)
+    assert ttm["2024-12-31"]["weighted_avg_shares_diluted"] == 4.15e9
+    assert ttm["2024-12-31"]["net_income"] == 10 + 20 + 30 + 40
+

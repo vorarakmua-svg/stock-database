@@ -13,6 +13,8 @@ from ..mappings.canonical import CANONICAL_FIELDS, DURATION, INSTANT
 
 _FLOW_KEYS = [f.key for f in CANONICAL_FIELDS if f.kind == DURATION]
 _INSTANT_KEYS = [f.key for f in CANONICAL_FIELDS if f.kind == INSTANT]
+#: Weighted-average share counts: a trailing year's is the four quarters' average, not their sum (BUG-074).
+_AVERAGE_KEYS = frozenset(f.key for f in CANONICAL_FIELDS if f.kind == DURATION and f.xbrl_unit == "shares")
 
 _QUARTER_MIN_DAYS = 80
 _QUARTER_MAX_DAYS = 100
@@ -44,9 +46,10 @@ def compute_ttm(quarterly: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any
             quarters (as produced by ``XBRLParser.extract_quarterly_financials``).
 
     Returns:
-        ``{period_end: {flow fields summed over trailing 4 quarters, balance-sheet
-        fields as-of, calendar_year, calendar_quarter, fiscal_year, ...}}`` for every
-        quarter-end that has four consecutive quarters behind it.
+        ``{period_end: {flow fields summed over trailing 4 quarters (weighted-average
+        share counts averaged), balance-sheet fields as-of, calendar_year,
+        calendar_quarter, fiscal_year, ...}}`` for every quarter-end that has four
+        consecutive quarters behind it.
     """
     ends = sorted(quarterly.keys())
     out: Dict[str, Dict[str, Any]] = {}
@@ -64,11 +67,13 @@ def compute_ttm(quarterly: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any
             "fiscal_year": latest.get("fiscal_year"),
         }
 
-        # Flow concepts: sum across the trailing 4 quarters (only when all present).
+        # Flow concepts: sum across the trailing 4 quarters (only when all present);
+        # share counts: their average.
         for key in _FLOW_KEYS:
             vals = [quarterly[w].get(key) for w in window]
             if all(isinstance(v, (int, float)) for v in vals):
-                row[key] = sum(vals)
+                total = sum(v for v in vals if isinstance(v, (int, float)))
+                row[key] = total / len(vals) if key in _AVERAGE_KEYS else total
 
         # Balance-sheet concepts: as of the latest quarter-end.
         for key in _INSTANT_KEYS:
