@@ -1595,3 +1595,17 @@ Result: BUG-125 VERIFIED; VALID-01 FAIL→BUG-119, MATCH-03 FAIL→BUG-126; BUG-
 Gates: ruff ✓ mypy ✓ pytest 1138 passed, 1 skipped (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(parsers): long-term debt is read from the tags filers use
 Next: BUG-126 (P2, the oldest), then BUG-127, BUG-128. Fixes since review 12's range (f87638f): 3.
+
+## Iteration 87: 2026-10-20 21:27: fix
+Picked: BUG-126, the oldest open P2 (no P0 or P1 open). CI: 5d2d996 ✓.
+Did: TDD (three tests RED, two guards after the fix): a quote refresh computes the snapshot's EV family as a full
+collection does, the calculator on the latest stored year with the quote's market data, where it stored Yahoo's EV
+and EV/EBITDA and carried EV/FCF and FCF yield to the new price. Five mutants, each failing a test. Real data: a
+refresh at each collection's own market data changed all 127 tickers' EV family before (112 to Yahoo's EV) and none
+after. Banks' EV family turned out to come from inputs their sector rules suppress: BUG-134 (P2) opened.
+Evidence: `qa/evidence/iter87-bug126-{red,green,mutants,realdata}.txt`
+Result: BUG-126 VERIFIED; MATCH-03 FAIL→BUG-134, MATCH-05 FAIL→BUG-038; BUG-134 opened (P2).
+Gates: ruff ✓ mypy ✓ pytest 1142 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(store): a quote refresh keeps our enterprise value
+Next: BUG-127 (P2, the oldest), then BUG-128 and BUG-134; after the next fix, code review 13 (5 fixes since
+review 12's range, f87638f).

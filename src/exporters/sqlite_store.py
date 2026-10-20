@@ -27,6 +27,7 @@ if TYPE_CHECKING:  # avoid a runtime exporters -> valuation dependency
 
 from ..mappings.canonical import CANONICAL_FIELDS
 from ..models.stock_data import StockData
+from ..parsers.calculated_metrics import CalculatedMetrics
 from ..valuation.inputs import SPLIT_JUMP_THRESHOLD, _simple_ratio
 
 # Canonical line-item columns shared by the annual/quarterly financial tables.
@@ -75,6 +76,9 @@ _ANALYST_COLUMNS = [
 # Daily OHLCV bars, one row per (ticker, date). Also used for the ^GSPC benchmark
 # (see export_benchmark_bars), which writes into this same table.
 _PRICE_BAR_COLUMNS = ["open", "high", "low", "close", "volume"]
+
+#: The snapshot's price-dependent metrics a full collection computes itself (``calculated_metrics``).
+_EV_FAMILY = ("enterprise_value", "ev_to_ebitda", "ev_to_fcf", "fcf_yield")
 
 # Earnings-surprise history, one row per (ticker, quarter).
 _EARNINGS_HISTORY_COLUMNS = ["eps_estimate", "eps_actual", "surprise_pct"]
@@ -879,19 +883,19 @@ class SQLiteStore:
         ``fetch_quote``'s ``market_data`` omits ``ma_50``/``ma_200`` (no
         history call is made for a quote-only refresh). Rather than let the
         DES page's moving averages go blank after every quote refresh, this
-        carries the PREVIOUS snapshot's ``ma_50``/``ma_200``/``beta``, plus
-        ``ev_to_fcf``/``fcf_yield``/``risk_free_rate`` (computed only during a
-        full export's ``calculated_metrics``/``risk_free_rate`` pass — a
-        quote-only fetch has no way to derive them), forward into the new row
-        whenever the fresh quote didn't return them (a one-row read-only
-        ``SELECT`` against ``market_snapshots``, no writer contention — this
-        method is only ever called from the single-writer job worker).
+        carries the PREVIOUS snapshot's ``ma_50``/``ma_200``/``beta`` and
+        ``risk_free_rate`` (computed only during a full export's pass) forward
+        into the new row whenever the fresh quote didn't return them (a one-row
+        read-only ``SELECT`` against ``market_snapshots``, no writer contention —
+        this method is only ever called from the single-writer job worker).
 
-        ``ev_to_ebitda``/``enterprise_value`` are NOT carried forward here:
-        unlike ``ev_to_fcf``/``fcf_yield``, ``fetch_quote`` returns these two
-        directly from yfinance on quote rows, whereas a full-export row
-        computes them internally via ``calculated_metrics`` — so a fresh
-        quote value (when present) should win rather than the stale prior one.
+        The EV family (``_EV_FAMILY``) is ours, as a full export's
+        ``calculated_metrics`` computes it: the quote's market cap with the latest
+        stored year's net debt, EBITDA and FCF (``_ev_family``). Yahoo's own
+        ``enterpriseValue`` and ``enterpriseToEbitda`` are another definition,
+        more than 5% off ours for 47 of 111 companies, about 2x for the banks, and
+        a refresh wrote them into the same columns (BUG-126). Without a market cap
+        or a stored year, the previous snapshot's carry forward.
         """
         try:
             conn = self._connect()
@@ -914,13 +918,19 @@ class SQLiteStore:
                 # forward below it would become the latest one, with no price, verdict
                 # or upside behind it (a Yahoo rate limit leaves every extractor empty).
                 if snapshot.get("current_price") is not None:
-                    # Carry forward ma_50/ma_200/beta/ev_to_fcf/fcf_yield/risk_free_rate
-                    # from the latest prior snapshot when this quote-only fetch didn't
-                    # return them.
+                    ours = self._ev_family(conn, ticker, md, val)
+                    carried = ["ma_50", "ma_200", "beta", "risk_free_rate", "risk_free_rate_date",
+                               "risk_free_rate_source"]
+                    if ours is None:
+                        snapshot.update(dict.fromkeys(_EV_FAMILY))
+                        carried += _EV_FAMILY
+                    else:
+                        snapshot.update(ours)
+                    # Carry the rest forward from the latest prior snapshot when this
+                    # quote-only fetch didn't return them.
                     prev = self._latest_snapshot_row(conn, ticker)
                     if prev is not None:
-                        for col in ("ma_50", "ma_200", "beta", "ev_to_fcf", "fcf_yield",
-                                    "risk_free_rate", "risk_free_rate_date", "risk_free_rate_source"):
+                        for col in carried:
                             if snapshot.get(col) is None:
                                 snapshot[col] = prev.get(col)
                     self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)
@@ -934,6 +944,25 @@ class SQLiteStore:
                 conn.close()
         except Exception as e:
             self.logger.error(f"Error writing quote for {ticker}: {e}")
+
+    @staticmethod
+    def _ev_family(conn: sqlite3.Connection, ticker: str, market_data: Dict[str, Any],
+                   valuation: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """A quote's EV family as a full export's ``calculated_metrics`` has it: the
+        calculator on the latest stored year, the quote's market data and the company's
+        sector. ``None`` without a market cap or a stored year."""
+        if not market_data.get("market_cap"):
+            return None
+        cur = conn.execute("SELECT * FROM financials_annual WHERE ticker = ? ORDER BY fiscal_year DESC LIMIT 1",
+                           (ticker,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        year = dict(zip([d[0] for d in cur.description], row))
+        sector = conn.execute("SELECT sector_class FROM companies WHERE ticker = ?", (ticker,)).fetchone()
+        metrics = CalculatedMetrics().calculate_all(year, market_data=market_data, valuation=valuation,
+                                                    sector=sector[0] if sector else None)
+        return {col: metrics.get(col) for col in _EV_FAMILY}
 
     @staticmethod
     def _latest_snapshot_row(conn: sqlite3.Connection, ticker: str) -> Optional[Dict[str, Any]]:
