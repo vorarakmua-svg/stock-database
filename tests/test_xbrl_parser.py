@@ -510,3 +510,52 @@ def test_a_quarters_own_share_count_fills_a_gap_in_the_year_to_date_rungs():
         "NetIncomeLoss": {"units": {"USD": income}}}}})
     assert quarterly["2025-03-29"]["weighted_avg_shares_diluted"] == 15.060e9
 
+
+def _currency_switcher(before, after, switch_fy):
+    """A 20-F filer reporting in *before* through FY{switch_fy - 1} and in *after* from FY{switch_fy}: each annual
+    report gives its year and the two before it (its balance sheet, two) in its own currency, and one in a currency
+    other than dollars also tags a US$ convenience translation of the year it reports."""
+    rate = {"USD": 1.0, "RUB": 75.0, "TWD": 31.0}
+    tags = {"Revenues": 1.0e10, "NetIncomeLoss": 1.0e9, "Assets": 3.0e10}
+    facts = {}
+    for tag, size in tags.items():
+        instant = tag == "Assets"
+        units = {}
+        for report_fy in range(2019, 2026):
+            currency = before if report_fy < switch_fy else after
+            filed = f"{report_fy + 1}-04-15"
+            for fy in range(report_fy - (1 if instant else 2), report_fy + 1):
+                value = size * 1.08 ** (fy - 2019) * rate[currency]
+                units.setdefault(currency, []).append(
+                    usd(value, start=None if instant else f"{fy}-01-01", end=f"{fy}-12-31", fy=report_fy, form="20-F",
+                        filed=filed))
+            if currency != "USD":  # the convenience translation, at that year's rate
+                units.setdefault("USD", []).append(usd(
+                    size * 1.08 ** (report_fy - 2019) * rate[currency] / (rate[currency] * 0.93),
+                    start=None if instant else f"{report_fy}-01-01", end=f"{report_fy}-12-31", fy=report_fy,
+                    form="20-F", filed=filed))
+        facts[tag] = {"units": units}
+    return {"facts": {"us-gaap": facts}}
+
+
+def test_a_filer_that_switched_to_dollars_keeps_its_dollar_filings():
+    # BUG-077 (code review 7, I3): the reporting currency was read over the whole history (the Yandex-to-Nebius path:
+    # RUB through FY2022, dollars since), so the filer got no record at all and the run said it reports in RUB.
+    facts = _currency_switcher("RUB", "USD", 2023)
+    parser = XBRLParser()
+    annual = parser.extract_annual_financials(facts)
+    assert sorted(annual) == ["2021", "2022", "2023", "2024", "2025"]  # the dollar 20-Fs and their comparatives
+    assert annual["2022"]["revenue"] == pytest.approx(1.0e10 * 1.08 ** 3)  # restated in dollars, not converted
+    assert {accn for year in parser.extract_annual_vintages(facts).values() for accn in year} == {
+        "2024-04-15", "2025-04-15", "2026-04-15"}
+
+
+def test_a_filer_that_switched_from_dollars_keeps_its_dollar_years_and_says_why_they_stop():
+    # The other way round, the later convenience translations made a record of their own.
+    facts = _currency_switcher("USD", "TWD", 2023)
+    annual = XBRLParser().extract_annual_financials(facts)
+    assert sorted(annual) == ["2017", "2018", "2019", "2020", "2021", "2022"]  # the dollar 20-Fs to FY2022
+    assert annual["2022"]["revenue"] == pytest.approx(1.0e10 * 1.08 ** 3)
+    assert explain_stale_annual_financials(facts, annual["2022"]["period_end"]) == (
+        "later annual reports are in TWD (20-F), which isn't converted to dollars")
+

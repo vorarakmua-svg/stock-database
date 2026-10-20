@@ -1112,3 +1112,20 @@ underivable; (this commit) fix(valuation): an ADS ratio is read against every cl
 says so
 Next: record code review 8 when it reports; then BUG-077, BUG-078, BUG-082 (P2). Fixes since review 8's range: 2
 (2bb2a24, this).
+
+## Iteration 58: 2026-10-20 10:53: fix
+Picked: BUG-077, the oldest open P2 (code review 8 running). CI: 80ea6d9 ✓.
+Did: TDD (2 tests RED: a currency switcher both ways, built in companyfacts' shape): the currency is now decided
+filing by filing, a filing with no more USD facts than another currency's left out whole, so a filer that switched
+to dollars keeps its dollar filings and one that left them keeps its dollar years and says why they stop. BUG-065's
+and BUG-071's currency tests stay green (a tie counts against dollars). Six mutants each fail a test. No cached
+filer has a filing in another currency: 0 of 143 records change. Code review 8 reported as this work finished
+(`qa/evidence/review8-report.md`): it proposes a P1 (C1: the migration that flags pre-fix bars as dividend-adjusted
+commits the column before the flags, so a first collection that fails or is interrupted leaves BUG-075's prices for
+good) and a P2 (I1: dividends stored by a run whose bars failed are undone from older bars).
+Evidence: `qa/evidence/iter58-bug077-{red,green,mutants,impact}.txt`, `qa/evidence/review8-report.md`
+Result: BUG-077 VERIFIED; GATHER-02 → TODO (no open bug; its untested cases remain).
+Gates: ruff ✓ mypy ✓ pytest 1026 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): a filer's reporting currency is decided filing by filing
+Next: record code review 8 (verify each claim), then its C1 (proposed P1) at once. Until C1 is fixed, only the
+backfill (which never runs the migration) is safe on the user's database; a collection or quote refresh isn't.

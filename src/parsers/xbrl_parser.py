@@ -4,7 +4,7 @@ import logging
 import math
 import re
 import statistics
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -50,9 +50,41 @@ def _reporting_currency(us_gaap: Dict[str, Any]) -> Optional[str]:
     return max(counts, key=lambda unit: counts[unit]) if counts else None
 
 
-def _foreign_currency(us_gaap: Dict[str, Any]) -> bool:
-    """Whether the filer reports in a currency other than dollars."""
-    return _reporting_currency(us_gaap) not in (None, "USD")
+def _foreign_filings(us_gaap: Dict[str, Any]) -> Dict[str, str]:
+    """The filings (accessions) reported in a currency other than dollars, with it:
+    those with no more USD facts than facts in another currency. Such a filing's few
+    USD facts are a convenience translation (TSM: 4,624 TWD facts beside 1,010 USD
+    ones; BUG-065). Decided filing by filing, since a filer can change its reporting
+    currency (the Yandex-to-Nebius path: rubles, then dollars; BUG-077)."""
+    counts: Dict[str, Counter] = defaultdict(Counter)
+    for tag in us_gaap.values():
+        for unit, entries in tag.get("units", {}).items():
+            if re.fullmatch(r"[A-Z]{3}", unit):
+                for entry in entries:
+                    counts[entry.get("accn") or ""][unit] += 1
+    foreign = {}
+    for accn, by_currency in counts.items():
+        others = [(n, currency) for currency, n in by_currency.items() if currency != "USD"]
+        if others and by_currency.get("USD", 0) <= max(others)[0]:
+            foreign[accn] = max(others)[1]
+    return foreign
+
+
+def _dollar_filings(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+    """The filer's facts less those of its filings in another currency (see
+    ``_foreign_filings``): a filer that switched to dollars keeps its filings since,
+    and one that left dollars its filings before."""
+    foreign = _foreign_filings(us_gaap)
+    if not foreign:
+        return us_gaap
+    kept: Dict[str, Any] = {}
+    for name, tag in us_gaap.items():
+        units = {unit: [e for e in entries if (e.get("accn") or "") not in foreign]
+                 for unit, entries in tag.get("units", {}).items()}
+        units = {unit: entries for unit, entries in units.items() if entries}
+        if units:
+            kept[name] = {**tag, "units": units}
+    return kept
 
 
 #: A later filing's figure for a year can be a tagging error of the figure the earlier
@@ -152,7 +184,7 @@ def explain_no_annual_financials(facts: Optional[Dict[str, Any]],
         report = "20-F" if us_gaap_forms & _FOREIGN_FORMS else "10-K"
         since = f" (its filings listed from {first_filing})" if first_filing else ""
         return f"it has filed no annual report ({report}) yet{since}"
-    if _foreign_currency(taxonomies["us-gaap"]):
+    if not _dollar_filings(taxonomies["us-gaap"]):
         return (f"it reports in {_reporting_currency(taxonomies['us-gaap'])} ({', '.join(sorted(us_gaap_forms))}), "
                 "which isn't converted to dollars")
     return "its annual-report facts give no full fiscal year of a mapped concept"
@@ -162,17 +194,29 @@ def explain_stale_annual_financials(facts: Optional[Dict[str, Any]],
                                     latest_period_end: Optional[str]) -> Optional[str]:
     """Why a filer's annual record stops at the period ending *latest_period_end*,
     when its later annual reports are in IFRS (a US-GAAP 20-F filer like TSM, or a
-    10-K filer, that moved to IFRS): the record otherwise reads as current. None when
-    no annual report in IFRS covers a later period (comparatives don't count)."""
+    10-K filer, that moved to IFRS) or in another currency (BUG-077): the record
+    otherwise reads as current. None when no such annual report covers a later period
+    (comparatives don't count)."""
     if not latest_period_end:
         return None
-    ifrs = (facts or {}).get("facts", {}).get("ifrs-full", {})
-    later = sorted({entry["form"] for tag in ifrs.values() for unit in tag.get("units", {}).values()
-                    for entry in unit
-                    if entry.get("form") in _ANNUAL_FORMS and str(entry.get("end") or "") > latest_period_end})
-    if not later:
+    taxonomies = (facts or {}).get("facts", {})
+
+    def later(entries: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [e for e in entries if e.get("form") in _ANNUAL_FORMS and str(e.get("end") or "") > latest_period_end]
+
+    ifrs = sorted({e["form"] for tag in taxonomies.get("ifrs-full", {}).values()
+                   for unit in tag.get("units", {}).values() for e in later(unit)})
+    if ifrs:
+        return f"later annual reports are in IFRS ({', '.join(ifrs)}), which isn't mapped"
+    us_gaap = taxonomies.get("us-gaap", {})
+    foreign = _foreign_filings(us_gaap)
+    reports = {(e["form"], foreign[e.get("accn") or ""]) for tag in us_gaap.values()
+               for unit in tag.get("units", {}).values() for e in later(unit) if (e.get("accn") or "") in foreign}
+    if not reports:
         return None
-    return f"later annual reports are in IFRS ({', '.join(later)}), which isn't mapped"
+    currencies = sorted({currency for _, currency in reports})
+    forms = sorted({form for form, _ in reports})
+    return f"later annual reports are in {', '.join(currencies)} ({', '.join(forms)}), which isn't converted to dollars"
 
 
 class XBRLParser:
@@ -303,8 +347,8 @@ class XBRLParser:
         Returns:
             Dictionary organized by fiscal year (string keys).
         """
-        us_gaap = facts.get("facts", {}).get("us-gaap", {})
-        if not us_gaap or _foreign_currency(us_gaap):
+        us_gaap = _dollar_filings(facts.get("facts", {}).get("us-gaap", {}))
+        if not us_gaap:
             return {}
 
         data = self._annual_periods(us_gaap)
@@ -329,8 +373,8 @@ class XBRLParser:
         already-fetched ``companyfacts`` (every historical instance carries its own
         ``accn``/``filed``); no extra network. Annual reports (10-K, 20-F, 40-F) only.
         """
-        us_gaap = facts.get("facts", {}).get("us-gaap", {})
-        if not us_gaap or _foreign_currency(us_gaap):
+        us_gaap = _dollar_filings(facts.get("facts", {}).get("us-gaap", {}))
+        if not us_gaap:
             return {}
 
         data: Dict[Any, Dict[str, Any]] = {}
@@ -399,8 +443,8 @@ class XBRLParser:
         Returns:
             Dictionary organized by period end date.
         """
-        us_gaap = facts.get("facts", {}).get("us-gaap", {})
-        if not us_gaap or _foreign_currency(us_gaap):
+        us_gaap = _dollar_filings(facts.get("facts", {}).get("us-gaap", {}))
+        if not us_gaap:
             return {}
 
         periods: Dict[str, Dict[str, Any]] = {}

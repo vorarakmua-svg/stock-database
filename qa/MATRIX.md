@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 83 · PASS 13 · FAIL 10 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
+**Status counts:** TODO 84 · PASS 13 · FAIL 9 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -60,7 +60,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
 | GATHER-01 | Yahoo | TODO | |  |
-| GATHER-02 | SEC CIK resolution | FAIL→BUG-077 | iter 57 | open: a currency switcher loses its dollar years (BUG-077, P2); done: an ADR's ratio is read against market cap / price from the period-end count, and one that can't be read leaves the per-share models N/A with the reason (BUG-076), a record that stops where IFRS reports begin is explained (BUG-066), a US-GAAP 20-F or 40-F ADR is valued on the ADS basis and a non-USD reporter's convenience translations are dropped and explained (BUG-065), ARM's 1:1 ADS read (BUG-043), TSM's IFRS and XOM's new registrant explained (BUG-044, BUG-042; Q6); untested: dual-class and punctuated tickers, renamed, delisted, ETF and index cases |
+| GATHER-02 | SEC CIK resolution | TODO | iter 58 | done: a filer's currency is decided filing by filing, so one that switched to dollars keeps its dollar years and one that left them says why they stop (BUG-077), an ADR's ratio is read against market cap / price from the period-end count and one that can't be read leaves the per-share models N/A with the reason (BUG-076), a record that stops where IFRS reports begin is explained (BUG-066), a US-GAAP 20-F or 40-F ADR is valued on the ADS basis and a non-USD reporter's convenience translations are dropped and explained (BUG-065), ARM's 1:1 ADS read (BUG-043), TSM's IFRS and XOM's new registrant explained (BUG-044, BUG-042; Q6); untested: dual-class and punctuated tickers, renamed, delisted, ETF and index cases |
 | GATHER-03 | companyfacts parsing | TODO | |  |
 | GATHER-04 | Rates | FAIL→BUG-052 | iter 39 | without a FRED key: Treasury.gov's latest day (BUG-041) with its day and source, and the static estimate flagged (BUG-037), checked live; the FRED-key path and January's prior-year fallback are untested; code review 5 (stubbed): any failure of the current-year request falls back to last year's year-end rate, and a blank latest 10-year gives no rate (BUG-052, P3) |
 | GATHER-05 | Rate limiting and retries | TODO | |  |
