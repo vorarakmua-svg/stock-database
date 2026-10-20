@@ -718,7 +718,7 @@ The server binds to `127.0.0.1` by default (localhost only).
 - **Companies browser** — filterable list of all tracked companies with sector drill-down.
 - **Cross-company screener** — filter by any fundamental metric (ROIC, net margin, debt/EBITDA, …) *or* market/valuation column (P/E, dividend yield, PEG, short interest, …) *or* the valuation layer's Upside % / verdict, sort, paginate, compare selected companies side-by-side, and download results as CSV.
 - **Point-in-time (as-of) explorer** — look up what financials and ratios looked like as of any historical date (before later restatements), and browse vintage side-by-side tables.
-- **On-demand quote refresh** — re-fetch a single ticker's live price/market snapshot from the workstation without running a full collection (see `STOCK_WEB_ALLOW_QUOTE_REFRESH` below).
+- **On-demand quote refresh** — re-fetch a single ticker's live price/market snapshot from the workstation without running a full collection (see `STOCK_WEB_ALLOW_QUOTE_REFRESH` below). After a stock split since the ticker's last collection with Yahoo, the refresh isn't saved, because the stored valuations, dividends and price history are on the pre-split basis; its status asks for a full collection of the ticker instead.
 - **CSV export** — download annual financials, annual metrics, or screener results as CSV from any company page or screener view.
 
 ### Terminal command bar

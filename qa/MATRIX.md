@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 81 · PASS 11 · FAIL 14 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
+**Status counts:** TODO 81 · PASS 12 · FAIL 13 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -71,7 +71,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | GATHER-10 | `--workers 1` and `--workers 4` produce identical DB content apart from timestamps.… | TODO | |  |
 | GATHER-11 | Flag combinations | TODO | |  |
 | GATHER-12 | Web jobs on a scratch server | TODO | |  |
-| GATHER-13 | Quote refresh (`POST /api/stocks/{T}/refresh-quote`) writes only the snapshot; `STOCK_WEB_… | FAIL→BUG-093 | iter 63 | a refresh after a split puts the post-split price beside valuations on the old basis: +420.3% and "cheap" where a full collection gives -48.0% (BUG-093, P1, code review 9); iter 30: a successful refresh writes one market and one analyst snapshot and nothing else (19 tables), and `STOCK_WEB_ALLOW_QUOTE_REFRESH=0` disables it (`qa/evidence/iter63-review9-rerun.txt`) |
+| GATHER-13 | Quote refresh (`POST /api/stocks/{T}/refresh-quote`) writes only the snapshot; `STOCK_WEB_… | PASS | iter 64 | a refresh writes one market snapshot (and an analyst snapshot when Yahoo has estimates) and nothing else, in all 19 tables; after a split since the ticker's last collection with Yahoo it writes nothing and asks for a full collection (BUG-093 fixed); `STOCK_WEB_ALLOW_QUOTE_REFRESH=0` gives 409 (`tests/test_web_quote_refresh.py`, `qa/evidence/iter64-bug093-e2e.txt`) |
 
 ## STORE: Persistence and queries
 

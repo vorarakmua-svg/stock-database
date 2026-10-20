@@ -105,16 +105,19 @@ class YahooHandler:
         Makes exactly ONE rate-limited ``yf.Ticker(ticker)`` call and reuses
         the same private extractors ``fetch_all`` uses for market data,
         valuation, and analyst estimates, plus the SCALAR shareholder stats
-        only (no holder-list DataFrame calls, no history/bars call).
+        only (no holder-list DataFrame calls, no bars), and the split history
+        (``_get_splits``, Yahoo's chart request), so the quote job can tell a
+        split since the last full collection, which would put this price on
+        another basis than everything stored (BUG-093).
 
-        Deliberately makes no ``stock.history()`` call, so the returned
-        ``market_data`` never includes ``ma_50``/``ma_200`` here (those
+        Deliberately makes no ``stock.history()`` call of its own, so the
+        returned ``market_data`` never includes ``ma_50``/``ma_200`` here (those
         require the "1y" history call ``_get_market_data`` makes for a full
         collection) — ``SQLiteStore.upsert_quote`` carries the previous
         snapshot's values for those forward instead of leaving them ``None``.
 
         Returns ``{"market_data": ..., "valuation": ..., "shareholders": ...,
-        "analyst_estimates": ...}`` on success, or ``{"error": ...}`` (never
+        "analyst_estimates": ..., "splits": ...}`` on success, or ``{"error": ...}`` (never
         raises) on failure — mirroring ``fetch_all``'s contract so callers
         (e.g. ``CollectionJobManager``'s quote-job worker) can check for the
         ``"error"`` key rather than needing a try/except per ticker.
@@ -128,6 +131,7 @@ class YahooHandler:
                 "valuation": self._get_valuation_metrics(stock),
                 "shareholders": self._get_shareholder_stats(stock),
                 "analyst_estimates": self._get_analyst_estimates(stock),
+                "splits": self._get_splits(stock),
             }
             # The extractors swallow Yahoo's errors (a rate limit leaves each one empty),
             # so a quote without a price is a failed fetch, not a refresh.

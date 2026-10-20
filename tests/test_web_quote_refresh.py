@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.exporters.sqlite_store import SQLiteStore
@@ -307,6 +308,72 @@ def test_a_failed_refresh_says_so_on_the_stock_page(web_db: Path, monkeypatch) -
     body = client.get(f"/ui/stocks/AAA/refresh-status/{job_id}").text
     assert "Refresh failed" in body and "Yahoo returned no price" in body
     assert "Quote refreshed" not in body and "/ui/stocks/AAA/des" not in body
+
+
+def _quote_with_splits_client(web_db: Path, splits: List[Dict[str, Any]],
+                              stored: List[Dict[str, Any]] = ()) -> TestClient:  # type: ignore[assignment]
+    """AAA last collected with Yahoo on 2024-06-15 (its bars end 2023-09-17, its stored split is 2:1 on
+    2023-06-01), then SEC-only on 2024-08-01; a quote whose split history is *splits*."""
+    conn = sqlite3.connect(web_db)
+    conn.executemany("INSERT INTO collection_runs (ticker, collected_at, data_sources) VALUES ('AAA', ?, ?)",
+                     [("2024-06-15T09:00:00", "yahoo_finance, sec_edgar"), ("2024-08-01T09:00:00", "sec_edgar")])
+    conn.executemany("INSERT INTO split_events (ticker, date, ratio) VALUES ('AAA', ?, ?)",
+                     [(s["date"], s["ratio"]) for s in stored])
+    conn.commit()
+    conn.close()
+    client = _make_client(web_db)
+    canned = {**_CANNED_QUOTE, "splits": splits}
+    client.app.state.job_manager.quote_fetcher_factory = lambda config: FakeQuoteHandler(canned)
+    return client
+
+
+@pytest.mark.parametrize("split_day", ["2024-06-15", "2024-07-01"])
+def test_a_refresh_after_a_split_since_the_last_collection_keeps_the_stored_quote(web_db: Path, split_day: str) -> None:
+    # BUG-093 (code review 9): the quote job writes only a market snapshot, so after a split since the last full
+    # collection the post-split price sat beside valuations, dividends and bars on the old basis (+420% and "cheap"
+    # where a full collection gives -48% and "expensive"), and no backfill could tell. A split on the day of the last
+    # collection with Yahoo may have come after it; an SEC-only run since doesn't bring it in.
+    before = _snapshot_count(web_db, "AAA")
+    client = _quote_with_splits_client(
+        web_db, [{"date": "2023-06-01", "ratio": 2.0}, {"date": split_day, "ratio": 10.0}])
+    job_id = client.post("/api/stocks/AAA/refresh-quote").json()["job_id"]
+    final = _wait_until_done(client, job_id)
+    assert (final["summary"]["successful"], final["summary"]["with_errors"]) == (0, 1)
+    assert _snapshot_count(web_db, "AAA") == before
+    body = client.get(f"/ui/stocks/AAA/refresh-status/{job_id}").text
+    assert "Refresh failed" in body and f"10-for-1 split on {split_day}" in body and "Collect AAA in full" in body
+
+
+@pytest.mark.parametrize("splits, stored", [
+    ([{"date": "2023-06-01", "ratio": 2.0}], []),  # the split the last collection stored
+    ([{"date": "2021-03-01", "ratio": 3.0}, {"date": "2023-06-01", "ratio": 2.0}], []),  # one from before it
+    ([{"date": "2023-06-01", "ratio": 2.0}, {"date": "2024-01-10", "ratio": 3.0}], []),  # after the last bar, before it
+    ([{"date": "2024-06-15", "ratio": 10.0}], [{"date": "2024-06-15", "ratio": 10.0}]),  # its day's, stored
+    ([{"date": "2024-07-01", "ratio": 1.0}], []),  # a 1-for-1 entry, which restates nothing
+])
+def test_a_refresh_without_a_split_since_the_last_collection_saves_the_quote(
+        web_db: Path, splits: List[Dict[str, Any]], stored: List[Dict[str, Any]]) -> None:
+    before = _snapshot_count(web_db, "AAA")
+    client = _quote_with_splits_client(web_db, splits, stored)
+    final = _wait_until_done(client, client.post("/api/stocks/AAA/refresh-quote").json()["job_id"])
+    assert final["summary"]["successful"] == 1
+    assert _snapshot_count(web_db, "AAA") == before + 1
+
+
+def test_a_quote_carries_yahoos_split_history(monkeypatch) -> None:
+    # What the quote job checks a refresh against (BUG-093): the split history from Yahoo's chart request.
+    import pandas as pd
+
+    import src.fetchers.yahoo_handler as yh
+
+    class SplitTicker:
+        def __init__(self, ticker: str) -> None:
+            self.info = {"currentPrice": 12.0, "regularMarketPrice": 12.0}
+            self.splits = pd.Series([2.0, 10.0], index=pd.to_datetime(["2023-06-01", "2024-07-01"]))
+
+    monkeypatch.setattr(yh.yf, "Ticker", SplitTicker)
+    quote = yh.YahooHandler(rate_limit_delay=0).fetch_quote("AAA")
+    assert quote["splits"] == [{"date": "2023-06-01", "ratio": 2.0}, {"date": "2024-07-01", "ratio": 10.0}]
 
 
 def test_refresh_quote_job_summary_notes_mode(web_db: Path) -> None:

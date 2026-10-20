@@ -1221,3 +1221,19 @@ Commit: (this commit) chore(qa): record code review 9; a quote refresh after a s
 never refetched
 Next: BUG-093 (P1) at once. Until it's fixed: after a company splits, collect it in full rather than refreshing its
 quote. Then the P2s, oldest first: BUG-084, BUG-092, BUG-094, BUG-095. Fixes since review 9's range: 1 (51091ce).
+
+## Iteration 64: 2026-10-20 13:04: fix
+Picked: BUG-093, the only open P1. CI: 440d5e7 ✓.
+Did: TDD (two tests RED: a refresh after a split since the last collection saved the post-split price; and the quote
+had no split history): the quote fetch reads Yahoo's split history, and the quote job saves nothing when Yahoo shows
+a split missing from `split_events` and dated on or after the ticker's last collection with Yahoo, telling the user
+to collect the ticker in full. A first version took any collection as the last one; the user's copy has 50
+SEC-only runs, which bring no split history, so it reads the last run with Yahoo (else the latest bar). Five
+controls and seven mutants, each failing a test. End to end through the app's refresh route on review 9's fake
+market: the refresh after the split is refused and the page keeps -47.8%, "expensive", where it showed +420.3%,
+"cheap"; nothing in any table changes; after a full collection a refresh saves one market snapshot, as before.
+Evidence: `qa/evidence/iter64-bug093-{red,green,mutants,e2e}.txt`
+Result: BUG-093 VERIFIED; GATHER-13 → PASS. No P0 or P1 open.
+Gates: ruff ✓ mypy ✓ pytest 1045 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(web): a quote refresh after a split since the last collection is refused, not saved
+Next: the P2s, oldest first: BUG-084, BUG-092, BUG-094, BUG-095. Fixes since review 9's range: 2 (51091ce, this).

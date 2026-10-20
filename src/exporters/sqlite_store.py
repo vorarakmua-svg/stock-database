@@ -763,6 +763,42 @@ class SQLiteStore:
                 "ratio": rec.get("ratio"),
             })
 
+    def splits_since_collection(self, ticker: str, splits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Of *splits* (Yahoo's ``{date, ratio}`` history for *ticker*), those the
+        stored record can't have seen: missing from ``split_events`` and dated on or
+        after the ticker's last collection with Yahoo, where its splits, bars and
+        dividends come from (a split that day may have come after it). The stored
+        prices, dividends, bars and valuations are on the basis before such a split,
+        so a quote after it would sit beside them on another (BUG-093).
+        """
+        candidates = [s for s in splits if s.get("date") and s.get("ratio") and float(s["ratio"]) != 1.0]
+        if not candidates:
+            return []
+        try:
+            conn = sqlite3.connect(read_only_uri(self.db_path), uri=True)
+        except sqlite3.Error:
+            return []  # nothing stored yet
+        try:
+            known = {str(d)[:10] for (d,) in conn.execute(
+                "SELECT date FROM split_events WHERE ticker = ?", (ticker,))}
+            since = None
+            # The last collection with Yahoo: its run row, else (no such row) its
+            # latest price bar, which only Yahoo gives.
+            for sql in ("SELECT max(collected_at) FROM collection_runs WHERE ticker = ? "
+                        "AND data_sources LIKE '%yahoo%'",
+                        "SELECT max(date) FROM price_bars WHERE ticker = ?"):
+                row = conn.execute(sql, (ticker,)).fetchone()
+                if row and row[0]:
+                    since = str(row[0])[:10]
+                    break
+        except sqlite3.Error:
+            return []
+        finally:
+            conn.close()
+        if since is None:
+            return []
+        return [s for s in candidates if str(s["date"])[:10] not in known and str(s["date"])[:10] >= since]
+
     def upsert_quote(self, ticker: str, quote: Dict[str, Any], collected_at: str) -> None:
         """Write ONE ``market_snapshots`` row + ONE ``analyst_snapshots`` row from
         a quote-only fetch (``YahooHandler.fetch_quote``) — nothing else.
