@@ -1735,3 +1735,17 @@ Gates: ruff ✓ mypy ✓ pytest 1168 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) chore(qa): discovery MATCH-04; the overlay's base, HP's CSV, stale ranges
 Next: BUG-136 (P2, the oldest open), then BUG-140, BUG-141, BUG-142, BUG-149, BUG-150, BUG-151. Fixes since review
 13's range (ef7cc76): 4.
+
+## Iteration 96: 2026-10-20 23:47: fix
+Picked: BUG-136, the oldest open P2 (no P0 or P1 open). CI: 96374fa ✓.
+Did: TDD (three tests RED): a count formatter, fmt_money's B/M/K without the currency (the two share the suffixes),
+for every count the app showed as money: DES's volumes, STAT's three share counts, the statements' shares, the HP
+table's volume, and the holders' and insiders' shares (two more than MATCH-06 named). Eight mutants, each failing a
+test. MATCH-06's sweep: the 1,140 and 1,026 dollar-signed counts gone, every value equal on both copies; stock-web:
+AAPL's 14.59B shares, 18.56M volume, Blackrock's 1.14B beside $350.76B.
+Evidence: `qa/evidence/iter96-bug136-{red,green,mutants,realdata,e2e}.txt`
+Result: BUG-136 VERIFIED; MATCH-06 FAIL→BUG-137.
+Gates: ruff ✓ mypy ✓ pytest 1171 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(web): share counts and volume read without a dollar sign
+Next: code review 14 (5 fixes since review 13's range, ef7cc76: 8a90337, ff5da71, 8d68d47, e03ffe1 and this
+commit); then BUG-140, BUG-141, BUG-142, BUG-149, BUG-150, BUG-151 (P2).

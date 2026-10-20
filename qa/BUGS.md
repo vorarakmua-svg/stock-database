@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 7 · P3 77 · NEEDS-USER 12 · Verified: 71
+**Open:** P0 0 · P1 0 · P2 6 · P3 77 · NEEDS-USER 12 · Verified: 72
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1050,11 +1050,12 @@ Impact: STAT's Debt/Equity for every company with Yahoo's figure; the screener's
 Decision (iteration 92): the figure stays Yahoo's percent, shown and named as one, rather than stored as the ratio. The JSON and CSV exports carry it as a percent and USAGE_GUIDE.md's screens read it so (`debt_to_equity < 100`, `{'max': 75}`): converting it would change those exports' unit silently, and the screener compares stored figures as typed. Yahoo presents it as a percent too ("Total Debt/Equity 78.45%").
 Fix: `fmt_value` has a "percent" kind, a figure already in percent (78.445 -> "78.4%"); STAT's Debt/Equity and the screener's kind map use it, the screener's filter is labelled "Debt / equity (%)", and the Yahoo field, the README and the guide say it is a percent; the guide's "normalize if over 10" step, which read NVDA's 6.6% as 6.6x, now divides by 100 always. Three tests RED on 3f55659; five mutants, four failing a test, the fifth (the compare view's kind) unreachable, as compare and peers take metrics_annual columns only (`qa/evidence/iter92-bug135-{red,green,mutants}.txt`). MATCH-06's sweep, with the figure judged by its ratio whether shown as a multiple or a percent: Debt/Equity's 13 mismatches on the user's copy and 15 on the golden one are gone, nothing else moved (`iter92-bug135-realdata.txt`). stock-web on a copy of the user's data: AAPL 78.4%, KO 115.5%, NEE 161.7%, NVDA 6.6%; the filter labelled "Debt / equity (%)": under 100 finds 70 companies, under 200 94 (`iter92-bug135-e2e.txt`).
 ### BUG-136 [P2][UI] Share counts and volume are shown as dollars: AAPL's "Shares outstanding $14.59B", "Volume $18.56M"
-Status: OPEN
-Found: iteration 91 via MATCH-06 (`qa/evidence/iter91-match06-{real,golden,extra}.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 96)
+Found: iteration 91 via MATCH-06 (`qa/evidence/iter91-match06-{real,golden,extra}.txt`) | Fixed: iteration 96 (see LOG) | Regression tests: `tests/test_web_workstation.py::test_a_count_formats_without_a_currency`, `::test_des_and_stat_show_counts_without_a_currency`, `::test_the_statements_hp_holders_and_insiders_show_counts_without_a_currency`
 Repro: counts go through `fmt_money`, which prefixes "$" (by design: `workstation.py:420-424` and `pages.py`'s `_STATEMENT_ROWS`, "for consistency"): DES's Volume and Avg Volume, STAT's Shares outstanding, Float shares and Shares short, every statement table's Shares outstanding row (annual, quarterly, TTM) and the HP table's volume. Over the golden tickers on the user's copy, 1,140 cells (15 DES pages x 2, 15 STAT x 3, 152 annual, 471 quarterly and 442 trailing-year cells); on the golden copy, 1,026.
 Expected: a count without a currency ("14.59B").   Actual: "$14.59B". The magnitudes and suffixes are right.
 
+Fix: `fmt_count` (and `fmt_value`'s "count" kind) formats a count with fmt_money's B/M/K suffixes and no currency, the two sharing `_suffixed`; every count the app showed as money uses it: DES's Volume and Avg Volume, STAT's Shares outstanding, Float shares and Shares short, the statements' Shares outstanding, the HP table's volume, and the holders' and insiders' shares (the last two found beside the four MATCH-06 named); the comments that called money "consistency" say so no longer. Three tests RED on 96374fa; eight mutants, each failing a test (`qa/evidence/iter96-bug136-{red,green,mutants}.txt`). MATCH-06's sweep, which reads a suffixed count with no currency as a count: the 1,140 and 1,026 dollar-signed counts are gone, every value equal (29,644 on the user's copy, 28,114 on the golden one; `iter96-bug136-realdata.txt`). stock-web on a copy of the user's data: AAPL's DES Volume 18.56M, STAT Shares outstanding 14.59B, statements 14.77B, HP volume 18.56M, Blackrock's 1.14B shares beside $350.76B, an insider's 116 shares beside $34.24K (`iter96-bug136-e2e.txt`).
 ### BUG-137 [P3][UI] A negative price change reads "$-10.87" where a negative amount reads "-$1.63B"
 Status: OPEN
 Found: iteration 91 via MATCH-06 (`qa/evidence/iter91-match06-extra.txt`) | Fixed: — | Regression test: —

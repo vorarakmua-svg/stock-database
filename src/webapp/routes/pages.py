@@ -60,7 +60,7 @@ _STATEMENT_ROWS: List[tuple[str, str, str]] = [
     ("Operating cash flow", "operating_cash_flow", "money"),
     ("CapEx", "capex", "money"),
     ("Dividends paid", "dividends_paid", "money"),
-    ("Shares outstanding", "shares_outstanding", "money"),
+    ("Shares outstanding", "shares_outstanding", "count"),
 ]
 
 # Metrics rows: (label, key, kind)

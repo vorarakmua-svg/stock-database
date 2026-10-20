@@ -327,6 +327,47 @@ def test_the_screener_names_debt_to_equity_a_percent(client):
     assert '"key": "debt_to_equity", "label": "Debt / equity (%)"' in client.get("/screener").text
 
 
+def test_a_count_formats_without_a_currency():
+    # BUG-136 (MATCH-06): share counts and volume went through fmt_money, so AAPL's STAT read "Shares outstanding
+    # $14.59B" and its DES "Volume $18.56M".
+    from src.webapp.formatting import fmt_count, fmt_value
+
+    assert [fmt_count(v) for v in (14_590_000_000, 146_550_000, -5_000, 999, None)] == [
+        "14.59B", "146.55M", "-5.00K", "999", "—"]
+    assert fmt_value(18_560_000, "count") == "18.56M"
+
+
+def test_des_and_stat_show_counts_without_a_currency(client, web_db):
+    conn = sqlite3.connect(web_db)
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price, volume, avg_volume, "
+                 "shares_outstanding, float_shares, shares_short) VALUES ('AAA', '2099-01-01T00:00:00', 100.0, "
+                 "18560000, 56630000, "
+                 "14590000000, 14570000000, 146550000)")
+    conn.commit()
+    conn.close()
+    des, stat = client.get("/ui/stocks/AAA/des").text, client.get("/ui/stocks/AAA/stat").text
+    for page, label, shown in ((des, "Volume", "18.56M"), (des, "Avg Volume", "56.63M"),
+                               (stat, "Shares outstanding", "14.59B"), (stat, "Float shares", "14.57B"),
+                               (stat, "Shares short", "146.55M")):
+        assert f'<span class="summary-label">{label}</span><span class="summary-value">{shown}</span>' in page
+
+
+def test_the_statements_hp_holders_and_insiders_show_counts_without_a_currency(client, web_db, monkeypatch):
+    conn = sqlite3.connect(web_db)
+    conn.execute("UPDATE financials_annual SET shares_outstanding = 15200000000 WHERE ticker = 'AAA'")
+    conn.commit()
+    conn.close()
+    statements = client.get("/ui/companies/AAA/statements?period=annual").text
+    assert "15.20B" in statements and "$15.20B" not in statements
+    _pin_today(monkeypatch, _AAA_LAST)
+    hp = client.get("/ui/stocks/AAA/hp").text
+    assert "1.13M" in hp and "$1.13M" not in hp  # the last bar's volume, 1,129,500
+    hds = client.get("/ui/stocks/AAA/hds").text
+    assert "5.00M" in hds and "$5.00M" not in hds  # Vanguard's 5,000,000 shares (worth $500.00M)
+    ins = client.get("/ui/stocks/AAA/ins").text
+    assert "10.00K" in ins and "$10.00K" not in ins  # Jane Doe's 10,000 shares
+
+
 def test_stat_fragment_unknown_ticker_404(client):
     resp = client.get("/ui/stocks/ZZZ/stat")
     assert resp.status_code == 404
