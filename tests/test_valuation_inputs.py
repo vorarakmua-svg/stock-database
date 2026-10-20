@@ -679,3 +679,37 @@ def test_a_split_after_the_latest_filing_never_explains_an_older_seam(tmp_path):
     assert [(r.fiscal_year, r.split_factor, round(r.eps_diluted, 3)) for r in records[:5]] == [
         (2016, 2.0, 1.0), (2017, 2.0, 1.05), (2018, 2.0, 1.1), (2019, 2.0, 1.15), (2020, 2.0, 1.3)]
 
+
+def _with_yahoo_series(db_path):
+    """Yahoo's dividends and FY-end price bars, adjusted for every split it knew when they were fetched."""
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO dividend_events (ticker, date, amount) VALUES ('KLA', '2025-05-15', 0.19)")
+    conn.execute("INSERT INTO price_bars (ticker, date, close) VALUES ('KLA', '2025-06-30', 60.0)")
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_a_split_after_the_latest_price_leaves_every_figure_on_that_prices_basis(tmp_path):
+    # Code review 5 (I2): a run whose quote failed keeps the older snapshot (BUG-033's fix) but stores the split and
+    # Yahoo's split-adjusted dividends and bars. The per-share figures moved past the split while the price didn't,
+    # so every model came out about a tenth of the price beside it.
+    db_path = _post_filing_split_db(tmp_path, "2026-09-01", 10.0, snapshot_shares=1.3375e8)
+    conn = _connect(_with_yahoo_series(db_path))
+    inputs = load_inputs(conn, "KLA")
+    conn.close()
+    latest = inputs.fy_records[-1]
+    assert (latest.split_factor, latest.eps_diluted) == (1.0, 30.37)
+    assert [(day, round(amount, 6)) for day, amount in inputs.dividends] == [("2025-05-15", 1.9)]
+    assert {fy: round(price, 6) for fy, price in inputs.fy_end_prices.items()} == {2025: 600.0}
+
+
+def test_a_split_before_the_latest_price_leaves_yahoos_figures_as_they_are(tmp_path):
+    db_path = _post_filing_split_db(tmp_path, "2026-06-12", 10.0, snapshot_shares=1.306e9)
+    conn = _connect(_with_yahoo_series(db_path))
+    inputs = load_inputs(conn, "KLA")
+    conn.close()
+    assert inputs.fy_records[-1].split_factor == 10.0
+    assert [(day, round(amount, 6)) for day, amount in inputs.dividends] == [("2025-05-15", 0.19)]
+    assert inputs.fy_end_prices == {2025: 60.0}
+

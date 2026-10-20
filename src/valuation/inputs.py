@@ -245,7 +245,8 @@ def _simple_ratio(ratio: float) -> bool:
 
 
 def _apply_later_splits(records: List[FYRecord], splits: Sequence[Tuple[str, float]],
-                        filed: Optional[str], today_counts: Sequence[float] = ()) -> None:
+                        filed: Optional[str], today_counts: Sequence[float] = (),
+                        priced_on: Optional[str] = None) -> None:
     """Move every year onto today's basis when a split came after the latest filing.
 
     Filings restate per-share figures only for splits made before they are
@@ -261,14 +262,16 @@ def _apply_later_splits(records: List[FYRecord], splits: Sequence[Tuple[str, flo
     when one of Yahoo's counts (``today_counts``) moved by it, within
     DECLARED_SPLIT_TOLERANCE (its own count, when market cap / price also
     counts units). A simple ratio is a split even before Yahoo's count catches
-    up with it (KLAC: 133.75M filed, 1.31B today).
+    up with it (KLAC: 133.75M filed, 1.31B today). A split after *priced_on*,
+    the day of the price the values are compared with, isn't in that price
+    (a quote failed since), so it moves nothing.
     """
     if not filed:
         return
     factor = 1.0
     needs_count = False
     for when, ratio in splits:
-        if ratio and str(when)[:10] > str(filed)[:10] and (
+        if ratio and str(when)[:10] > str(filed)[:10] and (priced_on is None or str(when)[:10] <= priced_on) and (
                 SPLIT_JUMP_THRESHOLD <= ratio <= MAX_SPLIT_RATIO
                 or 1.0 / MAX_SPLIT_RATIO <= ratio <= 1.0 / SPLIT_JUMP_THRESHOLD):
             factor *= ratio
@@ -418,7 +421,15 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     yahoo_counts = [snap["shares_outstanding"]] if snap and snap["shares_outstanding"] else []
     if snap and snap["market_cap"] and snap["current_price"]:
         yahoo_counts.append(snap["market_cap"] / snap["current_price"])
-    _apply_later_splits(records, splits, filed, yahoo_counts)
+    # Values are compared with this snapshot's price, so they stay on its basis: when a
+    # later run's quote failed (no new snapshot) but it stored a split made since, that
+    # split moves no year, and Yahoo's dividends and price bars, adjusted for every split
+    # it knew, are taken back to the price's basis (BUG-048).
+    priced_on = (str(snap["collected_at"])[:10]
+                 if snap is not None and snap["current_price"] is not None and snap["collected_at"] else None)
+    _apply_later_splits(records, splits, filed, yahoo_counts, priced_on)
+    unpriced = math.prod(ratio for when, ratio in splits
+                         if ratio and filed and priced_on and str(when)[:10] > max(priced_on, str(filed)[:10]))
     shares, shares_source = _total_shares(
         snap["shares_outstanding"] if snap else None,
         snap["market_cap"] if snap else None,
@@ -436,14 +447,14 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         "WHERE ticker = ? ORDER BY collected_at DESC LIMIT 1",
         (ticker,),
     ).fetchone()
-    dividends = _drop_spin_off_dividends([
+    dividends = [(day, amount * unpriced) for day, amount in _drop_spin_off_dividends([
         (r["date"], r["amount"])
         for r in conn.execute(
             "SELECT date, amount FROM dividend_events "
             "WHERE ticker = ? AND amount IS NOT NULL ORDER BY date ASC",
             (ticker,),
         ).fetchall()
-    ], splits)
+    ], splits)]
 
     fy_end_prices: Dict[int, float] = {}
     for rec in records:
@@ -455,7 +466,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
             (ticker, rec.period_end),
         ).fetchone()
         if bar is not None and bar["close"] is not None:
-            fy_end_prices[rec.fiscal_year] = bar["close"]
+            fy_end_prices[rec.fiscal_year] = bar["close"] * unpriced
 
     return ValuationInputs(
         ticker=ticker,

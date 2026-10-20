@@ -812,3 +812,22 @@ Gates: ruff ✓ mypy ✓ pytest 963 passed (1 known warning) | CI: pending for t
 Commit: (this commit) fix(valuation): a split after the latest filing never explains an older seam
 Next: code review 6 (five fixes since review 5's range: 8feac32, 98013f4, 14ac7c6, 522da04, this), dispatched in the
 background after this push; then BUG-048 (P2; the oracle rule changes first), then BUG-059.
+
+## Iteration 43: 2026-10-20 07:06: fix
+Picked: BUG-048, the oldest open P2. CI: f9bbc91 ✓. Code review 6 is still running.
+Did: every valuation input was already on today's basis (per-share figures, Yahoo's split-adjusted dividends and bars,
+the 0.75 rule's count) except the snapshot price, which every view compares them with; so the values now stay on
+that price's basis. The oracle took the rule first, in its own commit (30b3c5a, citing VAL-03, VAL-07 and VAL-09): on
+the whole scenario valued by the unfixed code it flagged all five applicable models, 10x off, and its verdicts on the
+real and golden copies were unchanged. Then TDD (2 tests; the stale case RED at split factor 10.0, EPS 3.037; the
+control guards the normal case): `_apply_later_splits` applies a post-filing split only up to the price's day, and
+Yahoo's dividends and FY-end bars are multiplied back by a split after both the filing and that day. Three mutants
+each fail a test. The scenario valued by the fix: median $277.31 beside $1,000 (was $27.73), the oracle agreeing at
+both levels; the real and golden copies revalued: 0 of 762 and 0 of 114 rows change. A split between the price's day
+and a filing that restated it is a different case; reproduced and recorded as BUG-060 (P2).
+Evidence: `qa/evidence/iter43-bug048-{oracle,red,green,mutants,e2e,impact}.txt`, `qa/evidence/iter43-bug060-repro.txt`
+Result: BUG-048 VERIFIED; new BUG-060. VAL-09 → FAIL→BUG-059.
+Gates: ruff ✓ mypy ✓ pytest 965 passed (1 known warning) | CI: pending for this push
+Commits: 30b3c5a chore(qa): oracle keeps per-share values on the latest price's basis; (this commit) fix(valuation):
+per-share values stay on the latest price's basis
+Next: record code review 6 when it reports; then BUG-059 (P2) or BUG-060 (P2), oldest first: BUG-059.

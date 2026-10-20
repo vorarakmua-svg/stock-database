@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 2 · P3 23 · NEEDS-USER 10 · Verified: 31
+**Open:** P0 0 · P1 0 · P2 2 · P3 23 · NEEDS-USER 10 · Verified: 32
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -406,13 +406,15 @@ Notes: the review's trial patch (drop splits dated after the latest FY filing be
 Fix: `load_inputs` offers `_normalize_splits` only the splits dated on or before the latest filing, the complement of what `_apply_later_splits` applies, so a post-filing split moves every year once and never explains a seam. The review's case end to end (`t_split/build_db.py`): Lynch $7.75 on 5.0% growth (was $18.60 on 13.4%), and the oracle agrees at both levels (it flagged 58.3% before). Impact: 0 of 762 real and 0 of 114 golden valuation rows change (both copies backfilled with 9892af9's code and with the fix; `qa/evidence/iter42-bug047-impact.txt`). Two mutants each fail a test.
 Notes: the variant, a split whose own seam lies before the window, is a different mechanism: BUG-059.
 ### BUG-048 [P2][VAL] After a failed quote, a split made since the last priced snapshot moves per-share values off the shown price's basis
-Status: OPEN
-Found: iteration 39 by code review 5 (I2), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 43)
+Found: iteration 39 by code review 5 (I2), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: iteration 43 (oracle rule 30b3c5a, then the fix; see LOG) | Regression tests: `tests/test_valuation_inputs.py::test_a_split_after_the_latest_price_leaves_every_figure_on_that_prices_basis`, `::test_a_split_before_the_latest_price_leaves_yahoos_figures_as_they_are`
 Repro: FY2023–25 filed 2025-08-08, a 10:1 split on 2026-06-12, and the latest priced snapshot from 2026-06-01 at $1,000: a later run's quote failed, so BUG-033's fix wrote no snapshot, while that run still stored the split and the price bars (`t_split/stale_snapshot.py`). Latest EPS 3.00, split_factor 10.0, Graham base $14.21 against the $1,000 price (61f8a56: EPS 30.00, $142.08). With Yahoo's split-adjusted dividends, DDM is $9.45 at both revisions, so DDM was already on the new basis; BUG-036's fix moved Graham, Lynch, the multiples band and the DCF there too. The verdict reads "expensive", with upside near −90%, until a run gets a quote.
 Expected: per-share values on the price's basis: apply a post-filing split only up to the snapshot's date, or withhold the verdict and upside.   Actual: values about a tenth of the price beside them.
 Impact today: none (no split of 3:2 or more postdates the latest priced snapshot on the real or golden copies).
 Notes: the oracle applies simple ratios unconditionally too, so its rule changes first (its own commit, before the fix).
 
+Fix: values stay on the basis of the price they are compared with. `load_inputs` takes the latest priced snapshot's day; `_apply_later_splits` applies a post-filing split only up to that day, and Yahoo's dividends and FY-end price bars, adjusted for every split it knew when fetched, are multiplied back by any split dated after both the latest filing and that day. The oracle took the rule first (30b3c5a): on the scenario valued by the unfixed code it flagged all five applicable models (10x), and its verdicts on the real and golden copies didn't change. The whole scenario (`iter43_stale_db.py`: 10 FYs, dividends, bars) valued by the fix: median $277.31 beside the $1,000 price (was $27.73), and the oracle agrees at both levels (`qa/evidence/iter43-bug048-{oracle,e2e}.txt`). Impact: 0 of 762 real and 0 of 114 golden valuation rows change. Three mutants each fail a test.
+Notes: a split between the price's day and the latest filing, which the filing restated, is a different case: BUG-060.
 ### BUG-049 [P2][VAL] BUG-017's third fix reads a special dividend next to a window end as a schedule change
 Status: NEEDS-USER (§10: BUG-017 has had three fixes; how DDM reads the payment history is your decision)
 Found: iteration 39 by code review 5 (I3), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
@@ -482,6 +484,14 @@ Repro (`review5/demo_old_split.py`): a 2:1 split in March 2017, restated by the 
 Expected: a seam the split can't have made stays unadjusted.   Actual: the merger seam takes the split.
 Impact today: none. On the real and golden copies the only declared match the EPS test would refuse is NOW's genuine 5:1 seam (FY2022 → FY2023: its EPS grew about 5× that year, the reason for a8fb8e4, BUG-031) (`qa/evidence/iter42-bug059-scan.txt`).
 Notes: fix direction: per-field filing dates. The vintages hold each field's filing, so a split can explain a seam only if the older year's share count was last filed before the split: that keeps NOW (FY2022 last filed early 2025, before December 2025's split) and refuses the variant (FY2016 last filed in 2019, after March 2017's). The oracle rule changes first.
+
+### BUG-060 [P2][VAL] A split between the latest price's day and the latest filing leaves per-share values past the split beside the older price
+Status: OPEN
+Found: iteration 43, while fixing BUG-048 (`qa/evidence/iter43-bug060-repro.txt`) | Fixed: — | Regression test: —
+Repro (`iter43_residual_db.py`): the latest priced snapshot is from 2026-01-10 ($1,000), a 10:1 split follows on 2026-02-01, and the FY2025 10-K filed 2026-02-20 restates FY2023-25 for it; a run on 2026-03-01 whose quote failed stored the 10-K, the split and Yahoo's split-adjusted dividends and bars. `_normalize_splits` moves FY2016-22 onto the restated basis, so every model comes out on the post-split basis: median $27.73 beside the pre-split $1,000. The oracle agrees with the code (0 of 5 beyond 0.5%): its closeness test reads the snapshot's count as today's basis, which it isn't here.
+Expected: values on the price's basis (about $277), as for BUG-048.   Actual: a tenth of that; the verdict reads expensive and upside about -97%.
+Impact today: none (no split of 3:2 or more postdates the latest priced snapshot on the real or golden copies; iteration 39's check).
+Notes: fix direction: after normalizing, take back each simple share split dated between the price's day and the filing (EPS and FFO times it, shares divided), and multiply Yahoo's series back by every split after the price's day; the oracle's closeness test then needs today's basis count (the snapshot's times those splits). Oracle first.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
