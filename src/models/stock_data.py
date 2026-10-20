@@ -287,6 +287,8 @@ class StockData:
             return
 
         self.add_source("yahoo_finance")
+        for warning in yahoo_data.get("warnings", []):
+            self.add_warning(f"Yahoo Finance: {warning}")
 
         # Company info
         if "company_info" in yahoo_data:

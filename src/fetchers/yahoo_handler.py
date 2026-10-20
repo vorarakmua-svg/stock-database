@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import yfinance as yf
@@ -71,8 +71,9 @@ class YahooHandler:
         try:
             self.rate_limiter.wait()
             stock = yf.Ticker(ticker)
+            bars, bars_error = self._price_bars_and_error(stock)
 
-            data = {
+            data: Dict[str, Any] = {
                 "company_info": self._get_company_info(stock),
                 "market_data": self._get_market_data(stock),
                 "valuation": self._get_valuation_metrics(stock),
@@ -81,12 +82,16 @@ class YahooHandler:
                 "price_history": self._get_price_history(stock),
                 "analyst_estimates": self._get_analyst_estimates(stock),
                 "dividend_history": self._get_dividend_history(stock),
-                "price_bars": self._get_price_bars(stock),
+                "price_bars": bars,
                 "earnings_history": self._get_earnings_history(stock),
                 "splits": self._get_splits(stock),
                 "fetched_at": datetime.now().isoformat(),
                 "source": "yahoo_finance",
             }
+            if bars_error:
+                # The stored bars stay as they were beside this run's newer dividends (BUG-084).
+                data["warnings"] = [f"price history unavailable ({bars_error}); "
+                                    "the stored daily bars weren't refreshed"]
 
             self.logger.info(f"Successfully fetched Yahoo data for {ticker}")
             return data
@@ -792,10 +797,14 @@ class YahooHandler:
         split basis: yfinance adjusts them for later dividends unless asked not to,
         and a past day's price then falls with every dividend since (BUG-075).
         """
+        return self._price_bars_and_error(stock)[0]
+
+    def _price_bars_and_error(self, stock: yf.Ticker) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """``_get_price_bars``' bars, and why the request failed, if it did."""
         try:
             hist = stock.history(period="max", interval="1d", auto_adjust=False)
             if hist is None or hist.empty:
-                return []
+                return [], None
 
             hist = hist.sort_index()
             bars = []
@@ -809,10 +818,10 @@ class YahooHandler:
                     "close": self._safe_float(row.get("Close")),
                     "volume": self._safe_float(row.get("Volume")),
                 })
-            return bars
+            return bars, None
         except Exception as e:
             self.logger.warning(f"Error getting price bars: {e}")
-            return []
+            return [], str(e)
 
     def _get_earnings_history(self, stock: yf.Ticker) -> List[Dict[str, Any]]:
         """

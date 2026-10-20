@@ -368,7 +368,7 @@ def _undo_splits_after_price(records: List[FYRecord], splits: Sequence[Tuple[str
             rec.shares /= factor
 
 
-def _yahoo_dividend_factors(conn: sqlite3.Connection, ticker: str) -> List[Tuple[str, float]]:
+def _yahoo_dividend_factors(conn: sqlite3.Connection, ticker: str, flagged: bool) -> List[Tuple[str, float]]:
     """Yahoo's dividend adjustment as ``[(ex_date, factor)]``, newest first.
 
     Yahoo lowers every price before an ex-date by 1 - d / (the close before it), so
@@ -377,13 +377,22 @@ def _yahoo_dividend_factors(conn: sqlite3.Connection, ticker: str) -> List[Tuple
     dividends' factors too, so each factor is solved with them:
     f = 1 / (1 + d * later / close). Against Yahoo's unadjusted closes, the golden
     basket's FY-end prices come back within 0.0001% (iteration 53's probe).
+
+    Yahoo adjusted the stored bars for the dividends it knew when it served them,
+    which the last such bar dates (the last flagged one, or any bar of a database
+    from before the flag): a dividend after it, a later run's whose bar request
+    failed, was never in them, so it isn't undone (BUG-084).
     """
+    served = conn.execute(
+        "SELECT max(date) FROM price_bars WHERE ticker = ?" + (" AND dividend_adjusted" if flagged else ""),
+        (ticker,),
+    ).fetchone()[0]
     factors: List[Tuple[str, float]] = []
     later = 1.0
     for ex, amount in conn.execute(
         "SELECT substr(date, 1, 10), amount FROM dividend_events "
-        "WHERE ticker = ? AND amount > 0 ORDER BY date DESC",
-        (ticker,),
+        "WHERE ticker = ? AND amount > 0 AND substr(date, 1, 10) <= ? ORDER BY date DESC",
+        (ticker, str(served or "")[:10]),
     ).fetchall():
         prev = conn.execute(
             "SELECT close FROM price_bars WHERE ticker = ? AND date < ? ORDER BY date DESC LIMIT 1",
@@ -633,7 +642,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         close = bar["close"]
         if not flagged or bar["dividend_adjusted"]:
             if factors is None:
-                factors = _yahoo_dividend_factors(conn, ticker)
+                factors = _yahoo_dividend_factors(conn, ticker, flagged)
             close /= math.prod(f for ex, f in factors if ex > str(bar["date"])[:10])
         fy_end_prices[rec.fiscal_year] = close * unpriced
 

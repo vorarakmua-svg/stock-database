@@ -10,6 +10,7 @@ import pytest
 
 from src.fetchers import yahoo_handler as yh_module
 from src.fetchers.yahoo_handler import YahooHandler
+from src.models.stock_data import StockData
 
 
 class _FakeTicker:
@@ -319,4 +320,25 @@ def test_price_bars_are_market_closes_not_dividend_adjusted(monkeypatch):
     _patch_ticker(monkeypatch, _FakeTickerAdjusting)
     bars = YahooHandler(rate_limit_delay=0.0).fetch_all("KO")["price_bars"]
     assert [b["close"] for b in bars] == [59.0, 59.1, 59.21]
+
+
+class _FakeTickerBarsFail(_FakeTicker):
+    """Every request works but the price history's (auto_adjust=False)."""
+
+    def history(self, period="1y", interval="1d", auto_adjust=True, **kwargs):
+        if auto_adjust is False:
+            raise RuntimeError("chart request failed")
+        return super().history(period=period, interval=interval, **kwargs)
+
+
+def test_a_failed_price_history_request_is_a_run_warning(monkeypatch):
+    # BUG-084 (code review 8): a failed bar request returned no bars and was only logged, so a run could store newer
+    # dividends beside the old bars with nothing to say they hadn't been refreshed.
+    _patch_ticker(monkeypatch, _FakeTickerBarsFail)
+    data = YahooHandler(rate_limit_delay=0.0).fetch_all("AAA")
+    assert data["price_bars"] == []
+    stock = StockData(ticker="AAA")
+    stock.merge_yahoo_data(data)
+    assert [w for w in stock.warnings if "price history" in w] == [
+        "Yahoo Finance: price history unavailable (chart request failed); the stored daily bars weren't refreshed"]
 

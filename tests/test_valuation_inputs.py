@@ -920,6 +920,36 @@ def test_fy_end_prices_are_market_closes(tmp_path, bars, expected):
     assert {fy: round(price, 6) for fy, price in inputs.fy_end_prices.items()} == expected
 
 
+@pytest.mark.parametrize("bars", ["flagged", "before the flag"])
+def test_a_dividend_after_the_last_adjusted_bar_is_not_undone(tmp_path, bars):
+    # BUG-084 (code review 8): Yahoo adjusted the stored bars for the dividends it knew when it served them. A later
+    # run whose bar request failed still stored its newer dividends, and the rebuild undid them too: FY-end prices
+    # about 0.5% high for each stale quarter.
+    db_path = _dividend_payer_db(tmp_path, bars)
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO dividend_events (ticker, date, amount) VALUES ('PAY', '2023-03-14', 2.0)")
+    conn.commit()
+    conn.close()
+    conn = _connect(db_path)
+    inputs = load_inputs(conn, "PAY")
+    conn.close()
+    assert {fy: round(price, 6) for fy, price in inputs.fy_end_prices.items()} == {2021: 100.0, 2022: 100.0}
+
+
+def test_a_dividend_on_the_last_adjusted_bars_day_is_undone(tmp_path):
+    # The bars Yahoo served on an ex-date already carry that day's dividend: with the payer's bars ending on its second
+    # ex-date, 2022-06-14, FY2021's close still comes back to 100.
+    db_path = _dividend_payer_db(tmp_path, "flagged")
+    conn = sqlite3.connect(db_path)
+    conn.execute("DELETE FROM price_bars WHERE date > '2022-06-14'")
+    conn.commit()
+    conn.close()
+    conn = _connect(db_path)
+    inputs = load_inputs(conn, "PAY")
+    conn.close()
+    assert {fy: round(price, 6) for fy, price in inputs.fy_end_prices.items()} == {2021: 100.0, 2022: 99.0}
+
+
 def test_an_ads_ratio_is_read_against_every_class(tmp_path):
     # Code review 7 (I2): Yahoo counts one class of several (GOOGL's class A, 5.867B of 12.23B), so a two-class 20-F
     # filer read as an ADS of 2 and its Graham and Lynch values doubled. Market cap / price counts every class.

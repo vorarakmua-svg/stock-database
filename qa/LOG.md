@@ -1237,3 +1237,20 @@ Result: BUG-093 VERIFIED; GATHER-13 → PASS. No P0 or P1 open.
 Gates: ruff ✓ mypy ✓ pytest 1045 passed, 1 skipped (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(web): a quote refresh after a split since the last collection is refused, not saved
 Next: the P2s, oldest first: BUG-084, BUG-092, BUG-094, BUG-095. Fixes since review 9's range: 2 (51091ce, this).
+
+## Iteration 65: 2026-10-20 13:26: fix
+Picked: BUG-084, the oldest open P2 (no P0 or P1 open). CI: 6ebfe38 ✓.
+Did: the oracle first (27ce753): Yahoo's stored bars count as adjusted for the dividends up to the last adjusted bar,
+which dates when they were served; on review 8's stale-dividend copy valued by the unfixed code it flags KO's and
+XOM's multiples. Then TDD (three tests RED: the rebuild undid a dividend after the last bar, in a flagged database and
+one from before the flag; a failed bar request left no warning): the factors stop at the last adjusted bar, and a
+failed price-history request is a run warning. A boundary test pins a dividend on the last bar's own day; five
+mutants, one surviving as equivalent in practice. The stale copies' multiples come back to the user's data's (76.94,
+212.32, 76.06), nothing moves on the real (0 of 889) or golden (0 of 133) copies, and a run whose bar request fails
+now says so. The real-app check also found BUG-094's family with only the bars failing (multiples 10x), added there.
+Evidence: `qa/evidence/iter65-bug084-{oracle,red,green,mutants,impact}.txt`
+Result: BUG-084 VERIFIED; VAL-05 → PASS.
+Gates: ruff ✓ mypy ✓ pytest 1049 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: 27ce753 chore(qa): oracle undoes only the dividends Yahoo's stored bars were adjusted for; (this commit)
+fix(valuation): the market-close rebuild undoes only the dividends Yahoo's bars were adjusted for
+Next: the P2s, oldest first: BUG-092, BUG-094, BUG-095. Fixes since review 9's range: 3 (51091ce, 6ebfe38, this).
