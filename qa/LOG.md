@@ -1014,3 +1014,31 @@ Gates: ruff ✓ mypy ✓ pytest 990 passed (1 known warning); no code changed | 
 Commit: (this commit) chore(qa): record code review 7; dividend-adjusted FY-end prices, ADS ratios and '#' paths
 Next: BUG-075 (P0: the FY-end market close, oracle rule first), then BUG-080 (P1), then the P2s oldest first (BUG-066,
 BUG-074, BUG-076, BUG-077, BUG-078). Fixes since review 7's range: 2 (2964555, 69c5a7e).
+
+## Iteration 53: 2026-10-20 09:43: fix
+Picked: BUG-075, the only open P0. CI: d6c8be7 ✓.
+Did: probe first (section 7, since code and oracle would share a reconstruction): the golden copy's stored bars
+rebuilt by undoing Yahoo's factor 1 - d / (the close before the ex-date) per later dividend equal Yahoo's
+unadjusted closes, fetched live for the 18 tickers, within 0.0001% at every FY-end bar (KO 2021-12-31: 51.546 →
+59.21). Then the oracle rule (5c1b693): the FY-end price is the market close, rebuilt for a bar flagged
+dividend-adjusted or from a database before the flag; it flagged 101 more multiples rows on the real copy and 11
+on the golden one valued by the unfixed code, and read the four synthetic KLA scenarios' bars as adjusted (one
+row each). Then TDD (4 tests RED, 1 control green): the fetch asks for market prices (`auto_adjust=False`), the
+migration flags bars already stored once, a re-collection clears the flag, and `load_inputs` rebuilds a flagged
+bar's FY-end market close. Nine mutants each fail a test. Valued by the fix, the copies change only in the
+multiples rows: real 103 rows, 20 medians beyond 0.5% (C +17.8%, JPM +12.6%), USB expensive → fair; golden 12
+rows (JPM +13.2%, PGR +6.5%). The oracle then agrees everywhere (real: the known 8; golden and scenarios: 0).
+End to end: the golden basket collected live with the fix stores market prices only (KO 59.21, NVDA 20.365); on it
+the oracle passes at both levels, VAL-13's hand-worked script equals all 14 models to 0.000%, and bars.csv and the
+VAL API show the market close and KO's new band. Treasury.gov's rate there is October 19's 5.15% (iteration 46's
+golden copy had January 2's 4.19%, BUG-041): no new issue. New lead L21 (moving averages and the price-history
+statistics still read the dividend-adjusted history).
+Evidence: `qa/evidence/iter53-bug075-{probe,oracle,red,green,mutants,impact,e2e}.txt`,
+`qa/evidence/iter53-val13-handworked.txt`
+Result: BUG-075 VERIFIED; VAL-05 and VAL-13 → PASS. No P0 open; P1: BUG-080.
+Gates: ruff ✓ mypy ✓ pytest 995 passed (1 known warning) | CI: pending for this push
+Commits: 5c1b693 chore(qa): oracle takes the market close at each FY end, not Yahoo's dividend-adjusted price;
+(this commit) fix(valuation): FY-end prices are market closes, not Yahoo's dividend-adjusted ones
+Next: BUG-080 (P1: a '#' or '%xx' in the database path). The user's valuations come right on the next backfill
+or collection (`python -m src.valuation.backfill`), and its price charts on re-collection (L20). Fixes since
+review 7's range: 3 (2964555, 69c5a7e, this).

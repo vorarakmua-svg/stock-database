@@ -227,6 +227,7 @@ class SQLiteStore:
             CREATE TABLE IF NOT EXISTS price_bars (
                 ticker TEXT NOT NULL, date TEXT NOT NULL,
                 {_cols_ddl(_PRICE_BAR_COLUMNS)},
+                dividend_adjusted INTEGER,
                 PRIMARY KEY (ticker, date)
             );
 
@@ -335,6 +336,13 @@ class SQLiteStore:
         }
         for table, columns in expected.items():
             self._ensure_columns(conn, table, columns)
+        # Bars stored before the fetch asked for market prices are Yahoo's
+        # dividend-adjusted ones (yfinance's default; BUG-075). Flag them once,
+        # as the column arrives, so readers rebuild their market closes.
+        bar_columns = {row[1] for row in conn.execute("PRAGMA table_info(price_bars)")}
+        if bar_columns and "dividend_adjusted" not in bar_columns:
+            conn.execute("ALTER TABLE price_bars ADD COLUMN dividend_adjusted INTEGER")
+            conn.execute("UPDATE price_bars SET dividend_adjusted = 1")
 
     # ---- upsert helper ----------------------------------------------------
 
@@ -701,6 +709,7 @@ class SQLiteStore:
                 continue
             row = {"ticker": ticker, "date": date}
             row.update({c: bar.get(c) for c in _PRICE_BAR_COLUMNS})
+            row["dividend_adjusted"] = None  # market prices (see _migrate)
             self._upsert(conn, "price_bars", ["ticker", "date"], row)
 
     def _write_earnings_history(self, conn: sqlite3.Connection, ticker: str,

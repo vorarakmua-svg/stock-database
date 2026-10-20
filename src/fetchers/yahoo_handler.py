@@ -784,10 +784,12 @@ class YahooHandler:
         Get the full daily OHLCV price history, ascending by ISO date.
 
         Returns a list of ``{date, open, high, low, close, volume}`` records,
-        or ``[]`` if no history is available.
+        or ``[]`` if no history is available. Prices are the market's, on today's
+        split basis: yfinance adjusts them for later dividends unless asked not to,
+        and a past day's price then falls with every dividend since (BUG-075).
         """
         try:
-            hist = stock.history(period="max", interval="1d")
+            hist = stock.history(period="max", interval="1d", auto_adjust=False)
             if hist is None or hist.empty:
                 return []
 

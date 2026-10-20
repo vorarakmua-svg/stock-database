@@ -854,3 +854,45 @@ def test_the_ads_basis_is_only_for_a_foreign_issuer_whose_count_is_a_multiple(tm
     conn.close()
     assert (inputs.ads_ratio, inputs.fy_records[-1].eps_diluted) == (1.0, 1.70)
 
+
+def _dividend_payer_db(tmp_path, bars):
+    """FY2021-22 of a payer whose market close is 100 throughout, and two $2 dividends in 2022: Yahoo's adjusted
+    prices are 96.04 (2021-12-31, 2022-03-11), 98.0 (2022-06-13) and 100.0 (2022-12-30); the ex-dates trade at
+    97 and 99 (95.06 and 99.0 adjusted), which the factors mustn't read. *bars* says how they're stored."""
+    db_path = tmp_path / "payer.db"
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('PAY', 'general')")
+    for fy in (2021, 2022):
+        conn.execute("INSERT INTO financials_annual (ticker, fiscal_year, period_end, net_income, total_equity, "
+                     "eps_diluted, weighted_avg_shares_diluted) VALUES ('PAY', ?, ?, 5.0e8, 4.0e9, 5.0, 1.0e8)",
+                     (fy, f"{fy}-12-31"))
+    conn.execute("INSERT INTO dividend_events (ticker, date, amount) VALUES ('PAY', '2022-03-14', 2.0), "
+                 "('PAY', '2022-06-14', 2.0)")
+    adjusted = [("2021-12-31", 96.04), ("2022-03-11", 96.04), ("2022-03-14", 95.06), ("2022-06-13", 98.0),
+                ("2022-06-14", 99.0), ("2022-12-30", 100.0)]
+    for day, close in adjusted:
+        conn.execute("INSERT INTO price_bars (ticker, date, close) VALUES ('PAY', ?, ?)", (day, close))
+    if bars == "flagged":
+        conn.execute("UPDATE price_bars SET dividend_adjusted = 1")
+    elif bars == "before the flag":
+        conn.execute("ALTER TABLE price_bars DROP COLUMN dividend_adjusted")
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+@pytest.mark.parametrize("bars, expected", [
+    ("flagged", {2021: 100.0, 2022: 100.0}),
+    ("before the flag", {2021: 100.0, 2022: 100.0}),
+    ("market closes", {2021: 96.04, 2022: 100.0}),
+])
+def test_fy_end_prices_are_market_closes(tmp_path, bars, expected):
+    # BUG-075: a bar stored from yfinance's default history is Yahoo's dividend-adjusted price, lower by every dividend
+    # paid since; its market close is rebuilt. A bar the fetch stored as a market close is read as it is.
+    conn = _connect(_dividend_payer_db(tmp_path, bars))
+    inputs = load_inputs(conn, "PAY")
+    conn.close()
+    assert {fy: round(price, 6) for fy, price in inputs.fy_end_prices.items()} == expected
+

@@ -360,6 +360,35 @@ def _undo_splits_after_price(records: List[FYRecord], splits: Sequence[Tuple[str
             rec.shares /= factor
 
 
+def _yahoo_dividend_factors(conn: sqlite3.Connection, ticker: str) -> List[Tuple[str, float]]:
+    """Yahoo's dividend adjustment as ``[(ex_date, factor)]``, newest first.
+
+    Yahoo lowers every price before an ex-date by 1 - d / (the close before it), so
+    a stored dividend-adjusted price divided by the factors of the dividends after
+    it is the market close. The stored close before an ex-date carries the later
+    dividends' factors too, so each factor is solved with them:
+    f = 1 / (1 + d * later / close). Against Yahoo's unadjusted closes, the golden
+    basket's FY-end prices come back within 0.0001% (iteration 53's probe).
+    """
+    factors: List[Tuple[str, float]] = []
+    later = 1.0
+    for ex, amount in conn.execute(
+        "SELECT substr(date, 1, 10), amount FROM dividend_events "
+        "WHERE ticker = ? AND amount > 0 ORDER BY date DESC",
+        (ticker,),
+    ).fetchall():
+        prev = conn.execute(
+            "SELECT close FROM price_bars WHERE ticker = ? AND date < ? ORDER BY date DESC LIMIT 1",
+            (ticker, ex),
+        ).fetchone()
+        if prev is None or not prev[0]:
+            continue
+        factor = 1.0 / (1.0 + amount * later / prev[0])
+        factors.append((ex, factor))
+        later *= factor
+    return factors
+
+
 def _drop_spin_off_dividends(dividends: List[Tuple[str, float]],
                              splits: Sequence[Tuple[str, float]]) -> List[Tuple[str, float]]:
     """Cash dividends only: drop a spin-off that Yahoo also records as a dividend.
@@ -561,17 +590,28 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         ).fetchall()
     ], splits)]
 
+    # A bar from yfinance's default history is Yahoo's dividend-adjusted price,
+    # lower by every dividend paid since (BUG-075): one flagged so, or any bar of a
+    # database from before the flag. The multiples band wants the market close.
+    flagged = "dividend_adjusted" in {r[1] for r in conn.execute("PRAGMA table_info(price_bars)")}
+    factors: Optional[List[Tuple[str, float]]] = None
     fy_end_prices: Dict[int, float] = {}
     for rec in records:
         if rec.period_end is None:
             continue
         bar = conn.execute(
-            "SELECT close FROM price_bars WHERE ticker = ? AND date <= ? "
-            "ORDER BY date DESC LIMIT 1",
+            "SELECT date, close" + (", dividend_adjusted" if flagged else "") + " FROM price_bars "
+            "WHERE ticker = ? AND date <= ? ORDER BY date DESC LIMIT 1",
             (ticker, rec.period_end),
         ).fetchone()
-        if bar is not None and bar["close"] is not None:
-            fy_end_prices[rec.fiscal_year] = bar["close"] * unpriced
+        if bar is None or bar["close"] is None:
+            continue
+        close = bar["close"]
+        if not flagged or bar["dividend_adjusted"]:
+            if factors is None:
+                factors = _yahoo_dividend_factors(conn, ticker)
+            close /= math.prod(f for ex, f in factors if ex > str(bar["date"])[:10])
+        fy_end_prices[rec.fiscal_year] = close * unpriced
 
     return ValuationInputs(
         ticker=ticker,

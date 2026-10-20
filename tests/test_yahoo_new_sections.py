@@ -28,7 +28,7 @@ class _FakeTicker:
             "preMarketPrice": 99.25,
         }
 
-    def history(self, period="1y", interval="1d"):
+    def history(self, period="1y", interval="1d", **kwargs):
         if period == "max" and interval == "1d":
             dates = pd.date_range("2024-01-01", periods=30, freq="D")
             return pd.DataFrame(
@@ -136,7 +136,7 @@ class _FakeTickerBadEarnings(_FakeTicker):
 class _FakeTickerTzAware(_FakeTicker):
     """Fake Ticker returning timezone-aware DatetimeIndex (matching real yfinance)."""
 
-    def history(self, period="1y", interval="1d"):
+    def history(self, period="1y", interval="1d", **kwargs):
         if period == "max" and interval == "1d":
             dates = pd.date_range("2024-01-01", periods=3, freq="D", tz="America/New_York")
             return pd.DataFrame(
@@ -295,3 +295,28 @@ def test_fetch_all_dividend_yield_none_stays_none(monkeypatch):
     assert data["valuation"]["dividend_yield"] is None
     assert data["dividend_history"]["dividend_yield"] is None
     assert data["dividend_history"]["five_year_avg_dividend_yield"] is None
+
+
+class _FakeTickerAdjusting(_FakeTicker):
+    """Like yfinance 1.0: history() adjusts every price for later dividends unless auto_adjust=False is asked for."""
+
+    def history(self, period="1y", interval="1d", auto_adjust=True, **kwargs):
+        if period != "max":
+            return pd.DataFrame()
+        market = [59.0, 59.1, 59.21]
+        later_dividends = 0.8706  # Yahoo's factor for the dividends paid since
+        frame = {"Open": market, "High": market, "Low": market, "Close": market, "Volume": [1.0e7] * 3}
+        if auto_adjust:
+            frame = {k: v if k == "Volume" else [p * later_dividends for p in v] for k, v in frame.items()}
+        else:
+            frame["Adj Close"] = [p * later_dividends for p in market]
+        return pd.DataFrame(frame, index=pd.date_range("2021-12-29", periods=3, freq="D"))
+
+
+def test_price_bars_are_market_closes_not_dividend_adjusted(monkeypatch):
+    # BUG-075: history() adjusts for dividends by default, so KO's 2021-12-31 close was stored as 51.55, not the 59.21
+    # it closed at, and the multiples band read P/Es lowered by every dividend paid since.
+    _patch_ticker(monkeypatch, _FakeTickerAdjusting)
+    bars = YahooHandler(rate_limit_delay=0.0).fetch_all("KO")["price_bars"]
+    assert [b["close"] for b in bars] == [59.0, 59.1, 59.21]
+

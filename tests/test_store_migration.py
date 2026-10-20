@@ -407,3 +407,28 @@ def test_ensure_columns_is_idempotent(tmp_path):
     assert cols.count("b") == 1
     assert cols.count("a") == 1
     conn.close()
+
+
+def test_bars_stored_before_market_closes_are_flagged_dividend_adjusted(tmp_path):
+    # BUG-075: every bar stored before the fetch asked for market prices holds Yahoo's dividend-adjusted one. The
+    # migration flags them once; a re-collected ticker's bars are market prices again.
+    db = tmp_path / "stock.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE price_bars (ticker TEXT NOT NULL, date TEXT NOT NULL, open REAL, high REAL, low REAL, "
+                 "close REAL, volume REAL, PRIMARY KEY (ticker, date))")
+    conn.executemany("INSERT INTO price_bars (ticker, date, close) VALUES (?, ?, ?)",
+                     [("KO", "2021-12-31", 51.546), ("PEP", "2021-12-31", 154.0)])
+    conn.commit()
+    conn.close()
+    ko = _full_stock("KO")
+    ko.price_bars = [{"date": "2021-12-31", "open": 59.0, "high": 59.3, "low": 58.9, "close": 59.21, "volume": 1.0e7}]
+    SQLiteStore(db).export([ko])
+    SQLiteStore(db).export([_stub_stock("ZZZ")])  # a later run's migration doesn't flag KO's again
+
+    conn = sqlite3.connect(db)
+    try:
+        rows = conn.execute("SELECT ticker, close, dividend_adjusted FROM price_bars ORDER BY ticker").fetchall()
+    finally:
+        conn.close()
+    assert rows == [("KO", 59.21, None), ("PEP", 154.0, 1)]
+
