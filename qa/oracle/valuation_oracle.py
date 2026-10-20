@@ -177,6 +177,20 @@ class Inputs:
         # both the latest filing and the price's day (a quote failed since; BUG-048) is in neither: no year moves
         # by it, and Yahoo's dividends and price bars, adjusted for every split it knew when fetched, are taken
         # back to the price's basis.
+        # The filing each year's figures were last taken from, per field (the vintages, every filing's view of each
+        # year): a share split restates the figures filed after it and no other (VAL-09's per-share consistency).
+        self.filed_by_field: Dict[Tuple[int, str], str] = {}
+        try:
+            for fy, *dates in db.execute(
+                    "select fiscal_year, max(case when weighted_avg_shares_diluted is not null then filed_date end), "
+                    "max(case when eps_diluted is not null then filed_date end), "
+                    "max(case when shares_outstanding is not null then filed_date end) "
+                    "from financials_annual_vintages where ticker=? group by fiscal_year", (ticker,)):
+                for field, filed in zip(("weighted_avg_shares_diluted", "eps_diluted", "shares_outstanding"), dates):
+                    if filed:
+                        self.filed_by_field[(fy, field)] = filed
+        except sqlite3.OperationalError:  # a database from before vintages were kept
+            pass
         self.priced_on = str(collected_at)[:10] if self.price is not None and collected_at else None
         self.unpriced = 1.0
         for date, ratio in self.splits:
@@ -188,8 +202,10 @@ class Inputs:
         # halved as well). A gap under 5% can be Yahoo's two figures disagreeing (MRVL, one class, 2.5%), so the
         # one nearer the latest FY's count wins (BUG-035); every wider gap in the data is a class or units
         # Yahoo's count leaves out (META 15%, BX 65%). The FY count is the diluted one, else the period-end one.
-        latest_fy = next(((r[5] or r[4], r[1]) for r in reversed(self.annual) if r[5] or r[4]), None)
-        fy_today = self.to_current_basis(latest_fy[0], latest_fy[1]) if self.snap_shares and latest_fy else None
+        latest_fy = next(((r[5] or r[4], r[1], self.filed_of(r[0], "weighted_avg_shares_diluted" if r[5]
+                                                             else "shares_outstanding"))
+                          for r in reversed(self.annual) if r[5] or r[4]), None)
+        fy_today = self.to_current_basis(*latest_fy) if self.snap_shares and latest_fy else None
         by_value = market_cap / self.price if market_cap and self.price else None
         if self.snap_shares and by_value and by_value > 1.02 * self.snap_shares and not (
                 fy_today and by_value < 1.05 * self.snap_shares
@@ -214,8 +230,14 @@ class Inputs:
         """A split dated after both the latest filing and the latest price's day (BUG-048)."""
         return bool(self.priced_on and self.last_filed and date[:10] > max(self.priced_on, self.last_filed[:10]))
 
-    def to_current_basis(self, shares: Optional[float], period_end: str) -> Optional[float]:
-        """Shares in today's split basis (declared splits after period_end, only if not yet restated)."""
+    def filed_of(self, fy: int, field: str) -> Optional[str]:
+        """When the year's figure for *field* was last filed, if the vintages say."""
+        return self.filed_by_field.get((fy, field))
+
+    def to_current_basis(self, shares: Optional[float], period_end: str,
+                         filed: Optional[str] = None) -> Optional[float]:
+        """Shares in today's split basis (declared splits after period_end, only if not yet restated).
+        *filed* is when the figure was last filed, if known."""
         if not shares:
             return None
         factor, unrestated = 1.0, 1.0
@@ -226,6 +248,13 @@ class Inputs:
             # history are spin-off price factors or stock dividends (HON 0.9535, SPGI 1.057; lead L12),
             # which don't change the share count.
             if date > period_end and ratio and (ratio >= 1.5 or ratio <= 1 / 1.5):
+                if filed and simple_ratio(ratio):
+                    # A filing restates its figures for every share split made before it, so the figure's own
+                    # filing says whether this split is in it. Today's count can't: a stock-paid merger or an IPO
+                    # moves it too (BUG-059).
+                    if date[:10] > filed[:10]:
+                        unrestated *= ratio
+                    continue
                 # A simple ratio dated after the latest filing is a share split no filing has restated yet
                 # (KLAC's 10:1): it applies whatever today's count says, since that count can lag a split
                 # (BUG-036). Spin-off and merger factors aren't simple (ABT 2.0842, DELL 1.806, RTX 1.589).
@@ -258,7 +287,8 @@ class Inputs:
             # EPS nor a diluted count, the spec's "EPS = net income / shares" takes the period-end count (DELL
             # FY2017-19, when it reported EPS only per tracking-stock class).
             basis_shares = wd or (ni / eps if ni and eps else None) or so
-            sh = self.to_current_basis(basis_shares, pe)
+            field = ("weighted_avg_shares_diluted" if wd else "eps_diluted" if ni and eps else "shares_outstanding")
+            sh = self.to_current_basis(basis_shares, pe, self.filed_of(fy, field))
             if eps is not None:
                 out.append((fy, eps * (basis_shares / sh) if basis_shares and sh else eps))
             elif ni is not None and sh:
@@ -269,7 +299,8 @@ class Inputs:
         fy, pe, _ni, eq, so, wd, _eps = fy_row
         # The spec's BVPS is "equity / shares". A filer that reports no diluted count (XOM since FY2014: its
         # diluted EPS equals basic) leaves the period-end count for the diluted reading too.
-        sh = self.to_current_basis((wd or so) if which == "diluted" else so, pe)
+        field = "weighted_avg_shares_diluted" if which == "diluted" and wd else "shares_outstanding"
+        sh = self.to_current_basis((wd or so) if which == "diluted" else so, pe, self.filed_of(fy, field))
         return eq / sh if eq is not None and sh else None
 
     def fy_end_price(self, period_end: str) -> Optional[float]:
