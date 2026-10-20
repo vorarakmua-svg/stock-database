@@ -1474,3 +1474,17 @@ Gates: ruff ✓ mypy ✓ pytest 1114 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(query): the as-of view keeps each figure as last filed
 Next: record code review 11 (re-run each claim; I1 and I2 proposed P2), then BUG-111 (P2). Fixes since review 11's
 range (6715f99): 3.
+
+## Iteration 79: 2026-10-20 19:34: review
+Picked: code review 11's record (8c34a86..6715f99, reported in iteration 78), before the next P2 fix. CI: a399dc0 ✓.
+Did: saved the report (`qa/evidence/review11-report.md`) and re-ran its claims on a399dc0 with its own scripts: the
+split-day scenario and its control (DDM 418.38 against 41.84 beside the post-split price, the oracle passing it), the
+JSON scenario (46 payments, then the error alone), the synthetic revenue and vintage probes, the user's clock (+0700;
+50 of 166 Yahoo runs at 14:xx), the stale comments, the oracle's copied rule, and its five meaningful surviving
+mutants against the whole suite. Every claim holds; no P0 or P1.
+Evidence: `qa/evidence/iter79-review11-rerun.txt`, `review11-report.md`
+Result: BUG-117 (P2, I1), BUG-118 (P2, I2), BUG-119-122 (P3: M1+M2, M3, M4+M7, M5) opened; M6 noted on BUG-109.
+VAL-09 FAIL→BUG-117, MATCH-05 FAIL→BUG-118, VALID-01 PASS→FAIL→BUG-119.
+Gates: ruff ✓ mypy ✓ pytest 1114 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) chore(qa): record code review 11
+Next: BUG-111 (P2, the oldest open), then BUG-117 and BUG-118. Fixes since review 11's range (6715f99): 3.

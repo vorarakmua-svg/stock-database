@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 52 · NEEDS-USER 12 · Verified: 60
+**Open:** P0 0 · P1 0 · P2 3 · P3 56 · NEEDS-USER 12 · Verified: 60
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -859,6 +859,7 @@ Found: iteration 70 by code review 10 (M7), re-run in iteration 71 (`qa/evidence
 Repro: `qa/oracle/valuation_oracle.py`'s `bars_to_price_basis` (`:368`) and its dividend cutoff (`:389-403`) are the rules of `src/valuation/inputs.py:386-405` and `:603-611`, reading the same `split_events`: code review 10's oracle run passes BUG-103's database (0 rows beyond 0.5%) with Graham ten times its value. (Their commits, 27ce753 and db4820b, said why section 7's probe didn't apply, and checked the premise on real data.)
 Expected: a check of the stored series' basis the code doesn't share: the stored bar on the price's day against the snapshot price, within 0.07% on every real and golden ticker (code review 10's `bars_basis_probe.txt`).   Actual: none.
 
+Code review 11 (M6), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`): the oracle's `dividend_onto` (`qa/oracle/valuation_oracle.py:385-401`) is `inputs._dividend_onto` line for line, so it passes BUG-117's DDM (0 rows beyond 0.5% after that scenario's run 2). The review's independent probe, the converted trailing payments against the snapshot's `dividend_rate` (on the price's basis), reads 9.76x in BUG-117's scenario and 0.976x in its control, and 104 of 106 real payers within 0.5-2 (NVDA 0.28, CB 0.488), 13 of 14 golden (PGR's variable dividend 34.75).
 ### BUG-110 [P1][STORE] The as-of view loses a year's figures once a later filing repeats only part of it: 70% of years read no revenue as of today
 Status: VERIFIED (iteration 78)
 Found: iteration 77 via VALID-10, lead L22 (`qa/evidence/iter77-pit.txt`) | Fixed: iteration 78 (see LOG) | Regression tests: `tests/test_asof_reader.py::test_a_figure_a_later_filing_leaves_out_keeps_its_last_filed_value`, `::test_a_figure_filed_after_the_date_is_never_carried`, `::test_as_of_value_and_history_read_each_figure_as_last_filed`, `tests/test_pit_metrics.py::test_ratios_read_each_figure_as_last_filed`, `tests/test_web_api_asof.py::test_annual_asof_returns_the_figures_a_later_filing_leaves_out`, `::test_asof_result_fragment_dates_a_figure_last_filed_earlier`
@@ -903,6 +904,44 @@ Status: OPEN
 Found: iteration 78 while verifying BUG-110 (`qa/evidence/iter78-bug110-realdata.txt`) | Fixed: — | Regression test: —
 Repro: each vintage resolves its own tags, and the as-of view takes each figure from the latest filing that reports it, while the annual record takes the preferred tag first and the latest filing after. So as of 2026-12-31, on a fresh offline collection of the 126 cached filers, the two differ in 1,250 of the 95,407 figures both hold (823 the latest filing's own, as before BUG-110's fix; 427 carried from an earlier filing), 274 by more than 10% (11 of them BUG-085's): ALL's FY2020 claims reserve $1.028B (its FY2021 10-K) against $27.61B, AMGN's FY2010 long-term debt $13.36B against $10.87B, and total equity with the non-controlling interest (762 years, from the equity statements' opening balances) against the parent's. Either can be the better figure: ADI's FY2018 revenue of $6.225B is the FY2019 10-K's restatement, which the annual record passes over for the $6.201B first filed (BUG-062's mix).
 Expected: one rule for both (for instance each vintage figure stored with its tag, so the as-of view ranks as the annual record does).   Actual: as above.
+
+### BUG-117 [P2][VAL] A payment's served day is the collector's local date: east of New York, a run before the open on a split's day keeps pre-split payments as post-split, and DDM reads ten times its value
+Status: OPEN
+Found: iteration 78 by code review 11 (I1), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `dividend_events.served_on` is `collected_at[:10]`, the collector's local date (`sqlite_store.py:626`), and `inputs._dividend_onto` counts a split dated on the served day as already in the payment (`day <= served`); the bars are dated by their last bar, New York's day. Code review 11's `scen11.py tz_split_day` on a399dc0: run 1 at local 2026-06-12 08:00 (+0700; New York still on 06-11, so Yahoo serves no split yet) stores the payments with served day 2026-06-12, the split's day; after run 2 (local 06-13 08:00, New York 06-12, post-split; only the dividends' request fails) they stay on the pre-split basis beside the post-split price: DDM 418.38 against 41.84 in the control (run 1 at local 06-11 20:00), median 80.91 against 52.66, upside -20.0% against -47.9%; Graham, Lynch and the multiples are right, and the oracle passes it (0 rows beyond 0.5%, BUG-109). A third run where everything works puts it right.
+Expected: payments dated on Yahoo's calendar, as the bars are (the chart response's last day, or `collected_at` in New York's time).   Actual: the local date.
+Impact today: none in the copies, but this machine's clock is +0700: 50 of the 166 Yahoo runs in the user's data ran at 14:xx local (03:xx in New York, before the open), and the 15 tickers last collected then have their last bar the day before. It needs a split, Yahoo not yet applying it at that hour, and a later run whose dividend request alone fails. Shares BUG-079's root; a3e9e27's `_dividend_onto` applies the same rule to the market-close rebuild. Graded P2 like BUG-103 (a scenario-only valuation error).
+
+### BUG-118 [P2][STORE] The JSON export keeps a failed dividend request's error in place of the dividend history
+Status: OPEN
+Found: iteration 78 by code review 11 (I2), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: — | Regression test: —
+Repro: code review 11's `scen11.py json_divfail` on a399dc0: run 1 (2026-06-01) writes FILER.json with 46 payments; run 2 (2026-10-01), whose dividends' request alone fails, writes `{"error": "'NoneType' object is not subscriptable"}` and 0 payments in their place, while SQLite keeps all 46. `json_exporter._merge_data` (`:184`) takes an error-only section as data.
+Expected: BUG-018's rule: a section the run didn't get keeps the earlier one.   Actual: the history is gone from the JSON until the next good run.
+Impact: the JSON's dividend history after every run whose dividend request fails; no valuation reads it. Pre-existing (8c34a86 does the same).
+
+### BUG-119 [P3][VALID] Revenue's rules differ from the README twice: the tax-inclusive contract tag outranks net sales, and a negative total gives way to a part
+Status: OPEN
+Found: iteration 78 by code review 11 (M1, M2), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: — | Regression test: —
+Repro: code review 11's `bug099_synthetic.py` on a399dc0. (A) The README (`:577`) and `xbrl_parser.py:116` say `RevenueFromContractWithCustomerIncludingAssessedTax` fills only a year with no other figure, but it is fourth in revenue's tag order (`canonical.py:85`), ahead of `SalesRevenueNet` and `SalesRevenueGoodsNet`, and outside the set-aside: at $74.953B beside either at $26.685B, revenue reads $74.953B. (B) The README (`:575`) says only a zero total gives way, but the code checks `value <= 0 < against`: `Revenues` of -$0.349B beside $2.0B of contract revenue, with no operating lines, reads $2.000B (an income statement adding up to the total keeps -$0.349B).
+Expected: code and README agree.   Actual: as above. Impact: none today (only TJX FY2017-18 take the tax-inclusive tag beside another figure, and the two are equal; no cached filer has a negative total beside a positive part).
+
+### BUG-120 [P3][STORE] An earlier filing's vintage takes the revenue a later filing's restatement decides (look-ahead)
+Status: OPEN
+Found: iteration 78 by code review 11 (M3), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: — | Regression test: —
+Repro: code review 11's `bug099_vintage_lookahead.py` on a399dc0: a FY2016 10-K (filed 2017-02-15) reports `Revenues` of $10.0B and contract revenue of $8.0B, its operating lines adding up to $10.0B, and a later 10-K restates contract revenue to $7.0B. `_revenue_set_aside` is computed from every filing's latest figures and applied to each vintage (`xbrl_parser.py:455`, `:480`), so the FY2016 10-K's own vintage reads $8.0B (8c34a86: $10.0B).
+Expected: each vintage's set-aside decided from that filing's own figures.   Actual: a later filing's. Impact: none in the cached filers.
+
+### BUG-121 [P3][DOCS] Three comments still describe the old behavior
+Status: OPEN
+Found: iteration 78 by code review 11 (M4, M7), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: — | Regression test: —
+Repro: README.md:438 still gives `total_liabilities = total_assets - total_equity` (since BUG-100 the non-controlling interest is taken out too), `src/validation/quality.py:146` still says "(A - E)", and `YahooHandler.fetch_quote`'s docstring (`yahoo_handler.py:122-125`) still says the quote job tells "a split since the last full collection" (since BUG-102, a split after the stored price's day).
+Expected: comments that match the code.   Actual: as above.
+
+### BUG-122 [P3][CODE] Four behaviors no test pins: a 17-week quarter, revenue's 25% gap, a split on the served day, the migration's re-check
+Status: OPEN
+Found: iteration 78 by code review 11 (M5), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: — | Regression test: —
+Repro: code review 11's surviving mutants, re-run on a399dc0 with its runner, the whole suite each; all five still survive (1,114 passed each): the parser's and `ttm.py`'s 115-day quarter limit, `_REVENUE_GAP = 1.15`, `day < served` in `_dividend_onto` (a3e9e27's form of the review's mutant) and the migration without its re-check. Their effects (the review's): a 115-day quarter limit in the parser loses six 17-week Q4s (COST 2012-09-02 $32.22B, 2017-09-03, 2023-09-03; PEP's 2011, 2016 and 2022 year-ends), and in `ttm.py` 18 trailing years; `_REVENUE_GAP = 1.15` moves DHR's FY2017-18 revenue from $18.33B and $19.89B to $15.52B and $17.05B; `day < served` makes a run on the split's day whose quote failed read DDM 41.84 beside the $1,008.86 pre-split price (median $490.63, upside -51.4%, against head's 418.38, $526.57 and -47.8%; re-run); without the re-check the loser of two first runs fails "duplicate column name: served_on" 5 of 5 times, where head's both succeed (re-run).
+Expected: a test each.   Actual: none fails.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
