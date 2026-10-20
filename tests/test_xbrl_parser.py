@@ -2,6 +2,7 @@
 
 import pytest
 
+from src.parsers.calculated_metrics import CalculatedMetrics
 from src.parsers.xbrl_parser import XBRLParser, explain_no_annual_financials, explain_stale_annual_financials
 from tests.conftest import usd
 
@@ -343,12 +344,17 @@ def test_a_later_10k_that_flips_a_years_acquisitions_is_put_right():
         11202.0, 1456.0, 8026.0, 2091.0, 12027.0]
 
 
-def _year_end_debt(**tagged):
-    """A 2025 balance sheet holding the given debt tags (tag=value), and its long-term debt as (value, tag)."""
+def _year_end_balance_sheet(**tagged):
+    """A 2025 balance sheet holding the given debt tags (tag=value), as the parser reads its year."""
     facts = {"facts": {"us-gaap": {
         tag: {"units": {"USD": [usd(val, None, "2025-12-31", fy=2025, fp="FY", form="10-K", filed="2026-02-12")]}}
         for tag, val in tagged.items()}}}
-    year = XBRLParser().extract_annual_financials(facts).get("2025", {})
+    return XBRLParser().extract_annual_financials(facts).get("2025", {})
+
+
+def _year_end_debt(**tagged):
+    """The long-term debt of ``_year_end_balance_sheet``'s year as (value, tag)."""
+    year = _year_end_balance_sheet(**tagged)
     return year.get("long_term_debt"), year.get("_source_tags", {}).get("long_term_debt")
 
 
@@ -367,6 +373,51 @@ def test_the_noncurrent_tags_win_beside_the_fallbacks():
         100.0e9, "LongTermDebtNoncurrent")
     assert _year_end_debt(LongTermDebtAndCapitalLeaseObligations=60.5e9, NotesPayable=63.7e9) == (
         60.5e9, "LongTermDebtAndCapitalLeaseObligations")
+
+
+@pytest.mark.parametrize("current", [{"DebtCurrent": 8.461e9}, {"LongTermDebtCurrent": 8.211e9},
+                                     {"ShortTermBorrowings": 8.211e9, "LongTermDebtCurrent": 8.211e9}])
+def test_a_total_beside_current_debt_that_holds_its_current_maturities_gives_way(current):
+    # BUG-141 (code review 13): LongTermDebt, a total with the current maturities, outranked the noncurrent tags, so
+    # where the balance sheet's current debt holds them they counted twice: BA's FY2025 $53.85B beside $8.46B of
+    # current debt, where its balance sheet has $45.64B; T, TMO, GE and IBM likewise. The short-term figure holds them
+    # as current debt, as the maturities themselves, or as borrowings tagged on the same line (AMT's).
+    assert _year_end_debt(LongTermDebt=53.848e9, LongTermDebtAndCapitalLeaseObligations=45.637e9, **current) == (
+        45.637e9, "LongTermDebtAndCapitalLeaseObligations")
+
+
+def test_bas_total_debt_is_its_balance_sheets():
+    year = _year_end_balance_sheet(LongTermDebt=53.848e9, LongTermDebtAndCapitalLeaseObligations=45.637e9,
+                                   DebtCurrent=8.461e9)
+    assert CalculatedMetrics().calculate_all(year)["total_debt"] == pytest.approx(54.098e9)  # $62.31B before
+
+
+@pytest.mark.parametrize("current", [{}, {"ShortTermBorrowings": 0.014e9}, {"LongTermDebtCurrent": 0.0}])
+def test_a_total_whose_current_maturities_no_short_term_figure_holds_is_kept(current):
+    # ABBV's FY2021: $75.96B, $12.48B of it due within a year, beside $14M of short-term borrowings that don't hold
+    # it; UNP's years hold the maturities in no short-term figure, GOOGL's FY2021 in one of zero. The noncurrent
+    # figure alone would lose them (review 13: 67 years at 14 filers).
+    assert _year_end_debt(LongTermDebt=75.962e9, LongTermDebtAndCapitalLeaseObligations=64.189e9, **current) == (
+        75.962e9, "LongTermDebt")
+
+
+def test_a_long_term_debt_below_the_noncurrent_figure_is_a_notes_figure():
+    # A total can't be below its noncurrent part: MU's FY2025 LongTermDebt is its notes ($11.53B), its balance sheet's
+    # long-term debt with the finance leases $14.02B; AMT's FY2019 a note's $1.9M against $21.13B (BUG-141).
+    assert _year_end_debt(LongTermDebt=11.533e9, LongTermDebtAndCapitalLeaseObligations=14.017e9) == (
+        14.017e9, "LongTermDebtAndCapitalLeaseObligations")
+
+
+def test_a_total_with_no_noncurrent_figure_beside_it_is_kept():
+    # KLAC's balance sheet tags its noncurrent line LongTermDebt beside its current maturities: with no noncurrent
+    # figure, the total is the only long-term debt there is.
+    assert _year_end_debt(LongTermDebt=5.88e9, LongTermDebtCurrent=0.75e9) == (5.88e9, "LongTermDebt")
+
+
+def test_a_total_is_weighed_against_the_noncurrent_figure_that_would_replace_it():
+    # The first noncurrent tag a filing uses is the one long-term debt reads in the total's place.
+    assert _year_end_debt(LongTermDebt=10.0e9, LongTermDebtAndCapitalLeaseObligations=12.0e9,
+                          LongTermNotesPayable=9.0e9) == (12.0e9, "LongTermDebtAndCapitalLeaseObligations")
 
 
 RESTRICTED = "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"

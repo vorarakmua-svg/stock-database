@@ -160,10 +160,56 @@ def _on_balance_sheet_dates(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     return kept
 
 
+#: LongTermDebt, a total with the current maturities, and the noncurrent figures long-term debt
+#: reads after it (``canonical.py``).
+_DEBT_TOTAL = "LongTermDebt"
+_DEBT_NONCURRENT = ("LongTermDebtAndCapitalLeaseObligations", "LongTermNotesPayable", "UnsecuredLongTermDebt",
+                    "ConvertibleLongTermNotesPayable")
+
+
+def _debt_totals_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+    """*us_gaap* less the LongTermDebt a filing tags beside a noncurrent figure, where its current
+    debt holds the current maturities, so the total would count them twice (BA's FY2025 $53.85B
+    beside $8.46B of current debt, where its balance sheet has $45.64B), or where it is below the
+    noncurrent figure, a note's narrower one (MU's notes without their finance leases; AMT's
+    FY2019 $1.9M against $21.13B). Current debt holds them as DebtCurrent or as the maturities,
+    above zero, or as short-term borrowings on the same line (AMT's); otherwise the total keeps
+    them, as ABBV's FY2021 $75.96B does $12.48B due within a year (BUG-141)."""
+    if _DEBT_TOTAL not in us_gaap:
+        return us_gaap
+
+    def by_filing(tag: str) -> Dict[Tuple[str, str], float]:
+        return {(e["accn"], e["end"]): e["val"] for e in us_gaap.get(tag, {}).get("units", {}).get("USD", [])
+                if e.get("accn") and e.get("end") and not e.get("start") and isinstance(e.get("val"), (int, float))}
+
+    noncurrent: Dict[Tuple[str, str], float] = {}
+    for tag in reversed(_DEBT_NONCURRENT):
+        noncurrent.update(by_filing(tag))  # the first tag's figure
+    current, borrowings = by_filing("DebtCurrent"), by_filing("ShortTermBorrowings")
+    maturities = by_filing("LongTermDebtCurrent")
+
+    def holds_maturities(key: Tuple[str, str]) -> bool:
+        if key in current:
+            return current[key] > 0
+        if key in borrowings:
+            return borrowings[key] > 0 and borrowings[key] == maturities.get(key)
+        return maturities.get(key, 0) > 0
+
+    aside = {key for key, total in by_filing(_DEBT_TOTAL).items()
+             if key in noncurrent and (total < noncurrent[key] or holds_maturities(key))}
+    if not aside:
+        return us_gaap
+    units = us_gaap[_DEBT_TOTAL].get("units", {})
+    kept = [e for e in units.get("USD", []) if (e.get("accn"), e.get("end")) not in aside]
+    return {**us_gaap, _DEBT_TOTAL: {**us_gaap[_DEBT_TOTAL], "units": {**units, "USD": kept}}}
+
+
 def _filer_facts(facts: Dict[str, Any]) -> Dict[str, Any]:
     """A filer's us-gaap facts as the extractions read them: its dollar filings', net outflows as
-    paid, and the balance-sheet-only tags on their balance sheets' dates."""
-    return _net_outflows_as_paid(_on_balance_sheet_dates(_dollar_filings(facts.get("facts", {}).get("us-gaap", {}))))
+    paid, the balance-sheet-only tags on their balance sheets' dates, and LongTermDebt set aside
+    where its noncurrent figure should stand."""
+    return _debt_totals_set_aside(_net_outflows_as_paid(_on_balance_sheet_dates(
+        _dollar_filings(facts.get("facts", {}).get("us-gaap", {})))))
 
 
 #: A later filing's figure for a year can be a tagging error of the figure the earlier

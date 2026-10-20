@@ -552,6 +552,10 @@ numbers SEC filings report:
   year-to-date totals as they are, so a year's quarters add up to its figure; but a total
   of payments that falls by half or more is two bases (a restated year beside nine months
   as first filed), and that quarter is left empty.
+- **Long-term debt beside current debt.** Long-term debt is the balance sheet's noncurrent
+  figure where the filing's short-term debt holds the current maturities (Boeing's FY2025:
+  $45.6B beside $8.5B of current debt, not its $53.8B total, which counted them twice), and
+  the filer's total with the maturities where no short-term figure holds them.
 - **Balance-sheet checkpoints** at every quarter-end (instant facts), full history.
 - **`fiscal_quarter`** (1–4, company calendar) and **`calendar_quarter`** (1–4, calendar)
   are both attached; `calendar_quarter` comes from the SEC frame and is the reliable

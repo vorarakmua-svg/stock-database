@@ -223,7 +223,9 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         "long_term_debt", "Long-Term Debt", BALANCE, UNIT_USD, INSTANT,
         # The noncurrent figure or the total, as most filers tag it; then the noncurrent tags of
         # those who file neither (with finance leases, notes, unsecured or convertible debt: VZ,
-        # ORCL, GS, NOW), and last the notes payable in total (O) (BUG-125). Not
+        # ORCL, GS, NOW), and last the notes payable in total (O) (BUG-125). A filing's total
+        # gives way to its noncurrent figure where its current debt holds the current maturities
+        # or the total is below it (``xbrl_parser._debt_totals_set_aside``, BUG-141). Not
         # DebtInstrumentCarryingAmount: often one instrument's, on days with no balance sheet
         # (SLB's $0.5B note at 2020-12-31).
         ("LongTermDebtNoncurrent", "LongTermDebt", "LongTermDebtAndCapitalLeaseObligations",

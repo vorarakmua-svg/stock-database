@@ -1764,3 +1764,27 @@ Gates: ruff ✓ mypy ✓ pytest 1173 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(parsers): an acquisitions total that falls by half is two bases, not a quarter
 Next: record code review 14 when it reports (its claims re-run first); then BUG-141, BUG-142, BUG-149, BUG-150,
 BUG-151 (P2). Fixes since review 14's range (16f3005): 1.
+
+## Iteration 98: 2026-10-21 00:44: fix
+Picked: BUG-141, the oldest open P2 (no P0 or P1 open). Code review 14 (ef7cc76..16f3005) reported during the
+iteration; its report is saved (`qa/evidence/review14-report.md`) and is recorded next iteration, its claims re-run
+first. CI: 2bc0065 ✓.
+Did: measured candidate rules over the 128 cached filers before the test (`qa/evidence/iter98-bug141-realdata.txt`):
+the plain reorder the review proposed loses the current maturities in 44 years at 14 filers (ABBV, ETN, RTX, LOW);
+summing each filing's short-term borrowings and maturities moves 230 years at 40 filers but counts IBM's twice,
+whose balance-sheet short-term debt holds them. So a filing's LongTermDebt gives way to its noncurrent figure only
+where its current debt holds the maturities (DebtCurrent, or the maturities, above zero; borrowings on the same
+line) or the total is below that figure, a note's narrower one. TDD (six tests RED, four guard cases); seven
+mutants, each failing a test. Real data: only long-term debt moves, total debt in 54 years at 18 filers (BA's
+FY2025 $62.31B to $54.10B; T, TMO, GE, IBM's FY2009; ORCL's FY2022 and MU read their balance sheets'); stock-web
+serves BA's $54.10B and keeps ABBV's and GOOGL's FY2021 totals. Opened BUG-159 (the maturities beside short-term
+borrowings: the sum's 230 years, IBM's line the open question); BUG-029 upgraded to P2 (this iteration's own
+prototypes kept 74 cells a newer parse left empty); BUG-142 notes CVX's FY2019-21, where its double count now
+shows in full. README: the debt rule.
+Evidence: `qa/evidence/iter98-bug141-{red,green,mutants,realdata,e2e}.txt`, `qa/evidence/review14-report.md`
+Result: BUG-141 VERIFIED; BUG-159 OPEN (P2); BUG-029 P2; VALID-01 FAIL→BUG-159, MATCH-03 FAIL→BUG-142.
+Gates: ruff ✓ mypy ✓ pytest 1183 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): a debt total gives way where current debt holds its maturities
+Next: record code review 14 (its claims re-run first: I1 a factor refresh's DDM without the payments since the
+collection, I2 note cash components ahead of the restricted total, M1-M6); then the P2s oldest first: BUG-029,
+BUG-142, BUG-149, BUG-150, BUG-151, BUG-159. Fixes since review 14's range (16f3005): 2.
