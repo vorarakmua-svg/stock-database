@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 90 · PASS 10 · FAIL 6 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
+**Status counts:** TODO 86 · PASS 11 · FAIL 9 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -30,9 +30,9 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
 | VALID-01 | Canonical mapping | TODO | iter 28 | BUG-032 fixed: the combined BasicAndDiluted EPS and share concepts fill both fields (132 values for 9 filers, none changed); the coverage_report run over the basket is untested |
-| VALID-02 | Accounting identities | TODO | |  |
-| VALID-03 | Sign conventions | TODO | |  |
-| VALID-04 | Units and scale | TODO | |  |
+| VALID-02 | Accounting identities | FAIL→BUG-061 | iter 47 | over the user's 2,312 company-years: EBITDA = operating income + D&A and FCF = OCF - |capex| hold everywhere; the cash-flow sections sum to the net change in all but 14 of 2,101 under one of two conventions (discontinued operations or FX inside the sections or not), and AMD FY2021 is a later filing's sign error (BUG-061); balance-sheet misses are temporary equity, NCI tags not mapped (BUG-063) or restated fields mixed with unrestated ones (BUG-062); gross-profit misses are presentation (excise taxes at MO and PM, Costco's membership fees, ORCL's split cost lines) or BUG-062 (DHR) (`qa/evidence/iter47-*`) |
+| VALID-03 | Sign conventions | PASS | iter 47 | capex, dividends paid, buybacks, debt repaid and acquisitions are positive magnitudes in every annual, quarterly and TTM row; D&A is negative only where insurers net in accretion (ALL, PRU, KKR) and in LLY FY2007; negative quarterly D&A at CRM and seven others goes to VALID-06 (lead L19); sign flips of other fields come from later filings' tagging errors (BUG-061) (`qa/evidence/iter47-*`) |
+| VALID-04 | Units and scale | FAIL→BUG-061 | iter 47 | no share-scale errors: diluted EPS x diluted shares = net income within 20% except preferred and TARP dividends (C, BAC, MS 2009), Blackstone's partnership units and IPO-year participating securities; latest FY counts match today's snapshots except six classes or post-filing splits (DELL, GOOGL, HON, BKNG, KLAC, CRWD); ratios are fractions (dividend yield = rate / price for all 106); scale errors come from later filings' tags (STX FY2022 DPS x10^6, BRK-B FY2008 shares; BUG-061), and quarter-sized annual DPS from filers' own tags (BUG-020) (`qa/evidence/iter47-*`) |
 | VALID-05 | Periods | FAIL→BUG-020 | iter 15 | BUG-013 fixed (point-in-time facts no longer stand in for a duration field's year; GS FY2008 and 15 dividend years corrected); left: V/CEG/PLD's own tagging (BUG-020, P3); the rest of the item is untested |
 | VALID-06 | Quarterly ladder | TODO | |  |
 | VALID-07 | Integrity checks (`validation/integrity.py`, `quality.py`) | TODO | iter 9 | new dividend completeness check (BUG-012): of 109 dividend payers only CB FY2025 fires; README row added; the other four checks are untested |
@@ -40,7 +40,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | VALID-09 | Derived fields (`parsers/derived_fields.py`) only fill gaps, never overwrite reported valu… | TODO | |  |
 | VALID-10 | Point-in-time | TODO | |  |
 | VALID-11 | The `/quality` dashboard numbers equal direct SQL on the same DB.… | TODO | |  |
-| VALID-12 | Sanity scan over the real-DB copy (read-only) | TODO | |  |
+| VALID-12 | Sanity scan over the real-DB copy (read-only) | FAIL→BUG-061 | iter 47 | every hit triaged: BAC FY2008 total assets 0 is a later filing's tagging error (BUG-061); BX FY2008's negative revenue (investment losses), PSA FY2022's net income above revenue (a gain on its PSB stake), early VRTX, TSLA, CRWD and PLTR margins below -100% and TSLA's P/E of 342 are real; CEG FY2020-21 (before its spin-off) and CRWD FY2020 carry zero share counts as filed; no negative prices, future dates, future bars or impossible ratios (`qa/evidence/iter47-*`) |
 
 ## MATCH: Data matching and reconciliation
 

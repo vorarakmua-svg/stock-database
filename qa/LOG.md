@@ -889,3 +889,23 @@ Result: VAL-13 PASS. No new bugs.
 Gates: ruff ✓ mypy ✓ pytest 969 passed (1 known warning); no code changed | CI: pending for this push
 Commit: (this commit) chore(qa): discovery VAL-13 passes; hand-worked AAPL, JPM and KO
 Next: record code review 6 when it reports; otherwise discovery in VALID (riskiest TODO area after VAL).
+
+## Iteration 47: 2026-10-20 07:45: discovery
+Picked: VALID-02, -03, -04 and -12, a read-only sweep of the stored fundamentals (no P0-P2 bug open; VALID is the
+riskiest area left). CI: 6d3024c queued at the start. Code review 6 is still running.
+Did: swept a fresh copy of the user's database (2,312 company-years, 126 companies) and the golden copy for the
+accounting identities, sign conventions, units and scale, and a sanity scan, then triaged every hit, re-reading the
+cached companyfacts and re-parsing with today's parser to tell current behaviour from stale data. A vintage scan (each
+field's latest filing against the ones before) found the one real defect class: a later 10-K's tagging error in a
+comparative year (a sign flip, a power-of-ten scale, a zero) overrides the figure the earlier filings agree on (AMD
+FY2021 cash flows, STX FY2022 dividend x10^6, DIS FY2021 interest expense, BAC FY2008 assets, BRK-B FY2008 shares).
+Most of the 63 such field-years are genuine 10:1 split restatements or corrections. Everything else traced to real
+facts or presentation: temporary equity, unmapped NCI tags (BX), restated fields mixed with unrestated ones (MSFT
+FY2016), excise taxes in revenue (MO, PM), declared-vs-paid dividend timing (PGR), insurers' accretion. Two stored
+values are stale (the August collection predates BUG-013's fix: AMGN FY2020 DPS).
+Evidence: `qa/evidence/iter47-{valid-sweep-real,valid-sweep-golden,vintage-flips,valid-triage}.txt`
+Result: VALID-03 PASS; VALID-02, -04 and -12 → FAIL→BUG-061. New: BUG-061 (P2), BUG-062 and BUG-063 (P3), leads L19
+and L20; BUG-020 notes three more filers.
+Gates: ruff ✓ mypy ✓ pytest 969 passed (1 known warning); no code changed | CI: pending for this push
+Commit: (this commit) chore(qa): discovery VALID-02, -03, -04, -12; later filings' tagging errors win
+Next: BUG-061 (P2), unless code review 6 reports first.

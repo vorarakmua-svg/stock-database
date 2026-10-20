@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 23 · NEEDS-USER 10 · Verified: 34
+**Open:** P0 0 · P1 0 · P2 1 · P3 25 · NEEDS-USER 10 · Verified: 34
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -194,6 +194,7 @@ Expected: the year's dividends per share.
 Actual: the parser stores what was filed: V, CEG at a quarter of the year, PLD at 0.01/0.03 (the preferred tag).
 Notes: not used by the valuations; the exports carry it, and the dividend completeness check (BUG-012) reads it, where a too-low figure can only hide a finding. Options: prefer `CashPaid` when both tags have a full-year fact and they differ more than 2× (PLD); flag a year whose SEC figure is about a quarter of Yahoo's payments (V, CEG); or WONTFIX as the filers' own data.
 
+Iteration 47: the same filer tagging (a quarterly amount in a full-year context) also gives BKNG FY2024-25 (8.75, 9.60), AMAT FY2016-17 (0.10) and NVDA FY2016 (0.115) a quarter of their year's dividend; today's parser reads what was filed (`qa/evidence/iter47-valid-triage.txt`).
 ### BUG-021 [P1][STORE] The CSV merge silently drops every earlier row when the old file has no `ticker` column
 Status: VERIFIED
 Found: iteration 17 by code review 2; reproduced (`qa/evidence/iter17-review2-checks.txt`) | Fixed: iteration 19 (see LOG) | Regression test: `tests/test_csv_exporter.py::test_a_summary_without_a_ticker_column_is_kept_aside` (`;` separators with a BOM; a header renamed `Ticker`)
@@ -495,6 +496,26 @@ Impact today: none (no split of 3:2 or more postdates the latest priced snapshot
 Notes: fix direction: after normalizing, take back each simple share split dated between the price's day and the filing (EPS and FFO times it, shares divided), and multiply Yahoo's series back by every split after the price's day; the oracle's closeness test then needs today's basis count (the snapshot's times those splits). Oracle first.
 
 Fix: `_undo_splits_after_price` takes every share split (a simple ratio of at least 3-for-2 or 1-for-2) dated after the price's day and on or before the latest filing back out of each year once normalized (EPS and FFO times it, shares and the split factor divided), and Yahoo's dividends and FY-end bars are taken back for every split after the price's day, not only one after the filing too. The oracle took the rule first (5070282): it moves the snapshot's count to today's basis by those splits for its closeness reading and takes every year back at the end, so its two readings (by filing date and by today's count) now agree; on the scenario valued by the unfixed code, with and without vintages, it flagged all five applicable models (10x), and its output on the real and golden copies and on BUG-048's and BUG-059's scenarios was unchanged. The scenario valued by the fix (`iter45_residual_db.py`, with and without vintages): median $277.31 beside the $1,000 price (was $27.73), and the oracle agrees at both levels; BUG-048's and BUG-059's scenarios still agree (`qa/evidence/iter45-bug060-{oracle,e2e}.txt`). Impact: 0 of 762 real and 0 of 114 golden valuation rows change. Three mutants each fail a test (one by the control).
+### BUG-061 [P2][VALID] A later filing's tagging error in a comparative year overrides the figure earlier filings agree on
+Status: OPEN
+Found: iteration 47 via VALID-02, -04 and -12 (`qa/evidence/iter47-{valid-sweep-real,vintage-flips,valid-triage}.txt`) | Fixed: — | Regression test: —
+Repro (today's parser on the user's cached companyfacts, and the stored values): AMD FY2021 investing and financing cash flows are -$686M and -$1,895M in the 10-Ks filed 2022-02-03 and 2023-02-27, and +$686M and +$1,895M in the one filed 2024-01-31; the latest wins, so the year's sections sum to $6.10B against its $0.94B net change. STX FY2022 dividends per share: 2.77 in two filings, 2,770,000 in the one filed 2024-08-02. DIS FY2021 interest expense: $1,546M in two filings, -$1,546M in 2023's. BAC FY2008 total assets: $1,817.9B in three filings, 0 in the one filed 2011-02-25. BRK-B FY2008 weighted basic shares: 1.549M, then 1.549 trillion in 2011's. A scan of every field's vintages finds 63 field-years whose latest value is a sign flip or a power-of-ten scale of the filing before it; most are genuine (10:1 split restatements at LRCX, NVDA, NFLX, AVGO and MA; later filings correcting an earlier error at STX FY2023-24, TSLA FY2016 and LLY FY2008), and the rest are tagging errors like these (others: NEE FY2022-23 credit-loss provision, GE FY2011-12 treasury stock, TJX FY2011-12, PG impairments).
+Expected: a latest value that is a pure sign flip, a power-of-ten scale or a zero of figures the earlier filings agree on (for per-share and share fields, not explained by a declared split) is read as a tagging error: keep the agreed figure and flag the conflict.   Actual: the latest figure is stored and shown (STX's FY2022 dividend reads $2,770,000 a share; AMD's FY2021 investing cash flow reads positive).
+Impact today: no valuation input in the 10-FY window (the EPS and share-count changes there are split restatements); shown figures and the metrics built on them.
+
+### BUG-062 [P3][VALID] A year's fields can come from different filings, restated and not, and break its own identities
+Status: OPEN
+Found: iteration 47 via VALID-02 (`qa/evidence/iter47-{valid-sweep-real,vintage-flips,valid-triage}.txt`) | Fixed: — | Regression test: —
+Repro: the most recently filed value wins per field, so MSFT FY2016 pairs equity of $83.090B (restated for ASC 606, the opening balance of the FY2018 10-K's equity statement) with assets of $193.468B and liabilities of $121.471B (last filed, unrestated, in the FY2017 10-K): assets miss liabilities + equity by $11.1B (5.7%). Likewise CRM FY2017, INTU FY2016-17 and NOW FY2016 (ASC 606), and DHR FY2017-18 (gross profit restated for continuing operations after the Envista split, revenue and cost of revenue not).
+Expected: a year's figures consistent with one another (for instance each statement taken from the latest filing that reports it whole), or the mix flagged.   Actual: per-field latest values.
+Impact: older years' identities and ratios; no valuation input in the window.
+
+### BUG-063 [P3][VALID] `minority_interest` misses common non-controlling-interest tags (BX)
+Status: OPEN
+Found: iteration 47 via VALID-02 (`qa/evidence/iter47-{valid-sweep-real,vintage-flips,valid-triage}.txt`) | Fixed: — | Regression test: —
+Repro: BX tags its non-controlling interests as `NonredeemableNoncontrollingInterest` ($6.15B at 2024-12-31), `MinorityInterestInOperatingPartnerships` ($4.33B) and `RedeemableNoncontrollingInterestEquityCarryingAmount` ($0.80B); `minority_interest` is stored empty, so its balance sheet misses assets = liabilities + equity + NCI by 25-30% in every year since FY2018 (SO FY2018 and UBER likewise, by less).
+Expected: those tags resolve to `minority_interest` (redeemable NCI and other temporary equity are a separate line that no canonical field covers yet, which explains most of the remaining 1-4% gaps: AMT, SPGI, TSLA, WELL, PGR, UBER).   Actual: empty. No valuation input uses it.
+
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
@@ -551,3 +572,5 @@ Options: (a) always count every class and unit (market cap ÷ price whenever it 
 - L16 [STORE] The JSON export writes in place, and an unreadable existing JSON is silently replaced, losing its history (the CSV analogue was BUG-015). Pre-existing. (review 3, iter 23)
 - L17 [VALID] HON's latest FY diluted count, on today's basis, is 2.03× Yahoo's count (`t_bug035/fy_vs_yahoo.py` on the real copy, iteration 39): check for a missed reverse split or a wrong Yahoo count.
 - L18 [CLI] `stock-data` exits 0 when every ticker has errors (iteration 41's run with companyfacts blocked: "Successfully fetched: 0", exit 0). CLI-01 decides what partial and total failure should return.
+- L19 [VALID] Quarterly D&A is negative for non-insurers too: CRM (9 quarters 2018-2026), AMD, AVGO, GE, INTC, MCD, MRK and NEE (one or two each); likely a Q4 = annual - 9-month difference across two D&A tags. Check in VALID-06. (Insurers' D&A net of accretion is negative for real: ALL, PRU, KKR.) (iter 47)
+- L20 [OPS] The user's database (collected 2026-08-04) predates this loop's parser fixes: today's parser reads AMGN FY2020 dividends per share as 6.56 (stored 1.76) and gives AMT FY2020 none (stored 1.21, a point-in-time fact). Re-collecting refreshes such years; say so in REPORT.md. (iter 47)
