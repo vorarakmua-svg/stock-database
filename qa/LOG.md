@@ -1626,3 +1626,20 @@ Gates: ruff ✓ mypy ✓ pytest 1149 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(parsers): acquisitions are read as paid, net of the cash acquired
 Next: code review 13 (5 fixes since review 12's range, f87638f: 9144791, eb0aec3, 5d2d996, 4c74cbf and this
 commit); then BUG-128 (P2, the oldest) and BUG-134.
+
+## Iteration 89: 2026-10-20 22:21: fix
+Picked: BUG-128, the oldest open P2 (no P0 or P1 open). Code review 13 (f87638f..ef7cc76, five fixes) dispatched to an
+opus reviewer, running in the background. CI: ef7cc76 ✓.
+Did: of the entry's two fixes, a tolerance can't serve both the valuations' +-0.5% and BUG-106 (SCCO's quarterly
+1.005-1.01 refused again), so a refresh after a stock dividend or a spin-off factor the stored valuations aren't on
+stores Yahoo's split history with the price and the job values the ticker on it (never-fail); share splits and
+factors of 3:2 or more still refuse it, and an ordinary refresh writes only the snapshot (GATHER-13). TDD (four tests
+RED, three guards); eight mutants, each failing a test. Code review 12's fake market through the web app's refresh
+route: GE's 1.253, T's 1.324, SPGI's 1.057 and SCCO's 1.01 read the full collection's DDM, multiples band and upside
+(-39.2% where it read -34.8%); a 2:1 split still refused. A copy of the user's data: nothing new for all 127 tickers.
+Evidence: `qa/evidence/iter89-bug128-{red,green,mutants,e2e,realdata}.txt`
+Result: BUG-128 VERIFIED; GATHER-13 PASS; a correction on BUG-106.
+Gates: ruff ✓ mypy ✓ pytest 1156 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(web): a refresh after a price factor values the ticker on it
+Next: record code review 13 when it reports (its claims re-run first), then BUG-134 (P2, the last open one). Fixes
+since review 13's range (ef7cc76): 1.

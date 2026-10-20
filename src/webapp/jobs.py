@@ -325,6 +325,8 @@ class CollectionJobManager:
             with_errors = 0
             # Each failed ticker's message, so the DES status can say why a refresh failed.
             errors: Dict[str, str] = {}
+            # Saved after a stock dividend or a spin-off factor the stored valuations aren't on.
+            rebased: List[str] = []
             for ticker in tickers:
                 with self._lock:
                     self._jobs[job_id].current_ticker = ticker
@@ -332,9 +334,12 @@ class CollectionJobManager:
                 quote = handler.fetch_quote(ticker)
                 # A split the stored valuations don't reflect: the price would sit
                 # beside them on another basis, which only a full collection brings
-                # over (BUG-093, BUG-102).
+                # over (BUG-093, BUG-102). Any other factor since (a stock dividend, a
+                # spin-off) is stored with the price, and the ticker valued on it (BUG-128).
+                factors = (store.factors_since_collection(ticker, quote.get("splits") or [])
+                           if "error" not in quote else [])
                 new_splits = (store.splits_since_collection(ticker, quote.get("splits") or [])
-                              if "error" not in quote else [])
+                              if factors else [])
                 if "error" in quote:
                     with_errors += 1
                     errors[ticker] = str(quote["error"])
@@ -343,11 +348,24 @@ class CollectionJobManager:
                     errors[ticker] = _split_since_collection(ticker, new_splits)
                 else:
                     collected_at = _collected_at_now()
-                    store.upsert_quote(ticker, quote, collected_at)
+                    store.upsert_quote(ticker, quote, collected_at,
+                                       splits=quote.get("splits") if factors else None)
                     successful += 1
+                    if factors:
+                        rebased.append(ticker)
 
                 with self._lock:
                     self._jobs[job_id].completed += 1
+
+            # A ticker priced after a stock dividend or a spin-off factor is valued on it,
+            # as a collection would (BUG-128). Never-fail, as there: the quotes have
+            # landed. Lazy import so tests can monkeypatch the engine.
+            if rebased:
+                try:
+                    from ..valuation import engine as valuation_engine
+                    valuation_engine.compute_and_store(self.db_path, tickers=rebased, logger=logger)
+                except Exception as exc:  # noqa: BLE001 — job must still succeed
+                    logger.warning(f"Valuation after a quote refresh failed: {exc}")
 
             with self._lock:
                 done_job = self._jobs[job_id]

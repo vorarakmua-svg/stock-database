@@ -455,8 +455,8 @@ def test_a_ticker_without_a_stored_price_is_checked_against_its_last_collection(
 def test_a_stock_dividend_or_a_spin_off_factor_doesnt_stop_a_refresh(web_db: Path, ratio: float) -> None:
     # BUG-106 (code review 10): every factor in Yahoo's split history but 1.0 was refused as a split. SCCO pays a stock
     # dividend almost every quarter ("a 1.01-for-1 split"), so its refreshes were refused most of the time, though only
-    # a share split, or a factor of 3:2 or more, moves the stored per-share figures; the next full collection brings
-    # the smaller factors' price history and dividends over.
+    # a share split, or a factor of 3:2 or more, moves the stored per-share figures; the refresh stores the smaller
+    # factors, and the ticker is valued on them (BUG-128).
     before = _snapshot_count(web_db, "AAA")
     client = _quote_with_splits_client(
         web_db, [{"date": "2023-06-01", "ratio": 2.0}, {"date": "2024-07-01", "ratio": ratio}])
@@ -477,6 +477,79 @@ def test_a_split_or_a_large_price_factor_is_refused_by_its_name(web_db: Path, ra
     assert (summary["successful"], summary["with_errors"]) == (0, 1)
     assert named in summary["errors"]["AAA"]
     assert _snapshot_count(web_db, "AAA") == before
+
+
+def _split_events(db_path: Path, ticker: str = "AAA") -> Dict[str, float]:
+    conn = sqlite3.connect(db_path)
+    try:
+        return dict(conn.execute("SELECT date, ratio FROM split_events WHERE ticker = ?", (ticker,)).fetchall())
+    finally:
+        conn.close()
+
+
+def _valuation_runs(monkeypatch) -> List[List[str]]:
+    """The tickers each valuation run is asked to value (the engine itself stubbed out)."""
+    runs: List[List[str]] = []
+
+    def compute_and_store(db_path: Any, tickers: Optional[List[str]] = None, logger: Any = None) -> int:
+        runs.append(list(tickers or []))
+        return len(runs[-1])
+
+    monkeypatch.setattr("src.valuation.engine.compute_and_store", compute_and_store)
+    return runs
+
+
+@pytest.mark.parametrize("ratio", [1.01, 0.9535, 1.253])  # SCCO's stock dividend, HON's and GE's spin-off factors
+def test_a_refresh_after_a_price_factor_stores_it_and_values_the_ticker_on_it(
+        web_db: Path, monkeypatch, ratio: float) -> None:
+    # BUG-128 (code review 12): a stock dividend or a spin-off factor rebases Yahoo's prices and dividends like a split
+    # of its size, and the stored DDM and multiples band stayed on the old ones: after GE's 1.253 a refresh read an
+    # upside of -34.8% where a full collection reads -39.2%, and the quote job stored no factor, so no backfill could
+    # put it right. The refresh stores the factor, as a collection does, and the ticker is valued on it.
+    runs = _valuation_runs(monkeypatch)
+    client = _quote_with_splits_client(
+        web_db, [{"date": "2023-06-01", "ratio": 2.0}, {"date": "2024-07-01", "ratio": ratio}])
+    assert _refresh_summary(client)["successful"] == 1
+    assert _split_events(web_db)["2024-07-01"] == ratio
+    assert runs == [["AAA"]]
+
+
+def test_a_refresh_after_a_stored_factor_its_price_predates_values_the_ticker_on_it(web_db: Path, monkeypatch) -> None:
+    # A collection whose quote failed stores the factor beside the older price (BUG-102's case, for a split).
+    runs = _valuation_runs(monkeypatch)
+    client = _quote_with_splits_client(web_db, [{"date": "2024-07-01", "ratio": 1.253}],
+                                       stored=[{"date": "2024-07-01", "ratio": 1.253}])
+    assert _refresh_summary(client)["successful"] == 1
+    assert runs == [["AAA"]]
+
+
+def test_a_refresh_without_a_new_factor_writes_only_the_snapshot(web_db: Path, monkeypatch) -> None:
+    # GATHER-13: an older split the stored history lacks isn't one the stored valuations aren't on (the date rule).
+    runs = _valuation_runs(monkeypatch)
+    client = _quote_with_splits_client(
+        web_db, [{"date": "2021-03-01", "ratio": 3.0}, {"date": "2023-06-01", "ratio": 2.0}])
+    assert _refresh_summary(client)["successful"] == 1
+    assert "2021-03-01" not in _split_events(web_db) and runs == []
+
+
+def test_a_refused_refresh_stores_no_factor(web_db: Path, monkeypatch) -> None:
+    runs = _valuation_runs(monkeypatch)
+    client = _quote_with_splits_client(
+        web_db, [{"date": "2024-07-01", "ratio": 1.01}, {"date": "2024-07-02", "ratio": 10.0}])
+    summary = _refresh_summary(client)
+    assert (summary["successful"], summary["with_errors"]) == (0, 1)
+    assert "2024-07-01" not in _split_events(web_db) and runs == []
+
+
+def test_a_failed_valuation_keeps_the_refresh(web_db: Path, monkeypatch) -> None:
+    def broken(db_path: Any, tickers: Optional[List[str]] = None, logger: Any = None) -> int:
+        raise RuntimeError("no inputs")
+
+    monkeypatch.setattr("src.valuation.engine.compute_and_store", broken)
+    before = _snapshot_count(web_db, "AAA")
+    client = _quote_with_splits_client(web_db, [{"date": "2024-07-01", "ratio": 1.253}])
+    assert _refresh_summary(client)["successful"] == 1
+    assert _snapshot_count(web_db, "AAA") == before + 1
 
 
 def test_a_quote_carries_yahoos_split_history(monkeypatch) -> None:

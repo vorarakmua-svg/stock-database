@@ -820,24 +820,33 @@ class SQLiteStore:
             })
 
     def splits_since_collection(self, ticker: str, splits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Of the factors since the last collection (``factors_since_collection``), those
+        a refresh can't put right: a share split (a simple ratio) or a factor of 3:2 or
+        more moves the stored per-share figures, which only a full collection restates
+        (BUG-093, BUG-106). Yahoo's split history also holds stock dividends (SCCO's
+        quarterly 1.01) and spin-off price factors (HON's 0.9535): a saved refresh
+        stores them, and the quote job values the ticker on them (BUG-128).
+        """
+        return [s for s in self.factors_since_collection(ticker, splits) if _moves_per_share(float(s["ratio"]))]
+
+    def factors_since_collection(self, ticker: str, splits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Of *splits* (Yahoo's ``{date, ratio}`` history for *ticker*), those the
         stored valuations aren't on the basis of, so a quote after them would sit
         beside them on another (BUG-093).
 
         The valuations are compared with the latest snapshot's price, as the engine
         reads it (``inputs.load_inputs``' ``priced_on``), so a split dated after that
-        price's day is refused even when stored: a later collection whose quote
-        failed stores the split but keeps the older price (BUG-102). A split missing
-        from ``split_events`` is refused from the price's day, or from the ticker's
+        price's day counts even when stored: a later collection whose quote failed
+        stores the split but keeps the older price (BUG-102). A split missing from
+        ``split_events`` counts from the price's day, or from the ticker's
         last collection with Yahoo if that is earlier (Yahoo can list a split days
         after a refresh priced it): a split on either day may have come after it.
-
-        Only a share split (a simple ratio) or a factor of 3:2 or more counts, as it
-        moves the stored per-share figures: Yahoo's split history also holds stock
-        dividends (SCCO's quarterly 1.01) and spin-off price factors (HON's 0.9535),
-        which the next full collection brings over (BUG-106).
+        Every factor counts but 1.0: a stock dividend's or a spin-off's rebases
+        Yahoo's prices and dividends, which the DDM and the multiples band are
+        built on, like a split of its size (BUG-128).
         """
-        candidates = [s for s in splits if s.get("date") and s.get("ratio") and _moves_per_share(float(s["ratio"]))]
+        candidates = [s for s in splits if s.get("date") and s.get("ratio") and float(s["ratio"]) > 0
+                      and float(s["ratio"]) != 1.0]
         if not candidates:
             return []
         try:
@@ -871,9 +880,14 @@ class SQLiteStore:
                 if (priced_on and str(s["date"])[:10] > priced_on)
                 or (str(s["date"])[:10] not in known and str(s["date"])[:10] >= min(starts))]
 
-    def upsert_quote(self, ticker: str, quote: Dict[str, Any], collected_at: str) -> None:
+    def upsert_quote(self, ticker: str, quote: Dict[str, Any], collected_at: str,
+                     splits: Optional[List[Dict[str, Any]]] = None) -> None:
         """Write ONE ``market_snapshots`` row + ONE ``analyst_snapshots`` row from
-        a quote-only fetch (``YahooHandler.fetch_quote``) — nothing else.
+        a quote-only fetch (``YahooHandler.fetch_quote``) — nothing else, but for
+        *splits*: Yahoo's split history, stored with the price as a collection
+        stores it, which the quote job passes when it holds a stock dividend or a
+        spin-off factor the stored valuations aren't on (the price is on its basis)
+        and then values the ticker on it (BUG-128).
 
         ``market_snapshots``' primary key is ``(ticker, collected_at)``, so
         this INSERTS a new row rather than overwriting the snapshot from the
@@ -934,6 +948,7 @@ class SQLiteStore:
                             if snapshot.get(col) is None:
                                 snapshot[col] = prev.get(col)
                     self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)
+                    self._write_split_events(conn, ticker, splits or [])
 
                 self._write_analyst_snapshot(
                     conn, ticker, collected_at, quote.get("analyst_estimates") or {}
