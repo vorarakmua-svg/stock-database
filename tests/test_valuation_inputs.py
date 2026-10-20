@@ -812,8 +812,10 @@ def test_a_split_the_filing_restated_before_the_price_stays(tmp_path):
     assert inputs.fy_end_prices == {2025: 60.0}
 
 
-def _foreign_issuer_db(tmp_path, form, filed_shares, snapshot_shares, price):
-    """FY2023-25 of a filer whose annual report is *form* (EPS per filed share), and today's market snapshot."""
+def _foreign_issuer_db(tmp_path, form, filed_shares, snapshot_shares, price, period_end_shares=None,
+                       market_count=None):
+    """FY2023-25 of a filer whose annual report is *form* (EPS per filed share), and today's market snapshot: Yahoo's
+    count *snapshot_shares*, and a market cap of *market_count* (default: that count) times the price."""
     db_path = tmp_path / "foreign_issuer.db"
     store = SQLiteStore(db_path=db_path)
     conn = store._connect()
@@ -822,11 +824,13 @@ def _foreign_issuer_db(tmp_path, form, filed_shares, snapshot_shares, price):
     for fy, eps in [(2023, 1.07), (2024, 1.36), (2025, 1.70)]:
         conn.execute(
             "INSERT INTO financials_annual (ticker, fiscal_year, period_end, filed_date, form, net_income, "
-            "total_equity, eps_diluted, weighted_avg_shares_diluted) VALUES ('ADR', ?, ?, ?, ?, ?, 1.0e11, ?, ?)",
-            (fy, f"{fy}-12-31", f"{fy + 1}-04-15", form, eps * filed_shares, eps, filed_shares),
+            "total_equity, eps_diluted, weighted_avg_shares_diluted, shares_outstanding) "
+            "VALUES ('ADR', ?, ?, ?, ?, ?, 1.0e11, ?, ?, ?)",
+            (fy, f"{fy}-12-31", f"{fy + 1}-04-15", form, eps * filed_shares, eps, filed_shares, period_end_shares),
         )
     conn.execute("INSERT INTO market_snapshots (ticker, collected_at, shares_outstanding, market_cap, current_price) "
-                 "VALUES ('ADR', '2026-10-20T09:00:00', ?, ?, ?)", (snapshot_shares, snapshot_shares * price, price))
+                 "VALUES ('ADR', '2026-10-20T09:00:00', ?, ?, ?)",
+                 (snapshot_shares, (market_count or snapshot_shares) * price, price))
     conn.commit()
     conn.close()
     return db_path
@@ -895,4 +899,50 @@ def test_fy_end_prices_are_market_closes(tmp_path, bars, expected):
     inputs = load_inputs(conn, "PAY")
     conn.close()
     assert {fy: round(price, 6) for fy, price in inputs.fy_end_prices.items()} == expected
+
+
+def test_an_ads_ratio_is_read_against_every_class(tmp_path):
+    # Code review 7 (I2): Yahoo counts one class of several (GOOGL's class A, 5.867B of 12.23B), so a two-class 20-F
+    # filer read as an ADS of 2 and its Graham and Lynch values doubled. Market cap / price counts every class.
+    conn = _connect(_foreign_issuer_db(tmp_path, "20-F", 12.23e9, 5.867e9, 345.40, market_count=12.228e9))
+    inputs = load_inputs(conn, "ADR")
+    conn.close()
+    assert (inputs.ads_ratio, inputs.ads_unreadable, inputs.fy_records[-1].eps_diluted) == (1.0, None, 1.70)
+
+
+def test_the_period_end_count_reads_an_ads_ratio_a_drifted_average_misses(tmp_path):
+    # The year's weighted average lags today's count by half a year of buybacks; the year-end count by less.
+    conn = _connect(_foreign_issuer_db(tmp_path, "20-F", 27.5e9, 5.186e9, 421.70, period_end_shares=25.93e9))
+    inputs = load_inputs(conn, "ADR")
+    conn.close()
+    assert inputs.ads_ratio == 5.0
+
+
+def test_an_unreadable_ads_ratio_leaves_the_per_share_models_unvalued(tmp_path):
+    # Code review 7 (I1): with today's count 8% off the filed one, a 5-share ADS read as none, and Graham, Lynch and DCF
+    # came out per ordinary share beside a per-ADS price. 25.93B / 5.60B is 4.63: no whole number, so they say why.
+    from src.valuation.engine import run_valuations
+
+    conn = _connect(_foreign_issuer_db(tmp_path, "20-F", 25.93e9, 5.186e9 * 1.08, 421.70))
+    inputs = load_inputs(conn, "ADR")
+    conn.close()
+    assert inputs.ads_unreadable == ("the ADS ratio can't be read: the latest 20-F counts 4.63 shares for each one "
+                                     "the market counts")
+    reasons = {r.model: r.na_reason for r in run_valuations(inputs)}
+    assert {m: reasons[m] for m in ("dcf", "graham", "lynch", "owner_earnings")} == dict.fromkeys(
+        ("dcf", "graham", "lynch", "owner_earnings"), inputs.ads_unreadable)
+    # Yahoo's dividends are per ADS, and a multiple's per-share basis cancels: those two say their own reasons
+    assert inputs.ads_unreadable not in (reasons["ddm"], reasons["multiples"])
+
+
+@pytest.mark.parametrize("filed_to_market, ratio", [
+    (5.0, 5.0), (5.2, 5.0), (2.08, 2.0),   # an ADS of n shares, a little drift
+    (1.07, 1.0), (0.82, 1.0),               # a 1:1 listing, its count drifted by buybacks or issuance
+    (0.5, 0.5),                             # two ADSs to the share
+    (4.63, None), (8 * 1.07, None),         # no whole number: a drifted 8-share ADS isn't read as 9
+])
+def test_an_ads_ratio_is_a_whole_number_or_unreadable(filed_to_market, ratio):
+    from src.valuation.inputs import _ads_ratio
+
+    assert _ads_ratio(filed_to_market) == ratio
 

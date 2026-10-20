@@ -128,6 +128,9 @@ class ValuationInputs:
     #: Ordinary shares per ADS when a foreign issuer's per-share figures were
     #: moved to the ADS basis Yahoo prices it on (see ``_ads_ratio``); 1.0 otherwise.
     ads_ratio: float = 1.0
+    #: Why a foreign issuer's ADS ratio couldn't be read, if it couldn't: the models
+    #: on filed per-share figures or counts are then N/A with this reason.
+    ads_unreadable: Optional[str] = None
     beta: Optional[float] = None
     risk_free_rate: Optional[float] = None
     #: The day the rate is for, and where it came from ("fred", "treasury_gov" or
@@ -316,18 +319,23 @@ def _apply_later_splits(records: List[FYRecord], splits: Sequence[Tuple[str, flo
             rec.shares *= factor
 
 
-def _ads_ratio(filed_to_yahoo: float) -> float:
-    """The ADS ratio a filed-to-Yahoo share-count ratio shows: a whole number n >= 2
-    of ordinary shares per ADS (or of ADSs per share) within 5%, else 1.
+def _ads_ratio(filed_to_market: float) -> Optional[float]:
+    """The ADS ratio a filed-to-market share-count ratio shows, or None when it
+    can't be read.
 
     A foreign issuer's 20-F or 40-F counts ordinary shares, while Yahoo quotes the
-    ADS and counts ADS-equivalents (TSM: 25.93B ordinary, 5.186B ADS).
+    ADS (TSM: 25.93B ordinary, 5.186B ADS). A ratio in [0.8, 1.25] is a 1:1 listing,
+    as buybacks and issuance drift a filed count that far from today's; any other is
+    a whole number n >= 2 of shares per ADS (or of ADSs per share) within 5% and a
+    quarter of a share, so a drifted 8-share ADS doesn't read as 9 (BUG-076).
     """
-    for candidate, per_ads in ((filed_to_yahoo, True), (1.0 / filed_to_yahoo, False)):
+    if 0.8 <= filed_to_market <= 1.25:
+        return 1.0
+    for candidate, per_ads in ((filed_to_market, True), (1.0 / filed_to_market, False)):
         n = round(candidate)
-        if n >= 2 and abs(candidate / n - 1) <= 0.05:
+        if n >= 2 and abs(candidate - n) <= min(0.05 * n, 0.25):
             return float(n) if per_ads else 1.0 / n
-    return 1.0
+    return None
 
 
 def _undo_splits_after_price(records: List[FYRecord], splits: Sequence[Tuple[str, float]],
@@ -548,12 +556,26 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     _undo_splits_after_price(records, splits, filed, priced_on)
     # A foreign issuer's filings count ordinary shares while the price is per ADS
     # (BUG-065): its per-share figures move to the ADS basis, before the share count
-    # is chosen, so the 75% rule compares like with like.
+    # is chosen, so the 75% rule compares like with like. The ratio is the latest FY's
+    # period-end count (else its diluted one), on today's basis, over market cap /
+    # price, which counts every class where Yahoo's count can be one (BUG-076).
     ads = 1.0
-    filed_count = next((r.shares for r in reversed(records) if r.shares and r.shares > 0), None)
-    yahoo_count = snap["shares_outstanding"] if snap is not None else None
-    if fy_rows and str(fy_rows[-1]["form"] or "")[:4] in ("20-F", "40-F") and filed_count and yahoo_count:
-        ads = _ads_ratio(filed_count / yahoo_count)
+    ads_unreadable = None
+    latest = next((r for r in reversed(records) if r.shares and r.shares > 0), None)
+    form = str(fy_rows[-1]["form"] or "") if fy_rows else ""
+    if form[:4] in ("20-F", "40-F") and latest is not None and snap is not None:
+        market_count = (snap["market_cap"] / snap["current_price"]
+                        if snap["market_cap"] and snap["current_price"] else snap["shares_outstanding"])
+        row = next(r for r in fy_rows if int(r["fiscal_year"]) == latest.fiscal_year)
+        basis = row["weighted_avg_shares_diluted"] or row["shares_outstanding"]
+        filed_count = (row["shares_outstanding"] * latest.shares / basis
+                       if row["shares_outstanding"] and basis else latest.shares)
+        read = _ads_ratio(filed_count / market_count) if market_count else 1.0
+        if read is None:
+            ads_unreadable = (f"the ADS ratio can't be read: the latest {form} counts "
+                              f"{filed_count / market_count:.2f} shares for each one the market counts")
+        else:
+            ads = read
         for rec in records if ads != 1.0 else ():
             rec.split_factor /= ads
             if rec.eps_diluted is not None:
@@ -620,6 +642,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         shares_outstanding=shares,
         shares_source=shares_source,
         ads_ratio=ads,
+        ads_unreadable=ads_unreadable,
         beta=snap["beta"] if snap else None,
         risk_free_rate=snap["risk_free_rate"] if snap else None,
         risk_free_rate_date=snap["risk_free_rate_date"] if "risk_free_rate_date" in snap_columns else None,

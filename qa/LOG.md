@@ -1091,3 +1091,24 @@ Result: BUG-074 VERIFIED; BUG-082 new (P2); VALID-06 → FAIL→BUG-082.
 Gates: ruff ✓ mypy ✓ pytest 1013 passed, 1 skipped (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(parsers): a quarter's weighted-average share count is its own, not a year-to-date difference
 Next: record code review 8 when it reports; then BUG-076, BUG-077, BUG-078, BUG-082 (P2).
+
+## Iteration 57: 2026-10-20 10:41: fix
+Picked: BUG-076, the oldest open P2 (code review 8 still running). CI: 2bb2a24 ✓.
+Did: probe first (section 7: a threshold the code and oracle share): over the real copy's 124 companies, none with
+an ADS, three pairings of filed and market counts, then the candidate rule's misreads and unreadables for an ADS of
+1-10 shares. The period-end count over market cap / price halves the drift (median 1.0%) and ends the class
+misreads (DELL, GOOGL at 2.1 with Yahoo's count); 1:1 needs a wide window, and 8- or 10-share ADSs a cap of a
+quarter share. Then the oracle rule (2de0046): it flagged the unfixed code on both of code review 7's demos, and
+its output elsewhere was unchanged. Then TDD (3 tests RED, 3 BUG-065 tests green): the ratio from the period-end
+count over market cap / price, the windows, and an unreadable ratio leaving DCF, Graham, Lynch and owner earnings
+N/A with the reason. A unit test of the windows and a check that DDM and multiples keep their own reasons came
+next; eight mutants each fail a test. Valued by the fix, the drifted ADS's four models say why, the two-class
+filer reads 1, and the oracle agrees; no row of the real or golden copy changes.
+Evidence: `qa/evidence/iter57-bug076-{probe,oracle,red,green,mutants,e2e,impact}.txt`
+Result: BUG-076 VERIFIED; GATHER-02 → FAIL→BUG-077.
+Gates: ruff ✓ mypy ✓ pytest 1024 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commits: 2de0046 chore(qa): oracle reads an ADS ratio against market cap / price, and leaves an unreadable one
+underivable; (this commit) fix(valuation): an ADS ratio is read against every class, and one that can't be read
+says so
+Next: record code review 8 when it reports; then BUG-077, BUG-078, BUG-082 (P2). Fixes since review 8's range: 2
+(2bb2a24, this).

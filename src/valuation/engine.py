@@ -36,6 +36,11 @@ _MODEL_FNS: List[Tuple[str, Callable[[ValuationInputs], ValuationResult]]] = [
     ("owner_earnings", value_owner_earnings),
 ]
 
+#: The models valued on filed per-share figures or a filed share count: N/A for a
+#: foreign issuer whose ADS ratio can't be read. DDM (Yahoo's dividends per ADS) and
+#: multiples (per-ADS prices over per-share EPS, times per-share EPS) don't depend on it.
+_ON_FILED_PER_SHARE_BASIS = frozenset({"dcf", "graham", "lynch", "owner_earnings"})
+
 #: The models whose values are averaged into the cross-model median that drives the
 #: headline verdict, the upside column and the screener.
 #:
@@ -61,6 +66,10 @@ def run_valuations(inputs: ValuationInputs,
     log = logger or logging.getLogger(__name__)
     results: List[ValuationResult] = []
     for name, fn in _MODEL_FNS:
+        if inputs.ads_unreadable and name in _ON_FILED_PER_SHARE_BASIS:
+            # The filed per-share basis can't be put on the price's (BUG-076).
+            results.append(ValuationResult(model=name, applicable=False, na_reason=inputs.ads_unreadable))
+            continue
         try:
             results.append(fn(inputs))
             if inputs.ads_ratio != 1.0 and results[-1].applicable:
