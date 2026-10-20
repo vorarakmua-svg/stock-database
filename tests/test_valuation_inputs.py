@@ -713,3 +713,54 @@ def test_a_split_before_the_latest_price_leaves_yahoos_figures_as_they_are(tmp_p
     assert [(day, round(amount, 6)) for day, amount in inputs.dividends] == [("2025-05-15", 0.19)]
     assert inputs.fy_end_prices == {2025: 60.0}
 
+
+def _restating_filings_db(tmp_path, split_date, shares_by_fy, eps_by_fy):
+    """FY2016-2025 with every 10-K's view of each year in the vintages: the 10-K for FY f, filed the February after,
+    reports FY f-2 to f, restated for a split made before it. *shares_by_fy* and *eps_by_fy* are on the post-split
+    basis; a filing made before the split reports half the shares and twice the EPS (a 2:1 split)."""
+    db_path = tmp_path / "restating_filings.db"
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('RST', 'general')")
+    for fy in range(2016, 2026):
+        reports = [f"{f + 1}-02-20" for f in range(fy, min(fy + 2, 2025) + 1)]
+        for filed in reports:
+            shares, eps = shares_by_fy[fy], eps_by_fy[fy]
+            if filed < split_date:
+                shares, eps = shares / 2, eps * 2
+            conn.execute("INSERT INTO financials_annual_vintages (ticker, fiscal_year, accn, filed_date, period_end, "
+                         "net_income, eps_diluted, weighted_avg_shares_diluted) VALUES ('RST', ?, ?, ?, ?, ?, ?, ?)",
+                         (fy, f"acc-{filed[:4]}", filed, f"{fy}-12-31", eps * shares, eps, shares))
+        conn.execute("INSERT INTO financials_annual (ticker, fiscal_year, period_end, filed_date, net_income, "
+                     "total_equity, eps_diluted, weighted_avg_shares_diluted) VALUES ('RST', ?, ?, ?, ?, 1.0e9, ?, ?)",
+                     (fy, f"{fy}-12-31", reports[-1], eps * shares, eps, shares))
+    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('RST', ?, 2.0)", (split_date,))
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_a_split_every_stored_year_already_reflects_explains_no_seam(tmp_path):
+    # Code review 5's variant (BUG-059): a 2:1 split in March 2017 restated every year stored (FY2016 was last filed
+    # in 2019), and a stock-paid merger doubles the share count in FY2017 while EPS rises. The split took the
+    # merger's seam, halving FY2016's EPS: Lynch read 12.6% growth instead of 4.2%.
+    shares = {fy: 1.0e8 if fy < 2017 else 2.0e8 for fy in range(2016, 2026)}
+    eps = {fy: 2.0 if fy < 2017 else 2.1 + 0.1 * (fy - 2017) for fy in range(2016, 2026)}
+    conn = _connect(_restating_filings_db(tmp_path, "2017-03-01", shares, eps))
+    first = load_inputs(conn, "RST").fy_records[0]
+    conn.close()
+    assert (first.fiscal_year, first.split_factor, first.eps_diluted) == (2016, 1.0, 2.0)
+
+
+def test_a_split_between_two_years_filings_still_explains_their_seam(tmp_path):
+    # NOW-like: the FY2023 10-K (filed 2024-02-20) restates FY2021-23 for a 2:1 split of 2023-06-01, while FY2020 was
+    # last filed before it. EPS grew enough to rise across the seam, so only the declared split explains it.
+    shares = {fy: 2.0e8 for fy in range(2016, 2026)}
+    eps = {fy: 0.5 + 0.1 * (fy - 2016) if fy < 2021 else 2.0 + 0.1 * (fy - 2021) for fy in range(2016, 2026)}
+    conn = _connect(_restating_filings_db(tmp_path, "2023-06-01", shares, eps))
+    records = load_inputs(conn, "RST").fy_records
+    conn.close()
+    assert [(r.fiscal_year, r.split_factor) for r in records[3:7]] == [
+        (2019, 2.0), (2020, 2.0), (2021, 1.0), (2022, 1.0)]
+

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 2 · P3 23 · NEEDS-USER 10 · Verified: 32
+**Open:** P0 0 · P1 0 · P2 1 · P3 23 · NEEDS-USER 10 · Verified: 33
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -478,13 +478,14 @@ Repro: since BUG-043's fix ARM has six fiscal years, but its interim statements 
 Expected: a foreign issuer's interim figures are read when it tags them (6-K ladders, with the 20-F as the year), or the gap is explained.   Actual: empty and unexplained.
 
 ### BUG-059 [P2][VAL] A declared split whose own seam lies before the 10-FY window can explain a merger or IPO seam inside it
-Status: OPEN
-Found: iteration 39 by code review 5 (I1's variant); split off in iteration 42 | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 44)
+Found: iteration 39 by code review 5 (I1's variant); split off in iteration 42 | Fixed: iteration 44 (oracle rule fd449ef, then the fix; see LOG) | Regression tests: `tests/test_valuation_inputs.py::test_a_split_every_stored_year_already_reflects_explains_no_seam`, `::test_a_split_between_two_years_filings_still_explains_their_seam`
 Repro (`review5/demo_old_split.py`): a 2:1 split in March 2017, restated by the FY2017 10-K, so every stored year from FY2016 is on the post-split basis, and a stock-paid merger that doubles the share count in FY2017 while EPS rises (2.0 → 2.1). `_declared_run` offers the split to the FY2016 → FY2017 seam (it is dated after FY2016's period end), and since a8fb8e4 a declared match skips the EPS-direction test, so FY2016's EPS is halved (2.0 → 1.0), still after BUG-047's fix; 61f8a56 kept it. End to end (`t_split/build_db_v2.py`, per the review): Lynch $34.80 against $14.50. The oracle's closeness heuristic agrees with the code, so it can't catch this.
 Expected: a seam the split can't have made stays unadjusted.   Actual: the merger seam takes the split.
 Impact today: none. On the real and golden copies the only declared match the EPS test would refuse is NOW's genuine 5:1 seam (FY2022 → FY2023: its EPS grew about 5× that year, the reason for a8fb8e4, BUG-031) (`qa/evidence/iter42-bug059-scan.txt`).
 Notes: fix direction: per-field filing dates. The vintages hold each field's filing, so a split can explain a seam only if the older year's share count was last filed before the split: that keeps NOW (FY2022 last filed early 2025, before December 2025's split) and refuses the variant (FY2016 last filed in 2019, after March 2017's). The oracle rule changes first.
 
+Fix: a filing restates its figures for every share split made before it, so `load_inputs` reads when each year's share figure was last filed (the latest vintage carrying the field that detects seams), and `_normalize_splits` offers a simple-ratio share split to a seam only if it lies between the two years' filings (`_filed_between`). Spin-off and merger price factors (not simple ratios) and databases without vintages keep the old reading. Feasibility first (`qa/evidence/iter44-bug059-seam-dates.txt`): every simple-ratio seam the code matches lies between its filings, 22 on the real copy and 8 on the golden one; the one outside is RTX's 1.589 spin-off factor (L12), which the rule leaves alone. The oracle took the rule first (fd449ef): it now reads each figure's filing date for simple splits, flagged the unfixed code (Lynch stored $34.80 against $14.50), and its output on the real and golden copies stayed identical. The variant with vintages (`iter44_variant_db.py`) valued by the fix: Lynch $14.50 on 4.2% growth (was $34.80 on 12.6%), and the oracle agrees at both levels. Impact: 0 of 762 real and 0 of 114 golden valuation rows change. Three mutants each fail a test (one by the control).
 ### BUG-060 [P2][VAL] A split between the latest price's day and the latest filing leaves per-share values past the split beside the older price
 Status: OPEN
 Found: iteration 43, while fixing BUG-048 (`qa/evidence/iter43-bug060-repro.txt`) | Fixed: — | Regression test: —

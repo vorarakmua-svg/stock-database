@@ -168,9 +168,21 @@ def _eps_moved_inversely(ratio: float, eps_older: Optional[float],
     return abs(eps_newer) > abs(eps_older)
 
 
+def _filed_between(split: Tuple[str, float], f_old: Optional[str], f_new: Optional[str]) -> bool:
+    """Whether *split* can explain the seam between two years whose share figures
+    were last filed on *f_old* and *f_new*: a share split restates the filings made
+    after it, so it lies between them. Unknown dates don't decide, nor do the
+    spin-off and merger price factors no filing restates (not simple ratios)."""
+    when, ratio = split
+    if not (f_old and f_new and ratio and ratio > 0 and _simple_ratio(ratio)):
+        return True
+    return f_old[:10] < str(when)[:10] <= f_new[:10]
+
+
 def _normalize_splits(records: List[FYRecord],
                       shares_detect: List[Optional[float]],
                       splits: Sequence[Tuple[str, float]] = (),
+                      detect_filed: Optional[Sequence[Optional[str]]] = None,
                       ) -> Tuple[List[FYRecord], bool]:
     """Restate every year's per-share figures onto the current share basis.
 
@@ -193,6 +205,12 @@ def _normalize_splits(records: List[FYRecord],
       modern series. Truncate: drop the older records and stop walking. The
       models' "insufficient history" guards then take over honestly.
     * otherwise -> ordinary issuance / buyback; no adjustment.
+
+    A filing restates its figures for every share split made before it, so
+    when *detect_filed* says when each year's share figure was last filed (the
+    vintages), a share split explains a seam only if it lies between the two
+    years' filings: one that every stored year already reflects can't have made
+    a seam, though a stock-paid merger's may sit near its ratio.
 
     Mutates the surviving *records* in place and returns
     ``(surviving_records, history_truncated)``. Per-share values are DIVIDED by
@@ -217,7 +235,9 @@ def _normalize_splits(records: List[FYRecord],
                 # Unit discontinuity: the pre-seam years are uncomparable.
                 return records[i + 1:], True
             if forward or reverse:
-                run = _declared_run(ratio, records[i].period_end, unused)
+                f_old, f_new = (detect_filed[i], detect_filed[i + 1]) if detect_filed else (None, None)
+                candidates = [split for split in unused if _filed_between(split, f_old, f_new)]
+                run = _declared_run(ratio, records[i].period_end, candidates)
                 if run:
                     unused = [split for split in unused if split not in run]
                     factor *= math.prod(split_ratio for _, split_ratio in run)
@@ -364,8 +384,27 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         "ORDER BY fa.fiscal_year ASC",
         (ticker,),
     ).fetchall()
+    # When each year's share figures were last filed, per field (the vintages, every
+    # filing's view of each year): a share split restates only the filings made after it.
+    filed_by_field: Dict[Tuple[int, str], str] = {}
+    try:
+        for v in conn.execute(
+            "SELECT fiscal_year, "
+            "MAX(CASE WHEN weighted_avg_shares_diluted IS NOT NULL THEN filed_date END), "
+            "MAX(CASE WHEN eps_diluted IS NOT NULL THEN filed_date END), "
+            "MAX(CASE WHEN shares_outstanding IS NOT NULL THEN filed_date END) "
+            "FROM financials_annual_vintages WHERE ticker = ? GROUP BY fiscal_year",
+            (ticker,),
+        ).fetchall():
+            for field_name, filed_on in zip(("weighted_avg_shares_diluted", "eps_diluted", "shares_outstanding"),
+                                            (v[1], v[2], v[3])):
+                if filed_on:
+                    filed_by_field[(int(v[0]), field_name)] = filed_on
+    except sqlite3.OperationalError:  # a database from before the vintages were kept
+        pass
     records: List[FYRecord] = []
     shares_detect: List[Optional[float]] = []
+    detect_filed: List[Optional[str]] = []
     for r in fy_rows[-_MAX_FY_HISTORY:]:
         fcf = r["levered_fcf"] if r["levered_fcf"] is not None else r["free_cash_flow"]
         shares = (
@@ -376,12 +415,13 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         # Split detection needs the share count that MATCHES the reported EPS,
         # so net_income / eps_diluted is preferred over shares_outstanding
         # (weighted_avg_shares_diluted is NULL for e.g. GOOGL).
-        detect = r["weighted_avg_shares_diluted"]
+        detect, detect_field = r["weighted_avg_shares_diluted"], "weighted_avg_shares_diluted"
         if detect is None and r["net_income"] is not None and r["eps_diluted"]:
-            detect = r["net_income"] / r["eps_diluted"]
+            detect, detect_field = r["net_income"] / r["eps_diluted"], "eps_diluted"
         if detect is None:
-            detect = r["shares_outstanding"]
+            detect, detect_field = r["shares_outstanding"], "shares_outstanding"
         shares_detect.append(detect)
+        detect_filed.append(filed_by_field.get((int(r["fiscal_year"]), detect_field)))
         records.append(
             FYRecord(
                 fiscal_year=int(r["fiscal_year"]),
@@ -407,7 +447,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     # explain a seam (an older merger's would take it); _apply_later_splits
     # moves every year by it instead.
     restated = [s for s in splits if not filed or str(s[0])[:10] <= str(filed)[:10]]
-    records, history_truncated = _normalize_splits(records, shares_detect, restated)
+    records, history_truncated = _normalize_splits(records, shares_detect, restated, detect_filed)
 
     # SELECT *: a database not yet migrated lacks the rate's date and source columns,
     # and the backfill reads it without migrating.

@@ -831,3 +831,24 @@ Gates: ruff ✓ mypy ✓ pytest 965 passed (1 known warning) | CI: pending for t
 Commits: 30b3c5a chore(qa): oracle keeps per-share values on the latest price's basis; (this commit) fix(valuation):
 per-share values stay on the latest price's basis
 Next: record code review 6 when it reports; then BUG-059 (P2) or BUG-060 (P2), oldest first: BUG-059.
+
+## Iteration 44: 2026-10-20 07:18: fix
+Picked: BUG-059, the oldest open P2. CI: 65a0602 running at the start (f9bbc91 ✓). Code review 6 is still running.
+Did: a filing restates its figures for every share split made before it, so whether a year's figure reflects a split
+follows from when it was filed. Feasibility first: with each year's filing date per field from the vintages, every
+simple-ratio seam the code matches today lies between its two years' filings (22 real, 8 golden); RTX's 1.589
+spin-off factor (L12) is the one outside, so the rule covers simple ratios only. The oracle took it first (fd449ef):
+for a simple split it now reads the figure's own filing date instead of the nearer-to-today's-count guess; on the
+variant (rebuilt with vintages) valued by the unfixed code it flagged Lynch ($34.80 against $14.50), and its output on
+the real and golden copies stayed identical. Then TDD (2 tests: the variant RED at split factor 2.0 and EPS 1.0; a
+NOW-like control whose EPS rises across a genuine seam, so only the declared match explains it): `load_inputs` reads
+each year's detection-field filing date and `_normalize_splits` offers a simple share split to a seam only if it lies
+between the two filings. Three mutants each fail a test. The variant valued by the fix: Lynch $14.50 on 4.2%, with the
+oracle agreeing; the real and golden copies revalued: 0 of 762 and 0 of 114 rows change.
+Evidence: `qa/evidence/iter44-bug059-{seam-dates,oracle,red,green,mutants,e2e,impact}.txt`
+Result: BUG-059 VERIFIED. Open P2: BUG-060 only. VAL-09 → FAIL→BUG-060.
+Gates: ruff ✓ mypy ✓ pytest 967 passed (1 known warning) | CI: pending for this push
+Commits: fd449ef chore(qa): oracle reads a split's restatement from each figure's filing; (this commit)
+fix(valuation): a share split explains only a seam between its filings
+Next: record code review 6 when it reports; then BUG-060 (P2; the oracle first). Fixes since review 6's range
+(f0db42a..f9bbc91): 2 (65a0602, this).
