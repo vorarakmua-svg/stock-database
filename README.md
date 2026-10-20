@@ -526,8 +526,8 @@ numbers SEC filings report:
   filed cumulative-to-date in 10-Qs (and full-year in the 10-K). We difference the
   cumulative ladder anchored at the fiscal-year start (`discrete[k] = YTD[k] − YTD[k-1]`),
   which recovers every quarter's standalone performance — including **Q4**, which is never
-  filed as a 10-Q (`Q4 = annual − 9-month YTD`). Derived values are tagged in
-  `_source_tags`.
+  filed as a 10-Q (`Q4 = annual − 9-month YTD`). Until a year's second 10-Q, its first
+  quarter is its own 3-month figure. Derived values are tagged in `_source_tags`.
 - **One split basis per year.** A stock split restates only the filings made after it,
   so a year's figures can come from both sides of one. Each quarter's per-share figures
   and share counts are put on the basis of its year's annual figures, as

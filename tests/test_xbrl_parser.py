@@ -140,6 +140,98 @@ def test_quarterly_cashflow_from_ytd_only_ladder():
     assert q["2024-09-28"]["operating_cash_flow"] == 28   # Q4 = 110 - 82
 
 
+def test_a_years_first_quarter_comes_from_its_own_10q_before_the_second():
+    # BUG-124: a year's ladder has one rung until its second 10-Q, and a ladder of one was skipped, so the first quarter
+    # had no flows for about three months: the latest quarter of 61 of the user's 126 companies (META's Q1 2026).
+    year, q1 = ("2025-01-01", "2025-12-31"), ("2026-01-01", "2026-03-31")
+    facts = {"facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": [usd(400.0, *year, fy=2025, fp="FY", form="10-K", filed="2026-01-29"),
+                                       usd(110.0, *q1, fy=2026, fp="Q1", form="10-Q", filed="2026-04-30")]}},
+        "PaymentsToAcquirePropertyPlantAndEquipment": {"units": {"USD": [
+            usd(-40.0, *year, fy=2025, fp="FY", form="10-K", filed="2026-01-29"),
+            usd(-12.0, *q1, fy=2026, fp="Q1", form="10-Q", filed="2026-04-30")]}},
+        "Assets": {"units": {"USD": [
+            usd(900.0, None, "2026-03-31", fy=2026, fp="Q1", form="10-Q", filed="2026-04-30")]}},
+    }}}
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2026-03-31"]
+    assert (quarter.get("revenue"), quarter.get("capex"), quarter.get("fiscal_quarter")) == (110.0, 12.0, 1)
+    assert quarter["_source_tags"]["revenue"] == "Revenues"
+
+
+def _january_year(*rungs):
+    """A January-year filer (NVDA): FY2026 ended 2026-01-25, then FY2027's 10-Q rungs as (end, revenue)."""
+    ladder = [usd(130.0, "2025-01-27", "2026-01-25", fy=2026, fp="FY", form="10-K", filed="2026-02-25")]
+    ladder += [usd(val, "2026-01-26", end, fy=2027, fp=f"Q{n}", form="10-Q", filed=end[:8] + "28")
+               for n, (end, val) in enumerate(rungs, 1)]
+    assets = [usd(900.0, None, end, fy=2027, fp="Q1", form="10-Q", filed=end[:8] + "28") for end, _ in rungs]
+    q = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": ladder}}, "Assets": {"units": {"USD": assets}}}}})
+    return [(q[end].get("revenue"), q[end].get("fiscal_year"), q[end].get("fiscal_quarter")) for end, _ in rungs]
+
+
+def test_a_january_years_first_quarter_is_its_new_years():
+    # BUG-124: NVDA's quarter to 2026-04-26 opens FY2027; read from its end's calendar year it was FY2026's, beside
+    # FY2026's own first quarter.
+    assert _january_year(("2026-04-26", 44.0)) == [(44.0, 2027, 1)]
+
+
+def test_a_year_in_progress_is_the_year_it_starts():
+    # A January year's quarters before its 10-K: their latest end's calendar year was the year before theirs.
+    assert _january_year(("2026-04-26", 44.0), ("2026-07-26", 91.0)) == [(44.0, 2027, 1), (47.0, 2027, 2)]
+
+
+def test_a_transition_period_a_10k_closes_keeps_its_ends_year():
+    # NOW moved from June years to calendar ones through a 10-K for July-December 2011: closed by a 10-K, that period
+    # keeps its end's year, as before, rather than the year after FY2011, which is FY2012's.
+    facts = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        usd(120.0, "2010-07-01", "2011-06-30", fy=2011, fp="FY", form="10-K", filed="2011-09-15"),
+        usd(34.0, "2011-07-01", "2011-09-30", fy=2011, fp="Q1", form="10-Q", filed="2011-11-10"),
+        usd(73.0, "2011-07-01", "2011-12-31", fy=2011, fp="FY", form="10-K", filed="2012-03-15"),
+        usd(47.0, "2012-01-01", "2012-03-31", fy=2012, fp="Q1", form="10-Q", filed="2012-05-10"),
+        usd(104.0, "2012-01-01", "2012-06-30", fy=2012, fp="Q2", form="10-Q", filed="2012-08-10")]}}}}}
+    q = XBRLParser().extract_quarterly_financials(facts)
+    assert [(end, q[end]["fiscal_year"], q[end]["revenue"]) for end in sorted(q)] == [
+        ("2011-09-30", 2011, 34.0), ("2011-12-31", 2011, 39.0), ("2012-03-31", 2012, 47.0), ("2012-06-30", 2012, 57.0)]
+
+
+def test_a_later_quarters_own_3_month_figure_leaves_its_ladder_value():
+    # A 10-Q's three months beside its year to date: the quarter is still the year-to-date difference.
+    s = "2026-01-01"
+    facts = {"facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": [
+            usd(155.0, "2026-04-01", "2026-06-30", fy=2026, fp="Q2", form="10-Q", filed="2026-07-30"),
+            usd(400.0, "2025-01-01", "2025-12-31", fy=2025, fp="FY", form="10-K", filed="2026-01-29"),
+            usd(100.0, s, "2026-03-31", fy=2026, fp="Q1", form="10-Q", filed="2026-04-30"),
+            usd(250.0, s, "2026-06-30", fy=2026, fp="Q2", form="10-Q", filed="2026-07-30")]}},
+        "Assets": {"units": {"USD": [
+            usd(900.0, None, "2026-06-30", fy=2026, fp="Q2", form="10-Q", filed="2026-07-30")]}},
+    }}}
+    q = XBRLParser().extract_quarterly_financials(facts)
+    assert (q["2026-03-31"]["revenue"], q["2026-06-30"]["revenue"]) == (100.0, 150.0)
+
+
+def test_a_lone_later_quarters_figure_stays_unread():
+    # Only a year's first quarter starts with its year: a lone later quarter's three months would read as a first
+    # quarter by its span, so it stays out (as before BUG-124's fix).
+    facts = {"facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": [
+            usd(400.0, "2025-01-01", "2025-12-31", fy=2025, fp="FY", form="10-K", filed="2026-01-29"),
+            usd(155.0, "2026-04-01", "2026-06-30", fy=2026, fp="Q2", form="10-Q", filed="2026-07-30")]}},
+        "Assets": {"units": {"USD": [
+            usd(900.0, None, "2026-06-30", fy=2026, fp="Q2", form="10-Q", filed="2026-07-30")]}},
+    }}}
+    assert "revenue" not in XBRLParser().extract_quarterly_financials(facts)["2026-06-30"]
+
+
+def test_a_lone_first_quarter_figure_makes_no_quarter_of_its_own():
+    # BUG-096's lesson: a 10-K can re-date a year's first quarter (ADI's 2011-02-04 beside its 10-Q's 2011-01-29), so a
+    # lone 3-month figure fills only a quarter the filings hold, its balance sheet's.
+    facts = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        usd(400.0, "2025-01-01", "2025-12-31", fy=2025, fp="FY", form="10-K", filed="2026-01-29"),
+        usd(105.0, "2026-01-01", "2026-04-04", fy=2026, fp="Q1", form="10-K", filed="2027-01-28")]}}}}}
+    assert "2026-04-04" not in XBRLParser().extract_quarterly_financials(facts)
+
+
 def _outflow_quarters(tag, field, values, start="2008-01-01", ends=("2008-03-31", "2008-06-30", "2008-09-30",
                                                                   "2008-12-31")):
     """An outflow's year-to-date ladder (three 10-Qs, then the 10-K's year), and its derived quarters."""

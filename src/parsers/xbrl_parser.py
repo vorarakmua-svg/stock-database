@@ -5,7 +5,7 @@ import math
 import re
 import statistics
 from collections import Counter, defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from fractions import Fraction
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
@@ -308,6 +308,12 @@ class XBRLParser:
         self.logger = logger or logging.getLogger(__name__)
 
     # ========== Period helpers ==========
+
+    @staticmethod
+    def _day_after(value: Optional[str]) -> Optional[str]:
+        """The ISO day after *value* (``None`` if it doesn't parse)."""
+        day = XBRLParser._parse_iso_date(value)
+        return (day + timedelta(days=1)).isoformat() if day is not None else None
 
     @staticmethod
     def _parse_iso_date(value: Optional[str]) -> Optional[date]:
@@ -686,7 +692,8 @@ class XBRLParser:
         onto their year's basis first. A full-year figure in *set_aside* (``(field, tag,
         fiscal year)``, see ``_revenue_set_aside``) ranks after every other tag. An outflow
         stored as a size differences the totals' sizes, and a total that shrinks gives no
-        quarter (BUG-111).
+        quarter (BUG-111). A year's ladder is one rung until its second 10-Q, its first quarter's
+        own 3-month figure, which fills that quarter after every ladder (BUG-124).
         """
         oracle_rungs: Dict[str, Dict[Tuple[str, str], Any]] = {}  # net income's and EPS's, for the counts' scale
         for field in CANONICAL_FIELDS:
@@ -694,6 +701,7 @@ class XBRLParser:
                 continue
             # Dedup per (start, end): higher-priority tag, then most-recently-filed.
             chosen: Dict[Tuple[str, str], Tuple[int, str, Any]] = {}
+            closed: Set[Tuple[str, str]] = set()  # the spans a 10-K reports: periods that are over
             for priority, tag in enumerate(field.tags):
                 for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
                     if entry.get("form", "") not in _QUARTERLY_FORMS:
@@ -711,6 +719,8 @@ class XBRLParser:
                         rank += len(field.tags)  # a revenue figure that isn't the year's (never a count)
                     filed = entry.get("filed") or ""
                     key = (start, end)
+                    if entry.get("form", "").startswith("10-K"):
+                        closed.add(key)
                     cur = chosen.get(key)
                     if cur is not None and not (
                         rank < cur[0] or (rank == cur[0] and filed >= cur[1])
@@ -781,12 +791,30 @@ class XBRLParser:
                 pd_.setdefault("fiscal_quarter", self._fiscal_quarter_from_span(self._span(start, end)))
                 pd_.setdefault("fiscal_year", ladder_fy)
 
+            # A year still open belongs to the year starting on its start day: as its own full-year
+            # figure dates it, or the year after the one ending the day before. Its latest end's
+            # calendar year put a January year's quarters before its 10-K in the year before theirs,
+            # beside that year's own (BUG-124). A period a 10-K closes keeps its end's year, as
+            # before: NOW's July-December 2011 between its June and calendar years.
+            year_of_start: Dict[str, Optional[int]] = {}
+            year_spans = [(start, end) for start, end in chosen
+                          if (self._span(start, end) or 0) >= _FULL_YEAR_MIN_DAYS]
+            for start, end in year_spans:
+                year_of_start[start] = self._fiscal_year_from_end(end)
+            for start, end in year_spans:
+                year, after = self._fiscal_year_from_end(end), self._day_after(end)
+                if year is not None and after is not None:
+                    year_of_start.setdefault(after, year + 1)
+
             for start, points in ladders.items():
                 if len(points) < 2:
                     continue  # not a cumulative ladder (isolated 3-month fact)
                 points.sort()
-                # The fiscal year this ladder belongs to, from its latest end (date rule).
-                ladder_fy = self._fiscal_year_from_end(points[-1][0])
+                # The fiscal year this ladder belongs to: a closed period's latest end's (the date
+                # rule), an open one's start's.
+                ladder_fy = None if (start, points[-1][0]) in closed else year_of_start.get(start)
+                if ladder_fy is None:
+                    ladder_fy = self._fiscal_year_from_end(points[-1][0])
                 prev_end, prev_val = start, 0.0
                 for end, val in points:
                     inc_span = self._span(prev_end, end)
@@ -812,6 +840,20 @@ class XBRLParser:
                         if keep:
                             assign(end, discrete, "derived:ytd_diff", start, ladder_fy, basis.get((start, end)))
                     prev_end, prev_val = end, val  # (a gap resets the baseline)
+            if not shares:
+                # A year's ladder is one rung until its second 10-Q: the first quarter's own
+                # 3-month figure, from the day a year starts. It fills that quarter where the
+                # filings hold it (its balance sheet), after every ladder, so it displaces no
+                # derived figure (BUG-124); other lone 3-month figures stay unread.
+                for start, points in ladders.items():
+                    if len(points) != 1 or year_of_start.get(start) is None:
+                        continue
+                    end, val = points[0]
+                    span = self._span(start, end)
+                    if end in periods and isinstance(val, (int, float)) and span is not None \
+                            and _QUARTER_MIN_DAYS <= span <= _QUARTER_MAX_DAYS:
+                        assign(end, abs(val) if field.sign == SIGN_ABS else val, field.tags[chosen[(start, end)][0]],
+                               start, year_of_start[start], basis.get((start, end)))
             for end, (value, tag, own_level) in own.items():  # quarters no year-to-date ladder reaches
                 if end in periods and field.key not in periods[end]:
                     periods[end][field.key] = value

@@ -1548,3 +1548,20 @@ Commit: (this commit) chore(qa): discovery MATCH-01, -02, -03, -07, -08; empty f
 debt
 Next: BUG-124 (P1, the older), then BUG-125, then BUG-126; record code review 12 when it reports. Fixes since review
 12's range (f87638f): 1.
+
+## Iteration 84: 2026-10-20 20:45: fix
+Picked: BUG-124, the older of the two open P1s. CI: eeb061e ✓. Code review 12 is running.
+Did: TDD (four tests RED, three guards): a year's first quarter is read from its own 3-month figure until the second
+10-Q, after every ladder and only where the filings hold the quarter; a year still open is labelled the year it starts
+(a January filer's first quarter read as the year before), a period a 10-K closes keeps its end's year (NOW's 2011
+transition, found when the first cut of the label rule moved it). Ten mutants, each failing a test. Real data: 1,547
+quarterly cells filled, nothing emptied, one value moved (MCD's count onto its scale); empty latest quarters 62 to 1;
+latest trailing years within 5% of Yahoo's for 96 and 94 of 111 (86 and 67). stock-web: NVDA's trailing year to
+2026-04-26 is Yahoo's own $253.49B.
+Evidence: `qa/evidence/iter84-bug124-{red,red-labels,red-transition,green,mutants,realdata,e2e}.txt`
+Result: BUG-124 VERIFIED; VALID-06 back to FAIL→BUG-096 (P3).
+Gates: ruff ✓ mypy ✓ pytest 1131 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): a year's first quarter comes from its own 10-Q
+Next: record code review 12 (reported during this iteration: no P0 or P1, two proposed P2s, one on BUG-111's rule
+for acquisitions; saved as `qa/evidence/review12-report.md`, claims to re-run first), then BUG-125 (P1). Fixes since
+review 12's range (f87638f): 2.
