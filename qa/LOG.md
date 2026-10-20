@@ -1657,3 +1657,18 @@ Gates: ruff ✓ mypy ✓ pytest 1161 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(parsers): a sector's EV ratios go with the figures they're built on
 Next: record code review 13 when it reports (its claims re-run first); otherwise discovery (TODO rows, VAL first).
 Fixes since review 13's range (ef7cc76): 2.
+
+## Iteration 91: 2026-10-20 22:46: discovery
+Picked: MATCH-04 and MATCH-06, the riskiest TODO rows (VAL and VALID are done; no P0-P2 open). Code review 13 still
+running. CI: ff5da71 ✓.
+Did: MATCH-04 (price history) dispatched to a worker, still running. MATCH-06 inline: each golden ticker's DES, STAT,
+FA statement tables, VAL and screener row rendered in-process over copies of the user's data and the golden basket,
+every displayed value read back (number, unit, sign, rounding) and compared with the DB value it shows, by its
+meaning rather than the code's format: 28,491 and 27,073 values equal; Debt/Equity is Yahoo's percent shown and
+screened as a multiple; counts carry a $; two sign placements; trillions read as billions.
+Evidence: `qa/evidence/iter91-match06-{real,golden,extra}.txt`
+Result: MATCH-06 FAIL→BUG-135 (P1); BUG-136 (P2), BUG-137 and BUG-138 (P3) opened. MATCH-04 pending.
+Gates: ruff ✓ mypy ✓ pytest 1161 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) chore(qa): discovery MATCH-06; debt/equity's units and share counts in dollars
+Next: record MATCH-04 and code review 13 when they report (claims re-run first); then BUG-135 (P1), BUG-136 (P2).
+Fixes since review 13's range (ef7cc76): 2.

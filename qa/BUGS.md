@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 62 · NEEDS-USER 12 · Verified: 69
+**Open:** P0 0 · P1 1 · P2 1 · P3 64 · NEEDS-USER 12 · Verified: 69
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1037,6 +1037,31 @@ Repro: `CalculatedMetrics.calculate_all` computes the EV family from net debt, E
 Expected: the EV family suppressed with its inputs for banks, stored NULL as the README's sector table promises for the EBITDA family ("a screen ... excludes sectors where [it] is undefined instead of returning a misleading value").   Actual: values from the suppressed inputs. Impact: the screener's EV columns and the company page for the 13 banks; no valuation input.
 
 Fix: a ratio built on a suppressed figure goes with it (`sector_metrics.SUPPRESSED_BY_SECTOR`): a bank's whole EV family (EV, EV/EBITDA, EV/revenue, EV/FCF, FCF yield) with its net debt, EBITDA and FCF; an insurer's EV/EBITDA with its EBITDA; a REIT's EV/FCF and FCF yield with its FCF. `apply_sector` nulls only the keys a dict holds, so the yearly metrics, which have no price, gain no EV keys (the README leaves EV ratios out of the as-of metrics); every other suppressed key is always computed first, as before. The README's sector table names them. No valuation model reads the EV family (the snapshot, the STAT page, the JSON and CSV exports do; the web screener whitelists none of it). Three tests RED on 8a90337, two guards; eight mutants, each failing a test (`qa/evidence/iter90-bug134-{red,green,mutants}.txt`). On copies of the user's data, a refresh of every ticker at its own collection's market data, before and after: 74 cells empty now (13 banks x 4, 8 insurers' EV/EBITDA, 7 REITs x 2), the other 434 identical; JPM's EV $1,027.5B, EV/EBITDA 12.62 and FCF yield -15.35% gone (`iter90-bug134-realdata.txt`). stock-web on each copy: JPM's STAT page reads EV/EBITDA 12.6x, then "—"; CB's EV and FCF yield and O's EV/EBITDA stay (`iter90-bug134-e2e.txt`). The stored snapshots change at the next collection or refresh.
+### BUG-135 [P1][MATCH] Debt/Equity is Yahoo's percent, shown and screened as a multiple: AAPL's STAT reads 78.4x for 0.78x, and "debt/equity under 2" finds 1 of 111 companies
+Status: OPEN
+Found: iteration 91 via MATCH-06 (`qa/evidence/iter91-match06-{real,golden,extra}.txt`) | Fixed: — | Regression test: —
+Repro: `YahooHandler` stores Yahoo's `debtToEquity`, a percent (AAPL's 78.445 is 78.4% of equity), as `market_snapshots.debt_to_equity` (`yahoo_handler.py:307`). STAT's `_STAT_LEVERAGE` formats it as a multiple (`workstation.py:437`: "78.4x"), the screener's kind map does too (`screener.py:134`), and the screener's filter compares the percent: on a copy of the user's data `/api/screen?debt_to_equity_lt=2` returns 1 company (SNDK at 1.503, 1.5%), `_lt=200` returns 94. The stored figures over 111 companies: median 68.9, max 790.9. Of the golden tickers, 13 STAT pages on the user's copy and 15 on the golden copy show the percent as a multiple (KO 115.5x, NEE 161.7x, NVDA 6.6x).
+Expected: the ratio (0.78x) on STAT and in the screener, its filter on the same basis, or the figure labelled a percent everywhere.   Actual: 100 times the ratio, as "x".
+Impact: STAT's Debt/Equity for every company with Yahoo's figure; the screener's "Debt / equity" filter and column; the snapshot in the exports. No valuation input (`src/valuation` doesn't read it).
+
+### BUG-136 [P2][UI] Share counts and volume are shown as dollars: AAPL's "Shares outstanding $14.59B", "Volume $18.56M"
+Status: OPEN
+Found: iteration 91 via MATCH-06 (`qa/evidence/iter91-match06-{real,golden,extra}.txt`) | Fixed: — | Regression test: —
+Repro: counts go through `fmt_money`, which prefixes "$" (by design: `workstation.py:420-424` and `pages.py`'s `_STATEMENT_ROWS`, "for consistency"): DES's Volume and Avg Volume, STAT's Shares outstanding, Float shares and Shares short, every statement table's Shares outstanding row (annual, quarterly, TTM) and the HP table's volume. Over the golden tickers on the user's copy, 1,140 cells (15 DES pages x 2, 15 STAT x 3, 152 annual, 471 quarterly and 442 trailing-year cells); on the golden copy, 1,026.
+Expected: a count without a currency ("14.59B").   Actual: "$14.59B". The magnitudes and suffixes are right.
+
+### BUG-137 [P3][UI] A negative price change reads "$-10.87" where a negative amount reads "-$1.63B"
+Status: OPEN
+Found: iteration 91 via MATCH-06 (`qa/evidence/iter91-match06-extra.txt`) | Fixed: — | Regression test: —
+Repro: `fmt_price` is `f"${x:,.2f}"`, its sign after the dollar sign, and `fmt_money` puts it before: DES's change for ALL reads "$-10.87 (-4.3%)", TSLA's statements "-$1.63B".
+Expected: one placement ("-$10.87").   Actual: two.
+
+### BUG-138 [P3][UI] Amounts of a trillion or more read in billions, without a separator: MSFT's market cap "$3676.66B"
+Status: OPEN
+Found: iteration 91 via MATCH-06 (`qa/evidence/iter91-match06-real.txt`, spot checks) | Fixed: — | Regression test: —
+Repro: `fmt_money`'s largest suffix is B and its format has no thousands separator: MSFT's DES market cap is "$3676.66B" (3,676,657,156,096); AAPL's, NVDA's and GOOGL's read the same way.
+Expected: "$3.68T" (or "$3,676.66B").   Actual: "$3676.66B". The value is right.
+
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
