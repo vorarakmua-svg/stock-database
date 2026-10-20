@@ -1720,3 +1720,18 @@ Gates: ruff ✓ mypy ✓ pytest 1168 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(parsers): cash is read where a balance sheet tags only its total with restricted cash
 Next: record MATCH-04 (its claims re-run first); then BUG-136, BUG-140, BUG-141, BUG-142 (P2). Fixes since review
 13's range (ef7cc76): 4.
+
+## Iteration 95: 2026-10-20 23:36: discovery
+Picked: MATCH-04's record (a worker's sweep dispatched in iteration 91, reported in iteration 94), no P0 or P1
+open. CI: e03ffe1 ✓.
+Did: re-ran its claims at HEAD on fresh copies through the web app in-process: DHR's 2016 spin-off bars (42.01 to
+67.73, a factor and a same-day "dividend"), KO's doubled 2001 payments, the overlay's two first bars (1980 and 1927,
+each at 0%), HP's 5Y and MAX tables against the CSV they link (1,254 against 262 rows; 11,555 against 551), the
+stale-database empty state (1M: "No price history collected." beside 11,502 bars), fmt_money's "$1000.00M", and the
+directories a client session makes. Every claim holds.
+Evidence: `qa/evidence/iter91-match04-report.md`, `iter95-match04-rerun.txt`
+Result: MATCH-04 FAIL→BUG-149; BUG-149, BUG-150, BUG-151 (P2) and BUG-152 to BUG-158 (P3) opened; BUG-138 extended.
+Gates: ruff ✓ mypy ✓ pytest 1168 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) chore(qa): discovery MATCH-04; the overlay's base, HP's CSV, stale ranges
+Next: BUG-136 (P2, the oldest open), then BUG-140, BUG-141, BUG-142, BUG-149, BUG-150, BUG-151. Fixes since review
+13's range (ef7cc76): 4.

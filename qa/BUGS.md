@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 4 · P3 70 · NEEDS-USER 12 · Verified: 71
+**Open:** P0 0 · P1 0 · P2 7 · P3 77 · NEEDS-USER 12 · Verified: 71
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1067,6 +1067,7 @@ Found: iteration 91 via MATCH-06 (`qa/evidence/iter91-match06-real.txt`, spot ch
 Repro: `fmt_money`'s largest suffix is B and its format has no thousands separator: MSFT's DES market cap is "$3676.66B" (3,676,657,156,096); AAPL's, NVDA's and GOOGL's read the same way.
 Expected: "$3.68T" (or "$3,676.66B").   Actual: "$3676.66B". The value is right.
 
+Also (MATCH-04, iteration 95): a value that rounds up to the next suffix keeps the smaller one: 999,996,000 reads "$1000.00M", 999,996 "$1000.00K" (NVDA's 2010-09-22 volume, `qa/evidence/iter95-match04-rerun.txt`).
 ### BUG-139 [P1][VALID] A balance sheet that tags its cash only with restricted cash leaves cash empty: seven companies' latest net debt is their whole total debt (GE's $22.16B for $9.76B, GEV's ROIC 12.3% for 58.0%)
 Status: VERIFIED (iteration 94)
 Found: iteration 92 by code review 13 (C1), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: iteration 94 (see LOG) | Regression tests: `tests/test_xbrl_parser.py::test_cash_tagged_only_with_restricted_cash_is_read`, `::test_a_quarter_whose_cash_is_tagged_only_with_restricted_cash_has_it`, `::test_restricted_cash_a_balance_sheet_doesnt_show_isnt_read`; guard `::test_cash_without_restricted_cash_comes_first`
@@ -1130,6 +1131,67 @@ Status: OPEN
 Found: iteration 92 by code review 13 (M6), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
 Repro: `xbrl_parser.py:100` (`_net_outflows_as_paid`) and BUG-127's Fix paragraph; the filings turned back are LLY's 10-Q filed 2009-10-30 and TXN's filed 2009-07-29 and 2009-10-30.
 Expected: the filings named as they are.   Actual: "2008 10-Qs".
+
+### BUG-149 [P2][UI] The ^GSPC overlay rebases each line to its own first bar: at MAX, AAPL's +349,443% beside an S&P from 1927 (+5,859% from AAPL's first day, shown +43,509%)
+Status: OPEN
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Repro: GP's compare chart draws `/api/stocks/{T}/compare-bars?others=^GSPC&range=R`, each series normalised against its own first non-null close in the range (`stocks_api.py:312`; `app.js:228-236` plots each on its own dates): on the golden copy AAPL starts 1980-12-12 at 0% and ^GSPC 1927-12-30 at 0%, and at 2026-10-19 they read +349,443% and +43,509%, where rebased on 1980-12-12 ^GSPC is +5,859%. The date pairing itself is right (218,709 points, no one-day shift).
+Expected: both lines rebased on the first date they share.   Actual: each on its own first bar.
+Impact: MAX for every ticker with a shorter history than the index (all 18 golden tickers, the user's 15), and ARM's 5Y (-1.2 points); 1Y and shorter unaffected.
+
+### BUG-150 [P2][UI] HP's Download CSV isn't the table it sits under: AAPL's 5Y table has 1,254 daily rows, the CSV 262 weekly
+Status: OPEN
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Repro: the HP tab links `/api/export/stock/{T}/bars.csv?range=R` with the default interval, which resamples by range (weekly at 5Y, monthly at MAX) while the tab lists daily bars: golden copy, AAPL: 1Y 251 rows and 251; 5Y 1,254 and 262; MAX 11,555 and 551 (iteration 95's re-run). Every ticker at 5Y and MAX (254 cases on the user's copy), with no hint on the tab.
+Expected: the CSV the table shows (`interval=1d`), or the link saying it is weekly or monthly.   Actual: a different series.
+
+### BUG-151 [P2][UI] On a database not collected in the last month, the short ranges say "No price history collected." beside thousands of stored bars
+Status: OPEN
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Repro: ranges are anchored on today, not on the last bar (`resolve_range_start`): the user's copy, last collected 2026-08-04, gives HP 1M empty for all 127 companies and 3M for 15 on 2026-10-20, reading "No price history collected." beside AAPL's 11,502 bars; the CSV is a 0-byte 200 and the API `[]`.
+Expected: the range ending at the last bar, or a message that says when the last bar is.   Actual: a false "no history".
+
+### BUG-152 [P3][MATCH] Bars stored before BUG-075's fix count a spin-off twice: DHR's MAX chart jumps +61.2% on 2016-07-05
+Status: OPEN
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Repro: the user's bars predate BUG-075's fix (Yahoo's dividend-adjusted prices, which the HP tab and bars.csv show until a ticker is re-collected, as that fix accepted), and Yahoo lists a spin-off both as a price factor and as a same-day dividend: DHR 2016-07-05 (factor 1.319, "dividend" 24.56): `/api/stocks/DHR/bars?range=MAX&interval=1d` closes 42.01 on 2016-07-01, then opens 65.22 and closes 67.73 (+61.2%; the rebuilt market closes +3.6%); ETN 2001-01-02 +22.9% (+3.2%), ABT 2004-05-03 +10.4% (+2.8%).
+Expected: an ordinary day's move.   Actual: a jump the size of the spin-off. Impact: those three tickers' MAX chart, HP rows and monthly CSV until re-collected; re-collecting them (market prices carry only the factor) is the remedy, or rebuilding flagged bars for display as `load_inputs` does.
+
+### BUG-153 [P3][MATCH] Yahoo's split list misses some old splits, and a few old bars are wrong: MCD's 1968 and 1969 2:1s read as -50% days
+Status: OPEN
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Repro: MCD 1968-05-21 -50.7% and 1969-06-13 -50.1%, TRV 1986-06-09 -52.1%: each opens at about half the previous close (0.499, 0.514, 0.499) with volume doubling and staying, and no split row; they persist in a post-fix collection, so Yahoo's list, not the adjustment. Suspect bars: LOW 1983-04-29 (rebased at the open, 0.62x), D 1983-05-23 (+46.7% after a zero-volume placeholder), EQIX 2001-04-06/09 (-42.4% and +55.0%). 42 other moves beyond 35% are real (volume 2x or more, or market-wide days).
+Expected: continuous series.   Actual: vendor gaps shown as moves on MAX charts (1960s-80s, and EQIX's 2001).
+
+### BUG-154 [P3][MATCH] A dividend stored twice: KO's 2001 payments sum to $0.72 where it paid $0.36
+Status: OPEN
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `SELECT date, amount FROM dividend_events WHERE ticker='KO' AND date LIKE '2001%'` (the user's copy) gives 0.09, 0.09, 0.18 (09-10), 0.18 (09-12), 0.09 (09-17), 0.09; the same amount within 7 days also at PGR 2001-09-10/12, HD 2001-11-27/28, AXP 1987-12-31/1988-01-04, and 11 more pairs within 5 days; KO's and PGR's 2001-09-12 has no bar (the market was shut). The DVD tab sums by year, so KO's 2001 reads double.
+Expected: one payment.   Actual: Yahoo's duplicate kept. 4 tickers, historic years.
+
+### BUG-155 [P3][API] An unknown or lower-case ticker gets `200 []` from the bars API and 404 everywhere else
+Status: OPEN
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `/api/stocks/QQQQ/bars` and `/api/stocks/aapl/bars` return 200 with `[]`, while the CSV, HP and compare-bars return 404.
+Expected: 404 for an unknown ticker throughout (and one rule for case).   Actual: two.
+
+### BUG-156 [P3][UI] The HP table shows partial and placeholder bars as ordinary rows: CVS's last bar opens above its high, old prices read "$0.00"
+Status: OPEN
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Repro: the user's copy ran 10:50-12:09 New York on 2026-08-04: 112 of 128 last bars have 14-60% of their 20-day median volume, and ORCL's, C's, SCCO's and CVS's open lies outside their low-high range (CVS open 105.00, high 104.94); split-adjusted 1960s-70s prices print "$0.00" (1,890 rows: MO, WMT); 658 zero-volume placeholder bars at 45 tickers (573 flat) read "$0" volume; the table is unpaginated (about 16,000 rows, 3.3 MB, AAPL's MAX); the CSV carries float32 noise and "82488700.0" volumes.
+Expected: a partial day marked, enough precision, placeholders marked or skipped.   Actual: as above.
+
+### BUG-157 [P3][UI] An empty range draws a blank compare chart with a legend, not a message
+Status: OPEN
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Repro: with no bars in the range, GP's compare chart plots two empty traces: the user's copy gives 0 points for every company's 1M overlay (BUG-151's anchoring).
+Expected: "no bars in this range" as the HP tab says.   Actual: a blank figure.
+
+### BUG-158 [P3][OPS] The web app makes data/cache and data/output/{csv,json} under the directory it starts in
+Status: OPEN
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `AppConfig.__post_init__` creates `json_dir`, `csv_dir` and `cache_dir` (`src/config.py:85-87`); a client session of `create_app(db_path=...)` started in an empty directory leaves `data/cache`, `data/output/csv` and `data/output/json` there (iteration 95), though the app reads only its database.
+Expected: no directories made by a read-only browser.   Actual: three.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
