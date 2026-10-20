@@ -18,6 +18,7 @@ All writes are idempotent upserts on the natural keys.
 import json
 import logging
 import sqlite3
+from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
 
@@ -101,6 +102,22 @@ def _moves_per_share(ratio: float) -> bool:
     AbbVie), as the valuation reads them (``inputs._apply_later_splits``)."""
     return ratio > 0 and ratio != 1.0 and (_simple_ratio(ratio) or ratio >= SPLIT_JUMP_THRESHOLD
                                            or ratio <= 1.0 / SPLIT_JUMP_THRESHOLD)
+
+
+def _served_day(stock: StockData, collected_at: str) -> str:
+    """The day on Yahoo's calendar a run's dividends were served: the run's last daily bar or
+    the latest split Yahoo lists, whichever is later, as a payment stored before
+    ``served_on`` is dated. The collector's own date runs ahead of New York's east of it: a
+    run before the open on a split's day, which Yahoo hadn't applied yet, dated its pre-split
+    payments on the split's day, so they read as split, and DDM read ten times its value after
+    a later run whose dividend request failed (BUG-117). A run with neither takes the day
+    before its own: Yahoo listed no split, and one it hasn't applied is dated on New York's
+    day or later, never before the collector's day less one."""
+    days = [str(rec["date"])[:10] for rec in list(stock.price_bars or []) + list(stock.splits or [])
+            if rec.get("date")]
+    if days:
+        return max(days)
+    return (date.fromisoformat(collected_at[:10]) - timedelta(days=1)).isoformat()
 
 
 def _cols_ddl(columns: Sequence[str], col_type: str = "REAL") -> str:
@@ -632,7 +649,8 @@ class SQLiteStore:
         self._write_analyst_snapshot(conn, stock.ticker, collected_at, stock.analyst_estimates or {})
 
         # dividend_events (upsert all known payments, with the day Yahoo served them)
-        self._write_dividend_events(conn, stock.ticker, stock.dividend_history or {}, collected_at[:10])
+        self._write_dividend_events(conn, stock.ticker, stock.dividend_history or {},
+                                    _served_day(stock, collected_at))
 
         # price_bars / earnings_history / split_events (upsert all known records)
         self._write_price_bars(conn, stock.ticker, stock.price_bars or [])
@@ -746,9 +764,9 @@ class SQLiteStore:
     def _write_dividend_events(self, conn: sqlite3.Connection, ticker: str,
                                 dividend_history: Dict[str, Any], served_on: str) -> None:
         """Upsert every known dividend payment (append-only in practice; history rarely changes),
-        each with *served_on*, the run's day: Yahoo split-adjusts a payment for every split up
-        to the day it serves it (BUG-103). A run whose dividend request failed writes none, so
-        the stored ones keep their day."""
+        each with *served_on*, the run's day on Yahoo's calendar (``_served_day``): Yahoo
+        split-adjusts a payment for every split up to the day it serves it (BUG-103). A run
+        whose dividend request failed writes none, so the stored ones keep their day."""
         for rec in dividend_history.get("dividend_payments") or []:
             date = rec.get("date")
             if not date:

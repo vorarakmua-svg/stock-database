@@ -1,10 +1,11 @@
 """ValuationInputs loader: builds the per-ticker bundle from SQLite."""
 import sqlite3
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
 from src.exporters.sqlite_store import SQLiteStore
+from src.models.stock_data import StockData
 from src.valuation.inputs import FYRecord, load_inputs
 
 
@@ -806,6 +807,21 @@ def test_a_dividend_goes_to_the_prices_basis_from_the_day_yahoo_served_it(tmp_pa
     inputs = load_inputs(conn, "KLA")
     conn.close()
     assert [(day, round(amount, 6)) for day, amount in inputs.dividends] == [("2025-05-15", expected)]
+
+
+def test_a_run_before_the_open_on_a_splits_day_keeps_its_payments_pre_split(tmp_path):
+    # BUG-117 (code review 11), end to end: a run at 08:00 local (+0700) on the split's day saw New York's evening
+    # before, no split yet, so its payment is pre-split; the price, a later run's, is after the split.
+    db_path = _post_filing_split_db(tmp_path, "2026-06-12", 10.0, snapshot_shares=1.306e9)
+    run = StockData(ticker="KLA", cik="000", company_name="KLA Corp")
+    run.collected_at = datetime(2026, 6, 12, 8)
+    run.dividend_history = {"dividend_payments": [{"date": "2025-05-15", "amount": 1.9}]}
+    run.price_bars = [{"date": "2026-06-11", "close": 1000.0}]
+    SQLiteStore(db_path=db_path).export([run])
+    conn = _connect(db_path)
+    inputs = load_inputs(conn, "KLA")
+    conn.close()
+    assert [(day, round(amount, 6)) for day, amount in inputs.dividends] == [("2025-05-15", 0.19)]
 
 
 def test_dividends_of_a_database_without_served_days_are_on_every_splits_basis(tmp_path):

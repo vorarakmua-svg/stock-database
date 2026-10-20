@@ -515,21 +515,53 @@ def _served_days(db, ticker):
 
 
 def test_dividends_keep_the_day_yahoo_served_them(tmp_path):
-    # BUG-103: a payment's amount is Yahoo's, split-adjusted as of the run that fetched it, so that run's day goes with
-    # it; a later run whose dividend request failed leaves the stored payments on their day.
+    # BUG-103: a payment's amount is Yahoo's, split-adjusted as of the run that fetched it, so that run's day on Yahoo's
+    # calendar, its last bar (BUG-117), goes with it; a later run whose dividend request failed leaves the stored
+    # payments on their day.
     db = tmp_path / "stock.db"
     failed = {"error": "chart request failed"}
-    for day, history in ((datetime(2026, 6, 1, 9), None), (datetime(2026, 10, 1, 9), failed)):
+    for day, last_bar, history in ((datetime(2026, 6, 1, 9), "2026-05-29", None),
+                                   (datetime(2026, 10, 1, 9), "2026-09-30", failed)):
         stock = _full_stock("AAA")
-        stock.collected_at = day
+        stock.collected_at, stock.price_bars = day, [{"date": last_bar, "close": 100.0}]
         if history is not None:
             stock.dividend_history = history
         SQLiteStore(db).export([stock])
-    assert _served_days(db, "AAA") == [("2024-01-15", "2026-06-01"), ("2024-04-15", "2026-06-01")]
+    assert _served_days(db, "AAA") == [("2024-01-15", "2026-05-29"), ("2024-04-15", "2026-05-29")]
     stock = _full_stock("AAA")
-    stock.collected_at = datetime(2026, 10, 8, 9)
+    stock.collected_at, stock.price_bars = datetime(2026, 10, 8, 9), [{"date": "2026-10-07", "close": 100.0}]
     SQLiteStore(db).export([stock])
-    assert _served_days(db, "AAA") == [("2024-01-15", "2026-10-08"), ("2024-04-15", "2026-10-08")]
+    assert _served_days(db, "AAA") == [("2024-01-15", "2026-10-07"), ("2024-04-15", "2026-10-07")]
+
+
+def _served_after_one_run(tmp_path, collected_at, bars=(), splits=()):
+    db = tmp_path / "stock.db"
+    stock = _full_stock("AAA")
+    stock.collected_at = collected_at
+    stock.price_bars = [{"date": day, "close": 100.0} for day in bars]
+    stock.splits = [{"date": day, "ratio": 10.0} for day in splits]
+    SQLiteStore(db).export([stock])
+    return {served for _, served in _served_days(db, "AAA")}
+
+
+def test_a_run_before_new_yorks_open_dates_its_payments_by_its_last_bar(tmp_path):
+    # BUG-117 (code review 11): the collector's date runs ahead of New York's east of it. A run at 08:00 local (+0700)
+    # on a split's day saw New York's evening before, no split yet, but dated its pre-split payments on the split's
+    # day, so they read as split; after a later run whose dividend request failed, DDM read ten times its value.
+    served = _served_after_one_run(tmp_path, datetime(2026, 6, 12, 8), bars=("2026-06-10", "2026-06-11"))
+    assert served == {"2026-06-11"}
+
+
+def test_a_split_yahoo_lists_dates_the_payments_it_adjusted(tmp_path):
+    # A split Yahoo lists is in the payments it serves, though the split's first bar is still to come.
+    served = _served_after_one_run(tmp_path, datetime(2026, 6, 12, 8), bars=("2026-06-11",), splits=("2026-06-12",))
+    assert served == {"2026-06-12"}
+
+
+def test_a_run_without_bars_or_splits_dates_its_payments_the_day_before_its_own(tmp_path):
+    # Yahoo then lists no split, and any it hasn't applied is dated on New York's day or later: never before the
+    # collector's day less one.
+    assert _served_after_one_run(tmp_path, datetime(2026, 6, 12, 8)) == {"2026-06-11"}
 
 
 def _pre_served_day_db(tmp_path):

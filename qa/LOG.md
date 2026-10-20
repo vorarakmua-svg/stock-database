@@ -1502,3 +1502,17 @@ Result: BUG-111 VERIFIED; VALID-07 FAIL→BUG-112; BUG-123 opened (P3).
 Gates: ruff ✓ mypy ✓ pytest 1119 passed, 1 skipped (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(parsers): an outflow's quarter is what its year-to-date total grew by
 Next: BUG-117 (P2), then BUG-118; after the next fix, code review 12 (5 fixes since review 11's range, 6715f99).
+
+## Iteration 81: 2026-10-20 20:00: fix
+Picked: BUG-117, the older of the two open P2s (no P0 or P1 open). CI: 3e3b721 ✓.
+Did: TDD (four tests RED: a run at local 08:00 on a split's day, New York's evening before, dated its payments on
+the split's day; end to end the payment read 1.9 against 0.19; one guard): the store dates a run's payments on
+Yahoo's calendar, its last bar or the latest split Yahoo lists, whichever is later, and a run with neither the day
+before its own. Six mutants, each failing a test. Real app: code review 11's scenario now reads DDM 41.84, median
+52.66, upside -47.9% after run 2 (418.38, 80.91, -20.0% before); 11 other scenarios of reviews 10 and 11 unchanged.
+Evidence: `qa/evidence/iter81-bug117-{red,green,mutants,e2e}.txt`
+Result: BUG-117 VERIFIED; VAL-09 back to FAIL→BUG-050 (P3).
+Gates: ruff ✓ mypy ✓ pytest 1123 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(store): a run's dividends are dated on Yahoo's calendar
+Next: BUG-118 (P2, the last open). Code review 12 dispatched after this commit (opus, background) over 6715f99..this
+commit: 5 fixes since review 11's range.

@@ -622,9 +622,11 @@ columns (P/E, PEG, price/book, debt/equity, short interest, 52-week range,
 moving averages, …) — see `SNAPSHOT_SCREEN_COLUMNS` in `src/webapp/screener.py`
 for the subset exposed to the screener. All writes are idempotent upserts, so
 re-runs update in place. `dividend_events` keeps each payment as Yahoo served it,
-split-adjusted as of `served_on` (the day of the collection that fetched it); the
-valuation takes each to its price's split basis by the splits in between, so a run
-whose dividend request failed can still store a split.
+split-adjusted as of `served_on`: the collection's day on Yahoo's calendar, its last
+daily bar or the latest split Yahoo listed, whichever is later (the collector's own date
+can run a day ahead of New York's). The valuation takes each payment to its price's
+split basis by the splits in between, so a run whose dividend request failed can still
+store a split.
 
 The `financials_annual_vintages` table stores **point-in-time** data: one row per
 (ticker, fiscal_year, filing accession), so you can see every filing's view of a year —
