@@ -549,7 +549,9 @@ numbers SEC filings report:
   sign: positive is cash paid, negative cash brought in, where a deal acquired more cash
   than it cost (Wells Fargo's 2008 with Wachovia, -$11.2B). A filing that tags its other
   outflows negative has its acquisitions turned back. Their quarters difference the
-  year-to-date totals as they are, so a year's quarters add up to its figure.
+  year-to-date totals as they are, so a year's quarters add up to its figure; but a total
+  of payments that falls by half or more is two bases (a restated year beside nine months
+  as first filed), and that quarter is left empty.
 - **Balance-sheet checkpoints** at every quarter-end (instant facts), full history.
 - **`fiscal_quarter`** (1–4, company calendar) and **`calendar_quarter`** (1–4, calendar)
   are both attached; `calendar_quarter` comes from the SEC frame and is the reliable

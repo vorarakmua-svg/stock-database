@@ -765,7 +765,8 @@ class XBRLParser:
         onto their year's basis first. A full-year figure in *set_aside* (``(field, tag,
         fiscal year)``, see ``_revenue_set_aside``) ranks after every other tag. An outflow
         stored as a size differences the totals' sizes, and a total that shrinks gives no
-        quarter (BUG-111); a net outflow's totals, as paid, difference as filed (BUG-127). A
+        quarter (BUG-111); a net outflow's totals, as paid, difference as filed (BUG-127), but
+        a total of payments that falls by half or more gives none (BUG-140). A
         year's ladder is one rung until its second 10-Q, its first quarter's own 3-month
         figure, which fills that quarter after every ladder (BUG-124).
         """
@@ -909,6 +910,13 @@ class XBRLParser:
                             # basis (INTU's 10-K puts capitalized software apart): no quarter (BUG-111).
                             discrete = abs(val) - abs(prev)
                             keep = discrete >= 0
+                        elif field.sign == SIGN_NET and 0 <= val < prev / 2:
+                            # A net outflow differences as filed, a total below zero an inflow (BUG-127),
+                            # but a total of payments that falls by half or more is two bases (GE's FY2017,
+                            # restated to $2,722M, beside nine months as first filed, $6,053M) or a
+                            # filing's own rungs (JNJ's Q1 2026 $17,500M, six months $263M): no quarter,
+                            # as BUG-111 left it. A smaller fall is a true-up (ABBV's 2012) (BUG-140).
+                            discrete, keep = val - prev, False
                         else:
                             discrete, keep = val - prev, True
                         if keep:

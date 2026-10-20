@@ -1749,3 +1749,18 @@ Gates: ruff ✓ mypy ✓ pytest 1171 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(web): share counts and volume read without a dollar sign
 Next: code review 14 (5 fixes since review 13's range, ef7cc76: 8a90337, ff5da71, 8d68d47, e03ffe1 and this
 commit); then BUG-140, BUG-141, BUG-142, BUG-149, BUG-150, BUG-151 (P2).
+
+## Iteration 97: 2026-10-20 23:55: fix
+Picked: BUG-140, the oldest open P2 (no P0 or P1 open). Code review 14 (ef7cc76..16f3005, five fixes) dispatched to
+an opus reviewer, running in the background. CI: 16f3005 ✓.
+Did: read the 95 shrinking acquisitions totals' falls first (12 under half: collapses to about zero and restated
+years; the next at 0.62; most of the rest small true-ups at 0.88 or more), then TDD (one test RED, one guard): a
+total of payments that falls by half or more gives no quarter, as BUG-111 left it, while a total below zero stays an
+inflow and a smaller fall a true-up. Five mutants, each failing a test. Real data: only acquisitions move, 11 quarters
+emptied (JNJ's -$17.237B, GE's -$3.331B) and 23 trailing years over them; stock-web keeps BUG-127's COP and GE cases.
+Evidence: `qa/evidence/iter97-bug140-{red,green,mutants,realdata,e2e}.txt`
+Result: BUG-140 VERIFIED; VALID-06 FAIL→BUG-096.
+Gates: ruff ✓ mypy ✓ pytest 1173 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): an acquisitions total that falls by half is two bases, not a quarter
+Next: record code review 14 when it reports (its claims re-run first); then BUG-141, BUG-142, BUG-149, BUG-150,
+BUG-151 (P2). Fixes since review 14's range (16f3005): 1.

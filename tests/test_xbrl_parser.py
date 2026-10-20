@@ -264,6 +264,19 @@ def test_a_years_acquisition_quarters_add_up_to_its_figure():
     assert _acquisition_quarters((100.0, 252.0, -216.0, 34.0)) == [100.0, 152.0, -468.0, 250.0]
 
 
+def test_a_total_of_acquisitions_that_falls_by_half_is_two_bases_not_a_quarter():
+    # BUG-140 (code review 13): BUG-127's signed differencing dropped BUG-111's guard too, so a shrinking total became a
+    # quarter: JNJ's Q2 10-Q tags its first quarter at $17,500M beside six months of $263M (Q2 -$17,237M, its latest
+    # quarter), and GE's FY2017, restated to $2,722M, less nine months as first filed ($6,053M) read Q4 -$3,331M.
+    assert _acquisition_quarters((17500.0, 263.0, 400.0, None)) == [17500.0, None, 137.0, None]
+    assert _acquisition_quarters((967.0, 2643.0, 6053.0, 2722.0)) == [967.0, 1676.0, 3410.0, None]
+
+
+def test_a_small_fall_in_acquisitions_is_a_true_up():
+    # ABBV's 2012: nine months $780M, the year $688M: Q4 -$92M, a purchase-price true-up.
+    assert _acquisition_quarters((671.0, 780.0, 780.0, 688.0)) == [671.0, 109.0, 0.0, -92.0]
+
+
 def test_acquisitions_in_a_filing_that_tags_its_payments_negative_are_turned_back():
     # LLY's 2008 10-Qs tag every outflow negative and its 10-K positive: a sign convention, not an inflow.
     assert _acquisition_quarters((-10.0, -20.0, -44.4, 6083.0), capex_signs=(-1, -1, -1, 1)) == pytest.approx(
