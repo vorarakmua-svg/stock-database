@@ -1129,3 +1129,23 @@ Gates: ruff ✓ mypy ✓ pytest 1026 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(parsers): a filer's reporting currency is decided filing by filing
 Next: record code review 8 (verify each claim), then its C1 (proposed P1) at once. Until C1 is fixed, only the
 backfill (which never runs the migration) is safe on the user's database; a collection or quote refresh isn't.
+
+## Iteration 59: 2026-10-20 11:01: review
+Picked: recording code review 8 (0ab5c81..fea2b70), which reported during iteration 58 with a proposed P1 (section
+4.6: valid findings become bugs; each claim re-run first). CI: 0b061c0 running at the start.
+Did: read each of the reviewer's scripts (copies, scratch folders and loopback only), then re-ran every claim on
+today's code. All hold: C1 (a pre-flag copy of the user's data whose first export fails, by a lock or Ctrl+C, keeps
+the new column and loses all 1,246,064 flags, so 98 multiples rows return to BUG-075's figures and the oracle sees
+only its known 8), I1 (October's dividends stored without bars lift KO's, JPM's and XOM's FY-end prices 0.4-0.7%;
+the oracle agrees), M1 (the as-of API returns AMD's flipped FY2021 cash flows), M2 (BRK-B FY2009, on the reviewer's
+archive since today's parser dropped the helper its script calls), M3 (the `ex >= day` mutant passes all 1026
+tests), M4 (the guard probe's 5 tests pass), M5 (the oracle on a '#' path leaves a file `or`), M6 (`//srv/...` an
+invalid authority) and M7 (README.md:590). The review's strengths (BUG-061's 14 repairs among 50 candidates, the
+rebuild exact on the user's own August bars, every bar route answering 200 on a flagged copy) are its own.
+Evidence: `qa/evidence/review8-report.md`, `qa/evidence/iter59-review8-rerun.txt`
+Result: new BUG-083 (P1, C1), BUG-084 (P2, I1), BUG-085 to BUG-091 (P3: M1-M7). VAL-05 → FAIL→BUG-084; STORE-02 →
+FAIL→BUG-083.
+Gates: ruff ✓ mypy ✓ pytest 1026 passed, 1 skipped (1 known warning); no code changed | CI: pending for this push
+Commit: (this commit) chore(qa): record code review 8; a non-atomic flag migration and dividends without bars
+Next: BUG-083 (P1) at once: until it's fixed, only the backfill is safe on the user's database. Then BUG-078,
+BUG-082, BUG-084 (P2). Fixes since review 8's range: 3 (2bb2a24, 80ea6d9, 0b061c0).

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 2 · P3 32 · NEEDS-USER 11 · Verified: 45
+**Open:** P0 0 · P1 1 · P2 3 · P3 39 · NEEDS-USER 11 · Verified: 45
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -653,6 +653,62 @@ Found: iteration 56, checking BUG-074's remaining misses (`qa/evidence/iter56-bu
 Repro: each quarter's figures come from its latest filing, and a split restates only the filings after it. AMZN (20:1, June 2022): FY2020's annual EPS is the restated 2.09 and its count 10.198B, while its quarters keep the pre-split EPS 5.01, 10.31 and 12.40 and counts of 0.51B, so Q4 2020's EPS, the year less nine months, reads -25.63 for a profitable quarter. Over every cached filer, 253 of 7,615 quarterly counts stay more than 2x off their fiscal year's average, mostly from such splits (AMZN 2020, NVDA 2009). The annual record's valuation inputs put every year on the price's basis (BUG-047, BUG-048, BUG-059, BUG-060); nothing does that for the quarterly record or the TTM rows built on it.
 Expected: a quarter's per-share figures and counts on one split basis with its year, and a fourth quarter derived from figures on the same basis.   Actual: mixed bases, and a fourth quarter that is the difference of two of them.
 Impact today: the statements tab's quarterly and TTM views, `financials_quarterly` and `financials_ttm`, the API and the exports, for the years around a split; no valuation (the models read annual rows).
+
+### BUG-083 [P1][STORE] A first write that fails after the upgrade loses the dividend-adjusted flags for good, and BUG-075's prices return
+Status: OPEN
+Found: iteration 58 by code review 8 (C1), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Repro: the migration adds `price_bars.dividend_adjusted` and flags every stored bar 1 (BUG-075), but `_create_schema`'s `executescript` commits and Python's sqlite3 opens a transaction only before DML, so the `ALTER TABLE` commits at once while the `UPDATE` joins the run's writes; `export()`, `export_benchmark_bars()` and `upsert_quote()` swallow a failure and close. On a pre-flag copy of the user's data, a first export whose write fails ("database is locked") or is interrupted (Ctrl+C) leaves the column with all 1,246,064 bars unflagged, and so does every later export: KO's FY2021 price reads 51.854, not 59.21. Revalued, 98 of 118 multiples rows fall back to BUG-075's figures (MO -21.9%, CVX -16.5%, C -15.1%; KO 70.06 against 76.94, JPM 188.48 against 212.32), and the oracle, which reads the flag the same way, sees only its known 8.
+Expected: the column and the flags arrive together or not at all; a bar from before the fix reads as Yahoo-adjusted whatever happens to the first run.   Actual: as above.
+Impact today: the user's database has no flag column yet, so its first collection or quote refresh after the upgrade is this migration; the backfill alone never runs it.
+
+### BUG-084 [P2][VAL] The market-close rebuild undoes dividends after the last stored bar, which Yahoo never applied to it
+Status: OPEN
+Found: iteration 58 by code review 8 (I1), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Repro: for a dividend-adjusted bar `load_inputs` (and the oracle) divides by the factor of every dividend after it, but Yahoo adjusted the stored bars only for dividends up to the day they were fetched. `_get_price_bars` returns `[]` on any error, logged but not a run warning, and dividends are fetched first, so a later run can store new dividends and no bars. On a copy of the user's data given October's dividends without bars, KO's FY2021-25 FY-end prices come out +0.54% to +0.61% above the market close, JPM's +0.41% to +0.45%, XOM's +0.57% to +0.66%, and the multiples base +0.59%, +0.40% and +0.57%; each further stale quarter adds about as much. The oracle agrees with the inflated values.
+Expected: only dividends up to the last flagged bar are undone, and a failed price-history request is a run warning.   Actual: as above.
+Impact today: a failed bar fetch beside successful dividends, for any ticker whose bars predate BUG-075's fix.
+
+### BUG-085 [P3][STORE] The as-of view serves the tagging errors the annual record puts right
+Status: OPEN
+Found: iteration 58 by code review 8 (M1), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `AsOfReader` returns the latest vintage filed on or before the date, and BUG-061's repairs apply only to the annual record: AMD collected offline keeps FY2021's investing and financing cash flows at -686M and -1,895M in `financials_annual`, while `/api/asof/AMD/annual?fiscal_year=2021&date=2026-10-20` returns +686M and +1,895M; as of 2024-08-02 to 2025-07-31 STX's FY2022 dividend reads 2,770,000, and as of 2011-02-25 to 2012-02-22 BAC's FY2008 total assets 0.
+Expected: the as-of view says the figure is as filed, or applies the repair the filings known on that date support.   Actual: the known error, unmarked.
+
+### BUG-086 [P3][VALID] BUG-061 misses a tagging error every later filing repeats: BRK-B's FY2009 basic shares
+Status: OPEN
+Found: iteration 58 by code review 8 (M2), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Repro: BRK-B's original FY2009 filing (2010) gives 1,551,174 weighted basic shares and its 2011 and 2012 10-Ks 1.551e12, so "every earlier filing agrees" never holds, and FY2009 has no EPS for the share-scale step; now FY2008 is put right, FY2009 stands alone at x10^6 (2007 1,545,751; 2008 1,548,960; 2009 1,551,174,000,000; 2010 1,635,661). The only such case in the cache.
+Expected: a figure the years around side with is kept against a later value however many filings repeat it.   Actual: as above.
+
+### BUG-087 [P3][CODE] No test holds the market-close rebuild's ex-date boundary
+Status: OPEN
+Found: iteration 58 by code review 8 (M3), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `load_inputs` undoes a dividend's factor only for bars before its ex-date (`ex > day`); the mutant `ex >= day` passes the whole suite (1026 passed on 0b061c0). Broken, 14 of the user's FY-end bars that fall on an ex-date would move (USB FY2024-25 +1.05% and +0.97%, BMY FY2020 +0.80%, O FY2017-25 about +0.4%).
+Expected: a test with a dividend on the FY-end bar's day.   Actual: none.
+
+### BUG-088 [P3][CODE] The suite's network guard misses curl_cffi, connect_ex, asyncio and name lookups, and refuses 127.0.0.2
+Status: OPEN
+Found: iteration 58 by code review 8 (M4), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Repro: the autouse `no_network` guard (BUG-073) patches only `socket.socket.connect`: under it, a probe whose server listens on 127.0.0.2 sees curl_cffi (yfinance 1.0's transport, so any Yahoo request), `connect_ex` and asyncio connect unnoticed, `getaddrinfo` unpatched, and `create_connection` to 127.0.0.2 refused as off the machine (5 passed). No test today takes those paths.
+Expected: every route off the machine refused, and all of 127.0.0.0/8 local.   Actual: as above.
+
+### BUG-089 [P3][CODE] The oracle's read-only URI is unescaped
+Status: OPEN
+Found: iteration 58 by code review 8 (M5), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `qa/oracle/valuation_oracle.py` opens `file:{args.db}?mode=ro`; with `--db ...\or#1\stock.db` it creates an empty file `or` and fails with "no such table: valuations" (BUG-080's case, in the QA tooling).
+Expected: any path the OS allows, read-only, without importing `src`.   Actual: as above.
+
+### BUG-090 [P3][STORE] `read_only_uri` fails on a POSIX path that starts with '//'
+Status: OPEN
+Found: iteration 58 by code review 8 (M6), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `read_only_uri(PurePosixPath("//srv/data/stock.db"))` gives `file://srv/data/stock.db?mode=ro`, which SQLite rejects: "invalid uri authority: srv". The form before BUG-080's fix did the same.
+Expected: such a path opens.   Actual: an error.
+
+### BUG-091 [P3][DOCS] The README doesn't say `price_bars` now holds market prices, or what `dividend_adjusted` means
+Status: OPEN
+Found: iteration 58 by code review 8 (M7), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Repro: README.md:590 describes `price_bars` as "daily OHLCV, also used for the ^GSPC S&P 500 benchmark": nothing on market prices since BUG-075, Yahoo's adjusted prices in bars stored before, or the flag, so an SQL user computing returns gets price returns for re-collected tickers and total returns for the rest.
+Expected: the table's basis and the flag described.   Actual: as above.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
