@@ -1042,3 +1042,20 @@ Commits: 5c1b693 chore(qa): oracle takes the market close at each FY end, not Ya
 Next: BUG-080 (P1: a '#' or '%xx' in the database path). The user's valuations come right on the next backfill
 or collection (`python -m src.valuation.backfill`), and its price charts on re-collection (L20). Fixes since
 review 7's range: 3 (2964555, 69c5a7e, this).
+
+## Iteration 54: 2026-10-20 09:54: fix
+Picked: BUG-080, the only open P1. CI: a80b143 ✓.
+Did: probe first: the review proposed `Path.as_uri()`, but on this machine it opens no UNC path at all, where
+today's form opens local and UNC paths alike and fails only on '#' and '%41'; escaping just '%', '#' and '?' in
+today's form opens all six cases read-only (`qa/evidence/iter54-bug080-uri-forms.txt`). TDD (6 tests RED, 2
+controls green, the '?' case off Windows): one helper, `sqlite_store.read_only_uri`, for the web Reader, the
+AsOfReader and the stored-sector fallback. Eight mutants each fail a test (`as_uri()` among them, caught by the UNC
+test). In the real app, on the fresh golden collection copied under `web#1` (port 8765, collection and quote
+refresh off, stopped after; no process or port left): every page tried answers 200, nothing appears beside the
+folder, and the served copy's content equals its source's. STORE-04 checked whole with it.
+Evidence: `qa/evidence/iter54-bug080-{red,green,mutants,uri-forms,realapp}.txt`
+Result: BUG-080 VERIFIED; STORE-04 → PASS. No P0 or P1 open.
+Gates: ruff ✓ mypy ✓ pytest 1004 passed, 1 skipped ('?' on Windows; 1 known warning) | CI: pending for this push
+Commit: (this commit) fix(store): read-only connections open a database under any folder name
+Next: the P2s, oldest first: BUG-066, BUG-074, BUG-076, BUG-077, BUG-078. Fixes since review 7's range: 4
+(2964555, 69c5a7e, a80b143, this); code review 8 after the next fix.

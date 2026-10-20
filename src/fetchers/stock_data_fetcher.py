@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 from ..config import AppConfig, default_config
 from ..exporters.csv_exporter import CSVExporter
 from ..exporters.json_exporter import JSONExporter
-from ..exporters.sqlite_store import SQLiteStore
+from ..exporters.sqlite_store import SQLiteStore, read_only_uri
 from ..models.canonical import validate_period
 from ..models.stock_data import StockData
 from ..parsers.calculated_metrics import CalculatedMetrics
@@ -255,7 +255,7 @@ class StockDataFetcher:
         path = Path(self.sqlite_store.db_path)
         if path.exists():
             try:
-                conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+                conn = sqlite3.connect(read_only_uri(path), uri=True)
                 try:
                     row = conn.execute("SELECT sector_class FROM companies WHERE ticker = ?", (ticker,)).fetchone()
                 finally:

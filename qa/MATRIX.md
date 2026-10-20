@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 83 · PASS 12 · FAIL 11 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
+**Status counts:** TODO 83 · PASS 13 · FAIL 10 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -80,7 +80,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | STORE-01 | Schema migrations applied to the real-DB copy are idempotent and non-destructive (row coun… | TODO | |  |
 | STORE-02 | A collection killed mid-run on scratch leaves a DB that opens, with `PRAGMA integrity_chec… | TODO | |  |
 | STORE-03 | WAL handling | TODO | |  |
-| STORE-04 | The web Reader (`mode=ro`) never writes; per-request connections survive threadpool hoppin… | FAIL→BUG-080 | iter 52 | found re-running code review 7's M2: an unescaped `file:{path}?mode=ro` loses `mode=ro` at a '#' in the path, so the Reader opens, and creates, a database at the truncated path and every page answers 500 (BUG-080, P1); untested: connections across threadpool hops, a plain path's Reader never writing (`qa/evidence/iter52-review7-rerun.txt`) |
+| STORE-04 | The web Reader (`mode=ro`) never writes; per-request connections survive threadpool hoppin… | PASS | iter 54 | the Reader opens `mode=ro` under any folder name (BUG-080 fixed: '#', '%41' and, off Windows, '?' tested; local and UNC paths probed) and rejects writes; in the real app a database served under `web#1` keeps its 19 tables and 220,663 rows unchanged and nothing appears beside it; per-request connections survive threadpool hopping (`tests/test_web_repository.py::test_reader_survives_threadpool_hopping`) (`qa/evidence/iter54-bug080-{realapp,uri-forms}.txt`) |
 | STORE-05 | The as-of API and UI equal `AsOfReader`; edge dates (before the first filing, today, the f… | TODO | |  |
 | STORE-06 | CSV exports | FAIL→BUG-027 | iter 24 | BUG-004, -015, -018 and -021 fixed; left: kept copies can collide within a second (BUG-027, P3); also an empty-string company field reaches JSON and SQLite but not the CSV (BUG-055, P3; iter 39) |
 | STORE-07 | The real-DB copy passes `PRAGMA integrity_check` and `foreign_key_check`.… | TODO | | Bootstrap: integrity_check ok on realcopy, but the schema declares no foreign keys (0 of 19 tables), so foreign_key_check is vacuous; needs an orphan-row join check. |

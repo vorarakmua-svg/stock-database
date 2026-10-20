@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 1 · P2 5 · P3 32 · NEEDS-USER 11 · Verified: 40
+**Open:** P0 0 · P1 0 · P2 5 · P3 32 · NEEDS-USER 11 · Verified: 41
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -629,12 +629,13 @@ Expected: the price's day on the exchange's calendar.   Actual: a tenth of those
 Impact today: needs BUG-048's preconditions and a collection in the hours the local date runs ahead of New York's (00:00 to 11:00 in UTC+7 in summer).
 
 ### BUG-080 [P1][STORE] A database path holding '#' or '%xx' breaks every read-only connection: the web app answers 500 and creates an empty file
-Status: OPEN
-Found: iteration 51 by code review 7 (M2, widened in the re-run), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 54)
+Found: iteration 51 by code review 7 (M2, widened in the re-run), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: iteration 54 (see LOG) | Regression tests: `tests/test_web_repository.py::test_a_database_under_any_folder_name_opens_read_only` ('#', '%41', '?' off Windows, and two controls), `::test_the_app_serves_a_database_under_a_hash_folder`, `::test_a_unc_path_keeps_its_form`, `tests/test_asof_reader.py::test_a_database_under_a_hash_folder_opens`, `tests/test_fetcher_concurrency.py::test_the_stored_sector_is_found_under_any_folder_name`
 Repro: `Reader` (`webapp/repository.py:52`), `AsOfReader` (`query/asof.py:30`) and `StockDataFetcher._stored_sector` open `file:{path}?mode=ro` without escaping the path. SQLite reads '#' as the start of a fragment, so `mode=ro` is cut off with the rest of the path and the connection opens, read-write, a database at the truncated path, creating it if missing; '%41' decodes to another name ("unable to open database file"). With the golden copy under `proj#1/output/stock.db`, the web app in-process answers 500 on `/api/companies` and `/companies/KO` (200 under `plain/`) and leaves an empty file `proj` beside the folder (`qa/evidence/iter52-review7-rerun.txt`); the stored-sector fallback returns None under `data#2` and `pct%41` (BUG-064's wipe again where no JSON export exists). `Path.resolve().as_uri() + "?mode=ro"` opens all three folders.
 Expected: any folder the OS allows works, and a read-only reader never writes (STORE-04).   Actual: as above.
 Impact today: none for the user's path (no '#' or '%'); any install under a folder like "C#" or "100%".
 
+Fix: one helper, `sqlite_store.read_only_uri`, builds the three read-only URIs (the web Reader, the AsOfReader and the stored-sector fallback). It escapes the three characters SQLite's URI syntax reads specially, '%', '#' and '?', and leaves the rest of the path as it is. The review's suggested `Path.as_uri()` would have broken network shares: a probe of the URI forms (`qa/evidence/iter54-bug080-uri-forms.txt`) shows the old form opening local and UNC (`\\localhost\C$\...`) paths but not '#' or '%41' folders, `as_uri()` opening local paths of every kind but no UNC path at all, and the escaped form opening all six cases, still read-only. Six tests RED, then GREEN (the '?' case runs off Windows only, which forbids the character); eight mutants each fail a test, `as_uri()` among them. In the real app (`stock-web` configured by environment on port 8765, the fresh golden collection copied under `web#1`): health, the companies API, KO's valuation, bars.csv, the statements fragment and the company page answer 200, no file appears beside the folder, and the served database's 19 tables and 220,663 rows equal their source's (`qa/evidence/iter54-bug080-realapp.txt`).
 ### BUG-081 [P3][CODE] 9 mutants of iterations 43-50's fixes survive the whole suite
 Status: OPEN
 Found: iteration 51 by code review 7 (M3), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: — | Regression test: —

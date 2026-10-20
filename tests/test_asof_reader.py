@@ -190,3 +190,17 @@ def test_history_as_of_unknown_ticker_empty(tmp_path):
     db = _three_years(tmp_path)
     with AsOfReader(db) as r:
         assert r.history_as_of("ZZZZ", "2025-01-01") == {}
+
+
+def test_a_database_under_a_hash_folder_opens(tmp_path):
+    # BUG-080: a '#' in the path cut `?mode=ro` off, and the reader opened, and created, an empty database at "proj".
+    (tmp_path / "proj#1").mkdir()
+    db = _build_db(tmp_path / "proj#1", {
+        "2019": {"a-orig": {"fiscal_year": 2019, "accn": "a-orig",
+                            "filed_date": "2020-02-15", "period_end": "2019-12-31",
+                            "form": "10-K", "calendar_year": 2019, "net_income": 100.0}},
+    })
+    with AsOfReader(db) as reader:
+        assert reader.as_of_value("PRU", 2019, "net_income", "2020-03-01") == 100.0
+    assert [p.name for p in tmp_path.iterdir()] == ["proj#1"]
+

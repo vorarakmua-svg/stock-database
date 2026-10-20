@@ -19,7 +19,7 @@ import json
 import logging
 import sqlite3
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
 
 if TYPE_CHECKING:  # avoid a runtime exporters -> valuation dependency
     from ..valuation.models import ValuationResult
@@ -76,6 +76,22 @@ _PRICE_BAR_COLUMNS = ["open", "high", "low", "close", "volume"]
 
 # Earnings-surprise history, one row per (ticker, quarter).
 _EARNINGS_HISTORY_COLUMNS = ["eps_estimate", "eps_actual", "surprise_pct"]
+
+
+def read_only_uri(path: Union[str, Path]) -> str:
+    """A ``mode=ro`` SQLite URI for the database at *path*.
+
+    SQLite decodes ``%HH`` in a URI's path, and a ``?`` or ``#`` ends the path, so
+    those three are escaped: unescaped, a '#' in a folder name cut ``mode=ro`` off
+    with the rest of the path, and SQLite opened, read-write, a database it created
+    at the truncated path (BUG-080). The rest of the path is left as it is, so a
+    UNC path still opens: ``Path.as_uri`` would make its server a URI authority,
+    which SQLite refuses.
+    """
+    text = str(path)
+    for char, escape in (("%", "%25"), ("#", "%23"), ("?", "%3f")):
+        text = text.replace(char, escape)
+    return f"file:{text}?mode=ro"
 
 
 def _cols_ddl(columns: Sequence[str], col_type: str = "REAL") -> str:

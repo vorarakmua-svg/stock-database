@@ -16,6 +16,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
+from ..exporters.sqlite_store import read_only_uri
+
 # Accepts an ISO ``YYYY-MM-DD`` string or a date/datetime (normalized before querying).
 AsOfDate = Union[str, date]
 
@@ -27,7 +29,7 @@ class AsOfReader:
                  logger: Optional[logging.Logger] = None) -> None:
         self.db_path = Path(db_path)
         self.logger = logger or logging.getLogger(__name__)
-        self._conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
+        self._conn = sqlite3.connect(read_only_uri(self.db_path), uri=True)
         self._conn.row_factory = sqlite3.Row
 
     def close(self) -> None:

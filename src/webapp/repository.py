@@ -13,7 +13,7 @@ import statistics
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Union
 
-from ..exporters.sqlite_store import _CANONICAL_COLUMNS, _METRIC_COLUMNS, _SNAPSHOT_COLUMNS
+from ..exporters.sqlite_store import _CANONICAL_COLUMNS, _METRIC_COLUMNS, _SNAPSHOT_COLUMNS, read_only_uri
 from .screener import SCREEN_COLUMNS, ScreenSpec, build_count_query, build_screen_query
 
 # O(1) whitelist sets — used for column-name validation before interpolation.
@@ -49,7 +49,7 @@ class Reader:
         # sqlite3's default serialized mode; the default same-thread check
         # made responses 500 whenever the threadpool happened to hop.
         self._conn = sqlite3.connect(
-            f"file:{self.db_path}?mode=ro", uri=True, check_same_thread=False
+            read_only_uri(self.db_path), uri=True, check_same_thread=False
         )
         self._conn.row_factory = sqlite3.Row
 

@@ -369,3 +369,13 @@ def test_a_tagging_error_put_right_is_a_warning(tmp_path, monkeypatch):
     assert ("SEC EDGAR: STX FY2022 dividends_per_share is 2.77, as earlier filings report; the filing of "
             "2024-08-02 reports 2.77e+06, which looks like a tagging error (scale x10^6)") in stock.warnings
 
+
+@pytest.mark.parametrize("folder", ["data#2", "pct%41"])
+def test_the_stored_sector_is_found_under_any_folder_name(tmp_path, monkeypatch, folder):
+    # BUG-080: the stored-sector fallback's read-only URI wasn't escaped either, so under such a folder it found none.
+    fetcher = _sec_only_fetcher(tmp_path / folder, monkeypatch, {
+        "cik": "0001045609", "ticker": "RIT", "source": "sec_edgar", "company_facts": _reit_fy2024_facts(),
+        "submissions_error": "Read timed out. (read timeout=30)"})
+    fetcher.sqlite_store.export([StockData(ticker="RIT", cik="0001045609", sector_class="reit")])
+    assert fetcher.fetch_ticker("RIT", include_yahoo=False).sector_class == "reit"
+
