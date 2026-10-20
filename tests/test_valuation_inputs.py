@@ -811,3 +811,46 @@ def test_a_split_the_filing_restated_before_the_price_stays(tmp_path):
     assert inputs.dividends == [("2025-05-15", 0.19)]
     assert inputs.fy_end_prices == {2025: 60.0}
 
+
+def _foreign_issuer_db(tmp_path, form, filed_shares, snapshot_shares, price):
+    """FY2023-25 of a filer whose annual report is *form* (EPS per filed share), and today's market snapshot."""
+    db_path = tmp_path / "foreign_issuer.db"
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('ADR', 'general')")
+    for fy, eps in [(2023, 1.07), (2024, 1.36), (2025, 1.70)]:
+        conn.execute(
+            "INSERT INTO financials_annual (ticker, fiscal_year, period_end, filed_date, form, net_income, "
+            "total_equity, eps_diluted, weighted_avg_shares_diluted) VALUES ('ADR', ?, ?, ?, ?, ?, 1.0e11, ?, ?)",
+            (fy, f"{fy}-12-31", f"{fy + 1}-04-15", form, eps * filed_shares, eps, filed_shares),
+        )
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, shares_outstanding, market_cap, current_price) "
+                 "VALUES ('ADR', '2026-10-20T09:00:00', ?, ?, ?)", (snapshot_shares, snapshot_shares * price, price))
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_a_foreign_issuers_per_share_figures_move_to_the_ads_basis(tmp_path):
+    # Code review 6 (I1): a 20-F counts ordinary shares while Yahoo quotes and counts the ADS (five shares each, like
+    # TSM's 25.93B and 5.186B), so every per-share model came out a fifth of the price's basis.
+    from src.valuation.engine import run_valuations
+
+    conn = _connect(_foreign_issuer_db(tmp_path, "20-F", 25.93e9, 5.186e9, 421.70))
+    inputs = load_inputs(conn, "ADR")
+    conn.close()
+    latest = inputs.fy_records[-1]
+    assert inputs.ads_ratio == 5.0
+    assert (round(latest.eps_diluted, 6), round(latest.shares), inputs.shares_outstanding) == (8.5, 5.186e9, 5.186e9)
+    assert {r.assumptions.get("ads_ratio") for r in run_valuations(inputs) if r.applicable} == {5.0}
+
+
+@pytest.mark.parametrize("form, filed_shares", [("10-K", 25.93e9), ("20-F", 5.17e9)])
+def test_the_ads_basis_is_only_for_a_foreign_issuer_whose_count_is_a_multiple(tmp_path, form, filed_shares):
+    # A 10-K filer's gap is a share class or a stale count (HON), and ARM's ADS is one share.
+    conn = _connect(_foreign_issuer_db(tmp_path, form, filed_shares, 5.186e9, 421.70))
+    inputs = load_inputs(conn, "ADR")
+    conn.close()
+    assert (inputs.ads_ratio, inputs.fy_records[-1].eps_diluted) == (1.0, 1.70)
+

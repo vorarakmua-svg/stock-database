@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 1 · P2 2 · P3 31 · NEEDS-USER 11 · Verified: 35
+**Open:** P0 0 · P1 0 · P2 2 · P3 30 · NEEDS-USER 11 · Verified: 37
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -526,12 +526,13 @@ Expected: a failed fetch never erases stored data (BUG-018's rule): take the sec
 
 Fix: when the submissions data is missing, `fetch_ticker` takes the sector from the stored record before computing metrics (`_stored_sector`: the database's companies row, read-only, else the JSON export's `sector_class`) and says so in a warning ("sector 'reit' taken from the stored record"); with no stored record the run goes on as before. A sector of None with annual financials only happens when submissions failed (a `--no-sec` or CIK-not-found run has no financials). The review's demos on the fixed tree (`qa/evidence/iter49-bug064-e2e.txt`): PLD keeps FFO per share in 17 of 18 years (was 0), its P/FFO band $125.73 and its summary (3 models, $70.71); JPM keeps its net interest margin in 18 of 19 years and CB its combined ratio in 19 of 20. Three mutants each fail a test (no fallback; a lookup that ignores the ticker, caught by a second stored company; no JSON fallback).
 ### BUG-065 [P1][VAL] A US-GAAP 20-F filer is valued per ordinary share against a per-ADS price, and a non-USD reporter gets in through US$ convenience translations
-Status: OPEN
-Found: iteration 48 by code review 6 (I1), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 50)
+Found: iteration 48 by code review 6 (I1), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: iteration 50 (oracle rule 8d8154c, then the fix; see LOG) | Regression tests: `tests/test_valuation_inputs.py::test_a_foreign_issuers_per_share_figures_move_to_the_ads_basis`, `::test_the_ads_basis_is_only_for_a_foreign_issuer_whose_count_is_a_multiple` (a 10-K filer, a 1:1 20-F), `tests/test_xbrl_parser.py::test_a_filer_reporting_in_another_currency_with_dollar_convenience_figures_gets_no_record`
 Repro: since BUG-043's fix (14ac7c6) 20-F records are read, but nothing knows an ADR's ratio of ordinary shares per ADS: Graham and Lynch use the filing's per-ordinary-share EPS and book value, and the DCF divides by shares after the 75% rule swaps Yahoo's ADS-equivalent count for the filing's ordinary count. ARM quoted as a 5-share ADS (`ads_demo.py`: price x5, Yahoo's count /5): DCF $15.27, Graham $12.18, Lynch $10.21 against $1,140.25 (per ADS they are 5x), median $13.73, upside -98.8%. And `_in_dollars` keeps a record that has any USD fact, while non-USD 20-F filers tag a US$ convenience translation of each year: TSM's real facts with IFRS concepts relabelled as US GAAP (`tsm_as_usgaap.py`) keep 10 fiscal years at each year's convenience rate, valued per ordinary share (25.93B) against $421.70 per ADS: median $20.40, upside -95.2%; before 14ac7c6 the same filer got an explained gap. Many large ADRs file US-GAAP 20-Fs in renminbi with convenience translations and ADS ratios other than 1 (BABA, PDD, BIDU). The oracle copies the 75% rule and agrees with the code on both demos.
 Expected: per-share inputs on the ADS basis (or the per-share models N/A with the ratio as the reason), and convenience translations treated as such.   Actual: values off by the ADS ratio, shown with a verdict. No stored ticker today (ARM's ADS is one share; TSM files IFRS).
 Notes: fix direction (review): for filers whose latest annual report is a 20-F or 40-F, compare Yahoo's count (and market cap ÷ price) with the filing's count; a simple ratio of 1.5 or more is an ADS ratio: rescale the per-share inputs and record `ads_ratio`, and keep the 75% rule from swapping for these filers. A USD fact reported beside the same concept in another currency is a convenience translation: dropping it (the record then falls through to "it reports in TWD") or keeping it flagged is a policy choice. Oracle rule first.
 
+Fix: (1) the ADS basis: for a filer whose latest annual report is a 20-F or 40-F, a filed share count within 5% of a whole multiple n >= 2 of Yahoo's count (or of 1/n) is the ADS ratio, and `load_inputs` moves every year's per-share figures to the ADS basis (EPS and FFO times n, shares divided) before the share count is chosen, so the 75% rule compares like with like; each applicable model's assumptions record `ads_ratio`. (2) Convenience translations: the parser reads a filer's reporting currency as the one most of its monetary facts are in, so a filer reporting in TWD or CNY gets no annual record, vintages or quarters even beside some USD facts, and the run explains "it reports in TWD (…), which isn't converted to dollars" (dropping them keeps the existing stance; valuing at convenience rates would be a new feature). The oracle took the ADS rule first (8d8154c): on the 5-share ADS demo valued by the unfixed code it flagged DCF, Graham and Lynch (76.36, 60.91, 51.04 per ADS against 15.27, 12.18, 10.21 stored), and its output elsewhere was unchanged. Valued by the fix (`qa/evidence/iter50-bug065-e2e.txt`): 76.36 / 60.91 / 51.04 and multiples 756.40, upside -94.0% (the 1:1 original's), the oracle agreeing; TSM relabelled as US GAAP keeps 0 fiscal years with its convenience translations, and only its DDM (on Yahoo's per-ADS dividends) applies. Impact: 0 of 143 cached companyfacts records change; 0 of 762 real, 114 golden and 6 ARM valuation rows. Six mutants each fail a test.
 ### BUG-066 [P2][GATHER] A filer whose US-GAAP annual reports stop (it moved to IFRS) keeps a stale record with no note
 Status: OPEN
 Found: iteration 48 by code review 6 (I3), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
@@ -563,17 +564,19 @@ Repro (`quality_sources.py`): the data-sources label reads "fred_treasury_gov" (
 Expected: labels and docs that match what runs.   Actual: as above.
 
 ### BUG-071 [P3][VALID] A non-USD 10-K/10-Q filer keeps quarterly rows holding only share counts
-Status: OPEN
-Found: iteration 48 by code review 6 (M6), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 50)
+Found: iteration 48 by code review 6 (M6), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: iteration 50, with BUG-065 (see LOG) | Regression test: `tests/test_xbrl_parser.py::test_a_filer_reporting_in_another_currency_keeps_no_share_only_quarters`
 Repro (`nonusd_quarterly.py`, a CAD reporter): annual {} and vintages {} with the note "it reports in CAD (10-K, 10-Q)", but three quarters stored with only shares_outstanding: the quarterly extractor has no `_in_dollars` check.
 Expected: the same rule as the annual record.   Actual: share-only quarters.
 
+Fix: the quarterly extractor applies BUG-065's reporting-currency rule, like the annual record and the vintages: a CAD reporter keeps no share-only quarters (a mutant without it fails the test).
 ### BUG-072 [P3][CODE] Two test gaps: a split on the filing day, and a first-filing date from a truncated list
 Status: OPEN
 Found: iteration 48 by code review 6 (M7), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
 Repro: on 3eee7b6 both mutants pass the full suite (969 passed each): `<=` → `<` in BUG-047's partition (a split dated on the latest filing's day goes to neither `_normalize_splits` nor `_apply_later_splits`), and dropping `len(filings) < 100` in `_no_annual_financials` (the note would claim a first filing date from SECHandler's 100 latest filings). No test covers an ADR or a convenience-translating reporter either (BUG-065).
 Expected: a test that fails for each.   Actual: none.
 
+Iteration 50: BUG-065's tests now cover an ADR and a convenience-translating reporter; the two surviving mutants remain.
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.

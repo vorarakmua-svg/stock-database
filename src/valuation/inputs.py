@@ -125,6 +125,9 @@ class ValuationInputs:
     shares_outstanding: Optional[float] = None
     #: Where ``shares_outstanding`` came from (see ``_total_shares``).
     shares_source: str = "market_snapshot"
+    #: Ordinary shares per ADS when a foreign issuer's per-share figures were
+    #: moved to the ADS basis Yahoo prices it on (see ``_ads_ratio``); 1.0 otherwise.
+    ads_ratio: float = 1.0
     beta: Optional[float] = None
     risk_free_rate: Optional[float] = None
     #: The day the rate is for, and where it came from ("fred", "treasury_gov" or
@@ -313,6 +316,20 @@ def _apply_later_splits(records: List[FYRecord], splits: Sequence[Tuple[str, flo
             rec.shares *= factor
 
 
+def _ads_ratio(filed_to_yahoo: float) -> float:
+    """The ADS ratio a filed-to-Yahoo share-count ratio shows: a whole number n >= 2
+    of ordinary shares per ADS (or of ADSs per share) within 5%, else 1.
+
+    A foreign issuer's 20-F or 40-F counts ordinary shares, while Yahoo quotes the
+    ADS and counts ADS-equivalents (TSM: 25.93B ordinary, 5.186B ADS).
+    """
+    for candidate, per_ads in ((filed_to_yahoo, True), (1.0 / filed_to_yahoo, False)):
+        n = round(candidate)
+        if n >= 2 and abs(candidate / n - 1) <= 0.05:
+            return float(n) if per_ads else 1.0 / n
+    return 1.0
+
+
 def _undo_splits_after_price(records: List[FYRecord], splits: Sequence[Tuple[str, float]],
                              filed: Optional[str], priced_on: Optional[str]) -> None:
     """Take a split the filings restated after the price's day back out of every year.
@@ -403,7 +420,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     sector = (row["sector_class"] if row is not None else None) or "general"
 
     fy_rows = conn.execute(
-        "SELECT fa.fiscal_year, fa.period_end, fa.filed_date, fa.net_income, fa.total_equity, "
+        "SELECT fa.fiscal_year, fa.period_end, fa.filed_date, fa.form, fa.net_income, fa.total_equity, "
         "fa.eps_diluted, fa.weighted_avg_shares_diluted, fa.shares_outstanding, "
         "fa.depreciation_amortization, fa.capex, "
         "ma.levered_fcf, ma.free_cash_flow, ma.ffo_per_share "
@@ -500,6 +517,22 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
                  if snap is not None and snap["current_price"] is not None and snap["collected_at"] else None)
     _apply_later_splits(records, splits, filed, yahoo_counts, priced_on)
     _undo_splits_after_price(records, splits, filed, priced_on)
+    # A foreign issuer's filings count ordinary shares while the price is per ADS
+    # (BUG-065): its per-share figures move to the ADS basis, before the share count
+    # is chosen, so the 75% rule compares like with like.
+    ads = 1.0
+    filed_count = next((r.shares for r in reversed(records) if r.shares and r.shares > 0), None)
+    yahoo_count = snap["shares_outstanding"] if snap is not None else None
+    if fy_rows and str(fy_rows[-1]["form"] or "")[:4] in ("20-F", "40-F") and filed_count and yahoo_count:
+        ads = _ads_ratio(filed_count / yahoo_count)
+        for rec in records if ads != 1.0 else ():
+            rec.split_factor /= ads
+            if rec.eps_diluted is not None:
+                rec.eps_diluted *= ads
+            if rec.ffo_per_share is not None:
+                rec.ffo_per_share *= ads
+            if rec.shares is not None:
+                rec.shares /= ads
     unpriced = math.prod(ratio for when, ratio in splits
                          if ratio and filed and priced_on and str(when)[:10] > priced_on)
     shares, shares_source = _total_shares(
@@ -546,6 +579,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         fy_records=records,
         shares_outstanding=shares,
         shares_source=shares_source,
+        ads_ratio=ads,
         beta=snap["beta"] if snap else None,
         risk_free_rate=snap["risk_free_rate"] if snap else None,
         risk_free_rate_date=snap["risk_free_rate_date"] if "risk_free_rate_date" in snap_columns else None,

@@ -63,6 +63,9 @@ def run_valuations(inputs: ValuationInputs,
     for name, fn in _MODEL_FNS:
         try:
             results.append(fn(inputs))
+            if inputs.ads_ratio != 1.0 and results[-1].applicable:
+                # Per-share values are per ADS, as the price is (BUG-065).
+                results[-1].assumptions["ads_ratio"] = inputs.ads_ratio
         except Exception as e:  # never abort the run for one model
             log.warning(f"{inputs.ticker}: {name} valuation failed: {e}")
             results.append(ValuationResult(

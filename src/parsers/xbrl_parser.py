@@ -33,6 +33,26 @@ def _in_dollars(periods: Iterable[Dict[str, Any]]) -> bool:
     return any(_DOLLAR_FIELDS & period.keys() for period in periods)
 
 
+def _reporting_currency(us_gaap: Dict[str, Any]) -> Optional[str]:
+    """The currency most of the filer's monetary facts are in.
+
+    A filer reporting in another currency also tags a US$ convenience
+    translation of some figures (TSM: 4,624 TWD facts beside 1,010 USD ones),
+    so a few USD facts don't make a dollar record.
+    """
+    counts: Dict[str, int] = defaultdict(int)
+    for tag in us_gaap.values():
+        for unit, entries in tag.get("units", {}).items():
+            if re.fullmatch(r"[A-Z]{3}", unit):
+                counts[unit] += len(entries)
+    return max(counts, key=lambda unit: counts[unit]) if counts else None
+
+
+def _foreign_currency(us_gaap: Dict[str, Any]) -> bool:
+    """Whether the filer reports in a currency other than dollars."""
+    return _reporting_currency(us_gaap) not in (None, "USD")
+
+
 def explain_no_annual_financials(facts: Optional[Dict[str, Any]],
                                  first_filing: Optional[str] = None) -> str:
     """Why a filer's SEC data yields no annual financials, for the run's warnings.
@@ -56,10 +76,8 @@ def explain_no_annual_financials(facts: Optional[Dict[str, Any]],
         report = "20-F" if us_gaap_forms & _FOREIGN_FORMS else "10-K"
         since = f" (its filings listed from {first_filing})" if first_filing else ""
         return f"it has filed no annual report ({report}) yet{since}"
-    currencies = {unit for tag in taxonomies["us-gaap"].values() for unit in tag.get("units", {})
-                  if re.fullmatch(r"[A-Z]{3}", unit)}
-    if currencies and "USD" not in currencies:
-        return (f"it reports in {', '.join(sorted(currencies))} ({', '.join(sorted(us_gaap_forms))}), "
+    if _foreign_currency(taxonomies["us-gaap"]):
+        return (f"it reports in {_reporting_currency(taxonomies['us-gaap'])} ({', '.join(sorted(us_gaap_forms))}), "
                 "which isn't converted to dollars")
     return "its annual-report facts give no full fiscal year of a mapped concept"
 
@@ -191,7 +209,7 @@ class XBRLParser:
             Dictionary organized by fiscal year (string keys).
         """
         us_gaap = facts.get("facts", {}).get("us-gaap", {})
-        if not us_gaap:
+        if not us_gaap or _foreign_currency(us_gaap):
             return {}
 
         def annual_fy(entry: Dict[str, Any]) -> Optional[int]:
@@ -226,7 +244,7 @@ class XBRLParser:
         ``accn``/``filed``); no extra network. Annual reports (10-K, 20-F, 40-F) only.
         """
         us_gaap = facts.get("facts", {}).get("us-gaap", {})
-        if not us_gaap:
+        if not us_gaap or _foreign_currency(us_gaap):
             return {}
 
         data: Dict[Any, Dict[str, Any]] = {}
@@ -296,7 +314,7 @@ class XBRLParser:
             Dictionary organized by period end date.
         """
         us_gaap = facts.get("facts", {}).get("us-gaap", {})
-        if not us_gaap:
+        if not us_gaap or _foreign_currency(us_gaap):
             return {}
 
         periods: Dict[str, Dict[str, Any]] = {}

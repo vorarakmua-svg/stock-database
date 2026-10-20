@@ -941,3 +941,24 @@ Gates: ruff ✓ mypy ✓ pytest 971 passed (1 known warning) | CI: pending for t
 Commit: (this commit) fix(fetchers): a failed submissions request keeps the stored sector
 Next: BUG-065 (P1: ADRs and convenience translations; the oracle rule first). Fixes since review 6's range: 4
 (65a0602, 72568ea, 144dcdf, this).
+
+## Iteration 50: 2026-10-20 08:16: fix
+Picked: BUG-065, the only open P1. CI: e87da0e running at the start (9c72efe ✓).
+Did: two parts. (B, the parser) TDD (2 tests RED): a filer's reporting currency is the one most of its monetary
+facts are in, so US$ convenience translations no longer make a TWD or CNY reporter's record, in the annual record, the
+vintages or the quarters (BUG-071 with it), and the explanation names the currency; 0 of 143 cached companyfacts
+records change. (A, the ADS basis) the oracle took the rule first (8d8154c, citing VAL-03 and VAL-07): for a 20-F or
+40-F filer a filed count within 5% of a whole multiple of Yahoo's is the ADS ratio, and per-share figures move to
+the ADS basis; it flagged the unfixed code on the review's 5-share ADS demo and kept its output elsewhere. Then TDD
+(3 tests: a 20-F ADR RED; a 10-K filer and a 1:1 20-F as controls): `load_inputs` applies the ratio before the share
+count is chosen, and the engine records `ads_ratio` in each applicable model's assumptions. Six mutants each fail a
+test. Valued by the fix: the ADS demo's DCF, Graham and Lynch are five times the per-share values and its upside
+equals the 1:1 original's, with the oracle agreeing; TSM relabelled as US GAAP keeps no convenience-translated years.
+Impact: 0 of 762 real, 114 golden and 6 ARM valuation rows change.
+Evidence: `qa/evidence/iter50-bug065-{red,red-a,green,green-a,mutants,oracle,impact-parser,e2e,impact}.txt`
+Result: BUG-065 and BUG-071 VERIFIED. No P0 or P1 open; P2: BUG-061, BUG-066. GATHER-02 → FAIL→BUG-066.
+Gates: ruff ✓ mypy ✓ pytest 976 passed (1 known warning) | CI: pending for this push
+Commits: 8d8154c chore(qa): oracle values a foreign issuer's per-share figures per ADS; (this commit) fix(valuation):
+a foreign issuer is valued per ADS, and convenience translations aren't dollars
+Next: code review 7 (five fixes since review 6's range: 65a0602, 72568ea, 144dcdf, e87da0e, this), dispatched in the
+background after this push; then BUG-061 (P2), BUG-066 (P2).

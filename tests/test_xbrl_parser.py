@@ -253,3 +253,38 @@ def test_a_filer_reporting_in_another_currency_gets_no_record_and_a_reason():
     assert parser.extract_annual_vintages(facts) == {}
     assert explain_no_annual_financials(facts) == "it reports in CNY (20-F), which isn't converted to dollars"
 
+
+def _fiscal_years(unit, values, form="20-F"):
+    """Full-year facts in *unit* for FY2023-25 (calendar years), each filed the March after."""
+    return {unit: [usd(v, start=f"{fy}-01-01", end=f"{fy}-12-31", fy=fy, form=form, filed=f"{fy + 1}-03-20")
+                   for fy, v in values.items()]}
+
+
+def test_a_filer_reporting_in_another_currency_with_dollar_convenience_figures_gets_no_record():
+    # Code review 6 (I1): a non-USD 20-F filer also tags a US$ convenience translation of the year it reports, so any
+    # USD fact kept the record, at each year's convenience rate (TSM: 4,624 TWD facts beside 1,010 USD ones).
+    cny = {2023: 9.0e11, 2024: 9.4e11, 2025: 9.96e11}
+    facts = {"facts": {"us-gaap": {
+        "Revenues": {"units": {**_fiscal_years("CNY", cny), **_fiscal_years("USD", {2025: 1.37e11})}},
+        "NetIncomeLoss": {"units": {**_fiscal_years("CNY", {fy: v / 8 for fy, v in cny.items()}),
+                                    **_fiscal_years("USD", {2025: 1.7e10})}},
+        "WeightedAverageNumberOfDilutedSharesOutstanding": {"units": _fiscal_years(
+            "shares", {2023: 2.5e10, 2024: 2.45e10, 2025: 2.4e10})},
+    }}}
+    parser = XBRLParser()
+    assert parser.extract_annual_financials(facts) == {}
+    assert parser.extract_annual_vintages(facts) == {}
+    assert explain_no_annual_financials(facts) == "it reports in CNY (20-F), which isn't converted to dollars"
+
+
+def test_a_filer_reporting_in_another_currency_keeps_no_share_only_quarters():
+    # BUG-071: a CAD 10-Q filer's quarters held nothing but share counts while its annual record was dropped.
+    q = [usd(v, start=s, end=e, fy=2025, fp=fp, form="10-Q", filed=f) for v, s, e, fp, f in [
+        (1.0e9, "2025-01-01", "2025-03-31", "Q1", "2025-05-01"),
+        (2.1e9, "2025-01-01", "2025-06-30", "Q2", "2025-08-01")]]
+    shares = [usd(5.0e8, end=e, fy=2025, fp=fp, form="10-Q", filed=f) for e, fp, f in [
+        ("2025-03-31", "Q1", "2025-05-01"), ("2025-06-30", "Q2", "2025-08-01")]]
+    facts = {"facts": {"us-gaap": {"Revenues": {"units": {"CAD": q}},
+                                   "CommonStockSharesOutstanding": {"units": {"shares": shares}}}}}
+    assert XBRLParser().extract_quarterly_financials(facts) == {}
+

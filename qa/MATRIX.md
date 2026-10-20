@@ -60,7 +60,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
 | GATHER-01 | Yahoo | TODO | |  |
-| GATHER-02 | SEC CIK resolution | FAIL→BUG-065 | iter 48 | foreign filers are not done: a US-GAAP 20-F ADR is valued per ordinary share against a per-ADS price, and US$ convenience translations let non-USD reporters in (BUG-065, P1); a move to IFRS leaves a stale record with no note (BUG-066, P2); done: ARM's 1:1 ADS read (BUG-043), TSM's IFRS and XOM's new registrant explained (BUG-044, BUG-042; Q6); untested: dual-class and punctuated tickers, renamed, delisted, ETF and index cases (code review 6) |
+| GATHER-02 | SEC CIK resolution | FAIL→BUG-066 | iter 50 | a move to IFRS leaves a stale record with no note (BUG-066, P2); done: a US-GAAP 20-F or 40-F ADR is valued on the ADS basis and a non-USD reporter's convenience translations are dropped and explained (BUG-065), ARM's 1:1 ADS read (BUG-043), TSM's IFRS and XOM's new registrant explained (BUG-044, BUG-042; Q6); untested: dual-class and punctuated tickers, renamed, delisted, ETF and index cases |
 | GATHER-03 | companyfacts parsing | TODO | |  |
 | GATHER-04 | Rates | FAIL→BUG-052 | iter 39 | without a FRED key: Treasury.gov's latest day (BUG-041) with its day and source, and the static estimate flagged (BUG-037), checked live; the FRED-key path and January's prior-year fallback are untested; code review 5 (stubbed): any failure of the current-year request falls back to last year's year-end rate, and a blank latest 10-year gives no rate (BUG-052, P3) |
 | GATHER-05 | Rate limiting and retries | TODO | |  |
