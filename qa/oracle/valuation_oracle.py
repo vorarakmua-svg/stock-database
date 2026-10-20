@@ -209,14 +209,13 @@ class Inputs:
         except sqlite3.OperationalError:  # a database from before vintages were kept
             pass
         self.priced_on = str(collected_at)[:10] if self.price is not None and collected_at else None
-        # Yahoo adjusts its dividends and price bars for every split it knew when fetched; one made after the
-        # price's day is taken back out, whatever the SEC record holds (a company without SEC annual financials
-        # too; BUG-078). A share split the latest filing restated after that day (BUG-060) is in the filed figures
-        # but not in the price: years come to today's basis and go back by it.
-        self.unpriced, self.since_price = 1.0, 1.0
+        # Yahoo's dividends and price bars come to the price's split basis from the day Yahoo served them, whatever
+        # the SEC record holds (a company without SEC annual financials too; BUG-078): see bars_to_price_basis and
+        # dividend_to_price_basis. A share split the latest filing restated after the price's day (BUG-060) is in
+        # the filed figures but not in the price: years come to today's basis and go back by it.
+        self.since_price = 1.0
         for date, ratio in self.splits:
             if ratio and self.priced_on and date[:10] > self.priced_on:
-                self.unpriced *= ratio
                 if (self.last_filed and date[:10] <= self.last_filed[:10] and (ratio >= 1.5 or ratio <= 1 / 1.5)
                         and simple_ratio(ratio)):
                     self.since_price *= ratio
@@ -383,6 +382,26 @@ class Inputs:
             self._bars_factor = factor
         return self._bars_factor
 
+    def dividend_to_price_basis(self, served: Optional[str]) -> float:
+        """The factor that puts a dividend Yahoo served on *served* on the latest price's split basis (VAL-09's
+        per-share consistency). Yahoo adjusts its dividends for every split it knew when it served them, so a split
+        between that day and the price's is in one of them only: a later run whose dividend request failed kept the
+        payments from before a split it stored, beside a price after it (BUG-103). The bars' rule, row by row. A row
+        without a served day (a database from before `dividend_events.served_on`) takes the bars' last day, and with
+        no bars every split, as Yahoo's latest basis."""
+        if not self.priced_on:
+            return 1.0
+        if served is None:
+            served = self.db.execute("select max(date) from price_bars where ticker=?", (self.t,)).fetchone()[0]
+        day = str(served)[:10] if served else None
+        factor = 1.0
+        for date, ratio in self.splits:
+            if ratio and self.priced_on < date[:10] and (day is None or date[:10] <= day):
+                factor *= ratio
+            elif ratio and day is not None and day < date[:10] <= self.priced_on:
+                factor /= ratio
+        return factor
+
     def yahoo_dividend_factors(self) -> List[Tuple[str, float]]:
         """Yahoo's dividend factors [(ex-date, factor)], newest first. The stored close before an ex-date already
         carries the later dividends' factors, so each factor is solved with them: f = 1 / (1 + d * later / close).
@@ -435,8 +454,12 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         anchor = stored.get("ttm_anchor")
         if not anchor:
             return None
-        events = db.execute("select substr(date,1,10), amount from dividend_events where ticker=? and amount is not "
-                            "null order by date", (ticker,)).fetchall()
+        served = "served_on" in {r[1] for r in db.execute("pragma table_info(dividend_events)")}
+        rows = db.execute("select substr(date,1,10), amount, " + ("served_on" if served else "null") +
+                          " from dividend_events where ticker=? and amount is not null order by date",
+                          (ticker,)).fetchall()
+        events = [(d, a) for d, a, _ in rows]
+        served_on = {d: s for d, _, s in rows}
         # A spin-off isn't a cash dividend. Yahoo records some twice: a price factor between 2:3 and 3:2 in its
         # split history and, that day, a "dividend" worth the spun-off shares (DHR 2016: 1.319 and $24.56, 228x
         # its regular payment; BUG-011). Such a payment, over 5x the median within 400 days, is dropped.
@@ -447,7 +470,7 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
                     and abs((datetime.date.fromisoformat(d) - datetime.date.fromisoformat(day)).days) <= 400]
             return day in spin_days and bool(near) and amount > 5 * median(near)
 
-        events = [(d, a * x.unpriced) for d, a in events if not spun_off(d, a)]
+        events = [(d, a * x.dividend_to_price_basis(served_on[d])) for d, a in events if not spun_off(d, a)]
         ttm_start = (datetime.date.fromisoformat(anchor[:10]) - datetime.timedelta(days=365)).isoformat()
         ttm = sum(a for d, a in events if ttm_start < d <= anchor[:10])
         by_year: Dict[int, List[float]] = {}
