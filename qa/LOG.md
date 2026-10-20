@@ -1688,3 +1688,19 @@ Commit: (this commit) fix(web): debt/equity reads as the percent Yahoo gives
 Next: record code review 13 (no P0; C1 P1: seven companies' latest cash unread; I1 P2: BUG-127's shrinking
 acquisitions totals stored as quarters; I2, I3 P2: total debt double counts; M1-M7 P3), its claims re-run first;
 then MATCH-04 when its worker reports. Fixes since review 13's range (ef7cc76): 3.
+
+## Iteration 93: 2026-10-20 23:10: review
+Picked: code review 13's record (f87638f..ef7cc76, reported in iteration 92), before the next fix. CI: 8d68d47 ✓.
+Did: re-ran its claims at HEAD with its own scripts on fresh copies: the seven companies' cash tags and their net debt
+with and without it, and the user's copy (each latest EV = market cap + total debt); the 146 acquisitions quarters below
+zero (JNJ's latest -$17.237B); BA's, T's and UNP's debt tags against the stored figures; CVX's total debt by year;
+the commercial paper counted twice; the trailing-year span case; two surviving mutants. Every claim holds; no P0. No
+valuation model reads net debt, cash or acquisitions.
+Evidence: `qa/evidence/iter93-review13-rerun.txt`, `review13-report.md`
+Result: BUG-139 (P1, C1), BUG-140, BUG-141, BUG-142 (P2: I1, I2, I3), BUG-143 to BUG-148 (P3: M1 to M6) opened; notes
+on BUG-085 (M7), BUG-125 (two counts corrected), BUG-134 (scope). VALID-01 FAIL→BUG-139, VALID-06 FAIL→BUG-140,
+MATCH-03 FAIL→BUG-139, VALID-03's note corrected.
+Gates: ruff ✓ mypy ✓ pytest 1164 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) chore(qa): record code review 13
+Next: BUG-139 (P1), then BUG-136, BUG-140, BUG-141, BUG-142 (P2); MATCH-04 when its worker reports. Fixes since
+review 13's range (ef7cc76): 3.

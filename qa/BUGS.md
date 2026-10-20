@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 64 · NEEDS-USER 12 · Verified: 70
+**Open:** P0 0 · P1 1 · P2 4 · P3 70 · NEEDS-USER 12 · Verified: 70
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -686,6 +686,7 @@ Expected: the as-of view says the figure is as filed, or applies the repair the 
 Re-run in iteration 63 (code review 9's M6: iteration 59 re-ran AMD only): on 51091ce, STX's FY2022 dividend a share reads 2,770,000 as of 2024-08-02 through 2025-07-31 (2.77 the day before), and BAC's FY2008 total assets 0 as of 2011-02-25 through 2012-02-22 (1.818T the day before); after each range the as-of value is None (lead L22) (`qa/evidence/iter63-review9-rerun.txt`).
 Re-run in iteration 78 (BUG-110's fix, `qa/evidence/iter78-bug110-realdata.txt`): a figure the latest filing leaves out now keeps its last filed value, so these errors also stand after their ranges. As of 2026-12-31 the as-of view serves the error for 11 of the annual record's 14 repairs on a fresh collection, 9 of them newly carried where they read None (BAC's FY2008 total assets 0, STX's FY2022 dividend 2,770,000, BRK-B's FY2008 basic shares x10^6, and GE's, PEP's, RTX's, WMT's, WELL's and NOW's sign flips), and AMD's two as before.
 Re-run in iteration 88 (BUG-127's fix): acquisitions are read signed now, so GE's 2015 10-K's flip of FY2012 (-$1.456B where its 2013 and 2014 10-Ks agree on +$1.456B), which the annual record puts right, is what the as-of view serves for FY2012 from 2015-02-27 on, carried past the 2016 10-K that leaves the figure out (`/api/asof/GE/annual?fiscal_year=2012&date=2016-06-30` gives -1.456e9), and for FY2013-14 until the 2016 10-K; read by size, the flip didn't show (`qa/evidence/iter88-bug127-e2e.txt`).
+Re-run in iteration 93 (code review 13's M7): BUG-127 reads vintages as filed, so a first-filed sign error now shows in the as-of view: SLB's FY2010 acquisitions as of 2011-06-30 read -$889M (+$889M before; its 2011 10-K tags a payment negative beside gross outflows all positive, and its 2012 and 2013 10-Ks give +$889M).
 ### BUG-086 [P3][VALID] BUG-061 misses a tagging error every later filing repeats: BRK-B's FY2009 basic shares
 Status: OPEN
 Found: iteration 58 by code review 8 (M2), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
@@ -974,6 +975,7 @@ Expected: the year's long-term debt from the tag the filer uses (with the curren
 Impact: the shown leverage and return metrics (net and total debt, debt/EBITDA, ROIC and invested capital, EV and the EV multiples) for those 22 companies, on the company tabs and in the screener; no valuation input (the valuation reads no debt).
 
 Fix: `long_term_debt` reads, after `LongTermDebtNoncurrent` and `LongTermDebt`, the noncurrent tags of filers who file neither (`LongTermDebtAndCapitalLeaseObligations`, `LongTermNotesPayable`, `UnsecuredLongTermDebt`, `ConvertibleLongTermNotesPayable`) and last `NotesPayable`, a total of notes (O). `DebtInstrumentCarryingAmount` was measured and left out: often one instrument's (SLB's $0.5B note at 2020-12-31 beside some $16B), on days with no balance sheet, where it made four debt-only quarters at BSX and HWM that cost seven trailing years. Seven tests RED on d56405a, a guard for the left-out tag; five mutants, each failing a test (`qa/evidence/iter86-bug125-{red,green,mutants}.txt`). Offline over the 126 cached filers against iteration 84's collection: long-term debt filled in 335 years, 1,587 quarters, 1,500 trailing years and 728 vintages, no row added or lost, no other figure moved; the debt metrics with them (VZ's debt/EBITDA 0.39 to 3.32, ROIC 21.6% to 9.3%; ORCL's ROIC 88.4% to 11.6%; KO's debt/EBITDA 0.10 to 2.95); the latest year's total debt within 25% of Yahoo's for 65 of 109 (52 before); the quality sweep unchanged; the valuation reads no debt. 20 of the 22 now read their debt; EQIX and PGR tag only totals, BUG-133 (`iter86-bug125-realdata.txt`). Through stock-web: VZ's long-term debt $139.53B, debt/EBITDA 3.32, ROIC 9.28% (`iter86-bug125-e2e.txt`).
+Correction (code review 13): the commit's "seven tests RED" counts a DebtInstrumentCarryingAmount case that was RED before it became the guard (six RED on base); its "1,587 quarters" are 1,585 by the reviewer's count. The tag order it kept (LongTermDebt second) double counts current maturities: BUG-141.
 ### BUG-126 [P2][STORE] SQLite's `enterprise_value` is our EV after a collection and Yahoo's after a quote refresh, while the JSON's is Yahoo's: the two differ by more than 5% for 47 of 111 companies
 Status: VERIFIED (iteration 87)
 Found: iteration 83 via MATCH-03 (`qa/evidence/iter83-match-real.txt`) | Fixed: iteration 87 (see LOG) | Regression tests: `tests/test_sqlite_store.py::test_a_quote_refresh_keeps_our_enterprise_value`, `::test_a_refresh_at_the_collections_market_cap_reads_its_ev_family`, `::test_a_refresh_without_a_stored_year_keeps_the_collections_ev_family`; guards `::test_a_refresh_carries_no_ev_multiple_ours_doesnt_have`, the latest year in the fixture
@@ -1037,6 +1039,7 @@ Repro: `CalculatedMetrics.calculate_all` computes the EV family from net debt, E
 Expected: the EV family suppressed with its inputs for banks, stored NULL as the README's sector table promises for the EBITDA family ("a screen ... excludes sectors where [it] is undefined instead of returning a misleading value").   Actual: values from the suppressed inputs. Impact: the screener's EV columns and the company page for the 13 banks; no valuation input.
 
 Fix: a ratio built on a suppressed figure goes with it (`sector_metrics.SUPPRESSED_BY_SECTOR`): a bank's whole EV family (EV, EV/EBITDA, EV/revenue, EV/FCF, FCF yield) with its net debt, EBITDA and FCF; an insurer's EV/EBITDA with its EBITDA; a REIT's EV/FCF and FCF yield with its FCF. `apply_sector` nulls only the keys a dict holds, so the yearly metrics, which have no price, gain no EV keys (the README leaves EV ratios out of the as-of metrics); every other suppressed key is always computed first, as before. The README's sector table names them. No valuation model reads the EV family (the snapshot, the STAT page, the JSON and CSV exports do; the web screener whitelists none of it). Three tests RED on 8a90337, two guards; eight mutants, each failing a test (`qa/evidence/iter90-bug134-{red,green,mutants}.txt`). On copies of the user's data, a refresh of every ticker at its own collection's market data, before and after: 74 cells empty now (13 banks x 4, 8 insurers' EV/EBITDA, 7 REITs x 2), the other 434 identical; JPM's EV $1,027.5B, EV/EBITDA 12.62 and FCF yield -15.35% gone (`iter90-bug134-realdata.txt`). stock-web on each copy: JPM's STAT page reads EV/EBITDA 12.6x, then "—"; CB's EV and FCF yield and O's EV/EBITDA stay (`iter90-bug134-e2e.txt`). The stored snapshots change at the next collection or refresh.
+Code review 13 (on ef7cc76, before this fix) measured the same pattern beyond banks: all 8 insurers had an EV/EBITDA beside a suppressed EBITDA (CB's from Yahoo's EBITDA), all 7 REITs an EV/FCF and FCF yield beside a suppressed FCF; the fix covers both.
 ### BUG-135 [P1][MATCH] Debt/Equity is Yahoo's percent, shown and screened as a multiple: AAPL's STAT reads 78.4x for 0.78x, and "debt/equity under 2" finds 1 of 111 companies
 Status: VERIFIED (iteration 92)
 Found: iteration 91 via MATCH-06 (`qa/evidence/iter91-match06-{real,golden,extra}.txt`) | Fixed: iteration 92 (see LOG) | Regression tests: `tests/test_web_workstation.py::test_stat_shows_yahoos_debt_to_equity_as_the_percent_it_is`, `::test_a_figure_already_in_percent_formats_as_one`, `::test_the_screener_names_debt_to_equity_a_percent`
@@ -1063,6 +1066,69 @@ Status: OPEN
 Found: iteration 91 via MATCH-06 (`qa/evidence/iter91-match06-real.txt`, spot checks) | Fixed: — | Regression test: —
 Repro: `fmt_money`'s largest suffix is B and its format has no thousands separator: MSFT's DES market cap is "$3676.66B" (3,676,657,156,096); AAPL's, NVDA's and GOOGL's read the same way.
 Expected: "$3.68T" (or "$3,676.66B").   Actual: "$3676.66B". The value is right.
+
+### BUG-139 [P1][VALID] A balance sheet that tags its cash only with restricted cash leaves cash empty: seven companies' latest net debt is their whole total debt (GE's $22.16B for $9.76B, GEV's ROIC 12.3% for 58.0%)
+Status: OPEN
+Found: iteration 92 by code review 13 (C1), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `cash_and_equivalents` reads only CashAndCashEquivalentsAtCarryingValue, Cash and CashEquivalentsAtCarryingValue (`canonical.py:178-179`), and the FY2025 10-Ks of CB, CVX, DHR, GE, GEV, GILD and SBUX tag their balance-sheet cash only as CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents: the field is empty, net debt is total debt, EV is market cap plus total debt, and invested capital keeps the cash. Review 13's `cash_tags.py` and `cash_effect.py` at HEAD on the iteration-88 collection: GE's net debt $22.16B against $9.76B with its cash; GEV $0.06B against -$8.79B (ROIC 12.3% against 58.0%); SBUX $15.83B against $12.61B (27.3% against 45.7%); GILD $24.87B against $17.30B (18.3% against 21.7%); DHR $18.42B against $13.80B; CVX $55.34B against $48.06B; CB $17.23B against $14.76B. In the user's copy each of the seven latest snapshots has an EV of exactly market cap plus total debt (GE +$22.16B, GILD +$24.87B). Historically 49 filer-years at 12 filers (BRK-B, CAT 2015-19, CB, CRWD, CVX, DHR 2020-25, GE 2018-25, GEV, GILD, GLW 2019-22, INTC 2019-23, SBUX 2022-25).
+Expected: the restricted-cash total as the field's last fallback (it includes restricted cash, which the field's note should say), so net debt nets the cash.   Actual: no cash.
+Impact: net debt, EV and the EV multiples, invested capital and ROIC for those years (company page, screener, snapshots, exports). No valuation model reads them (the DCF works from free cash flow per share).
+
+### BUG-140 [P2][VALID] BUG-127 regression: a shrinking acquisitions year-to-date total, usually two bases, is now a quarter: JNJ's latest reads -$17.24B
+Status: OPEN
+Found: iteration 92 by code review 13 (I1), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
+Repro: BUG-127 reads acquisitions with their sign, rightly, but its signed differencing (`xbrl_parser.py:876-877`, the `else` branch SIGN_NET now takes) dropped BUG-111's guard too: a total that shrinks is usually a later filing's other basis. Review 13's `acq_negative_quarters.py` at HEAD on the iteration-88 collection: 146 acquisitions quarters below zero, 52 from a rung itself below zero as filed (real inflows: WFC, COF, GS, USB), the rest from rungs at or above zero whose total shrinks (10 of them $100M or more): JNJ 2026-06-28, its latest quarter, -$17.237B (its Q2 10-Q tags the first quarter at $17.5B beside six months of $263M); GE Q4 2017 -$3.331B (FY2017 $6.087B as first filed, $2.722B in its 2020 10-K, nine months $6.053B as first filed: +$34M on one basis); MRK Q4 2024 -$1.344B (the year $746M, then $0); ABT Q4 2011 -$399.5M; DELL FY2019 Q4 -$623M and FY2022 Q4 +$3.973B (restated years); trailing years: GE at 2018-09-30 -$3.330B, MRK's three of 2025. Each was empty before. The 744-of-744 year sums hold by construction (Q4 is the year less nine months), so they can't see these.
+Expected: no quarter, as before, or one on one basis (keep the signed difference where a rung is itself below zero; leave a non-negative total that falls by half or more empty: that drops 11 of the 93, the 7 large ones among them, and keeps 82 small true-ups).   Actual: the difference of two bases.
+Impact: after the next collection (the user's copy holds pre-BUG-111 figures): the Financials tab, API, exports and trailing years; no valuation input. Mutant `m127_shrinking_net_dropped` survives.
+
+### BUG-141 [P2][VALID] LongTermDebt, a total that includes the current maturities, outranks the noncurrent tags: BA's FY2025 total debt $62.3B where its balance sheet has $54.1B
+Status: OPEN
+Found: iteration 92 by code review 13 (I2), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `long_term_debt` reads LongTermDebt second (`canonical.py:222-224`), ahead of the noncurrent tags BUG-125 added; where a filer tags both, the year takes the total, beside a short-term figure that holds the current maturities already. Iteration 93 from the filings: BA FY2025 LongTermDebt $53.85B (noncurrent $45.64B) plus DebtCurrent $8.46B = $62.31B stored; T FY2021 $167.48B (noncurrent $151.01B) plus DebtCurrent $24.62B (and commercial paper again, BUG-143) = $198.68B. Review 13: 55 years at 15 filers count the current maturities twice (BA, T, TMO FY2021-25, HON, D FY2024-25, AMT FY2021-22, GE FY2024-25); but a plain reorder would lose them for 67 years at 14 filers whose short-term debt doesn't hold them (UNP's 17 years: FY2025 LongTermDebt $31.81B, noncurrent $30.29B, no short-term figure; ABBV FY2019-25, HD, LOW, ETN); and a footnote figure beats the balance sheet (AMT FY2019 $1.9M against $21.13B; CVX FY2018-21). The new test's docstring says "the noncurrent figure before a fallback, a total last". Mutant `m125_fallback_before_total` survives.
+Expected: the noncurrent figure first, with the current-maturity tags filers use in `short_term_debt` (LongTermDebtAndCapitalLeaseObligationsCurrent), or total debt from the filer's own total.   Actual: the current maturities twice for those 55 years.
+Impact: total debt, net debt, debt/EBITDA and EV about 8-16% high for them (inside MATCH-03's 25% band); no valuation input.
+
+### BUG-142 [P2][VALID] CVX's total debt counts its reclassified short-term debt and its commercial paper twice: +56% in FY2024
+Status: OPEN
+Found: iteration 92 by code review 13 (I3), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `short_term_debt` reads DebtCurrent first (`canonical.py:228`); CVX's is its footnote's short-term obligations before the part reclassified to long-term ($12.656B in 2024, against $4.406B of ShortTermBorrowings on the balance sheet), while the $20.135B long-term figure BUG-125 now reads includes the reclassified $8.25B, and `calculated_metrics` adds the $5.386B of commercial paper inside DebtCurrent again (`calculated_metrics.py:284-303`). Review 13's `cvx_total_debt.py` re-run: stored total debt against the balance sheet's long-term plus short-term debt: FY2022 $27.39B against $23.34B (+17%), FY2023 $25.38B against $20.84B (+22%), FY2024 $38.18B against $24.54B (+56%), FY2025 $55.34B against $40.76B (+36%); before BUG-125 they were 52-74% low.
+Expected: the balance sheet's short-term figure where DebtCurrent exceeds ShortTermBorrowings plus LongTermDebtCurrent, and no commercial paper added to a total that includes it (BUG-143).   Actual: +17% to +56%.
+
+### BUG-143 [P3][VALID] Commercial paper is added on top of short-term totals that include it: 214 filer-years, PG's latest total debt 11% high
+Status: OPEN
+Found: iteration 92 by code review 13 (M1), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `calculated_metrics.py:288-300` adds `commercial_paper` to `short_term_debt`, but DebtCurrent and ShortTermBorrowings include the paper by definition: 214 filer-years; latest years ADI 5%, XOM 7%, PG 11%, TRV 25%, CVX 8%, C 5%, LIN 14% of total debt (review 13's `cp_tags.py` re-run at HEAD).
+Expected: paper added only where the short-term figure is a current-maturities tag that excludes it.   Actual: twice.
+
+### BUG-144 [P3][VALID] Annual and quarterly long-term debt disagree at 10 year ends (4 before BUG-125): COP's 2019 reads $14.79B a quarter, $18.11B a year
+Status: OPEN
+Found: iteration 92 by code review 13 (M2), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
+Repro: at quarterly checkpoints the 10-Qs' LongTermDebt outranks the new noncurrent tag, while the 10-K carries only the new one: COP 2019 $14.79B against $18.11B, COP 2020 $14.75B against $19.11B, ADI 2021 $6.25B against $6.78B, D 2019 $29.0B against $30.3B (review 13's `ltd_annual_vs_quarter.py`). Same root as BUG-141's tag order.
+Expected: one figure for a year end.   Actual: two.
+
+### BUG-145 [P3][STORE] A refresh without a stored year carries the previous snapshot's EV family, so a pre-BUG-126 refresh's Yahoo EV stays for good
+Status: OPEN
+Found: iteration 92 by code review 13 (M3), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `upsert_quote` carries the EV family forward when ours can't be computed (`sqlite_store.py:924-935`); for a ticker with no stored year whose latest snapshot is a pre-fix refresh's, Yahoo's 5,010 and 50.1 are carried on every later refresh (review 13's `bug126_carry.py`). Latent: SPCX, the only ticker without a stored year, has no refresh in the user's copy.
+Expected: carry only a full collection's EV family, or store none.   Actual: Yahoo's, indefinitely.
+
+### BUG-146 [P3][VALID] BUG-124 reads a 10-Q's trailing-twelve-month span as a year, so the quarter after it can be labelled the next year's first
+Status: OPEN
+Found: iteration 92 by code review 13 (M4), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `year_spans` takes any 350-380-day span from any form (`xbrl_parser.py:837-845`); a three-month figure starting the day after a TTM's end, in a field whose ladder misses that quarter, reads as the next year's Q1: review 13's synthetic case gives 2025-09-30 an OCF of 120 labelled FY2026 Q1 (empty before BUG-124), re-run at HEAD. Latent: AMZN is the only cached filer with TTM spans (13 fields), and its ladders reach every quarter first.
+Expected: `year_of_start` from the years a 10-K closes.   Actual: from any year-long span.
+
+### BUG-147 [P3][CODE] Two branches no test pins: a lone first quarter's 80-day floor and a refresh's Yahoo-EBITDA fallback
+Status: OPEN
+Found: iteration 92 by code review 13 (M5), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
+Repro: mutants surviving at HEAD (re-run against `tests/test_xbrl_parser.py`, and `test_sqlite_store.py` with `test_web_quote_refresh.py`): `m124_lone_no_span_floor` (without the floor MS's 2008-12-31 and GS's 2008-12-26 one-month transition periods become first quarters with flows: MS OCF -$14.17B, debt issued $13.59B; GS OCF -$13.91B); `m126_no_yahoo_ebitda` (CB's and CRWD's refreshed EV/EBITDA would be None, not 10.13 and 3,541). Review 13's other two meaningful survivors are BUG-140's and BUG-141's.
+Expected: a test for each.   Actual: none.
+
+### BUG-148 [P3][DOCS] BUG-127's docstring and fix note name "LLY's and TXN's 2008 10-Qs", which are their 2009 10-Qs' 2008 comparatives
+Status: OPEN
+Found: iteration 92 by code review 13 (M6), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `xbrl_parser.py:100` (`_net_outflows_as_paid`) and BUG-127's Fix paragraph; the filings turned back are LLY's 10-Q filed 2009-10-30 and TXN's filed 2009-07-29 and 2009-10-30.
+Expected: the filings named as they are.   Actual: "2008 10-Qs".
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
