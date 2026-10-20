@@ -451,6 +451,34 @@ def test_a_ticker_without_a_stored_price_is_checked_against_its_last_collection(
     assert _snapshot_count(web_db, "EEE") == 0
 
 
+@pytest.mark.parametrize("ratio", [1.01, 0.9535, 1.057])  # SCCO's stock dividend, HON's and SPGI's spin-off factors
+def test_a_stock_dividend_or_a_spin_off_factor_doesnt_stop_a_refresh(web_db: Path, ratio: float) -> None:
+    # BUG-106 (code review 10): every factor in Yahoo's split history but 1.0 was refused as a split. SCCO pays a stock
+    # dividend almost every quarter ("a 1.01-for-1 split"), so its refreshes were refused most of the time, though only
+    # a share split, or a factor of 3:2 or more, moves the stored per-share figures; the next full collection brings
+    # the smaller factors' price history and dividends over.
+    before = _snapshot_count(web_db, "AAA")
+    client = _quote_with_splits_client(
+        web_db, [{"date": "2023-06-01", "ratio": 2.0}, {"date": "2024-07-01", "ratio": ratio}])
+    assert _refresh_summary(client)["successful"] == 1
+    assert _snapshot_count(web_db, "AAA") == before + 1
+
+
+@pytest.mark.parametrize("ratio, named", [
+    (1.25, "a 5-for-4 split on 2024-07-01"),  # a share split under 3:2
+    (0.1, "a 1-for-10 split on 2024-07-01"),  # a reverse split
+    (2.0842, "a 2.0842 price adjustment"),  # ABT's AbbVie spin-off factor: no split, but big enough to move values
+])
+def test_a_split_or_a_large_price_factor_is_refused_by_its_name(web_db: Path, ratio: float, named: str) -> None:
+    before = _snapshot_count(web_db, "AAA")
+    client = _quote_with_splits_client(
+        web_db, [{"date": "2023-06-01", "ratio": 2.0}, {"date": "2024-07-01", "ratio": ratio}])
+    summary = _refresh_summary(client)
+    assert (summary["successful"], summary["with_errors"]) == (0, 1)
+    assert named in summary["errors"]["AAA"]
+    assert _snapshot_count(web_db, "AAA") == before
+
+
 def test_a_quote_carries_yahoos_split_history(monkeypatch) -> None:
     # What the quote job checks a refresh against (BUG-093): the split history from Yahoo's chart request.
     import pandas as pd

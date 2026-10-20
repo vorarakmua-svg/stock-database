@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 47 · NEEDS-USER 12 · Verified: 58
+**Open:** P0 0 · P1 0 · P2 0 · P3 47 · NEEDS-USER 12 · Verified: 59
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -831,13 +831,14 @@ Expected: a figure filed after a split that repeats an earlier filing's value fo
 Impact today: the next collection's quarterly and TTM rows (statements tab, API, exports); no valuation.
 
 ### BUG-106 [P2][UI] A quote refresh is refused for a stock dividend or a spin-off factor, called a split: SCCO's after nearly every quarter
-Status: OPEN
-Found: iteration 70 by code review 10 (M2), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 76)
+Found: iteration 70 by code review 10 (M2), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: iteration 76 (see LOG) | Regression tests: `tests/test_web_quote_refresh.py::test_a_stock_dividend_or_a_spin_off_factor_doesnt_stop_a_refresh` (three cases), `::test_a_split_or_a_large_price_factor_is_refused_by_its_name` (three cases)
 Repro: `review10/scripts/stock_dividend_refusal.py` on a fresh copy of the user's data with the real job manager: a new factor after the copy's last collection (2026-08-04) for SCCO (its quarterly stock dividend, 1.01; seven since 2024-08 in the copy), HON (a spin-off, 0.9535) and SPGI (1.057). All three refreshes are refused: "Yahoo shows a 1.01-for-1 split on 2026-08-14 since the last full collection ...", "a 1-for-1.04877 split", "a 1.057-for-1 split".
 Expected: only a factor that moves the stored per-share figures (the parser applies simple ratios of 3:2 or more) is refused, and any other is named for what it is.   Actual: every factor but 1.0 is refused as a split.
 Root cause: `splits_since_collection` takes every ratio but 1.0; `_split_since_collection` (`src/webapp/jobs.py:48`) words each as a split.
 Impact today: SCCO's refreshes refused once its next stock dividend is out, nearly every quarter; HON's and SPGI's around their spin-offs. Graded P2 (a feature degraded for some tickers, with a misleading reason); code review 10 proposed P3.
 
+Fix: only a factor that moves the stored per-share figures stops a refresh, as the valuation reads them (`sqlite_store._moves_per_share`): a share split, which is a simple ratio (`inputs._simple_ratio`, 5:4 and 1:10 too), or any factor of 3:2 or more (`SPLIT_JUMP_THRESHOLD`; ABT's 2.084 for AbbVie). The stock dividends and smaller spin-off factors Yahoo also lists are saved beside, and the next full collection brings their price history and dividends over; for the filed figures a full collection moves nothing for them either. The refusal names a split by its ratio ("a 5-for-4 split", "a 1-for-10 split") and any other factor as a price adjustment ("a 2.0842 price adjustment (a spin-off or merger)"). Five tests RED on a3e9e27 (the three small factors refused; a 5:4 split named "1.25-for-1", ABT's factor a "2.0842-for-1 split"), one guard (a reverse split); five mutants, each failing a test (`qa/evidence/iter76-bug106-{red,green,mutants}.txt`). Code review 10's script on a fresh copy of the user's data with the real job manager: SCCO's, HON's and SPGI's refreshes saved (3 of 3, none refused); the 10:1 refusals of BUG-093 and BUG-102 hold, through the app's own route (`iter76-bug106-e2e.txt`).
 ### BUG-107 [P3][GATHER] yfinance 1.0's failures read as empty histories: an outage says "No dividend history (non-dividend paying stock)" without a warning
 Status: OPEN
 Found: iteration 70 by code review 10 (M3), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: — | Regression test: —

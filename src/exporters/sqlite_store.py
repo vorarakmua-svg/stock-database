@@ -26,6 +26,7 @@ if TYPE_CHECKING:  # avoid a runtime exporters -> valuation dependency
 
 from ..mappings.canonical import CANONICAL_FIELDS
 from ..models.stock_data import StockData
+from ..valuation.inputs import SPLIT_JUMP_THRESHOLD, _simple_ratio
 
 # Canonical line-item columns shared by the annual/quarterly financial tables.
 _CANONICAL_COLUMNS = [f.key for f in CANONICAL_FIELDS]
@@ -92,6 +93,14 @@ def read_only_uri(path: Union[str, Path]) -> str:
     for char, escape in (("%", "%25"), ("#", "%23"), ("?", "%3f")):
         text = text.replace(char, escape)
     return f"file:{text}?mode=ro"
+
+
+def _moves_per_share(ratio: float) -> bool:
+    """A factor of Yahoo's split history that moves the stored per-share figures: a share
+    split (a simple ratio, 5:4 or 1:10 too) or any factor of 3:2 or more (ABT's 2.084 for
+    AbbVie), as the valuation reads them (``inputs._apply_later_splits``)."""
+    return ratio > 0 and ratio != 1.0 and (_simple_ratio(ratio) or ratio >= SPLIT_JUMP_THRESHOLD
+                                           or ratio <= 1.0 / SPLIT_JUMP_THRESHOLD)
 
 
 def _cols_ddl(columns: Sequence[str], col_type: str = "REAL") -> str:
@@ -800,8 +809,13 @@ class SQLiteStore:
         from ``split_events`` is refused from the price's day, or from the ticker's
         last collection with Yahoo if that is earlier (Yahoo can list a split days
         after a refresh priced it): a split on either day may have come after it.
+
+        Only a share split (a simple ratio) or a factor of 3:2 or more counts, as it
+        moves the stored per-share figures: Yahoo's split history also holds stock
+        dividends (SCCO's quarterly 1.01) and spin-off price factors (HON's 0.9535),
+        which the next full collection brings over (BUG-106).
         """
-        candidates = [s for s in splits if s.get("date") and s.get("ratio") and float(s["ratio"]) != 1.0]
+        candidates = [s for s in splits if s.get("date") and s.get("ratio") and _moves_per_share(float(s["ratio"]))]
         if not candidates:
             return []
         try:

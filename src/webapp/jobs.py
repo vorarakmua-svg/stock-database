@@ -13,6 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -20,6 +21,7 @@ from ..config import AppConfig, StorageConfig
 from ..exporters.sqlite_store import SQLiteStore
 from ..fetchers.stock_data_fetcher import StockDataFetcher
 from ..fetchers.yahoo_handler import YahooHandler
+from ..valuation.inputs import _simple_ratio
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +48,17 @@ def _now_iso() -> str:
 
 
 def _split_since_collection(ticker: str, splits: List[Dict[str, Any]]) -> str:
-    """Why a quote after a split the stored valuations don't reflect isn't saved (BUG-093, BUG-102)."""
-    def ratio(r: float) -> str:
-        return f"{r:g}-for-1" if r >= 1 else f"1-for-{1 / r:g}"
+    """Why a quote after a split the stored valuations don't reflect isn't saved (BUG-093, BUG-102):
+    a share split by its ratio ("a 5-for-4 split"), any other factor of 3:2 or more as the price
+    adjustment Yahoo records for a spin-off or a merger (BUG-106)."""
+    def name(r: float) -> str:
+        if not _simple_ratio(r):
+            return f"a {r:g} price adjustment (a spin-off or merger)"
+        fraction = Fraction(r if r >= 1 else 1.0 / r).limit_denominator(4)
+        new, old = (fraction.numerator, fraction.denominator) if r >= 1 else (fraction.denominator, fraction.numerator)
+        return f"a {new}-for-{old} split"
 
-    seen = ", ".join(f"a {ratio(float(s['ratio']))} split on {str(s['date'])[:10]}" for s in splits)
+    seen = ", ".join(f"{name(float(s['ratio']))} on {str(s['date'])[:10]}" for s in splits)
     return (f"Yahoo shows {seen} that the stored valuations don't reflect, so the quote wasn't saved. "
             f"Collect {ticker} in full to update them.")
 

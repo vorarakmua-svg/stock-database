@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 78 · PASS 14 · FAIL 14 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
+**Status counts:** TODO 78 · PASS 15 · FAIL 13 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -71,7 +71,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | GATHER-10 | `--workers 1` and `--workers 4` produce identical DB content apart from timestamps.… | TODO | |  |
 | GATHER-11 | Flag combinations | TODO | |  |
 | GATHER-12 | Web jobs on a scratch server | TODO | |  |
-| GATHER-13 | Quote refresh (`POST /api/stocks/{T}/refresh-quote`) writes only the snapshot; `STOCK_WEB_… | FAIL→BUG-106 | iter 72 | stock dividends and spin-off factors are refused as splits (BUG-106, code review 10); done: a split after the stored price is refused even when a later collection whose quote failed stored it, or when all of a later collection's Yahoo requests failed (BUG-102 fixed: code review 10's three scenarios refused, the page at -47.8%) (`qa/evidence/iter72-bug102-*`, `iter71-review10-rerun.txt`); a refresh writes one market snapshot (and an analyst snapshot when Yahoo has estimates) and nothing else, in all 19 tables; after a split since the ticker's last collection with Yahoo it writes nothing and asks for a full collection (BUG-093 fixed); `STOCK_WEB_ALLOW_QUOTE_REFRESH=0` gives 409 (`tests/test_web_quote_refresh.py`, `qa/evidence/iter64-bug093-e2e.txt`) |
+| GATHER-13 | Quote refresh (`POST /api/stocks/{T}/refresh-quote`) writes only the snapshot; `STOCK_WEB_… | PASS | iter 76 | only a share split or a factor of 3:2 or more stops a refresh, named for what it is, and stock dividends and smaller spin-off factors are saved (BUG-106 fixed, code review 10: SCCO's, HON's and SPGI's refreshes saved on a copy of the user's data) (`qa/evidence/iter76-bug106-*`); a split after the stored price is refused even when a later collection whose quote failed stored it, or when all of a later collection's Yahoo requests failed (BUG-102 fixed: code review 10's three scenarios refused, the page at -47.8%) (`qa/evidence/iter72-bug102-*`, `iter71-review10-rerun.txt`); a refresh writes one market snapshot (and an analyst snapshot when Yahoo has estimates) and nothing else, in all 19 tables; after a split since the ticker's last collection with Yahoo it writes nothing and asks for a full collection (BUG-093 fixed); `STOCK_WEB_ALLOW_QUOTE_REFRESH=0` gives 409 (`tests/test_web_quote_refresh.py`, `qa/evidence/iter64-bug093-e2e.txt`) |
 
 ## STORE: Persistence and queries
 

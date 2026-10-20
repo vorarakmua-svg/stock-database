@@ -1425,3 +1425,17 @@ Gates: ruff ✓ mypy ✓ pytest 1102 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(valuation): the market-close rebuild puts each dividend on the bars' basis
 Next: record code review 11 when it reports; otherwise BUG-106 (P2), the last open P2. Fixes since review 11's range
 (6715f99): 1.
+
+## Iteration 76: 2026-10-20 18:40: fix
+Picked: BUG-106, the last open P2 (no P0 or P1 open; code review 11 running). CI: a3e9e27 ✓.
+Did: TDD (five tests RED: SCCO's 1.01, HON's 0.9535 and SPGI's 1.057 refused, a 5:4 split and ABT's 2.084 misnamed;
+one guard): only a factor that moves the stored per-share figures stops a refresh, as the valuation reads them, a
+share split (a simple ratio) or any factor of 3:2 or more, and each is named for what it is ("a 5-for-4 split", "a
+2.0842 price adjustment"). Five mutants, each failing a test. Real app: code review 10's script on a fresh copy of the
+user's data saves all three refreshes; the 10:1 refusals of BUG-093 and BUG-102 hold through the app's route.
+Evidence: `qa/evidence/iter76-bug106-{red,green,mutants,e2e}.txt`
+Result: BUG-106 VERIFIED; GATHER-13 → PASS. No P0, P1 or P2 open.
+Gates: ruff ✓ mypy ✓ pytest 1108 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(web): only a share split stops a quote refresh
+Next: record code review 11 when it reports; until then a discovery unit over the TODO rows, riskiest first (VALID-07,
+-10, -11; then MATCH). Fixes since review 11's range (6715f99): 2.
