@@ -655,6 +655,84 @@ def test_a_reverse_mergers_restated_history_is_no_split():
     assert quarterly["2012-03-31"]["weighted_avg_shares_basic"] == 362_718_613
 
 
+def _scale_mixed_year(counts, eps=None, true=(751.0e6, 751.6e6, 751.9e6, 751.8e6), income=None):
+    """A calendar 2021 whose diluted-count rungs (3, 6, 9 and 12 months) are *counts* as filed, and, when *eps* is
+    given, its EPS rungs with net income to match (*income*, else the *true* counts, in units, times EPS)."""
+    ends = ("2021-03-31", "2021-06-30", "2021-09-30", "2021-12-31")
+    filed = ("2021-05-05", "2021-08-04", "2021-11-02", "2022-02-24")
+
+    def entry(val, end, day):
+        form = "10-K" if end.endswith("12-31") else "10-Q"
+        return {"val": val, "start": "2021-01-01", "end": end, "form": form, "filed": day, "accn": day,
+                "fy": 2021, "fp": "FY" if form == "10-K" else "Q"}
+
+    us_gaap = {"WeightedAverageNumberOfDilutedSharesOutstanding": {"units": {"shares": [
+        entry(c, end, day) for c, end, day in zip(counts, ends, filed)]}}}
+    if eps:
+        us_gaap["EarningsPerShareDiluted"] = {"units": {"USD/shares": [
+            entry(e, end, day) for e, end, day in zip(eps, ends, filed)]}}
+        income = income or tuple(t * e for t, e in zip(true, eps))
+        us_gaap["NetIncomeLoss"] = {"units": {"USD": [
+            entry(n, end, day) for n, end, day in zip(income, ends, filed)]}}
+    return {"facts": {"us-gaap": us_gaap}}
+
+
+@pytest.mark.parametrize("counts", [
+    (751.0e6, 751.6e6, 751.9e6, 751.8),  # MCD: the year re-tagged in millions by a later 10-K
+    (751_000, 751.6e6, 751.9e6, 751_800),  # COP: the first quarter and the year in thousands
+])
+def test_a_years_share_counts_are_on_one_scale_before_its_fourth_quarter(counts):
+    # BUG-092: the ladder differenced counts filed at different scales, so MCD's Q4 2021 read -2,223.0M and COP's Q4
+    # 2019 -3,339.5M. Each rung goes onto the scale its own net income and EPS imply (share_scale's rule).
+    quarterly = XBRLParser().extract_quarterly_financials(_scale_mixed_year(counts, eps=(2.05, 4.42, 7.26, 10.04)))
+    assert [round(quarterly[end]["weighted_avg_shares_diluted"] / 1e6, 2) for end in sorted(quarterly)] == [
+        751.0, 752.19, 752.49, 751.5]
+
+
+def test_a_rung_without_eps_takes_the_scale_its_years_other_rungs_have():
+    facts = _scale_mixed_year((751.0e6, 751.6e6, 751.9e6, 751.8), eps=(2.05, 4.42, 7.26, 10.04))
+    for tag in ("EarningsPerShareDiluted", "NetIncomeLoss"):
+        facts["facts"]["us-gaap"][tag]["units"] = {u: [e for e in entries if e["end"] != "2021-12-31"]
+                                                   for u, entries in facts["facts"]["us-gaap"][tag]["units"].items()}
+    quarterly = XBRLParser().extract_quarterly_financials(facts)
+    assert round(quarterly["2021-12-31"]["weighted_avg_shares_diluted"] / 1e6, 2) == 751.5
+
+
+def test_a_rung_whose_eps_is_misscaled_keeps_its_count():
+    # TMO's 10-Q for Q3 2009 put 2008's nine-month EPS at 1,580,000 (1.58), so its net income over EPS implied a count
+    # of 439 beside the 437.1M filed, and the count was rescaled to it; a correction no other rung of the year is near
+    # is none.
+    counts = (436.0e6, 436.6e6, 437.1e6, 434.7e6)
+    income = tuple(c * e for c, e in zip(counts, (0.53, 1.09, 1.58, 2.25)))
+    quarterly = XBRLParser().extract_quarterly_financials(
+        _scale_mixed_year(counts, eps=(0.53, 1.09, 1_580_000.0, 2.25), income=income))
+    assert [round(quarterly[end]["weighted_avg_shares_diluted"] / 1e6, 2) for end in sorted(quarterly)] == [
+        436.0, 437.19, 438.08, 427.6]
+
+
+def test_a_rung_whose_eps_misses_its_count_takes_its_years_scale():
+    # COP-like: the first quarter's count in thousands beside an EPS a quarter off, which implies no power of 1000;
+    # it's no check, so the rung takes the scale its year's checked rungs have.
+    true = (751.0e6, 751.6e6, 751.9e6, 751.8e6)
+    income = tuple(t * e for t, e in zip(true, (2.05, 4.42, 7.26, 10.04)))
+    quarterly = XBRLParser().extract_quarterly_financials(
+        _scale_mixed_year((751_000, 751.6e6, 751.9e6, 751.8e6), eps=(2.05 * 1.25, 4.42, 7.26, 10.04), income=income))
+    assert [round(quarterly[end]["weighted_avg_shares_diluted"] / 1e6, 2) for end in sorted(quarterly)] == [
+        751.0, 752.19, 752.49, 751.5]
+
+
+def test_a_count_at_or_below_zero_is_no_count():
+    # With nothing to tell the year's scale by, the fourth quarter's share-days difference is negative: no count, not
+    # a negative one. A filed zero is no count either.
+    quarterly = XBRLParser().extract_quarterly_financials(_scale_mixed_year((751.0e6, 751.6e6, 751.9e6, 751.8)))
+    assert "weighted_avg_shares_diluted" not in quarterly.get("2021-12-31", {})
+    quarterly = XBRLParser().extract_quarterly_financials(_scale_mixed_year((0.0, 751.6e6, 751.9e6, 751.8e6)))
+    assert "weighted_avg_shares_diluted" not in quarterly.get("2021-03-31", {})
+    # ...and no baseline: the half year less a zero first quarter would read 1,486.7M for Q2.
+    assert "weighted_avg_shares_diluted" not in quarterly.get("2021-06-30", {})
+    assert round(quarterly["2021-12-31"]["weighted_avg_shares_diluted"] / 1e6, 2) == 751.5
+
+
 def _currency_switcher(before, after, switch_fy):
     """A 20-F filer reporting in *before* through FY{switch_fy - 1} and in *after* from FY{switch_fy}: each annual
     report gives its year and the two before it (its balance sheet, two) in its own currency, and one in a currency

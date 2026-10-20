@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 3 · P3 42 · NEEDS-USER 11 · Verified: 50
+**Open:** P0 0 · P1 0 · P2 2 · P3 42 · NEEDS-USER 11 · Verified: 51
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -687,6 +687,7 @@ Found: iteration 58 by code review 8 (M2), re-run in iteration 59 (`qa/evidence/
 Repro: BRK-B's original FY2009 filing (2010) gives 1,551,174 weighted basic shares and its 2011 and 2012 10-Ks 1.551e12, so "every earlier filing agrees" never holds, and FY2009 has no EPS for the share-scale step; now FY2008 is put right, FY2009 stands alone at x10^6 (2007 1,545,751; 2008 1,548,960; 2009 1,551,174,000,000; 2010 1,635,661). The only such case in the cache.
 Expected: a figure the years around side with is kept against a later value however many filings repeat it.   Actual: as above.
 
+Iteration 66: BUG-092's fix puts BRK-B's quarters right (Q4 2009's basic count 1,551,730, was 6.1e12); the annual FY2009 figure still stands at 1,551,174,000,000.
 ### BUG-087 [P3][CODE] No test holds the market-close rebuild's ex-date boundary
 Status: OPEN
 Found: iteration 58 by code review 8 (M3), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
@@ -719,12 +720,13 @@ Repro: README.md:590 describes `price_bars` as "daily OHLCV, also used for the ^
 Expected: the table's basis and the flag described.   Actual: as above.
 
 ### BUG-092 [P2][VALID] The quarterly ladder differences share counts filed at different scales, so a quarter's count comes out negative or tens of times its year's
-Status: OPEN
-Found: iteration 62, checking BUG-082's impact (`qa/evidence/iter62-bug082-impact.txt`); code review 9 reported it too (M1, `qa/evidence/review9-report.md`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 66)
+Found: iteration 62, checking BUG-082's impact (`qa/evidence/iter62-bug082-impact.txt`); code review 9 reported it too (M1, `qa/evidence/review9-report.md`) | Fixed: iteration 66 (see LOG) | Regression tests: `tests/test_xbrl_parser.py::test_a_years_share_counts_are_on_one_scale_before_its_fourth_quarter` (MCD's year in millions; COP's first quarter and year in thousands), `::test_a_rung_without_eps_takes_the_scale_its_years_other_rungs_have`, `::test_a_rung_whose_eps_is_misscaled_keeps_its_count`, `::test_a_rung_whose_eps_misses_its_count_takes_its_years_scale`, `::test_a_count_at_or_below_zero_is_no_count`
 Repro: a year's rungs come from their latest filings, and a later filing can re-tag a count at another scale. MCD's 10-Ks for FY2023 and FY2024 give FY2021's and FY2022's diluted counts as 751.8 and 741.3 (millions) beside nine months of 751.9M and 743.0M in units, so Q4 2021 reads -2,223.0M, Q4 2022 -2,196.7M, and their trailing years 8.17M and 8.10M against years of 751.8M and 741.3M; COP's Q1 and year of 2019 are in thousands (Q4 -3,339.5M, TTM 12.88M against 1,123.5M); NVDA's FY2009-10 rungs in thousands; KO's 2017 and T's 2009 quarters in millions (Q4 16.9B and 23.4B against years of 4.3B and 5.9B); TXN's 2009 nine months in millions. `share_scale` puts the annual record right, and a quarter only where its EPS implies the count, never a derived one or one at or below zero.
 Expected: a year's rungs on one scale before Q4 is derived (share_scale's rule applied to the rungs), and no count at or below zero.   Actual: as above.
 Impact today: those years' quarterly and TTM counts in the statements tab, the API and the exports; no valuation (the models read annual rows). BX's 2015 and 2017 rungs differ by a restated count basis (1.88x), not a scale.
 
+Fix: before Q4 is derived, a year's weighted-count rungs go onto one scale (`_rungs_on_one_scale`): a rung whose own net income over EPS implies it times a power of 1000 is rescaled by that power (share_scale's rule), provided another of the year's rungs, as filed, is near the result; a rung without a usable EPS takes the scale of its year's checked rungs; and a count at or below zero, filed or derived, is no count and no baseline. The corroboration came from the impact run: a first version took the EPS alone, and TMO's 10-Q for Q3 2009, which tags 2008's nine-month EPS as 1,580,000 (1.58), turned its correct 437.1M into 437.1 and its Q4 into 1.67B; a test of that case went RED first. Six tests, RED on 341f785 (MCD's Q4 2021 -2,223.01M, COP's 0.75M and -2,220M, the zeros), and six mutants, each failing a test (`qa/evidence/iter66-bug092-{red,green,mutants}.txt`). Over the 126 cached filers collected offline (`qa/evidence/iter66-bug092-impact.txt`): 10 change, and no annual or per-share figure; quarterly counts at or below zero 9 -> 0 (basic and diluted), more than 2x off their year's 16 -> 10 (diluted; the rest IPO years, Citigroup's 2009 issuance, BX's restated basis and MS 2010), trailing counts at fiscal year ends more than 10% off the year's 10 -> 4; MCD's Q4 2021 751.5M and Q4 2022 736.3M, COP's Q4 2019 1.10B, KO's Q4 2017 4.32B, NVDA, T and TXN alike, BRK-B's 2009-11 quarters back to its 1.55M class-A-equivalent count from x10^6, CEG's filed zeros empty, BX's negative Q4 2017 empty. The README says so.
 ### BUG-093 [P1][VAL] A quote refresh after a split puts the post-split price beside valuations on the old basis
 Status: VERIFIED (iteration 64)
 Found: iteration 62 by code review 9 (C1), re-run in iteration 63 (`qa/evidence/iter63-review9-rerun.txt`) | Fixed: iteration 64 (see LOG) | Regression tests: `tests/test_web_quote_refresh.py::test_a_refresh_after_a_split_since_the_last_collection_keeps_the_stored_quote` (a split on the last collection's day, and one after it beside a later SEC-only run), `::test_a_refresh_without_a_split_since_the_last_collection_saves_the_quote` (five controls), `::test_a_quote_carries_yahoos_split_history`

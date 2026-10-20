@@ -1254,3 +1254,19 @@ Gates: ruff ✓ mypy ✓ pytest 1049 passed, 1 skipped (1 known warning) | CI: p
 Commit: 27ce753 chore(qa): oracle undoes only the dividends Yahoo's stored bars were adjusted for; (this commit)
 fix(valuation): the market-close rebuild undoes only the dividends Yahoo's bars were adjusted for
 Next: the P2s, oldest first: BUG-092, BUG-094, BUG-095. Fixes since review 9's range: 3 (51091ce, 6ebfe38, this).
+
+## Iteration 66: 2026-10-20 14:04: fix
+Picked: BUG-092, the oldest open P2 (no P0 or P1 open). CI: 341f785 ✓.
+Did: TDD (four tests RED on MCD's and COP's own figures: Q4 2021 -2,223.01M; a rung without EPS; the zeros): a
+year's weighted-count rungs go onto the scale their own net income and EPS imply (share_scale's rule) before Q4, a
+rung without a usable EPS onto its year's, and no count is at or below zero. The impact run caught the first version
+rescaling TMO's correct 437.1M to 437.1 on a 10-Q whose EPS is tagged x10^6, so a correction now needs another of the
+year's rungs near it (a test RED first); a surviving mutant got a test too. Six mutants, each failing a test. Over
+126 cached filers: 10 change, no annual or per-share figure; counts at or below zero 9 -> 0, more than 2x off their
+year's 16 -> 10, trailing counts more than 10% off 10 -> 4.
+Evidence: `qa/evidence/iter66-bug092-{red,green,mutants,impact}.txt`
+Result: BUG-092 VERIFIED; VALID-06 → FAIL→BUG-095.
+Gates: ruff ✓ mypy ✓ pytest 1055 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): a year's share counts are on one scale before its fourth quarter
+Next: BUG-094, BUG-095 (P2). Fixes since review 9's range: 4 (51091ce, 6ebfe38, 341f785, this); one more and code
+review 10 is due.

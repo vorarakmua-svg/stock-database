@@ -10,6 +10,8 @@ from fractions import Fraction
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, DURATION, INSTANT, SIGN_ABS
+from .share_scale import _TOLERANCE as _SCALE_TOLERANCE
+from .share_scale import _best_scale
 
 # Duration bounds (in days) used to distinguish annual vs quarterly periods.
 # A "full year" span is ~365 days; a quarter is ~91 days. Bounds are generous
@@ -164,6 +166,8 @@ def _cash_adds_up(sections: List[float], period: Dict[str, Any]) -> bool:
 
 #: Units a share split restates: per-share figures and share counts (BUG-082).
 _SPLIT_UNITS = ("USD/shares", "shares")
+#: The EPS whose rungs, with net income's, tell a weighted count's scale (BUG-092).
+_SCALE_ORACLES = {"weighted_avg_shares_diluted": "eps_diluted", "weighted_avg_shares_basic": "eps_basic"}
 #: A split's ratio, new shares per old, is a simple fraction of 3:2 or more either way,
 #: up to 50:1 (CMG's of 2024). A split restates each count by it exactly, so two filings'
 #: counts for a period give it within 0.5%, their rounding; a reverse merger's restated
@@ -605,6 +609,54 @@ class XBRLParser:
                 year_filed[end] = max(year_filed.get(end, ""), anchor)
         return {(start, end): level(year_filed.get(end, filed)) for (start, end), (_p, filed, _v) in chosen.items()}
 
+    @staticmethod
+    def _rungs_on_one_scale(chosen: Dict[Tuple[str, str], Tuple[int, str, Any]],
+                            income: Dict[Tuple[str, str], Any], eps: Dict[Tuple[str, str], Any]) -> None:
+        """Put a weighted count's rungs on one scale (BUG-092): a rung whose own net income
+        over EPS implies it times a power of 1000 is rescaled by that power (share_scale's
+        rule) when another rung of its year, as filed, is near the result, since an EPS
+        can be the mis-scaled figure (TMO's nine months of 2008 at 1,580,000 a share); a
+        rung without a usable EPS takes the scale its year's checked rungs have. A rung no
+        year checks is left as filed."""
+        ladder_of_end: Dict[str, str] = {}  # a period end -> its year's ladder (start)
+        ends_by_start: Dict[str, List[str]] = defaultdict(list)
+        for start, end in chosen:
+            ends_by_start[start].append(end)
+        for start, ends in ends_by_start.items():
+            if len(ends) >= 2:
+                for end in ends:
+                    ladder_of_end.setdefault(end, start)
+        filed_by_year: Dict[str, List[Tuple[Tuple[str, str], float]]] = defaultdict(list)
+        for key, (_p, _f, val) in chosen.items():
+            if isinstance(val, (int, float)) and val > 0:
+                filed_by_year[ladder_of_end.get(key[1], key[0])].append((key, val))
+        checked: Dict[str, List[float]] = defaultdict(list)
+        unchecked: List[Tuple[str, str]] = []
+        for key, (priority, filed, val) in list(chosen.items()):
+            if not isinstance(val, (int, float)) or val <= 0:
+                continue
+            year = ladder_of_end.get(key[1], key[0])
+            net_income, per_share = income.get(key), eps.get(key)
+            if isinstance(net_income, (int, float)) and isinstance(per_share, (int, float)) \
+                    and net_income and per_share:
+                implied = abs(net_income / per_share)
+                scale = _best_scale(val, implied)
+                if scale is not None and any(0.5 <= val * scale / other <= 2.0
+                                             for other_key, other in filed_by_year[year] if other_key != key):
+                    val *= scale
+                    chosen[key] = (priority, filed, val)
+                if abs(val / implied - 1.0) <= _SCALE_TOLERANCE:
+                    checked[year].append(val)
+                    continue
+            unchecked.append(key)
+        for key in unchecked:
+            reference = checked.get(ladder_of_end.get(key[1], key[0]))
+            priority, filed, val = chosen[key]
+            if reference:
+                scale = _best_scale(val, statistics.median(reference))
+                if scale is not None:
+                    chosen[key] = (priority, filed, val * scale)
+
     def _collect_discrete_flows(
         self, us_gaap: Dict[str, Any], periods: Dict[str, Dict[str, Any]],
         frames: Dict[str, set], restored: Dict[Tuple[str, str], Tuple[float, float]],
@@ -621,6 +673,7 @@ class XBRLParser:
         With *level* (the split basis of a filing date), per-share figures and counts go
         onto their year's basis first.
         """
+        oracle_rungs: Dict[str, Dict[Tuple[str, str], Any]] = {}  # net income's and EPS's, for the counts' scale
         for field in CANONICAL_FIELDS:
             if field.kind != DURATION:
                 continue
@@ -670,6 +723,20 @@ class XBRLParser:
                         moved = year_level / level(filed)
                         chosen[key] = (priority, filed, val * moved if shares else val / moved)
 
+            # A later filing can re-tag a year's count in thousands or millions beside its
+            # other rungs in units (MCD's FY2021 as 751.8, its nine months 751.9M), and the
+            # fourth quarter, the year's share-days less the nine months', read -2,223.0M
+            # (BUG-092): each rung goes onto the scale its own net income and EPS imply
+            # (share_scale's rule), and one without them onto its year's.
+            if field.key in _SCALE_ORACLES:
+                self._rungs_on_one_scale(chosen, oracle_rungs.get("net_income", {}),
+                                         oracle_rungs.get(_SCALE_ORACLES[field.key], {}))
+            if field.key in ("net_income", "eps_basic", "eps_diluted"):
+                oracle_rungs[field.key] = {key: val for key, (_p, _f, val) in chosen.items()}
+            if shares:  # a count at or below zero (a filed zero) is no count, and no baseline
+                chosen = {key: rung for key, rung in chosen.items()
+                          if not isinstance(rung[2], (int, float)) or rung[2] > 0}
+
             # Group by fiscal-period start -> cumulative ladders.
             ladders: Dict[str, List[Tuple[str, Any]]] = defaultdict(list)
             for (start, end), (_p, _f, val) in chosen.items():
@@ -681,7 +748,7 @@ class XBRLParser:
             own: Dict[str, Tuple[Any, str, Optional[float]]] = {}
             for (start, end), (priority, _f, val) in chosen.items() if shares else ():
                 days = self._span(start, end)
-                if isinstance(val, (int, float)) and days is not None \
+                if isinstance(val, (int, float)) and val > 0 and days is not None \
                         and _QUARTER_MIN_DAYS <= days <= _QUARTER_MAX_DAYS:
                     own[end] = (val, field.tags[priority], basis.get((start, end)))
 
@@ -718,7 +785,8 @@ class XBRLParser:
                             discrete = val - prev
                         if field.sign == SIGN_ABS:
                             discrete = abs(discrete)
-                        assign(end, discrete, "derived:ytd_diff", start, ladder_fy, basis.get((start, end)))
+                        if not shares or discrete > 0:  # never a count at or below zero (BUG-092)
+                            assign(end, discrete, "derived:ytd_diff", start, ladder_fy, basis.get((start, end)))
                     prev_end, prev_val = end, val  # (a gap resets the baseline)
             for end, (value, tag, own_level) in own.items():  # quarters no year-to-date ladder reaches
                 if end in periods and field.key not in periods[end]:

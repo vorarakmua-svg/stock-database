@@ -535,6 +535,11 @@ numbers SEC filings report:
   the filings themselves: counts that two filings give for the same period at a split's
   ratio. Years that no filing after a split reports keep their older basis, as in
   `financials_annual`.
+- **One share-count scale per year.** A later filing can tag a year's share count in
+  thousands or millions where its other figures are in units. Before Q4 is derived,
+  each weighted count goes onto the scale its own net income and EPS imply, provided
+  another of the year's counts agrees; otherwise it follows the year's checked counts.
+  A count at or below zero, filed or derived, is left empty.
 - **Balance-sheet checkpoints** at every quarter-end (instant facts), full history.
 - **`fiscal_quarter`** (1–4, company calendar) and **`calendar_quarter`** (1–4, calendar)
   are both attached; `calendar_quarter` comes from the SEC frame and is the reliable
