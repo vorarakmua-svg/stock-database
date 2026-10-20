@@ -1529,3 +1529,22 @@ Gates: ruff ✓ mypy ✓ pytest 1124 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(export): a failed dividend request keeps the JSON's dividend history
 Next: record code review 12 when it reports; until then discovery over the TODO rows, riskiest first (MATCH-01..04,
 -06..08). Fixes since review 12's range (f87638f): 1.
+
+## Iteration 83: 2026-10-20 20:22: discovery
+Picked: MATCH-01, -02, -03, -07 and -08, the data-matching rows without the UI (no P0-P2 open). CI: 9144791 ✓. Code
+review 12 is running.
+Did: on a copy of the user's data with its JSON, and on the golden basket: identity across the store, SEC's
+submissions, Yahoo and the JSON; each filer's latest fiscal year against Yahoo's annual statement (SEC side from a
+fresh collection with today's parser); Yahoo's market math and our copies of it; sector medians, aggregates and peers
+through the app against SQL; near-duplicates after repeated collections. Identity, cross-source fundamentals,
+medians and dedup hold. But a fiscal year's first quarter gets no flows until its second 10-Q (61 of 126 latest
+quarters empty), `long_term_debt` misses the tags 22 companies use (ORCL's ROIC 88%), and SQLite's EV switches
+definition with the kind of run.
+Evidence: `qa/evidence/iter83-match-{real,golden}.txt`
+Result: MATCH-01, -02, -07, -08 PASS; MATCH-03 FAIL→BUG-125; BUG-124 (P1), BUG-125 (P1), BUG-126 (P2) opened;
+leads L27, L28.
+Gates: ruff ✓ mypy ✓ pytest 1124 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) chore(qa): discovery MATCH-01, -02, -03, -07, -08; empty first quarters and missing long-term
+debt
+Next: BUG-124 (P1, the older), then BUG-125, then BUG-126; record code review 12 when it reports. Fixes since review
+12's range (f87638f): 1.
