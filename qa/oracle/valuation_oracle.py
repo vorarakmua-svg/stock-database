@@ -328,9 +328,39 @@ class Inputs:
         return eq / sh if eq is not None and sh else None
 
     def fy_end_price(self, period_end: str) -> Optional[float]:
-        row = self.db.execute("select close from price_bars where ticker=? and date<=? order by date desc limit 1",
+        """VAL-05's FY-end price: the market close of the last trading day on or before the FY end, on today's split
+        basis, with no look-ahead. yfinance's default history is Yahoo's dividend-adjusted price, which every later
+        dividend lowers (BUG-075); a bar flagged `dividend_adjusted`, and every bar of a database from before the
+        flag, holds it. Its market close is rebuilt by undoing Yahoo's factor 1 - d / (the close before the
+        ex-date) for each later dividend, newest first: a reconstruction, which iteration 53's probe checked against
+        Yahoo's unadjusted closes (the golden basket's FY-end bars within 0.0001%)."""
+        flagged = "dividend_adjusted" in {r[1] for r in self.db.execute("pragma table_info(price_bars)")}
+        row = self.db.execute("select date, close" + (", dividend_adjusted" if flagged else "") + " from price_bars "
+                              "where ticker=? and date<=? order by date desc limit 1",
                               (self.t, period_end[:10])).fetchone()
-        return row[0] * self.unpriced if row and row[0] is not None else None
+        if not row or row[1] is None:
+            return None
+        close = row[1]
+        if not flagged or row[2]:
+            close /= math.prod(f for ex, f in self.yahoo_dividend_factors() if ex > row[0][:10])
+        return close * self.unpriced
+
+    def yahoo_dividend_factors(self) -> List[Tuple[str, float]]:
+        """Yahoo's dividend factors [(ex-date, factor)], newest first. The stored close before an ex-date already
+        carries the later dividends' factors, so each factor is solved with them: f = 1 / (1 + d * later / close)."""
+        if getattr(self, "_yahoo_factors", None) is None:
+            factors: List[Tuple[str, float]] = []
+            later = 1.0
+            for ex, amount in self.db.execute("select substr(date,1,10), amount from dividend_events where ticker=? "
+                                              "and amount > 0 order by date desc", (self.t,)).fetchall():
+                prev = self.db.execute("select close from price_bars where ticker=? and date<? order by date desc "
+                                       "limit 1", (self.t, ex)).fetchone()
+                if prev and prev[0]:
+                    factor = 1.0 / (1.0 + amount * later / prev[0])
+                    factors.append((ex, factor))
+                    later *= factor
+            self._yahoo_factors = factors
+        return self._yahoo_factors
 
 
 def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Optional[Dict]:
