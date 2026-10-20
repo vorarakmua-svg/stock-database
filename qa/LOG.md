@@ -1488,3 +1488,17 @@ VAL-09 FAIL→BUG-117, MATCH-05 FAIL→BUG-118, VALID-01 PASS→FAIL→BUG-119.
 Gates: ruff ✓ mypy ✓ pytest 1114 passed, 1 skipped (1 known warning) | CI: pending for this push
 Commit: (this commit) chore(qa): record code review 11
 Next: BUG-111 (P2, the oldest open), then BUG-117 and BUG-118. Fixes since review 11's range (6715f99): 3.
+
+## Iteration 80: 2026-10-20 19:47: fix
+Picked: BUG-111, the oldest open P2 (no P0 or P1 open). CI: 9e99a02 ✓.
+Did: TDD (two tests RED: INTU's falling nine months gave a $15M Q4, LLY's both-signed year a Q4 of 3,500 against
+500; three guards): an outflow's quarter is what the year-to-date total's size grew by, none where it shrinks. Six
+mutants, each failing a test. Offline over the 126 cached filers: 200 quarters no longer derived, 54 corrected (GE's
+Q4 2016 buybacks $40.7B to $4.4B, CVX's Q4 2010 dividends $9.9B to $1.4B), nothing else; the sweep loses only INTU's
+five quarterly-sum findings. Real app: stock-web on that collection shows INTU's Q4 FY2025 capex "—". Two collections
+of the same cache also differed in two vintage calendar years: they follow the hash seed (BUG-123, P3, opened).
+Evidence: `qa/evidence/iter80-bug111-{red,green,mutants,realdata,e2e}.txt`
+Result: BUG-111 VERIFIED; VALID-07 FAIL→BUG-112; BUG-123 opened (P3).
+Gates: ruff ✓ mypy ✓ pytest 1119 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): an outflow's quarter is what its year-to-date total grew by
+Next: BUG-117 (P2), then BUG-118; after the next fix, code review 12 (5 fixes since review 11's range, 6715f99).

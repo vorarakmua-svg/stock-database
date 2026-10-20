@@ -140,6 +140,47 @@ def test_quarterly_cashflow_from_ytd_only_ladder():
     assert q["2024-09-28"]["operating_cash_flow"] == 28   # Q4 = 110 - 82
 
 
+def _outflow_quarters(tag, field, values, start="2008-01-01", ends=("2008-03-31", "2008-06-30", "2008-09-30",
+                                                                  "2008-12-31")):
+    """An outflow's year-to-date ladder (three 10-Qs, then the 10-K's year), and its derived quarters."""
+    ladder = [usd(v, start, end, fy=int(ends[-1][:4]), fp=fp, form=form, filed=f"{end[:8]}28")
+              for v, end, fp, form in zip(values, ends, ("Q1", "Q2", "Q3", "FY"), ("10-Q", "10-Q", "10-Q", "10-K"))]
+    q = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": {tag: {"units": {"USD": ladder}}}}})
+    return [q.get(end, {}).get(field) for end in ends]
+
+
+def test_a_falling_year_to_date_outflow_derives_no_quarter():
+    # BUG-111: INTU's 10-Qs give capex of $99M for nine months and its 10-K $84M for the year (capitalized software
+    # put apart): the fall was stored as a fourth quarter of $15M, and the quarters summed to $114M against $84M.
+    quarters = _outflow_quarters("PaymentsToAcquirePropertyPlantAndEquipment", "capex", (33e6, 64e6, 99e6, 84e6),
+                                 start="2024-08-01", ends=("2024-10-31", "2025-01-31", "2025-04-30", "2025-07-31"))
+    assert quarters == [33e6, 31e6, 35e6, None]
+
+
+def test_an_outflow_tagged_with_both_signs_in_one_year_keeps_its_quarters():
+    # BUG-111: LLY's 10-Qs tag dividends paid negative and its 10-K positive, so the fourth quarter took the two
+    # totals' sum: $3.60B of 2008 dividends where a quarter paid $0.52B.
+    quarters = _outflow_quarters("PaymentsOfDividends", "dividends_paid", (-500.0, -1000.0, -1500.0, 2000.0))
+    assert quarters == [500.0, 500.0, 500.0, 500.0]
+
+
+def test_an_outflow_tagged_negative_derives_its_quarters():
+    quarters = _outflow_quarters("PaymentsOfDividends", "dividends_paid", (-500.0, -1000.0, -1500.0, -2000.0))
+    assert quarters == [500.0, 500.0, 500.0, 500.0]
+
+
+def test_a_quarter_without_an_outflow_stays_zero():
+    quarters = _outflow_quarters("PaymentsToAcquireBusinessesNetOfCashAcquired", "acquisitions",
+                                 (100.0, 100.0, 250.0, 250.0))
+    assert quarters == [100.0, 0.0, 150.0, 0.0]
+
+
+def test_a_signed_flow_keeps_its_signed_quarters():
+    # Only the outflows stored as sizes difference sizes: a loss year's quarters keep their signs.
+    quarters = _outflow_quarters("NetIncomeLoss", "net_income", (-100.0, -50.0, 30.0, 120.0))
+    assert quarters == [-100.0, 50.0, 80.0, 90.0]
+
+
 def test_quarterly_no_cap_returns_all_and_limit_works():
     s1, s2 = "2022-10-01", "2023-10-01"
     facts = {"facts": {"us-gaap": {"NetIncomeLoss": {"units": {"USD": [

@@ -540,6 +540,10 @@ numbers SEC filings report:
   each weighted count goes onto the scale its own net income and EPS imply, provided
   another of the year's counts agrees; otherwise it follows the year's checked counts.
   A count at or below zero, filed or derived, is left empty.
+- **Outflows by size.** Capex, acquisitions, buybacks, debt repaid and dividends paid are
+  stored as positive amounts, and filers tag them with either sign, sometimes both within
+  one year. Their quarters difference the year-to-date totals' sizes, and a quarter whose
+  total shrinks (a later filing reporting the flow on another basis) is left empty.
 - **Balance-sheet checkpoints** at every quarter-end (instant facts), full history.
 - **`fiscal_quarter`** (1–4, company calendar) and **`calendar_quarter`** (1–4, calendar)
   are both attached; `calendar_quarter` comes from the SEC frame and is the reliable

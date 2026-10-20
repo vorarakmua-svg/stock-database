@@ -684,7 +684,9 @@ class XBRLParser:
         back (*restored*), so the fourth quarter is the restored year less nine months.
         With *level* (the split basis of a filing date), per-share figures and counts go
         onto their year's basis first. A full-year figure in *set_aside* (``(field, tag,
-        fiscal year)``, see ``_revenue_set_aside``) ranks after every other tag.
+        fiscal year)``, see ``_revenue_set_aside``) ranks after every other tag. An outflow
+        stored as a size differences the totals' sizes, and a total that shrinks gives no
+        quarter (BUG-111).
         """
         oracle_rungs: Dict[str, Dict[Tuple[str, str], Any]] = {}  # net income's and EPS's, for the counts' scale
         for field in CANONICAL_FIELDS:
@@ -797,11 +799,17 @@ class XBRLParser:
                         if shares:
                             ytd_days, prev_days = self._span(start, end) or 0, self._span(start, prev_end) or 0
                             discrete = (val * ytd_days - prev * prev_days) / inc_span
+                            keep = discrete > 0  # never a count at or below zero (BUG-092)
+                        elif field.sign == SIGN_ABS:
+                            # An outflow can be tagged either sign, even within one year (LLY's 10-Qs
+                            # negative, its 10-K positive), so its quarter is what the year-to-date
+                            # total's size grew by. A total that shrinks is a later filing's other
+                            # basis (INTU's 10-K puts capitalized software apart): no quarter (BUG-111).
+                            discrete = abs(val) - abs(prev)
+                            keep = discrete >= 0
                         else:
-                            discrete = val - prev
-                        if field.sign == SIGN_ABS:
-                            discrete = abs(discrete)
-                        if not shares or discrete > 0:  # never a count at or below zero (BUG-092)
+                            discrete, keep = val - prev, True
+                        if keep:
                             assign(end, discrete, "derived:ytd_diff", start, ladder_fy, basis.get((start, end)))
                     prev_end, prev_val = end, val  # (a gap resets the baseline)
             for end, (value, tag, own_level) in own.items():  # quarters no year-to-date ladder reaches
