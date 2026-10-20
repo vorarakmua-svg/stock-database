@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 47 · NEEDS-USER 12 · Verified: 59
+**Open:** P0 0 · P1 1 · P2 1 · P3 51 · NEEDS-USER 12 · Verified: 59
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -858,6 +858,44 @@ Found: iteration 70 by code review 10 (M7), re-run in iteration 71 (`qa/evidence
 Repro: `qa/oracle/valuation_oracle.py`'s `bars_to_price_basis` (`:368`) and its dividend cutoff (`:389-403`) are the rules of `src/valuation/inputs.py:386-405` and `:603-611`, reading the same `split_events`: code review 10's oracle run passes BUG-103's database (0 rows beyond 0.5%) with Graham ten times its value. (Their commits, 27ce753 and db4820b, said why section 7's probe didn't apply, and checked the premise on real data.)
 Expected: a check of the stored series' basis the code doesn't share: the stored bar on the price's day against the snapshot price, within 0.07% on every real and golden ticker (code review 10's `bars_basis_probe.txt`).   Actual: none.
 
+### BUG-110 [P1][STORE] The as-of view loses a year's figures once a later filing repeats only part of it: 70% of years read no revenue as of today
+Status: OPEN
+Found: iteration 77 via VALID-10, lead L22 (`qa/evidence/iter77-pit.txt`) | Fixed: — | Regression test: —
+Repro: a 10-K repeats only part of each earlier year (the income and cash-flow statements of the two years before, the balance sheet of the one before, the opening balances of its equity statement three years back), and each such filing is stored as a vintage of the year holding just those figures. `AsOfReader.as_of_annual` returns the latest vintage filed on or before the date, whole. So as of 2026-01-01 MSFT's FY2016 is the FY2019 10-K's vintage (filed 2019-08-01), with no revenue or net income, where the FY2018 10-K (filed 2018-08-03) restated them to $91.154B and $20.539B. On a fresh offline collection of the 126 cached filers, as of 2026-12-31, 1,629 of 2,318 (ticker, year)s read no revenue that an earlier filing reported (net income 1,655, operating cash flow 1,664, diluted EPS 1,594, total assets 1,771): 104 of the years two before their filer's latest (the balance sheet) and 82 to 125 at each age from three to eighteen. The user's data alike: 1,627 of 2,312.
+Expected: as of a date, each figure as last filed on or before it (the README: fundamentals "as they were known on a given date"): MSFT FY2016 revenue $91.154B as of 2026-01-01.   Actual: None, and so the point-in-time ratios built on it.
+Impact: the as-of explorer, `/api/asof/...`, `AsOfReader` and `PointInTimeMetrics` (backtests); no valuation input (the valuation reads the annual record). The rest of VALID-10 holds: 7,711 vintages, one per (ticker, year, filing), none without a filing date; 23,097 as-of answers (each filing day and the days either side) are each the latest vintage filed on or before the day, none filed after it; MSFT FY2016 reads $85.32B until the FY2018 10-K, then $91.154B; the latest years' point-in-time ratios equal the stored ones (2,160 values) and a hand computation (AAPL, JPM and KO FY2024).
+
+### BUG-111 [P2][VALID] A quarter derived from a falling year-to-date total is stored as a positive outflow: INTU's Q4 capex, GE's Q3 2013 acquisitions ($7.8B)
+Status: OPEN
+Found: iteration 77 via VALID-07 (`qa/evidence/iter77-{quality-sweep,falling-ytd}.txt`) | Fixed: — | Regression test: —
+Repro: `XBRLParser._collect_discrete_flows` derives a quarter as its year-to-date figure less the one before and, for the sign-normalized flows (capex, acquisitions, buybacks, debt repaid, dividends paid), takes the absolute value of the difference, which is right for filers that tag the outflows negative. When the year-to-date total falls instead, because a later filing reports the flow on another basis, the fall is stored as the quarter's outflow: INTU's 10-Qs give capex of $99M for the nine months to 2025-04-30 and its 10-K $84M for FY2025 (capitalized software, $40M, apart), so Q4 FY2025 is stored as $15M and the quarters sum to $114M against the year's $84M; likewise 16 of its 17 fiscal Q4s since FY2009 (the quality pass's quarterly-sum findings for FY2021-25). Across the 126 cached filers, 200 such quarters at 75 filers (acquisitions 117, debt repaid 37, capex 26, buybacks 19, dividends 1), 198 of them in the user's stored quarters; 55 at 29 filers are at least $10M and 5% of their year: GE's Q3 2013 acquisitions $7.80B, DELL's Q4 FY2022 acquisitions $3.97B (the year's $16M), GE's Q4 2013 capex $3.38B, WDC's debt repaid $1.95B.
+Expected: no quarter where the year-to-date total falls (its bases differ, so the quarter can't be read from them).   Actual: the fall, as a positive outflow.
+Impact: the shown quarterly flows (Financials tab, API, the exports' quarterly rows) and the TTM series summed from them (`financials_ttm`); no valuation input.
+
+### BUG-112 [P3][VALID] The quality score's five years include a year known only from opening balances: GEV and SNDK score 30
+Status: OPEN
+Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: — | Regression test: —
+Repro: the earliest 10-K's equity and cash-flow statements open three years back, so the annual record holds a year with only total equity and/or cash (121 such years at 119 of the 126 cached filers, 119 of them the filer's earliest). `quality.assess_annual` scores the record's latest five years, so for a filer with four years of statements the fifth is that year, and its missing revenue, net income, total assets and liabilities and operating cash flow cost 50 points: GEV scores 30 (FY2021 holds total equity alone), SNDK 30 (FY2022), BLK 0 (FY2021, with Q9's bank fields).
+Expected: the scored years are years the filings report: GEV and SNDK 80 (their FY2022 and FY2023 lack only the balance sheet no 10-K holds).   Actual: 30.
+
+### BUG-113 [P3][STORE] A forward-dated fact opens a vintage of a year that hadn't ended when it was filed: BAC FY2011, LLY FY2014
+Status: OPEN
+Found: iteration 77 via VALID-10 (`qa/evidence/iter77-pit.txt`) | Fixed: — | Regression test: —
+Repro: BAC's FY2010 10-K (filed 2011-02-25) tags a dividend declared of $0.01 a share for 2011-01-01 to 2011-12-31, and LLY's FY2013 10-K (filed 2014-02-19) short-term borrowings of $1B at 2014-03-31. Each becomes a vintage of the next fiscal year, so as of 2011-03-01 `history_as_of("BAC", ...)` lists FY2011, a year not yet ended, holding that dividend alone (LLY's FY2014 likewise until its 10-K). The only two of 7,711 vintages.
+Expected: a filing's vintages are the years ended by its filing date.   Actual: as above.
+
+### BUG-114 [P3][VALID] The balance-sheet identity has no term for temporary equity: SPGI scores 50
+Status: OPEN
+Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: — | Regression test: —
+Repro: the quality pass checks assets = liabilities + equity + non-controlling interest, but redeemable non-controlling interests and redeemable preferred stock sit between liabilities and equity (temporary equity), which no canonical field holds, so a filer with them misses the identity by that amount: SPGI FY2021-25 (FY2025 $4.917B, `RedeemableNoncontrollingInterestEquityCarryingAmount`), UBER FY2021-23 (with BUG-063's unmapped NCI), WDC FY2023 ($0.876B, its convertible preferred) and BLK FY2025 ($5.427B, tagged outside us-gaap): 10 of the sweep's 15 imbalance findings (BX's five are BUG-063's).
+Expected: temporary equity counted in the identity.   Actual: a MEDIUM finding a year (SPGI 50, UBER 70, WDC 90).
+
+### BUG-115 [P3][VALID] The gross-profit identity misses excise taxes filed apart from cost of sales: MO
+Status: OPEN
+Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: — | Regression test: —
+Repro: MO deducts both cost of sales and excise taxes on products (`OtherCostOfOperatingRevenue`) from net revenues to reach gross profit, and `cost_of_revenue` takes cost of sales alone, so revenue less cost of revenue overshoots MO's gross profit by the excise taxes ($3.574B FY2024, $3.140B FY2025) and the check fires for FY2021-25 (score 85).
+Expected: the identity holds where a filed cost line explains the gap (or excise taxes count in cost of revenue).   Actual: five LOW findings.
+
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
@@ -887,6 +925,7 @@ Options: (a) the plan's analyst-only fallback; (b) flat 0% (iteration 6); (c) me
 Status: NEEDS-USER
 Context: SEC's ticker map now sends XOM to ExxonMobil Holdings Corp (CIK 2115436), which has filed only 10-Qs since 2026-07; the 20 fiscal years of history are under Exxon Mobil Corp (CIK 34088). A fresh collection therefore has no XOM fundamentals, and every model that needs fiscal years is N/A; re-collecting into your existing database keeps the stored years. Since iteration 38 the gap is explained in the run, the database and the FA and VAL tabs (BUG-042).
 Options: (a) a small, explicit successor map in the code (2115436 → 34088), reading the predecessor's facts for the years the new registrant lacks: safe, but each reorganization needs an entry; (b) fall back automatically to the CIK already stored for the ticker when the new one has no 10-K: no upkeep, but a reassigned ticker could mix two unrelated companies, and a fresh database has no stored CIK; (c) keep the explanation only and wait for the new registrant's first 10-K. Recommendation: (a).
+Iteration 77: BLK likewise. SEC maps it to CIK 2012383 (BlackRock, Inc.), whose company facts start with a 10-Q filed 2024-11-06 and the FY2024 10-K, so its record starts at FY2021 (opening balances only) and FY2022 has no balance sheet; the earlier registrant's filings aren't in the cache or your data (`qa/evidence/iter77-quality-sweep.txt`).
 
 ### Q7 [VAL] NEEDS-USER: should per-share values count every share class and partnership unit?
 Status: NEEDS-USER
@@ -927,7 +966,7 @@ Options: (a) a bank also needs deposits on its balance sheet, otherwise it is va
 - L19 [VALID] Quarterly D&A is negative for non-insurers too: CRM (9 quarters 2018-2026), AMD, AVGO, GE, INTC, MCD, MRK and NEE (one or two each); likely a Q4 = annual - 9-month difference across two D&A tags. Check in VALID-06. (Insurers' D&A net of accretion is negative for real: ALL, PRU, KKR.) (iter 47)
 - L20 [OPS] The user's database (collected 2026-08-04) predates this loop's parser fixes: today's parser reads AMGN FY2020 dividends per share as 6.56 (stored 1.76) and gives AMT FY2020 none (stored 1.21, a point-in-time fact). Re-collecting refreshes such years; say so in REPORT.md. (iter 47)
 - L21 [MATCH] The market data's 50- and 200-day moving averages (`yahoo_handler.py`, `history(period="1y")`) and the 10-year price-history statistics (period high, low and average) still come from yfinance's dividend-adjusted history, slightly below the market's for a dividend payer; total return and CAGR are right on it. MATCH-03 decides. (iter 53)
-- L22 [STORE/VALID] The as-of view returns None for a figure a year's later filing doesn't repeat: STX's FY2022 dividend a share as of 2025-08-01 and BAC's FY2008 total assets as of 2012-02-23, where the annual record keeps 2.77 and 1.818T. Check whether a later vintage's partial view of a year should hide what earlier filings reported (VALID-10, STORE-05). (iter 63)
+- L22 [STORE/VALID] The as-of view returns None for a figure a year's later filing doesn't repeat: STX's FY2022 dividend a share as of 2025-08-01 and BAC's FY2008 total assets as of 2012-02-23, where the annual record keeps 2.77 and 1.818T. Check whether a later vintage's partial view of a year should hide what earlier filings reported (VALID-10, STORE-05). (iter 63) Iteration 77: RESOLVED into BUG-110 (every year two or more before the filer's latest; as of today 70% of years read no revenue).
 - L23 [VALID] 19 quarterly revenues are negative after BUG-099's fix (29 before), and 13 trailing years' gross profit: BX's and KKR's are real investment losses; the rest look like a restated rung less one as first filed (COP 2011-06-30 -$22.1B, RTX 2018-12-31 -$13.8B, GE 2022-12-31 -$12.1B, ABT 2011-12-31 -$7.1B, HWM 2014-15 and 2018-19, WDC 2023-24, DHR 2014-12-31, SPGI 2010-11, APP 2023-12-31) and PM's Q4 2016 (-$29.1B), its year net of excise taxes less nine months including them. Confirm and file (iteration 70, `qa/evidence/iter70-bug099-impact.txt`); L19 may share the cause.
 - L24 [OPS] `qa/oracle/sec_oracle.py`, the independent parse of SEC companyfacts that LOOP_PROMPT section 7 and `qa/GOLDEN.md` describe, was never written (it has no git history), so section 9's "both oracles" can't be met yet: build it (json, not `src.parsers`) before the convergence sweeps. (iteration 70)
 - L25 [PKG] `requirements.txt` and `pyproject.toml` allow pandas>=2.1.0, but `src/fetchers/yahoo_handler.py:498` and `:747` resample by 'YE', an alias pandas 2.2 added; on 2.1 every dividend history would fail, and by BUG-094's rule drop its run's splits (code review 10, unverified: only pandas 2.2.3 is installed). Confirm in a pandas 2.1 environment, or raise the floor. (iteration 71)

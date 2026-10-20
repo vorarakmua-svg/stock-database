@@ -1439,3 +1439,21 @@ Gates: ruff ✓ mypy ✓ pytest 1108 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(web): only a share split stops a quote refresh
 Next: record code review 11 when it reports; until then a discovery unit over the TODO rows, riskiest first (VALID-07,
 -10, -11; then MATCH). Fixes since review 11's range (6715f99): 2.
+
+## Iteration 77: 2026-10-20 19:05: discovery
+Picked: VALID-07, -10 and -11, the integrity checks, point-in-time and the `/quality` dashboard (no P0-P2 open; the
+riskiest TODO rows). CI: bce9244 ✓. Code review 11 is still running.
+Did: collected the 126 cached filers offline with bce9244 and ran the quality pass with the user's stored dividends,
+triaging every finding against the filings; checked the as-of view (vintage uniqueness, 23,097 answers against SQL
+written separately, a restatement by date, point-in-time ratios against the stored ones and by hand) and what it
+returns today for each year; compared `/quality` and its API with SQL written separately on a copy of the user's data
+and on the fresh collection. As of today the as-of view returns no revenue for 70% of years (a later 10-K's partial
+view of a year hides the earlier filings), and 200 stored quarters are a falling year-to-date total read as an
+outflow (INTU's Q4 capex; GE's $7.8B Q3 2013 acquisitions).
+Evidence: `qa/evidence/iter77-{quality-sweep,falling-ytd,pit,quality-page}.txt`
+Result: VALID-07 FAIL→BUG-111 (P2; BUG-112, -114, -115 P3); VALID-10 FAIL→BUG-110 (P1; BUG-113 P3); VALID-11 PASS.
+L22 resolved into BUG-110; Q6 notes BLK's new registrant.
+Gates: ruff ✓ mypy ✓ pytest 1108 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) chore(qa): discovery VALID-07, -10, -11; the as-of view loses most years' figures
+Next: BUG-110 (P1), then BUG-111 (P2); record code review 11 when it reports. Fixes since review 11's range
+(6715f99): 2.
