@@ -1378,3 +1378,18 @@ Result: BUG-102 VERIFIED; GATHER-13 → FAIL→BUG-106 (P2, the stock-dividend r
 Gates: ruff ✓ mypy ✓ pytest 1084 passed, 1 skipped (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(web): a refresh after a split the stored price predates is refused
 Next: the P2s, oldest first: BUG-100, BUG-103, BUG-104, BUG-106. Fixes since review 10's range: 3.
+
+## Iteration 73: 2026-10-20 16:17: fix
+Picked: BUG-100, the oldest open P2 (no P0 or P1 open). CI: a26e1a7 ✓.
+Did: TDD (two tests RED: INTC's FY2025 liabilities read $97.15B where its filed figures give $85.07B, and equity of no
+recorded tag is the parent's): a derived total liabilities takes out the non-controlling interest, except beside
+equity filed under the tag that includes it (a guard: VZ FY2012). Four mutants, each failing a test. Over the 126
+cached filers collected offline, 2,769 cells change in 25 tickers, each exactly its NCI, nothing else; the 12 latest
+years checked equal each filer's own liabilities-and-equity total less its equity including the NCI, to the dollar.
+Quality's balance identity flags none of the periods beside equity including the NCI. Real app: stock-web on an
+offline-collected scratch database (INTC $85.07B, DIS $82.90B).
+Evidence: `qa/evidence/iter73-bug100-{red,green,mutants,impact,app}.txt`
+Result: BUG-100 VERIFIED; VALID-09 PASS.
+Gates: ruff ✓ mypy ✓ pytest 1087 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): derived liabilities leave out the non-controlling interest
+Next: the P2s, oldest first: BUG-103, BUG-104, BUG-106. Fixes since review 10's range: 4.

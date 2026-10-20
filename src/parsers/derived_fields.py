@@ -2,8 +2,8 @@
 
 Some universal concepts aren't always tagged directly. Notably many filers (e.g.
 Walmart, Duke Energy) never tag ``Liabilities``, yet it equals
-``total_assets - total_equity``. Deriving these closes coverage gaps so the
-universal core approaches 100% across all companies.
+``total_assets - total_equity - minority_interest``. Deriving these closes coverage
+gaps so the universal core approaches 100% across all companies.
 
 A derived value is only filled when the field is *absent* from a reported tag, and
 is marked in the period's ``_source_tags`` as ``"derived"`` so reported vs derived
@@ -18,12 +18,26 @@ def _num(period: Dict[str, Any], key: str) -> Optional[float]:
     return float(val) if isinstance(val, (int, float)) else None
 
 
+#: ``total_equity``'s fallback tag, which holds the non-controlling interest too.
+_EQUITY_WITH_NCI = "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"
+
+
 def _total_liabilities(p: Dict[str, Any]) -> Optional[float]:
+    """Total assets less the parent's equity and the non-controlling interest.
+
+    ``total_equity`` is the parent's (``StockholdersEquity``, its first tag), so the
+    interest is neither it nor a liability: INTC's FY2025 liabilities are $85.07B, not
+    the $97.15B assets less equity gave (BUG-100). Equity filed under the fallback tag
+    already holds the interest. Temporary (redeemable) equity has no field and stays in.
+    """
     assets = _num(p, "total_assets")
     equity = _num(p, "total_equity")
-    if assets is not None and equity is not None:
-        return assets - equity
-    return None
+    if assets is None or equity is None:
+        return None
+    nci = _num(p, "minority_interest")
+    if nci is not None and p.get("_source_tags", {}).get("total_equity") != _EQUITY_WITH_NCI:
+        return assets - equity - nci
+    return assets - equity
 
 
 def _gross_profit(p: Dict[str, Any]) -> Optional[float]:
@@ -63,7 +77,7 @@ def _discontinued_ops_cash(p: Dict[str, Any]) -> Optional[float]:
 # absent. Order matters if a derivation depends on another's output.
 DERIVATIONS: List[Tuple[str, Callable[[Dict[str, Any]], Optional[float]], str]] = [
     ("revenue", _bank_revenue, "net_interest_income + noninterest_income"),
-    ("total_liabilities", _total_liabilities, "total_assets - total_equity"),
+    ("total_liabilities", _total_liabilities, "total_assets - total_equity - minority_interest"),
     ("gross_profit", _gross_profit, "revenue - cost_of_revenue"),
     ("cash_from_discontinued_operations", _discontinued_ops_cash,
      "discontinued operating + investing + financing cash flows"),
