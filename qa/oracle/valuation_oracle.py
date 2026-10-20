@@ -363,7 +363,25 @@ class Inputs:
         close = row[1]
         if not flagged or row[2]:
             close /= math.prod(f for ex, f in self.yahoo_dividend_factors() if ex > row[0][:10])
-        return close * self.unpriced
+        return close * self.bars_to_price_basis()
+
+    def bars_to_price_basis(self) -> float:
+        """The factor that puts the stored bars on the latest price's split basis (VAL-09's per-share consistency).
+        Yahoo served the bars on the basis of every split up to their last day, which their history reaches: a split
+        between that day and the price's is in one of them only. A later run whose price-history request failed left
+        bars older than a split it stored, beside a price from before it or after it (BUG-094)."""
+        if getattr(self, "_bars_factor", None) is None:
+            served = self.db.execute("select max(date) from price_bars where ticker=?", (self.t,)).fetchone()[0]
+            factor = 1.0
+            if self.priced_on and served:
+                last = str(served)[:10]
+                for date, ratio in self.splits:
+                    if ratio and self.priced_on < date[:10] <= last:
+                        factor *= ratio
+                    elif ratio and last < date[:10] <= self.priced_on:
+                        factor /= ratio
+            self._bars_factor = factor
+        return self._bars_factor
 
     def yahoo_dividend_factors(self) -> List[Tuple[str, float]]:
         """Yahoo's dividend factors [(ex-date, factor)], newest first. The stored close before an ex-date already
