@@ -1704,3 +1704,19 @@ Gates: ruff ✓ mypy ✓ pytest 1164 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) chore(qa): record code review 13
 Next: BUG-139 (P1), then BUG-136, BUG-140, BUG-141, BUG-142 (P2); MATCH-04 when its worker reports. Fixes since
 review 13's range (ef7cc76): 3.
+
+## Iteration 94: 2026-10-20 23:31: fix
+Picked: BUG-139, the only open P1. CI: e74e96b ✓. MATCH-04's worker reported during the iteration (saved as
+`qa/evidence/iter91-match04-report.md`).
+Did: measured the restricted-cash total against the cash line first (a median 0.3% above it where both are tagged),
+then TDD (three tests RED, one guard): cash reads it last, on dates its filing tags its balance sheet's total. Two
+first cuts were wider: on every date, a cash flow statement's earlier years made cash-only years and changed 152
+years' as-of cash by 10% or more (PH's FY2022 to $6.648B); on dates with Assets, a note's total let some back in.
+Seven mutants, each failing a test. Real data: cash filled in 105 years at 20 filers, net debt moved in 43, nothing
+else, valuations identical; GE's FY2025 net debt $22.16B to $9.76B, GEV's ROIC 58.0%; stock-web shows them.
+Evidence: `qa/evidence/iter94-bug139-{red,green,mutants,realdata,e2e}.txt`, `iter91-match04-report.md`
+Result: BUG-139 VERIFIED; VALID-01 and MATCH-03 FAIL→BUG-141.
+Gates: ruff ✓ mypy ✓ pytest 1168 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): cash is read where a balance sheet tags only its total with restricted cash
+Next: record MATCH-04 (its claims re-run first); then BUG-136, BUG-140, BUG-141, BUG-142 (P2). Fixes since review
+13's range (ef7cc76): 4.

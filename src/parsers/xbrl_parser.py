@@ -130,6 +130,42 @@ def _net_outflows_as_paid(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     return turned
 
 
+#: Tags read only on the dates a filing's balance sheet covers, those it tags the balance
+#: sheet's total on (a note's total assets can stand at earlier year ends: PH's 2024 10-K at
+#: 2022's): a cash flow statement reconciles cash with restricted cash (ASU 2016-18), so the
+#: total also stands at each earlier year end the statement covers.
+_BALANCE_SHEET_ONLY = ("CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",)
+_BALANCE_SHEET_TOTAL = "LiabilitiesAndStockholdersEquity"
+
+
+def _on_balance_sheet_dates(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+    """*us_gaap* with the ``_BALANCE_SHEET_ONLY`` tags' facts kept on their filing's balance-sheet
+    dates. Cash reads the restricted-cash total last, for balance sheets that tag nothing else
+    (GE's FY2025; BUG-139); read from a cash flow statement's opening balances too, it made
+    cash-only years (DIS's FY2016) and, in the vintages, replaced a balance sheet's own cash in
+    the as-of view (PH's FY2022: $0.536B, its 2024 10-K's $6.648B with the Meggitt escrow)."""
+    if not any(tag in us_gaap for tag in _BALANCE_SHEET_ONLY):
+        return us_gaap
+    dates: Dict[str, Set[str]] = defaultdict(set)
+    for entry in us_gaap.get(_BALANCE_SHEET_TOTAL, {}).get("units", {}).get("USD", []):
+        if entry.get("accn") and entry.get("end"):
+            dates[entry["accn"]].add(entry["end"])
+    kept = dict(us_gaap)
+    for tag in _BALANCE_SHEET_ONLY:
+        if tag in us_gaap:
+            units = us_gaap[tag].get("units", {})
+            kept[tag] = {**us_gaap[tag], "units": {
+                unit: [e for e in entries if e.get("end") in dates.get(e.get("accn") or "", ())]
+                for unit, entries in units.items()}}
+    return kept
+
+
+def _filer_facts(facts: Dict[str, Any]) -> Dict[str, Any]:
+    """A filer's us-gaap facts as the extractions read them: its dollar filings', net outflows as
+    paid, and the balance-sheet-only tags on their balance sheets' dates."""
+    return _net_outflows_as_paid(_on_balance_sheet_dates(_dollar_filings(facts.get("facts", {}).get("us-gaap", {}))))
+
+
 #: A later filing's figure for a year can be a tagging error of the figure the earlier
 #: filings agree on: its negative, a zero, or it times 10^3 or more (STX's FY2024 10-K put
 #: FY2022's 2.77 dividend a share at 2,770,000; BUG-061). x10 and x100 are left alone, as
@@ -462,7 +498,7 @@ class XBRLParser:
         Returns:
             Dictionary organized by fiscal year (string keys).
         """
-        us_gaap = _net_outflows_as_paid(_dollar_filings(facts.get("facts", {}).get("us-gaap", {})))
+        us_gaap = _filer_facts(facts)
         if not us_gaap:
             return {}
 
@@ -488,7 +524,7 @@ class XBRLParser:
         already-fetched ``companyfacts`` (every historical instance carries its own
         ``accn``/``filed``); no extra network. Annual reports (10-K, 20-F, 40-F) only.
         """
-        us_gaap = _net_outflows_as_paid(_dollar_filings(facts.get("facts", {}).get("us-gaap", {})))
+        us_gaap = _filer_facts(facts)
         if not us_gaap:
             return {}
 
@@ -560,7 +596,7 @@ class XBRLParser:
         Returns:
             Dictionary organized by period end date.
         """
-        us_gaap = _net_outflows_as_paid(_dollar_filings(facts.get("facts", {}).get("us-gaap", {})))
+        us_gaap = _filer_facts(facts)
         if not us_gaap:
             return {}
 

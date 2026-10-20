@@ -176,7 +176,14 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "cash_and_equivalents", "Cash and Equivalents", BALANCE, UNIT_USD, INSTANT,
-        ("CashAndCashEquivalentsAtCarryingValue", "Cash", "CashEquivalentsAtCarryingValue"),
+        ("CashAndCashEquivalentsAtCarryingValue", "Cash", "CashEquivalentsAtCarryingValue",
+         # Last, the total with restricted cash: some balance sheets tag nothing else (GE's,
+         # CVX's and five more FY2025 10-Ks), and without it net debt was their whole debt
+         # (BUG-139). Where a filer tags both, it runs a median 0.3% above the cash line. Read
+         # on balance-sheet dates only (xbrl_parser._BALANCE_SHEET_ONLY).
+         "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"),
+        description="Cash and cash equivalents; where a balance sheet tags only the total with restricted "
+                    "cash, that total.",
     ),
     CanonicalField(
         "short_term_investments", "Short-Term Investments", BALANCE, UNIT_USD, INSTANT,

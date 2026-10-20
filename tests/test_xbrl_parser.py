@@ -356,6 +356,66 @@ def test_the_noncurrent_tags_win_beside_the_fallbacks():
         60.5e9, "LongTermDebtAndCapitalLeaseObligations")
 
 
+RESTRICTED = "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
+
+
+def _year_end_cash(**tagged):
+    """A 2025 balance sheet holding the given cash tags (tag=value) beside its total, and its cash as (value, tag)."""
+    facts = {"facts": {"us-gaap": {
+        tag: {"units": {"USD": [usd(val, None, "2025-12-31", fy=2025, fp="FY", form="10-K", filed="2026-02-12")]}}
+        for tag, val in {"LiabilitiesAndStockholdersEquity": 90.0e9, **tagged}.items()}}}
+    year = XBRLParser().extract_annual_financials(facts).get("2025", {})
+    return year.get("cash_and_equivalents"), year.get("_source_tags", {}).get("cash_and_equivalents")
+
+
+def test_cash_tagged_only_with_restricted_cash_is_read():
+    # BUG-139 (code review 13): GE's, CVX's, DHR's, GEV's, GILD's, SBUX's and CB's FY2025 10-Ks tag their cash only
+    # with the total that includes restricted cash, so cash was empty and net debt their whole total debt: GE's
+    # $22.16B where its $12.39B of cash leaves $9.76B.
+    assert _year_end_cash(**{RESTRICTED: 12.392e9}) == (12.392e9, RESTRICTED)
+
+
+def test_cash_without_restricted_cash_comes_first():
+    # Where a balance sheet tags both, its own cash line wins (the total runs a median 0.3% higher).
+    assert _year_end_cash(CashAndCashEquivalentsAtCarryingValue=12.0e9, **{RESTRICTED: 12.4e9}) == (
+        12.0e9, "CashAndCashEquivalentsAtCarryingValue")
+    assert _year_end_cash(Cash=11.0e9, **{RESTRICTED: 12.4e9}) == (11.0e9, "Cash")
+
+
+def test_restricted_cash_a_balance_sheet_doesnt_show_isnt_read():
+    # A cash flow statement reconciles cash with restricted cash for each earlier year it covers: PH's 2024 10-K puts
+    # FY2022's at $6.648B (the Meggitt escrow), where its own balance sheet showed $0.536B of cash, and DIS's 2019
+    # 10-K opens on FY2016, a year it has no other figure for. A note's total assets can stand on such a year too.
+    # The year before's 10-K, whose balance sheet does cover 2023, tags no restricted total.
+    k10 = dict(fy=2025, fp="FY", form="10-K", filed="2026-02-12")
+    k10_before = dict(fy=2024, fp="FY", form="10-K", filed="2025-02-12")
+    facts = {"facts": {"us-gaap": {
+        "LiabilitiesAndStockholdersEquity": {"units": {"USD": [
+            usd(90.0e9, None, "2025-12-31", **k10), usd(80.0e9, None, "2024-12-31", **k10),
+            usd(80.0e9, None, "2024-12-31", **k10_before), usd(70.0e9, None, "2023-12-31", **k10_before)]}},
+        "Assets": {"units": {"USD": [usd(90.0e9, None, "2025-12-31", **k10), usd(80.0e9, None, "2024-12-31", **k10),
+                                     usd(70.0e9, None, "2023-12-31", **k10),  # a segment note's
+                                     usd(80.0e9, None, "2024-12-31", **k10_before),
+                                     usd(70.0e9, None, "2023-12-31", **k10_before)]}},
+        RESTRICTED: {"units": {"USD": [usd(v, None, end, **k10) for v, end in (
+            (12.0e9, "2025-12-31"), (11.0e9, "2024-12-31"), (6.6e9, "2023-12-31"))]}},
+    }}}
+    parser = XBRLParser()
+    years = parser.extract_annual_financials(facts)
+    assert {y: p.get("cash_and_equivalents") for y, p in years.items()} == {"2025": 12.0e9, "2024": 11.0e9,
+                                                                            "2023": None}
+    assert parser.extract_annual_vintages(facts)["2023"]["2026-02-12"].get("cash_and_equivalents") is None
+
+
+def test_a_quarter_whose_cash_is_tagged_only_with_restricted_cash_has_it():
+    q1 = dict(fy=2026, fp="Q1", form="10-Q", filed="2026-04-28")
+    facts = {"facts": {"us-gaap": {
+        RESTRICTED: {"units": {"USD": [usd(8.0e9, None, "2026-03-31", **q1)]}},
+        "LiabilitiesAndStockholdersEquity": {"units": {"USD": [usd(90.0e9, None, "2026-03-31", **q1)]}},
+    }}}
+    assert XBRLParser().extract_quarterly_financials(facts)["2026-03-31"].get("cash_and_equivalents") == 8.0e9
+
+
 def test_an_instruments_carrying_amount_is_not_the_years_debt():
     # DebtInstrumentCarryingAmount is often one instrument's, on days with no balance sheet: SLB's $0.5B note at
     # 2020-12-31 beside some $16B of debt, BSX's and HWM's debt-only quarters that cost them seven trailing years.
