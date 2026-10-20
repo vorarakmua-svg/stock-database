@@ -56,6 +56,8 @@ Golden collection of 2026-10-20 (`SCRATCH/golden`, valued by 144dcdf's code), wo
 `qa/evidence/iter46-val13-handworked.txt`). **Every model's bear, base and bull value equals the stored one (0.000%
 difference), and so do the summaries.**
 
+**Caveat (iteration 52, BUG-075):** the FY-end prices in the multiples steps below are `price_bars` closes, which hold Yahoo's dividend-adjusted closes: AAPL, JPM and KO closed those days at 146.92, 158.35 and 59.21, not 143.30, 139.87 and 51.55. The arithmetic stands; the multiples inputs, and so those values, are wrong until BUG-075 is fixed, when this section is worked again.
+
 Readings where the specs are silent (each is what the stored values follow, recorded since iteration 4):
 - EPS = reported diluted EPS (it nets out preferred dividends: JPM), on today's split basis. A year's figure
   reflects a split only if it was last filed after it (AAPL's FY2016 EPS 8.31, last filed 2018-11-05, before the

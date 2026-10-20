@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 2 · P3 30 · NEEDS-USER 11 · Verified: 39
+**Open:** P0 1 · P1 1 · P2 5 · P3 32 · NEEDS-USER 11 · Verified: 39
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -591,6 +591,55 @@ Found: iteration 51, checking BUG-061's impact on MRK's TTM rows (`qa/evidence/i
 Repro: the quarterly ladder (`XBRLParser._collect_discrete_flows`) differences every duration field's year-to-date facts, share counts included: AAPL's Q2-Q4 FY2025 diluted weighted shares read -0.047B, -0.052B and -0.047B, MSFT's -0.001B to -0.006B, MRK's FY2011 +0.002B, -0.004B and -0.008B; only Q1, a 3-month fact, is right. A TTM row sums the four quarters, which telescopes to roughly a count (AAPL 14.703B) without being the trailing year's average.
 Expected: a quarter's weighted-average count is its own 3-month figure (10-Qs tag it), and a TTM count an average of the four, not their sum.   Actual: near-zero and negative counts in `financials_quarterly`, the `/api/companies/{ticker}/financials/quarterly` endpoint and the CSV and JSON exports.
 Impact today: no valuation input (the models read annual rows) and no row of the statements tab (it shows EPS, not share counts); every company's stored quarterly share counts and its TTM count.
+
+### BUG-075 [P0][VAL] The multiples band's FY-end prices are Yahoo's dividend-adjusted closes, not the market's
+Status: OPEN
+Found: iteration 51 by code review 7 (C1), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `YahooHandler._get_price_bars` calls `stock.history(period="max", interval="1d")`, and yfinance 1.0 defaults to `auto_adjust=True` (OHLC adjusted for dividends as well as splits), so `price_bars.close` holds total-return prices, which `load_inputs` reads as each FY-end price for `value_multiples`. Rebuilt from the stored bars and Yahoo's dividends (inverting Yahoo's factor 1 - d / prior close, newest first), the market closes are exactly the published ones: KO 2021-12-31 stored 51.854 in the August copy and 51.546 in the October one, against 59.21; JPM 140.571 against 158.35; AAPL 2021-09-24 143.425 against 146.92; MO 33.419 against 47.39. A past day's stored close falls with every later dividend, so it changes from one collection to the next, and the HP tab and `/api/export/stock/{T}/bars.csv` call it "close" (KO's row: 51.546).
+Expected: the spec's "multiple = FY-end price (nearest `price_bars` close on or before fiscal year end)" and VAL-05's "each year's price taken at its fiscal-year end with no look-ahead": the market close on today's split basis.   Actual: a price lowered by every dividend paid since: 98 of 118 applicable multiples rows in the user's copy understate the base value by more than 0.5% (52 by more than 5%, 17 by more than 10%; MO $45.05 against $57.66, CVX $79.81 against $95.58, JPM $188.48 against $212.32, KO $70.06 against $76.94); 20 of 127 headline medians move beyond 0.5% (C +17.8%, MS +16.5%, JPM +12.6%, WFC +11.9%, GS +11.7%, MO +10.9%, O +10.7%); USB reads expensive, and fair with market closes.
+Impact today: every dividend payer's multiples value and the medians and verdicts built on it. The oracle reads the same column and VAL-13's hand-worked check the same closes, so VAL-05's and VAL-13's PASS hid it (both now FAIL→BUG-075). The spec already says what the price is, so this is a fix, not a policy question: the oracle's rule first.
+
+### BUG-076 [P2][VAL] The ADS ratio misreads a drifted share count, and a listed class's count as an ADS
+Status: OPEN
+Found: iteration 51 by code review 7 (I1, I2), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `_ads_ratio` compares the latest FY's weighted diluted count with Yahoo's count of today, and the oracle copies the rule. (1) Drift: 19 of the user's 113 single-class companies' filed counts differ from Yahoo's by more than 5% (8 by more than 10%; median 1.84%). Code review 6's 5-share ADS demo with Yahoo's count 8% lower reads ads_ratio 1.0, and BUG-065's values come back (DCF 15.27, Graham 12.18, Lynch 10.21 against a $1,140.25 ADS; upside -98.8%); for an ADS of 8 or 10 shares those drifts read 9 or 11. (2) Several classes: Yahoo counts the listed one, so GOOGL relabelled 20-F reads 12.23B / 5.867B = 2.08 as an ADS of 2: Graham 90.88 → 181.75, Lynch 162.15 → 324.30, the median +23.6%, and `ads_ratio: 2` in every row's assumptions. The oracle agrees in both.
+Expected: the ratio read against a count on the price's basis that covers every class (market cap ÷ price: TSM 5.186B, ARM 1.068B, GOOGL 12.228B, a ratio of 1), and per-share models N/A with a reason when a 20-F or 40-F filer's ratio isn't a whole number.   Actual: as above.
+Impact today: none in the user's copy (no ADR has a record); any US-GAAP ADR collected later.
+
+### BUG-077 [P2][VALID] A filer's reporting currency is read over its whole history, so a switch to dollars loses the dollar years
+Status: OPEN
+Found: iteration 51 by code review 7 (I3; a regression of 0ab5c81), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `_reporting_currency` counts every monetary us-gaap fact the filer has ever filed. A filer that reported in RUB with US$ convenience translations through FY2022 and in dollars from FY2023 (the Yandex-to-Nebius path; 146 RUB facts beside 94 USD in the synthetic case) gets no annual record, no vintages and no quarters, and the run says "it reports in RUB (20-F), which isn't converted to dollars"; f9bbc91 kept every year, the RUB years as their convenience translations. A filer that switched away from dollars keeps its later convenience translations.
+Expected: the currency decided per filing (accession): the dollar filings kept, the others dropped, and the explanation only when no dollar filing is left.   Actual: as above.
+Impact today: none (no cached filer changed currency: `review7/scripts/currency_margins.py`).
+
+### BUG-078 [P2][VAL] Without an SEC filing date, Yahoo's split-adjusted dividends stay beside a pre-split price
+Status: OPEN
+Found: iteration 51 by code review 7 (I4), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `load_inputs` puts Yahoo's dividends and FY-end bars back on the price's basis (`unpriced`, BUG-048) only when the latest annual row has a filing date (`if ratio and filed and priced_on ...`); 144dcdf dropped the `max(priced_on, filed)` the guard served but kept it, and the oracle has the same guard. A company without SEC annual financials (an IFRS filer like TSM, whose only model is DDM, or XOM's new registrant) in BUG-048's scenario (the latest priced snapshot, $1,000, before a 10:1 split that a later run stored while its quote failed) gets DDM 41.84 against 418.38 on the price's basis, and the oracle agrees with 41.84. Dropping the guard passes the whole suite.
+Expected: Yahoo's series on the price's basis whatever the SEC record holds (BUG-048's Expected).   Actual: a tenth of the value.
+Impact today: none in the user's copy; BUG-048's preconditions for a company without SEC annual financials.
+
+### BUG-079 [P3][VAL] The price's day is the collector's local date, while splits are dated in New York
+Status: OPEN
+Found: iteration 51 by code review 7 (M1), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `priced_on` is the snapshot's `collected_at` date, naive local time (`models/stock_data.py`, `webapp/jobs.py`), and split dates are exchange dates: the golden snapshots were stamped 02:07 on 2026-10-20 in UTC+7, 15:07 on 10-19 in New York. In BUG-048's scenario with the snapshot stamped 02:30 local on a split's ex-date (15:30 the day before in New York, before the split), the split counts as already priced: Graham 45.21, Lynch 24.76, multiples 54.67; stamped with its New York date, 452.06, 247.61 and 546.66. The oracle agrees with the first.
+Expected: the price's day on the exchange's calendar.   Actual: a tenth of those values until the next priced collection.
+Impact today: needs BUG-048's preconditions and a collection in the hours the local date runs ahead of New York's (00:00 to 11:00 in UTC+7 in summer).
+
+### BUG-080 [P1][STORE] A database path holding '#' or '%xx' breaks every read-only connection: the web app answers 500 and creates an empty file
+Status: OPEN
+Found: iteration 51 by code review 7 (M2, widened in the re-run), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `Reader` (`webapp/repository.py:52`), `AsOfReader` (`query/asof.py:30`) and `StockDataFetcher._stored_sector` open `file:{path}?mode=ro` without escaping the path. SQLite reads '#' as the start of a fragment, so `mode=ro` is cut off with the rest of the path and the connection opens, read-write, a database at the truncated path, creating it if missing; '%41' decodes to another name ("unable to open database file"). With the golden copy under `proj#1/output/stock.db`, the web app in-process answers 500 on `/api/companies` and `/companies/KO` (200 under `plain/`) and leaves an empty file `proj` beside the folder (`qa/evidence/iter52-review7-rerun.txt`); the stored-sector fallback returns None under `data#2` and `pct%41` (BUG-064's wipe again where no JSON export exists). `Path.resolve().as_uri() + "?mode=ro"` opens all three folders.
+Expected: any folder the OS allows works, and a read-only reader never writes (STORE-04).   Actual: as above.
+Impact today: none for the user's path (no '#' or '%'); any install under a folder like "C#" or "100%".
+
+### BUG-081 [P3][CODE] 9 mutants of iterations 43-50's fixes survive the whole suite
+Status: OPEN
+Found: iteration 51 by code review 7 (M3), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `review7/scripts/mutants.py` on an archive of 69c5a7e, each mutant in a fresh copy with the whole suite (990 passed, 1 warning in 88.70s (0:01:28)): ads 1/n branch returns n; ads tolerance 5% -> 30%; ads: 40-F not foreign; filed_between ignores the newer date; filed_between: non-simple ratios judged too; detect date always the weighted field's; undo: non-simple factors too; unpriced without the filing guard (proposed fix); stored sector: no warning all pass. Code review 7's targeted run also has survivors for the ADS step not moving `split_factor` or `ffo_per_share`, `ads_ratio` stamped on N/A rows, and the `<`/`<=` date boundaries (BUG-072's class). One survivor changes real inputs: `_filed_between` judging non-simple ratios moves RTX's FY2016-19 split factor from 1.589 to 1.5717 on the user's copy, though no value moves at two decimals.
+Expected: each fix's rule held by a test.   Actual: these rules are held by none.
+Impact today: none; the next change to these rules can break them unseen.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

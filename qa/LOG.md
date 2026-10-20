@@ -992,3 +992,25 @@ Next: record code review 7 (f9bbc91..0ab5c81), verifying each claim: it proposes
 multiples band are Yahoo's dividend-adjusted closes) and four P2s (ADS-ratio drift, a two-class 20-F read as an ADS,
 the reporting currency decided over a filer's whole history, Yahoo's split undo needing a filing date); then by
 priority.
+
+## Iteration 52: 2026-10-20 09:19: review
+Picked: recording code review 7 (f9bbc91..0ab5c81), which reported as iteration 51 ended with a proposed P0 (§4.6:
+valid findings become bugs; each claim re-run first). CI: 69c5a7e ✓ (Python 3.9-3.12, the network guard on).
+Did: read each of the reviewer's offline scripts, then re-ran every claim on today's code (69c5a7e; valuation
+unchanged since 0ab5c81) with my own output folder. All hold: C1 (yfinance 1.0's `history()` defaults to
+`auto_adjust=True`; the market closes rebuilt from the stored bars equal the published ones to the cent; 98 of 118
+multiples rows and 20 of 127 medians move; USB's verdict flips), I1 (the drifted ADS demo returns BUG-065's values),
+I2 (GOOGL relabelled 20-F reads an ADS of 2), I3 (the currency switcher keeps no year), I4 (DDM 41.84 against 418.38),
+M1 (Graham 45.21 against 452.06), M2, and M3 (9 of 9 mutants survive the whole suite on 69c5a7e). M2 is
+wider than reported: the web app's Reader and the as-of reader build the same unescaped URI, so a '#' in the database
+path cuts `mode=ro` off, the app answers 500 on every page and an empty file appears at the truncated path (BUG-080,
+P1). Added the review's lesson to §7 (an oracle rule that encodes the fix's heuristic says so and is probed on real
+distributions first) and a caveat to GOLDEN.md's VAL-13 section.
+Evidence: `qa/evidence/review7-report.md`, `qa/evidence/iter52-review7-rerun.txt`
+Result: new BUG-075 (P0, C1), BUG-080 (P1, M2 widened), BUG-076 (P2, I1 and I2), BUG-077 (P2, I3), BUG-078 (P2, I4),
+BUG-079 and BUG-081 (P3, M1 and M3). VAL-05 and VAL-13 → FAIL→BUG-075; STORE-04 → FAIL→BUG-080; GATHER-02 notes
+BUG-076 and BUG-077.
+Gates: ruff ✓ mypy ✓ pytest 990 passed (1 known warning); no code changed | CI: pending for this push
+Commit: (this commit) chore(qa): record code review 7; dividend-adjusted FY-end prices, ADS ratios and '#' paths
+Next: BUG-075 (P0: the FY-end market close, oracle rule first), then BUG-080 (P1), then the P2s oldest first (BUG-066,
+BUG-074, BUG-076, BUG-077, BUG-078). Fixes since review 7's range: 2 (2964555, 69c5a7e).

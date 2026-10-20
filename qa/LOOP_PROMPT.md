@@ -276,6 +276,7 @@ misbehaves for reasons outside this program, swap in an equivalent and say why i
 - `qa/oracle/sec_oracle.py`: parses SEC companyfacts JSON on its own (requests + json, not `src.parsers`) for revenue, net income, assets, liabilities, equity, OCF, capex and diluted shares, then compares with the DB.
 - Hand checks: for 3 companies, check the oracle itself against the filed 10-K numbers (record source URLs and dates).
 - Oracle rule changes go in their own commit, citing the spec, before the code fix they verify, and that commit shows the oracle flagging the unfixed code. An oracle changed in the same commit as the code proves nothing. (Added in iteration 10 after code review 1.)
+- When an oracle rule encodes the fix's own heuristic (a detection threshold or tolerance, not a formula from the spec), the commit says so, and the rule is first probed for false positives and misses on the real data's distributions: otherwise the oracle agreeing only shows the code implements the same heuristic. (Added in iteration 52 after code review 7.)
 - **Tolerances:** SEC-reported values exact after unit normalization; derived sums ±1%; cross-source market data ±5%; valuations ±0.5% vs the oracle.
 
 ## 8. Templates and seeded bugs
