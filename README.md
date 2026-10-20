@@ -528,12 +528,21 @@ numbers SEC filings report:
   which recovers every quarter's standalone performance — including **Q4**, which is never
   filed as a 10-Q (`Q4 = annual − 9-month YTD`). Derived values are tagged in
   `_source_tags`.
+- **One split basis per year.** A stock split restates only the filings made after it,
+  so a year's figures can come from both sides of one. Each quarter's per-share figures
+  and share counts are put on the basis of its year's annual figures, as
+  `financials_annual` has them, before Q4 is derived. The parser reads the splits from
+  the filings themselves: counts that two filings give for the same period at a split's
+  ratio. Years that no filing after a split reports keep their older basis, as in
+  `financials_annual`.
 - **Balance-sheet checkpoints** at every quarter-end (instant facts), full history.
 - **`fiscal_quarter`** (1–4, company calendar) and **`calendar_quarter`** (1–4, calendar)
   are both attached; `calendar_quarter` comes from the SEC frame and is the reliable
   cross-company key.
 - **TTM (`financials_ttm`)** — trailing-twelve-month series (rolling 4 discrete quarters
-  for flows, balance sheet as-of) for seasonality-free, up-to-date comparison.
+  for flows, their average for weighted share counts, balance sheet as-of, and per-share
+  figures and counts on the latest quarter's split basis) for seasonality-free, up-to-date
+  comparison.
 
 ```sql
 -- Discrete quarterly revenue trend for one company (incl. derived Q4):

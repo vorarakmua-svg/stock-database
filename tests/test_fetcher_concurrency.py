@@ -8,6 +8,7 @@ import pytest
 from src.config import AppConfig, StorageConfig
 from src.fetchers.stock_data_fetcher import StockDataFetcher
 from src.models.stock_data import StockData
+from tests.test_xbrl_parser import _split_restated_facts
 
 
 def _make_fetcher(tmp_path, workers):
@@ -390,4 +391,16 @@ def test_a_record_that_stops_where_ifrs_reports_begin_is_a_warning(tmp_path, mon
     assert sorted(stock.financials_annual) == ["2015", "2016", "2017", "2018", "2019"]
     assert ("SEC EDGAR: annual financials stop at FY2019 for TSM: later annual reports are in IFRS (20-F), which "
             "isn't mapped") in stock.warnings
+
+
+def test_a_collected_quarterly_record_and_its_trailing_years_sit_on_one_split_basis(tmp_path, monkeypatch):
+    # BUG-082 through a collection: the quarters take their year's basis, a trailing year its latest quarter's, and
+    # the bookkeeping that carries each quarter's basis to the trailing years never reaches the stored record.
+    stock = _collect_from_sec(tmp_path, monkeypatch, {
+        "cik": "0001018724", "ticker": "AMZN", "source": "sec_edgar", "company_facts": _split_restated_facts()})
+    assert stock.financials_quarterly["2020-12-31"]["eps_diluted"] == pytest.approx(0.704)
+    # Q2-Q4 2019 on FY2019's basis, a twentieth of it on Q1 2020's, beside Q1 2020's 0.2505
+    assert stock.financials_ttm["2020-03-31"]["eps_diluted"] == pytest.approx((5.31 + 4.03 + 6.58) / 20 + 0.2505)
+    assert stock.financials_ttm["2019-12-31"]["eps_diluted"] == pytest.approx(23.01)
+    assert not [end for end, period in stock.financials_quarterly.items() if "_split_levels" in period]
 

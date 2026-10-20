@@ -511,6 +511,150 @@ def test_a_quarters_own_share_count_fills_a_gap_in_the_year_to_date_rungs():
     assert quarterly["2025-03-29"]["weighted_avg_shares_diluted"] == 15.060e9
 
 
+#: AMZN's filings around its 20:1 split of June 2022: (form, date filed).
+_SPLIT_FILINGS = {
+    "Q1-19": ("10-Q", "2019-04-26"), "Q2-19": ("10-Q", "2019-07-26"), "Q3-19": ("10-Q", "2019-10-25"),
+    "K-19": ("10-K", "2020-01-31"), "Q1-20": ("10-Q", "2020-04-30"), "Q2-20": ("10-Q", "2020-07-31"),
+    "Q3-20": ("10-Q", "2020-10-30"), "K-20": ("10-K", "2021-02-03"), "Q1-21": ("10-Q", "2021-04-30"),
+    "Q2-21": ("10-Q", "2021-07-30"), "Q3-21": ("10-Q", "2021-10-29"), "K-21": ("10-K", "2022-02-04"),
+    "Q1-22": ("10-Q", "2022-04-29"), "Q2-22": ("10-Q", "2022-07-29"), "Q3-22": ("10-Q", "2022-10-28"),
+    "K-22": ("10-K", "2023-02-03"),
+}
+
+
+def _split_restated_facts():
+    """AMZN-like companyfacts around a 20:1 split in June 2022: (start, end, figure as filed before the split, those
+    filings, figure as filed after it, those filings). FY2019 is never restated; FY2020's year is, by the 10-K for
+    FY2022, and its quarters never are; FY2021's half and nine months are, by the 10-Qs of 2022, but not its first
+    quarter, whose latest filing (the 10-Q for Q1 2022) came before the split."""
+    eps = [
+        ("2019-01-01", "2019-03-31", 7.09, "Q1-19 Q1-20", None, ""),
+        ("2019-01-01", "2019-06-30", 12.40, "Q2-19 Q2-20", None, ""),
+        ("2019-01-01", "2019-09-30", 16.43, "Q3-19 Q3-20", None, ""),
+        ("2019-01-01", "2019-12-31", 23.01, "K-19 K-20 K-21", None, ""),
+        ("2020-01-01", "2020-03-31", 5.01, "Q1-20 Q1-21", None, ""),
+        ("2020-01-01", "2020-06-30", 15.32, "Q2-20 Q2-21", None, ""),
+        ("2020-01-01", "2020-09-30", 27.72, "Q3-20 Q3-21", None, ""),
+        ("2020-01-01", "2020-12-31", 41.83, "K-20 K-21", 2.09, "K-22"),
+        ("2021-01-01", "2021-03-31", 15.79, "Q1-21 Q1-22", None, ""),
+        ("2021-01-01", "2021-06-30", 30.91, "Q2-21", 1.55, "Q2-22"),
+        ("2021-01-01", "2021-09-30", 37.03, "Q3-21", 1.85, "Q3-22"),
+        ("2021-01-01", "2021-12-31", 64.81, "K-21", 3.24, "K-22"),
+    ]
+    diluted = [
+        ("2019-01-01", "2019-03-31", 500e6, "Q1-19 Q1-20", None, ""),
+        ("2019-01-01", "2019-06-30", 501e6, "Q2-19 Q2-20", None, ""),
+        ("2019-01-01", "2019-09-30", 502e6, "Q3-19 Q3-20", None, ""),
+        ("2019-01-01", "2019-12-31", 503e6, "K-19 K-20 K-21", None, ""),
+        ("2020-01-01", "2020-03-31", 506e6, "Q1-20 Q1-21", None, ""),
+        ("2020-01-01", "2020-06-30", 507e6, "Q2-20 Q2-21", None, ""),
+        ("2020-01-01", "2020-09-30", 508e6, "Q3-20 Q3-21", None, ""),
+        ("2020-01-01", "2020-12-31", 510e6, "K-20 K-21", 10.2e9, "K-22"),
+        ("2021-01-01", "2021-03-31", 512e6, "Q1-21 Q1-22", None, ""),
+        ("2021-01-01", "2021-06-30", 513e6, "Q2-21", 10.26e9, "Q2-22"),
+        ("2021-01-01", "2021-09-30", 514e6, "Q3-21", 10.28e9, "Q3-22"),
+        ("2021-01-01", "2021-12-31", 515e6, "K-21", 10.3e9, "K-22"),
+    ]
+    outstanding = [
+        (None, "2021-03-31", 511e6, "Q1-21", None, ""),
+        (None, "2021-06-30", 512e6, "Q2-21", None, ""),
+        (None, "2021-09-30", 513e6, "Q3-21", None, ""),
+        (None, "2021-12-31", 514e6, "K-21 Q1-22", 10.28e9, "Q2-22 Q3-22 K-22"),
+    ]
+    income = [  # dollars, which no split restates
+        ("2020-01-01", "2020-03-31", 2.535e9, "Q1-20 Q1-21", None, ""),
+        ("2020-01-01", "2020-06-30", 7.778e9, "Q2-20 Q2-21", None, ""),
+        ("2020-01-01", "2020-09-30", 14.109e9, "Q3-20 Q3-21", None, ""),
+        ("2020-01-01", "2020-12-31", 21.331e9, "K-20 K-21", 21.331e9, "K-22"),
+    ]
+
+    def entries(rows):
+        out = []
+        for start, end, before, before_in, after, after_in in rows:
+            for value, accns in ((before, before_in), (after, after_in)):
+                for accn in accns.split():
+                    form, filed = _SPLIT_FILINGS[accn]
+                    entry = {"val": value, "end": end, "accn": accn, "form": form, "filed": filed,
+                             "fy": int(filed[:4]), "fp": "FY" if form == "10-K" else accn[:2]}
+                    if start:
+                        entry["start"] = start
+                    out.append(entry)
+        return out
+
+    return {"facts": {"us-gaap": {
+        "EarningsPerShareDiluted": {"units": {"USD/shares": entries(eps)}},
+        "WeightedAverageNumberOfDilutedSharesOutstanding": {"units": {"shares": entries(diluted)}},
+        "CommonStockSharesOutstanding": {"units": {"shares": entries(outstanding)}},
+        "NetIncomeLoss": {"units": {"USD": entries(income)}},
+    }}}
+
+
+def test_a_years_quarters_are_on_the_split_basis_its_year_is_filed_on():
+    # BUG-082: each rung of a year's ladder comes from its latest filing, and a split restates only the filings after
+    # it. AMZN's FY2020 was restated by the 10-K for FY2022 (EPS 2.09) while its quarters never were (5.01, 10.31,
+    # 12.40), so Q4 2020, the year less nine months, read -25.63; FY2021's first quarter, from the 10-Q filed before
+    # the split, sat beside a restated half year, so Q2 2021 read -14.24.
+    quarterly = XBRLParser().extract_quarterly_financials(_split_restated_facts())
+    eps = {end: quarterly[end]["eps_diluted"] for end in sorted(quarterly) if end >= "2020"}
+    assert eps == {"2020-03-31": pytest.approx(0.2505), "2020-06-30": pytest.approx(0.5155),
+                   "2020-09-30": pytest.approx(0.62), "2020-12-31": pytest.approx(0.704),
+                   "2021-03-31": pytest.approx(0.7895), "2021-06-30": pytest.approx(0.7605),
+                   "2021-09-30": pytest.approx(0.30), "2021-12-31": pytest.approx(1.39)}
+    # FY2019, which no filing after the split reports, keeps its basis; dollars are never restated.
+    assert [quarterly[end]["eps_diluted"] for end in ("2019-03-31", "2019-12-31")] == [
+        7.09, pytest.approx(6.58)]
+    assert quarterly["2020-12-31"]["net_income"] == pytest.approx(21.331e9 - 14.109e9)
+
+
+def test_a_quarters_share_counts_are_on_its_years_basis():
+    quarterly = XBRLParser().extract_quarterly_financials(_split_restated_facts())
+    counts = {end: quarterly[end]["weighted_avg_shares_diluted"] for end in sorted(quarterly)}
+    assert all(500e6 <= count <= 510e6 for end, count in counts.items() if end < "2020")
+    assert all(10.1e9 <= count <= 10.4e9 for end, count in counts.items() if end >= "2020"), counts
+    # A balance at a quarter's end: Q1-Q3 2021 from their own 10-Qs, before the split; the year's end from the
+    # filings after it.
+    assert {end: quarterly[end]["shares_outstanding"] for end in sorted(quarterly)
+            if "shares_outstanding" in quarterly[end]} == {
+        "2021-03-31": 10.22e9, "2021-06-30": 10.24e9, "2021-09-30": 10.26e9, "2021-12-31": 10.28e9}
+
+
+def test_a_ratio_one_count_alone_shows_is_no_split():
+    # A split restates every count the later filings report; one count that two filings give at 2:1 (a correction, a
+    # mis-tag) restates nothing else.
+    facts = _split_restated_facts()
+    us_gaap = facts["facts"]["us-gaap"]
+    for tag in ("EarningsPerShareDiluted", "CommonStockSharesOutstanding"):
+        us_gaap.pop(tag)
+    diluted = us_gaap["WeightedAverageNumberOfDilutedSharesOutstanding"]["units"]["shares"]
+    diluted[:] = [e for e in diluted if e["filed"] < "2022-07-29"
+                  or (e["start"], e["end"]) == ("2020-01-01", "2020-12-31")]
+    for e in diluted:
+        if e["filed"] >= "2022-07-29":
+            e["val"] = 2 * 510e6
+    quarterly = XBRLParser().extract_quarterly_financials(facts)
+    assert quarterly["2020-03-31"]["weighted_avg_shares_diluted"] == 506e6
+
+
+def test_a_reverse_mergers_restated_history_is_no_split():
+    # TMUS: the 2013 reverse merger replaced MetroPCS's history with T-Mobile USA's, whose deemed count (535,286,077 for
+    # every period) runs 1.46 to 1.49 times MetroPCS's. A split restates each count by its ratio exactly, so this is no
+    # split, and MetroPCS's quarters stay as it filed them.
+    def count(val, end, form, filed):
+        return {"val": val, "start": "2012-01-01", "end": end, "form": form, "filed": filed, "accn": filed,
+                "fy": 2012, "fp": "FY" if form == "10-K" else "Q"}
+
+    basic = [count(362_718_613, "2012-03-31", "10-Q", "2012-04-26"),
+             count(362_991_209, "2012-06-30", "10-Q", "2012-07-26"),
+             count(363_190_434, "2012-09-30", "10-Q", "2012-10-30"),
+             count(363_449_061, "2012-12-31", "10-K", "2013-03-01"),
+             count(535_286_077, "2012-06-30", "10-Q", "2013-08-08"),
+             count(535_286_077, "2012-09-30", "10-Q", "2013-11-07"),
+             count(535_286_077, "2012-12-31", "10-K", "2014-02-25")]
+    quarterly = XBRLParser().extract_quarterly_financials(
+        {"facts": {"us-gaap": {"WeightedAverageNumberOfSharesOutstandingBasic": {"units": {"shares": basic}}}}})
+    assert quarterly["2012-03-31"]["weighted_avg_shares_basic"] == 362_718_613
+
+
 def _currency_switcher(before, after, switch_fy):
     """A 20-F filer reporting in *before* through FY{switch_fy - 1} and in *after* from FY{switch_fy}: each annual
     report gives its year and the two before it (its balance sheet, two) in its own currency, and one in a currency

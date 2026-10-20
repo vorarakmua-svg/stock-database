@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 2 · P3 39 · NEEDS-USER 11 · Verified: 47
+**Open:** P0 0 · P1 0 · P2 2 · P3 39 · NEEDS-USER 11 · Verified: 48
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -649,12 +649,13 @@ Expected: each fix's rule held by a test.   Actual: these rules are held by none
 Impact today: none; the next change to these rules can break them unseen.
 
 ### BUG-082 [P2][VALID] The quarterly ladder mixes split bases: a split restates the annual figures but not the quarters filed before it
-Status: OPEN
-Found: iteration 56, checking BUG-074's remaining misses (`qa/evidence/iter56-bug082-repro.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 62)
+Found: iteration 56, checking BUG-074's remaining misses (`qa/evidence/iter56-bug082-repro.txt`) | Fixed: iteration 62 (see LOG) | Regression tests: `tests/test_xbrl_parser.py::test_a_years_quarters_are_on_the_split_basis_its_year_is_filed_on`, `::test_a_quarters_share_counts_are_on_its_years_basis`, `::test_a_ratio_one_count_alone_shows_is_no_split`, `::test_a_reverse_mergers_restated_history_is_no_split`, `tests/test_ttm.py::test_a_trailing_year_across_a_split_is_on_its_latest_quarters_basis`, `tests/test_fetcher_concurrency.py::test_a_collected_quarterly_record_and_its_trailing_years_sit_on_one_split_basis`
 Repro: each quarter's figures come from its latest filing, and a split restates only the filings after it. AMZN (20:1, June 2022): FY2020's annual EPS is the restated 2.09 and its count 10.198B, while its quarters keep the pre-split EPS 5.01, 10.31 and 12.40 and counts of 0.51B, so Q4 2020's EPS, the year less nine months, reads -25.63 for a profitable quarter. Over every cached filer, 253 of 7,615 quarterly counts stay more than 2x off their fiscal year's average, mostly from such splits (AMZN 2020, NVDA 2009). The annual record's valuation inputs put every year on the price's basis (BUG-047, BUG-048, BUG-059, BUG-060); nothing does that for the quarterly record or the TTM rows built on it.
 Expected: a quarter's per-share figures and counts on one split basis with its year, and a fourth quarter derived from figures on the same basis.   Actual: mixed bases, and a fourth quarter that is the difference of two of them.
 Impact today: the statements tab's quarterly and TTM views, `financials_quarterly` and `financials_ttm`, the API and the exports, for the years around a split; no valuation (the models read annual rows).
 
+Fix: the parser reads the splits from the filings themselves (`_split_restatements`): a share count two filings give for one period at a simple ratio of 3:2 or more either way, within 0.5%, and at least two such counts in overlapping windows; a filing's basis is the product of the splits it came after. A probe on the cached filers came first (`qa/evidence/iter62-bug082-probe.txt`): of the 38 splits found, 37 are Yahoo's, and the other is Arconic's 1-for-3 of 2016, which Yahoo's history lacks; every Yahoo split since 2010 without one has no restated filing in the cache. Each quarter's per-share figures and counts then go onto the basis of its year's annual figures (that of the latest filing of the year's full-year figure, as `financials_annual` has them) before Q4 is derived; quarter-end counts onto their year end's; and a trailing year onto its latest quarter's, from the bases the parser hands over in `_split_levels`, which the fetcher pops before anything is stored. A first version took ratios within 2%, and the impact run showed it moving TMUS's MetroPCS quarters by the 2013 reverse merger (T-Mobile USA's deemed count, 1.46 to 1.49 times MetroPCS's, read as 3:2), so the tolerance went to 0.5%, which the counts' rounding allows and which keeps every real split, with a test RED first. Six tests (AMZN's own figures: Q4 2020 -25.63 and Q2 2021 -14.24 before, 0.704 and 0.7605 after), RED then GREEN; eleven mutants, ten of which fail a test, and the one that survives (a year's basis from its latest rung, not its full-year one) is equivalent in practice (`qa/evidence/iter62-bug082-{red,green,mutants}.txt`). Over the 126 cached filers collected offline through the fetcher (`qa/evidence/iter62-bug082-impact.txt`): 28 change, all with splits in their filings, and no annual figure; quarterly diluted counts more than 2x off their year's 214 -> 21 (the rest scale errors, now BUG-092, IPO years, and Citigroup's 2009 issuance); quarters whose EPS exceeds the whole year's 154 -> 80, none new; nothing reaches the stored record. The README describes the basis.
 ### BUG-083 [P1][STORE] A first write that fails after the upgrade loses the dividend-adjusted flags for good, and BUG-075's prices return
 Status: VERIFIED (iteration 60)
 Found: iteration 58 by code review 8 (C1), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: iteration 60 (see LOG) | Regression tests: `tests/test_store_migration.py::test_a_first_export_that_fails_keeps_the_flags` (a failed write, Ctrl+C), `::test_a_migration_interrupted_while_flagging_is_undone_whole`
@@ -711,6 +712,13 @@ Status: OPEN
 Found: iteration 58 by code review 8 (M7), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
 Repro: README.md:590 describes `price_bars` as "daily OHLCV, also used for the ^GSPC S&P 500 benchmark": nothing on market prices since BUG-075, Yahoo's adjusted prices in bars stored before, or the flag, so an SQL user computing returns gets price returns for re-collected tickers and total returns for the rest.
 Expected: the table's basis and the flag described.   Actual: as above.
+
+### BUG-092 [P2][VALID] The quarterly ladder differences share counts filed at different scales, so a quarter's count comes out negative or tens of times its year's
+Status: OPEN
+Found: iteration 62, checking BUG-082's impact (`qa/evidence/iter62-bug082-impact.txt`); code review 9 reported it too (M1, `qa/evidence/review9-report.md`) | Fixed: — | Regression test: —
+Repro: a year's rungs come from their latest filings, and a later filing can re-tag a count at another scale. MCD's 10-Ks for FY2023 and FY2024 give FY2021's and FY2022's diluted counts as 751.8 and 741.3 (millions) beside nine months of 751.9M and 743.0M in units, so Q4 2021 reads -2,223.0M, Q4 2022 -2,196.7M, and their trailing years 8.17M and 8.10M against years of 751.8M and 741.3M; COP's Q1 and year of 2019 are in thousands (Q4 -3,339.5M, TTM 12.88M against 1,123.5M); NVDA's FY2009-10 rungs in thousands; KO's 2017 and T's 2009 quarters in millions (Q4 16.9B and 23.4B against years of 4.3B and 5.9B); TXN's 2009 nine months in millions. `share_scale` puts the annual record right, and a quarter only where its EPS implies the count, never a derived one or one at or below zero.
+Expected: a year's rungs on one scale before Q4 is derived (share_scale's rule applied to the rungs), and no count at or below zero.   Actual: as above.
+Impact today: those years' quarterly and TTM counts in the statements tab, the API and the exports; no valuation (the models read annual rows). BX's 2015 and 2017 rungs differ by a restated count basis (1.88x), not a scale.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

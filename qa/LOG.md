@@ -1182,3 +1182,21 @@ Commit: 2d9b9dc chore(qa): oracle takes Yahoo's series back to the price's basis
 commit) fix(valuation): Yahoo's series go back to the price's basis without a filing date
 Next: BUG-082 (P2), then BUG-084 (P2). This is the fifth fix since review 8's range (2bb2a24, 80ea6d9, 0b061c0,
 1d762ba, this), so code review 9 (fea2b70..this commit) runs in the background; record it when it reports.
+
+## Iteration 62: 2026-10-20 12:26: fix
+Picked: BUG-082, the oldest open P2 (no P0 or P1 open). CI: f0690bc ✓.
+Did: a probe first: the filings show their own split restatements (a count two filings give for one period at a
+simple ratio), 37 of them Yahoo's splits on the cached filers. TDD (four tests RED, on AMZN's own figures: Q4 2020
+-25.63, Q2 2021 -14.24): each quarter's per-share figures and counts go onto the basis of its year's annual figures
+before Q4 is derived, and a trailing year onto its latest quarter's. The impact run showed TMUS's MetroPCS quarters
+moved by its reverse merger, so the count tolerance went from 2% to 0.5% (a test RED first), which keeps every real
+split. Eleven mutants: ten fail a test, and the survivor is equivalent in practice. Over 126 cached filers collected
+offline, 28 change and no annual figure does; quarterly counts more than 2x off their year's 214 -> 21. Code review 9
+reported meanwhile (`qa/evidence/review9-report.md`): a proposed P1 (C1: a quote refresh after a split values the
+models on the old basis against the new price), two P2s and P3s, all unverified yet.
+Evidence: `qa/evidence/iter62-bug082-{probe,red,green,mutants,impact}.txt`, `qa/evidence/review9-report.md`
+Result: BUG-082 VERIFIED; new BUG-092 (P2: a year's counts filed at different scales); VALID-06 → FAIL→BUG-092.
+Gates: ruff ✓ mypy ✓ pytest 1037 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(parsers): a year's quarters are on the split basis its year is filed on
+Next: record code review 9 (re-run each claim first), then its C1 at once if it holds as a P1. Fixes since review
+9's range: 1 (this).

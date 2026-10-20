@@ -6,7 +6,8 @@ import re
 import statistics
 from collections import Counter, defaultdict
 from datetime import date, datetime
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from fractions import Fraction
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, DURATION, INSTANT, SIGN_ABS
 
@@ -159,6 +160,64 @@ def _cash_adds_up(sections: List[float], period: Dict[str, Any]) -> bool:
     scale = max(abs(s) for s in sections) or 1.0
     return any(abs(sum(sections) + extra - period["net_change_in_cash"]) <= 0.01 * scale
                for extra in (0.0, fx, discontinued, fx + discontinued))
+
+
+#: Units a share split restates: per-share figures and share counts (BUG-082).
+_SPLIT_UNITS = ("USD/shares", "shares")
+#: A split's ratio, new shares per old, is a simple fraction of 3:2 or more either way,
+#: up to 50:1 (CMG's of 2024). A split restates each count by it exactly, so two filings'
+#: counts for a period give it within 0.5%, their rounding; a reverse merger's restated
+#: history doesn't (TMUS's, 1.46 to 1.49 times MetroPCS's counts, isn't 3:2).
+_SPLIT_RANGE = (1.45, 52.0)
+_SPLIT_TOLERANCE = 0.005
+
+
+def _split_ratio(ratio: float) -> Optional[float]:
+    """The share split a later filing's count over an earlier one's for the same period
+    reads as (new shares per old), or None."""
+    for x, inverse in ((ratio, False), (1 / ratio, True)):
+        if _SPLIT_RANGE[0] <= x <= _SPLIT_RANGE[1]:
+            fraction = float(Fraction(x).limit_denominator(4))
+            if abs(fraction / x - 1) <= _SPLIT_TOLERANCE:
+                return 1 / fraction if inverse else fraction
+    return None
+
+
+def _split_restatements(us_gaap: Dict[str, Any]) -> List[Tuple[str, str, float]]:
+    """The share splits the filer's own filings restated: ``[(the last filing date on the
+    old basis, the first on the new one, new shares per old share)]``.
+
+    A split restates every share count and per-share figure the filings after it report,
+    so a count two filings give for one period at a split's ratio shows one between them.
+    Two such counts in overlapping windows make a split: on the cached filers, 37 of the
+    38 found are Yahoo's splits, and the other is Arconic's 1-for-3 of 2016, which Yahoo's
+    history lacks. A lone ratio is a correction or a mis-tag, which restates nothing else.
+    """
+    pairs: List[Tuple[str, str, float]] = []
+    for field in CANONICAL_FIELDS:
+        if field.xbrl_unit != "shares":
+            continue
+        for tag in field.tags:
+            by_period: Dict[Tuple[Any, Any], Dict[str, float]] = defaultdict(dict)
+            for entry in us_gaap.get(tag, {}).get("units", {}).get("shares", []):
+                val, filed = entry.get("val"), entry.get("filed")
+                if entry.get("form", "") in _QUARTERLY_FORMS and filed and isinstance(val, (int, float)) and val > 0:
+                    by_period[(entry.get("start"), entry.get("end"))].setdefault(filed, float(val))
+            for by_filed in by_period.values():
+                history = sorted(by_filed.items())
+                for (before, old), (after, new) in zip(history, history[1:]):
+                    ratio = _split_ratio(new / old)
+                    if ratio:
+                        pairs.append((before, after, ratio))
+    splits: List[List[Any]] = []  # [last old-basis filing, first new-basis filing, ratio, counts]
+    for before, after, ratio in sorted(pairs, key=lambda p: (p[1], p[0])):
+        for split in splits:
+            if split[2] == ratio and before < split[1] and split[0] < after:
+                split[0], split[1], split[3] = max(split[0], before), min(split[1], after), split[3] + 1
+                break
+        else:
+            splits.append([before, after, ratio, 1])
+    return [(before, after, ratio) for before, after, ratio, counts in splits if counts >= 2]
 
 
 def explain_no_annual_financials(facts: Optional[Dict[str, Any]],
@@ -453,9 +512,17 @@ class XBRLParser:
         # read the same here: {(field, period end): (the later filing's figure, the one kept)}.
         restored = {(r["field"], r["period_end"]): (r["dropped"], r["kept"])
                     for period in self._annual_periods(us_gaap).values() for r in period.get("_repairs", [])}
+        # The split basis a filing's figures are on: the product of the splits it came
+        # after. Each quarter's per-share figures and counts go onto their year's, and
+        # its basis is kept in ``_split_levels`` for the trailing years (BUG-082).
+        splits = _split_restatements(us_gaap)
+        level: Optional[Callable[[str], float]] = (
+            (lambda filed: math.prod(ratio for _, after, ratio in splits if after <= filed)) if splits else None)
 
-        self._collect_instant_checkpoints(us_gaap, periods, frames, restored)
-        self._collect_discrete_flows(us_gaap, periods, frames, restored)
+        instants_filed = self._collect_instant_checkpoints(us_gaap, periods, frames, restored)
+        self._collect_discrete_flows(us_gaap, periods, frames, restored, level)
+        if level is not None:
+            self._instants_on_year_basis(periods, instants_filed, level)
         self._apply_quarter_calendar(periods, frames)
 
         sorted_ends = sorted(periods.keys(), reverse=True)
@@ -466,9 +533,10 @@ class XBRLParser:
     def _collect_instant_checkpoints(
         self, us_gaap: Dict[str, Any], periods: Dict[str, Dict[str, Any]],
         frames: Dict[str, set], restored: Dict[Tuple[str, str], Tuple[float, float]],
-    ) -> None:
+    ) -> Dict[Tuple[str, str], str]:
         """Balance-sheet (instant) values at every quarter-end (10-Q and 10-K), with the
-        year-end figures the annual record puts back (*restored*)."""
+        year-end figures the annual record puts back (*restored*). Returns when each share
+        count was filed: ``{(period end, field): filed}``."""
         best: Dict[Tuple[str, str], Tuple[int, str]] = {}
         for field in CANONICAL_FIELDS:
             if field.kind != INSTANT:
@@ -499,10 +567,48 @@ class XBRLParser:
             value = periods.get(end, {}).get(key)
             if isinstance(value, (int, float)) and _agree(value, dropped):
                 periods[end][key] = kept
+        split_keys = {f.key for f in CANONICAL_FIELDS if f.kind == INSTANT and f.xbrl_unit == "shares"}
+        return {(end, key): filed for (end, key), (_, filed) in best.items() if key in split_keys}
+
+    def _instants_on_year_basis(self, periods: Dict[str, Dict[str, Any]],
+                                filed_at: Dict[Tuple[str, str], str], level: Callable[[str], float]) -> None:
+        """Put each quarter-end share count on its year's split basis, that of the year's
+        latest-filed one: its year end's, which the annual record has (BUG-082)."""
+        years: Dict[Tuple[Any, str], List[str]] = defaultdict(list)
+        for (end, key) in filed_at:
+            fy = periods.get(end, {}).get("fiscal_year")
+            if fy is not None:
+                years[(fy, key)].append(end)
+        for (_, key), ends in years.items():
+            basis = level(max(filed_at[(end, key)] for end in ends))
+            for end in ends:
+                value = periods[end].get(key)
+                if isinstance(value, (int, float)):
+                    periods[end][key] = value * basis / level(filed_at[(end, key)])
+                    periods[end].setdefault("_split_levels", {})[key] = basis
+
+    def _year_basis(self, chosen: Dict[Tuple[str, str], Tuple[int, str, Any]],
+                    level: Callable[[str], float]) -> Dict[Tuple[str, str], float]:
+        """The split basis each of a field's figures goes onto: its year's, that of the
+        latest filing of the year's full-year figure (else of its latest), which is the
+        annual record's (BUG-082). A figure no year-to-date ladder reaches keeps its own."""
+        ladders: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
+        for (start, end), (_p, filed, _v) in chosen.items():
+            ladders[start].append((end, filed))
+        year_filed: Dict[str, str] = {}  # period end -> its year's latest filing
+        for start, rungs in ladders.items():
+            if len(rungs) < 2:
+                continue
+            full_year = [filed for end, filed in rungs if (self._span(start, end) or 0) >= _FULL_YEAR_MIN_DAYS]
+            anchor = max(full_year) if full_year else max(filed for _, filed in rungs)
+            for end, _ in rungs:
+                year_filed[end] = max(year_filed.get(end, ""), anchor)
+        return {(start, end): level(year_filed.get(end, filed)) for (start, end), (_p, filed, _v) in chosen.items()}
 
     def _collect_discrete_flows(
         self, us_gaap: Dict[str, Any], periods: Dict[str, Dict[str, Any]],
         frames: Dict[str, set], restored: Dict[Tuple[str, str], Tuple[float, float]],
+        level: Optional[Callable[[str], float]] = None,
     ) -> None:
         """Discrete quarterly flows via cumulative-ladder differencing.
 
@@ -512,6 +618,8 @@ class XBRLParser:
         guarding that each increment spans ~one quarter so missing rungs don't produce
         multi-quarter blobs. A full-year rung reads the figure the annual record puts
         back (*restored*), so the fourth quarter is the restored year less nine months.
+        With *level* (the split basis of a filing date), per-share figures and counts go
+        onto their year's basis first.
         """
         for field in CANONICAL_FIELDS:
             if field.kind != DURATION:
@@ -549,6 +657,19 @@ class XBRLParser:
                 elif field.sign != SIGN_ABS and _agree(val, dropped):
                     chosen[(start, end)] = (priority, filed, kept)
 
+            # A split restates only the filings after it, so a year's rungs can sit on two
+            # bases: AMZN's FY2020 from a 10-K after its 20:1 split, its nine months from a
+            # 10-Q before, and Q4 read -25.63 (BUG-082). Each goes onto its year's basis.
+            shares = field.xbrl_unit == "shares"
+            basis: Dict[Tuple[str, str], float] = {}
+            if level is not None and field.xbrl_unit in _SPLIT_UNITS:
+                basis = self._year_basis(chosen, level)
+                for key, year_level in basis.items():
+                    priority, filed, val = chosen[key]
+                    if isinstance(val, (int, float)):
+                        moved = year_level / level(filed)
+                        chosen[key] = (priority, filed, val * moved if shares else val / moved)
+
             # Group by fiscal-period start -> cumulative ladders.
             ladders: Dict[str, List[Tuple[str, Any]]] = defaultdict(list)
             for (start, end), (_p, _f, val) in chosen.items():
@@ -557,19 +678,21 @@ class XBRLParser:
             # A weighted-average share count isn't additive (BUG-074): a quarter's is its
             # own 3-month figure, which 10-Qs tag, and otherwise (Q4: 10-Ks don't tag it)
             # the year-to-date share-days less the previous rung's, over the quarter's days.
-            shares = field.xbrl_unit == "shares"
-            own: Dict[str, Tuple[Any, str]] = {}
+            own: Dict[str, Tuple[Any, str, Optional[float]]] = {}
             for (start, end), (priority, _f, val) in chosen.items() if shares else ():
                 days = self._span(start, end)
                 if isinstance(val, (int, float)) and days is not None \
                         and _QUARTER_MIN_DAYS <= days <= _QUARTER_MAX_DAYS:
-                    own[end] = (val, field.tags[priority])
+                    own[end] = (val, field.tags[priority], basis.get((start, end)))
 
-            def assign(end: str, value: Any, source: str, start: str, ladder_fy: Optional[int]) -> None:
+            def assign(end: str, value: Any, source: str, start: str, ladder_fy: Optional[int],
+                       split_level: Optional[float]) -> None:
                 pd_ = periods.setdefault(end, {"period_end": end})
                 if field.key not in pd_:
                     pd_[field.key] = value
                     pd_.setdefault("_source_tags", {})[field.key] = source
+                    if split_level is not None:
+                        pd_.setdefault("_split_levels", {})[field.key] = split_level
                 pd_.setdefault("fiscal_quarter", self._fiscal_quarter_from_span(self._span(start, end)))
                 pd_.setdefault("fiscal_year", ladder_fy)
 
@@ -583,7 +706,8 @@ class XBRLParser:
                 for end, val in points:
                     inc_span = self._span(prev_end, end)
                     if end in own:
-                        assign(end, *own[end], start, ladder_fy)
+                        own_val, own_tag, own_level = own[end]
+                        assign(end, own_val, own_tag, start, ladder_fy, own_level)
                     elif isinstance(val, (int, float)) and inc_span is not None \
                             and _QUARTER_MIN_DAYS <= inc_span <= _QUARTER_MAX_DAYS:
                         prev = prev_val if isinstance(prev_val, (int, float)) else 0.0
@@ -594,12 +718,14 @@ class XBRLParser:
                             discrete = val - prev
                         if field.sign == SIGN_ABS:
                             discrete = abs(discrete)
-                        assign(end, discrete, "derived:ytd_diff", start, ladder_fy)
+                        assign(end, discrete, "derived:ytd_diff", start, ladder_fy, basis.get((start, end)))
                     prev_end, prev_val = end, val  # (a gap resets the baseline)
-            for end, (value, tag) in own.items():  # quarters no year-to-date ladder reaches
+            for end, (value, tag, own_level) in own.items():  # quarters no year-to-date ladder reaches
                 if end in periods and field.key not in periods[end]:
                     periods[end][field.key] = value
                     periods[end].setdefault("_source_tags", {})[field.key] = tag
+                    if own_level is not None:
+                        periods[end].setdefault("_split_levels", {})[field.key] = own_level
 
     def _apply_quarter_calendar(
         self, periods: Dict[str, Dict[str, Any]], frames: Dict[str, set],

@@ -1,5 +1,7 @@
 """Tests for the trailing-twelve-month (TTM) series."""
 
+import pytest
+
 from src.parsers.ttm import compute_ttm
 
 
@@ -50,4 +52,19 @@ def test_ttm_share_counts_are_the_four_quarters_average():
     ttm = compute_ttm(q)
     assert ttm["2024-12-31"]["weighted_avg_shares_diluted"] == 4.15e9
     assert ttm["2024-12-31"]["net_income"] == 10 + 20 + 30 + 40
+
+
+def test_a_trailing_year_across_a_split_is_on_its_latest_quarters_basis():
+    # BUG-082: each quarter's per-share figures and counts sit on the basis its own year is filed on, so a trailing year
+    # that reaches back past a 20:1 split's restatement put three old-basis quarters beside one new-basis quarter.
+    q = _quarters()
+    for end, eps, count in zip(sorted(q), (5.0, 6.0, 6.0, 6.0, 0.3), (500e6, 500e6, 500e6, 500e6, 10.1e9)):
+        q[end].update(eps_diluted=eps, weighted_avg_shares_diluted=count)
+    levels = {end: {"eps_diluted": 1.0, "weighted_avg_shares_diluted": 1.0} for end in q}
+    levels["2025-03-31"] = {"eps_diluted": 20.0, "weighted_avg_shares_diluted": 20.0}
+    ttm = compute_ttm(q, levels)
+    assert ttm["2025-03-31"]["eps_diluted"] == pytest.approx(3 * 6.0 / 20 + 0.3)
+    assert ttm["2025-03-31"]["weighted_avg_shares_diluted"] == pytest.approx((3 * 500e6 * 20 + 10.1e9) / 4)
+    assert ttm["2025-03-31"]["net_income"] == 20 + 30 + 40 + 50  # dollars as they are
+    assert ttm["2024-12-31"]["eps_diluted"] == 5.0 + 6.0 + 6.0 + 6.0  # one basis already
 

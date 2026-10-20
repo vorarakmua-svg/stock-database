@@ -130,6 +130,8 @@ class StockDataFetcher:
         self.logger.info(f"Fetching data for {ticker}")
 
         stock = StockData(ticker=ticker)
+        # Each quarter's split basis, for the trailing years; not a figure to store (BUG-082).
+        split_levels: Dict[str, Dict[str, float]] = {}
 
         # Fetch Yahoo Finance data
         if include_yahoo:
@@ -164,6 +166,8 @@ class StockDataFetcher:
                     quarterly = self.xbrl_parser.extract_quarterly_financials(
                         facts, quarters_back=(years_back * 4 if years_back else None)
                     )
+                    split_levels = {end: period.pop("_split_levels") for end, period in quarterly.items()
+                                    if "_split_levels" in period}
                     vintages = self.xbrl_parser.extract_annual_vintages(
                         facts, years_back=years_back
                     )
@@ -231,7 +235,7 @@ class StockDataFetcher:
         # Clean, derive identities, and build the TTM series.
         if stock.financials_annual or stock.financials_quarterly:
             try:
-                self._clean_and_derive(stock)
+                self._clean_and_derive(stock, split_levels)
             except Exception as e:
                 self.logger.warning(f"Data cleaning error for {ticker}: {e}")
                 stock.add_warning(f"Data cleaning: {str(e)}")
@@ -302,8 +306,10 @@ class StockDataFetcher:
         )
         stock.merge_calculated_metrics(metrics)
 
-    def _clean_and_derive(self, stock: StockData) -> None:
-        """Derive identities, validate/coerce each period, and build the TTM series."""
+    def _clean_and_derive(self, stock: StockData,
+                          split_levels: Optional[Dict[str, Dict[str, float]]] = None) -> None:
+        """Derive identities, validate/coerce each period, and build the TTM series
+        (*split_levels*: each quarter's split basis, the parser's ``_split_levels``)."""
         for attr in ("financials_annual", "financials_quarterly"):
             periods = getattr(stock, attr)
             if not periods:
@@ -333,7 +339,7 @@ class StockDataFetcher:
                 apply_derivations(period)
 
         if stock.financials_quarterly:
-            stock.financials_ttm = compute_ttm(stock.financials_quarterly)
+            stock.financials_ttm = compute_ttm(stock.financials_quarterly, split_levels)
 
     @staticmethod
     def _no_annual_financials(ticker: str, sec_data: Dict[str, Any]) -> str:

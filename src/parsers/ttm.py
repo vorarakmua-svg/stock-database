@@ -15,6 +15,8 @@ _FLOW_KEYS = [f.key for f in CANONICAL_FIELDS if f.kind == DURATION]
 _INSTANT_KEYS = [f.key for f in CANONICAL_FIELDS if f.kind == INSTANT]
 #: Weighted-average share counts: a trailing year's is the four quarters' average, not their sum (BUG-074).
 _AVERAGE_KEYS = frozenset(f.key for f in CANONICAL_FIELDS if f.kind == DURATION and f.xbrl_unit == "shares")
+#: Per-share figures, which a share split restates like the counts (BUG-082).
+_PER_SHARE_KEYS = frozenset(f.key for f in CANONICAL_FIELDS if f.kind == DURATION and f.xbrl_unit == "USD/shares")
 
 _QUARTER_MIN_DAYS = 80
 _QUARTER_MAX_DAYS = 100
@@ -38,12 +40,17 @@ def _consecutive(ends: List[str]) -> bool:
     return True
 
 
-def compute_ttm(quarterly: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+def compute_ttm(quarterly: Dict[str, Dict[str, Any]],
+                split_levels: Optional[Dict[str, Dict[str, float]]] = None) -> Dict[str, Dict[str, Any]]:
     """Build a trailing-twelve-month series from discrete quarterly periods.
 
     Args:
         quarterly: ``{period_end: {canonical_field: value, ...}}`` of *discrete*
             quarters (as produced by ``XBRLParser.extract_quarterly_financials``).
+        split_levels: each quarter's split basis per field (``{period_end: {field:
+            level}}``, the parser's ``_split_levels``). A quarter's per-share figures and
+            counts are on its own year's basis, so a trailing year's go onto its latest
+            quarter's before they add up (BUG-082).
 
     Returns:
         ``{period_end: {flow fields summed over trailing 4 quarters (weighted-average
@@ -72,6 +79,11 @@ def compute_ttm(quarterly: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any
         for key in _FLOW_KEYS:
             vals = [quarterly[w].get(key) for w in window]
             if all(isinstance(v, (int, float)) for v in vals):
+                if split_levels and (key in _AVERAGE_KEYS or key in _PER_SHARE_KEYS):
+                    last = split_levels.get(end, {}).get(key, 1.0)
+                    moved = [last / split_levels.get(w, {}).get(key, 1.0) for w in window]
+                    vals = [float(v) * m if key in _AVERAGE_KEYS else float(v) / m
+                            for v, m in zip(vals, moved) if isinstance(v, (int, float))]
                 total = sum(v for v in vals if isinstance(v, (int, float)))
                 row[key] = total / len(vals) if key in _AVERAGE_KEYS else total
 
