@@ -909,3 +909,20 @@ and L20; BUG-020 notes three more filers.
 Gates: ruff ✓ mypy ✓ pytest 969 passed (1 known warning); no code changed | CI: pending for this push
 Commit: (this commit) chore(qa): discovery VALID-02, -03, -04, -12; later filings' tagging errors win
 Next: BUG-061 (P2), unless code review 6 reports first.
+
+## Iteration 48: 2026-10-20 07:56: review
+Picked: BUG-061 (the only open P2), then code review 6 reported mid-iteration with two proposed P1s, before any code
+changed; so this iteration records the review (§4.6), and BUG-061 waits behind the P1s. CI: 3eee7b6 ✓.
+Did: saved the report (`qa/evidence/review6-report.md`) and re-ran every claim on an archive of 3eee7b6 with the
+reviewer's offline scripts (SEC from the read-only caches, Yahoo off, the rate stubbed). All hold on today's code: the
+ADR and convenience-translation demos (ARM as a 5-share ADS: DCF, Graham and Lynch unchanged beside a 5x price; TSM's
+facts relabelled as US GAAP: 10 years kept, median $20.40 against $421.70), the failed-submissions demos (PLD's FFO per
+share and P/FFO band, JPM's NIM and efficiency ratio, CB's combined ratio wiped from every stored year), the IFRS
+switcher (FY2015-19 valued, no note), and M1-M6. Both surviving mutants pass the full suite (969 passed each).
+Evidence: `qa/evidence/iter48-review6-rerun.txt`, `qa/evidence/review6-report.md`
+Result: new BUG-064 (P1, I2), BUG-065 (P1, I1), BUG-066 (P2, I3), BUG-067 to BUG-072 (P3: M1-M7), Q8. GATHER-02 →
+FAIL→BUG-065; GATHER-06 → FAIL→BUG-064.
+Gates: ruff ✓ mypy ✓ pytest 969 passed (1 known warning); no code changed | CI: pending for this push
+Commit: (this commit) chore(qa): record code review 6; ADRs, convenience translations and a wiping failure path
+Next: BUG-064 (P1: keep the stored sector when the submissions request fails), then BUG-065 (P1; oracle first), then
+BUG-061 and BUG-066 (P2). Fixes since review 6's range: 3 (65a0602, 72568ea, 144dcdf).

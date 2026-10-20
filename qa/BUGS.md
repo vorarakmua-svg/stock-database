@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 25 · NEEDS-USER 10 · Verified: 34
+**Open:** P0 0 · P1 2 · P2 2 · P3 31 · NEEDS-USER 11 · Verified: 34
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -374,6 +374,7 @@ Notes: since iteration 38 the run says why: "it files as a foreign issuer (20-F,
 
 Fix: a foreign issuer's annual report (20-F, 20-F/A, 40-F, 40-F/A) counts as annual for the annual record, the vintages and the unmapped-tag worklist. A filer reporting in another currency would then resolve only its share counts (the parser reads each field in its dollar unit, so nothing is mixed), so a record without a single dollar figure is dropped and the run explains it: "it reports in CNY (20-F), which isn't converted to dollars". A 6-K-only filer reads "it has filed no annual report (20-F) yet". Impact (`qa/evidence/iter40-bug043-impact.txt`): of 143 cached companyfacts files (the user's 126 and the golden basket's), 142 records are unchanged and ARM goes from 0 to 6 fiscal years. A live ARM collection (`iter40-bug043-e2e.txt`) stores FY2021–26 (FY2025: revenue $4,007M, net income $792M, diluted EPS 0.75, as reported) and values it: DCF $15.27, Graham $12.18, Lynch $10.21, multiples $151.28 (median $13.73 against $228.05); the oracle agrees at both levels (0 of 4 beyond 0.5%), and the FA tab shows the six years with no gap note. Six mutants each fail a test.
 Notes: ARM's 6-K interim reports still aren't read, so it has no quarterly or TTM rows (BUG-058).
+Iteration 48: code review 6 found that 20-F records reach the models without the ADS ratio, and convenience translations get non-USD reporters in (BUG-065); a move to IFRS leaves a stale record (BUG-066).
 ### BUG-044 [P2][GATHER] A filer whose SEC data yields no financials gets no explanation (TSM, ARM)
 Status: VERIFIED (iteration 38)
 Found: iteration 37 via VAL-09 (lead L1) | Fixed: iteration 38, with BUG-042 (see LOG) | Regression tests: `tests/test_xbrl_parser.py::test_an_empty_sec_record_says_why`, `::test_a_10k_filer_whose_facts_cover_no_full_year_gets_the_last_reason`, `tests/test_sqlite_store.py::test_a_collection_run_keeps_its_warnings`, `tests/test_web_workstation.py::test_the_fa_and_val_tabs_say_why_sec_gave_no_annual_financials`, `::test_the_tabs_render_on_a_database_from_before_runs_kept_warnings`, `tests/test_web_api_quality.py::test_runs_give_their_warnings_as_a_list`
@@ -390,6 +391,7 @@ Expected (GATHER-06): a failed request is an error for that ticker, and the summ
 
 Fix: `StockData.merge_sec_data` records each failed part as an error ("SEC EDGAR companyfacts: …", "SEC EDGAR submissions: …"), so `error_count` and the run summary count it, and `SECHandler.fetch_all` logs "SEC data for T is incomplete" instead of "Successfully fetched SEC data" after a failed part. The exporters don't branch on errors, so nothing else changes. The real CLI (`src.main.main`) with companyfacts blocked by a stubbed 403 now prints "Successfully fetched: 0 / With errors: 1" (before: 1 and 0), stores `error_count` 1 and the error in the JSON, and the FA note names the 403 (`qa/evidence/iter41-bug045-e2e.txt`). Three mutants each fail a test.
 Notes: that run still exits 0 with every ticker failed: lead L18 (CLI-01).
+Iteration 48: code review 6 found that on this failure path a failed submissions request also wipes a financial company's sector ratios (BUG-064).
 ### BUG-046 [P3][CLI] `stock-web --help` starts the server instead of printing usage
 Status: OPEN
 Found: iteration 38 (looking up the server's settings) | Fixed: — | Regression test: —
@@ -516,6 +518,61 @@ Found: iteration 47 via VALID-02 (`qa/evidence/iter47-{valid-sweep-real,vintage-
 Repro: BX tags its non-controlling interests as `NonredeemableNoncontrollingInterest` ($6.15B at 2024-12-31), `MinorityInterestInOperatingPartnerships` ($4.33B) and `RedeemableNoncontrollingInterestEquityCarryingAmount` ($0.80B); `minority_interest` is stored empty, so its balance sheet misses assets = liabilities + equity + NCI by 25-30% in every year since FY2018 (SO FY2018 and UBER likewise, by less).
 Expected: those tags resolve to `minority_interest` (redeemable NCI and other temporary equity are a separate line that no canonical field covers yet, which explains most of the remaining 1-4% gaps: AMT, SPGI, TSLA, WELL, PGR, UBER).   Actual: empty. No valuation input uses it.
 
+### BUG-064 [P1][GATHER] A failed SEC submissions request wipes a bank's, insurer's or REIT's stored sector ratios
+Status: OPEN
+Found: iteration 48 by code review 6 (I2), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Repro: the sector comes only from the submissions data (`StockData.merge_sec_data`), so when that request fails the run carries on with `sector_class` None, recomputes every stored year's metrics as a general company's and overwrites `metrics_annual` for all of them (the upsert replaces every column); `companies.sector_class` survives. PLD with submissions failing (`submissions_failure_reit.py`): FFO per share 6.22 / 6.62 / 5.82 → None, the multiples band (P/FFO) $125.73 → N/A "insufficient multiple history", summary (3 models, $70.71) → (2, $68.72). JPM (`submissions_failure_bank.py`): net interest margin 0.0216 and efficiency ratio 0.524 → None; JPM's NIM goes from 18 of 19 years to 0, PLD's FFO per share from 17 of 18, CB's combined ratio from 19 of 20 (`count_wiped.py`). The same at f0db42a: pre-existing, on BUG-045's failure path.
+Expected: a failed fetch never erases stored data (BUG-018's rule): take the sector from the stored companies row, or skip the metrics write for that run.   Actual: one timeout erases a financial company's sector ratios until the next good run; 28 companies in the user's database are exposed (13 banks, 8 insurers, 7 REITs).
+
+### BUG-065 [P1][VAL] A US-GAAP 20-F filer is valued per ordinary share against a per-ADS price, and a non-USD reporter gets in through US$ convenience translations
+Status: OPEN
+Found: iteration 48 by code review 6 (I1), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Repro: since BUG-043's fix (14ac7c6) 20-F records are read, but nothing knows an ADR's ratio of ordinary shares per ADS: Graham and Lynch use the filing's per-ordinary-share EPS and book value, and the DCF divides by shares after the 75% rule swaps Yahoo's ADS-equivalent count for the filing's ordinary count. ARM quoted as a 5-share ADS (`ads_demo.py`: price x5, Yahoo's count /5): DCF $15.27, Graham $12.18, Lynch $10.21 against $1,140.25 (per ADS they are 5x), median $13.73, upside -98.8%. And `_in_dollars` keeps a record that has any USD fact, while non-USD 20-F filers tag a US$ convenience translation of each year: TSM's real facts with IFRS concepts relabelled as US GAAP (`tsm_as_usgaap.py`) keep 10 fiscal years at each year's convenience rate, valued per ordinary share (25.93B) against $421.70 per ADS: median $20.40, upside -95.2%; before 14ac7c6 the same filer got an explained gap. Many large ADRs file US-GAAP 20-Fs in renminbi with convenience translations and ADS ratios other than 1 (BABA, PDD, BIDU). The oracle copies the 75% rule and agrees with the code on both demos.
+Expected: per-share inputs on the ADS basis (or the per-share models N/A with the ratio as the reason), and convenience translations treated as such.   Actual: values off by the ADS ratio, shown with a verdict. No stored ticker today (ARM's ADS is one share; TSM files IFRS).
+Notes: fix direction (review): for filers whose latest annual report is a 20-F or 40-F, compare Yahoo's count (and market cap ÷ price) with the filing's count; a simple ratio of 1.5 or more is an ADS ratio: rescale the per-share inputs and record `ads_ratio`, and keep the 75% rule from swapping for these filers. A USD fact reported beside the same concept in another currency is a convenience translation: dropping it (the record then falls through to "it reports in TWD") or keeping it flagged is a policy choice. Oracle rule first.
+
+### BUG-066 [P2][GATHER] A filer whose US-GAAP annual reports stop (it moved to IFRS) keeps a stale record with no note
+Status: OPEN
+Found: iteration 48 by code review 6 (I3), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Repro: TSM's real facts with fiscal years to 2019 as US GAAP and later ones left in IFRS (`ifrs_switcher.py`): FY2015-19 are kept and valued beside today's price, Graham on FY2017 ($4.44) and the multiples band on FY2019 ($33.18), computed 2026-10-20, with no note; `explain_no_annual_financials` runs only for an empty record. Before 14ac7c6 the filer got an explained empty record. The same gap exists for a 10-K filer that moved to an IFRS 20-F.
+Expected: a note when ifrs-full holds annual-report facts for periods after the record's latest fiscal year ("annual financials stop at FY2019: later annual reports are in IFRS, which isn't mapped"), shown on the FA and VAL tabs.   Actual: nothing says the figures are years old except the "Basis FY" column. Whether models should go N/A on a stale basis is Q8.
+
+### BUG-067 [P3][UI] The VAL tab shows "None" for the rate's date and source after a backfill
+Status: OPEN
+Found: iteration 48 by code review 6 (M1), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `val_none_scan.py` on the user's copy: the rate's "as of" and source assumptions read "None" on 122 of 127 VAL tabs (snapshots collected before 8feac32 carry neither); hist_cagr (26 tabs), cagr_years (7) and analyst_growth (5) did before.
+Expected: missing values shown as "—" (UI-11), and the keys left out when unknown.   Actual: "None".
+
+### BUG-068 [P3][UI] Collection failures read badly in the web app: a failed request's note sits above the stored years, and the job card names no failed ticker
+Status: OPEN
+Found: iteration 48 by code review 6 (M2, M3), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Repro (`web_job_sec_failure.py`): after a failed companyfacts request AAPL's FA tab shows its 20 stored years under "SEC EDGAR: no annual financials for AAPL … its companyfacts request failed (403 …)", and the failure is recorded twice (an error and a warning). The job card reads "Done: 0 successful, 2 with errors (2 total, 2 valuations refreshed)." without naming either ticker or error; MSFT (submissions timed out) has error_count 1 and no text anywhere: `collection_runs` keeps the warnings' text but not the errors'.
+Expected: with stored years, the note says this collection got no new SEC data and dates the figures shown; the card lists each failed ticker and its error (as the quote job does); an `errors` column like `warnings`.   Actual: as above.
+
+### BUG-069 [P3][API] `/api/quality/runs` omits `warnings` on a database without the column
+Status: OPEN
+Found: iteration 48 by code review 6 (M4), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Repro (`web_probe.py` on the user's copy): the rows' keys lack `warnings`; on a migrated database they have it.
+Expected: the field always present, [] when the column is missing.   Actual: absent.
+
+### BUG-070 [P3][DOCS] Labels and docs lag the code: "fred_treasury_gov" without FRED, the README's rate example, "annual (10-K)"
+Status: OPEN
+Found: iteration 48 by code review 6 (M5, M7), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Repro (`quality_sources.py`): the data-sources label reads "fred_treasury_gov" (or "fred_estimate") on /quality although FRED wasn't consulted; README.md's rate JSON example (around line 204) has no `date` and shows a `series` key nothing writes; README.md (around line 270) says "Official financial statements (10-K, 10-Q)" and an `xbrl_parser.py` docstring "annual (10-K)" after 20-F and 40-F were added.
+Expected: labels and docs that match what runs.   Actual: as above.
+
+### BUG-071 [P3][VALID] A non-USD 10-K/10-Q filer keeps quarterly rows holding only share counts
+Status: OPEN
+Found: iteration 48 by code review 6 (M6), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Repro (`nonusd_quarterly.py`, a CAD reporter): annual {} and vintages {} with the note "it reports in CAD (10-K, 10-Q)", but three quarters stored with only shares_outstanding: the quarterly extractor has no `_in_dollars` check.
+Expected: the same rule as the annual record.   Actual: share-only quarters.
+
+### BUG-072 [P3][CODE] Two test gaps: a split on the filing day, and a first-filing date from a truncated list
+Status: OPEN
+Found: iteration 48 by code review 6 (M7), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Repro: on 3eee7b6 both mutants pass the full suite (969 passed each): `<=` → `<` in BUG-047's partition (a split dated on the latest filing's day goes to neither `_normalize_splits` nor `_apply_later_splits`), and dropping `len(filings) < 100` in `_no_annual_financials` (the note would claim a first filing date from SECHandler's 100 latest filings). No test covers an ADR or a convenience-translating reporter either (BUG-065).
+Expected: a test that fails for each.   Actual: none.
+
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
@@ -550,6 +607,11 @@ Options: (a) a small, explicit successor map in the code (2115436 → 34088), re
 Status: NEEDS-USER
 Context: `_total_shares` takes market cap ÷ price (every class and unit, the way Yahoo values the company) when it is more than 5% above Yahoo's count, and settles a 2–5% gap by whichever figure is nearer the latest FY count (BUG-035). That decides the question company by company, and between 2% and 5% the answer flips with count drift (BUG-051): PLD takes market cap ÷ price on the real copy (954.8M) but Yahoo's count on the golden one (950.3M); KKR, BLK and PLTR sit in the same band. Above 5%: SPG's partnership units (17%), BX's (65%), and the second classes of APP, V, META, GOOGL and BRK-B. Raised by code review 5.
 Options: (a) always count every class and unit (market cap ÷ price whenever it is larger); (b) count only the listed class (Yahoo's count, or the FY diluted count); (c) keep the gap rule and make its tiebreaker fresher (BUG-051). Recommendation: (a) for classes, which share the same earnings; units are your call (they are exchangeable into shares, so (a) is the conservative choice).
+
+### Q8 [VAL] NEEDS-USER: should a company be valued on a basis year that is years old?
+Status: NEEDS-USER
+Context: when a company's usable annual reports stop (it moved to IFRS, BUG-066, or stopped filing), its models keep valuing it on the last fiscal year it has, beside today's price: in code review 6's example Graham on FY2017 and the multiples band on FY2019, computed in 2026. Nothing in the valuation checks how old the basis is; the "Basis FY" column shows it.
+Options: (a) mark the per-share models N/A past a cutoff (say a basis more than two fiscal years old), with the reason; (b) keep the values and add a staleness flag to the verdict; (c) keep things as they are, with BUG-066's note explaining the gap. Recommendation: (a) at two years.
 
 ---
 
