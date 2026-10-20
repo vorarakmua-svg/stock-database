@@ -210,13 +210,15 @@ class Inputs:
             pass
         self.priced_on = str(collected_at)[:10] if self.price is not None and collected_at else None
         # Yahoo adjusts its dividends and price bars for every split it knew when fetched; one made after the
-        # price's day is taken back out. A share split the latest filing restated after that day (BUG-060) is in
-        # the filed figures but not in the price: years come to today's basis and go back by it.
+        # price's day is taken back out, whatever the SEC record holds (a company without SEC annual financials
+        # too; BUG-078). A share split the latest filing restated after that day (BUG-060) is in the filed figures
+        # but not in the price: years come to today's basis and go back by it.
         self.unpriced, self.since_price = 1.0, 1.0
         for date, ratio in self.splits:
-            if ratio and self.priced_on and self.last_filed and date[:10] > self.priced_on:
+            if ratio and self.priced_on and date[:10] > self.priced_on:
                 self.unpriced *= ratio
-                if date[:10] <= self.last_filed[:10] and (ratio >= 1.5 or ratio <= 1 / 1.5) and simple_ratio(ratio):
+                if (self.last_filed and date[:10] <= self.last_filed[:10] and (ratio >= 1.5 or ratio <= 1 / 1.5)
+                        and simple_ratio(ratio)):
                     self.since_price *= ratio
         # Per-share values divide by every share class (BUG-022). Yahoo's share count can cover one class of
         # several (GOOGL's class A: 5.87B of 12.23B), while market cap / price counts them all; and a count still
