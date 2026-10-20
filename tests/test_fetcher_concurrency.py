@@ -311,3 +311,42 @@ def test_the_run_summary_counts_a_failed_sec_request_as_an_error(tmp_path, monke
                                                         "submissions_error": "Read timed out. (read timeout=30)"})
     summary = fetcher.fetch_and_export(["XOM"], include_yahoo=False, formats=["json"])
     assert (summary["successful"], summary["with_errors"]) == (0, 1)
+
+
+def _reit_fy2024_facts():
+    def fy(val, instant=False):
+        entry = {"val": val, "end": "2024-12-31", "fy": 2024, "fp": "FY", "form": "10-K", "filed": "2025-02-20"}
+        if not instant:
+            entry["start"] = "2024-01-01"
+        return {"units": {"USD": [entry]}}
+
+    return {"facts": {"us-gaap": {
+        "Revenues": fy(500.0e6), "NetIncomeLoss": fy(100.0e6), "DepreciationDepletionAndAmortization": fy(40.0e6),
+        "PaymentsToAcquirePropertyPlantAndEquipment": fy(10.0e6), "Assets": fy(2000.0e6, instant=True),
+        "StockholdersEquity": fy(800.0e6, instant=True)}}}
+
+
+def test_a_failed_submissions_request_keeps_the_stored_sector(tmp_path, monkeypatch):
+    # Code review 6 (I2): the sector comes only from SEC's submissions data, so when that request failed the run
+    # recomputed a REIT's (or a bank's, an insurer's) metrics as a general company's and overwrote every stored
+    # year's FFO, net interest margin or combined ratio.
+    fetcher = _sec_only_fetcher(tmp_path, monkeypatch, {
+        "cik": "0001045609", "ticker": "RIT", "source": "sec_edgar", "company_facts": _reit_fy2024_facts(),
+        "submissions_error": "Read timed out. (read timeout=30)"})
+    fetcher.sqlite_store.export([StockData(ticker="BNK", cik="0000019617", sector_class="bank"),
+                                 StockData(ticker="RIT", cik="0001045609", sector_class="reit")])
+    stock = fetcher.fetch_ticker("RIT", include_yahoo=False)
+    assert stock.sector_class == "reit"
+    assert stock.calculated_metrics["historical"]["2024"]["ffo"] == 140.0e6
+
+
+def test_a_json_only_store_also_keeps_the_sector(tmp_path, monkeypatch):
+    # The same failure without a database (a --formats json run): the earlier JSON export knows the sector.
+    fetcher = _sec_only_fetcher(tmp_path, monkeypatch, {
+        "cik": "0001045609", "ticker": "RIT", "source": "sec_edgar", "company_facts": _reit_fy2024_facts(),
+        "submissions_error": "Read timed out. (read timeout=30)"})
+    fetcher.json_exporter.export([StockData(ticker="RIT", cik="0001045609", sector_class="reit")])
+    assert not fetcher.sqlite_store.db_path.exists()
+    stock = fetcher.fetch_ticker("RIT", include_yahoo=False)
+    assert stock.sector_class == "reit"
+

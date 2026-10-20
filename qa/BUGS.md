@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 2 · P2 2 · P3 31 · NEEDS-USER 11 · Verified: 34
+**Open:** P0 0 · P1 1 · P2 2 · P3 31 · NEEDS-USER 11 · Verified: 35
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -519,11 +519,12 @@ Repro: BX tags its non-controlling interests as `NonredeemableNoncontrollingInte
 Expected: those tags resolve to `minority_interest` (redeemable NCI and other temporary equity are a separate line that no canonical field covers yet, which explains most of the remaining 1-4% gaps: AMT, SPGI, TSLA, WELL, PGR, UBER).   Actual: empty. No valuation input uses it.
 
 ### BUG-064 [P1][GATHER] A failed SEC submissions request wipes a bank's, insurer's or REIT's stored sector ratios
-Status: OPEN
-Found: iteration 48 by code review 6 (I2), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 49)
+Found: iteration 48 by code review 6 (I2), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: iteration 49 (see LOG) | Regression tests: `tests/test_fetcher_concurrency.py::test_a_failed_submissions_request_keeps_the_stored_sector`, `::test_a_json_only_store_also_keeps_the_sector`
 Repro: the sector comes only from the submissions data (`StockData.merge_sec_data`), so when that request fails the run carries on with `sector_class` None, recomputes every stored year's metrics as a general company's and overwrites `metrics_annual` for all of them (the upsert replaces every column); `companies.sector_class` survives. PLD with submissions failing (`submissions_failure_reit.py`): FFO per share 6.22 / 6.62 / 5.82 → None, the multiples band (P/FFO) $125.73 → N/A "insufficient multiple history", summary (3 models, $70.71) → (2, $68.72). JPM (`submissions_failure_bank.py`): net interest margin 0.0216 and efficiency ratio 0.524 → None; JPM's NIM goes from 18 of 19 years to 0, PLD's FFO per share from 17 of 18, CB's combined ratio from 19 of 20 (`count_wiped.py`). The same at f0db42a: pre-existing, on BUG-045's failure path.
 Expected: a failed fetch never erases stored data (BUG-018's rule): take the sector from the stored companies row, or skip the metrics write for that run.   Actual: one timeout erases a financial company's sector ratios until the next good run; 28 companies in the user's database are exposed (13 banks, 8 insurers, 7 REITs).
 
+Fix: when the submissions data is missing, `fetch_ticker` takes the sector from the stored record before computing metrics (`_stored_sector`: the database's companies row, read-only, else the JSON export's `sector_class`) and says so in a warning ("sector 'reit' taken from the stored record"); with no stored record the run goes on as before. A sector of None with annual financials only happens when submissions failed (a `--no-sec` or CIK-not-found run has no financials). The review's demos on the fixed tree (`qa/evidence/iter49-bug064-e2e.txt`): PLD keeps FFO per share in 17 of 18 years (was 0), its P/FFO band $125.73 and its summary (3 models, $70.71); JPM keeps its net interest margin in 18 of 19 years and CB its combined ratio in 19 of 20. Three mutants each fail a test (no fallback; a lookup that ignores the ticker, caught by a second stored company; no JSON fallback).
 ### BUG-065 [P1][VAL] A US-GAAP 20-F filer is valued per ordinary share against a per-ADS price, and a non-USD reporter gets in through US$ convenience translations
 Status: OPEN
 Found: iteration 48 by code review 6 (I1), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —

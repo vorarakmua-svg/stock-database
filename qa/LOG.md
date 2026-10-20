@@ -926,3 +926,18 @@ Gates: ruff ✓ mypy ✓ pytest 969 passed (1 known warning); no code changed | 
 Commit: (this commit) chore(qa): record code review 6; ADRs, convenience translations and a wiping failure path
 Next: BUG-064 (P1: keep the stored sector when the submissions request fails), then BUG-065 (P1; oracle first), then
 BUG-061 and BUG-066 (P2). Fixes since review 6's range: 3 (65a0602, 72568ea, 144dcdf).
+
+## Iteration 49: 2026-10-20 08:02: fix
+Picked: BUG-064, the older-numbered of the two open P1s (both iteration 48). CI: 9c72efe running at the start.
+Did: TDD (RED: the run's sector None, so a REIT's FFO isn't computed). When the submissions data is missing,
+`fetch_ticker` now takes the sector from the stored record before computing metrics: the database's companies row
+(read-only), else the JSON export's `sector_class` (a second RED test covers a `--formats json` run), with a warning
+saying so. Three mutants each fail a test (no fallback; a lookup ignoring the ticker, caught by a second stored company;
+no JSON fallback). The review's own demos on the fixed tree: PLD, JPM and CB keep every stored year's FFO per share, net
+interest margin and combined ratio (17 of 18, 18 of 19, 19 of 20; 0 before), and PLD's P/FFO band and summary stay.
+Evidence: `qa/evidence/iter49-bug064-{red,green,mutants,e2e}.txt`
+Result: BUG-064 VERIFIED. GATHER-06 → TODO (its other failure modes untested).
+Gates: ruff ✓ mypy ✓ pytest 971 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(fetchers): a failed submissions request keeps the stored sector
+Next: BUG-065 (P1: ADRs and convenience translations; the oracle rule first). Fixes since review 6's range: 4
+(65a0602, 72568ea, 144dcdf, this).

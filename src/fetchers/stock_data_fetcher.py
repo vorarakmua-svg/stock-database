@@ -1,7 +1,9 @@
 """Main orchestrator for stock data collection."""
 
+import json
 import logging
 import os
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -200,6 +202,16 @@ class StockDataFetcher:
             self.logger.warning(f"FRED data error for {ticker}: {e}")
             stock.add_warning(f"FRED: {str(e)}")
 
+        # The sector comes from SEC's submissions data. When that request failed, the
+        # stored record still knows it; metrics computed as a general company's would
+        # overwrite every stored year's sector ratios (FFO, net interest margin).
+        if stock.sector_class is None and stock.financials_annual:
+            stored = self._stored_sector(ticker)
+            if stored:
+                stock.sector_class = stored
+                stock.add_warning(f"SEC EDGAR: sector '{stored}' taken from the stored record "
+                                  "(the submissions data is unavailable)")
+
         # Clean, derive identities, and build the TTM series.
         if stock.financials_annual or stock.financials_quarterly:
             try:
@@ -230,6 +242,27 @@ class StockDataFetcher:
         )
 
         return stock
+
+    def _stored_sector(self, ticker: str) -> Optional[str]:
+        """The sector already stored for *ticker*: the database's, else the JSON export's (read-only)."""
+        path = Path(self.sqlite_store.db_path)
+        if path.exists():
+            try:
+                conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+                try:
+                    row = conn.execute("SELECT sector_class FROM companies WHERE ticker = ?", (ticker,)).fetchone()
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                row = None
+            if row and row[0]:
+                return row[0]
+        try:
+            stored = json.loads((Path(self.json_exporter.output_dir) / f"{ticker.upper()}.json")
+                                .read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return stored.get("sector_class") or None if isinstance(stored, dict) else None
 
     def _compute_metrics(self, stock: StockData) -> None:
         """Populate generic + sector-aware derived metrics on the stock.

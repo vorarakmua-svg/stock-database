@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 84 · PASS 11 · FAIL 11 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
+**Status counts:** TODO 85 · PASS 11 · FAIL 10 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -64,7 +64,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | GATHER-03 | companyfacts parsing | TODO | |  |
 | GATHER-04 | Rates | FAIL→BUG-052 | iter 39 | without a FRED key: Treasury.gov's latest day (BUG-041) with its day and source, and the static estimate flagged (BUG-037), checked live; the FRED-key path and January's prior-year fallback are untested; code review 5 (stubbed): any failure of the current-year request falls back to last year's year-end rate, and a blank latest 10-year gives no rate (BUG-052, P3) |
 | GATHER-05 | Rate limiting and retries | TODO | |  |
-| GATHER-06 | Failure modes (mocked) | FAIL→BUG-064 | iter 48 | a failed SEC submissions request wipes a bank's, insurer's or REIT's stored sector ratios (BUG-064, P1; code review 6); done: a failed SEC request is an error (BUG-045), a failed run no longer erases stored data or writes a price-less snapshot (BUG-018), a locked summary.csv no longer stops the export |
+| GATHER-06 | Failure modes (mocked) | TODO | iter 49 | done: a failed SEC submissions request keeps the stored sector and so every stored year's sector ratios (BUG-064), a failed SEC request is an error (BUG-045), a failed run no longer erases stored data or writes a price-less snapshot (BUG-018), a locked summary.csv no longer stops the export; untested: DNS failure, offline, 404, 429, 500, malformed or truncated JSON, empty yfinance frames, the exit code |
 | GATHER-07 | SEC cache | TODO | |  |
 | GATHER-08 | Idempotency | TODO | |  |
 | GATHER-09 | Ticker input | TODO | |  |
