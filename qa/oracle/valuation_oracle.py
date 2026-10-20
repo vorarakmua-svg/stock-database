@@ -157,10 +157,10 @@ class Inputs:
 
     def __init__(self, db: sqlite3.Connection, ticker: str):
         self.db, self.t = db, ticker
-        snap = db.execute("select beta, risk_free_rate, shares_outstanding, current_price, market_cap from "
-                          "market_snapshots where ticker=? order by collected_at desc limit 1",
-                          (ticker,)).fetchone() or (None,) * 5
-        self.beta, self.rf, self.snap_shares, self.price, market_cap = snap
+        snap = db.execute("select beta, risk_free_rate, shares_outstanding, current_price, market_cap, collected_at "
+                          "from market_snapshots where ticker=? order by collected_at desc limit 1",
+                          (ticker,)).fetchone() or (None,) * 6
+        self.beta, self.rf, self.snap_shares, self.price, market_cap, collected_at = snap
         row = db.execute("select earnings_growth from analyst_snapshots where ticker=? order by collected_at desc "
                          "limit 1", (ticker,)).fetchone()
         self.analyst = row[0] if row else None
@@ -172,6 +172,16 @@ class Inputs:
         row = db.execute("select filed_date from financials_annual where ticker=? and fiscal_year is not null "
                          "order by fiscal_year desc limit 1", (ticker,)).fetchone()
         self.last_filed = row[0] if row and row[0] else None
+        # Per-share values are compared with the latest price (VAL-07's upside), so they sit on that price's
+        # basis (VAL-03 "same share basis", VAL-09 "per-share consistency" across a split). A split dated after
+        # both the latest filing and the price's day (a quote failed since; BUG-048) is in neither: no year moves
+        # by it, and Yahoo's dividends and price bars, adjusted for every split it knew when fetched, are taken
+        # back to the price's basis.
+        self.priced_on = str(collected_at)[:10] if self.price is not None and collected_at else None
+        self.unpriced = 1.0
+        for date, ratio in self.splits:
+            if ratio and self.after_price(date):
+                self.unpriced *= ratio
         # Per-share values divide by every share class (BUG-022). Yahoo's share count can cover one class of
         # several (GOOGL's class A: 5.87B of 12.23B), while market cap / price counts them all; and a count still
         # under 3/4 of the latest FY's diluted shares on today's basis is incomplete too (HON, whose market cap is
@@ -200,12 +210,18 @@ class Inputs:
         raw = min(hist, self.analyst) if self.analyst is not None else hist
         return clamp(raw, 0.0, cap)
 
+    def after_price(self, date: str) -> bool:
+        """A split dated after both the latest filing and the latest price's day (BUG-048)."""
+        return bool(self.priced_on and self.last_filed and date[:10] > max(self.priced_on, self.last_filed[:10]))
+
     def to_current_basis(self, shares: Optional[float], period_end: str) -> Optional[float]:
         """Shares in today's split basis (declared splits after period_end, only if not yet restated)."""
         if not shares:
             return None
         factor, unrestated = 1.0, 1.0
         for date, ratio in self.splits:
+            if self.after_price(date):
+                continue
             # Share splits are at least 3-for-2 (or 1-for-2 reversed). Smaller ratios in Yahoo's split
             # history are spin-off price factors or stock dividends (HON 0.9535, SPGI 1.057; lead L12),
             # which don't change the share count.
@@ -259,7 +275,7 @@ class Inputs:
     def fy_end_price(self, period_end: str) -> Optional[float]:
         row = self.db.execute("select close from price_bars where ticker=? and date<=? order by date desc limit 1",
                               (self.t, period_end[:10])).fetchone()
-        return row[0] if row else None
+        return row[0] * self.unpriced if row and row[0] is not None else None
 
 
 def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Optional[Dict]:
@@ -299,7 +315,7 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
                     and abs((datetime.date.fromisoformat(d) - datetime.date.fromisoformat(day)).days) <= 400]
             return day in spin_days and bool(near) and amount > 5 * median(near)
 
-        events = [(d, a) for d, a in events if not spun_off(d, a)]
+        events = [(d, a * x.unpriced) for d, a in events if not spun_off(d, a)]
         ttm_start = (datetime.date.fromisoformat(anchor[:10]) - datetime.timedelta(days=365)).isoformat()
         ttm = sum(a for d, a in events if ttm_start < d <= anchor[:10])
         by_year: Dict[int, List[float]] = {}
