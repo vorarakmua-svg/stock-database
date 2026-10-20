@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 83 · PASS 12 · FAIL 11 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
+**Status counts:** TODO 84 · PASS 12 · FAIL 10 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -78,7 +78,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | ID | Check | Status | Last run | Evidence / notes |
 |---|---|---|---|---|
 | STORE-01 | Schema migrations applied to the real-DB copy are idempotent and non-destructive (row coun… | TODO | |  |
-| STORE-02 | A collection killed mid-run on scratch leaves a DB that opens, with `PRAGMA integrity_chec… | FAIL→BUG-083 | iter 59 | found by code review 8: a first collection after the upgrade that fails or is interrupted while writing keeps the migration's new column but loses its flags, so every bar stored before BUG-075's fix reads as a market close for good (BUG-083, P1); untested: a kill mid-run on scratch with `PRAGMA integrity_check` (`qa/evidence/iter59-review8-rerun.txt`) |
+| STORE-02 | A collection killed mid-run on scratch leaves a DB that opens, with `PRAGMA integrity_chec… | TODO | iter 60 | done: the first export's migration killed (TerminateProcess) at every moment tried leaves a whole copy of the user's data, with no column or every bar flagged, and `integrity_check` ok (BUG-083 fixed; the unfixed code left it torn); untested: a kill during a multi-ticker export's writes, and during the fetches (`qa/evidence/iter60-bug083-e2e.txt`) |
 | STORE-03 | WAL handling | TODO | |  |
 | STORE-04 | The web Reader (`mode=ro`) never writes; per-request connections survive threadpool hoppin… | PASS | iter 54 | the Reader opens `mode=ro` under any folder name (BUG-080 fixed: '#', '%41' and, off Windows, '?' tested; local and UNC paths probed) and rejects writes; in the real app a database served under `web#1` keeps its 19 tables and 220,663 rows unchanged and nothing appears beside it; per-request connections survive threadpool hopping (`tests/test_web_repository.py::test_reader_survives_threadpool_hopping`) (`qa/evidence/iter54-bug080-{realapp,uri-forms}.txt`) |
 | STORE-05 | The as-of API and UI equal `AsOfReader`; edge dates (before the first filing, today, the f… | TODO | |  |

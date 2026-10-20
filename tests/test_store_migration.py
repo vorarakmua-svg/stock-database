@@ -8,6 +8,8 @@ Covers:
 
 import sqlite3
 
+import pytest
+
 from src.exporters.sqlite_store import SQLiteStore
 from src.models.stock_data import StockData
 
@@ -409,9 +411,8 @@ def test_ensure_columns_is_idempotent(tmp_path):
     conn.close()
 
 
-def test_bars_stored_before_market_closes_are_flagged_dividend_adjusted(tmp_path):
-    # BUG-075: every bar stored before the fetch asked for market prices holds Yahoo's dividend-adjusted one. The
-    # migration flags them once; a re-collected ticker's bars are market prices again.
+def _pre_flag_db(tmp_path):
+    """A database from before the dividend-adjusted flag: KO's and PEP's bars, Yahoo's adjusted prices."""
     db = tmp_path / "stock.db"
     conn = sqlite3.connect(db)
     conn.execute("CREATE TABLE price_bars (ticker TEXT NOT NULL, date TEXT NOT NULL, open REAL, high REAL, low REAL, "
@@ -420,6 +421,13 @@ def test_bars_stored_before_market_closes_are_flagged_dividend_adjusted(tmp_path
                      [("KO", "2021-12-31", 51.546), ("PEP", "2021-12-31", 154.0)])
     conn.commit()
     conn.close()
+    return db
+
+
+def test_bars_stored_before_market_closes_are_flagged_dividend_adjusted(tmp_path):
+    # BUG-075: every bar stored before the fetch asked for market prices holds Yahoo's dividend-adjusted one. The
+    # migration flags them once; a re-collected ticker's bars are market prices again.
+    db = _pre_flag_db(tmp_path)
     ko = _full_stock("KO")
     ko.price_bars = [{"date": "2021-12-31", "open": 59.0, "high": 59.3, "low": 58.9, "close": 59.21, "volume": 1.0e7}]
     SQLiteStore(db).export([ko])
@@ -431,4 +439,67 @@ def test_bars_stored_before_market_closes_are_flagged_dividend_adjusted(tmp_path
     finally:
         conn.close()
     assert rows == [("KO", 59.21, None), ("PEP", 154.0, 1)]
+
+
+@pytest.mark.parametrize("failure", [sqlite3.OperationalError("database is locked"), KeyboardInterrupt()])
+def test_a_first_export_that_fails_keeps_the_flags(tmp_path, monkeypatch, failure):
+    # BUG-083 (code review 8): the migration's ALTER TABLE committed at once while its UPDATE waited on the run's
+    # writes, so a first run that failed while writing (logged and swallowed, or Ctrl+C) kept the column and lost every
+    # flag: the bars read as market closes for good, and BUG-075's prices came back.
+    db = _pre_flag_db(tmp_path)
+
+    def failing_write(self, conn, stock):
+        raise failure
+
+    monkeypatch.setattr(SQLiteStore, "_write_stock", failing_write)
+    try:
+        SQLiteStore(db).export([_full_stock("KO")])
+    except KeyboardInterrupt:
+        pass
+    monkeypatch.undo()
+    SQLiteStore(db).export([_stub_stock("ZZZ")])
+
+    conn = sqlite3.connect(db)
+    try:
+        flags = conn.execute("SELECT ticker, dividend_adjusted FROM price_bars ORDER BY ticker").fetchall()
+    finally:
+        conn.close()
+    assert flags == [("KO", 1), ("PEP", 1)]
+
+
+def test_a_migration_interrupted_while_flagging_is_undone_whole(tmp_path, monkeypatch):
+    # BUG-083: the column and the flags arrive together or not at all. Interrupted as the flags are written (Ctrl+C,
+    # a killed process), the copy keeps no column, and the next run migrates again.
+    db = _pre_flag_db(tmp_path)
+    real_connect = SQLiteStore._connect
+
+    class InterruptedWhileFlagging:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, sql, *args):
+            if sql.startswith("UPDATE price_bars SET dividend_adjusted"):
+                raise KeyboardInterrupt
+            return self._conn.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    monkeypatch.setattr(SQLiteStore, "_connect", lambda self: InterruptedWhileFlagging(real_connect(self)))
+    with pytest.raises(KeyboardInterrupt):
+        SQLiteStore(db).export([_stub_stock("ZZZ")])
+    monkeypatch.undo()
+    conn = sqlite3.connect(db)
+    try:
+        assert "dividend_adjusted" not in {row[1] for row in conn.execute("PRAGMA table_info(price_bars)")}
+    finally:
+        conn.close()
+
+    SQLiteStore(db).export([_stub_stock("ZZZ")])
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute("SELECT ticker, dividend_adjusted FROM price_bars ORDER BY ticker").fetchall() == [
+            ("KO", 1), ("PEP", 1)]
+    finally:
+        conn.close()
 

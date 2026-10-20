@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 1 · P2 3 · P3 39 · NEEDS-USER 11 · Verified: 45
+**Open:** P0 0 · P1 0 · P2 3 · P3 39 · NEEDS-USER 11 · Verified: 46
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -655,12 +655,13 @@ Expected: a quarter's per-share figures and counts on one split basis with its y
 Impact today: the statements tab's quarterly and TTM views, `financials_quarterly` and `financials_ttm`, the API and the exports, for the years around a split; no valuation (the models read annual rows).
 
 ### BUG-083 [P1][STORE] A first write that fails after the upgrade loses the dividend-adjusted flags for good, and BUG-075's prices return
-Status: OPEN
-Found: iteration 58 by code review 8 (C1), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 60)
+Found: iteration 58 by code review 8 (C1), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: iteration 60 (see LOG) | Regression tests: `tests/test_store_migration.py::test_a_first_export_that_fails_keeps_the_flags` (a failed write, Ctrl+C), `::test_a_migration_interrupted_while_flagging_is_undone_whole`
 Repro: the migration adds `price_bars.dividend_adjusted` and flags every stored bar 1 (BUG-075), but `_create_schema`'s `executescript` commits and Python's sqlite3 opens a transaction only before DML, so the `ALTER TABLE` commits at once while the `UPDATE` joins the run's writes; `export()`, `export_benchmark_bars()` and `upsert_quote()` swallow a failure and close. On a pre-flag copy of the user's data, a first export whose write fails ("database is locked") or is interrupted (Ctrl+C) leaves the column with all 1,246,064 bars unflagged, and so does every later export: KO's FY2021 price reads 51.854, not 59.21. Revalued, 98 of 118 multiples rows fall back to BUG-075's figures (MO -21.9%, CVX -16.5%, C -15.1%; KO 70.06 against 76.94, JPM 188.48 against 212.32), and the oracle, which reads the flag the same way, sees only its known 8.
 Expected: the column and the flags arrive together or not at all; a bar from before the fix reads as Yahoo-adjusted whatever happens to the first run.   Actual: as above.
 Impact today: the user's database has no flag column yet, so its first collection or quote refresh after the upgrade is this migration; the backfill alone never runs it.
 
+Fix: the migration adds the column and flags the bars in one explicit transaction (`BEGIN IMMEDIATE`, the column re-checked once the lock is held, then the `ALTER`, the `UPDATE` and a `COMMIT`), committed before the run writes anything, and rolled back whole on any failure, Ctrl+C included. The review's alternative, flipping the encoding so an unflagged bar reads as adjusted, would also have reread every test database's bars and still leaves a row an older version rewrites misread, so the transaction is the narrower change. On pre-flag copies of the user's data (`qa/evidence/iter60-bug083-e2e.txt`): the review's abort scenario now keeps all 1,246,064 flags through a failed or interrupted first export and a later successful one (KO's FY2021 price 59.21), and the revalued copy matches the fixed one (0 of 118 multiples rows off). Hard kills of the first export's migration leave a whole copy every time, either no column (rolled back) or every bar flagged, with `integrity_check` ok, where the unfixed code killed at the same moments (0.9-1.3 s) leaves the column with every flag empty. Two mutants: running the `ALTER` outside the transaction fails the interrupted-migration test; leaving the migration's transaction open into the run's writes survives, being all or nothing as well.
 ### BUG-084 [P2][VAL] The market-close rebuild undoes dividends after the last stored bar, which Yahoo never applied to it
 Status: OPEN
 Found: iteration 58 by code review 8 (I1), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —

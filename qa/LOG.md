@@ -1149,3 +1149,20 @@ Gates: ruff ✓ mypy ✓ pytest 1026 passed, 1 skipped (1 known warning); no cod
 Commit: (this commit) chore(qa): record code review 8; a non-atomic flag migration and dividends without bars
 Next: BUG-083 (P1) at once: until it's fixed, only the backfill is safe on the user's database. Then BUG-078,
 BUG-082, BUG-084 (P2). Fixes since review 8's range: 3 (2bb2a24, 80ea6d9, 0b061c0).
+
+## Iteration 60: 2026-10-20 11:14: fix
+Picked: BUG-083, the only open P1. CI: 7648ec5 ✓.
+Did: TDD (2 tests RED: a first export that fails while writing, by a lock or Ctrl+C, kept the column and lost
+every flag): the migration adds the column and flags the bars in one `BEGIN IMMEDIATE` transaction, committed
+before the run's writes and rolled back whole on any failure. A mutant (the `ALTER` outside the transaction)
+survived the first tests, since they fail after the migration, so a third test interrupts the migration itself as
+the flags are written, RED on 7648ec5's migration. On pre-flag copies of the user's data: the review's abort
+scenario keeps every flag, the revalued copy matches the fixed one, and hard kills of the migration leave a whole
+copy every time, where the unfixed code killed at the same moments leaves the column with every flag empty.
+Evidence: `qa/evidence/iter60-bug083-{red,green,mutants,e2e}.txt`
+Result: BUG-083 VERIFIED; STORE-02 → TODO (the migration's kills done; a kill mid-export untested). No P0 or P1 open.
+Gates: ruff ✓ mypy ✓ pytest 1029 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(store): the dividend-adjusted flags arrive with their column, or neither does
+Next: the P2s, oldest first: BUG-078, BUG-082, BUG-084. The user's database can take a collection again; a run whose
+price history fails beside new dividends still inflates FY-end prices about 0.5% (BUG-084). Fixes since review 8's
+range: 4 (2bb2a24, 80ea6d9, 0b061c0, this).

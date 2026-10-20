@@ -354,11 +354,22 @@ class SQLiteStore:
             self._ensure_columns(conn, table, columns)
         # Bars stored before the fetch asked for market prices are Yahoo's
         # dividend-adjusted ones (yfinance's default; BUG-075). Flag them once,
-        # as the column arrives, so readers rebuild their market closes.
+        # as the column arrives, so readers rebuild their market closes: in one
+        # transaction, committed before the run writes anything, since an ALTER
+        # outside it commits at once and a run that then failed kept the column
+        # and lost the flags for good (BUG-083).
         bar_columns = {row[1] for row in conn.execute("PRAGMA table_info(price_bars)")}
         if bar_columns and "dividend_adjusted" not in bar_columns:
-            conn.execute("ALTER TABLE price_bars ADD COLUMN dividend_adjusted INTEGER")
-            conn.execute("UPDATE price_bars SET dividend_adjusted = 1")
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                # Another process may have migrated while this one waited for the lock.
+                if "dividend_adjusted" not in {row[1] for row in conn.execute("PRAGMA table_info(price_bars)")}:
+                    conn.execute("ALTER TABLE price_bars ADD COLUMN dividend_adjusted INTEGER")
+                    conn.execute("UPDATE price_bars SET dividend_adjusted = 1")
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
 
     # ---- upsert helper ----------------------------------------------------
 
