@@ -779,6 +779,69 @@ def test_a_split_after_the_latest_price_takes_yahoos_series_back_whatever_the_se
         {} if annual_rows == "none" else {2025: 600.0})
 
 
+def _with_dividend_served_on(db_path, amount, served_on):
+    """One payment, of 2025-05-15, as Yahoo served it on *served_on*."""
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO dividend_events (ticker, date, amount, served_on) VALUES ('KLA', '2025-05-15', ?, ?)",
+                 (amount, served_on))
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+@pytest.mark.parametrize("split_date, served_on, stored, expected", [
+    ("2026-06-12", "2026-06-01", 1.9, 0.19),  # served before a split the price came after: down by it (BUG-103)
+    ("2026-09-01", "2026-08-04", 1.9, 1.9),   # served with the price, before a later split: as it is
+    ("2026-09-01", "2026-10-01", 0.19, 1.9),  # served after a split the price came before: up by it (BUG-078, BUG-094)
+    ("2026-06-12", "2026-10-01", 0.19, 0.19),  # served, like the price, after the split: as it is
+    ("2026-06-12", "2026-06-12", 0.19, 0.19),  # served on the split's day, which Yahoo has split by then
+])
+def test_a_dividend_goes_to_the_prices_basis_from_the_day_yahoo_served_it(tmp_path, split_date, served_on, stored,
+                                                                          expected):
+    # BUG-103 (code review 10): Yahoo's dividends went to the price's basis by every split after the price, as if Yahoo
+    # had served them after all of them. A run whose dividend request failed keeps payments from before a split beside
+    # a price after it, and DDM came out ten times its value. The price here is of 2026-08-04.
+    db_path = _post_filing_split_db(tmp_path, split_date, 10.0, snapshot_shares=1.3375e8)
+    conn = _connect(_with_dividend_served_on(db_path, stored, served_on))
+    inputs = load_inputs(conn, "KLA")
+    conn.close()
+    assert [(day, round(amount, 6)) for day, amount in inputs.dividends] == [("2025-05-15", expected)]
+
+
+def test_dividends_of_a_database_without_served_days_are_on_every_splits_basis(tmp_path):
+    # A database from before `dividend_events.served_on`, read by the backfill without migrating, keeps the rule its
+    # payments were read by: Yahoo's basis after every stored split.
+    db_path = _post_filing_split_db(tmp_path, "2026-09-01", 10.0, snapshot_shares=1.3375e8)
+    conn = sqlite3.connect(_with_yahoo_series(db_path))
+    conn.execute("ALTER TABLE dividend_events DROP COLUMN served_on")
+    conn.commit()
+    conn.close()
+    conn = _connect(db_path)
+    inputs = load_inputs(conn, "KLA")
+    conn.close()
+    assert [(day, round(amount, 6)) for day, amount in inputs.dividends] == [("2025-05-15", 1.9)]
+
+
+def test_without_a_price_a_dividend_stays_as_yahoo_served_it(tmp_path):
+    # No snapshot has a price, so no basis to bring it to (as before the served day).
+    db_path = _post_filing_split_db(tmp_path, "2026-06-12", 10.0)
+    conn = _connect(_with_dividend_served_on(db_path, 0.19, "2026-10-01"))
+    inputs = load_inputs(conn, "KLA")
+    conn.close()
+    assert [(day, round(amount, 6)) for day, amount in inputs.dividends] == [("2025-05-15", 0.19)]
+
+
+def test_a_dividend_without_a_served_day_beside_bars_a_split_behind_is_on_every_splits_basis(tmp_path):
+    # BUG-094's case: a run stored the split and its dividends while its bar request failed. Such a payment, stored
+    # before the column (or not dated by the migration), is on the new basis, though the bars are a split behind.
+    db_path = _post_filing_split_db(tmp_path, "2026-09-01", 10.0, snapshot_shares=1.3375e8)
+    conn = _connect(_with_bars_from(_with_dividend_served_on(db_path, 0.19, None), "2026-08-04",
+                                    [("2025-06-30", 600.0)]))
+    inputs = load_inputs(conn, "KLA")
+    conn.close()
+    assert [(day, round(amount, 6)) for day, amount in inputs.dividends] == [("2025-05-15", 1.9)]
+
+
 def _restating_filings_db(tmp_path, split_date, shares_by_fy, eps_by_fy):
     """FY2016-2025 with every 10-K's view of each year in the vintages: the 10-K for FY f, filed the February after,
     reports FY f-2 to f, restated for a split made before it. *shares_by_fy* and *eps_by_fy* are on the post-split

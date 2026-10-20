@@ -217,7 +217,7 @@ class SQLiteStore:
             );
 
             CREATE TABLE IF NOT EXISTS dividend_events (
-                ticker TEXT NOT NULL, date TEXT NOT NULL, amount REAL,
+                ticker TEXT NOT NULL, date TEXT NOT NULL, amount REAL, served_on TEXT,
                 PRIMARY KEY (ticker, date)
             );
 
@@ -366,6 +366,27 @@ class SQLiteStore:
                 if "dividend_adjusted" not in {row[1] for row in conn.execute("PRAGMA table_info(price_bars)")}:
                     conn.execute("ALTER TABLE price_bars ADD COLUMN dividend_adjusted INTEGER")
                     conn.execute("UPDATE price_bars SET dividend_adjusted = 1")
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
+        # A payment's amount is Yahoo's, split-adjusted as of the day it served it, which
+        # each row now keeps (BUG-103). Until then a run stored no split without the
+        # dividends from the same chart request, so a payment stored before the column
+        # is on the basis of everything its ticker's series show: dated by its last bar
+        # or its latest split, whichever is later, the rule it was read by. As the flags:
+        # in one transaction, committed before the run writes anything (BUG-083).
+        dividend_columns = {row[1] for row in conn.execute("PRAGMA table_info(dividend_events)")}
+        if dividend_columns and "served_on" not in dividend_columns:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                if "served_on" not in {row[1] for row in conn.execute("PRAGMA table_info(dividend_events)")}:
+                    conn.execute("ALTER TABLE dividend_events ADD COLUMN served_on TEXT")
+                    conn.execute(
+                        "UPDATE dividend_events SET served_on = (SELECT max(day) FROM ("
+                        "SELECT substr(max(date), 1, 10) AS day FROM price_bars WHERE ticker = dividend_events.ticker "
+                        "UNION ALL SELECT substr(max(date), 1, 10) FROM split_events "
+                        "WHERE ticker = dividend_events.ticker))")
                 conn.commit()
             except BaseException:
                 conn.rollback()
@@ -601,8 +622,8 @@ class SQLiteStore:
         # analyst_snapshots (one row per collection)
         self._write_analyst_snapshot(conn, stock.ticker, collected_at, stock.analyst_estimates or {})
 
-        # dividend_events (upsert all known payments)
-        self._write_dividend_events(conn, stock.ticker, stock.dividend_history or {})
+        # dividend_events (upsert all known payments, with the day Yahoo served them)
+        self._write_dividend_events(conn, stock.ticker, stock.dividend_history or {}, collected_at[:10])
 
         # price_bars / earnings_history / split_events (upsert all known records)
         self._write_price_bars(conn, stock.ticker, stock.price_bars or [])
@@ -714,8 +735,11 @@ class SQLiteStore:
             self._upsert(conn, "analyst_snapshots", ["ticker", "collected_at"], row)
 
     def _write_dividend_events(self, conn: sqlite3.Connection, ticker: str,
-                                dividend_history: Dict[str, Any]) -> None:
-        """Upsert every known dividend payment (append-only in practice; history rarely changes)."""
+                                dividend_history: Dict[str, Any], served_on: str) -> None:
+        """Upsert every known dividend payment (append-only in practice; history rarely changes),
+        each with *served_on*, the run's day: Yahoo split-adjusts a payment for every split up
+        to the day it serves it (BUG-103). A run whose dividend request failed writes none, so
+        the stored ones keep their day."""
         for rec in dividend_history.get("dividend_payments") or []:
             date = rec.get("date")
             if not date:
@@ -724,6 +748,7 @@ class SQLiteStore:
                 "ticker": ticker,
                 "date": date,
                 "amount": rec.get("amount"),
+                "served_on": served_on,
             })
 
     def _write_price_bars(self, conn: sqlite3.Connection, ticker: str,

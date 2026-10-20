@@ -1393,3 +1393,20 @@ Result: BUG-100 VERIFIED; VALID-09 PASS.
 Gates: ruff ✓ mypy ✓ pytest 1087 passed, 1 skipped (1 known warning) | CI: pending for this push
 Commit: (this commit) fix(parsers): derived liabilities leave out the non-controlling interest
 Next: the P2s, oldest first: BUG-103, BUG-104, BUG-106. Fixes since review 10's range: 4.
+
+## Iteration 74: 2026-10-20 18:18: fix
+Picked: BUG-103, the oldest open P2 (no P0 or P1 open). CI: 3d39b8f ✓.
+Did: the basis of Yahoo's dividends is recorded, as code review 10 proposed: `dividend_events.served_on`, the day of
+the collection that fetched each payment. A run whose dividend request fails keeps its splits; the engine takes each
+payment to the price's basis by the splits between its served day and the price's; one without a served day is on
+every stored split's basis, the old rule, and the migration dates the old payments to reproduce it (one transaction,
+committed before the run writes). Oracle first, in its own commits (1ee9fbc, 7191997): it flags the unfixed engine's
+DDM on BUG-103's database (316.33 against 31.63) and is unchanged on every other copy. TDD (the two engine cases RED
+on the old rule), eight mutants each failing a test. Real app: code review 10's combinations through the real
+fetcher, store, engine and route read as the review expected; 0 of 762 real and 0 of 114 golden rows move.
+Evidence: `qa/evidence/iter74-bug103-{red,green,mutants,e2e,impact}.txt`, `iter74-oracle-dividend-basis.txt`
+Result: BUG-103 VERIFIED; GATHER-06 → FAIL→BUG-107 (P3, left).
+Gates: ruff ✓ mypy ✓ pytest 1098 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(valuation): a run whose dividend request fails keeps its splits
+Next: the P2s, oldest first: BUG-104, then BUG-106. Fixes since review 10's range: 5, so code review 11 is due
+(a26e1a7..this commit: BUG-102, BUG-100, BUG-103).

@@ -92,11 +92,10 @@ class YahooHandler:
             if data["market_data"].get("current_price") is None:
                 warnings.append("quote unavailable; the stored price wasn't refreshed")
             if "error" in data["dividend_history"]:
-                # The dividends and the splits come from one chart response: a split
-                # stored without them would take back dividends from before it (BUG-094).
-                data["splits"] = []
+                # The stored dividends keep the day Yahoo served them (``served_on``), which
+                # takes them to the price's basis past any split this run stores (BUG-103).
                 warnings.append(f"dividend history unavailable ({data['dividend_history']['error']}); "
-                                "the stored dividends and splits weren't refreshed")
+                                "the stored dividends weren't refreshed")
             if bars_error:
                 # The stored bars stay as they were beside this run's newer dividends (BUG-084).
                 warnings.append(f"price history unavailable ({bars_error}); the stored daily bars weren't refreshed")

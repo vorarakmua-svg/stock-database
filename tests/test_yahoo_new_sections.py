@@ -376,14 +376,15 @@ class _FakeTickerDividendsFail(_FakeTicker):
         raise RuntimeError("chart request failed")
 
 
-def test_a_run_whose_dividends_fail_stores_no_split(monkeypatch):
-    # The dividends and the splits come from one chart response; a split stored without them would take back dividends
-    # from before it (BUG-094), so the run keeps neither and says so.
+def test_a_run_whose_dividends_fail_keeps_its_splits(monkeypatch):
+    # BUG-103 (code review 10): BUG-094's fix dropped the splits whenever the dividend history failed, which helped only
+    # when the quote failed too: with the quote and bars on the new basis, nothing recorded the split, and Graham and
+    # Lynch read ten times their value. The stored dividends keep the day Yahoo served them (`served_on`), which takes
+    # them to the price's basis instead.
     _patch_ticker(monkeypatch, _FakeTickerDividendsFail)
     data = YahooHandler(rate_limit_delay=0.0).fetch_all("AAA")
-    assert data["splits"] == []
+    assert data["splits"] == [{"date": "2024-06-10", "ratio": 2.0}]
     stock = StockData(ticker="AAA")
     stock.merge_yahoo_data(data)
     assert [w for w in stock.warnings if "dividend history" in w] == [
-        "Yahoo Finance: dividend history unavailable (chart request failed); the stored dividends and splits "
-        "weren't refreshed"]
+        "Yahoo Finance: dividend history unavailable (chart request failed); the stored dividends weren't refreshed"]

@@ -406,6 +406,32 @@ def _yahoo_dividend_factors(conn: sqlite3.Connection, ticker: str, flagged: bool
     return factors
 
 
+def _dividend_to_price(splits: Sequence[Tuple[str, float]], priced_on: Optional[str],
+                       served_on: Optional[str]) -> float:
+    """The factor that puts a dividend Yahoo served on *served_on* on the basis of the price
+    of *priced_on*.
+
+    Yahoo adjusts a payment for every split up to the day it serves it, so a split between
+    that day and the price's is in one of them only: a later run whose dividend request
+    failed keeps the payments from before a split it stored, beside a price after it, and
+    DDM read ten times its value (BUG-103). The bars' rule (``bars_to_price``), payment by
+    payment. A payment without a served day is on the basis of every stored split, as
+    before: until BUG-103's fix a run stored no split without the dividends from the same
+    chart request. Without a price nothing moves.
+    """
+    if not priced_on:
+        return 1.0
+    served = str(served_on)[:10] if served_on else None
+    factor = 1.0
+    for when, ratio in splits:
+        day = str(when)[:10]
+        if ratio and priced_on < day and (served is None or day <= served):
+            factor *= ratio
+        elif ratio and served is not None and served < day <= priced_on:
+            factor /= ratio
+    return factor
+
+
 def _drop_spin_off_dividends(dividends: List[Tuple[str, float]],
                              splits: Sequence[Tuple[str, float]]) -> List[Tuple[str, float]]:
     """Cash dividends only: drop a spin-off that Yahoo also records as a dividend.
@@ -593,10 +619,6 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
                 rec.ffo_per_share *= ads
             if rec.shares is not None:
                 rec.shares /= ads
-    # Yahoo's series need no filing to go back: a company without SEC annual
-    # financials (an IFRS filer's DDM) kept them a split ahead of its price (BUG-078).
-    unpriced = math.prod(ratio for when, ratio in splits
-                         if ratio and priced_on and str(when)[:10] > priced_on)
     # The bars are on the basis of every split up to their last day, which their daily
     # history reaches: a split between that day and the price's is in one of them only,
     # as when a later run stored it while its price-history request failed (BUG-094).
@@ -626,14 +648,18 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         "WHERE ticker = ? ORDER BY collected_at DESC LIMIT 1",
         (ticker,),
     ).fetchone()
-    dividends = [(day, amount * unpriced) for day, amount in _drop_spin_off_dividends([
-        (r["date"], r["amount"])
-        for r in conn.execute(
-            "SELECT date, amount FROM dividend_events "
-            "WHERE ticker = ? AND amount IS NOT NULL ORDER BY date ASC",
-            (ticker,),
-        ).fetchall()
-    ], splits)]
+    # Yahoo's dividends come to the price's basis from the day Yahoo served them, as the
+    # bars do (BUG-103), whatever the SEC record holds (BUG-078). A database from before
+    # the column, read without migrating, keeps every stored split's basis.
+    served_column = "served_on" in {r[1] for r in conn.execute("PRAGMA table_info(dividend_events)")}
+    payments = conn.execute(
+        "SELECT date, amount, " + ("served_on" if served_column else "NULL") + " AS served_on "
+        "FROM dividend_events WHERE ticker = ? AND amount IS NOT NULL ORDER BY date ASC",
+        (ticker,),
+    ).fetchall()
+    served_on = {r["date"]: r["served_on"] for r in payments}
+    dividends = [(day, amount * _dividend_to_price(splits, priced_on, served_on.get(day)))
+                 for day, amount in _drop_spin_off_dividends([(r["date"], r["amount"]) for r in payments], splits)]
 
     # A bar from yfinance's default history is Yahoo's dividend-adjusted price,
     # lower by every dividend paid since (BUG-075): one flagged so, or any bar of a
