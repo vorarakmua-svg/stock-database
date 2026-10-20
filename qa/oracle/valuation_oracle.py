@@ -175,8 +175,7 @@ class Inputs:
         # Per-share values are compared with the latest price (VAL-07's upside), so they sit on that price's
         # basis (VAL-03 "same share basis", VAL-09 "per-share consistency" across a split). A split dated after
         # both the latest filing and the price's day (a quote failed since; BUG-048) is in neither: no year moves
-        # by it, and Yahoo's dividends and price bars, adjusted for every split it knew when fetched, are taken
-        # back to the price's basis.
+        # by it.
         # The filing each year's figures were last taken from, per field (the vintages, every filing's view of each
         # year): a share split restates the figures filed after it and no other (VAL-09's per-share consistency).
         self.filed_by_field: Dict[Tuple[int, str], str] = {}
@@ -192,10 +191,15 @@ class Inputs:
         except sqlite3.OperationalError:  # a database from before vintages were kept
             pass
         self.priced_on = str(collected_at)[:10] if self.price is not None and collected_at else None
-        self.unpriced = 1.0
+        # Yahoo adjusts its dividends and price bars for every split it knew when fetched; one made after the
+        # price's day is taken back out. A share split the latest filing restated after that day (BUG-060) is in
+        # the filed figures but not in the price: years come to today's basis and go back by it.
+        self.unpriced, self.since_price = 1.0, 1.0
         for date, ratio in self.splits:
-            if ratio and self.after_price(date):
+            if ratio and self.priced_on and self.last_filed and date[:10] > self.priced_on:
                 self.unpriced *= ratio
+                if date[:10] <= self.last_filed[:10] and (ratio >= 1.5 or ratio <= 1 / 1.5) and simple_ratio(ratio):
+                    self.since_price *= ratio
         # Per-share values divide by every share class (BUG-022). Yahoo's share count can cover one class of
         # several (GOOGL's class A: 5.87B of 12.23B), while market cap / price counts them all; and a count still
         # under 3/4 of the latest FY's diluted shares on today's basis is incomplete too (HON, whose market cap is
@@ -262,14 +266,16 @@ class Inputs:
                     unrestated *= ratio
                 else:
                     factor *= ratio
-        # Today's basis is today's share count (the latest market snapshot: the basis the price is quoted on).
-        # The latest FY's count is still pre-split when a split came after its filing (KLAC, BKNG; BUG-014),
-        # so it is only the fallback when there is no snapshot.
-        latest = self.snap_shares or next((r[5] for r in reversed(self.annual) if r[5]), None)
+        # Today's basis is today's share count (the latest market snapshot: the basis the price is quoted on),
+        # moved by a share split the filings restated since the price's day. The latest FY's count is still
+        # pre-split when a split came after its filing (KLAC, BKNG; BUG-014), so it is only the fallback when there
+        # is no snapshot.
+        latest = (self.snap_shares * self.since_price if self.snap_shares else None) or next(
+            (r[5] for r in reversed(self.annual) if r[5]), None)
         shares *= unrestated
-        if factor == 1.0 or not latest:
-            return shares
-        return min((shares, shares * factor), key=lambda s: abs(math.log(s / latest)))
+        if factor != 1.0 and latest:
+            shares = min((shares, shares * factor), key=lambda s: abs(math.log(s / latest)))
+        return shares / self.since_price
 
     def last_10_fys(self, series: List[Tuple[int, float]]) -> List[Tuple[int, float]]:
         """The spec's "<= 10-FY CAGR windows": the values of the last 10 fiscal years the filings cover. A year
