@@ -303,6 +303,30 @@ def test_stat_fragment_known_ticker_uses_fmt_value_for_roic(client):
     assert "15.0%" in resp.text
 
 
+def test_stat_shows_yahoos_debt_to_equity_as_the_percent_it_is(client, web_db):
+    # BUG-135: Yahoo's debtToEquity is a percent (AAPL's 78.445 is 0.784 times equity), and STAT formatted it as a
+    # multiple: "78.4x".
+    conn = sqlite3.connect(web_db)
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price, debt_to_equity) "
+                 "VALUES ('AAA', '2099-01-01T00:00:00', 100.0, 78.445)")
+    conn.commit()
+    conn.close()
+    body = client.get("/ui/stocks/AAA/stat").text
+    assert '<span class="summary-label">Debt/Equity</span><span class="summary-value">78.4%</span>' in body
+
+
+def test_a_figure_already_in_percent_formats_as_one():
+    from src.webapp.formatting import fmt_value
+
+    assert (fmt_value(78.445, "percent"), fmt_value(-1.5, "percent"), fmt_value(None, "percent")) == (
+        "78.4%", "-1.5%", "—")
+
+
+def test_the_screener_names_debt_to_equity_a_percent(client):
+    # The screener compares the stored figure, a percent: read as a ratio, "debt / equity under 2" found 1 of 111.
+    assert '"key": "debt_to_equity", "label": "Debt / equity (%)"' in client.get("/screener").text
+
+
 def test_stat_fragment_unknown_ticker_404(client):
     resp = client.get("/ui/stocks/ZZZ/stat")
     assert resp.status_code == 404

@@ -624,7 +624,7 @@ plus (added for the web terminal — see [Web interface](#web-interface)) `price
 estimate/actual/surprise per quarter), `dividend_events`, `split_events`,
 `holders` (institutional + mutual-fund), `insider_transactions`, and `officers`.
 `market_snapshots` itself was widened with ~40 point-in-time market/valuation
-columns (P/E, PEG, price/book, debt/equity, short interest, 52-week range,
+columns (P/E, PEG, price/book, debt/equity (Yahoo's, a percent), short interest, 52-week range,
 moving averages, …) — see `SNAPSHOT_SCREEN_COLUMNS` in `src/webapp/screener.py`
 for the subset exposed to the screener. All writes are idempotent upserts, so
 re-runs update in place. `dividend_events` keeps each payment as Yahoo served it,

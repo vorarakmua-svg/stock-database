@@ -141,7 +141,7 @@ _SNAPSHOT_SCREENER_LABELS: Dict[str, str] = {
     "short_percent_of_float": "Short % of float",
     "insider_percent": "Insider %",
     "institutional_percent": "Institutional %",
-    "debt_to_equity": "Debt / equity",
+    "debt_to_equity": "Debt / equity (%)",  # the stored figure is Yahoo's percent: 100 is 1x (BUG-135)
     "current_ratio": "Current ratio",
 }
 

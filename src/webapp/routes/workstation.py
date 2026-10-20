@@ -434,7 +434,9 @@ _STAT_PROFITABILITY: List[Tuple[str, str, str]] = [
 ]
 
 _STAT_LEVERAGE: List[Tuple[str, str, str]] = [
-    ("Debt/Equity", "debt_to_equity", "mult"),
+    # Yahoo's debtToEquity is a percent (AAPL's 78.4 is 0.784 times equity), which a
+    # multiple's format read as 78.4x (BUG-135).
+    ("Debt/Equity", "debt_to_equity", "percent"),
     ("Current ratio", "current_ratio", "mult"),
     ("Quick ratio", "quick_ratio", "mult"),
     ("Interest coverage", "interest_coverage", "mult"),

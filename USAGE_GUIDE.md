@@ -256,7 +256,7 @@ undervalued = df[
     (df['pe_trailing'] < 20) &
     (df['pe_trailing'] > 0) &
     (df['profit_margin'] > 0.15) &
-    (df['debt_to_equity'] < 100)
+    (df['debt_to_equity'] < 100)  # a percent: under 1x
 ]
 
 print("Potentially Undervalued Stocks:")
@@ -825,9 +825,8 @@ def buffett_analysis(stock: dict) -> dict:
     }
     results['score'] += results['criteria']['ROIC']['score']
 
-    # 3. Debt to Equity (target: <0.5)
-    de_ratio = valuation.get('debt_to_equity', 0) or 0
-    de_ratio = de_ratio / 100 if de_ratio > 10 else de_ratio  # Normalize if in percentage
+    # 3. Debt to Equity (target: <0.5); Yahoo's debt_to_equity is a percent (78.4 is 0.784x)
+    de_ratio = (valuation.get('debt_to_equity') or 0) / 100
     de_pass = de_ratio < 0.5
     results['criteria']['Debt/Equity'] = {
         "value": f"{de_ratio:.2f}",

@@ -304,7 +304,7 @@ class YahooHandler:
                 "total_cash": info.get("totalCash"),
                 "total_cash_per_share": info.get("totalCashPerShare"),
                 "total_debt": info.get("totalDebt"),
-                "debt_to_equity": info.get("debtToEquity"),
+                "debt_to_equity": info.get("debtToEquity"),  # a percent: 78.4 is 0.784 times equity
                 "current_ratio": info.get("currentRatio"),
                 "quick_ratio": info.get("quickRatio"),
             }

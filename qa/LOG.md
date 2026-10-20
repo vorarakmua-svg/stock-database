@@ -1672,3 +1672,19 @@ Gates: ruff ✓ mypy ✓ pytest 1161 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) chore(qa): discovery MATCH-06; debt/equity's units and share counts in dollars
 Next: record MATCH-04 and code review 13 when they report (claims re-run first); then BUG-135 (P1), BUG-136 (P2).
 Fixes since review 13's range (ef7cc76): 2.
+
+## Iteration 92: 2026-10-20 23:02: fix
+Picked: BUG-135, the only open P1. CI: 3f55659 ✓. Code review 13 reported during the iteration (saved as
+`qa/evidence/review13-report.md`); MATCH-04 still with its worker.
+Did: kept Yahoo's percent rather than converting it (the exports and the guide carry it as one, and the screener
+compares stored figures as typed): STAT and the screener's kind map show it as a percent ("78.4%"), the filter is
+labelled "Debt / equity (%)", the field, README and guide say so, and the guide's normalize-if-over-10 step, which
+read NVDA's 6.6% as 6.6x, divides by 100. TDD (three tests RED); five mutants, four failing a test, one unreachable.
+MATCH-06's sweep: the Debt/Equity mismatches (13 and 15) gone, nothing else moved; stock-web: AAPL 78.4%.
+Evidence: `qa/evidence/iter92-bug135-{red,green,mutants,realdata,e2e}.txt`, `review13-report.md`
+Result: BUG-135 VERIFIED; MATCH-06 FAIL→BUG-136.
+Gates: ruff ✓ mypy ✓ pytest 1164 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(web): debt/equity reads as the percent Yahoo gives
+Next: record code review 13 (no P0; C1 P1: seven companies' latest cash unread; I1 P2: BUG-127's shrinking
+acquisitions totals stored as quarters; I2, I3 P2: total debt double counts; M1-M7 P3), its claims re-run first;
+then MATCH-04 when its worker reports. Fixes since review 13's range (ef7cc76): 3.

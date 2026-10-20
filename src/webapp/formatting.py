@@ -67,13 +67,17 @@ def fmt_price(x: Optional[float]) -> str:
 def fmt_value(x: Optional[float], kind: str) -> str:
     """Dispatch formatting by kind.
 
-    kind in {"money", "pct", "mult", "raw"}.
+    kind in {"money", "pct", "percent", "mult", "raw"}: "pct" is a fraction
+    (0.15 -> "15.0%"), "percent" a figure already in percent (Yahoo's
+    debtToEquity: 78.445 -> "78.4%").
     "raw" -> str(x) or "—".
     """
     if kind == "money":
         return fmt_money(x)
     if kind == "pct":
         return fmt_pct(x)
+    if kind == "percent":
+        return fmt_pct(None if x is None else x / 100)
     if kind == "mult":
         return fmt_mult(x)
     # "raw" or unknown
