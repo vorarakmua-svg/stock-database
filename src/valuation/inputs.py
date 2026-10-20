@@ -313,6 +313,36 @@ def _apply_later_splits(records: List[FYRecord], splits: Sequence[Tuple[str, flo
             rec.shares *= factor
 
 
+def _undo_splits_after_price(records: List[FYRecord], splits: Sequence[Tuple[str, float]],
+                             filed: Optional[str], priced_on: Optional[str]) -> None:
+    """Take a split the filings restated after the price's day back out of every year.
+
+    The latest filing restates its years for a split made before it, and
+    ``_normalize_splits`` brings the older ones onto that basis; but a price
+    quoted before the split isn't on it. That happens when a later run's quote
+    failed, keeping a snapshot older than a split the latest 10-K already
+    reflects (BUG-060). Only share splits count (simple ratios of at least
+    3-for-2 or 1-for-2): no filing restates for a spin-off's price factor.
+    """
+    if not (filed and priced_on):
+        return
+    factor = math.prod(ratio for when, ratio in splits
+                       if ratio and priced_on < str(when)[:10] <= str(filed)[:10]
+                       and (SPLIT_JUMP_THRESHOLD <= ratio <= MAX_SPLIT_RATIO
+                            or 1.0 / MAX_SPLIT_RATIO <= ratio <= 1.0 / SPLIT_JUMP_THRESHOLD)
+                       and _simple_ratio(ratio))
+    if factor == 1.0:
+        return
+    for rec in records:
+        rec.split_factor /= factor
+        if rec.eps_diluted is not None:
+            rec.eps_diluted *= factor
+        if rec.ffo_per_share is not None:
+            rec.ffo_per_share *= factor
+        if rec.shares is not None:
+            rec.shares /= factor
+
+
 def _drop_spin_off_dividends(dividends: List[Tuple[str, float]],
                              splits: Sequence[Tuple[str, float]]) -> List[Tuple[str, float]]:
     """Cash dividends only: drop a spin-off that Yahoo also records as a dividend.
@@ -463,13 +493,15 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         yahoo_counts.append(snap["market_cap"] / snap["current_price"])
     # Values are compared with this snapshot's price, so they stay on its basis: when a
     # later run's quote failed (no new snapshot) but it stored a split made since, that
-    # split moves no year, and Yahoo's dividends and price bars, adjusted for every split
-    # it knew, are taken back to the price's basis (BUG-048).
+    # split moves no year (BUG-048), one the latest filing already restated is taken back
+    # out (BUG-060), and Yahoo's dividends and price bars, adjusted for every split it
+    # knew, are taken back to the price's basis.
     priced_on = (str(snap["collected_at"])[:10]
                  if snap is not None and snap["current_price"] is not None and snap["collected_at"] else None)
     _apply_later_splits(records, splits, filed, yahoo_counts, priced_on)
+    _undo_splits_after_price(records, splits, filed, priced_on)
     unpriced = math.prod(ratio for when, ratio in splits
-                         if ratio and filed and priced_on and str(when)[:10] > max(priced_on, str(filed)[:10]))
+                         if ratio and filed and priced_on and str(when)[:10] > priced_on)
     shares, shares_source = _total_shares(
         snap["shares_outstanding"] if snap else None,
         snap["market_cap"] if snap else None,

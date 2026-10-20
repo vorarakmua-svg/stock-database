@@ -764,3 +764,50 @@ def test_a_split_between_two_years_filings_still_explains_their_seam(tmp_path):
     assert [(r.fiscal_year, r.split_factor) for r in records[3:7]] == [
         (2019, 2.0), (2020, 2.0), (2021, 1.0), (2022, 1.0)]
 
+
+def _restated_after_the_price_db(tmp_path, snapshot_day, price, snapshot_shares):
+    """FY2023-25 as the FY2025 10-K, filed 2026-02-20, restates them for a 10:1 split of 2026-02-01, with Yahoo's
+    split-adjusted dividends and FY-end bars, and the latest market snapshot taken on *snapshot_day*."""
+    db_path = tmp_path / "restated_after_the_price.db"
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('KLA', 'general')")
+    for fy, eps in [(2023, 2.500), (2024, 2.028), (2025, 3.037)]:
+        conn.execute(
+            "INSERT INTO financials_annual (ticker, fiscal_year, period_end, filed_date, net_income, total_equity, "
+            "eps_diluted, weighted_avg_shares_diluted) VALUES ('KLA', ?, ?, '2026-02-20', ?, 4.0e9, ?, 1.3375e9)",
+            (fy, f"{fy}-12-31", eps * 1.3375e9, eps),
+        )
+    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('KLA', '2026-02-01', 10.0)")
+    conn.execute("INSERT INTO dividend_events (ticker, date, amount) VALUES ('KLA', '2025-05-15', 0.19)")
+    conn.execute("INSERT INTO price_bars (ticker, date, close) VALUES ('KLA', '2025-12-31', 60.0)")
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, shares_outstanding, market_cap, current_price) "
+                 "VALUES ('KLA', ?, ?, ?, ?)", (f"{snapshot_day}T12:00:00", snapshot_shares,
+                                                snapshot_shares * price, price))
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_a_split_the_filing_restated_after_the_price_is_taken_back_out(tmp_path):
+    # BUG-060: the latest price is from before a split that the latest 10-K already restated (a later run's quote
+    # failed). The filed figures were past the split and the price wasn't: every model a tenth of the price.
+    conn = _connect(_restated_after_the_price_db(tmp_path, "2026-01-10", 1000.0, 1.3375e8))
+    inputs = load_inputs(conn, "KLA")
+    conn.close()
+    latest = inputs.fy_records[-1]
+    assert (latest.split_factor, round(latest.eps_diluted, 6), latest.shares) == (0.1, 30.37, 1.3375e8)
+    assert [(day, round(amount, 6)) for day, amount in inputs.dividends] == [("2025-05-15", 1.9)]
+    assert {fy: round(close, 6) for fy, close in inputs.fy_end_prices.items()} == {2025: 600.0}
+
+
+def test_a_split_the_filing_restated_before_the_price_stays(tmp_path):
+    conn = _connect(_restated_after_the_price_db(tmp_path, "2026-03-01", 100.0, 1.3375e9))
+    inputs = load_inputs(conn, "KLA")
+    conn.close()
+    latest = inputs.fy_records[-1]
+    assert (latest.split_factor, latest.eps_diluted, latest.shares) == (1.0, 3.037, 1.3375e9)
+    assert inputs.dividends == [("2025-05-15", 0.19)]
+    assert inputs.fy_end_prices == {2025: 60.0}
+

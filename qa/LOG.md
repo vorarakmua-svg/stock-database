@@ -852,3 +852,24 @@ Commits: fd449ef chore(qa): oracle reads a split's restatement from each figure'
 fix(valuation): a share split explains only a seam between its filings
 Next: record code review 6 when it reports; then BUG-060 (P2; the oracle first). Fixes since review 6's range
 (f0db42a..f9bbc91): 2 (65a0602, this).
+
+## Iteration 45: 2026-10-20 07:26: fix
+Picked: BUG-060, the only open P2. CI: 72568ea running at the start (65a0602 ✓). Code review 6 is still running.
+Did: values stay on the price's basis when the latest snapshot predates a split the latest filing already restated.
+The oracle took the rule first (5070282): its date reading already reached today's basis, but its closeness reading
+compared with the snapshot's count, which isn't on today's basis here; it now moves that count by the splits restated
+since the price's day and takes every year back at the end, and takes Yahoo's series back for every split after the
+price's day. On the scenario (rebuilt with consistent filing dates, with and without vintages) valued by the unfixed
+code it flagged all five applicable models, 10x off, and its output elsewhere (real, golden, BUG-048's and BUG-059's
+scenarios) was unchanged. Then TDD (2 tests: RED at split factor 1.0, EPS 3.037 beside a pre-split price; the control
+has the snapshot after the split): `_undo_splits_after_price` takes such a share split back out of every year, and
+Yahoo's series go back for every split after the price's day. Three mutants each fail a test. Valued by the fix: median
+$277.31 beside $1,000 (was $27.73), with the oracle agreeing in both variants; the other split scenarios still agree;
+the real and golden copies revalued: 0 of 762 and 0 of 114 rows change.
+Evidence: `qa/evidence/iter45-bug060-{oracle,red,green,mutants,e2e,impact}.txt`
+Result: BUG-060 VERIFIED. No P0-P2 bug is open (P3 23, NEEDS-USER 10). VAL-09 → FAIL→BUG-050 (P3).
+Gates: ruff ✓ mypy ✓ pytest 969 passed (1 known warning) | CI: pending for this push
+Commits: 5070282 chore(qa): oracle takes a split restated after the price's day back out; (this commit)
+fix(valuation): a split restated after the price's day is taken back out
+Next: record code review 6 when it reports; otherwise a discovery unit (VAL-13 hand-worked examples, then VALID).
+Fixes since review 6's range (f0db42a..f9bbc91): 3 (65a0602, 72568ea, this).
