@@ -382,42 +382,51 @@ class Inputs:
             self._bars_factor = factor
         return self._bars_factor
 
-    def dividend_to_price_basis(self, served: Optional[str]) -> float:
-        """The factor that puts a dividend Yahoo served on *served* on the latest price's split basis (VAL-09's
-        per-share consistency). Yahoo adjusts its dividends for every split it knew when it served them, so a split
-        between that day and the price's is in one of them only: a later run whose dividend request failed kept the
-        payments from before a split it stored, beside a price after it (BUG-103). The bars' rule, row by row. A row
-        without a served day (a database from before `dividend_events.served_on`) is on the basis of every stored
-        split, as before: until BUG-103's fix a run stored no split without the dividends from the same chart."""
-        if not self.priced_on:
+    def dividend_onto(self, onto: Optional[str], served: Optional[str]) -> float:
+        """The factor that puts a dividend Yahoo served on *served* onto the split basis of the day *onto* (the
+        latest price's, or the stored bars' last day). Yahoo adjusts its dividends for every split it knew when it
+        served them, so a split between that day and *onto* is in one of them only. A row without a served day (a
+        database from before `dividend_events.served_on`) is on the basis of every stored split, as before: until
+        BUG-103's fix a run stored no split without the dividends from the same chart. Without *onto*, nothing moves."""
+        if not onto:
             return 1.0
+        target = str(onto)[:10]
         day = str(served)[:10] if served else None
         factor = 1.0
         for date, ratio in self.splits:
-            if ratio and self.priced_on < date[:10] and (day is None or date[:10] <= day):
+            if ratio and target < date[:10] and (day is None or date[:10] <= day):
                 factor *= ratio
-            elif ratio and day is not None and day < date[:10] <= self.priced_on:
+            elif ratio and day is not None and day < date[:10] <= target:
                 factor /= ratio
         return factor
+
+    def dividend_to_price_basis(self, served: Optional[str]) -> float:
+        """A dividend on the latest price's split basis (VAL-09's per-share consistency): a later run whose dividend
+        request failed kept the payments from before a split it stored, beside a price after it (BUG-103)."""
+        return self.dividend_onto(self.priced_on, served)
 
     def yahoo_dividend_factors(self) -> List[Tuple[str, float]]:
         """Yahoo's dividend factors [(ex-date, factor)], newest first. The stored close before an ex-date already
         carries the later dividends' factors, so each factor is solved with them: f = 1 / (1 + d * later / close).
         Yahoo adjusted the stored bars for the dividends it knew when it served them, which the last such bar dates:
-        a dividend after it (a later run's, whose bar request failed) was never in them (BUG-084)."""
+        a dividend after it (a later run's, whose bar request failed) was never in them (BUG-084). Each payment goes
+        onto the bars' split basis first: a later run that stored a split and its dividends on the new basis while
+        its bar request failed left post-split amounts beside pre-split closes (BUG-104)."""
         if getattr(self, "_yahoo_factors", None) is None:
             factors: List[Tuple[str, float]] = []
             later = 1.0
             flagged = "dividend_adjusted" in {r[1] for r in self.db.execute("pragma table_info(price_bars)")}
             served = self.db.execute("select max(date) from price_bars where ticker=?" +
                                      (" and dividend_adjusted" if flagged else ""), (self.t,)).fetchone()[0]
-            for ex, amount in self.db.execute("select substr(date,1,10), amount from dividend_events where ticker=? "
-                                              "and amount > 0 and substr(date,1,10) <= ? order by date desc",
-                                              (self.t, str(served or "")[:10])).fetchall():
+            dated = "served_on" in {r[1] for r in self.db.execute("pragma table_info(dividend_events)")}
+            for ex, amount, paid in self.db.execute(
+                    "select substr(date,1,10), amount, " + ("served_on" if dated else "null") + " from dividend_events "
+                    "where ticker=? and amount > 0 and substr(date,1,10) <= ? order by date desc",
+                    (self.t, str(served or "")[:10])).fetchall():
                 prev = self.db.execute("select close from price_bars where ticker=? and date<? order by date desc "
                                        "limit 1", (self.t, ex)).fetchone()
                 if prev and prev[0]:
-                    factor = 1.0 / (1.0 + amount * later / prev[0])
+                    factor = 1.0 / (1.0 + amount * self.dividend_onto(served, paid) * later / prev[0])
                     factors.append((ex, factor))
                     later *= factor
             self._yahoo_factors = factors
