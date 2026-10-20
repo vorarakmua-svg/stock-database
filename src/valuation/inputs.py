@@ -597,6 +597,18 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     # financials (an IFRS filer's DDM) kept them a split ahead of its price (BUG-078).
     unpriced = math.prod(ratio for when, ratio in splits
                          if ratio and priced_on and str(when)[:10] > priced_on)
+    # The bars are on the basis of every split up to their last day, which their daily
+    # history reaches: a split between that day and the price's is in one of them only,
+    # as when a later run stored it while its price-history request failed (BUG-094).
+    served = conn.execute("SELECT max(date) FROM price_bars WHERE ticker = ?", (ticker,)).fetchone()[0]
+    bars_to_price = 1.0
+    if priced_on and served:
+        last_bar = str(served)[:10]
+        for when, ratio in splits:
+            if ratio and priced_on < str(when)[:10] <= last_bar:
+                bars_to_price *= ratio
+            elif ratio and last_bar < str(when)[:10] <= priced_on:
+                bars_to_price /= ratio
     shares, shares_source = _total_shares(
         snap["shares_outstanding"] if snap else None,
         snap["market_cap"] if snap else None,
@@ -644,7 +656,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
             if factors is None:
                 factors = _yahoo_dividend_factors(conn, ticker, flagged)
             close /= math.prod(f for ex, f in factors if ex > str(bar["date"])[:10])
-        fy_end_prices[rec.fiscal_year] = close * unpriced
+        fy_end_prices[rec.fiscal_year] = close * bars_to_price
 
     return ValuationInputs(
         ticker=ticker,

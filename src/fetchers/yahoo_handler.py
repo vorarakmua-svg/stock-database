@@ -88,10 +88,20 @@ class YahooHandler:
                 "fetched_at": datetime.now().isoformat(),
                 "source": "yahoo_finance",
             }
+            warnings: List[str] = []
+            if data["market_data"].get("current_price") is None:
+                warnings.append("quote unavailable; the stored price wasn't refreshed")
+            if "error" in data["dividend_history"]:
+                # The dividends and the splits come from one chart response: a split
+                # stored without them would take back dividends from before it (BUG-094).
+                data["splits"] = []
+                warnings.append(f"dividend history unavailable ({data['dividend_history']['error']}); "
+                                "the stored dividends and splits weren't refreshed")
             if bars_error:
                 # The stored bars stay as they were beside this run's newer dividends (BUG-084).
-                data["warnings"] = [f"price history unavailable ({bars_error}); "
-                                    "the stored daily bars weren't refreshed"]
+                warnings.append(f"price history unavailable ({bars_error}); the stored daily bars weren't refreshed")
+            if warnings:
+                data["warnings"] = warnings
 
             self.logger.info(f"Successfully fetched Yahoo data for {ticker}")
             return data
@@ -694,8 +704,14 @@ class YahooHandler:
         - Dividend yield analysis
         """
         try:
-            info = stock.info
+            # The payments come from the chart, as the splits do, and a failed quote
+            # mustn't keep them from a split the same run stores (BUG-094).
             dividends = stock.dividends
+            try:
+                info = stock.info or {}
+            except Exception as e:  # quoteSummary and v7/quote failed (yfinance raises)
+                self.logger.debug(f"Error getting dividend info: {e}")
+                info = {}
 
             result = {
                 # Current dividend info

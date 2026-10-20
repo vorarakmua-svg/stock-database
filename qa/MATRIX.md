@@ -2,7 +2,7 @@
 
 Generated from `qa/LOOP_PROMPT.md` §6. Full test method and pass criterion for each ID live there.
 
-**Status counts:** TODO 81 · PASS 13 · FAIL 12 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
+**Status counts:** TODO 82 · PASS 13 · FAIL 11 · N-A 0 · BLOCKED 0 · NEEDS-USER 3  
 **Consecutive clean sweeps:** 0
 
 Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEEDS-USER`
@@ -64,7 +64,7 @@ Status values: `TODO | PASS | FAIL→BUG-n | N-A (reason) | BLOCKED (why) | NEED
 | GATHER-03 | companyfacts parsing | TODO | |  |
 | GATHER-04 | Rates | FAIL→BUG-052 | iter 39 | without a FRED key: Treasury.gov's latest day (BUG-041) with its day and source, and the static estimate flagged (BUG-037), checked live; the FRED-key path and January's prior-year fallback are untested; code review 5 (stubbed): any failure of the current-year request falls back to last year's year-end rate, and a blank latest 10-year gives no rate (BUG-052, P3) |
 | GATHER-05 | Rate limiting and retries | TODO | |  |
-| GATHER-06 | Failure modes (mocked) | FAIL→BUG-094 | iter 63 | a later run whose Yahoo quote fails (`Ticker.info` raising) stores the split and not the dividends, so DDM reads ten times its value, with 0 errors and 0 warnings (BUG-094, P2, code review 9); done: a failed SEC submissions request keeps the stored sector (BUG-064), a failed SEC request is an error (BUG-045); untested: DNS failure, 403, 404, 429, 500, malformed JSON, empty yfinance frames (`qa/evidence/iter63-review9-rerun.txt`) |
+| GATHER-06 | Failure modes (mocked) | TODO | iter 67 | done: a run whose Yahoo quote, dividends or price history fail after a split keeps every stored series on one split basis and says so in its warnings (BUG-094 fixed: review 9's four scenarios right through the real fetcher; a failed chart request loses the price too), a failed price-history request is a warning and its stale bars' dividends aren't undone (BUG-084), a failed SEC submissions request keeps the stored sector (BUG-064), a failed SEC request is an error (BUG-045); untested: DNS failure, 403, 404, 429, 500, malformed JSON, empty yfinance frames (`qa/evidence/iter67-bug094-*`) |
 | GATHER-07 | SEC cache | TODO | |  |
 | GATHER-08 | Idempotency | TODO | |  |
 | GATHER-09 | Ticker input | TODO | |  |

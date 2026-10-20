@@ -1270,3 +1270,21 @@ Gates: ruff ✓ mypy ✓ pytest 1055 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(parsers): a year's share counts are on one scale before its fourth quarter
 Next: BUG-094, BUG-095 (P2). Fixes since review 9's range: 4 (51091ce, 6ebfe38, 341f785, this); one more and code
 review 10 is due.
+
+## Iteration 67: 2026-10-20 14:30: fix
+Picked: BUG-094, the older open P2 (no P0 or P1 open). CI: 51b90e0 ✓.
+Did: the oracle first (db4820b): the stored bars count as served on the basis of the splits up to their last day,
+a premise probed on real data first (every ticker's last bar 0-1 days before its last collection with Yahoo); on
+review 9's scenarios valued by the unfixed code it flags the multiples. Then TDD (five tests RED): the dividends come
+from the chart with the splits whatever the quote does, a run whose dividends fail stores no split, the bars take
+the splits between their last day and the price's, and a failed quote or dividend history is a run warning; two
+fixtures gained the day their bars were served. Six mutants, each failing a test. Review 9's four scenarios come
+right through the real fetcher (DDM 418.38 where it read 4,183.77), each failure warned; nothing moves on the real
+(0 of 762) or golden (0 of 114) copies.
+Evidence: `qa/evidence/iter67-bug094-{oracle,red,green,mutants,impact}.txt`
+Result: BUG-094 VERIFIED; GATHER-06 → TODO (no open bug; its other failure modes untested).
+Gates: ruff ✓ mypy ✓ pytest 1060 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: db4820b chore(qa): oracle reads the stored bars' split basis from the day they reach; (this commit)
+fix(valuation): Yahoo's stored series stay on one split basis when a run's requests fail
+Next: this is the fifth fix since review 9's range (51091ce, 6ebfe38, 341f785, 51b90e0, this): code review 10
+(f0690bc..this commit) runs in the background. Then BUG-095 (P2), the last open P2.

@@ -342,3 +342,48 @@ def test_a_failed_price_history_request_is_a_run_warning(monkeypatch):
     assert [w for w in stock.warnings if "price history" in w] == [
         "Yahoo Finance: price history unavailable (chart request failed); the stored daily bars weren't refreshed"]
 
+
+class _FakeTickerQuoteFails(_FakeTicker):
+    """yfinance 1.0 when quoteSummary and v7/quote both fail: info raises, the chart (history, dividends, splits)
+    answers."""
+
+    @property
+    def info(self):
+        raise TypeError("argument of type 'NoneType' is not iterable")
+
+    @property
+    def dividends(self):
+        return pd.Series([0.5, 0.05], index=pd.to_datetime(["2024-05-15", "2024-08-15"]))
+
+
+def test_a_failed_quote_still_brings_the_dividends_with_the_splits(monkeypatch):
+    # BUG-094 (code review 9): the dividend history read `info` before `dividends`, so a failed quote kept the stored
+    # dividends from before a split the run stored from the chart, and DDM took them back by it: ten times over.
+    _patch_ticker(monkeypatch, _FakeTickerQuoteFails)
+    data = YahooHandler(rate_limit_delay=0.0).fetch_all("AAA")
+    assert [p["date"] for p in data["dividend_history"]["dividend_payments"]] == ["2024-05-15", "2024-08-15"]
+    assert data["splits"] == [{"date": "2024-06-10", "ratio": 2.0}]
+    stock = StockData(ticker="AAA")
+    stock.merge_yahoo_data(data)
+    assert "Yahoo Finance: quote unavailable; the stored price wasn't refreshed" in stock.warnings
+
+
+class _FakeTickerDividendsFail(_FakeTicker):
+    """The chart answers the split request but not the dividend one."""
+
+    @property
+    def dividends(self):
+        raise RuntimeError("chart request failed")
+
+
+def test_a_run_whose_dividends_fail_stores_no_split(monkeypatch):
+    # The dividends and the splits come from one chart response; a split stored without them would take back dividends
+    # from before it (BUG-094), so the run keeps neither and says so.
+    _patch_ticker(monkeypatch, _FakeTickerDividendsFail)
+    data = YahooHandler(rate_limit_delay=0.0).fetch_all("AAA")
+    assert data["splits"] == []
+    stock = StockData(ticker="AAA")
+    stock.merge_yahoo_data(data)
+    assert [w for w in stock.warnings if "dividend history" in w] == [
+        "Yahoo Finance: dividend history unavailable (chart request failed); the stored dividends and splits "
+        "weren't refreshed"]

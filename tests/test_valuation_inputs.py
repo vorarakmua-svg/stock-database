@@ -681,13 +681,59 @@ def test_a_split_after_the_latest_filing_never_explains_an_older_seam(tmp_path):
 
 
 def _with_yahoo_series(db_path):
-    """Yahoo's dividends and FY-end price bars, adjusted for every split it knew when they were fetched."""
+    """Yahoo's dividends and FY-end price bars, adjusted for every split it knew when a run on 2026-10-01 fetched them,
+    the day the bars run to."""
     conn = sqlite3.connect(db_path)
     conn.execute("INSERT INTO dividend_events (ticker, date, amount) VALUES ('KLA', '2025-05-15', 0.19)")
-    conn.execute("INSERT INTO price_bars (ticker, date, close) VALUES ('KLA', '2025-06-30', 60.0)")
+    conn.executemany("INSERT INTO price_bars (ticker, date, close) VALUES ('KLA', ?, ?)",
+                     [("2025-06-30", 60.0), ("2026-10-01", 80.0)])
     conn.commit()
     conn.close()
     return db_path
+
+
+def _with_bars_from(db_path, served, closes):
+    """Bars a run served on *served*, the day they run to: *closes* by date."""
+    conn = sqlite3.connect(db_path)
+    conn.executemany("INSERT INTO price_bars (ticker, date, close) VALUES ('KLA', ?, ?)", closes + [(served, 900.0)])
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_bars_from_before_a_split_stay_on_the_older_prices_basis(tmp_path):
+    # BUG-094 (code review 9): a later run stored a split while its quote and price-history requests failed. Its bars,
+    # served with the price on 2026-08-04, were taken back by the split as if refetched since: the multiples band read
+    # 9,833.66 against 983.37.
+    db_path = _post_filing_split_db(tmp_path, "2026-09-01", 10.0, snapshot_shares=1.3375e8)
+    conn = _connect(_with_bars_from(db_path, "2026-08-04", [("2025-06-30", 600.0)]))
+    inputs = load_inputs(conn, "KLA")
+    conn.close()
+    assert inputs.fy_end_prices == {2025: 600.0}
+
+
+def test_bars_served_on_a_splits_own_day_are_after_it(tmp_path):
+    # Yahoo splits the history on the split's day, so bars that reach it carry the split.
+    db_path = _post_filing_split_db(tmp_path, "2026-09-01", 10.0, snapshot_shares=1.3375e8)
+    conn = _connect(_with_bars_from(db_path, "2026-09-01", [("2025-06-30", 60.0)]))
+    inputs = load_inputs(conn, "KLA")
+    conn.close()
+    assert inputs.fy_end_prices == {2025: 600.0}
+
+
+def test_bars_from_before_a_split_go_onto_a_newer_prices_basis(tmp_path):
+    # BUG-094 (iteration 65): a later run's quote worked after the split while its bar request failed, so the new price
+    # sat beside bars a split behind it: the multiples band read 983.37 against 98.34.
+    db_path = _post_filing_split_db(tmp_path, "2026-09-01", 10.0, snapshot_shares=1.3375e8)
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, shares_outstanding, market_cap, current_price) "
+                 "VALUES ('KLA', '2026-10-01T12:00:00', 1.3375e9, 1.3375e11, 100.0)")
+    conn.commit()
+    conn.close()
+    conn = _connect(_with_bars_from(db_path, "2026-08-04", [("2025-06-30", 600.0)]))
+    inputs = load_inputs(conn, "KLA")
+    conn.close()
+    assert (inputs.fy_records[-1].split_factor, inputs.fy_end_prices) == (10.0, {2025: 60.0})
 
 
 def test_a_split_after_the_latest_price_leaves_every_figure_on_that_prices_basis(tmp_path):
@@ -786,7 +832,8 @@ def test_a_split_between_two_years_filings_still_explains_their_seam(tmp_path):
 
 def _restated_after_the_price_db(tmp_path, snapshot_day, price, snapshot_shares):
     """FY2023-25 as the FY2025 10-K, filed 2026-02-20, restates them for a 10:1 split of 2026-02-01, with Yahoo's
-    split-adjusted dividends and FY-end bars, and the latest market snapshot taken on *snapshot_day*."""
+    split-adjusted dividends and FY-end bars as a run on 2026-03-01 served them (the day the bars run to), and the
+    latest market snapshot taken on *snapshot_day*."""
     db_path = tmp_path / "restated_after_the_price.db"
     store = SQLiteStore(db_path=db_path)
     conn = store._connect()
@@ -800,7 +847,8 @@ def _restated_after_the_price_db(tmp_path, snapshot_day, price, snapshot_shares)
         )
     conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('KLA', '2026-02-01', 10.0)")
     conn.execute("INSERT INTO dividend_events (ticker, date, amount) VALUES ('KLA', '2025-05-15', 0.19)")
-    conn.execute("INSERT INTO price_bars (ticker, date, close) VALUES ('KLA', '2025-12-31', 60.0)")
+    conn.executemany("INSERT INTO price_bars (ticker, date, close) VALUES ('KLA', ?, ?)",
+                     [("2025-12-31", 60.0), ("2026-03-01", 80.0)])
     conn.execute("INSERT INTO market_snapshots (ticker, collected_at, shares_outstanding, market_cap, current_price) "
                  "VALUES ('KLA', ?, ?, ?, ?)", (f"{snapshot_day}T12:00:00", snapshot_shares,
                                                 snapshot_shares * price, price))
