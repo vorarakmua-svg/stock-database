@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 42 · NEEDS-USER 11 · Verified: 53
+**Open:** P0 0 · P1 0 · P2 2 · P3 43 · NEEDS-USER 12 · Verified: 53
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -770,6 +770,28 @@ Found: iteration 62 by code review 9 (M4), re-run in iteration 63 (`qa/evidence/
 Repro: `_ensure_columns` checks the columns and then ALTERs without a lock, and the user's copy lacks three ordinary columns (`risk_free_rate_date`, `risk_free_rate_source`, `warnings`). Two first exports at once on a pre-flag copy of the user's data: one failed "duplicate column name: risk_free_rate_source" and wrote nothing, 1 of 3 tries on 51091ce (code review 9: 4 of 5, with both versions); the run's summary still counts its tickers successful, and the error is one log line. BUG-083's own migration re-checks under its lock.
 Expected: every ALTER under one `BEGIN IMMEDIATE`, re-checked, so concurrent first runs both write.   Actual: as above.
 
+### BUG-099 [P2][VALID] Revenue's tag order takes a part of the revenue: AXP's ASC 606 contract revenue, and a figure BLK's next 10-K drops
+Status: OPEN
+Found: iteration 69 via VALID-01 (`qa/evidence/iter69-{revenue,bankfields,sector_rest}.txt`) | Fixed: — | Regression test: —
+Repro: revenue takes the first of its tags the year has (`Revenues`, the two ASC 606 contract-revenue tags, `SalesRevenueNet`, `SalesRevenueGoodsNet`, then `RevenuesNetOfInterestExpense`). AXP files its income statement's total, total revenues net of interest expense, as `RevenuesNetOfInterestExpense` ($60.52B, $65.95B and $72.23B for FY2023-25, its net interest income plus noninterest income to the dollar), and its contract revenue as `RevenueFromContractWithCustomerExcludingAssessedTax` ($37.22B, $38.83B, $41.30B), which wins. BLK's FY2024 10-K tags `Revenues` of $11.01B and $12.79B for FY2023-24; its FY2025 10-K files those years' total revenue as $17.86B and $20.41B under the contract-revenue tag and no `Revenues`, but `Revenues` wins. Over the 126 cached filers' latest three years (378 filer-years) these five are the only picks under 80% of another revenue tag the filer reports for the year.
+Expected: the income statement's total: AXP $60.52B, $65.95B, $72.23B; BLK $17.86B, $20.41B.   Actual: as above, and stored so in the user's data: AXP's FY2025 net margin reads 26.2% (15.0%), BLK's 50.0% for FY2024 then 22.9% for FY2025 (31.2%, then 22.9%), with revenue up 89% (19%).
+Root cause: revenue's tag order in `src/mappings/canonical.py`, applied year by year with no check against the filer's other revenue tags or against its latest filing.
+Impact today: the shown revenue and the metrics built on it (margins, turnover, growth); no valuation input uses revenue. Graded P2 like BUG-061. Also latent: `noninterest_income` lists `RevenuesNetOfInterestExpense`, which already holds the net interest income, so a bank filing no `NoninterestIncome` would count that twice in its efficiency ratio; no cached filer does.
+
+### BUG-100 [P2][VALID] A derived total liabilities counts the non-controlling interest as a liability: INTC's FY2025 is 14% high
+Status: OPEN
+Found: iteration 69 via VALID-09 (`qa/evidence/iter69-{derived,sector_rest}.txt`) | Fixed: — | Regression test: —
+Repro: when a filer tags no `Liabilities`, `derived_fields._total_liabilities` fills it as total assets - total equity. But total equity is the parent's (`StockholdersEquity`, its first tag) whenever that is filed, so the non-controlling interest lands in liabilities, against `quality.py`'s own identity (assets = liabilities + equity + NCI, "total_equity is parent-only"). INTC FY2025: assets $211.43B, Intel's equity $114.28B, non-controlling interests $12.08B; the stored liabilities are $97.15B, the filed figures give $85.07B. INTC FY2024: $97.22B against $91.46B; DIS FY2025: $87.64B against $82.90B. Over the 126 cached filers, 266 annual periods get a derived figure with a minority interest inside, high by a median 0.5% and by over 5% in 13 (AMD FY2009 +14.6%, INTC FY2025 +14.2%, MRK FY2008 +9.3%, DIS FY2018 +8.9%). Where liabilities are filed, assets - equity matches them within 0.5% in 1,038 of 1,540 annual periods, and assets - equity - NCI (when the equity is the parent's) in 1,342.
+Expected: assets - equity - NCI when the equity is the parent's, and assets - equity when it is `StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest`.   Actual: assets - equity.
+Impact today: the shown total liabilities (Financials tab, API, the exports' `sec_total_liabilities`), annual and quarterly; no valuation input. Most remaining gaps are temporary equity (no canonical field) and BUG-063's unmapped NCI tags.
+Notes: the derivations otherwise hold: across the 126 filers' annual and quarterly records no reported value changes and every fill is tagged "derived".
+
+### BUG-101 [P3][VALID] SCHW has no efficiency ratio: the bank formula needs a noninterest-income tag SCHW doesn't file
+Status: OPEN
+Found: iteration 69 via VALID-08 (`qa/evidence/iter69-bankfields.txt`) | Fixed: — | Regression test: —
+Repro: `sector_metrics.bank_metrics` divides noninterest expense by net interest income + noninterest income. SCHW files no `NoninterestIncome`, so its efficiency ratio is empty for FY2023-25, although its revenue is its total net revenue ($23.92B for FY2025, as at the banks that file both, where revenue is their sum within 0.5%: BAC, C, COF, GS, JPM, MS, USB, WFC) and its noninterest expense is filed ($12.46B).
+Expected: 52.1% for FY2025 (noninterest expense / net revenue).   Actual: NULL.
+
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
@@ -809,6 +831,11 @@ Options: (a) always count every class and unit (market cap ÷ price whenever it 
 Status: NEEDS-USER
 Context: when a company's usable annual reports stop (it moved to IFRS, BUG-066, or stopped filing), its models keep valuing it on the last fiscal year it has, beside today's price: in code review 6's example Graham on FY2017 and the multiples band on FY2019, computed in 2026. Nothing in the valuation checks how old the basis is; the "Basis FY" column shows it.
 Options: (a) mark the per-share models N/A past a cutoff (say a basis more than two fiscal years old), with the reason; (b) keep the values and add a staleness flag to the verdict; (c) keep things as they are, with BUG-066's note explaining the gap. Recommendation: (a) at two years.
+
+### Q9 [VAL] NEEDS-USER: should asset managers and a health insurer be valued as banks and insurers?
+Status: NEEDS-USER
+Context: `classify_sic` makes SIC 6020-6299 a bank ("depository institutions, holding companies, broker-dealers, finance") and 6300-6411 an insurer, so BLK (6211), BX and KKR (6282, investment advice) are banks and UNH (6324, hospital and medical service plans) an insurer. Their DCF, Lynch and owner-earnings models are "not applicable to sector 'bank'" (or 'insurance'), leaving DDM, Graham and the P/B band (KKR's DDM base 7.2 at a price of 107.78; BLK's 345.6 at 1132.74), and the bank ratios are empty for all three asset managers, which report no deposits or net interest income. The other ten banks (AXP, BAC, C, COF, GS, JPM, MS, SCHW, USB, WFC) report both.
+Options: (a) a bank also needs deposits on its balance sheet, otherwise it is valued as a general company, and SIC 6324 is general (managed care is valued on its earnings); (b) (a) for the asset managers only, with UNH kept an insurer; (c) keep the SIC routing and say on the VAL tab why the cash-flow models don't apply. Recommendation: (a).
 
 ---
 

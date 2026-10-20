@@ -1303,3 +1303,20 @@ Gates: ruff ✓ mypy ✓ pytest 1063 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(parsers): a 16-week fourth quarter is a quarter
 Next: record code review 10 when it reports (fixes since review 9's range: 5, reviewed). With no P0-P2 open, a
 discovery unit over the TODO rows, riskiest area first (section 4.2.3: VAL > VALID > MATCH > GATHER > ...).
+
+## Iteration 69: 2026-10-20 15:09: discovery
+Picked: VALID-01, -08 and -09, the canonical mapping, sector classification and derived fields (no P0-P2 open; VAL
+has no TODO row left). CI: fe20fd6 ✓. Code review 10 is still running.
+Did: ran the coverage report over the basket from a scratch copy of the golden cache, and probed the 126 cached
+filers (read-only) and a copy of the user's database: every boundary SIC code, each stored class against its SIC,
+the sector ratios in all 2,312 company-years, every derivation's fill against the reported values, and the revenue
+each filer's tags give. The universal core resolves for every US-GAAP filer with data, the classes match SIC, and no
+derivation overwrites or goes untagged. But revenue's tag order takes a part of AXP's and BLK's revenue (AXP's ASC
+606 contract revenue, 57% of its total), a derived total liabilities counts the non-controlling interest (INTC
+FY2025 +14%), SCHW gets no efficiency ratio, and three asset managers and UNH are valued as banks and an insurer.
+Evidence: `qa/evidence/iter69-{coverage,coverage-stderr,sectors,bankfields,sector_rest,derived,revenue}.txt`
+Result: VALID-01 → FAIL→BUG-099, VALID-08 → FAIL→BUG-101, VALID-09 → FAIL→BUG-100. New: BUG-099 and BUG-100
+(P2), BUG-101 (P3), Q9 (NEEDS-USER).
+Gates: ruff ✓ mypy ✓ pytest 1063 passed, 1 skipped (1 known warning); no code changed | CI: pending for this push
+Commit: (this commit) chore(qa): discovery VALID-01, -08, -09; AXP's revenue is a part, derived liabilities hold the NCI
+Next: BUG-099 (P2), unless code review 10 reports first; then BUG-100.
