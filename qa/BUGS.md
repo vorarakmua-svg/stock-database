@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 2 · P3 39 · NEEDS-USER 11 · Verified: 48
+**Open:** P0 0 · P1 1 · P2 4 · P3 42 · NEEDS-USER 11 · Verified: 48
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -648,6 +648,7 @@ Repro: `review7/scripts/mutants.py` on an archive of 69c5a7e, each mutant in a f
 Expected: each fix's rule held by a test.   Actual: these rules are held by none.
 Impact today: none; the next change to these rules can break them unseen.
 
+Code review 9 (M5), re-run in iteration 63 on 51091ce, each mutant in a fresh archive with the whole suite (1037 passed each; `qa/evidence/iter63-review9-rerun.txt`): nine more survive. BUG-083's re-check under the lock and its `BEGIN IMMEDIATE` (review 9: without either, the second of two concurrent first runs fails, 3 of 3), and its `except BaseException` (equivalent in practice); `unpriced` with `>=` (no test has a split on the price's day) and counting simple ratios only (none has a spin-off factor after it); BUG-076's ADS count without the split factor (a 1:1 20-F filer with a 4:1 split after its 20-F would read 0.25: Graham 4.63 and Lynch 3.98 against 18.52 and 15.92) and its 1:1 band widened to [0.7, 1.43]; BUG-074's own figures used for flows too (a design choice review 9 left alone) and the basic count summed in TTM (the test sets only the diluted one).
 ### BUG-082 [P2][VALID] The quarterly ladder mixes split bases: a split restates the annual figures but not the quarters filed before it
 Status: VERIFIED (iteration 62)
 Found: iteration 56, checking BUG-074's remaining misses (`qa/evidence/iter56-bug082-repro.txt`) | Fixed: iteration 62 (see LOG) | Regression tests: `tests/test_xbrl_parser.py::test_a_years_quarters_are_on_the_split_basis_its_year_is_filed_on`, `::test_a_quarters_share_counts_are_on_its_years_basis`, `::test_a_ratio_one_count_alone_shows_is_no_split`, `::test_a_reverse_mergers_restated_history_is_no_split`, `tests/test_ttm.py::test_a_trailing_year_across_a_split_is_on_its_latest_quarters_basis`, `tests/test_fetcher_concurrency.py::test_a_collected_quarterly_record_and_its_trailing_years_sit_on_one_split_basis`
@@ -671,12 +672,14 @@ Repro: for a dividend-adjusted bar `load_inputs` (and the oracle) divides by the
 Expected: only dividends up to the last flagged bar are undone, and a failed price-history request is a run warning.   Actual: as above.
 Impact today: a failed bar fetch beside successful dividends, for any ticker whose bars predate BUG-075's fix.
 
+Re-run in iteration 63 (code review 9's M6: iteration 59 took this figure from review 8 unchecked): a second stale quarter adds +0.60%, +0.45% and +0.66% to KO's, JPM's and XOM's FY2025 prices, as much as the first (`qa/evidence/iter63-review9-rerun.txt`).
 ### BUG-085 [P3][STORE] The as-of view serves the tagging errors the annual record puts right
 Status: OPEN
 Found: iteration 58 by code review 8 (M1), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
 Repro: `AsOfReader` returns the latest vintage filed on or before the date, and BUG-061's repairs apply only to the annual record: AMD collected offline keeps FY2021's investing and financing cash flows at -686M and -1,895M in `financials_annual`, while `/api/asof/AMD/annual?fiscal_year=2021&date=2026-10-20` returns +686M and +1,895M; as of 2024-08-02 to 2025-07-31 STX's FY2022 dividend reads 2,770,000, and as of 2011-02-25 to 2012-02-22 BAC's FY2008 total assets 0.
 Expected: the as-of view says the figure is as filed, or applies the repair the filings known on that date support.   Actual: the known error, unmarked.
 
+Re-run in iteration 63 (code review 9's M6: iteration 59 re-ran AMD only): on 51091ce, STX's FY2022 dividend a share reads 2,770,000 as of 2024-08-02 through 2025-07-31 (2.77 the day before), and BAC's FY2008 total assets 0 as of 2011-02-25 through 2012-02-22 (1.818T the day before); after each range the as-of value is None (lead L22) (`qa/evidence/iter63-review9-rerun.txt`).
 ### BUG-086 [P3][VALID] BUG-061 misses a tagging error every later filing repeats: BRK-B's FY2009 basic shares
 Status: OPEN
 Found: iteration 58 by code review 8 (M2), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
@@ -689,6 +692,7 @@ Found: iteration 58 by code review 8 (M3), re-run in iteration 59 (`qa/evidence/
 Repro: `load_inputs` undoes a dividend's factor only for bars before its ex-date (`ex > day`); the mutant `ex >= day` passes the whole suite (1026 passed on 0b061c0). Broken, 14 of the user's FY-end bars that fall on an ex-date would move (USB FY2024-25 +1.05% and +0.97%, BMY FY2020 +0.80%, O FY2017-25 about +0.4%).
 Expected: a test with a dividend on the FY-end bar's day.   Actual: none.
 
+Re-run in iteration 63 (code review 9's M6: iteration 59 re-ran the mutant, not these figures): 14 of the user's 1,244 FY-end bars since FY2016 fall on an ex-date, and the mutant would move USB's FY2024-25 +1.05% and +0.97%, BMY's FY2020 +0.80% and O's FY2017-25 about +0.4% (`qa/evidence/iter63-review9-rerun.txt`).
 ### BUG-088 [P3][CODE] The suite's network guard misses curl_cffi, connect_ex, asyncio and name lookups, and refuses 127.0.0.2
 Status: OPEN
 Found: iteration 58 by code review 8 (M4), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
@@ -719,6 +723,45 @@ Found: iteration 62, checking BUG-082's impact (`qa/evidence/iter62-bug082-impac
 Repro: a year's rungs come from their latest filings, and a later filing can re-tag a count at another scale. MCD's 10-Ks for FY2023 and FY2024 give FY2021's and FY2022's diluted counts as 751.8 and 741.3 (millions) beside nine months of 751.9M and 743.0M in units, so Q4 2021 reads -2,223.0M, Q4 2022 -2,196.7M, and their trailing years 8.17M and 8.10M against years of 751.8M and 741.3M; COP's Q1 and year of 2019 are in thousands (Q4 -3,339.5M, TTM 12.88M against 1,123.5M); NVDA's FY2009-10 rungs in thousands; KO's 2017 and T's 2009 quarters in millions (Q4 16.9B and 23.4B against years of 4.3B and 5.9B); TXN's 2009 nine months in millions. `share_scale` puts the annual record right, and a quarter only where its EPS implies the count, never a derived one or one at or below zero.
 Expected: a year's rungs on one scale before Q4 is derived (share_scale's rule applied to the rungs), and no count at or below zero.   Actual: as above.
 Impact today: those years' quarterly and TTM counts in the statements tab, the API and the exports; no valuation (the models read annual rows). BX's 2015 and 2017 rungs differ by a restated count basis (1.88x), not a scale.
+
+### BUG-093 [P1][VAL] A quote refresh after a split puts the post-split price beside valuations on the old basis
+Status: OPEN
+Found: iteration 62 by code review 9 (C1), re-run in iteration 63 (`qa/evidence/iter63-review9-rerun.txt`) | Fixed: — | Regression test: —
+Repro: the quote job (`src/webapp/jobs.py`: the web app's REFRESH and `POST /api/stocks/{T}/refresh-quote`) calls only `YahooHandler.fetch_quote` and `SQLiteStore.upsert_quote`, which writes one market snapshot. After a split since the last full collection the snapshot moves to the post-split price, while `split_events`, the dividends, the bars and the filed figures stay pre-split: every per-share model sits on the old basis beside the new price, and a backfill can't tell, since nothing records the split. On code review 9's scenario through the real fetcher, YahooHandler and SQLiteStore (a fake yf.Ticker; a 10:1 split on 2026-06-12, the quote refreshed on 06-20): price 101.21, median 526.57, upside +420.3%, "cheap", on the valuation API and the VAL tab, and the same after a backfill; a full collection instead gives median 52.66, upside -48.0%, "expensive" (DDM 41.84, Graham 63.48, Lynch 34.65, multiples 98.34).
+Expected: a refresh after a split leaves the price and the valuations on one basis (it brings the split in, or says the ticker needs a full collection).   Actual: as above.
+Impact today: none in the user's copy (its 2026 splits predate its snapshots); any split after 2026-08-04, from the first quote refresh after it until the next full collection.
+
+### BUG-094 [P2][VAL] When a later run's Yahoo quote fails, its split takes back dividends Yahoo never refetched: DDM ten times its value, and the run says nothing
+Status: OPEN
+Found: iteration 62 by code review 9 (I1), re-run in iteration 63 (`qa/evidence/iter63-review9-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `unpriced` (BUG-048, BUG-078) multiplies Yahoo's stored dividends and FY-end bars by every split since the price's day, on the premise that the run that stored the split refetched them. When yfinance 1.0's `Ticker.info` raises (quoteSummary and v7/quote failing: a TypeError, or a 429), the quote fails and so does the dividend extractor, which reads `stock.info` before `stock.dividends`, while the split (chart endpoint) is stored and the bars usually refresh. Code review 9's scenario through the real fetcher (a 10:1 split on 2026-06-12, run 2 on 2026-10-01): with `info` raising, a company without SEC annual financials values DDM at 4,183.77 (TTM dividends 219.78) against 418.38, and so does one with ten 10-K years; with the bar request failing too, its multiples band reads 9,833.66 against 983.37. Run 2 records 0 errors and 0 warnings. With `info` empty (BUG-078's own premise) DDM is 418.38, as intended. The oracle shares the predicate, so it agrees.
+Expected: Yahoo's series on the price's basis (BUG-048's Expected), and a failed quote or dividend fetch a run warning.   Actual: as above.
+Impact today: none in the user's copy; a split between two runs where the second's `info` fails.
+
+### BUG-095 [P2][VALID] A 16-week fourth quarter is never derived: COST and PEP have no Q4 and no trailing year
+Status: OPEN
+Found: iteration 62 by code review 9 (I2), re-run in iteration 63 (`qa/evidence/iter63-review9-rerun.txt`) | Fixed: — | Regression test: —
+Repro: the ladder derives a quarter only when its increment spans 80 to 100 days (`_QUARTER_MAX_DAYS`), and COST's and PEP's 12-12-12-16-week years end on a 112 to 119-day fourth quarter (COST 2023-05-07 to 2023-09-03: 119 days; PEP 2024-09-07 to 2024-12-28: 112). On 51091ce neither has a quarter labelled Q4 among its 74, and none of their 18 and 17 TTM rows has revenue or net income.
+Expected: Q4 = annual - 9-month YTD (VALID-06), and the trailing years the rolling four quarters.   Actual: as above.
+Impact today: both tickers' Q4s and every TTM row in the statements tab, the API and the exports; no valuation.
+
+### BUG-096 [P3][VALID] A quarter's own 3-month count can make a share-only quarter (BUG-074), which costs ADI two trailing years
+Status: OPEN
+Found: iteration 62 by code review 9 (M2), re-run in iteration 63 (`qa/evidence/iter63-review9-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `assign` makes a period for an own 3-month count no flow ladder reaches. ADI's FY2012 10-K re-dates fiscal Q1 2011 to end 2011-02-04, beside the 10-Q's 2011-01-29, so on 51091ce 2011-02-04 is a quarter of share counts only, the TTM rows of 2011-04-30 and 2011-07-30 (net income 888.4M and 908.9M on fea2b70) are gone, and 2011-10-29's net income is blank; code review 9 counts four such quarters (ADI 2011-02-04, GS 2008-05-30, RTX and SYK 2008-06-30). A regression of 2bb2a24.
+Expected: an own figure fills only a quarter that exists, as the fill loop does.   Actual: as above.
+
+### BUG-097 [P3][VALID] The empty-record explanation loses the currency when one filing isn't in it (BUG-077)
+Status: OPEN
+Found: iteration 62 by code review 9 (M3), re-run in iteration 63 (`qa/evidence/iter63-review9-rerun.txt`) | Fixed: — | Regression test: —
+Repro: synthetic companyfacts of a CNY 20-F reporter with one dollar-majority 6-K, or with one filing that tags only share counts: on 51091ce the explanation reads "its annual-report facts give no full fiscal year of a mapped concept", where fea2b70 said "it reports in CNY (20-F, 6-K), which isn't converted to dollars". No cached filer has this shape. A regression of 0b061c0.
+Expected: the currency named when every annual report is in it.   Actual: as above.
+
+### BUG-098 [P3][STORE] Two first runs at once after an upgrade: the loser's whole batch fails on a duplicate column, and only a log line says so
+Status: OPEN
+Found: iteration 62 by code review 9 (M4), re-run in iteration 63 (`qa/evidence/iter63-review9-rerun.txt`) | Fixed: — | Regression test: —
+Repro: `_ensure_columns` checks the columns and then ALTERs without a lock, and the user's copy lacks three ordinary columns (`risk_free_rate_date`, `risk_free_rate_source`, `warnings`). Two first exports at once on a pre-flag copy of the user's data: one failed "duplicate column name: risk_free_rate_source" and wrote nothing, 1 of 3 tries on 51091ce (code review 9: 4 of 5, with both versions); the run's summary still counts its tickers successful, and the error is one log line. BUG-083's own migration re-checks under its lock.
+Expected: every ALTER under one `BEGIN IMMEDIATE`, re-checked, so concurrent first runs both write.   Actual: as above.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
@@ -784,3 +827,4 @@ Options: (a) mark the per-share models N/A past a cutoff (say a basis more than 
 - L19 [VALID] Quarterly D&A is negative for non-insurers too: CRM (9 quarters 2018-2026), AMD, AVGO, GE, INTC, MCD, MRK and NEE (one or two each); likely a Q4 = annual - 9-month difference across two D&A tags. Check in VALID-06. (Insurers' D&A net of accretion is negative for real: ALL, PRU, KKR.) (iter 47)
 - L20 [OPS] The user's database (collected 2026-08-04) predates this loop's parser fixes: today's parser reads AMGN FY2020 dividends per share as 6.56 (stored 1.76) and gives AMT FY2020 none (stored 1.21, a point-in-time fact). Re-collecting refreshes such years; say so in REPORT.md. (iter 47)
 - L21 [MATCH] The market data's 50- and 200-day moving averages (`yahoo_handler.py`, `history(period="1y")`) and the 10-year price-history statistics (period high, low and average) still come from yfinance's dividend-adjusted history, slightly below the market's for a dividend payer; total return and CAGR are right on it. MATCH-03 decides. (iter 53)
+- L22 [STORE/VALID] The as-of view returns None for a figure a year's later filing doesn't repeat: STX's FY2022 dividend a share as of 2025-08-01 and BAC's FY2008 total assets as of 2012-02-23, where the annual record keeps 2.77 and 1.818T. Check whether a later vintage's partial view of a year should hide what earlier filings reported (VALID-10, STORE-05). (iter 63)

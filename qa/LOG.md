@@ -1200,3 +1200,24 @@ Gates: ruff ✓ mypy ✓ pytest 1037 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(parsers): a year's quarters are on the split basis its year is filed on
 Next: record code review 9 (re-run each claim first), then its C1 at once if it holds as a P1. Fixes since review
 9's range: 1 (this).
+
+## Iteration 63: 2026-10-20 12:39: review
+Picked: recording code review 9 (fea2b70..f0690bc), which reported during iteration 62 with a proposed P1 (section
+4.6: valid findings become bugs; each claim re-run first). CI: 51091ce running at the start.
+Did: read each of the reviewer's scripts (copies, scratch folders, the network blocked), then re-ran every claim on
+51091ce. All hold: C1 (after a 10:1 split, a quote refresh shows +420.3% and "cheap" where a full collection gives
+-48.0%, and a backfill doesn't help), I1 (with Yahoo's `info` failing, the stored split takes back dividends never
+refetched: DDM 4,183.77 against 418.38, the multiples band 9,833.66 with the bars failing too, 0 errors and 0
+warnings), I2 (COST and PEP: no Q4, no TTM revenue), M1 (= BUG-092), M2 (ADI's share-only quarter costs two TTM
+rows; a regression of 2bb2a24), M3 (the currency gone from the explanation; synthetic; a regression of 0b061c0), M4
+(1 of 3 tries), M5 (the nine survivors survive the whole suite on 51091ce too) and M6 (three figures iteration 59's
+records took from review 8 unchecked; re-run now, all three hold).
+Evidence: `qa/evidence/review9-report.md`, `qa/evidence/iter63-review9-rerun.txt`
+Result: new BUG-093 (P1, C1), BUG-094 (P2, I1), BUG-095 (P2, I2), BUG-096 to BUG-098 (P3: M2-M4); M5 added to
+BUG-081; M6's figures re-run into BUG-084, BUG-085 and BUG-087; lead L22. GATHER-13 → FAIL→BUG-093 (it was PASS),
+GATHER-06 → FAIL→BUG-094, GATHER-02 → FAIL→BUG-097, STORE-01 → FAIL→BUG-098.
+Gates: ruff ✓ mypy ✓ pytest 1037 passed, 1 skipped (1 known warning); no code changed | CI: pending for this push
+Commit: (this commit) chore(qa): record code review 9; a quote refresh after a split, and dividends a failed quote
+never refetched
+Next: BUG-093 (P1) at once. Until it's fixed: after a company splits, collect it in full rather than refreshing its
+quote. Then the P2s, oldest first: BUG-084, BUG-092, BUG-094, BUG-095. Fixes since review 9's range: 1 (51091ce).
