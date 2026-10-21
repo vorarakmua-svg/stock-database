@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 13 · DOING 0 · DONE 1 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 12 · DOING 0 · DONE 2 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -18,7 +18,7 @@
 
 | ID | Task | Status | Commit | Evidence |
 |---|---|---|---|---|
-| M1-1 | `src/valuation/history_inputs.py`: share series normalization, price factors, known dates, field choice, `load_history_inputs`; with tests | TODO | | |
+| M1-1 | `src/valuation/history_inputs.py`: share series normalization, price factors, known dates, field choice, `load_history_inputs`; with tests | DONE | this commit | `qa/evidence/valhist-m1-1-*.txt` |
 | M1-2 | `src/valuation/history.py`: multiples, window statistics, implied prices, the fair-value line, labels, `compute_history`; with tests | TODO | | |
 | M1-3 | Storage (`valuation_history`, `valuation_ranges`, `export_valuation_history`) and the engine hook in `compute_and_store`, covering backfill; with tests | TODO | | |
 | M1-4 | Real-data validation: `qa/oracle/history_vs_yahoo.py` on a backfilled DB copy; the spec's gates; split continuity; jumps traced; misses explained | TODO | | |
@@ -76,3 +76,22 @@ Evidence: `qa/evidence/levfcf-{red,green,oracle-before,oracle-flags,oracle-after
 Gates: ruff ✓ mypy ✓ pytest 1195 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
 Commit: 59e0678 test(qa): the valuation oracle reads the DCF basis as OCF - capex, as the spec says; (this commit) fix(parsers): levered FCF stops taking off interest that operating cash flow already bears
 Next: M1-1.
+
+### Build iteration 2: 2026-10-21 15:05: M1-1
+Did:
+- `src/valuation/history_inputs.py`: `load_history_inputs` reads the month-end closes, each TTM row's
+  fundamentals through `CalculatedMetrics` (sector suppression applied; FCF only with capex), the day each
+  became known, and one share field per quarter on the bars' split basis.
+- The bars-to-price factor moved out of `load_inputs` into `inputs.bars_to_price_factor` (behaviour unchanged).
+- TDD: 17 tests (RED: the module missing), and 15 mutants, each killed.
+- Real data (a backup-API copy, read-only): 122 of 127 load; N/A for 3 without quarterly share counts
+  (BRK-B, V, one more), BX by the Yahoo guard (1.49x, Q7) and SPCX (no TTM). The latest count is within
+  5% of Yahoo's for 117 of 123; 4 splits applied (APH and CRWD after their latest quarter, BKNG, GOOGL);
+  C's latest trailing year is stale (2025-12-31).
+- Leads for M1-4: TSLA's quarterly weighted basic count (3.24B) lags its period-end 3.95B, about 18% low at
+  the current point; the oldest quarters (2009-2013) of PG, LLY, GE and HON lack the chosen share field, so
+  their history starts in 2011-2013.
+Evidence: `qa/evidence/valhist-m1-1-{red,mutants,realdata}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1212 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
+Commit: (this commit) feat(valuation): history inputs put every quarter's shares on the price bars' basis
+Next: M1-2.

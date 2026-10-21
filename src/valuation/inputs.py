@@ -463,6 +463,25 @@ def _drop_spin_off_dividends(dividends: List[Tuple[str, float]],
     return kept
 
 
+def bars_to_price_factor(splits: Sequence[Tuple[str, float]], priced_on: Optional[str],
+                         last_bar: Optional[str]) -> float:
+    """The factor that puts a price bar onto the basis of the price quoted on *priced_on*.
+
+    The bars are on the basis of every split up to their last day, which their daily
+    history reaches. A split between that day and the price's is in one of them only, as
+    when a later run stored it while its price-history request failed (BUG-094).
+    """
+    factor = 1.0
+    if priced_on and last_bar:
+        last = str(last_bar)[:10]
+        for when, ratio in splits:
+            if ratio and priced_on < str(when)[:10] <= last:
+                factor *= ratio
+            elif ratio and last < str(when)[:10] <= priced_on:
+                factor /= ratio
+    return factor
+
+
 def _total_shares(snapshot: Optional[float], market_cap: Optional[float], price: Optional[float],
                   records: List[FYRecord]) -> Tuple[Optional[float], str]:
     """Shares of every class, for per-share values that are compared with the price.
@@ -627,18 +646,8 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
                 rec.ffo_per_share *= ads
             if rec.shares is not None:
                 rec.shares /= ads
-    # The bars are on the basis of every split up to their last day, which their daily
-    # history reaches: a split between that day and the price's is in one of them only,
-    # as when a later run stored it while its price-history request failed (BUG-094).
     served = conn.execute("SELECT max(date) FROM price_bars WHERE ticker = ?", (ticker,)).fetchone()[0]
-    bars_to_price = 1.0
-    if priced_on and served:
-        last_bar = str(served)[:10]
-        for when, ratio in splits:
-            if ratio and priced_on < str(when)[:10] <= last_bar:
-                bars_to_price *= ratio
-            elif ratio and last_bar < str(when)[:10] <= priced_on:
-                bars_to_price /= ratio
+    bars_to_price = bars_to_price_factor(splits, priced_on, str(served)[:10] if served else None)
     shares, shares_source = _total_shares(
         snap["shares_outstanding"] if snap else None,
         snap["market_cap"] if snap else None,
