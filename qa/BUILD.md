@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 11 · DOING 1 · DONE 11 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 10 · DOING 1 · DONE 12 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -34,7 +34,7 @@
 |---|---|---|---|---|
 | M2-0 | Design M2: `docs/superpowers/specs/2026-10-21-quality-scores-design.md`, then these rows | DONE | this commit | the spec |
 | M2-1 | `src/scores/fundamentals.py`: per-share series on today's split basis, 3/5/10-year CAGRs; with tests | DONE | this commit | `qa/evidence/scores-m2-1-*.txt` |
-| M2-2 | `src/scores/scores.py`: Piotroski F (9 tests), Altman Z, Beneish M, Sloan, ROIC vs WACC, predictability stars; with tests | TODO | | |
+| M2-2 | `src/scores/scores.py`: Piotroski F (9 tests), Altman Z, Beneish M, Sloan, ROIC vs WACC, predictability stars; with tests | DONE | this commit | `qa/evidence/scores-m2-2-*.txt` |
 | M2-3 | `src/scores/signs.py`: the 20 warning signs; with tests | TODO | | |
 | M2-4 | Storage (`per_share_annual`, `quality_scores`, `warning_signs`), the engine hooks, `rank_universe` (ranks, composite, momentum, Magic Formula); with tests | TODO | | |
 | M2-5 | Independent oracle `qa/oracle/scores_oracle.py` and real-data validation (distributions, severe signs traced) | TODO | | |
@@ -318,3 +318,29 @@ Evidence: `qa/evidence/scores-m2-1-{red,mutants,realdata}.txt`
 Gates: ruff ✓ mypy ✓ pytest 1282 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
 Commit: (this commit) feat(scores): per-share series on today's split basis and their CAGRs
 Next: M1-9 when the review reports; otherwise M2-2.
+
+### Build iteration 13: 2026-10-21 23:00: M2-2 (code review 15 still running)
+Did:
+- `src/scores/scores.py`, each score as the spec gives it:
+  - Piotroski F: nine strict tests; a test without inputs isn't counted, so F is "out of N tested".
+  - Altman Z (original) and its zone; Beneish M (SGAI and DEPI neutral when missing); Sloan.
+  - WACC on the DCF's CAPM cost of equity, the debt cost clamped to [rf, rf + 10%], the tax 0-35% (21% when
+    unknown). ROIC - WACC.
+  - Predictability stars: `stars_for` rounds 1 + 4·min R² down to the half star; any loss year or a
+    falling trend gives 1; banks and insurers use EPS.
+  - NCAV per share, and the Magic Formula's earnings yield and Greenblatt return on capital.
+  - Sector exclusions carry reasons.
+- No `type: ignore`: Optional values are narrowed into locals.
+- TDD: 20 tests (RED: the module missing); 12 mutants, each killed. "Round to the nearest" survived the
+  noisy predictability case, so the star rule became `stars_for`, pinned at R² 0.70 (3.5 stars, not 4).
+- Real data (read-only):
+  - F peaks at 5-7 (22 N/A: banks and insurers).
+  - Altman: 66 safe, 8 grey, 9 distress (BA among them).
+  - Predictability: 26 at 4.5 stars, 36 at 1 star.
+  - Beneish flags 5 hyper-growers or restructurers (NVDA, LRCX, MRVL, SNDK, WDC); Sloan beyond 25% for 4.
+  - WACC median 9.2% (6.2-14.0%).
+  - AAPL: F 8/9, Z 12.7, 4.5 stars.
+Evidence: `qa/evidence/scores-m2-2-{red,mutants,realdata}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1302 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
+Commit: (this commit) feat(scores): Piotroski F, Altman Z, Beneish M, Sloan, ROIC vs WACC and predictability
+Next: M1-9 when the review reports; otherwise M2-3.
