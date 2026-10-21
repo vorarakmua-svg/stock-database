@@ -201,6 +201,12 @@ Nothing in the valuations or the history changes. The backfill covers it as befo
   DB's raw tables:
   - Piotroski (each test), Altman, Beneish, Sloan, the CAGRs and predictability: all must agree;
   - the ranks' percentiles, recomputed from the stored components.
+  - It puts shares on today's split basis its own way: each year's count from its latest filing (the diluted
+    weighted count; else net income / diluted EPS; else shares outstanding; a count 100x from its reference is
+    in other units), times the declared share splits after that filing. So it also checks the FY records'
+    seam folding, and found BUG-185.
+  - Years ending before the first price bar + 1 year are not compared: their folded count is the spec's
+    approximation of the converted preferred, which nothing in the filings states.
 - **Real-data distributions**, recorded as evidence: the F-score histogram, Altman zones, the number of
   Beneish flags, predictability stars, the composite. Every severe warning sign gets explained or traced to
   the data.

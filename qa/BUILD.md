@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 5 · DOING 1 · DONE 17 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 5 · DOING 0 · DONE 18 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -37,7 +37,7 @@
 | M2-2 | `src/scores/scores.py`: Piotroski F (9 tests), Altman Z, Beneish M, Sloan, ROIC vs WACC, predictability stars; with tests | DONE | this commit | `qa/evidence/scores-m2-2-*.txt` |
 | M2-3 | `src/scores/signs.py`: the 20 warning signs; with tests | DONE | this commit | `qa/evidence/scores-m2-3-*.txt` |
 | M2-4 | Storage (`per_share_annual`, `quality_scores`, `warning_signs`), the engine hooks, `rank_universe` (ranks, composite, momentum, Magic Formula); with tests | DONE | this commit | `qa/evidence/scores-m2-4-*.txt` |
-| M2-5 | Independent oracle `qa/oracle/scores_oracle.py` and real-data validation (distributions, severe signs traced) | DOING (the oracle's worker is running; the 14 severe signs judged) | | `qa/evidence/scores-m2-5-*.txt` |
+| M2-5 | Independent oracle `qa/oracle/scores_oracle.py` and real-data validation (distributions, severe signs traced) | DONE | a312d54 (BUG-185), this commit | `qa/evidence/scores-m2-5-*.txt`, `qa/evidence/bug185-*.txt` |
 | M2-6 | `GET /api/stocks/{t}/scores` and the STAT tab's Quality section (radar, ranks, tests, growth, signs), browser-checked; with tests | DONE | this commit | `qa/evidence/scores-m2-6-*.txt` |
 | M2-7 | Screener fields from `quality_scores` (table-exists switch) and the preset screens; with tests | DONE | this commit | `qa/evidence/scores-m2-7-*.txt` |
 | M2-8 | Docs: README and USAGE_GUIDE | TODO | | |
@@ -543,3 +543,44 @@ Gates: ruff ✓ mypy ✓ pytest 1390 passed, 1 skipped, 1 warning | CI: no PR (Q
 Commit: (this commit) feat(web): screen on the quality scores, with the five preset screens
 Next: M2-5. Diagnose the annual path's folds (is it BUG-175 again, and does fixing it move a verdict?), refine
 the oracle where its method is approximate, and settle the long-term-debt reading.
+
+### Build iteration 24: 2026-10-22 02:57: M2-5 (BUG-185 found by the oracle, and fixed)
+Did:
+- The oracle's first run (5 of 9 gates) traced its misses to three causes:
+  - The FY records' share normalization folded jumps that aren't splits (8 tickers): BUG-185, the annual twin
+    of BUG-175.
+  - Its own approximate counts where no weighted count is filed (GOOGL, XOM), and vintages in thousands (COP).
+  - A reading: Beneish with a missing long-term debt.
+- Prototyped BUG-175's rules on a scratch copy first: no median and no verdict moves. Then fixed it test-first
+  (a312d54): only declared share splits are candidates; an undeclared jump folds on a split's marks when net
+  income / EPS moved with it; years before the listing fold into the public count. Five tests, six mutants
+  killed. On a copy, RTX's Lynch bull goes from $29.02 to $24.80; the scores of BX, DELL, LIN and RTX move.
+- Decided: Beneish reads a missing long-term debt as zero (debt-free filers tag none); Piotroski's leverage test
+  stays untested without it. The spec says so.
+Evidence: `qa/evidence/bug185-{red,green,mutants,realdata}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1395 passed, 1 skipped | CI: no PR (Q10)
+Commit: a312d54 fix(valuation): the fiscal years fold only a split's share jump, as the history does (BUG-185)
+Next: M2-5's oracle refinements and its final run.
+
+### Build iteration 25: 2026-10-22 03:06: M2-5 (DONE)
+Did:
+- The oracle's refinements, by its worker:
+  - Each year's count comes from its latest filing: the diluted weighted count, else net income / diluted EPS,
+    else shares outstanding. A count 100x from its reference is in other units (COP, AMT).
+  - Beneish reads a missing long-term debt as zero.
+  - Years before the first bar + 1 year are not compared (the listing fold is an approximation).
+- Reviewed the oracle myself against the spec: every formula, the readings, the ranks' percentiles, the severe-sign
+  traces. It imports nothing from `src`.
+- Ran it on a copy backfilled with BUG-185's fix: all 9 gates pass (6,630 per-share values, 1,367 CAGRs, 1,397 Piotroski results, 321 predictability values, 889 ranks; Altman, Beneish and Sloan for all 127), the oracle exiting 0.
+- Distributions on that copy:
+  - Piotroski F 3-9 (median 6).
+  - Altman: distress 5, grey 7, safe 66, N/A 49.
+  - Beneish: 5 flags.
+  - Predictability: 1 to 4.5 stars, none at 5.
+  - Composite: 30 to 90 (quartiles 48 / 56 / 67.5).
+- The 14 severe signs are each recomputed from the raw tables and explained (`scores-m2-5-severe-judged.txt`):
+  telecoms under the original Altman, hypergrowth and one gain under Beneish, securities purchases under Sloan.
+Evidence: `qa/evidence/scores-m2-5-{oracle,severe-judged}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1395 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) test(qa): the quality scores' independent oracle (M2-5)
+Next: M2-8 (docs: README and USAGE_GUIDE for the quality scores).
