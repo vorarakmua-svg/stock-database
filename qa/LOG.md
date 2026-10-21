@@ -1807,3 +1807,20 @@ Gates: ruff ✓ mypy ✓ pytest 1183 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) chore(qa): record code review 14
 Next: the P2s oldest first: BUG-029, BUG-142, BUG-149, BUG-150, BUG-151, BUG-159, BUG-160, BUG-161. Fixes since review
 14's range (16f3005): 2 (BUG-140, BUG-141); review 15 after three more.
+
+## Iteration 100: 2026-10-21 10:06: fix (the user's request)
+Picked: BUG-029, at the user's request ("fix BUG-029 and re-run the update"), after their database's live update
+earlier today (127 tickers, 0 errors; 84 quarters and 12 fiscal years added; backup taken first) kept 500 cells the
+current parse leaves empty (`qa/evidence/update-20261021.txt`). The loop's own state file was gone by then.
+Did: measured the plain rewrite's risk first: XOM's ticker now reads a new registrant with 10-Qs only, whose parse
+would clear 143 of the predecessor's figures; so a run rewrites every column of the periods it gives only when it
+parsed an annual record, and otherwise only adds. TDD (one test RED, one guard); six mutants, each failing a test.
+A copy of the user's database re-collected offline with the fix: exactly the 500 cleared, nothing else. Then, with a
+second backup, the user's database re-collected live (127 tickers, 0 errors, 804 s): the same 500 cleared, XOM and
+SPCX untouched, none left beside a fresh parse; 8 rows of periods the parse no longer gives stay (BUG-168).
+Evidence: `qa/evidence/bug029-{red,green,mutants,realdata}.txt`, `qa/evidence/update-20261021.txt`
+Result: BUG-029 VERIFIED; BUG-168 OPEN (P3); Q6 noted (decide before XOM's holding company files a 10-K).
+Gates: ruff ✓ mypy ✓ pytest 1185 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(store): a re-collection clears what its parse leaves empty
+Next: the P2s oldest first: BUG-142, BUG-149, BUG-150, BUG-151, BUG-159, BUG-160, BUG-161. Fixes since review 14's
+range (16f3005): 3 (BUG-140, BUG-141, BUG-029).

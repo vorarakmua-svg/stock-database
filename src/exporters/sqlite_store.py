@@ -447,8 +447,11 @@ class SQLiteStore:
         conn.execute(sql, [row[c] for c in columns])
 
     @staticmethod
-    def _canonical_values(period: Dict[str, Any]) -> Dict[str, Any]:
-        """Pull only canonical numeric columns from a period dict."""
+    def _canonical_values(period: Dict[str, Any], restated: bool = False) -> Dict[str, Any]:
+        """Pull only canonical numeric columns from a period dict; *restated*, every one of
+        them, those the period lacks as NULL (BUG-029)."""
+        if restated:
+            return {c: period.get(c) for c in _CANONICAL_COLUMNS}
         return {c: period.get(c) for c in _CANONICAL_COLUMNS if c in period}
 
     @staticmethod
@@ -515,6 +518,12 @@ class SQLiteStore:
             "updated_at": collected_at,
         }, keep_existing=True)
 
+        # A run that parsed the filer's annual record restates every period it gives: a field its
+        # parse leaves empty is cleared, not kept from an earlier parse (BUG-029). A filer with no
+        # 10-K yet (XOM's new holding company, SPCX) gives a few quarters only, which can't speak
+        # for what a predecessor filed, so its run only adds.
+        restated = bool(stock.financials_annual)
+
         # financials_annual + metrics_annual
         historical = (stock.calculated_metrics or {}).get("historical", {})
         for year, period in (stock.financials_annual or {}).items():
@@ -527,7 +536,7 @@ class SQLiteStore:
                 "form": period.get("form"),
                 "quality_score": quality_score,
             }
-            row.update(self._canonical_values(period))
+            row.update(self._canonical_values(period, restated))
             self._upsert(conn, "financials_annual", ["ticker", "fiscal_year"], row)
 
             year_metrics = historical.get(year) or {}
@@ -550,7 +559,7 @@ class SQLiteStore:
                 "filed_date": period.get("filed_date"),
                 "form": period.get("form"),
             }
-            row.update(self._canonical_values(period))
+            row.update(self._canonical_values(period, restated))
             self._upsert(conn, "financials_quarterly", ["ticker", "period_end"], row)
 
         # financials_ttm (trailing-twelve-month series)
@@ -562,7 +571,7 @@ class SQLiteStore:
                 "calendar_year": period.get("calendar_year"),
                 "calendar_quarter": period.get("calendar_quarter"),
             }
-            row.update(self._canonical_values(period))
+            row.update(self._canonical_values(period, restated))
             self._upsert(conn, "financials_ttm", ["ticker", "period_end"], row)
 
         # financials_annual_vintages (point-in-time: one row per filing/accession)
@@ -577,7 +586,7 @@ class SQLiteStore:
                     "form": period.get("form"),
                     "calendar_year": period.get("calendar_year"),
                 }
-                vrow.update(self._canonical_values(period))
+                vrow.update(self._canonical_values(period, restated))
                 self._upsert(conn, "financials_annual_vintages",
                              ["ticker", "fiscal_year", "accn"], vrow)
 

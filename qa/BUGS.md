@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 8 · P3 82 · NEEDS-USER 12 · Verified: 74
+**Open:** P0 0 · P1 0 · P2 7 · P3 83 · NEEDS-USER 12 · Verified: 75
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -257,13 +257,14 @@ Found: iteration 17 by code review 2 | Fixed: — | Regression test: —
 Repro: `src/valuation/inputs.py` (`_apply_later_splits`) and c5f6e72's message say "1-for-2", but the code and the oracle accept reverse ratios up to 2-for-3; README's integrity section says "clean filings keep a score of 100", but the dividend completeness check depends on Yahoo data, so a company with clean filings can score 90 (CB).
 
 ### BUG-029 [P2][STORE] Values a re-parse empties stay in SQLite (upgraded from P3 in iteration 98)
-Status: OPEN
-Found: iteration 23 by code review 3 (verified there) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 100)
+Found: iteration 23 by code review 3 (verified there) | Fixed: iteration 100 (see LOG) | Regression tests: `tests/test_sqlite_store.py::test_a_recollection_clears_what_its_parse_leaves_empty`; guard `::test_a_recollection_with_no_annual_record_only_adds`
 Repro: after BUG-013, a re-parse leaves DIS FY2024–25 dividends per share (and AMGN 2011–15, AMT, ABBV, DELL, 21 zero impairments) empty, but `_canonical_values` upserts only the keys present, so `financials_annual` and the vintages keep the old values. The JSON and financial_history.csv do clear them.
 Expected: a canonical column absent from a re-parsed period is written as NULL (or the limitation is documented).
 
 Code review 10 (M4), re-run in iteration 71: after re-collecting the user's copy offline with 679a35d, the counts BUG-092's fix leaves empty stay as stored: BX's 2017-12-31 diluted count -533.8M, CEG's 2021 quarters' diluted and basic counts 0, and CEG's 2021-12-31 TTM counts 0, where a fresh collection has the rows and no value (`qa/evidence/iter71-review10-rerun.txt`).
 Iteration 98: this iteration's own prototype collections, re-collected into a database an earlier prototype had filled, kept 74 short-term debt cells the newer parse left empty (AMD's FY2011 $489M, from a tag the second prototype no longer read) until the database was recreated. Upgraded to P2: a fix that leaves a field empty reaches an existing database only through a fresh one, so the user's re-collection keeps the old figure (BUG-013's dividends here, BUG-092's counts in code review 10's re-run); the loop's evidence comes from fresh databases.
+Fix (at the user's request, after their 2026-10-21 update kept 500 such cells: `qa/evidence/update-20261021.txt`): a ticker's run that parsed its annual record writes every canonical column of every period it gives (`sqlite_store._canonical_values`, `restated`), so a figure the current rules leave empty is NULL, not the earlier parse's; periods the run doesn't give keep their rows (BUG-168), and a run with no annual record, a filer with no 10-K yet (XOM's new holding company, SPCX), only adds: XOM's new registrant gives 2 to 15 fields for quarters whose stored rows came from Exxon Mobil Corp, so a plain rewrite would have cleared 143 of its figures (Q6). The history limit (`--years`) trims whole periods after they resolve, so a limited run's periods are complete. One test RED, one guard; six mutants, each failing a test (`qa/evidence/bug029-{red,green,mutants}.txt`). On a copy of the user's database, an offline re-collection with the fix clears exactly the 500 cells a fresh parse of the same filings leaves empty (32 annual: 21 zero impairments, 11 dividends per share; 101 quarterly: debt repaid, capex, buybacks, acquisitions, share counts; 299 TTM; 68 vintages) and changes nothing else; then the user's database itself, re-collected live with the fix (127 tickers, 0 errors): the same 500 cleared, nothing else in the financial tables changed, XOM and SPCX untouched, none left beside a fresh parse (`qa/evidence/bug029-realdata.txt`; backups in the user's %LOCALAPPDATA%\stockdb-backups\2026-10-21 and 2026-10-21-b).
 ### BUG-030 [P3][STORE] After a failed run, the JSON files old price statistics under the failed run's time
 Status: OPEN
 Found: iteration 23 by code review 3 (moved out of BUG-018 in iteration 24) | Fixed: — | Regression test: —
@@ -1256,6 +1257,12 @@ Found: iteration 98 by code review 14 (M6), re-run in iteration 99 (`qa/evidence
 Repro: `src/webapp/routes/stocks_api.py:458`: "Submit a lightweight quote-only refresh job", where since BUG-128 a refresh also stores Yahoo's split history and revalues the ticker.
 Expected: the docstring says what the job does.
 
+### BUG-168 [P3][STORE] A period a re-parse no longer gives keeps its row: ADI's 2011-04-30 and 2011-07-30 trailing years, six vintages
+Status: OPEN
+Found: iteration 100 while verifying BUG-029's fix (`qa/evidence/bug029-realdata.txt`) | Fixed: — | Regression test: —
+Repro: the export upserts the periods a run gives and never removes a ticker's others, so rows an older parse made stay after the current rules stop giving them: the user's database, re-collected with BUG-029's fix, still holds ADI's TTM 2011-04-30 and 2011-07-30 and vintages for ETN's FY2014 and FY2017, GS's FY2019 and FY2022, SCCO's FY2015 and SPG's FY2013 (by accession), which a fresh collection of the same filings doesn't have.
+Expected: a run that parsed the filer's annual record removes the ticker's periods it no longer gives (not a run with no annual record, a failed one or a predecessor's: Q6).   Actual: 8 stale rows.
+
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
@@ -1286,7 +1293,7 @@ Status: NEEDS-USER
 Context: SEC's ticker map now sends XOM to ExxonMobil Holdings Corp (CIK 2115436), which has filed only 10-Qs since 2026-07; the 20 fiscal years of history are under Exxon Mobil Corp (CIK 34088). A fresh collection therefore has no XOM fundamentals, and every model that needs fiscal years is N/A; re-collecting into your existing database keeps the stored years. Since iteration 38 the gap is explained in the run, the database and the FA and VAL tabs (BUG-042).
 Options: (a) a small, explicit successor map in the code (2115436 → 34088), reading the predecessor's facts for the years the new registrant lacks: safe, but each reorganization needs an entry; (b) fall back automatically to the CIK already stored for the ticker when the new one has no 10-K: no upkeep, but a reassigned ticker could mix two unrelated companies, and a fresh database has no stored CIK; (c) keep the explanation only and wait for the new registrant's first 10-K. Recommendation: (a).
 Iteration 77: BLK likewise. SEC maps it to CIK 2012383 (BlackRock, Inc.), whose company facts start with a 10-Q filed 2024-11-06 and the FY2024 10-K, so its record starts at FY2021 (opening balances only) and FY2022 has no balance sheet; the earlier registrant's filings aren't in the cache or your data (`qa/evidence/iter77-quality-sweep.txt`).
-
+Iteration 100 (BUG-029's fix): a re-collection now clears what its parse leaves empty, but a run with no annual record only adds, so XOM keeps Exxon Mobil Corp's figures while its holding company has filed no 10-K. Once it files one (early 2027), a re-collection restates the periods its reports give and clears what they don't repeat (FY2024's balance sheet, the predecessor's quarters): decide before then.
 ### Q7 [VAL] NEEDS-USER: should per-share values count every share class and partnership unit?
 Status: NEEDS-USER
 Context: `_total_shares` takes market cap ÷ price (every class and unit, the way Yahoo values the company) when it is more than 5% above Yahoo's count, and settles a 2–5% gap by whichever figure is nearer the latest FY count (BUG-035). That decides the question company by company, and between 2% and 5% the answer flips with count drift (BUG-051): PLD takes market cap ÷ price on the real copy (954.8M) but Yahoo's count on the golden one (950.3M); KKR, BLK and PLTR sit in the same band. Above 5%: SPG's partnership units (17%), BX's (65%), and the second classes of APP, V, META, GOOGL and BRK-B. Raised by code review 5.

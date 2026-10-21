@@ -489,3 +489,53 @@ def test_a_collection_run_keeps_its_warnings(tmp_path):
     conn.close()
     assert [(count, json.loads(text)) for count, text in rows] == [(2, stock.warnings)]
 
+
+
+def _filer(annual=None, quarterly=None, ttm=None, vintages=None):
+    """AAA as a collection's SEC parse gives it: the annual record, quarters, trailing years and vintages."""
+    s = StockData(ticker="AAA", cik="000", company_name="AAA Inc.")
+    s.financials_annual = annual or {}
+    s.financials_quarterly = quarterly or {}
+    s.financials_ttm = ttm or {}
+    s.financials_annual_vintages = vintages or {}
+    s.add_source("sec_edgar")
+    return s
+
+
+def _stored(db, table, column):
+    conn = sqlite3.connect(db)
+    try:
+        return [r[0] for r in conn.execute(f"SELECT {column} FROM {table} WHERE ticker = 'AAA'")]
+    finally:
+        conn.close()
+
+
+def test_a_recollection_clears_what_its_parse_leaves_empty(tmp_path):
+    # BUG-029: a re-parse that leaves a field empty (a rule fixed since, BUG-013's dividends or BUG-092's counts)
+    # upserted only the fields it had, so the old figure stayed: the user's update on 2026-10-21 kept about 500,
+    # WFC's 2017-06-30 acquisitions quarter and MSFT's zero impairments among them.
+    db = tmp_path / "stock.db"
+    year = {"fiscal_year": 2024, "period_end": "2024-12-31", "revenue": 1000.0}
+    quarter = {"fiscal_year": 2024, "period_end": "2024-12-31", "revenue": 250.0}
+    SQLiteStore(db).export([_filer(annual={"2024": {**year, "impairment": 0.0}},
+                                   quarterly={"2024-12-31": {**quarter, "capex": 43.0}},
+                                   ttm={"2024-12-31": {**quarter, "capex": 406.0}},
+                                   vintages={"2024": {"0001-25-000001": {**year, "impairment": 0.0}}})])
+    SQLiteStore(db).export([_filer(annual={"2024": year}, quarterly={"2024-12-31": quarter},
+                                   ttm={"2024-12-31": quarter}, vintages={"2024": {"0001-25-000001": year}})])
+    assert _stored(db, "financials_annual", "impairment") == [None]
+    assert _stored(db, "financials_quarterly", "capex") == [None]
+    assert _stored(db, "financials_ttm", "capex") == [None]
+    assert _stored(db, "financials_annual_vintages", "impairment") == [None]
+    assert _stored(db, "financials_annual", "revenue") == [1000.0]
+
+
+def test_a_recollection_with_no_annual_record_only_adds(tmp_path):
+    # XOM's ticker now reads its new holding company, which has filed no 10-K: its 10-Qs give a few figures for
+    # quarters whose full record the predecessor filed, so a run without an annual record clears nothing.
+    db = tmp_path / "stock.db"
+    quarter = {"fiscal_year": 2025, "period_end": "2025-03-31"}
+    SQLiteStore(db).export([_filer(annual={"2024": {"fiscal_year": 2024, "revenue": 1000.0}},
+                                   quarterly={"2025-03-31": {**quarter, "revenue": 83.1e9, "net_income": 7.7e9}})])
+    SQLiteStore(db).export([_filer(quarterly={"2025-03-31": {**quarter, "net_income": 7.7e9}})])
+    assert _stored(db, "financials_quarterly", "revenue") == [83.1e9]
