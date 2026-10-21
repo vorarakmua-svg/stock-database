@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 8 · DOING 0 · DONE 6 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 7 · DOING 0 · DONE 7 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -23,7 +23,7 @@
 | M1-3 | Storage (`valuation_history`, `valuation_ranges`, `export_valuation_history`) and the engine hook in `compute_and_store`, covering backfill; with tests | DONE | this commit | `qa/evidence/valhist-m1-3-*.txt` |
 | M1-4 | Real-data validation: `qa/oracle/history_vs_yahoo.py` on a backfilled DB copy; the spec's gates; split continuity; jumps traced; misses explained | DONE | this commit | `qa/evidence/valhist-m1-4-*.txt` |
 | M1-5 | Repository readers and `GET /api/stocks/{t}/valuation-history`; with tests | DONE | this commit | `qa/evidence/valhist-m1-5-*.txt` |
-| M1-6 | The VAL tab section (fragment, `renderValHistory`), checked in Chrome on a scratch server; with tests | TODO | | |
+| M1-6 | The VAL tab section (fragment, `renderValHistory`), checked in Chrome on a scratch server; with tests | DONE | this commit | `qa/evidence/valhist-m1-6-*` |
 | M1-7 | Screener columns (`*_pct_10y`, `price_to_hist_value`), filters, CSV; with tests | TODO | | |
 | M1-8 | Docs: README "Valuation history", USAGE_GUIDE, the stale "no price series" text; the multiples-band basis bug logged (NEEDS-USER) | TODO | | |
 | M1-9 | Milestone close: code review 15 (opus, 16f3005..HEAD) with Critical and Important findings fixed; then backup and offline backfill of the user's DB; verdict changes reported | TODO | | |
@@ -186,3 +186,24 @@ Evidence: `qa/evidence/valhist-m1-5-{red,mutants,realdata}.txt`
 Gates: ruff ✓ mypy ✓ pytest 1256 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
 Commit: (this commit) feat(web): the valuation history's API route
 Next: M1-6.
+
+### Build iteration 7: 2026-10-21 19:30: M1-6
+Did:
+- The VAL tab loads a "Historical Value" section (`/ui/stocks/{t}/val-history`, `fragments/val_history.html`)
+  with `hx-trigger="load"`. It holds:
+  - the label pill against the live price, the value with its range, and price / value;
+  - the price against the historical value, with bands at the cutoffs;
+  - a picker of the applicable multiples, each drawn against its 10-year low, median and high;
+  - the table of each multiple's range (shorter windows labelled "since YYYY-MM (n months)");
+  - the method note.
+- `renderValHistory` in `static/app.js` uses the SLATE helpers and a 10-year default range. The inline
+  config escapes "</".
+- TDD: 8 tests (RED: 7 failing, the route missing); 6 mutants, each killed; `node --check` passes.
+- In the browser: the Claude in Chrome extension isn't connected, so the installed Chrome ran headless on a
+  scratch server over the backfilled copy (collection and quote refresh off, a scratch profile). Screenshots
+  of AAPL ("far above") and GE ("near") look right. AAPL, JPM, O, GEV and NVDA render with no console
+  errors, and GEV shows "Not available" with its reason. The server is stopped and port 8765 freed.
+Evidence: `qa/evidence/valhist-m1-6-{red,mutants}.txt`, `valhist-m1-6-AAPL-val.png`, `valhist-m1-6-GE-val.png`
+Gates: ruff ✓ mypy ✓ pytest 1264 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
+Commit: (this commit) feat(web): the VAL tab's valuation history section and chart
+Next: M1-7.

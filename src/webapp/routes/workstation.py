@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse
 from ...fetchers.stock_data_fetcher import NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS
 from ...valuation.assumptions import DISCOUNT_SPREAD, GROWTH_CAP
 from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
+from ...valuation.history import HISTORICAL_VALUE_CUTOFFS, METRICS, historical_value_label
 from ...valuation.models import ValuationResult, dcf_per_share
 from ..dependencies import get_job_manager, get_reader, get_settings
 from ..formatting import fmt_count, fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
@@ -930,6 +931,99 @@ def _dcf_sensitivity(assumptions: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "values": [dcf_per_share(fcf, shares, g, d) for g in growths],
         })
     return {"growths": growths, "rows": rows}
+
+
+_HISTORY_LABELS = {"pe": "P/E", "ps": "P/S", "pb": "P/B", "pfcf": "P/FCF", "ev_ebitda": "EV/EBITDA",
+                   "pffo": "P/FFO", "div_yield": "Dividend yield"}
+#: The pill colours of the historical-value labels: under the value reads like cheap, over it like expensive.
+_HISTORY_PILLS = {"far below": "cheap", "below": "cheap", "near": "fair", "above": "expensive",
+                  "far above": "expensive"}
+
+
+def _window_text(row: Dict[str, Any]) -> str:
+    """A range's window: "10 years", or "since 2022-03 (37 months)" when the history is shorter."""
+    n, start = row.get("n_months") or 0, row.get("window_start")
+    if n >= 120:
+        return "10 years"
+    if n and start:
+        return f"since {str(start)[:7]} ({n} months)"
+    return "—"
+
+
+@router.get("/ui/stocks/{ticker}/val-history", response_class=HTMLResponse)
+def val_history_fragment(
+    ticker: str,
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """The VAL panel's valuation history: the historical value against the live price,
+    each multiple's 10-year range, and the price against the historical value
+    (docs/superpowers/specs/2026-10-21-valuation-history-design.md)."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    quote = r.quote(ticker)
+    price = quote.get("current_price") if quote else None
+    ranges = {row["metric"]: row for row in r.valuation_ranges(ticker)}
+    fv = ranges.get("fair_value") or {}
+    value = fv.get("current_value")
+    label = historical_value_label(price, value)
+    rows = r.valuation_history(ticker)
+    table = []
+    chart_metrics = []
+    for metric in METRICS:
+        g = ranges.get(metric)
+        if g is None:
+            continue
+        fmt = fmt_pct if metric == "div_yield" else fmt_mult
+        table.append({
+            "label": _HISTORY_LABELS[metric],
+            "applicable": bool(g["applicable"]),
+            "na_reason": g.get("na_reason"),
+            "current": fmt(g.get("current_value")),
+            "min": fmt(g.get("min")),
+            "median": fmt(g.get("median")),
+            "max": fmt(g.get("max")),
+            "pct": fmt_pct(g.get("pct_rank")),
+            "window": _window_text(g),
+            "implied": fmt_price(g.get("implied_value")),
+            "in_fv": bool(g.get("in_fair_value")),
+        })
+        if g["applicable"]:
+            chart_metrics.append({"key": metric, "label": _HISTORY_LABELS[metric], "pct": metric == "div_yield",
+                                  "values": [row.get(metric) for row in rows],
+                                  "min": g.get("min"), "median": g.get("median"), "max": g.get("max")})
+    cfg = {
+        "dates": [row["date"] for row in rows],
+        "close": [row["close"] for row in rows],
+        "fair_value": [row["fair_value"] for row in rows],
+        "cutoffs": list(HISTORICAL_VALUE_CUTOFFS),
+        "metrics": chart_metrics,
+    }
+    return templates.TemplateResponse(
+        request,
+        "fragments/val_history.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "has_history": bool(ranges),
+            "applicable": bool(fv.get("applicable")),
+            "na_reason": fv.get("na_reason"),
+            "label": label,
+            "pill": _HISTORY_PILLS.get(label or "", "none"),
+            "value_fmt": fmt_price(value),
+            "low_fmt": fmt_price(fv.get("p25")),
+            "high_fmt": fmt_price(fv.get("p75")),
+            "price_fmt": fmt_price(price),
+            "ratio_fmt": f"{price / value:.2f}" if price and value else "—",
+            "combined": [_HISTORY_LABELS[m] for m in METRICS if (ranges.get(m) or {}).get("in_fair_value")],
+            "cutoffs_text": ", ".join(f"{c:g}" for c in HISTORICAL_VALUE_CUTOFFS),
+            "window": _window_text(fv),
+            "rows": table,
+            "has_chart": bool(rows),
+            # The XSS defense of the other inline configs: "</" can't close the <script>.
+            "cfg_json": json.dumps(cfg).replace("</", "<\\/"),
+        },
+    )
 
 
 @router.get("/ui/stocks/{ticker}/val", response_class=HTMLResponse)

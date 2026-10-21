@@ -1,0 +1,59 @@
+<section class="section" id="val-history">
+  <h2 class="section-heading">Historical Value</h2>
+  {% if not has_history %}
+  <div class="empty-state">No valuation history computed yet — click UPDATE DATA above.</div>
+  {% else %}
+  <div class="chip-row">
+    {% if applicable %}
+    <span class="pill verdict-{{ pill }}">Price {{ label }} historical value</span>
+    <span class="text-muted">Historical value {{ value_fmt }} (range {{ low_fmt }} – {{ high_fmt }}) ·
+      Price {{ price_fmt }} · Price / value {{ ratio_fmt }}</span>
+    {% else %}
+    <span class="pill verdict-none">Not available</span>
+    <span class="text-muted">{{ na_reason }}</span>
+    {% endif %}
+  </div>
+  {% if has_chart %}
+  <div id="valh-chart" class="gp-chart"></div>
+  <div class="chip-row mt-2">
+    <label for="valh-metric" class="text-muted">Multiple</label>
+    <select id="valh-metric"></select>
+  </div>
+  <div id="valh-metric-chart" class="gp-chart"></div>
+  <script>
+    var _valhCfg = {{ cfg_json | safe }};
+    renderValHistory('valh-chart', 'valh-metric-chart', 'valh-metric', _valhCfg);
+  </script>
+  {% endif %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>Multiple</th><th class="num">Now</th><th class="num">Low</th><th class="num">Median</th>
+        <th class="num">High</th><th class="num">Percentile</th><th>Window</th><th class="num">Implied price</th></tr></thead>
+      <tbody>
+        {% for m in rows %}
+        <tr>
+          <td class="row-label">{{ m.label }}{% if m.in_fv %} <span class="text-muted" title="in the historical value">•</span>{% endif %}</td>
+          <td class="num">{{ m.current }}</td>
+          {% if m.applicable %}
+          <td class="num">{{ m.min }}</td>
+          <td class="num">{{ m.median }}</td>
+          <td class="num">{{ m.max }}</td>
+          <td class="num">{{ m.pct }}</td>
+          <td>{{ m.window }}{% if m.na_reason %} <span class="text-muted">· {{ m.na_reason }}</span>{% endif %}</td>
+          <td class="num">{{ m.implied }}</td>
+          {% else %}
+          <td colspan="6" class="text-muted">{{ m.na_reason }}</td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="text-muted mt-2">Each month's multiples are on the trailing twelve months known that month (a 10-Q
+    45 days after its quarter, a 10-K on its filing day). The historical value is the median, across
+    {{ combined | join(", ") or "the sector's multiples" }}, of each multiple's trailing 10-year median applied to
+    the latest trailing year; its range uses the quartile multiples. Bands sit at {{ cutoffs_text }} × the value.
+    Window: {{ window }}. Figures are as later restated, not as first reported. This is a history of how the
+    market priced the company, not a forecast.</p>
+  {% endif %}
+</section>

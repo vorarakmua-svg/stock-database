@@ -417,6 +417,92 @@ function renderVAL(elId, cfg) {
 }
 
 /**
+ * The VAL tab's valuation history: the price against its historical value, with bands at the
+ * label cutoffs, and one multiple against its 10-year low, median and high.
+ * @param {string} chartId - The element for the price chart.
+ * @param {string} metricChartId - The element for the multiple's chart.
+ * @param {string} selectId - The <select> that picks the multiple.
+ * @param {{dates: string[], close: number[], fair_value: Array<number|null>, cutoffs: number[],
+ *   metrics: Array<{key: string, label: string, pct: boolean, values: Array<number|null>,
+ *   min: number, median: number, max: number}>}} cfg
+ */
+function renderValHistory(chartId, metricChartId, selectId, cfg) {
+  if (typeof Plotly === 'undefined' || !cfg.dates || cfg.dates.length === 0) return;
+  var x = cfg.dates;
+  var last = new Date(x[x.length - 1]);
+  var first = new Date(last.getTime());
+  first.setFullYear(first.getFullYear() - 10);
+  var range = [first.toISOString().slice(0, 10), x[x.length - 1]];
+
+  // Bands: between 0.7 and 0.9 of the value (below), 0.9 and 1.1 (near), 1.1 and 1.3 (above).
+  var fills = ['rgba(63, 185, 80, 0.10)', 'rgba(139, 148, 158, 0.12)', 'rgba(210, 153, 34, 0.12)'];
+  var traces = cfg.cutoffs.map(function (c, i) {
+    var band = {
+      x: x, y: cfg.fair_value.map(function (v) { return v === null ? null : v * c; }),
+      type: 'scatter', mode: 'lines', line: { width: 0 }, hoverinfo: 'skip', showlegend: false,
+    };
+    if (i > 0) { band.fill = 'tonexty'; band.fillcolor = fills[i - 1]; }
+    return band;
+  });
+  traces.push({
+    x: x, y: cfg.fair_value, type: 'scatter', mode: 'lines', name: 'Historical value',
+    line: { color: SLATE.warn, width: 2, dash: 'dot' },
+    hovertemplate: '%{x}: value %{y:.2f}<extra></extra>',
+  });
+  traces.push({
+    x: x, y: cfg.close, type: 'scatter', mode: 'lines', name: 'Price',
+    line: { color: SLATE.accent, width: 2 },
+    hovertemplate: '%{x}: price %{y:.2f}<extra></extra>',
+  });
+  Plotly.newPlot(chartId, traces, slateLayout({
+    showlegend: true,
+    legend: { orientation: 'h', x: 0, y: 1.12, font: { color: SLATE.muted } },
+    xaxis: slateAxis({ type: 'date', range: range }),
+    yaxis: slateAxis({ title: 'Per share' }),
+    margin: { t: 32, r: 16, b: 32, l: 56 },
+  }), { displayModeBar: false, responsive: true });
+
+  var select = document.getElementById(selectId);
+  if (!select) return;
+  select.innerHTML = '';
+  cfg.metrics.forEach(function (m) {
+    var option = document.createElement('option');
+    option.value = m.key;
+    option.textContent = m.label;
+    select.appendChild(option);
+  });
+  function draw(key) {
+    var m = cfg.metrics.filter(function (item) { return item.key === key; })[0];
+    if (!m) return;
+    var tick = m.pct ? '.1%' : '.1f';
+    var lines = [['10y low', m.min, SLATE.up], ['Median', m.median, SLATE.muted], ['10y high', m.max, SLATE.down]];
+    Plotly.newPlot(metricChartId, [{
+      x: x, y: m.values, type: 'scatter', mode: 'lines', name: m.label,
+      line: { color: SLATE.purple, width: 2 },
+      hovertemplate: '%{x}: %{y:' + tick + '}<extra></extra>',
+    }], slateLayout({
+      xaxis: slateAxis({ type: 'date', range: range }),
+      yaxis: slateAxis({ title: m.label, tickformat: m.pct ? '.1%' : '' }),
+      margin: { t: 16, r: 16, b: 32, l: 56 },
+      shapes: lines.map(function (l) {
+        return { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: l[1], y1: l[1],
+                 line: { color: l[2], width: 1, dash: 'dash' } };
+      }),
+      annotations: lines.map(function (l) {
+        return { xref: 'paper', x: 1, y: l[1], xanchor: 'right', yanchor: 'bottom', showarrow: false,
+                 text: l[0], font: { color: l[2], size: 10 } };
+      }),
+    }), { displayModeBar: false, responsive: true });
+  }
+  select.onchange = function () { draw(select.value); };
+  if (cfg.metrics.length > 0) {
+    draw(cfg.metrics[0].key);
+  } else {
+    select.parentNode.style.display = 'none';
+  }
+}
+
+/**
  * HTMX tab-active helper.
  * When a tab button triggers an HTMX request, mark it active and remove
  * active from its siblings.
