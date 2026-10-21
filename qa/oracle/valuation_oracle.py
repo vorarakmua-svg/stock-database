@@ -442,8 +442,9 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         return None  # a foreign issuer whose ADS ratio can't be read: its filed per-share basis isn't the price's
 
     if model == "dcf":
-        rows = db.execute("select fiscal_year, coalesce(levered_fcf, free_cash_flow) from metrics_annual where "
-                          "ticker=? and coalesce(levered_fcf, free_cash_flow) is not null order by fiscal_year",
+        # The spec's basis: equity FCF = OCF - capex, interest already through OCF (ASC 230).
+        rows = db.execute("select fiscal_year, free_cash_flow from metrics_annual where "
+                          "ticker=? and free_cash_flow is not null order by fiscal_year",
                           (ticker,)).fetchall()
         window = x.last_10_fys([(fy, v) for fy, v in rows])
         fcf = [v for _fy, v in window]
