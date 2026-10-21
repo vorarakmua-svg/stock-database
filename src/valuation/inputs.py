@@ -11,7 +11,7 @@ import math
 import sqlite3
 import statistics
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from fractions import Fraction
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -33,6 +33,18 @@ MAX_SPLIT_RATIO = 50.0
 #: declared ratio is the exact one; a jump nowhere near any declared ratio keeps
 #: the detected value (the only evidence there is).
 DECLARED_SPLIT_TOLERANCE = 1.25
+
+#: An undeclared seam folds by its own ratio only on a split's marks: EPS of the same sign on both sides moved
+#: against the count by at least this share of the seam's ratio (in log terms), and revenue didn't move with the
+#: count by as much. A stock-paid merger brings its revenue and earnings with it (DUK's Progress Energy: 1.567x
+#: the shares, revenue 1.88x, EPS 0.99 to 0.86; LIN's Linde AG: 1.88x and revenue 1.89x, though EPS fell), and
+#: an exchange offer's EPS changes sign (Citigroup's 2009, 2.242x): they stay organic (BUG-175, BUG-185).
+SPLIT_EVIDENCE_SHARE = 0.5
+
+#: A fiscal year ending less than this many days after the listing (the first price bar) is the listing's year
+#: or one before it: its weighted count leaves out the preferred stock that converted at the listing (PLTR's
+#: 577M in FY2019 against 1.92B after), so a seam from it into the public count folds, whatever EPS did (BUG-185).
+LISTING_YEAR_DAYS = 366
 
 #: A "dividend" at least this many times the payments around it, on a day the
 #: split history records a spin-off price factor, is the spun-off shares' value.
@@ -146,32 +158,37 @@ class ValuationInputs:
     history_truncated: bool = False
 
 
-def _eps_moved_inversely(ratio: float, eps_older: Optional[float],
-                         eps_newer: Optional[float]) -> bool:
-    """Did EPS move opposite to the share count across this seam?
+def _split_marks(ratio: float, eps_older: Optional[float], eps_newer: Optional[float],
+                 revenue_older: Optional[float], revenue_newer: Optional[float]) -> bool:
+    """Whether an undeclared seam of *ratio* bears a split's marks (SPLIT_EVIDENCE_SHARE).
 
-    A split multiplies the share count and divides as-reported EPS by the same
-    factor, so EPS must fall across a forward split (and rise across a reverse
-    one). An acquisition-scale share issuance — the real hazard near the 1.5
-    threshold, e.g. Realty Income's 1.48x VEREIT merger — brings its own
-    earnings with it and does not invert EPS, so the share jump alone would
-    otherwise be enough to rescale a whole history wrongly. Both figures are
-    as reported, and the test only judges seams no declared split explains:
-    earnings can outgrow a split's ratio in its year (NOW 2023).
+    A split multiplies the share count and divides as-reported EPS by the same factor, so EPS of one sign must
+    move against the count, by magnitude: a loss-making company's per-share loss grows across a reverse split
+    (GE: -2.62 to -4.99 over its 1:8). A seam whose EPS changes sign, or is missing or zero, carries no such mark.
+    Revenue, where both periods have it, must not move with the count by as much: a split leaves it alone, a
+    stock-paid merger brings its own. Both figures are as reported, and the test only judges seams no declared
+    split explains: earnings can outgrow a split's ratio in its year (NOW 2023)."""
+    if not eps_older or not eps_newer or (eps_older > 0) != (eps_newer > 0):
+        return False
+    direction = 1.0 if ratio > 1.0 else -1.0
+    enough = SPLIT_EVIDENCE_SHARE * abs(math.log(ratio))
+    if -direction * math.log(eps_newer / eps_older) < enough:
+        return False
+    if revenue_older and revenue_newer and revenue_older > 0 and revenue_newer > 0:
+        return direction * math.log(revenue_newer / revenue_older) < enough
+    return True
 
-    The comparison is on MAGNITUDE, not signed value: a split rescales EPS
-    multiplicatively whatever its sign, so a loss-making company's per-share
-    loss grows across a reverse split (GE: -2.62 -> -4.99 over its 1:8). A
-    seam whose EPS changes sign carries no directional information, and neither
-    does a missing or zero EPS; those fall back to the share-count signal alone.
-    """
-    if not eps_older or not eps_newer:
+
+def _implied_count_moves(ratio: float, older: "FYRecord", newer: "FYRecord",
+                         eps_older: Optional[float], eps_newer: Optional[float]) -> bool:
+    """Whether the count a year's EPS divides by (net income / diluted EPS) moved with a seam of *ratio*, within
+    DECLARED_SPLIT_TOLERANCE. A split restates the count and EPS together; BX's diluted count takes the Holdings
+    units in and out (1,195M, 666M, 1,207M) while its EPS keeps dividing by about 670M (BUG-185). Unknown when a
+    figure is missing, and then it doesn't decide."""
+    if not (older.net_income and newer.net_income and eps_older and eps_newer):
         return True
-    if (eps_older > 0) != (eps_newer > 0):
-        return True
-    if ratio > 1.0:
-        return abs(eps_newer) < abs(eps_older)
-    return abs(eps_newer) > abs(eps_older)
+    implied = (newer.net_income / eps_newer) / (older.net_income / eps_older)
+    return implied > 0 and abs(math.log(implied / ratio)) <= math.log(DECLARED_SPLIT_TOLERANCE)
 
 
 def _filed_between(split: Tuple[str, float], f_old: Optional[str], f_new: Optional[str]) -> bool:
@@ -189,6 +206,8 @@ def _normalize_splits(records: List[FYRecord],
                       shares_detect: List[Optional[float]],
                       splits: Sequence[Tuple[str, float]] = (),
                       detect_filed: Optional[Sequence[Optional[str]]] = None,
+                      revenue: Optional[Sequence[Optional[float]]] = None,
+                      listed: Optional[str] = None,
                       ) -> Tuple[List[FYRecord], bool]:
     """Restate every year's per-share figures onto the current share basis.
 
@@ -205,6 +224,12 @@ def _normalize_splits(records: List[FYRecord],
     * ``1/50 .. 1/1.5`` -> reverse split; same treatment with a factor < 1,
       which scales the older years' per-share values UP and their share counts
       DOWN — exactly the correction a reverse split needs.
+      Either folds by a declared share split (a simple ratio: a spin-off's price
+      factor changes no share count), by its own ratio when the older year ends
+      before the listing (*listed*) or in its year (LISTING_YEAR_DAYS), or by its
+      own ratio on a split's marks in EPS and *revenue* (``_split_marks``) when
+      the count EPS implies moved with it (``_implied_count_moves``). Otherwise
+      it stays: a merger, an exchange offer, a count that swings alone (BUG-185).
     * beyond ``+/- 50x`` -> not a credible corporate action. The source data
       mixes units across fiscal years (thousands vs units), so everything older
       than this seam is on an unknown scale and simply CANNOT be compared to the
@@ -242,12 +267,19 @@ def _normalize_splits(records: List[FYRecord],
                 return records[i + 1:], True
             if forward or reverse:
                 f_old, f_new = (detect_filed[i], detect_filed[i + 1]) if detect_filed else (None, None)
-                candidates = [split for split in unused if _filed_between(split, f_old, f_new)]
+                candidates = [split for split in unused
+                              if _simple_ratio(split[1]) and _filed_between(split, f_old, f_new)]
                 run = _declared_run(ratio, records[i].period_end, candidates)
+                listing = (listed is not None and records[i].period_end is not None
+                           and str(records[i].period_end)[:10] < listed)
                 if run:
                     unused = [split for split in unused if split not in run]
                     factor *= math.prod(split_ratio for _, split_ratio in run)
-                elif _eps_moved_inversely(ratio, reported_eps[i], reported_eps[i + 1]):
+                elif listing or (
+                        _split_marks(ratio, reported_eps[i], reported_eps[i + 1],
+                                     revenue[i] if revenue else None, revenue[i + 1] if revenue else None)
+                        and _implied_count_moves(ratio, records[i], records[i + 1],
+                                                 reported_eps[i], reported_eps[i + 1])):
                     factor *= ratio
         rec = records[i]
         rec.split_factor = factor
@@ -517,7 +549,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
     sector = (row["sector_class"] if row is not None else None) or "general"
 
     fy_rows = conn.execute(
-        "SELECT fa.fiscal_year, fa.period_end, fa.filed_date, fa.form, fa.net_income, fa.total_equity, "
+        "SELECT fa.fiscal_year, fa.period_end, fa.filed_date, fa.form, fa.net_income, fa.total_equity, fa.revenue, "
         "fa.eps_diluted, fa.weighted_avg_shares_diluted, fa.shares_outstanding, "
         "fa.depreciation_amortization, fa.capex, "
         "ma.free_cash_flow, ma.ffo_per_share "
@@ -595,7 +627,11 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
     # explain a seam (an older merger's would take it); _apply_later_splits
     # moves every year by it instead.
     restated = [s for s in splits if not filed or str(s[0])[:10] <= str(filed)[:10]]
-    records, history_truncated = _normalize_splits(records, shares_detect, restated, detect_filed)
+    first_bar = conn.execute("SELECT MIN(date) FROM price_bars WHERE ticker = ?", (ticker,)).fetchone()[0]
+    listed = ((date.fromisoformat(str(first_bar)[:10]) + timedelta(days=LISTING_YEAR_DAYS)).isoformat()
+              if first_bar else None)
+    records, history_truncated = _normalize_splits(records, shares_detect, restated, detect_filed,
+                                                   [r["revenue"] for r in fy_rows[-max_years:]], listed)
 
     # SELECT *: a database not yet migrated lacks the rate's date and source columns,
     # and the backfill reads it without migrating.

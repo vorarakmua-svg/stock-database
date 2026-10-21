@@ -24,6 +24,7 @@ from .inputs import (
     _dividend_onto,
     _drop_spin_off_dividends,
     _simple_ratio,
+    _split_marks,
     _yahoo_dividend_factors,
     bars_to_price_factor,
 )
@@ -55,12 +56,6 @@ YAHOO_SHARE_GAP = 1.25
 #: a declared split dated after its older quarter and no more than this many days after its newer one.
 #: Unbounded, an older seam would take a split after the latest quarter (APH's 2026-09-03; BUG-174).
 SEAM_RESTATEMENT_DAYS = 3 * 365 + 120
-#: An undeclared seam folds by its own ratio only on a split's two marks: EPS of the same sign on both sides
-#: moved against the count by at least this share of the seam's ratio (in log terms), and revenue didn't move
-#: with the count by as much. A stock-paid merger brings its revenue and earnings with it (DUK's Progress
-#: Energy: 1.567x the shares, revenue 1.88x, EPS 0.99 to 0.86), and an exchange offer's EPS changes sign
-#: (Citigroup's 2009, 2.242x): both stay organic (BUG-175).
-SPLIT_EVIDENCE_SHARE = 0.5
 #: The listing's quarter, the first one ending on or after the first bar and within this many days of it (a
 #: 14-week quarter), averages the private company's count with the public one: preferred stock converting,
 #: shares sold (UBER's 2019 Q2: 1.11B against 1.70B after). An undeclared seam right after it is the
@@ -275,21 +270,6 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
             out = [c * moved if c is not None else None for c in out]
             applied.extend(later)
     return out, sorted(applied)
-
-
-def _split_marks(ratio: float, eps_older: Optional[float], eps_newer: Optional[float],
-                 revenue_older: Optional[float], revenue_newer: Optional[float]) -> bool:
-    """Whether an undeclared seam of *ratio* bears a split's marks (SPLIT_EVIDENCE_SHARE): EPS of one sign that
-    moved against the count by enough, and revenue, where both quarters have it, that didn't move with it."""
-    if not eps_older or not eps_newer or (eps_older > 0) != (eps_newer > 0):
-        return False
-    direction = 1.0 if ratio > 1.0 else -1.0
-    enough = SPLIT_EVIDENCE_SHARE * abs(math.log(ratio))
-    if -direction * math.log(eps_newer / eps_older) < enough:
-        return False
-    if revenue_older and revenue_newer and revenue_older > 0 and revenue_newer > 0:
-        return direction * math.log(revenue_newer / revenue_older) < enough
-    return True
 
 
 def _seam_run(observed: float, after: str, splits: Sequence[Tuple[str, float]]) -> List[Tuple[str, float]]:

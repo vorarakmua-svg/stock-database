@@ -24,6 +24,10 @@ the existing models, median and verdicts are untouched. The package is `src/scor
   operating_margin, interest_coverage). The latest 11 fiscal years are used.
 - **Per-share series**, per fiscal year, on today's split basis (the FY record's `shares`): revenue/share,
   EPS (the record's diluted EPS), EBITDA/share, FCF/share (`free_cash_flow`), book/share (total equity).
+  The FY records fold a share-count jump by a declared share split, by its own ratio on a split's marks (EPS
+  against the count, revenue not with it, the EPS-implied count moving with it), or when the older year ends
+  before the listing or in its year (pre-listing counts leave out converted preferred). Mergers, exchange
+  offers, swinging counts and spin-off price factors fold nothing (BUG-185, as BUG-175 for the history).
 - **CAGRs** over 3, 5 and 10 years: `(last / first) ** (1 / years) - 1`. Both ends must be positive, and the
   start year must exist exactly `years` fiscal years back; otherwise None.
 
@@ -39,7 +43,7 @@ are N/A where the sector rules suppress an input (`sector_metrics`), with a reas
   - CFO > 0.
   - ROA rose.
   - CFO > NI.
-  - LTD / total assets fell.
+  - LTD / total assets fell. Untested when long-term debt is missing in either year.
   - The current ratio rose.
   - Shares outstanding did not rise: the FY records' split-normalized count, within 0.5% (rounding).
   - The gross margin rose.
@@ -63,7 +67,8 @@ are N/A where the sector rules suppress an input (`sector_metrics`), with a reas
     - SGAI = (SGA/Sales)_t / (SGA/Sales)_t-1.
     - LVGI = ((CL+LTD)/TA)_t / ((CL+LTD)/TA)_t-1.
     - TATA = (NI - CFO)_t / TA_t.
-  - SGAI and DEPI are 1 (neutral) when their inputs are missing; any other missing variable means N/A.
+  - SGAI and DEPI are 1 (neutral) when their inputs are missing. A missing long-term debt reads as zero in
+    LVGI: debt-free filers tag none (ANET, ISRG, PANW, PLTR). Any other missing variable means N/A.
   - Above -1.78 flags a likely manipulator.
   - N/A for banks, insurers and REITs.
 - **Sloan ratio**: (NI - CFO - CFI) / total assets.

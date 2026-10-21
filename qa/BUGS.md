@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 89 · NEEDS-USER 13 · Verified: 81
+**Open:** P0 0 · P1 0 · P2 11 · P3 89 · NEEDS-USER 13 · Verified: 82
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1398,6 +1398,20 @@ Found: build iteration 18 (BUG-175's real-data check), build M1-9 | Fixed: | Reg
 Repro: HON. Its Q2 2026 10-Q restated 2025's weighted counts by half (637.5M to 318.8M for 2025's Q2), a 1:2 reverse split's mark, and Yahoo lists only a 0.9535 factor on 2026-06-29 (0.5 x 1.907: the split with a distribution). `is_share_split(0.9535)` is false, so it's a price factor and the bars before it stay on the raw basis, where the unfolded counts are right. But the stored 2026 Q1 count (317.35M, derived from the restated half year) is already on the split's basis: the 2026-05-29 sample pairs a raw close ($237.86) with it, a market cap of $75.5B where about $151B was true.
 Expected: the quarters filed on the split's basis before the split meet closes on the same basis.   Actual: one monthly sample (2026-05-29) at half the market cap; from 2026-06-30 the post-split count and close agree.
 Notes: one of HON's 121 months in its window. A fix needs the split apart from the factor: the restatement shows it (the same period's count halved between two filings), Yahoo doesn't.
+
+### BUG-185 [P2][VAL] The annual share normalization folds share jumps that aren't splits: mergers, swinging counts, spin-off price factors
+Status: VERIFIED (build iteration 24)
+Found: build iteration 24, M2-5's scores oracle | Fixed: (this commit) | Regression test: tests/test_valuation_inputs.py::test_a_spin_off_price_factor_never_explains_a_share_seam, ::test_a_merger_whose_revenue_rose_with_the_count_is_not_a_split, ::test_a_diluted_count_that_swings_alone_is_not_a_split, ::test_years_before_the_listing_take_the_public_count, ::test_a_listing_jump_folds_though_eps_changed_sign
+Repro: `inputs._normalize_splits` builds the FY records behind the six models and the quality scores. It offered every `split_events` row as a seam's candidate, spin-off price factors included, and folded an undeclared jump of 1.5x or more whenever `_eps_moved_inversely` agreed, which counts a zero EPS or a sign change as agreement. RTX's 1.57x Raytheon merger took the 1.589 Carrier/Otis factor (stored FY2015 EPS 5.42 against 8.61 filed), DELL's FY2016 took the 1.973 VMware factor, and LIN's 1.88x Linde AG merger and BX's diluted count (swinging with the Holdings units) folded on EPS moves.
+Expected: the history's rules (BUG-175): declared share splits only, an undeclared jump only on a split's marks.   Actual: as above. M2's per-share series, CAGRs and predictability were off for these (BX's 10-year EPS CAGR 1.51% against 14.04%; RTX's revenue/share CAGR 5.03% against 0.28%).
+Root cause: `src/valuation/inputs.py` `_normalize_splits`: the quarterly history got BUG-175's rules, the annual path kept the old ones.
+Fix (build iteration 24):
+- Only declared share splits (simple ratios) are a seam's candidates; a spin-off changes no share count.
+- An undeclared jump folds on a split's marks, the rule now shared with the history (`_split_marks`, moved into `inputs.py`), when the count the year's EPS divides by (net income / diluted EPS) moved with it too (`_implied_count_moves`). BX's diluted count swings while that count stays near 670M.
+- A jump whose older year ends before the listing or in its year (`LISTING_YEAR_DAYS`) folds by its ratio: pre-listing counts leave out the preferred that converted (PLTR's two jumps now both fold; before, only the one EPS agreed with did).
+- Tests: five (four failing first); six mutants, each killed.
+- Real data (a backfilled copy against today's): no median and no verdict moves. RTX's Lynch bull goes from $29.02 to $24.80, its 9-year EPS CAGR from +2.9% to -2.3%. The quality scores move for BX, DELL, LIN and RTX, and through the bank ranks for C, COF, USB and WFC (BX's stars changed). Per-share rows change for BX, DELL, LIN, PLTR and RTX.
+Evidence: `qa/evidence/bug185-{red,green,mutants,realdata}.txt`
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

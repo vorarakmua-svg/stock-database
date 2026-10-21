@@ -386,7 +386,9 @@ How it's built:
   folds by its own ratio only on a split's marks: EPS of one sign moved against the count at least
   halfway (in log terms), and revenue didn't move with it as far. A merger's or an exchange offer's
   jump stays (DUK 2012, Citigroup 2009). The quarter of a listing, whose weighted count blends the
-  private one, takes the public count after it.
+  private one, takes the public count after it. The fiscal years behind the six models and the quality scores
+  follow the same rules, the EPS-implied count (net income / EPS) having to move with the jump too, and a year
+  before the listing takes the public count (BUG-185). A spin-off's price factor never explains a jump.
 - **Ranges.** Each multiple's min, quartiles, median and max, and the current value's percentile, over
   the trailing 10 years. They need 36 months of values, so GEV and SNDK show their multiples without a
   range.

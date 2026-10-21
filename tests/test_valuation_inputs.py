@@ -417,8 +417,9 @@ def test_ordinary_issuance_below_threshold_is_not_a_split(split_db):
     assert recs[0].eps_diluted == pytest.approx(4.00)
 
 
-def _seam_db(tmp_path, name, rows, splits=()):
-    """Build a 5-FY ticker 'SPL' from (fy, net_income, eps, shares) rows and declared (date, ratio) splits."""
+def _seam_db(tmp_path, name, rows, splits=(), revenue=None, first_bar=None):
+    """Build a 5-FY ticker 'SPL' from (fy, net_income, eps, shares) rows and declared (date, ratio) splits, with
+    each year's revenue from *revenue* (fy -> revenue) and a price bar on *first_bar* (the listing)."""
     db_path = tmp_path / name
     store = SQLiteStore(db_path=db_path)
     conn = store._connect()
@@ -427,12 +428,14 @@ def _seam_db(tmp_path, name, rows, splits=()):
     for fy, ni, eps, shares in rows:
         conn.execute(
             "INSERT INTO financials_annual (ticker, fiscal_year, period_end, "
-            "net_income, total_equity, eps_diluted, weighted_avg_shares_diluted) "
-            "VALUES ('SPL', ?, ?, ?, ?, ?, ?)",
-            (fy, f"{fy}-12-31", ni, 800.0, eps, shares),
+            "net_income, total_equity, eps_diluted, weighted_avg_shares_diluted, revenue) "
+            "VALUES ('SPL', ?, ?, ?, ?, ?, ?, ?)",
+            (fy, f"{fy}-12-31", ni, 800.0, eps, shares, (revenue or {}).get(fy)),
         )
     for date_str, ratio in splits:
         conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('SPL', ?, ?)", (date_str, ratio))
+    if first_bar:
+        conn.execute("INSERT INTO price_bars (ticker, date, close) VALUES ('SPL', ?, 20.0)", (first_bar,))
     conn.commit()
     conn.close()
     return db_path
@@ -560,6 +563,82 @@ def test_an_undeclared_share_jump_without_an_eps_drop_is_not_a_split(tmp_path):
     recs = load_inputs(conn, "SPL").fy_records
     conn.close()
     assert all(r.split_factor == 1.0 for r in recs)
+
+
+def _factors(db):
+    conn = _connect(db)
+    recs = load_inputs(conn, "SPL").fy_records
+    conn.close()
+    return {r.fiscal_year: r.split_factor for r in recs}
+
+
+def test_a_spin_off_price_factor_never_explains_a_share_seam(tmp_path):
+    # RTX (BUG-185): Raytheon's merger raised the count 1.57x into FY2020, and Yahoo's 1.589 for the Carrier and
+    # Otis spin-offs (2020-04-03) sits within the tolerance of it. A spin-off changes no share count.
+    db = _seam_db(tmp_path, "spin.db", [
+        (2018, 5000.0, 6.20, 806.0),
+        (2019, 5500.0, 6.40, 860.0),
+        (2020, -3500.0, -2.60, 1350.0),
+        (2021, 3900.0, 2.60, 1500.0),
+        (2022, 5200.0, 3.50, 1486.0),
+    ], splits=[("2020-04-03", 1.589)], first_bar="1990-01-02")  # listed long before: no listing jump
+    assert set(_factors(db).values()) == {1.0}
+
+
+def test_a_merger_whose_revenue_rose_with_the_count_is_not_a_split(tmp_path):
+    # LIN (BUG-185): Praxair's merger with Linde AG, 1.88x the shares in FY2019 while EPS fell (merger costs)
+    # and revenue rose 1.89x with them. A split leaves revenue where it was.
+    db = _seam_db(tmp_path, "merger.db", [
+        (2016, 3800.0, 13.10, 290.0),
+        (2017, 4000.0, 13.79, 290.0),
+        (2018, 4200.0, 14.48, 290.0),
+        (2019, 2300.0, 4.20, 547.6),
+        (2020, 2500.0, 4.60, 543.5),
+    ], revenue={2016: 11.4e9, 2017: 12.0e9, 2018: 14.9e9, 2019: 28.2e9, 2020: 27.2e9})
+    assert set(_factors(db).values()) == {1.0}
+
+
+def test_a_diluted_count_that_swings_alone_is_not_a_split(tmp_path):
+    # BX (BUG-185): the diluted count takes the Holdings units in and out (1,195M, 666M, 1,207M, 676M) while
+    # the count its EPS divides by (net income / EPS) stays near 670M. A split moves both.
+    db = _seam_db(tmp_path, "swing.db", [
+        (2015, 710.0, 1.04, 1188.0),
+        (2016, 1040.0, 1.56, 1195.0),
+        (2017, 1471.0, 2.21, 666.0),
+        (2018, 1541.0, 2.26, 1207.0),
+        (2019, 2049.0, 3.03, 676.0),
+    ])
+    assert set(_factors(db).values()) == {1.0}
+
+
+def test_years_before_the_listing_take_the_public_count(tmp_path):
+    # PLTR (BUG-185): listed on 2020-09-30. Its weighted counts before then leave out the preferred stock that
+    # converted (544M, 577M, 979M, then 1,924M in the listing year), so every jump into the public count folds,
+    # whatever EPS did; before, only the one EPS happened to agree with did.
+    db = _seam_db(tmp_path, "listing.db", [
+        (2017, -580.0, -1.07, 544.0),
+        (2018, -580.0, -1.01, 577.0),
+        (2019, -1170.0, -1.19, 979.0),
+        (2020, -520.0, -0.27, 1923.6),
+        (2021, -373.0, -0.19, 1960.0),
+    ], first_bar="2020-09-30")
+    factors = _factors(db)
+    assert factors[2017] == pytest.approx(1923.6 / 577.0) and factors[2018] == pytest.approx(1923.6 / 577.0)
+    assert factors[2019] == pytest.approx(1923.6 / 979.0) and factors[2020] == 1.0
+
+
+def test_a_listing_jump_folds_though_eps_changed_sign(tmp_path):
+    # APP (BUG-185), a year earlier here: listed in April 2020, so FY2019's count (214.9M) leaves out the
+    # converted preferred, and the jump folds though EPS changed sign.
+    db = _seam_db(tmp_path, "app.db", [
+        (2018, -100.0, -0.47, 212.4),
+        (2019, -120.0, -0.56, 214.9),
+        (2020, 35.0, 0.10, 342.8),
+        (2021, 360.0, 0.98, 367.0),
+        (2022, -190.0, -0.51, 373.0),
+    ], first_bar="2020-04-15")
+    factors = _factors(db)
+    assert factors[2018] == pytest.approx(342.8 / 214.9) and factors[2020] == 1.0
 
 
 def test_a_declared_split_explains_one_seam_only(tmp_path):
