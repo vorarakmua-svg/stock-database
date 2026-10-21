@@ -505,7 +505,7 @@ def _total_shares(snapshot: Optional[float], market_cap: Optional[float], price:
     return count, source
 
 
-def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
+def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_HISTORY) -> ValuationInputs:
     """Build the ValuationInputs bundle for *ticker*.
 
     ``conn.row_factory`` must be ``sqlite3.Row``. Missing rows degrade to
@@ -549,7 +549,9 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     records: List[FYRecord] = []
     shares_detect: List[Optional[float]] = []
     detect_filed: List[Optional[str]] = []
-    for r in fy_rows[-_MAX_FY_HISTORY:]:
+    # The valuations read the latest _MAX_FY_HISTORY years; the quality scores ask for one more (a 10-year
+    # CAGR). Splits fold newest first, so an older year never moves a newer one.
+    for r in fy_rows[-max_years:]:
         # OCF - capex, interest already through OCF. A stored levered_fcf from before
         # BUG-169's fix took interest off again, so it isn't read.
         fcf = r["free_cash_flow"]

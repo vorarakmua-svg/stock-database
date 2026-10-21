@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 12 · DOING 1 · DONE 10 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 11 · DOING 1 · DONE 11 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -33,7 +33,7 @@
 | ID | Task | Status | Commit | Evidence |
 |---|---|---|---|---|
 | M2-0 | Design M2: `docs/superpowers/specs/2026-10-21-quality-scores-design.md`, then these rows | DONE | this commit | the spec |
-| M2-1 | `src/scores/fundamentals.py`: per-share series on today's split basis, 3/5/10-year CAGRs; with tests | TODO | | |
+| M2-1 | `src/scores/fundamentals.py`: per-share series on today's split basis, 3/5/10-year CAGRs; with tests | DONE | this commit | `qa/evidence/scores-m2-1-*.txt` |
 | M2-2 | `src/scores/scores.py`: Piotroski F (9 tests), Altman Z, Beneish M, Sloan, ROIC vs WACC, predictability stars; with tests | TODO | | |
 | M2-3 | `src/scores/signs.py`: the 20 warning signs; with tests | TODO | | |
 | M2-4 | Storage (`per_share_annual`, `quality_scores`, `warning_signs`), the engine hooks, `rank_universe` (ranks, composite, momentum, Magic Formula); with tests | TODO | | |
@@ -298,3 +298,23 @@ Evidence: the spec
 Gates: unchanged (docs only)
 Commit: (this commit) docs: Milestone 2's design, quality scores and ranks
 Next: M1-9 when the review reports; otherwise M2-1.
+
+### Build iteration 12: 2026-10-21 22:10: M2-1 (code review 15 still running)
+Did:
+- `src/scores/fundamentals.py`: each fiscal year's figures, its per-share series on today's split basis
+  (revenue, EPS, EBITDA, FCF, book) and their 3/5/10-year CAGRs. A CAGR needs both ends positive and its
+  start exactly that many years back.
+- `load_inputs(..., max_years=)` keeps 10 years by default, so the valuations stay identical (checked on a
+  backfilled copy); the scores take 11.
+- The real data showed GOOGL's revenue/share falling 34% a year. FY2020's count was the cover's 0.675B as
+  filed, while its EPS was restated for the 2022 20:1 split. The scores now count each year on its EPS's
+  basis: net income / EPS without a weighted count, if EPS is $0.10 or more. GOOGL now reads +19.9%.
+  BUG-173 is opened for the same fallback in `load_inputs`.
+- `src/scores` is added to mypy's files.
+- TDD: 9 tests (RED: the package missing, then the GOOGL-like basis); 6 mutants, each killed.
+- Real data: CAGRs for 121 tickers (revenue/share 5y, median 9.4%; 10y for 108). The only year-on-year
+  moves beyond 3x are real (BX and KKR carry, MU's memory year, WDC's SanDisk separation).
+Evidence: `qa/evidence/scores-m2-1-{red,mutants,realdata}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1282 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
+Commit: (this commit) feat(scores): per-share series on today's split basis and their CAGRs
+Next: M1-9 when the review reports; otherwise M2-2.

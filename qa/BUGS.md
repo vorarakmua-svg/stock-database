@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 9 · P3 83 · NEEDS-USER 13 · Verified: 77
+**Open:** P0 0 · P1 0 · P2 10 · P3 83 · NEEDS-USER 13 · Verified: 77
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1294,6 +1294,14 @@ Repro: GE's `multiples` row in `valuations`: P/E band low 12.18x, median 32.84x,
 Expected: each fiscal year's multiple taken on the price as traded then (the close times the spin-off factors after it), as the valuation history does (`history_inputs.price_factor_after`); and a band that one tiny-earnings year can't stretch to 1,044x.   Actual: closes before a spin-off sit 1.6x low against that year's EPS, so the band mixes bases (here it understates FY2022's P/E: 1,676x as traded). The band's max then multiplies the latest EPS.
 Root cause: `src/valuation/inputs.py` `load_inputs` takes `fy_end_prices` from the `price_bars` closes (put back to the market close and the price's split basis) without undoing Yahoo's non-split price factors. `src/valuation/models.py` (the multiples band) takes the min and max of the yearly multiples, so a single outlier year sets bear or bull.
 Notes / decision needed: either fix moves the multiples band, a member of the five-model median, so verdicts can change: a valuation-policy change the protocol leaves to you. Options: (a) take the closes as traded (reuse `price_factor_after`); (b) bound the band by quartiles rather than min/max, as the valuation history's range does; (c) both. Default until you decide: unchanged.
+
+### BUG-173 [P2][VAL] A fiscal year's share count falls back to the cover's shares outstanding, as filed, while its split is folded by net income / EPS: GOOGL's FY2020 reads 0.675B, 20x short
+Status: OPEN
+Found: build iteration 12 via M2-1 (the quality scores' per-share series on the real data) | Fixed: | Regression test:
+Repro: `load_inputs(conn, "GOOGL").fy_records`, FY2020: `shares` 0.675B with `split_factor` 1.0. FY2019 and older read 13.7-13.9B (factor 20). GOOGL files no weighted diluted count before FY2022, so the split detection reads net income / EPS (FY2020: 13.744B, its EPS restated for the 20:1 split of 2022-07-15) and finds the seam between FY2019 and FY2020; `shares` reads the cover's 0.675B, which no filing restates.
+Expected: each year's count on its EPS's basis, the one the split detection folded.   Actual: FY2020's count is 20x short, so its book value per share reads 20x high, as does any per-share figure built on `FYRecord.shares` for such a year.
+Root cause: `src/valuation/inputs.py` `load_inputs` takes `shares` from weighted diluted else shares outstanding, while the detection takes weighted diluted else net income / EPS else shares outstanding. Where the two differ, their split bases can differ.
+Notes: the valuation models read old years' `shares` only through `bvps()`: the P/B multiples band of banks and insurers whose weighted count is missing in some years (the Graham number uses the latest year). The quality scores take the count on the EPS's basis instead (`scores.fundamentals._count_on_eps_basis`, M2-1), so their series are right; GOOGL's revenue/share 5-year CAGR is 19.9%, not -34.4%. A fix in `load_inputs` may move a band and so the median: to be weighed with BUG-172.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

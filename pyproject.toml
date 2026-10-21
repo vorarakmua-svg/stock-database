@@ -62,6 +62,7 @@ files = [
     "src/models/canonical.py",
     "src/validation",
     "src/valuation",
+    "src/scores",
     "src/parsers/derived_fields.py",
     "src/parsers/metric_utils.py",
     "src/parsers/sector_metrics.py",
