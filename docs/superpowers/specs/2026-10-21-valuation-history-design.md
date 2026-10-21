@@ -306,8 +306,11 @@ imports nothing from `src`.
 | TTM at fiscal year end vs `metrics_annual` | ≥ 95% within 1% |
 
 Every miss beyond 20% (35% for EV/EBITDA) gets an explanation in the evidence. The run also checks:
-- Market-cap continuity across the AAPL, NVDA, AVGO, WMT, GE, KLAC, CRWD and BKNG splits: the market
-  cap change stays within 5% of the price change.
+- Market-cap continuity at every declared share split's seam (BUG-177). The seam is the jump of about
+  the split's ratio in the filed counts, up to three years before the split. Where the history's
+  trailing quarter crosses it, the market cap moves within 10% of the price. No monthly move may sit
+  within 3% of a nearby declared split's ratio. A check at the split dates alone can't see a seam left
+  unfolded, since bars and counts both sit on today's basis there; it passed with NFLX 10x off.
 - Every monthly market-cap jump above 12% that the price doesn't explain is traced to an event. The
   prototype found 67, among them BMY 2020, LIN 2019 and SCHW 2021.
 - `valuation_summary` is unchanged by this milestone.

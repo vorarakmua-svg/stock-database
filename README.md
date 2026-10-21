@@ -417,7 +417,11 @@ Checked against Yahoo's own figures by `qa/oracle/history_vs_yahoo.py`, which im
 `src`:
 - current P/E within 10% for 110 of 120 companies, P/S for 115 of 122, P/B for 108 of 114;
 - share counts within 5% for 118 of 122;
-- market cap continuous across all 10 share splits since 2009.
+- market cap continuous at all 40 split seams the history crosses, for 38 of the 44 share splits since
+  the filed quarters begin. A seam is the jump of about a split's ratio in the filed counts, up to three
+  years before the split, and no monthly move matches a nearby split's ratio. C's and TJX's seams sit
+  before the history begins, DHR's, FTNT's and SCCO's quarters were all restated, and APH's 2026 split
+  came after the latest quarter.
 
 Limitations:
 - It's a history of how the market priced a company, not a forecast. A business that changed (a

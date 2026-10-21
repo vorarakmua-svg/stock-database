@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 12 · P3 89 · NEEDS-USER 13 · Verified: 80
+**Open:** P0 0 · P1 0 · P2 11 · P3 89 · NEEDS-USER 13 · Verified: 81
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1345,10 +1345,16 @@ Fix (build iteration 17):
 Evidence: `qa/evidence/review15-bug176-{red,mutants,realdata}.txt`
 
 ### BUG-177 [P2][QA] The valuation history's oracle can't see a split seam left unfolded, and the README claims continuity across all splits
-Status: OPEN
-Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Status: VERIFIED (build iteration 19)
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: (this commit) | Regression test: `qa/oracle/history_vs_yahoo.py`'s gates "market cap at each declared share split's seam" and "no market-cap move at a nearby declared split's ratio" (an oracle, so checked on real copies: RED on the copy backfilled before BUG-174's fix)
 Repro: `qa/oracle/history_vs_yahoo.py` checks market-cap continuity only on split dates, where bars and normalized counts both sit on today's basis whatever the seams do. Its jump tracer counts any filed share-count change as an explanation, so it "traced" NFLX's x10.001 and PANW's x2.010 seams. README: "market cap continuous across all 10 share splits since 2009".
 Expected: a gate per declared share split since the first bar, checking the normalized series is continuous at the raw seam; a jump within about 2% of a declared split's ratio flagged as a defect.   Actual: M1-4 and M1-9's dry run passed every gate with BUG-174 in place.
+Fix (build iteration 19):
+- Gate 4 now checks each declared share split's seam: two consecutive filed quarters whose counts jump within 15% of a run of declared splits dated after the older one and within four years of the newer. Where the history's trailing quarter crosses it, market cap must move within 10% of the price. It replaces the check at the split dates of eight tickers.
+- Gate 5's tracer calls a move within 3% of a nearby declared split's ratio a seam left unfolded, and a new gate wants none.
+- On the copy backfilled before BUG-174's fix, both gates fail, on NFLX (x10.001) and PANW (x2.010) alone. On a fresh copy backfilled with every fix, all gates pass: 40/40 seams continuous, no unfolded move, 80 of 80 moves traced. Of the 44 share splits since the filed quarters begin, the history crosses the seams of 38. C's and TJX's seams sit before the history, DHR's, FTNT's and SCCO's quarters were all restated, and APH's 2026 split came after the latest quarter.
+- The README's "continuous across all 10 share splits since 2009" and the spec's gate now say this. Iteration 5's log line and the M1-4 evidence summary are marked.
+Evidence: `qa/evidence/review15-bug177-{red,green}.txt`
 
 ### BUG-178 [P3][VAL] A spin-off factor between the last bar and the snapshot shrinks Yahoo's share count in the valuation history's guard
 Status: OPEN

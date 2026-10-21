@@ -26,7 +26,7 @@
 | M1-6 | The VAL tab section (fragment, `renderValHistory`), checked in Chrome on a scratch server; with tests | DONE | this commit | `qa/evidence/valhist-m1-6-*` |
 | M1-7 | Screener columns (`*_pct_10y`, `price_to_hist_value`), filters, CSV; with tests | DONE | this commit | `qa/evidence/valhist-m1-7-*.txt` |
 | M1-8 | Docs: README "Valuation history", USAGE_GUIDE, the stale "no price series" text; the multiples-band basis bug logged (NEEDS-USER) | DONE | this commit | README, USAGE_GUIDE; `qa/BUGS.md` BUG-172 |
-| M1-9 | Milestone close: code review 15 (opus, 16f3005..HEAD) with Critical and Important findings fixed; then backup and offline backfill of the user's DB; verdict changes reported | DOING (review 15's fixes: BUG-174, BUG-176 and BUG-175 done; BUG-177 next) | 7189bf7, 61181e7, 0ffde44 | `qa/evidence/m1-9-dryrun-*.txt`, `qa/evidence/review15-*.txt` |
+| M1-9 | Milestone close: code review 15 (opus, 16f3005..HEAD) with Critical and Important findings fixed; then backup and offline backfill of the user's DB; verdict changes reported | DOING (review 15's Critical and Important findings fixed: BUG-174 to BUG-177; next the live backfill) | 7189bf7, 61181e7, 0ffde44, 5efe18e | `qa/evidence/m1-9-dryrun-*.txt`, `qa/evidence/review15-*.txt` |
 
 ## M2: quality scores and ranks
 
@@ -156,7 +156,8 @@ Did:
   - P/E within 10% of Yahoo's for 110/120, P/S 115/122, P/B 108/114; EV/EBITDA within 20% for 72/87.
   - Share counts within 5% for 118/122; trailing years at fiscal year ends against `metrics_annual`
     within 1% for 4,196/4,245.
-  - Market cap across all 10 share splits within 5% (0.989 to 1.001).
+  - Market cap across all 10 share splits within 5% (0.989 to 1.001). Later found blind to seams left
+    unfolded (BUG-177, build iteration 19).
   - The valuations and summaries are identical to the M0 copy's.
 - Its first run found 9 monthly market-cap moves it couldn't trace; three fixes in the history inputs,
   each RED first (6 mutants, each killed):
@@ -443,3 +444,21 @@ Gates: ruff ✓ mypy ✓ pytest 1357 passed, 1 skipped, 1 warning | CI: no PR (Q
 Commit: (this commit) fix(valuation): an unexplained share jump folds only on a split's marks (BUG-175)
 Next, still M1-9: BUG-177 (the oracle's seam gate and the README's continuity claim); then the oracle and the
 dry run again, and the live backfill.
+
+### Build iteration 19: 2026-10-21 22:32: M1-9 (code review 15's BUG-177; the dry run again)
+Did:
+- Fixed BUG-177 in `qa/oracle/history_vs_yahoo.py`. Gate 4 checks market cap where the history crosses
+  each declared share split's seam in the filed quarters. The tracer flags a move at a nearby split's ratio
+  as a seam left unfolded, and a new gate wants none. The README's continuity claim and the spec's gate now
+  say what's checked.
+- RED: on the copy backfilled before BUG-174's fix, both gates fail on NFLX (x10.001) and PANW (x2.010) alone.
+- The live step's dry run again, on a fresh backup-API copy backfilled with HEAD's code (7 s). Every
+  oracle gate passes: 40/40 seams, 80/80 moves traced. The verdicts move as before, fair 16 to 18 and
+  expensive 108 to 106: MCD and PFE from expensive to fair (M0). Now all 127 tickers also get
+  `quality_scores` (248 warning signs), which M2-9 recomputes.
+- Review 15's Critical and Important findings are all fixed (BUG-174 to BUG-177).
+Evidence: `qa/evidence/review15-bug177-{red,green}.txt`, `qa/evidence/m1-9-dryrun2-{diff,oracle}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1357 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(qa): the history's oracle checks market cap at every split's seam (BUG-177)
+Next, M1-9's live step: back up the user's DB, run the offline backfill on it, check it with the oracle and
+report the verdict changes; record code review 15 in `qa/LOG.md`; then M1-9 is DONE.

@@ -11,13 +11,15 @@ Gates; any that fails makes the exit code 1:
 - Our latest share count against Yahoo's (market cap / price): at least 90% within 5%.
 - Each fiscal year's trailing twelve months at its year end against metrics_annual (EBITDA, FCF, net
   debt): at least 95% within 1%.
-- Market cap continuous across the share splits of AAPL, NVDA, AVGO, WMT, GE, KLAC, CRWD and BKNG:
-  within 5% of the price's move.
+- Market cap continuous at each declared share split's seam in the filed quarters, where the history's
+  trailing quarter crosses it: within 10% of the price's move.
+- No monthly market-cap move within 3% of the ratio of a declared split near it: a seam left unfolded.
 
 Reported, not gated:
 - The misses beyond 20% (35% for EV/EBITDA).
 - The monthly market-cap moves above 12% that the price doesn't explain, each traced to a price factor
   or a filed share-count change.
+- The declared share splits whose seam the filed quarters don't show.
 - The restatement look-ahead: annual figures as first filed against the latest.
 - With --reference, whether the valuations and summaries equal another copy's.
 
@@ -33,11 +35,19 @@ import math
 import sqlite3
 import statistics
 import sys
+from datetime import date, timedelta
 from fractions import Fraction
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-SPLIT_TICKERS = ("AAPL", "NVDA", "AVGO", "WMT", "GE", "KLAC", "CRWD", "BKNG")
+#: Later filings restate the quarters before a split for three years, so a split's seam sits in the filed
+#: quarters up to three years and a filing's lag before it; a year more of slack.
+REACH_DAYS = 4 * 365
+#: The filed jump at a split's seam is its ratio, give or take a quarter's issuance and buybacks.
+SEAM_MATCH = 0.15
+#: A market-cap move within this of a nearby declared split's ratio is that split's seam left unfolded.
+UNFOLDED_MATCH = 0.03
+COUNT = "COALESCE(weighted_avg_shares_basic, shares_outstanding, weighted_avg_shares_diluted)"
 
 
 def share_split(ratio: float) -> bool:
@@ -45,6 +55,25 @@ def share_split(ratio: float) -> bool:
     if not ratio or ratio <= 0 or abs(ratio - 1) < 1e-9:
         return False
     return any(abs(float(Fraction(r).limit_denominator(4)) - r) <= 1e-9 * r for r in (ratio, 1 / ratio))
+
+
+def split_runs(events: List[Tuple[str, float]]) -> List[Tuple[str, str, float]]:
+    """Every run of consecutive declared share splits: (first date, last date, the product of the ratios)."""
+    s = sorted((d, r) for d, r in events if share_split(r))
+    runs = []
+    for i in range(len(s)):
+        product = 1.0
+        for j in range(i, len(s)):
+            product *= s[j][1]
+            runs.append((s[i][0], s[j][0], product))
+    return runs
+
+
+def runs_near(runs: List[Tuple[str, str, float]], older: str, newer: str) -> List[Tuple[str, str, float]]:
+    """The runs a seam between the quarters ending *older* and *newer* can come from: starting after the older
+    quarter and ending no more than REACH_DAYS after the newer one."""
+    reach = (date.fromisoformat(newer[:10]) + timedelta(days=REACH_DAYS)).isoformat()
+    return [run for run in runs if run[0] > older[:10] and run[1] <= reach]
 
 
 def within(a: float, b: float, tol: float) -> bool:
@@ -181,26 +210,58 @@ def main(argv: Optional[List[str]] = None) -> int:
     for o in off[:12]:
         print("   ", o)
 
-    # 4. Market cap across share splits.
-    print("== market cap across share splits")
+    # 4. Market cap at each declared share split's seam (BUG-177). Filings restate the quarters before a split,
+    # so it shows in the filed counts as a jump of about its ratio between two quarters up to three years before
+    # it, not on its date. Where the history's trailing quarter crosses that jump, market cap must move with the
+    # price; a seam left unfolded moves by the split's ratio.
+    print("== market cap at each declared share split's seam in the filed quarters")
     ok = total = 0
-    for t in SPLIT_TICKERS:
-        hist = db.execute("SELECT date, close, market_cap FROM valuation_history WHERE ticker = ? "
-                          "AND market_cap IS NOT NULL ORDER BY date", (t,)).fetchall()
-        for d, r in splits.get(t, []):
-            if not share_split(r) or not hist or not (hist[0][0] < d <= hist[-1][0]):
+    declared: List[Tuple[str, str, float]] = []
+    seen, early = set(), set()
+    for t in sorted(splits):
+        hist = db.execute("SELECT date, close, market_cap, ttm_period_end FROM valuation_history WHERE ticker = ? "
+                          "AND market_cap IS NOT NULL AND ttm_period_end IS NOT NULL ORDER BY date",
+                          (t,)).fetchall()
+        filed = [(str(pe)[:10], c) for pe, c in db.execute(
+            f"SELECT period_end, {COUNT} FROM financials_quarterly WHERE ticker = ? AND {COUNT} > 0 "
+            "ORDER BY period_end", (t,))]
+        if not hist or not filed:
+            continue
+        own = [(d, r) for d, r in splits[t] if share_split(r) and d > filed[0][0]]
+        declared += [(t, d, r) for d, r in own]
+        runs = split_runs(own)
+        for (a, ca), (b, cb) in zip(filed, filed[1:]):
+            match = [run for run in runs_near(runs, a, b) if within(cb / ca, run[2], SEAM_MATCH)]
+            if not match:
                 continue
-            before = max((h for h in hist if h[0] < d), key=lambda h: h[0])
-            after = min((h for h in hist if h[0] >= d), key=lambda h: h[0])
-            move = (after[2] / before[2]) / (after[1] / before[1])
+            first, last, ratio = min(match, key=lambda run: abs(math.log(cb / ca / run[2])))
+            before = [h for h in hist if str(h[3])[:10] < b]
+            after = [h for h in hist if str(h[3])[:10] >= b]
+            if not before or not after:  # the history doesn't cross this seam
+                early.update((t, d) for d, r in own if first <= d <= last)
+                continue
+            x, y = before[-1], after[0]
+            factors = [r for d, r in splits[t] if x[0] < d <= y[0] and not share_split(r)]
+            move = (y[2] / x[2]) / (y[1] / x[1]) * math.prod(factors)
             total += 1
-            ok += abs(move - 1) <= 0.05
-            print(f"    {t} {d} x{r:g}: {before[0]} -> {after[0]}, market cap / price {move:.3f}")
-    gate("market cap across share splits", total > 0 and ok == total, f"within 5% {share(ok, total)}", failures)
+            good = within(move, 1.0, 0.10)
+            ok += good
+            seen.update((t, d) for d, r in own if first <= d <= last)
+            print(f"    {t} x{ratio:g} ({first}{'' if first == last else '..' + last}): filed "
+                  f"{ca / 1e6:,.0f}M -> {cb / 1e6:,.0f}M ({a} -> {b}); market cap / price {x[0]} -> {y[0]}: "
+                  f"x{move:.3f}{'' if good else '  UNFOLDED'}")
+    gate("market cap at each declared share split's seam", total > 0 and ok == total,
+         f"continuous within 10% {share(ok, total)}", failures)
+    outside = [f"{t} {d} x{r:g}" for t, d, r in declared if (t, d) in early and (t, d) not in seen]
+    unseen = [f"{t} {d} x{r:g}" for t, d, r in declared if (t, d) not in early | seen]
+    print(f"declared share splits after the first filed quarter: {len(declared)}; their seams the history "
+          f"crosses: {len(declared) - len(outside) - len(unseen)}; seams before the history: "
+          f"{', '.join(outside) or 'none'}; no seam in the filed quarters (restated throughout, or after the "
+          f"latest quarter): {', '.join(unseen) or 'none'}")
 
     # 5. Monthly market-cap moves the price doesn't explain.
     print("== monthly market-cap moves above 12% that the price doesn't explain")
-    jumps = traced = 0
+    jumps = traced = unfolded = 0
     lines = []
     for t in sorted({k for k, _ in ours} | set(latest)):
         hist = db.execute("SELECT date, close, market_cap, ttm_period_end FROM valuation_history WHERE ticker = ? "
@@ -213,6 +274,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             factors = [r for d, r in splits.get(t, []) if prev[0] < d <= cur[0] and not share_split(r)]
             fac = math.prod(factors) if factors else 1.0
             why = None
+            seam = [run for run in runs_near(split_runs(splits.get(t, [])), str(prev[3]), str(cur[3]))
+                    if within(move * fac, run[2], UNFOLDED_MATCH)] if prev[3] and cur[3] else []
+            if seam:
+                unfolded += 1
+                lines.append(f"    {t} {prev[0]} -> {cur[0]}: x{move:.3f}: UNFOLDED SEAM of the declared "
+                             f"x{seam[0][2]:g} ({seam[0][0]}), between {prev[3]} and {cur[3]}")
+                continue
             if factors and within(move * fac, 1.0, 0.05):
                 why = f"price factor {fac:.3f} (a spin-off)"
             elif prev[3] != cur[3]:
@@ -225,9 +293,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     why = f"filed share count {a / 1e6:,.0f}M -> {b / 1e6:,.0f}M ({prev[3]} -> {cur[3]})"
             traced += why is not None
             lines.append(f"    {t} {prev[0]} -> {cur[0]}: x{move:.3f}: {why or 'UNEXPLAINED'}")
-    print(f"moves {jumps}, traced {traced}")
+    print(f"moves {jumps}, traced {traced}, unfolded seams {unfolded}")
     for line in lines:
         print(line)
+    gate("no market-cap move at a nearby declared split's ratio", unfolded == 0, f"{unfolded} moves", failures)
 
     # 6. The restatement look-ahead: annual figures as first filed against the latest.
     print("== restatement look-ahead (annual figures, first filed vs latest)")
