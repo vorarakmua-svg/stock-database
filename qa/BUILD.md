@@ -6,13 +6,13 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 14 · DOING 0 · DONE 0 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 13 · DOING 0 · DONE 1 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
 | ID | Task | Status | Commit | Evidence |
 |---|---|---|---|---|
-| M0-1 | `_calculate_levered_fcf` stops subtracting interest again; `load_inputs` reads `free_cash_flow`; RED tests, mutants, spec/README/oracle updated; BUG logged and verified; a DCF and verdict diff on a DB copy | TODO | | |
+| M0-1 | `_calculate_levered_fcf` stops subtracting interest again; `load_inputs` reads `free_cash_flow`; RED tests, mutants, spec/README/oracle updated; BUG logged and verified; a DCF and verdict diff on a DB copy | DONE | 59e0678 (oracle), this commit (fix) | `qa/evidence/levfcf-*.txt` |
 
 ## M1: valuation history and a historical fair value (spec: `docs/superpowers/specs/2026-10-21-valuation-history-design.md`)
 
@@ -54,7 +54,7 @@
 
 ## NEEDS-USER (each also recorded in `qa/BUGS.md`)
 
-None yet.
+- Q10 [OPS]: a draft PR so CI runs on the branch. Default: no PR; local gates and ruff's py39 target.
 
 ## Log
 
@@ -62,3 +62,17 @@ None yet.
 Did: the approved plan copied into the repo; the M1 spec written from the design pass; this board and
 `qa/BUILD_LOOP_PROMPT.md` created; the Ralph loop started.
 Next: M0-1.
+
+### Build iteration 1: 2026-10-21 14:20: M0-1
+Did:
+- RED tests: `levered_fcf` 180 where 200 is expected, 230 where 250 is; the basis read 70 where 80 is.
+- The oracle was put right first (59e0678), reading `free_cash_flow` as the spec says; it then flagged 54 DCF rows.
+- The fix: `_calculate_levered_fcf` returns FCF, and `load_inputs` reads `free_cash_flow`; the spec is updated.
+- Real data on two backfilled copies: 66 DCF rows change (28 by 10% or more), two verdicts move to fair
+  (MCD, PFE), and the oracle agrees (level 1 0/522, level 2 8/487, all Graham bear cases, BUG-007).
+- BUG-169 opened as P1 and verified. Q10 opened: no PR is open, so CI doesn't run on the branch.
+- The BUGS header's NEEDS-USER count had stayed 11 after Q6's decision; with Q10 it is 11 again, now right.
+Evidence: `qa/evidence/levfcf-{red,green,oracle-before,oracle-flags,oracle-after,realdata}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1195 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
+Commit: 59e0678 test(qa): the valuation oracle reads the DCF basis as OCF - capex, as the spec says; (this commit) fix(parsers): levered FCF stops taking off interest that operating cash flow already bears
+Next: M1-1.

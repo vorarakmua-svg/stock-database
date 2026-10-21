@@ -83,10 +83,10 @@ class ValuationResult:
 
 ### DCF — sectors: general, utility, energy
 
-- Basis FCF = **median of the last 3 annual `levered_fcf`** (falls back to
-  `free_cash_flow` when `levered_fcf` is NULL). FCF here is equity free cash flow
-  (OCF − capex, interest already through OCF), so it is discounted at the CAPM cost
-  of equity with **no net-debt adjustment**.
+- Basis FCF = **median of the last 3 annual `free_cash_flow`**. FCF here is equity
+  free cash flow (OCF − capex, interest already through OCF), so it is discounted at
+  the CAPM cost of equity with **no net-debt adjustment**. (Until BUG-169's fix, the
+  basis read `levered_fcf`, which took interest off a second time.)
 - Projection: years 1–5 at base growth, years 6–10 linear fade to terminal 2.5%,
   Gordon terminal value at year 10.
 - Per-share: divide equity value by `market_snapshots.shares_outstanding` (latest).

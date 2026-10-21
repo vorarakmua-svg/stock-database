@@ -247,19 +247,14 @@ class CalculatedMetrics:
 
     def _calculate_levered_fcf(self, financials: Dict[str, Any]) -> Optional[float]:
         """
-        Calculate Levered FCF = FCF - Interest Expense.
+        Calculate Levered FCF, the cash left for equity holders: OCF - CapEx.
 
-        Levered FCF represents cash available to equity holders.
+        US GAAP classifies interest paid as an operating cash flow (ASC 230), so
+        OCF is already after interest and levered FCF equals FCF. Subtracting
+        interest expense again counted it twice (BUG-169). Only us-gaap facts are
+        mapped, so IFRS's choice of a financing classification doesn't arise.
         """
-        fcf = self._calculate_fcf(financials)
-        if fcf is None:
-            return None
-
-        interest = self._get_value(financials, ["interest_expense"])
-
-        if interest is not None:
-            return fcf - abs(interest)
-        return fcf
+        return self._calculate_fcf(financials)
 
     # ========== Capital Structure Metrics ==========
 

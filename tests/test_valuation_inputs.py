@@ -70,11 +70,13 @@ def test_load_inputs_builds_fy_records_ascending(val_db):
     assert inputs.fy_records[-1].net_income == 140.0
 
 
-def test_fcf_prefers_levered_fcf(val_db):
+def test_fcf_basis_is_free_cash_flow(val_db):
+    # The DCF's basis is OCF - capex, interest already through OCF. A stored levered_fcf
+    # from before that fix took interest off again, so it isn't read.
     conn = _connect(val_db)
     inputs = load_inputs(conn, "AAA")
     conn.close()
-    assert inputs.fy_records[0].fcf == 70.0  # levered_fcf, not free_cash_flow
+    assert inputs.fy_records[0].fcf == 80.0  # free_cash_flow, not the stale levered_fcf
 
 
 def test_market_analyst_and_dividends_loaded(val_db):

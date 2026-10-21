@@ -501,7 +501,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         "SELECT fa.fiscal_year, fa.period_end, fa.filed_date, fa.form, fa.net_income, fa.total_equity, "
         "fa.eps_diluted, fa.weighted_avg_shares_diluted, fa.shares_outstanding, "
         "fa.depreciation_amortization, fa.capex, "
-        "ma.levered_fcf, ma.free_cash_flow, ma.ffo_per_share "
+        "ma.free_cash_flow, ma.ffo_per_share "
         "FROM financials_annual fa "
         "LEFT JOIN metrics_annual ma "
         "  ON ma.ticker = fa.ticker AND ma.fiscal_year = fa.fiscal_year "
@@ -531,7 +531,9 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     shares_detect: List[Optional[float]] = []
     detect_filed: List[Optional[str]] = []
     for r in fy_rows[-_MAX_FY_HISTORY:]:
-        fcf = r["levered_fcf"] if r["levered_fcf"] is not None else r["free_cash_flow"]
+        # OCF - capex, interest already through OCF. A stored levered_fcf from before
+        # BUG-169's fix took interest off again, so it isn't read.
+        fcf = r["free_cash_flow"]
         shares = (
             r["weighted_avg_shares_diluted"]
             if r["weighted_avg_shares_diluted"] is not None

@@ -27,9 +27,9 @@ def seeded_db(tmp_path):
             (fy, f"{fy}-12-31", 200.0, 1000.0, 2.0 + 0.1 * i, 100.0),
         )
         conn.execute(
-            "INSERT INTO metrics_annual (ticker, fiscal_year, levered_fcf) "
-            "VALUES ('AAA', ?, ?)",
-            (fy, 100.0 * 1.05 ** i),
+            "INSERT INTO metrics_annual (ticker, fiscal_year, free_cash_flow, levered_fcf) "
+            "VALUES ('AAA', ?, ?, ?)",
+            (fy, 100.0 * 1.05 ** i, 100.0 * 1.05 ** i),
         )
         conn.execute(
             "INSERT INTO price_bars (ticker, date, close) VALUES ('AAA', ?, ?)",

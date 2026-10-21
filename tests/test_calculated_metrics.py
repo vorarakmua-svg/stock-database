@@ -60,6 +60,18 @@ def test_fcf_without_capex_returns_ocf(calc):
     assert calc._calculate_fcf({"operating_cash_flow": 250.0}) == pytest.approx(250.0)
 
 
+def test_levered_fcf_does_not_subtract_interest_again(calc, sample_financials):
+    # US GAAP puts interest paid in operating cash flow (ASC 230), so OCF - capex is already the
+    # cash left for equity: taking the 20 of interest off again counts it twice.
+    m = calc.calculate_all(sample_financials)
+    assert m["levered_fcf"] == pytest.approx(200.0)  # 250 OCF - 50 CapEx
+
+
+def test_levered_fcf_without_capex_is_ocf(calc):
+    financials = {"operating_cash_flow": 250.0, "interest_expense": 20.0}
+    assert calc._calculate_levered_fcf(financials) == pytest.approx(250.0)
+
+
 def test_net_debt_negative_when_net_cash(calc):
     financials = {"long_term_debt": 100.0, "cash_and_equivalents": 500.0}
     assert calc._calculate_net_debt(financials) == pytest.approx(-400.0)

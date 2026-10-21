@@ -210,7 +210,8 @@ iteration**:
    question recorded in `qa/BUGS.md`. Nothing is TODO, DOING or BLOCKED without evidence.
 2. Each milestone's close task is DONE: its code review has no open Critical or Important finding,
    and its authorized user-data step ran and was checked.
-3. The gates are green locally and on CI for the pushed head.
+3. The gates are green locally, and on CI for the pushed head when a PR is open. With no PR, ruff's py39
+   target stands in for CI's Python 3.9 job (Q10, the user's call).
 4. README and USAGE_GUIDE describe every new feature, and the docs tests pass.
 5. The working tree is clean apart from the user's own files, and everything is pushed.
 6. A final summary is appended to the `qa/BUILD.md` log: what was built, the commits, the NEEDS-USER

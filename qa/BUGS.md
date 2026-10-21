@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 7 · P3 83 · NEEDS-USER 11 · Verified: 76
+**Open:** P0 0 · P1 0 · P2 7 · P3 83 · NEEDS-USER 11 · Verified: 77
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1263,6 +1263,14 @@ Found: iteration 100 while verifying BUG-029's fix (`qa/evidence/bug029-realdata
 Repro: the export upserts the periods a run gives and never removes a ticker's others, so rows an older parse made stay after the current rules stop giving them: the user's database, re-collected with BUG-029's fix, still holds ADI's TTM 2011-04-30 and 2011-07-30 and vintages for ETN's FY2014 and FY2017, GS's FY2019 and FY2022, SCCO's FY2015 and SPG's FY2013 (by accession), which a fresh collection of the same filings doesn't have.
 Expected: a run that parsed the filer's annual record removes the ticker's periods it no longer gives (not a run with no annual record, a failed one or a predecessor's: Q6).   Actual: 8 stale rows.
 
+### BUG-169 [P1][VAL] The DCF's basis took interest off twice: `levered_fcf` subtracted interest expense from OCF - capex
+Status: VERIFIED (build iteration 1)
+Found: the GuruFocus research's inventory (2026-10-21), build task M0-1 | Fixed: (this commit) | Regression test: tests/test_calculated_metrics.py::test_levered_fcf_does_not_subtract_interest_again, tests/test_calculated_metrics.py::test_levered_fcf_without_capex_is_ocf, tests/test_valuation_inputs.py::test_fcf_basis_is_free_cash_flow
+Repro: `CalculatedMetrics()._calculate_levered_fcf` on OCF 250, capex 50, interest expense 20 gave 180, and the DCF's basis was the median of the last 3 `levered_fcf`.
+Expected: 200. US GAAP puts interest paid in operating cash flow (ASC 230), and the spec's basis is "OCF - capex, interest already through OCF" (`docs/superpowers/specs/2026-07-13-valuation-layer-design.md`).   Actual: 180, so every DCF basis was short by the year's interest expense.
+Root cause: `src/parsers/calculated_metrics.py` `_calculate_levered_fcf` returned FCF - |interest|, and `src/valuation/inputs.py` `load_inputs` preferred it to `free_cash_flow`. The oracle read the same stored column (`coalesce(levered_fcf, free_cash_flow)`), so it agreed; it was put right first (59e0678), when it flagged 54 DCF rows.
+Notes: On two backup-API copies of the real DB, backfilled with the code before and after: 66 of 127 DCF rows change. Of the 91 applicable, 28 rise by 10% or more and 11 by 25% or more (DE $245.39 to $542.95, T $29.80 to $50.03, D $61.11 to $98.12, AMGN $159.15 to $241.18); 14 fall a little (WDC 0.82x the most), since the 10-year FCF CAGR is now measured on the right series. The median value moves for 24 tickers (0.95x to 1.52x), and two verdicts change, MCD and PFE from expensive to fair (fair 16 to 18, expensive 108 to 106); the median upside goes from -58.3% to -56.1%. The oracle on the fixed copy: level 1, 522 rows, 0 beyond 0.5%; level 2, 487 rows, 8 beyond, all of them the Graham bear cases (BUG-007). The stored `metrics_annual.levered_fcf` (FA tab, screener) keeps its old value until a ticker is re-collected; the DCF reads `free_cash_flow`, so an offline backfill is right at once. The user's DB gets that backfill at M1-9 (`qa/evidence/levfcf-{red,green,oracle-before,oracle-flags,oracle-after,realdata}.txt`).
+
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
@@ -1342,3 +1350,9 @@ Options: (a) a bank also needs deposits on its balance sheet, otherwise it is va
 - L26 [STORE] After a run whose dividend request failed, the JSON keeps the earlier run's payments (BUG-118's fix) on the split basis Yahoo served them on, but keeps no served day (SQLite keeps `served_on`): after a split in between (code review 11's `json_divfail`, a 10:1 split on 2026-06-12) a reader of the JSON gets pre-split payments beside a post-split price, with nothing to tell them apart. Check whether the JSON should carry the served day or the price's basis (STORE-06, MATCH-05). (iter 82)
 - L27 [MATCH] Yahoo's insider list repeats some rows exactly (23 in the user's JSON, e.g. AMD's Lisa Su selling 76,496 shares at 141.89-143.69 twice on 2024-12-04), and SQLite's key (ticker, insider, day, text) keeps one. Check against the Form 4s whether these are separate trades (SQLite then under-counts) or Yahoo's duplicates (MATCH-08). (iter 83)
 - L28 [MATCH] Yahoo's own fields disagree with one another, and the app shows them as they are: its dividend yield is 5-17% above its rate over the price for 17 of 91 payers (GLW, MRVL, DELL: a lagging price), its trailing P/E 17% above the price over its trailing EPS for SYK, its EV negative for BRK-B and C and in another currency for TSM, and PM's FY2025 statement gives 12.46B diluted shares beside its 1.56B outstanding. Decide whether the app should derive these itself or flag them (MATCH-03). (iter 83)
+
+### Q10 [OPS] NEEDS-USER: should `qa/full-loop` get a draft PR so CI runs on its pushes?
+Status: NEEDS-USER
+Found: build iteration 1. PR #28 (the QA loop's) was merged on 2026-10-19, and CI runs only on pull requests and on pushes to `main`, so the branch's pushes since then have run no CI (Python 3.9-3.12).
+Default applied: no PR; the local gates (Python 3.13) and ruff's py39 target stand in for CI. Opening a PR publishes the branch on GitHub, so it waits for you.
+Decision needed: open a draft PR "Build loop: GuruFocus roadmap" against `main`, so CI runs on every push?
