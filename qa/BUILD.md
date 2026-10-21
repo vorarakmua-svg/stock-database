@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 8 · DOING 0 · DONE 15 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 7 · DOING 1 · DONE 15 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -37,7 +37,7 @@
 | M2-2 | `src/scores/scores.py`: Piotroski F (9 tests), Altman Z, Beneish M, Sloan, ROIC vs WACC, predictability stars; with tests | DONE | this commit | `qa/evidence/scores-m2-2-*.txt` |
 | M2-3 | `src/scores/signs.py`: the 20 warning signs; with tests | DONE | this commit | `qa/evidence/scores-m2-3-*.txt` |
 | M2-4 | Storage (`per_share_annual`, `quality_scores`, `warning_signs`), the engine hooks, `rank_universe` (ranks, composite, momentum, Magic Formula); with tests | DONE | this commit | `qa/evidence/scores-m2-4-*.txt` |
-| M2-5 | Independent oracle `qa/oracle/scores_oracle.py` and real-data validation (distributions, severe signs traced) | TODO | | |
+| M2-5 | Independent oracle `qa/oracle/scores_oracle.py` and real-data validation (distributions, severe signs traced) | DOING (the oracle's worker is running; the 14 severe signs judged) | | `qa/evidence/scores-m2-5-*.txt` |
 | M2-6 | `GET /api/stocks/{t}/scores` and the STAT tab's Quality section (radar, ranks, tests, growth, signs), browser-checked; with tests | TODO | | |
 | M2-7 | Screener fields from `quality_scores` (table-exists switch) and the preset screens; with tests | TODO | | |
 | M2-8 | Docs: README and USAGE_GUIDE | TODO | | |
@@ -483,3 +483,21 @@ Evidence: `qa/evidence/m1-9-live-{backup,backfill,oracle,diff,vs-dryrun}.txt`, `
 Gates: ruff ✓ mypy ✓ pytest 1357 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) chore(build): close M1, with the user's DB backed up and backfilled
 Next: M2-5 (the scores oracle and real-data validation).
+
+### Build iteration 21: 2026-10-21 22:46: M2-5 (started)
+Did:
+- Dispatched an opus worker to write `qa/oracle/scores_oracle.py` from the spec alone, importing nothing from
+  `src`. It puts shares on today's split basis its own way (the latest vintage's count times the declared splits
+  after its filing), so it also checks the code's seam folding. It gates every score, the CAGRs, predictability,
+  the ranks and the composite, and reports the distributions.
+- Judged the 14 severe warning signs on the backfilled copy (identical to the user's DB). None traces to a
+  data error:
+  - Altman distress: T, VZ and TMUS are capital-heavy telecoms (asset turnover 0.30-0.40), which the original
+    model reads as distress, as it does utilities. BA (thin equity, weak EBIT) and ORCL (negative retained
+    earnings, heavy liabilities) are genuine readings.
+  - Beneish: hypergrowth (NVDA sales +65%, SNDK x2.75, MRVL's receivables) and WDC's non-cash gain.
+  - Sloan: securities purchases in investing cash flow (PLTR, MU, NVDA) and WDC's gain.
+Evidence: `qa/evidence/scores-m2-5-severe-judged.txt`
+Gates: ruff ✓ mypy ✓ pytest 1357 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) chore(build): build iteration 21, the scores oracle's worker dispatched
+Next: M2-6 while the oracle's worker runs; then M2-5's results (gates, disagreements, distributions).
