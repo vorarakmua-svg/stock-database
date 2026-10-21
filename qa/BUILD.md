@@ -26,7 +26,7 @@
 | M1-6 | The VAL tab section (fragment, `renderValHistory`), checked in Chrome on a scratch server; with tests | DONE | this commit | `qa/evidence/valhist-m1-6-*` |
 | M1-7 | Screener columns (`*_pct_10y`, `price_to_hist_value`), filters, CSV; with tests | DONE | this commit | `qa/evidence/valhist-m1-7-*.txt` |
 | M1-8 | Docs: README "Valuation history", USAGE_GUIDE, the stale "no price series" text; the multiples-band basis bug logged (NEEDS-USER) | DONE | this commit | README, USAGE_GUIDE; `qa/BUGS.md` BUG-172 |
-| M1-9 | Milestone close: code review 15 (opus, 16f3005..HEAD) with Critical and Important findings fixed; then backup and offline backfill of the user's DB; verdict changes reported | DOING (code review 15 running) | | `qa/evidence/m1-9-dryrun-*.txt` |
+| M1-9 | Milestone close: code review 15 (opus, 16f3005..HEAD) with Critical and Important findings fixed; then backup and offline backfill of the user's DB; verdict changes reported | DOING (review 15's fixes: BUG-174 and BUG-176 done; BUG-175 and BUG-177 next) | 7189bf7, 61181e7 | `qa/evidence/m1-9-dryrun-*.txt`, `qa/evidence/review15-*.txt` |
 
 ## M2: quality scores and ranks
 
@@ -413,3 +413,17 @@ Next, still M1-9:
 - BUG-175 (mergers folded as splits), BUG-176 (a price-less latest snapshot), BUG-177 (the oracle's seam gate
   and the README).
 - Then the oracle and the dry run again, and the live backfill.
+
+### Build iteration 17: 2026-10-21 22:05: M1-9 (code review 15's BUG-176)
+Did:
+- Fixed BUG-176: the valuation history reads the latest snapshot with a price, for the price, its date and
+  Yahoo's implied count. A run whose quote failed leaves a later row without them, which switched off the
+  share guard and the later-split check. With no priced snapshot at all, the history is N/A with a reason.
+- Tests: two RED; two mutants, each killed. The README's limitation and the spec's guard say so.
+- Real data: given a price-less latest row, HEAD's code drops APH's 2026-09-03 split and computes BX; the fix
+  keeps both right. No ticker has a price-less latest row today, so all 127 fair values are unchanged.
+Evidence: `qa/evidence/review15-bug176-{red,mutants,realdata}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1348 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(valuation): the history checks shares against the latest priced quote (BUG-176)
+Next, still M1-9: BUG-175 (mergers folded as splits), BUG-177 (the oracle's seam gate and the README); then
+the oracle and the dry run again, and the live backfill.

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 14 · P3 88 · NEEDS-USER 13 · Verified: 78
+**Open:** P0 0 · P1 0 · P2 13 · P3 88 · NEEDS-USER 13 · Verified: 79
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1326,11 +1326,16 @@ Root cause: `history_inputs.normalize_share_series` folds an undeclared seam of 
 Notes: today's 10-year window is clean for both; a future stock merger of 1.5x or more with an EPS dip would corrupt it. Revenue per share moves with a merger's shares (DUK x1.88, LIN x1.93) and stays near 1 across a split.
 
 ### BUG-176 [P2][VAL] A latest snapshot without a price switches off the valuation history's share-class guard and its later-split confirmation
-Status: OPEN
-Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Status: VERIFIED (build iteration 17)
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: (this commit) | Regression test: tests/test_valuation_history_inputs.py::test_a_priceless_latest_snapshot_doesnt_switch_off_the_share_guard, ::test_without_any_priced_snapshot_the_history_says_so
 Repro: `history_inputs.load_history_inputs` reads the latest snapshot whether or not it has a price. The real copy holds 50 snapshots with a NULL price, market cap and share count, each the latest when it was written.
 Expected: the guard and the confirmation read the latest snapshot with a price, or the history is N/A with a reason.   Actual: with no `yahoo_shares` there's no guard and no later split. BX turns from N/A ("differ 1.49x") into a full history (P/E 25.08); APH loses its 2026-09-03 2:1, halving its whole series.
 Root cause: `src/valuation/history_inputs.py` takes `current_price`, `priced_on` and `yahoo_shares` from the newest snapshot row.
+Fix (build iteration 17):
+- `load_history_inputs` reads the latest snapshot with a price for `current_price`, `priced_on` and Yahoo's implied count. With no such snapshot the history is N/A: "no quote with a price to check the share count against".
+- Two RED tests; two mutants (the old query; the old guard), each killed.
+- Real data: on a copy of the backfilled DB given a price-less latest snapshot for APH and BX, HEAD's code drops APH's 2026-09-03 2:1 and computes BX (value $112.90); the fix keeps APH's four splits and BX's N/A ("differ 1.49x"). Today no ticker's latest snapshot is price-less, so all 127 fair values match the stored ones.
+Evidence: `qa/evidence/review15-bug176-{red,mutants,realdata}.txt`
 
 ### BUG-177 [P2][QA] The valuation history's oracle can't see a split seam left unfolded, and the README claims continuity across all splits
 Status: OPEN

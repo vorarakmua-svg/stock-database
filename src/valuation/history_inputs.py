@@ -349,8 +349,10 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
         x.months.append((day, close))
     x.last_bar = x.months[-1][0]
 
-    snaps = _rows(conn, "SELECT * FROM market_snapshots WHERE ticker = ? ORDER BY collected_at DESC LIMIT 1",
-                  (ticker,))
+    # The latest snapshot with a price: a later run whose quote failed leaves a row without price, market cap
+    # or count, and reading it would switch off the share guard and the later-split confirmation (BUG-176).
+    snaps = _rows(conn, "SELECT * FROM market_snapshots WHERE ticker = ? AND current_price IS NOT NULL "
+                  "ORDER BY collected_at DESC LIMIT 1", (ticker,))
     snap = snaps[0] if snaps else {}
     x.current_price = snap.get("current_price")
     x.priced_on = (str(snap["collected_at"])[:10]
@@ -426,7 +428,9 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
         ))
 
     latest = next((c for c in reversed(counts) if c), None)
-    if latest and x.yahoo_shares:
+    if not x.yahoo_shares:
+        x.na_reason = "no quote with a price to check the share count against"
+    elif latest:
         gap = max(latest, x.yahoo_shares) / min(latest, x.yahoo_shares)
         if gap > YAHOO_SHARE_GAP:
             x.na_reason = (f"our share count ({latest / 1e6:,.0f}M) and Yahoo's ({x.yahoo_shares / 1e6:,.0f}M) "

@@ -89,6 +89,8 @@ Helpers, each unit-tested:
     (APH, 2026-09-03).
 - **N/A guard**: when our latest count and Yahoo's implied count differ by more than 1.25x, the ticker
   is N/A with a reason. That covers BX at 1.49x and BRK-B at about 1,300x (share classes; Q7).
+  The guard and the later-split check read the latest snapshot with a price, since a run whose quote
+  failed leaves one without; with none, the ticker is N/A too (BUG-176).
 
 **Fundamentals**
 - Each TTM row goes through `CalculatedMetrics().calculate_all(row, sector=sector_class)`

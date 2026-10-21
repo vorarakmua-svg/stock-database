@@ -340,3 +340,23 @@ def test_a_seam_years_older_than_the_restatements_reach_takes_no_split():
     assert out[-1] == pytest.approx(2000e6)  # the latest quarter carries the later split too
     assert applied == [("2026-09-03", 2.0)]
 
+
+def _priceless_snapshot(conn, when="2026-02-26T10:00:00"):
+    # A later run whose quote failed: the snapshot row holds no price, market cap or share count (BUG-176).
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at) VALUES ('AAA', ?)", (when,))
+
+
+def test_a_priceless_latest_snapshot_doesnt_switch_off_the_share_guard(tmp_path):
+    conn = _db(tmp_path, yahoo_cap=21.0 * 400e6)  # Yahoo counts 400M against our 200M
+    _priceless_snapshot(conn)
+    x = load_history_inputs(conn, "AAA")
+    assert x.na_reason is not None and "share count" in x.na_reason
+    assert x.current_price == 21.0 and x.priced_on == "2026-02-25"  # the latest snapshot with a price
+
+
+def test_without_any_priced_snapshot_the_history_says_so(tmp_path):
+    conn = _db(tmp_path)
+    conn.execute("DELETE FROM market_snapshots")
+    _priceless_snapshot(conn)
+    assert load_history_inputs(conn, "AAA").na_reason == "no quote with a price to check the share count against"
+

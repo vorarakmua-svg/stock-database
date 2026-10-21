@@ -417,7 +417,7 @@ Limitations:
 - It's a history of how the market priced a company, not a forecast. A business that changed (a
   spin-off, a new segment) or a short history reads poorly, as GuruFocus warns of its own GF Value.
 - It isn't available for share classes that the filings and the quote count differently (BRK-B, V, BX;
-  Q7), or without trailing years (SPCX).
+  Q7), without trailing years (SPCX), or without a quote with a price to check our share count against.
 - Yahoo normalizes EBITDA, so our EV/EBITDA can read apart from Yahoo's (MRK, PFE). A quarter whose 10-Q
   lacks the long-term debt its 10-Ks report has no EV (BUG-171).
 
