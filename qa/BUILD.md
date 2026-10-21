@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 5 · DOING 0 · DONE 9 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 4 · DOING 1 · DONE 9 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -26,7 +26,7 @@
 | M1-6 | The VAL tab section (fragment, `renderValHistory`), checked in Chrome on a scratch server; with tests | DONE | this commit | `qa/evidence/valhist-m1-6-*` |
 | M1-7 | Screener columns (`*_pct_10y`, `price_to_hist_value`), filters, CSV; with tests | DONE | this commit | `qa/evidence/valhist-m1-7-*.txt` |
 | M1-8 | Docs: README "Valuation history", USAGE_GUIDE, the stale "no price series" text; the multiples-band basis bug logged (NEEDS-USER) | DONE | this commit | README, USAGE_GUIDE; `qa/BUGS.md` BUG-172 |
-| M1-9 | Milestone close: code review 15 (opus, 16f3005..HEAD) with Critical and Important findings fixed; then backup and offline backfill of the user's DB; verdict changes reported | TODO | | |
+| M1-9 | Milestone close: code review 15 (opus, 16f3005..HEAD) with Critical and Important findings fixed; then backup and offline backfill of the user's DB; verdict changes reported | DOING (code review 15 running) | | `qa/evidence/m1-9-dryrun-*.txt` |
 
 ## M2: quality scores and ranks
 
@@ -253,3 +253,17 @@ Evidence: the docs test (2 passed); the SQL examples run read-only on the backfi
 Gates: ruff ✓ mypy ✓ pytest 1273 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
 Commit: (this commit) docs: the valuation history in the README and the usage guide
 Next: M1-9 (milestone close: code review 15, then the user's DB backfill).
+
+### Build iteration 10: 2026-10-21 21:05: M1-9 (started)
+Did:
+- Code review 15 dispatched: an opus reviewer, read-only, over 16f3005..a3c8a77. That is the QA fixes since
+  review 14 (BUG-140, BUG-141, BUG-029, Q6, BLK), M0 and M1, about 2,600 lines in 33 files.
+- The live step's dry run, on a fresh backup-API copy backfilled with HEAD (5.4 s):
+  - Verdicts: fair 16 to 18 and expensive 108 to 106. MCD and PFE move from expensive to fair, from M0's
+    fix. The median upside goes from -58.3% to -56.1%; the median value moves for 24 tickers.
+  - Every oracle gate passes, and all 78 monthly moves are traced.
+- Waiting on the review. Its Critical and Important findings are fixed before the live backfill.
+Evidence: `qa/evidence/m1-9-dryrun-{diff,oracle}.txt`
+Gates: unchanged since a3c8a77 (no code change)
+Commit: (this commit) chore(qa): build iteration 10, code review 15 dispatched and the backfill's dry run
+Next: M1-9 (the review's findings, then the live backfill). While the review runs: M2-0.
