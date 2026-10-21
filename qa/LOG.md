@@ -1839,3 +1839,19 @@ Gates: ruff ✓ mypy ✓ pytest 1190 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) feat(sec): XOM reads its predecessor's filings and keeps Exxon Mobil Corp's history
 Next: BLK's predecessor, if the user wants it; the P2s oldest first: BUG-142, BUG-149, BUG-150, BUG-151, BUG-159,
 BUG-160, BUG-161. Fixes since review 14's range (16f3005): 4 (BUG-140, BUG-141, BUG-029, Q6).
+
+## Iteration 102: 2026-10-21 10:40: decision (the user's)
+Picked: BLK's predecessor, at the user's request ("yes add BLK too"), as Q6 decided for XOM.
+Did: SEC's own records first: BLK's predecessor is CIK 1364742 (the old BlackRock, now BlackRock Finance, Inc.),
+whose facts stop at 2024-08-06, before BlackRock, Inc.'s first report; but Exxon Mobil Corp files on as a subsidiary
+(a 10-Q listed on 2026-08-03), so a predecessor's facts now count only up to the successor's first annual or
+quarterly report. TDD (two tests RED, two edges pinned); four mutants, each failing a test. Real filings: BLK's
+record 5 years to 20, the added 15 equal BlackRock Finance's own cell for cell; XOM's unchanged. A backup, then BLK
+and XOM re-collected live (0 errors): BLK's history whole (20 years, 75 quarters), its median unchanged; XOM
+unchanged in every stored cell.
+Evidence: `qa/evidence/blk-{red,green,mutants,realdata,live}.txt`
+Result: Q6 extended to BLK; MATCH-01's note updated.
+Gates: ruff ✓ mypy ✓ pytest 1193 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) feat(sec): BLK reads the old BlackRock's filings, a predecessor's counted up to the successor's first report
+Next: the P2s oldest first: BUG-142, BUG-149, BUG-150, BUG-151, BUG-159, BUG-160, BUG-161. Fixes since review 14's
+range (16f3005): 5 (BUG-140, BUG-141, BUG-029, Q6, BLK): code review 15 due.

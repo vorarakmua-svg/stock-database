@@ -165,3 +165,56 @@ def test_a_failed_predecessor_request_keeps_the_successors_filings(tmp_path, mon
     data = handler.fetch_all("XOM")
     assert data["predecessor_cik"] == "0000034088" and data["predecessor_error"]
     assert data["company_facts"]["facts"]["us-gaap"]["Revenues"]["units"]["USD"] == [_Q2_2026]
+
+
+def test_a_predecessors_filings_from_the_successors_first_report_on_are_left_out(tmp_path, monkeypatch):
+    # Exxon Mobil Corp keeps filing as the holding company's subsidiary (its own 10-Q of 2026-08-03, the day of
+    # the holding company's first): from the successor's first report on, the successor reports, and a
+    # subsidiary's figures aren't the company's.
+    subsidiary_q2 = {**_Q2_2026, "val": 80.9e9, "accn": "0000034088-26-000031"}
+    payloads = {**_XOM, "companyfacts/CIK0000034088.json": {
+        "entityName": "EXXON MOBIL CORP",
+        "facts": {"us-gaap": {"Revenues": {"units": {"USD": [_FY2025, subsidiary_q2]}}}}}}
+    handler, _ = _successor_handler(tmp_path, monkeypatch, payloads)
+    data = handler.fetch_all("XOM")
+    assert data["company_facts"]["facts"]["us-gaap"]["Revenues"]["units"]["USD"] == [_FY2025, _Q2_2026]
+
+
+def test_blk_reads_blackrock_finances_filings(tmp_path, monkeypatch):
+    # BLK, the user's decision of 2026-10-21 as for XOM: BlackRock, Inc. (CIK 2012383), the holding company formed
+    # with the GIP acquisition, reports from its 10-Q of 2024-11-06; the history is BlackRock Finance, Inc.'s
+    # (CIK 1364742), the old BlackRock.
+    fy2023 = {"val": 17.859e9, "start": "2023-01-01", "end": "2023-12-31", "fy": 2023, "fp": "FY", "form": "10-K",
+              "filed": "2024-02-23", "accn": "0001364742-24-000010"}
+    q3_2024 = {"val": 5.197e9, "start": "2024-07-01", "end": "2024-09-30", "fy": 2024, "fp": "Q3", "form": "10-Q",
+               "filed": "2024-11-06", "accn": "0002012383-24-000005"}
+    handler, _ = _successor_handler(tmp_path, monkeypatch, {
+        "companyfacts/CIK0002012383.json": {"entityName": "BlackRock, Inc.",
+                                            "facts": {"us-gaap": {"Revenues": {"units": {"USD": [q3_2024]}}}}},
+        "companyfacts/CIK0001364742.json": {"entityName": "BlackRock Finance, Inc.",
+                                            "facts": {"us-gaap": {"Revenues": {"units": {"USD": [fy2023]}}}}},
+        "submissions/CIK0002012383.json": {"name": "BlackRock, Inc.", "filings": {"recent": {}}}})
+    handler._cik_mapping["BLK"] = "0002012383"
+    data = handler.fetch_all("BLK")
+    assert (data["predecessor_cik"], data["predecessor_name"]) == ("0001364742", "BlackRock Finance, Inc.")
+    assert XBRLParser().extract_annual_financials(data["company_facts"])["2023"]["revenue"] == 17.859e9
+
+
+def test_a_successors_debt_filing_doesnt_end_its_predecessors_history(tmp_path, monkeypatch):
+    # The holding company's first filings with facts can be debt registrations (XOM's POSASR of 2026-07-01): only its
+    # first annual or quarterly report takes over, so the predecessor's 10-Q filed before that still counts.
+    q1_2026 = {"val": 85.138e9, "start": "2026-01-01", "end": "2026-03-31", "fy": 2026, "fp": "Q1", "form": "10-Q",
+               "filed": "2026-05-04", "accn": "0000034088-26-000020"}
+    shelf = {"val": 4.3e9, "end": "2026-03-31", "fy": 2026, "fp": "Q1", "form": "POSASR", "filed": "2026-04-01",
+             "accn": "0002115436-26-000001"}
+    payloads = {**_XOM,
+                "companyfacts/CIK0002115436.json": {
+                    "entityName": "ExxonMobil Holdings Corp",
+                    "facts": {"dei": {"EntityCommonStockSharesOutstanding": {"units": {"shares": [shelf]}}},
+                              "us-gaap": {"Revenues": {"units": {"USD": [_Q2_2026]}}}}},
+                "companyfacts/CIK0000034088.json": {
+                    "entityName": "EXXON MOBIL CORP",
+                    "facts": {"us-gaap": {"Revenues": {"units": {"USD": [_FY2025, q1_2026]}}}}}}
+    handler, _ = _successor_handler(tmp_path, monkeypatch, payloads)
+    data = handler.fetch_all("XOM")
+    assert data["company_facts"]["facts"]["us-gaap"]["Revenues"]["units"]["USD"] == [_FY2025, q1_2026, _Q2_2026]

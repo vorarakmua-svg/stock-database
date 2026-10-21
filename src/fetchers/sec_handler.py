@@ -6,7 +6,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import requests
 
@@ -14,17 +14,33 @@ from .rate_limiter import RateLimiter, RetryHandler, is_transient_error
 
 #: A registrant SEC's ticker map now sends to a successor formed to take its place (a holding
 #: company reorganization), mapped from the successor's CIK: the successor's company facts are
-#: read with the predecessor's, so the ticker keeps its history. XOM since 2026-07: ExxonMobil
-#: Holdings Corp, whose 10-Qs follow Exxon Mobil Corp's 20 years (Q6, the user's decision of
-#: 2026-10-21).
+#: read with the predecessor's, so the ticker keeps its history (Q6, the user's decisions of
+#: 2026-10-21). XOM since 2026-07: ExxonMobil Holdings Corp, whose 10-Qs follow Exxon Mobil
+#: Corp's 20 years. BLK since 2024-10: BlackRock, Inc., formed with the GIP acquisition, after
+#: the old BlackRock, now BlackRock Finance, Inc.
 PREDECESSOR_CIKS: Dict[str, str] = {
     "0002115436": "0000034088",
+    "0002012383": "0001364742",
 }
+
+_REPORT_FORMS = ("10-K", "10-Q", "20-F", "40-F")
+
+
+def _entries(facts: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+    for tags in (facts.get("facts") or {}).values():
+        for body in tags.values():
+            for entries in (body.get("units") or {}).values():
+                yield from entries
 
 
 def merge_company_facts(current: Dict[str, Any], earlier: Dict[str, Any]) -> Dict[str, Any]:
     """*current*'s company facts with a predecessor's (*earlier*) beside them: each tag's entries
-    from both filers, whose accession numbers never coincide, and the successor's own name."""
+    from both filers, whose accession numbers never coincide, and the successor's own name. The
+    predecessor's count only as filed before the successor's first annual or quarterly report:
+    from then on the successor reports, and a predecessor that keeps filing as its subsidiary
+    (Exxon Mobil Corp's 10-Q of 2026-08-03) reports another entity."""
+    reports = [e.get("filed") or "" for e in _entries(current) if (e.get("form") or "").startswith(_REPORT_FORMS)]
+    first = min(reports) if reports else None
     facts: Dict[str, Dict[str, Any]] = {}
     for source in (earlier, current):
         for taxonomy, tags in (source.get("facts") or {}).items():
@@ -32,7 +48,9 @@ def merge_company_facts(current: Dict[str, Any], earlier: Dict[str, Any]) -> Dic
             for tag, body in tags.items():
                 into = merged.setdefault(tag, {**{k: v for k, v in body.items() if k != "units"}, "units": {}})
                 for unit, entries in (body.get("units") or {}).items():
-                    into["units"].setdefault(unit, []).extend(entries)
+                    into["units"].setdefault(unit, []).extend(
+                        entries if source is current or first is None
+                        else [e for e in entries if (e.get("filed") or "") < first])
     return {**current, "facts": facts}
 
 
