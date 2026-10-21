@@ -532,8 +532,12 @@ class Reader:
         ``spec`` is validated inside ``build_screen_query``; raises
         ``ValueError`` if any field/sort/op is not whitelisted.
         """
-        sql, params = build_screen_query(spec)
-        count_sql, count_params = build_count_query(spec)
+        # The valuation history's fields are NULL in a database from before its table.
+        history = self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'valuation_ranges'"
+        ).fetchone() is not None
+        sql, params = build_screen_query(spec, history)
+        count_sql, count_params = build_count_query(spec, history)
 
         cur = self._conn.execute(sql, params)
         items = [dict(row) for row in cur.fetchall()]

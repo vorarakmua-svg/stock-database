@@ -5,8 +5,10 @@ Security invariant
 Column names placed into SQL come ONLY from whitelists: ``_METRIC_COLUMNS``
 (imported from ``sqlite_store``, qualified ``ma."col"``, latest-fiscal-year
 metrics), ``SNAPSHOT_SCREEN_COLUMNS`` (qualified ``ms."col"``, latest
-market/valuation snapshot), and ``VALUATION_EXPRS`` (a fixed name -> SQL
-expression mapping for computed valuation fields such as ``val_upside_pct``).
+market/valuation snapshot), ``VALUATION_EXPRS`` (a fixed name -> SQL
+expression mapping for computed valuation fields such as ``val_upside_pct``),
+and ``HISTORY_EXPRS`` (the valuation history's percentiles and price / value,
+over fixed-literal joins of ``valuation_ranges``).
 The first two sets are disjoint (enforced by a test), so resolution is
 deterministic; a filter/sort field is looked up in the metric set first, then
 the snapshot set, then the valuation-expression set, and any field in none of
@@ -51,6 +53,23 @@ VALUATION_EXPRS: Dict[str, str] = {
         '((oe."value_base" - ms."current_price") / NULLIF(ms."current_price", 0))',
 }
 VALUATION_SELECT_COLUMNS: List[str] = ["median_bear", "median_base", "median_bull"]
+
+# The valuation history's ranges (valuation_ranges): each multiple's percentile in its
+# trailing 10-year window, and the live price over the historical value. One LEFT JOIN
+# per metric, its alias and literal from this fixed tuple, never from input; joined only
+# when the table exists, so a database from before the history screens on with these
+# fields NULL (docs/superpowers/specs/2026-10-21-valuation-history-design.md).
+HISTORY_METRICS: Tuple[str, ...] = ("pe", "ps", "pb", "pfcf", "ev_ebitda", "pffo", "div_yield")
+HISTORY_EXPRS: Dict[str, str] = {
+    **{f"{m}_pct_10y": f'vr_{m}."pct_rank"' for m in HISTORY_METRICS},
+    "price_to_hist_value": '(ms."current_price" / NULLIF(vr_fv."current_value", 0))',
+}
+_HISTORY_JOIN: str = "\n".join(
+    [f"LEFT JOIN valuation_ranges vr_{m} ON vr_{m}.ticker = ma.ticker "
+     f"AND vr_{m}.metric = '{m}' AND vr_{m}.applicable = 1" for m in HISTORY_METRICS]
+    + ["LEFT JOIN valuation_ranges vr_fv ON vr_fv.ticker = ma.ticker "
+       "AND vr_fv.metric = 'fair_value' AND vr_fv.applicable = 1"]
+)
 ALLOWED_VERDICTS = ("cheap", "fair", "expensive")
 
 # Allowed filter operators → SQL operator string
@@ -75,6 +94,7 @@ SCREEN_COLUMNS: List[str] = (
     + VALUATION_SELECT_COLUMNS
     + OWNER_EARNINGS_SELECT
     + list(VALUATION_EXPRS)
+    + list(HISTORY_EXPRS)
 )
 
 # Default metrics for the compare view — single source of truth.
@@ -143,6 +163,9 @@ METRIC_KINDS: Dict[str, str] = {
     # valuation — computed percentage
     "val_upside_pct": "pct",
     "oe_upside_pct": "pct",
+    # valuation history — percentiles in the 10-year window, and price / value
+    **{f"{m}_pct_10y": "pct" for m in HISTORY_METRICS},
+    "price_to_hist_value": "mult",
 }
 
 # SQL fragment for the latest-fiscal-year-per-ticker sub-join (shared between
@@ -216,7 +239,7 @@ class ScreenSpec:
 # ---------------------------------------------------------------------------
 
 
-def _qualify_column(field_name: str, *, context: str = "filter") -> str:
+def _qualify_column(field_name: str, *, context: str = "filter", history: bool = True) -> str:
     """Resolve *field_name* to a qualified, quoted SQL column reference.
 
     Metric columns (``_METRIC_COL_SET``) resolve to ``ma."col"``; snapshot
@@ -227,7 +250,8 @@ def _qualify_column(field_name: str, *, context: str = "filter") -> str:
 
     Raises ``ValueError`` if *field_name* is in neither whitelist. *context*
     (``"filter"`` or ``"sort"``) is folded into the message only, to match the
-    caller's existing error-matching expectations.
+    caller's existing error-matching expectations. A ``HISTORY_EXPRS`` field
+    is NULL when *history* is False (no ``valuation_ranges`` table).
     """
     if field_name in _METRIC_COL_SET:
         return f'ma."{field_name}"'
@@ -235,13 +259,15 @@ def _qualify_column(field_name: str, *, context: str = "filter") -> str:
         return f'ms."{field_name}"'
     if field_name in VALUATION_EXPRS:
         return VALUATION_EXPRS[field_name]
+    if field_name in HISTORY_EXPRS:
+        return HISTORY_EXPRS[field_name] if history else "NULL"
     raise ValueError(
         f"Invalid {context} field {field_name!r}: not in whitelisted "
-        "_METRIC_COLUMNS, SNAPSHOT_SCREEN_COLUMNS, or VALUATION_EXPRS."
+        "_METRIC_COLUMNS, SNAPSHOT_SCREEN_COLUMNS, VALUATION_EXPRS, or HISTORY_EXPRS."
     )
 
 
-def _build_where(spec: ScreenSpec) -> Tuple[str, List[Any]]:
+def _build_where(spec: ScreenSpec, history: bool = True) -> Tuple[str, List[Any]]:
     """Validate filters/sector and build the WHERE clause + ordered params.
 
     Raises ``ValueError`` for any non-whitelisted field or unknown op.
@@ -251,7 +277,7 @@ def _build_where(spec: ScreenSpec) -> Tuple[str, List[Any]]:
     clauses: List[str] = []
 
     for f in spec.filters:
-        col = _qualify_column(f.field, context="filter")
+        col = _qualify_column(f.field, context="filter", history=history)
         if f.op == "between":
             if f.value2 is None:
                 raise ValueError(
@@ -323,7 +349,7 @@ def _build_where(spec: ScreenSpec) -> Tuple[str, List[Any]]:
 # ---------------------------------------------------------------------------
 
 
-def build_screen_query(spec: ScreenSpec) -> Tuple[str, List[Any]]:
+def build_screen_query(spec: ScreenSpec, history: bool = True) -> Tuple[str, List[Any]]:
     """Return ``(sql, params)`` for the full screen query.
 
     Pure function — does NOT touch the database.
@@ -344,10 +370,10 @@ def build_screen_query(spec: ScreenSpec) -> Tuple[str, List[Any]]:
     # Validate sort column (may be either a metric or a snapshot column)
     sort_col: Optional[str] = None
     if spec.sort is not None:
-        sort_col = _qualify_column(spec.sort, context="sort")
+        sort_col = _qualify_column(spec.sort, context="sort", history=history)
 
     # Build WHERE (also validates filters)
-    where_sql, params = _build_where(spec)
+    where_sql, params = _build_where(spec, history)
 
     # Build ORDER BY with NULLs-last
     if sort_col is not None:
@@ -364,10 +390,13 @@ def build_screen_query(spec: ScreenSpec) -> Tuple[str, List[Any]]:
     valuation_exprs_sql = ", ".join(
         f"{expr} AS {name}" for name, expr in VALUATION_EXPRS.items()
     )
+    history_exprs_sql = ", ".join(
+        f"{expr if history else 'NULL'} AS {name}" for name, expr in HISTORY_EXPRS.items()
+    )
     select_sql = (
         f"c.ticker, c.company_name, c.sector_class, ma.fiscal_year, "
         f"{metric_cols_sql}, {snapshot_cols_sql}, "
-        f"{valuation_cols_sql}, {oe_cols_sql}, {valuation_exprs_sql}"
+        f"{valuation_cols_sql}, {oe_cols_sql}, {valuation_exprs_sql}, {history_exprs_sql}"
     )
 
     sql = (
@@ -377,6 +406,7 @@ def build_screen_query(spec: ScreenSpec) -> Tuple[str, List[Any]]:
         f"{_SNAPSHOT_JOIN}\n"
         f"{_VALUATION_JOIN}\n"
         f"{_OWNER_EARNINGS_JOIN}\n"
+        f"{_HISTORY_JOIN if history else ''}\n"
         f"{where_sql}\n"
         f"{order_sql}\n"
         f"LIMIT ? OFFSET ?"
@@ -386,14 +416,14 @@ def build_screen_query(spec: ScreenSpec) -> Tuple[str, List[Any]]:
     return sql, params
 
 
-def build_count_query(spec: ScreenSpec) -> Tuple[str, List[Any]]:
+def build_count_query(spec: ScreenSpec, history: bool = True) -> Tuple[str, List[Any]]:
     """Return ``(sql, params)`` for a ``COUNT(*)`` version of the same query.
 
     Used by ``Reader.screen`` to compute the total without LIMIT/OFFSET.
     Validates filters and sector (same as ``build_screen_query``) but does NOT
     validate sort/sort_dir (not needed for a count).
     """
-    where_sql, params = _build_where(spec)
+    where_sql, params = _build_where(spec, history)
 
     sql = (
         f"SELECT COUNT(*)\n"
@@ -402,6 +432,7 @@ def build_count_query(spec: ScreenSpec) -> Tuple[str, List[Any]]:
         f"{_SNAPSHOT_JOIN}\n"
         f"{_VALUATION_JOIN}\n"
         f"{_OWNER_EARNINGS_JOIN}\n"
+        f"{_HISTORY_JOIN if history else ''}\n"
         f"{where_sql}"
     ).strip()
 

@@ -155,6 +155,18 @@ SCREENER_SNAPSHOT_OPTIONS: List[tuple[str, str]] = [
     (_SNAPSHOT_SCREENER_LABELS.get(col, col), col) for col in SNAPSHOT_SCREEN_COLUMNS
 ]
 
+# The valuation history's fields (screener.HISTORY_EXPRS): percentiles are fractions.
+SCREENER_HISTORY_OPTIONS: List[tuple[str, str]] = [
+    ("P/E percentile (10y)", "pe_pct_10y"),
+    ("P/S percentile (10y)", "ps_pct_10y"),
+    ("P/B percentile (10y)", "pb_pct_10y"),
+    ("P/FCF percentile (10y)", "pfcf_pct_10y"),
+    ("EV/EBITDA percentile (10y)", "ev_ebitda_pct_10y"),
+    ("P/FFO percentile (10y)", "pffo_pct_10y"),
+    ("Dividend yield percentile (10y)", "div_yield_pct_10y"),
+    ("Price / historical value", "price_to_hist_value"),
+]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -488,6 +500,10 @@ def screener_page(
         + [
             {"key": key, "label": label, "group": "Market / Valuation"}
             for label, key in snapshot_options
+        ]
+        + [
+            {"key": key, "label": label, "group": "Historical value"}
+            for label, key in SCREENER_HISTORY_OPTIONS
         ]
     )
     return templates.TemplateResponse(

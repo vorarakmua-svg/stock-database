@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 7 · DOING 0 · DONE 7 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 6 · DOING 0 · DONE 8 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -24,7 +24,7 @@
 | M1-4 | Real-data validation: `qa/oracle/history_vs_yahoo.py` on a backfilled DB copy; the spec's gates; split continuity; jumps traced; misses explained | DONE | this commit | `qa/evidence/valhist-m1-4-*.txt` |
 | M1-5 | Repository readers and `GET /api/stocks/{t}/valuation-history`; with tests | DONE | this commit | `qa/evidence/valhist-m1-5-*.txt` |
 | M1-6 | The VAL tab section (fragment, `renderValHistory`), checked in Chrome on a scratch server; with tests | DONE | this commit | `qa/evidence/valhist-m1-6-*` |
-| M1-7 | Screener columns (`*_pct_10y`, `price_to_hist_value`), filters, CSV; with tests | TODO | | |
+| M1-7 | Screener columns (`*_pct_10y`, `price_to_hist_value`), filters, CSV; with tests | DONE | this commit | `qa/evidence/valhist-m1-7-*.txt` |
 | M1-8 | Docs: README "Valuation history", USAGE_GUIDE, the stale "no price series" text; the multiples-band basis bug logged (NEEDS-USER) | TODO | | |
 | M1-9 | Milestone close: code review 15 (opus, 16f3005..HEAD) with Critical and Important findings fixed; then backup and offline backfill of the user's DB; verdict changes reported | TODO | | |
 
@@ -207,3 +207,26 @@ Evidence: `qa/evidence/valhist-m1-6-{red,mutants}.txt`, `valhist-m1-6-AAPL-val.p
 Gates: ruff ✓ mypy ✓ pytest 1264 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
 Commit: (this commit) feat(web): the VAL tab's valuation history section and chart
 Next: M1-7.
+
+### Build iteration 8: 2026-10-21 20:05: M1-7
+Did:
+- The screener's `HISTORY_EXPRS` fields: `pe_pct_10y` through `div_yield_pct_10y`, each multiple's percentile
+  in its 10-year window, and `price_to_hist_value`, the live price over the historical value.
+  - They read fixed-literal LEFT JOINs of `valuation_ranges`, applicable rows only, and are whitelisted
+    like the other fields.
+  - They are joined only when the table exists. A database from before the history (the user's, until
+    M1-9's backfill) screens on with them NULL, where an unconditional join would have failed with "no such
+    table".
+  - Wired into `SCREEN_COLUMNS` (so the CSV), `METRIC_KINDS`, a "Historical value" group in the picker, and
+    two sortable result columns.
+- TDD: 9 tests (RED: the import missing); 6 mutants, each killed. The `applicable = 1` guard needed a test
+  row that isn't applicable but holds a stray percentile.
+- Real data (read-only):
+  - The backfilled copy: 33 stocks have P/E in the bottom quarter of their 10 years (EQIX, GOOGL, MCD,
+    AMZN...); 28 trade below 0.9x their historical value (ADBE 0.30, CRM 0.38, INTU 0.41...); 42 above
+    1.3x; 120 of 126 have a price / value.
+  - A fresh copy without the tables screens all 126, with the fields NULL.
+Evidence: `qa/evidence/valhist-m1-7-{red,mutants,realdata}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1273 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
+Commit: (this commit) feat(web): screen by each multiple's 10-year percentile and by price / historical value
+Next: M1-8.
