@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
 
 if TYPE_CHECKING:  # avoid a runtime exporters -> valuation dependency
+    from ..valuation.history import HistoryResult
     from ..valuation.models import ValuationResult
 
 from ..mappings.canonical import CANONICAL_FIELDS
@@ -316,6 +317,42 @@ class SQLiteStore:
                 n_applicable INTEGER NOT NULL,
                 median_bear REAL, median_base REAL, median_bull REAL,
                 computed_at TEXT NOT NULL
+            );
+
+            -- The valuation history (docs/superpowers/specs/2026-10-21-valuation-history-design.md):
+            -- each month's last close, the multiples on the trailing year known then, and the
+            -- historical value, per share on the price bars' basis.
+            CREATE TABLE IF NOT EXISTS valuation_history (
+                ticker TEXT NOT NULL,
+                date TEXT NOT NULL,
+                close REAL,
+                market_cap REAL,
+                enterprise_value REAL,
+                ttm_period_end TEXT,
+                pe REAL, ps REAL, pb REAL, pfcf REAL, ev_ebitda REAL, pffo REAL, div_yield REAL,
+                fair_value REAL,
+                fair_value_n INTEGER,
+                PRIMARY KEY (ticker, date)
+            );
+
+            -- Each metric's trailing 10-year range at the latest month, and the historical value
+            -- (metric 'fair_value', its current_value, p25 and p75 on the latest quote's basis).
+            CREATE TABLE IF NOT EXISTS valuation_ranges (
+                ticker TEXT NOT NULL,
+                metric TEXT NOT NULL,
+                applicable INTEGER NOT NULL,
+                na_reason TEXT,
+                as_of TEXT,
+                window_start TEXT,
+                n_months INTEGER,
+                current_value REAL,
+                pct_rank REAL,
+                min REAL, p25 REAL, median REAL, p75 REAL, max REAL,
+                implied_value REAL,
+                in_fair_value INTEGER,
+                n_metrics INTEGER,
+                computed_at TEXT NOT NULL,
+                PRIMARY KEY (ticker, metric)
             );
 
             -- Material us-gaap facts under tags not yet in the canonical registry.
@@ -1050,6 +1087,31 @@ class SQLiteStore:
                 "median_bull": summary["median_bull"],
                 "computed_at": computed_at,
             })
+            conn.commit()
+        finally:
+            conn.close()
+
+    def export_valuation_history(self, ticker: str, result: "HistoryResult", computed_at: str) -> None:
+        """Replace one ticker's valuation history and ranges, in one transaction."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            conn.execute("DELETE FROM valuation_history WHERE ticker = ?", (ticker,))
+            conn.execute("DELETE FROM valuation_ranges WHERE ticker = ?", (ticker,))
+            conn.executemany(
+                "INSERT INTO valuation_history (ticker, date, close, market_cap, enterprise_value, "
+                "ttm_period_end, pe, ps, pb, pfcf, ev_ebitda, pffo, div_yield, fair_value, fair_value_n) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(ticker, row.date, row.close, row.market_cap, row.enterprise_value, row.ttm_period_end,
+                  *(row.multiples.get(m) for m in ("pe", "ps", "pb", "pfcf", "ev_ebitda", "pffo", "div_yield")),
+                  row.fair_value, row.fair_value_n) for row in result.rows])
+            conn.executemany(
+                "INSERT INTO valuation_ranges (ticker, metric, applicable, na_reason, as_of, window_start, "
+                "n_months, current_value, pct_rank, min, p25, median, p75, max, implied_value, in_fair_value, "
+                "n_metrics, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(ticker, r.metric, 1 if r.applicable else 0, r.na_reason, r.as_of, r.window_start, r.n_months,
+                  r.current, r.pct_rank, r.min, r.p25, r.median, r.p75, r.max, r.implied_value,
+                  1 if r.in_fair_value else 0, r.n_metrics, computed_at) for r in result.ranges])
             conn.commit()
         finally:
             conn.close()

@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 11 · DOING 0 · DONE 3 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 10 · DOING 0 · DONE 4 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -20,7 +20,7 @@
 |---|---|---|---|---|
 | M1-1 | `src/valuation/history_inputs.py`: share series normalization, price factors, known dates, field choice, `load_history_inputs`; with tests | DONE | this commit | `qa/evidence/valhist-m1-1-*.txt` |
 | M1-2 | `src/valuation/history.py`: multiples, window statistics, implied prices, the fair-value line, labels, `compute_history`; with tests | DONE | this commit | `qa/evidence/valhist-m1-2-*.txt` |
-| M1-3 | Storage (`valuation_history`, `valuation_ranges`, `export_valuation_history`) and the engine hook in `compute_and_store`, covering backfill; with tests | TODO | | |
+| M1-3 | Storage (`valuation_history`, `valuation_ranges`, `export_valuation_history`) and the engine hook in `compute_and_store`, covering backfill; with tests | DONE | this commit | `qa/evidence/valhist-m1-3-*.txt` |
 | M1-4 | Real-data validation: `qa/oracle/history_vs_yahoo.py` on a backfilled DB copy; the spec's gates; split continuity; jumps traced; misses explained | TODO | | |
 | M1-5 | Repository readers and `GET /api/stocks/{t}/valuation-history`; with tests | TODO | | |
 | M1-6 | The VAL tab section (fragment, `renderValHistory`), checked in Chrome on a scratch server; with tests | TODO | | |
@@ -116,3 +116,24 @@ Evidence: `qa/evidence/valhist-m1-2-{red,mutants,realdata}.txt`
 Gates: ruff ✓ mypy ✓ pytest 1236 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
 Commit: (this commit) feat(valuation): the valuation history's multiples, 10-year ranges and historical value
 Next: M1-3.
+
+### Build iteration 4: 2026-10-21 16:45: M1-3
+Did:
+- New tables `valuation_history` (one row per month) and `valuation_ranges` (each metric's window at the
+  latest month, and the historical value). `SQLiteStore.export_valuation_history` replaces a ticker's
+  rows in one transaction.
+- `compute_and_store` computes the history after the valuations, in its own try/except, so CLI
+  collection, web jobs and the backfill all write it. A failure is logged and leaves the valuations
+  stored. `MEDIAN_MODELS` and the six rows are unchanged.
+- The ranges column is `current_value`, since CURRENT is an SQL keyword; the spec now says so.
+- The real-data copy showed 34,800 stored months without a market cap (bars back to 1962). The series
+  now starts at the first market cap, or the latest 10-year window if that is earlier (RED test first).
+- TDD: 8 store and engine tests and 1 trim test (RED: no such tables, no hook); 7 mutants, each killed.
+- Real data: a fresh backup-API copy backfilled in 6.4 s for 127 tickers.
+  - Valuations and summaries are identical to M0's backfilled copy.
+  - 23,287 monthly rows for 122 tickers: 22,764 with a market cap, 17,667 with a historical value.
+  - 1,016 ranges rows; the historical value is set for 119.
+Evidence: `qa/evidence/valhist-m1-3-{red,trim-red,mutants,realdata}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1245 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
+Commit: (this commit) feat(valuation): store the valuation history and compute it with the valuations
+Next: M1-4.

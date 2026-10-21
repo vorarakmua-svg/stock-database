@@ -314,7 +314,9 @@ def compute_history(inputs: HistoryInputs) -> HistoryResult:
         have = sum(1 for v in latest_implied.values() if v[0] is not None)
         fv.na_reason = latest_gap or (f"only {have} metric{'' if have == 1 else 's'} with {MIN_MONTHS} months "
                                       f"of values; {MIN_FV_METRICS} needed")
-    result.rows = rows
+    # A month before the first market cap and before the latest window holds nothing the history uses.
+    first_cap = next((i for i, r in enumerate(rows) if r.market_cap is not None), len(rows))
+    result.rows = rows[min(first_cap, latest_left):]
     return result
 
 

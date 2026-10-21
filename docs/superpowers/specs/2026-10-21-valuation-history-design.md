@@ -182,12 +182,13 @@ valuation_history(ticker, date, close, market_cap, enterprise_value, ttm_period_
   pe, ps, pb, pfcf, ev_ebitda, pffo, div_yield, fair_value, fair_value_n,
   PRIMARY KEY(ticker, date))
 valuation_ranges(ticker, metric, applicable INTEGER NOT NULL, na_reason, as_of, window_start,
-  n_months, current, pct_rank, min, p25, median, p75, max, implied_value, in_fair_value,
+  n_months, current_value, pct_rank, min, p25, median, p75, max, implied_value, in_fair_value,
   n_metrics, computed_at TEXT NOT NULL, PRIMARY KEY(ticker, metric))
 ```
 
-- `metric` also takes the value 'fair_value'. That row's current, p25 and p75 are on the latest
-  snapshot's price basis, multiplied by `bars_to_price`.
+- `metric` also takes the value 'fair_value'. That row's current_value, p25 and p75 are on the
+  latest snapshot's price basis, multiplied by `bars_to_price`. (The column is `current_value`, not
+  `current`, because CURRENT is an SQL keyword.)
 - `SQLiteStore.export_valuation_history(ticker, result, computed_at)` deletes and re-inserts the
   ticker's rows in one transaction.
 - An N/A ticker gets ranges rows that carry the reason.

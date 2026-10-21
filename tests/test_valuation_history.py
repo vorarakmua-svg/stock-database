@@ -205,3 +205,13 @@ def test_a_window_that_ends_on_feb_29():
     pe = next(r for r in compute_history(x).ranges if r.metric == "pe")
     assert pe.window_start == "2022-03-31"  # the first month after 2022-02-28, ten years back
     assert pe.n_months == 120
+
+
+def test_months_before_the_fundamentals_and_the_window_are_left_out():
+    # Bars from 2015, the first trailing year known in 2020-08, the latest month 2025-12: the stored series
+    # starts at the earlier of the first market cap and the latest 10-year window (2016-01).
+    x = _inputs()
+    x.months = [(d, 20.0) for d in _month_ends(date(2015, 1, 1), 72)] + x.months
+    result = compute_history(x)
+    assert result.rows[0].date == "2016-01-31"
+    assert len(result.rows) == 120

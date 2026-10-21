@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from ..exporters.sqlite_store import SQLiteStore
+from .history import compute_history
+from .history_inputs import load_history_inputs
 from .inputs import ValuationInputs, load_inputs
 from .models import (
     ValuationResult,
@@ -170,6 +172,14 @@ def compute_and_store(db_path: Union[str, Path],
                 stored += 1
             except Exception as e:
                 log.warning(f"Valuation failed for {ticker}: {e}")
+            # The valuation history is a separate indicator: its failure never blocks the valuations
+            # above, and it touches none of their rows (docs/superpowers/specs/2026-10-21-valuation-
+            # history-design.md).
+            try:
+                history = compute_history(load_history_inputs(conn, ticker))
+                store.export_valuation_history(ticker, history, computed_at)
+            except Exception as e:
+                log.warning(f"Valuation history failed for {ticker}: {e}")
         return stored
     finally:
         conn.close()
