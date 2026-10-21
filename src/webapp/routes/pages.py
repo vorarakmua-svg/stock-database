@@ -60,7 +60,7 @@ _STATEMENT_ROWS: List[tuple[str, str, str]] = [
     ("Operating cash flow", "operating_cash_flow", "money"),
     ("CapEx", "capex", "money"),
     ("Dividends paid", "dividends_paid", "money"),
-    ("Shares outstanding", "shares_outstanding", "money"),
+    ("Shares outstanding", "shares_outstanding", "count"),
 ]
 
 # Metrics rows: (label, key, kind)
@@ -141,7 +141,7 @@ _SNAPSHOT_SCREENER_LABELS: Dict[str, str] = {
     "short_percent_of_float": "Short % of float",
     "insider_percent": "Insider %",
     "institutional_percent": "Institutional %",
-    "debt_to_equity": "Debt / equity",
+    "debt_to_equity": "Debt / equity (%)",  # the stored figure is Yahoo's percent: 100 is 1x (BUG-135)
     "current_ratio": "Current ratio",
 }
 
@@ -409,9 +409,12 @@ def asof_result_fragment(
     # Build curated rows
     fin_rows: List[Dict[str, Any]] = []
     if filing is not None:
+        carried = filing.get("carried_from") or {}
         for label, key, kind in _ASOF_FINANCIALS_ROWS:
             val = filing.get(key)
-            fin_rows.append({"label": label, "value": fmt_value(val, kind)})
+            # A figure the latest filing leaves out shows the date it was last filed (BUG-110).
+            fin_rows.append({"label": label, "value": fmt_value(val, kind),
+                             "filed": (carried.get(key) or {}).get("filed_date")})
 
     ratio_rows: List[Dict[str, Any]] = []
     if ratios is not None:

@@ -32,6 +32,16 @@ DCF_SECTORS = ("general", "utility", "energy")
 #: missed annual payment plus a grace quarter) is treated as having stopped.
 DIVIDEND_STALE_DAYS = 456
 
+#: Dividend growth uses at most this many complete calendar years (the spec's
+#: "hist dividend CAGR (<= 10 yrs)", the same window as the FY-based models):
+#: decades-old growth says little about the next five years.
+DIVIDEND_CAGR_YEARS = 10
+
+#: Payments within this factor of a neighbouring year's typical payment are
+#: regular ones. A special is larger, and a different schedule pays a
+#: different amount each time (a semiannual payment is twice a quarterly one).
+REGULAR_PAYMENT_RANGE = 1.5
+
 
 @dataclass
 class ValuationResult:
@@ -45,6 +55,25 @@ class ValuationResult:
     value_bull: Optional[float] = None
     assumptions: Dict[str, Any] = field(default_factory=dict)
     basis_fiscal_year: Optional[int] = None
+
+
+def _rate_provenance(inputs: ValuationInputs) -> Dict[str, Any]:
+    """The risk-free rate's day and source, for the models that discount with it.
+
+    The spec stores "the rate and its as-of date so staleness is visible in the
+    UI" (the VAL tab lists every assumption). The static estimate the rate falls
+    back to when FRED and Treasury.gov both fail is flagged; with no rate at all,
+    the model's ``rf_fallback`` already says so.
+    """
+    if inputs.risk_free_rate is None:
+        return {}
+    meta: Dict[str, Any] = {
+        "risk_free_rate_as_of": inputs.risk_free_rate_date,
+        "risk_free_rate_source": inputs.risk_free_rate_source,
+    }
+    if inputs.risk_free_rate_source == "estimate":
+        meta["rf_estimate"] = True
+    return meta
 
 
 def _na(model: str, reason: str,
@@ -85,7 +114,7 @@ def value_dcf(inputs: ValuationInputs) -> ValuationResult:
     if basis <= 0:
         return _na("dcf", "median 3-year FCF is not positive", basis_fy=basis_fy)
     shares = inputs.shares_outstanding
-    shares_source = "market_snapshot"
+    shares_source = inputs.shares_source
     if not shares or shares <= 0:
         shares = None
         for r in reversed(recs):
@@ -103,6 +132,7 @@ def value_dcf(inputs: ValuationInputs) -> ValuationResult:
     assumptions: Dict[str, Any] = {}
     assumptions.update(gmeta)
     assumptions.update(dmeta)
+    assumptions.update(_rate_provenance(inputs))
     assumptions.update({
         "fcf_basis": basis,
         "fcf_years": len(fcf_hist),
@@ -164,8 +194,58 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
     if ttm <= 0:
         return _na("ddm", "no dividends in trailing 12 months")
 
-    # CAGR over complete calendar years only (the anchor year is likely partial).
-    complete_years = [(year, total) for year, total in annual if year < anchor.year]
+    # CAGR over the last DIVIDEND_CAGR_YEARS complete calendar years only (the
+    # anchor year is likely partial).
+    complete_years = [(year, total) for year, total in annual
+                      if anchor.year - DIVIDEND_CAGR_YEARS <= year < anchor.year]
+    # Growth compares full years, judging each end of the window by the cadence
+    # of the (up to 3) years next to it, since a payer can change how often it
+    # pays (PGR and TSM paid yearly until 2018, then quarterly). A first year
+    # with fewer payments than those is partial: a dividend started, paused or
+    # restarted mid-year (MU: 2 payments in 2021, then 4 a year), or an ex-date
+    # slipped into the year before (BMY). Growth measured from one counts
+    # payments, not raises (MU read 23%/yr on a flat dividend), so it is
+    # skipped, unless it carries on a lower-frequency schedule: the year before
+    # paid as often, and each payment is larger than the later years' typical
+    # one (a dividend restarted after a suspension pays the same size). An end
+    # year with exactly one payment more than its neighbours, next to a year
+    # still on that schedule and all of regular size, holds one that slipped
+    # across the year boundary (O's 2025-12-31 ex-date for January), so it
+    # counts at their cadence; a neighbour that already pays more often means
+    # the schedule changed. A special is larger and counts in full (whether it
+    # should is the user's call), and a short last year stays as it is, since
+    # it can be a real cut.
+    paid: Dict[int, List[float]] = {}
+    for day, amount in inputs.dividends:
+        paid.setdefault(int(day[:4]), []).append(amount)
+
+    def cadence(years: List[Tuple[int, float]]) -> float:
+        return statistics.median(len(paid[year]) for year, _ in years)
+
+    def lower_frequency(year: int, later: List[Tuple[int, float]]) -> bool:
+        typical = statistics.median(a for later_year, _ in later for a in paid[later_year])
+        return (len(paid.get(year - 1, [])) == len(paid[year])
+                and all(a >= typical * REGULAR_PAYMENT_RANGE for a in paid[year]))
+
+    while (len(complete_years) >= 2
+           and len(paid[complete_years[0][0]]) < cadence(complete_years[1:4])
+           and not lower_frequency(complete_years[0][0], complete_years[1:4])):
+        complete_years = complete_years[1:]
+    for end, adjacent, near in ((0, 1, complete_years[1:4]), (-1, -2, complete_years[-4:-1])):
+        if len(complete_years) < 2:
+            break
+        year, total = complete_years[end]
+        usual, regular = cadence(near), statistics.median(paid[complete_years[adjacent][0]])
+        if (len(paid[year]) == usual + 1 and len(paid[complete_years[adjacent][0]]) <= usual
+                and all(regular / REGULAR_PAYMENT_RANGE < a < regular * REGULAR_PAYMENT_RANGE
+                        for a in paid[year])):
+            complete_years[end] = (year, total * usual / len(paid[year]))
+    # The spec's historical CAGR "requires >= 4 FYs" (DCF and Lynch are N/A
+    # below that). DDM stays applicable from 3 calendar years, so with fewer
+    # full years no CAGR is measured (TMUS's 2 full years read 29%/yr from a
+    # single year's change).
+    if len(complete_years) < 4:
+        complete_years = []
     complete = [total for _, total in complete_years]
     growth, gmeta = derive_growth(complete, inputs.analyst_growth, cap=DDM_GROWTH_CAP,
                                   periods=[year for year, _ in complete_years])
@@ -174,6 +254,7 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
     assumptions: Dict[str, Any] = {}
     assumptions.update(gmeta)
     assumptions.update(dmeta)
+    assumptions.update(_rate_provenance(inputs))
     assumptions.update({
         "ttm_dps": ttm,
         "ttm_anchor": anchor.isoformat(),
@@ -421,7 +502,7 @@ def value_owner_earnings(inputs: ValuationInputs) -> ValuationResult:
                    "median 3-year owner earnings is not positive", basis_fy=basis_fy)
 
     shares = inputs.shares_outstanding
-    shares_source = "market_snapshot"
+    shares_source = inputs.shares_source
     if not shares or shares <= 0:
         shares = None
         for r in reversed(recs):
@@ -476,6 +557,7 @@ def value_owner_earnings(inputs: ValuationInputs) -> ValuationResult:
     })
     if rf_fallback:
         assumptions["rf_fallback"] = True
+    assumptions.update(_rate_provenance(inputs))
     return ValuationResult(
         model="owner_earnings",
         applicable=True,

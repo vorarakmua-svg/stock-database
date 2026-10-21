@@ -14,11 +14,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
+from ...fetchers.stock_data_fetcher import NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS
 from ...valuation.assumptions import DISCOUNT_SPREAD, GROWTH_CAP
 from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
 from ...valuation.models import ValuationResult, dcf_per_share
 from ..dependencies import get_job_manager, get_reader, get_settings
-from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
+from ..formatting import fmt_count, fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
 from ..jobs import CollectionJobManager
 from ..repository import Reader
 from ..settings import WebSettings
@@ -201,8 +202,8 @@ def des_fragment(
         "day_high": fmt_price(quote.get("day_high") if quote else None),
         "fifty_two_low": fmt_price(fifty_two_low),
         "fifty_two_high": fmt_price(fifty_two_high),
-        "volume": fmt_money(quote.get("volume") if quote else None),
-        "avg_volume": fmt_money(quote.get("avg_volume") if quote else None),
+        "volume": fmt_count(quote.get("volume") if quote else None),
+        "avg_volume": fmt_count(quote.get("avg_volume") if quote else None),
         "market_cap": fmt_money(quote.get("market_cap") if quote else None),
         "pe_trailing": fmt_mult(quote.get("pe_trailing") if quote else None),
         "pe_forward": fmt_mult(quote.get("pe_forward") if quote else None),
@@ -371,6 +372,13 @@ def gp_fragment(
 # ---------------------------------------------------------------------------
 
 
+def _sec_gap_note(r: Reader, ticker: str) -> Optional[str]:
+    """Why the latest collection got no annual financials from SEC, or why they stop
+    years ago (BUG-066), if it said."""
+    return next((w for w in r.latest_run_warnings(ticker)
+                 if w.startswith((NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS))), None)
+
+
 @router.get("/ui/stocks/{ticker}/fa", response_class=HTMLResponse)
 def fa_fragment(
     ticker: str,
@@ -401,6 +409,7 @@ def fa_fragment(
             "ticker": ticker,
             "columns": columns,
             "rows": display_rows,
+            "gap_note": _sec_gap_note(r, ticker),
         },
     )
 
@@ -410,10 +419,8 @@ def fa_fragment(
 # ---------------------------------------------------------------------------
 
 # (label, key, kind) — kind "raw2" is handled as fmt_raw2 (bare 2dp, no
-# suffix); everything else dispatches through fmt_value. Share counts use
-# "money" (same treatment _STATEMENT_ROWS in pages.py already gives
-# shares_outstanding) for consistency across the app rather than introducing
-# a new unformatted-thousands-separator kind.
+# suffix); everything else dispatches through fmt_value. Share counts are
+# "count": B/M/K without a currency, as everywhere in the app (BUG-136).
 _STAT_PROFITABILITY: List[Tuple[str, str, str]] = [
     ("Gross margin", "gross_margin", "pct"),
     ("Operating margin", "operating_margin", "pct"),
@@ -425,7 +432,9 @@ _STAT_PROFITABILITY: List[Tuple[str, str, str]] = [
 ]
 
 _STAT_LEVERAGE: List[Tuple[str, str, str]] = [
-    ("Debt/Equity", "debt_to_equity", "mult"),
+    # Yahoo's debtToEquity is a percent (AAPL's 78.4 is 0.784 times equity), which a
+    # multiple's format read as 78.4x (BUG-135).
+    ("Debt/Equity", "debt_to_equity", "percent"),
     ("Current ratio", "current_ratio", "mult"),
     ("Quick ratio", "quick_ratio", "mult"),
     ("Interest coverage", "interest_coverage", "mult"),
@@ -442,9 +451,9 @@ _STAT_VALUATION: List[Tuple[str, str, str]] = [
 ]
 
 _STAT_SHARES: List[Tuple[str, str, str]] = [
-    ("Shares outstanding", "shares_outstanding", "money"),
-    ("Float shares", "float_shares", "money"),
-    ("Shares short", "shares_short", "money"),
+    ("Shares outstanding", "shares_outstanding", "count"),
+    ("Float shares", "float_shares", "count"),
+    ("Shares short", "shares_short", "count"),
     ("Short ratio (days to cover)", "short_ratio", "raw2"),
     ("Short % of float", "short_percent_of_float", "pct"),
     ("Insider %", "insider_percent", "pct"),
@@ -623,11 +632,7 @@ def hp_fragment(
             "high": fmt_price(b.get("high")),
             "low": fmt_price(b.get("low")),
             "close": fmt_price(b.get("close")),
-            # Volume is a share count, not a dollar amount, but fmt_money's
-            # B/M/K-suffixed formatting is the same treatment DES/STAT already
-            # give share counts (e.g. DES's summary.volume) — kept consistent
-            # here rather than introducing a new unformatted-thousands kind.
-            "volume": fmt_money(b.get("volume")),
+            "volume": fmt_count(b.get("volume")),  # a share count (BUG-136)
         }
         for b in reversed(bars)
     ]
@@ -804,7 +809,7 @@ def _build_holder_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     return [
         {
             "holder": h.get("holder", ""),
-            "shares": fmt_money(h.get("shares")),
+            "shares": fmt_count(h.get("shares")),
             "pct_held": fmt_pct(h.get("pct_held")),
             "value": fmt_money(h.get("value")),
             "date_reported": h.get("date_reported") or "—",
@@ -879,7 +884,7 @@ def ins_fragment(
             "insider": t.get("insider", ""),
             "position": t.get("position") or "—",
             "text": t.get("text", ""),
-            "shares": fmt_money(t.get("shares")),
+            "shares": fmt_count(t.get("shares")),
             "value": fmt_money(t.get("value")),
             "tint_class": _insider_tint_class(t.get("text") or ""),
         }
@@ -1035,6 +1040,7 @@ def val_fragment(
             "sensitivity": sensitivity,
             "oe": oe_ctx,
             "computed_at": computed_at,
+            "gap_note": _sec_gap_note(r, ticker),
             # Same XSS defense-in-depth as gp_fragment's cfg_json/ern_fragment's
             # ern_cfg_json/dvd_fragment's dvd_cfg_json: escape "</" so a literal
             # "</script>" can't break out of the inline <script> block. Today's

@@ -110,7 +110,9 @@ def reit_metrics(financials: Dict[str, Any]) -> Dict[str, Optional[float]]:
 
 
 # Generic ratio keys to null per sector (must match keys emitted by
-# CalculatedMetrics.calculate_all).
+# CalculatedMetrics.calculate_all). A ratio built on a suppressed figure goes with
+# it: the EV family is computed from net debt, EBITDA and FCF before they're nulled,
+# and a bank's read JPM's EV at $1.03T, its FCF yield at -15% (BUG-134).
 SUPPRESSED_BY_SECTOR: Dict[str, frozenset] = {
     BANK: frozenset({
         "ebitda", "ebit", "ebitda_margin", "debt_to_ebitda",
@@ -121,9 +123,10 @@ SUPPRESSED_BY_SECTOR: Dict[str, frozenset] = {
         "asset_turnover", "working_capital",
         "net_debt", "total_debt",
         "free_cash_flow", "fcf_margin", "levered_fcf",
+        "enterprise_value", "ev_to_ebitda", "ev_to_revenue", "ev_to_fcf", "fcf_yield",
     }),
     INSURANCE: frozenset({
-        "ebitda", "ebitda_margin", "debt_to_ebitda",
+        "ebitda", "ebitda_margin", "debt_to_ebitda", "ev_to_ebitda",
         "roic", "nopat", "invested_capital",
         "inventory_turnover", "days_inventory_outstanding",
         "gross_margin", "asset_turnover", "working_capital",
@@ -133,7 +136,7 @@ SUPPRESSED_BY_SECTOR: Dict[str, frozenset] = {
         "inventory_turnover", "days_inventory_outstanding",
         "receivables_turnover", "days_sales_outstanding",
         "gross_margin", "asset_turnover",
-        "free_cash_flow", "fcf_margin", "levered_fcf",
+        "free_cash_flow", "fcf_margin", "levered_fcf", "ev_to_fcf", "fcf_yield",
     }),
 }
 
@@ -168,7 +171,8 @@ def apply_sector(
         return metrics
 
     metrics.update(extras_fn(financials))
-    for key in SUPPRESSED_BY_SECTOR.get(sector, frozenset()):
+    # Only what was computed: the EV family needs a price, which yearly metrics don't have.
+    for key in SUPPRESSED_BY_SECTOR.get(sector, frozenset()) & metrics.keys():
         metrics[key] = None
 
     basis = metrics.setdefault("_basis", {})

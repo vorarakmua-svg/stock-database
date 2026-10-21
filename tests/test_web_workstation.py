@@ -17,6 +17,7 @@ test modules assert exact company counts against it).
 """
 from __future__ import annotations
 
+import sqlite3
 from datetime import date, timedelta
 
 import pandas as pd
@@ -300,6 +301,71 @@ def test_stat_fragment_known_ticker_uses_fmt_value_for_roic(client):
     resp = client.get("/ui/stocks/AAA/stat")
     assert resp.status_code == 200
     assert "15.0%" in resp.text
+
+
+def test_stat_shows_yahoos_debt_to_equity_as_the_percent_it_is(client, web_db):
+    # BUG-135: Yahoo's debtToEquity is a percent (AAPL's 78.445 is 0.784 times equity), and STAT formatted it as a
+    # multiple: "78.4x".
+    conn = sqlite3.connect(web_db)
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price, debt_to_equity) "
+                 "VALUES ('AAA', '2099-01-01T00:00:00', 100.0, 78.445)")
+    conn.commit()
+    conn.close()
+    body = client.get("/ui/stocks/AAA/stat").text
+    assert '<span class="summary-label">Debt/Equity</span><span class="summary-value">78.4%</span>' in body
+
+
+def test_a_figure_already_in_percent_formats_as_one():
+    from src.webapp.formatting import fmt_value
+
+    assert (fmt_value(78.445, "percent"), fmt_value(-1.5, "percent"), fmt_value(None, "percent")) == (
+        "78.4%", "-1.5%", "—")
+
+
+def test_the_screener_names_debt_to_equity_a_percent(client):
+    # The screener compares the stored figure, a percent: read as a ratio, "debt / equity under 2" found 1 of 111.
+    assert '"key": "debt_to_equity", "label": "Debt / equity (%)"' in client.get("/screener").text
+
+
+def test_a_count_formats_without_a_currency():
+    # BUG-136 (MATCH-06): share counts and volume went through fmt_money, so AAPL's STAT read "Shares outstanding
+    # $14.59B" and its DES "Volume $18.56M".
+    from src.webapp.formatting import fmt_count, fmt_value
+
+    assert [fmt_count(v) for v in (14_590_000_000, 146_550_000, -5_000, 999, None)] == [
+        "14.59B", "146.55M", "-5.00K", "999", "—"]
+    assert fmt_value(18_560_000, "count") == "18.56M"
+
+
+def test_des_and_stat_show_counts_without_a_currency(client, web_db):
+    conn = sqlite3.connect(web_db)
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price, volume, avg_volume, "
+                 "shares_outstanding, float_shares, shares_short) VALUES ('AAA', '2099-01-01T00:00:00', 100.0, "
+                 "18560000, 56630000, "
+                 "14590000000, 14570000000, 146550000)")
+    conn.commit()
+    conn.close()
+    des, stat = client.get("/ui/stocks/AAA/des").text, client.get("/ui/stocks/AAA/stat").text
+    for page, label, shown in ((des, "Volume", "18.56M"), (des, "Avg Volume", "56.63M"),
+                               (stat, "Shares outstanding", "14.59B"), (stat, "Float shares", "14.57B"),
+                               (stat, "Shares short", "146.55M")):
+        assert f'<span class="summary-label">{label}</span><span class="summary-value">{shown}</span>' in page
+
+
+def test_the_statements_hp_holders_and_insiders_show_counts_without_a_currency(client, web_db, monkeypatch):
+    conn = sqlite3.connect(web_db)
+    conn.execute("UPDATE financials_annual SET shares_outstanding = 15200000000 WHERE ticker = 'AAA'")
+    conn.commit()
+    conn.close()
+    statements = client.get("/ui/companies/AAA/statements?period=annual").text
+    assert "15.20B" in statements and "$15.20B" not in statements
+    _pin_today(monkeypatch, _AAA_LAST)
+    hp = client.get("/ui/stocks/AAA/hp").text
+    assert "1.13M" in hp and "$1.13M" not in hp  # the last bar's volume, 1,129,500
+    hds = client.get("/ui/stocks/AAA/hds").text
+    assert "5.00M" in hds and "$5.00M" not in hds  # Vanguard's 5,000,000 shares (worth $500.00M)
+    ins = client.get("/ui/stocks/AAA/ins").text
+    assert "10.00K" in ins and "$10.00K" not in ins  # Jane Doe's 10,000 shares
 
 
 def test_stat_fragment_unknown_ticker_404(client):
@@ -845,3 +911,72 @@ def test_base_page_carries_allow_collect_flag(collection_enabled_client):
     resp = collection_enabled_client.get("/")
     assert resp.status_code == 200
     assert 'data-allow-collect="1"' in resp.text
+
+
+# ---------------------------------------------------------------------------
+# A company whose SEC record gave no annual financials (BUG-044)
+# ---------------------------------------------------------------------------
+
+_TSM_NOTE = ("SEC EDGAR: no annual financials for TSM from CIK 0001046179 (TAIWAN SEMICONDUCTOR MANUFACTURING CO "
+             "LTD): it reports in IFRS (20-F, 6-K), which isn't mapped")
+
+
+def _db_after_a_run_with(tmp_path, warnings):
+    from datetime import datetime
+
+    from src.exporters.sqlite_store import SQLiteStore
+    from src.models.stock_data import StockData
+
+    db_path = tmp_path / "gap.db"
+    tsm = StockData(ticker="TSM", cik="0001046179", company_name="Taiwan Semiconductor",
+                    collected_at=datetime(2026, 10, 20))
+    for warning in warnings:
+        tsm.add_warning(warning)
+    SQLiteStore(db_path).export([tsm])
+    return db_path
+
+
+def _client_for(db_path):
+    from fastapi.testclient import TestClient
+
+    from src.webapp import create_app
+
+    return TestClient(create_app(db_path=db_path))
+
+
+def test_the_fa_and_val_tabs_say_why_sec_gave_no_annual_financials(tmp_path):
+    # TSM's FA tab was empty and its models N/A with no reason given; the run's explanation stayed in the JSON.
+    from markupsafe import escape
+
+    client = _client_for(_db_after_a_run_with(tmp_path, ["[data-quality/high] No annual financial data extracted.",
+                                                         _TSM_NOTE]))
+    for tab in ("fa", "val"):
+        body = client.get(f"/ui/stocks/TSM/{tab}").text
+        assert str(escape(_TSM_NOTE)) in body, tab
+        assert "No annual financial data extracted" not in body, tab
+
+
+def test_the_tabs_render_on_a_database_from_before_runs_kept_warnings(tmp_path):
+    # The web app opens the user's database read-only, so it can't add the column.
+    db_path = _db_after_a_run_with(tmp_path, [_TSM_NOTE])
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE collection_runs DROP COLUMN warnings")
+    conn.commit()
+    conn.close()
+    client = _client_for(db_path)
+    for tab in ("fa", "val"):
+        resp = client.get(f"/ui/stocks/TSM/{tab}")
+        assert resp.status_code == 200, tab
+        assert "no annual financials" not in resp.text, tab
+
+
+def test_the_fa_and_val_tabs_say_when_annual_financials_stop(tmp_path):
+    # BUG-066: a record that stops where IFRS reports begin read like a current one.
+    from markupsafe import escape
+
+    note = ("SEC EDGAR: annual financials stop at FY2019 for TSM: later annual reports are in IFRS (20-F), which "
+            "isn't mapped")
+    client = _client_for(_db_after_a_run_with(tmp_path, [note]))
+    for tab in ("fa", "val"):
+        assert str(escape(note)) in client.get(f"/ui/stocks/TSM/{tab}").text, tab
+

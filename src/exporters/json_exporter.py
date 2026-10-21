@@ -8,6 +8,15 @@ from typing import Any, Dict, List, Optional, Union
 
 from ..models.stock_data import StockData
 
+#: A run's own diagnostics: always the latest run's when merging, even when empty.
+_RUN_FIELDS = frozenset({"collected_at", "data_sources", "errors", "warnings"})
+
+
+def _is_empty(value: Any) -> bool:
+    """Nothing the run got: no value, or a handler's failure alone, ``{"error": ...}`` (BUG-118)."""
+    return value is None or value == "" or value == {} or value == [] or (
+        isinstance(value, dict) and value.keys() == {"error"})
+
 
 class JSONExporter:
     """
@@ -169,6 +178,15 @@ class JSONExporter:
                 if v is not None:
                     merged_info[k] = v
             merged["company_info"] = merged_info
+
+        # A section the new run didn't get (a failed or partial fetch) keeps the earlier data
+        # instead of being emptied, and so does the quality report describing kept financials.
+        # Only the run's own diagnostics are always the new run's.
+        for key, old in existing.items():
+            if key not in _RUN_FIELDS and not _is_empty(old) and _is_empty(merged.get(key)):
+                merged[key] = old
+        if not new.get("financials_annual") and existing.get("financials_annual") and existing.get("data_quality"):
+            merged["data_quality"] = existing["data_quality"]
 
         # Track data collection history
         collection_history = existing.get("collection_history", [])

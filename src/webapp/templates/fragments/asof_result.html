@@ -23,7 +23,7 @@
           {% for row in fin_rows %}
           <tr>
             <th class="row-label">{{ row.label }}</th>
-            <td class="num">{{ row.value }}</td>
+            <td class="num">{{ row.value }}{% if row.filed %} <span class="muted">(filed {{ row.filed }})</span>{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>

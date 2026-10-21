@@ -1,3 +1,6 @@
+{% if gap_note %}
+<p class="text-muted text-sm mb-3" role="note">{{ gap_note }}</p>
+{% endif %}
 <div class="tab-bar" role="tablist">
   <button class="tab-btn tab-active"
     hx-get="/ui/companies/{{ ticker }}/statements?period=annual"

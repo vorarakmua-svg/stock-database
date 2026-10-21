@@ -83,3 +83,21 @@ def test_404_not_cached(tmp_path, monkeypatch):
     monkeypatch.setattr(handler, "_request", lambda url, timeout=30: _FakeResp(404, {}))
     assert handler.get_company_facts("0000000003") is None
     assert not handler._payload_cache_path("companyfacts", "0000000003").exists()
+
+
+def test_a_failed_request_is_not_logged_as_a_success(tmp_path, monkeypatch, caplog):
+    # A 403 on companyfacts logged an error and then "Successfully fetched SEC data" for the same ticker.
+    handler = _handler(tmp_path)
+    monkeypatch.setattr(handler, "ticker_to_cik", lambda ticker: "0000320193")
+    monkeypatch.setattr(handler, "get_submissions", lambda cik: {"name": "Apple Inc.", "filings": []})
+
+    def blocked(cik):
+        raise requests.HTTPError("403 Client Error: Forbidden")
+
+    monkeypatch.setattr(handler, "get_company_facts", blocked)
+    with caplog.at_level("INFO"):
+        data = handler.fetch_all("AAPL")
+    assert data["company_facts_error"] == "403 Client Error: Forbidden"
+    assert "Successfully fetched SEC data" not in caplog.text
+    assert "SEC data for AAPL is incomplete" in caplog.text
+

@@ -104,6 +104,7 @@ for key in stock.keys():
 # - ticker
 # - cik
 # - company_name
+# - sector_class
 # - collected_at
 # - company_info
 # - market_data
@@ -112,13 +113,19 @@ for key in stock.keys():
 # - yahoo_financials
 # - financials_annual
 # - financials_quarterly
+# - financials_ttm
 # - sec_submissions
 # - insider_transactions
+# - unmapped_facts
 # - price_history
 # - analyst_estimates
 # - dividend_history
+# - price_bars
+# - earnings_history
+# - splits
 # - calculated_metrics
 # - risk_free_rate
+# - data_quality
 # - data_sources
 # - warnings
 # - errors
@@ -166,11 +173,11 @@ latest_year = years[0]
 financials = annual[latest_year]
 
 print(f"\n{stock['ticker']} - FY{latest_year}")
-print(f"Revenue: ${financials.get('Revenue', financials.get('Net Revenue', 0)):,.0f}")
-print(f"Net Income: ${financials.get('Net Income', 0):,.0f}")
-print(f"Total Assets: ${financials.get('Total Assets', 0):,.0f}")
-print(f"Total Debt: ${financials.get('Long-Term Debt', 0):,.0f}")
-print(f"Operating Cash Flow: ${financials.get('Operating Cash Flow', 0):,.0f}")
+print(f"Revenue: ${financials.get('revenue') or 0:,.0f}")
+print(f"Net Income: ${financials.get('net_income') or 0:,.0f}")
+print(f"Total Assets: ${financials.get('total_assets') or 0:,.0f}")
+print(f"Long-Term Debt: ${financials.get('long_term_debt') or 0:,.0f}")
+print(f"Operating Cash Flow: ${financials.get('operating_cash_flow') or 0:,.0f}")
 ```
 
 ### Multi-Year Financial Trends
@@ -193,14 +200,13 @@ def get_financial_trends(stock: dict, metrics: list) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 # Example: Revenue and Net Income trends
-metrics = ['Revenue', 'Net Revenue', 'Net Income', 'Operating Cash Flow']
+metrics = ['revenue', 'net_income', 'operating_cash_flow']
 trends = get_financial_trends(stock, metrics)
 
 # Calculate growth rates
-trends['Revenue_Final'] = trends['Revenue'].fillna(trends['Net Revenue'])
-trends['Revenue_Growth'] = trends['Revenue_Final'].pct_change()
+trends['revenue_growth'] = trends['revenue'].pct_change()
 
-print(trends[['Year', 'Revenue_Final', 'Net Income', 'Revenue_Growth']])
+print(trends[['Year', 'revenue', 'net_income', 'revenue_growth']])
 ```
 
 ### Accessing Analyst Estimates
@@ -225,7 +231,7 @@ dividends = stock['dividend_history']
 print(f"Current Dividend Rate: ${dividends['dividend_rate']:.2f}")
 print(f"Dividend Yield: {dividends['dividend_yield']*100:.2f}%")
 print(f"Payout Ratio: {dividends['payout_ratio']*100:.1f}%")
-print(f"Years of Dividends: {dividends['years_of_dividends']}")
+print(f"Years of Dividend History: {dividends['years_of_data']:.1f}")
 print(f"Dividend CAGR: {dividends.get('dividend_cagr', 0)*100:.1f}%")
 
 # Get annual dividend totals
@@ -250,7 +256,7 @@ undervalued = df[
     (df['pe_trailing'] < 20) &
     (df['pe_trailing'] > 0) &
     (df['profit_margin'] > 0.15) &
-    (df['debt_to_equity'] < 100)
+    (df['debt_to_equity'] < 100)  # a percent: under 1x
 ]
 
 print("Potentially Undervalued Stocks:")
@@ -637,7 +643,7 @@ def graham_number(stock: dict) -> dict:
     annual = stock.get('financials_annual', {})
     if annual:
         latest_year = sorted(annual.keys(), reverse=True)[0]
-        equity = annual[latest_year].get('Total Stockholders Equity', 0)
+        equity = annual[latest_year].get('total_equity') or 0
         shares = shareholders.get('shares_outstanding', 1)
         bvps = equity / shares if shares else 0
     else:
@@ -819,9 +825,8 @@ def buffett_analysis(stock: dict) -> dict:
     }
     results['score'] += results['criteria']['ROIC']['score']
 
-    # 3. Debt to Equity (target: <0.5)
-    de_ratio = valuation.get('debt_to_equity', 0) or 0
-    de_ratio = de_ratio / 100 if de_ratio > 10 else de_ratio  # Normalize if in percentage
+    # 3. Debt to Equity (target: <0.5); Yahoo's debt_to_equity is a percent (78.4 is 0.784x)
+    de_ratio = (valuation.get('debt_to_equity') or 0) / 100
     de_pass = de_ratio < 0.5
     results['criteria']['Debt/Equity'] = {
         "value": f"{de_ratio:.2f}",
@@ -846,7 +851,7 @@ def buffett_analysis(stock: dict) -> dict:
     positive_years = 0
     if annual:
         for year_data in annual.values():
-            net_income = year_data.get('Net Income', 0)
+            net_income = year_data.get('net_income', 0)
             if net_income and net_income > 0:
                 positive_years += 1
     consistency = positive_years >= 5
@@ -906,10 +911,10 @@ def profitability_analysis(stock: dict) -> pd.DataFrame:
     data = []
     for year in sorted(annual.keys()):
         fin = annual[year]
-        revenue = fin.get('Revenue') or fin.get('Net Revenue') or 0
-        gross_profit = fin.get('Gross Profit', 0)
-        operating_income = fin.get('Operating Income', 0)
-        net_income = fin.get('Net Income', 0)
+        revenue = fin.get('revenue') or 0
+        gross_profit = fin.get('gross_profit', 0)
+        operating_income = fin.get('operating_income', 0)
+        net_income = fin.get('net_income', 0)
 
         if revenue > 0:
             data.append({
@@ -937,9 +942,9 @@ def cash_flow_analysis(stock: dict) -> pd.DataFrame:
     data = []
     for year in sorted(annual.keys()):
         fin = annual[year]
-        net_income = fin.get('Net Income', 0)
-        ocf = fin.get('Operating Cash Flow', 0)
-        capex = fin.get('CapEx', 0) or fin.get('Capital Expenditures', 0)
+        net_income = fin.get('net_income', 0)
+        ocf = fin.get('operating_cash_flow', 0)
+        capex = fin.get('capex', 0)
 
         # FCF = Operating Cash Flow - CapEx
         fcf = ocf - abs(capex) if ocf and capex else None
@@ -1065,8 +1070,8 @@ if selected_ticker:
     annual = stock.get('financials_annual', {})
     if annual:
         years = sorted(annual.keys())
-        revenue = [annual[y].get('Revenue') or annual[y].get('Net Revenue') for y in years]
-        net_income = [annual[y].get('Net Income') for y in years]
+        revenue = [annual[y].get('revenue') for y in years]
+        net_income = [annual[y].get('net_income') for y in years]
 
         chart_data = pd.DataFrame({
             'Year': years,
@@ -1088,9 +1093,9 @@ def create_financial_dashboard(stock: dict):
     years = sorted(annual.keys())
 
     # Extract data
-    revenue = [annual[y].get('Revenue') or annual[y].get('Net Revenue') for y in years]
-    net_income = [annual[y].get('Net Income') for y in years]
-    ocf = [annual[y].get('Operating Cash Flow') for y in years]
+    revenue = [annual[y].get('revenue') for y in years]
+    net_income = [annual[y].get('net_income') for y in years]
+    ocf = [annual[y].get('operating_cash_flow') for y in years]
 
     # Create subplots
     fig = make_subplots(
@@ -1120,8 +1125,8 @@ def create_financial_dashboard(stock: dict):
     # Margins
     margins = []
     for y in years:
-        rev = annual[y].get('Revenue') or annual[y].get('Net Revenue') or 1
-        ni = annual[y].get('Net Income') or 0
+        rev = annual[y].get('revenue') or 1
+        ni = annual[y].get('net_income') or 0
         margins.append(ni / rev * 100)
 
     fig.add_trace(
@@ -1343,7 +1348,7 @@ def dividend_growth_analysis(ticker: str) -> dict:
         "ticker": ticker,
         "current_yield": dividends.get('dividend_yield'),
         "dividend_rate": dividends.get('dividend_rate'),
-        "years_of_dividends": dividends.get('years_of_dividends'),
+        "years_of_dividends": dividends.get('years_of_data'),
         "dividend_cagr": dividends.get('dividend_cagr'),
         "avg_yoy_growth": avg_growth,
         "payout_ratio": payout_ratio,

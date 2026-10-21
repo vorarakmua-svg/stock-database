@@ -3,7 +3,34 @@
 import json
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+#: The StockData section each ``to_summary`` column comes from. A CSV merge keeps a column's
+#: earlier value only when a run got nothing for its section (a failed or partial fetch), the
+#: way the JSON merge keeps a whole section; a section the run did get replaces it, empty
+#: values included. Company details are the exception: like the JSON's company_info and
+#: SQLite's companies row, they keep each earlier value the run lacked.
+SUMMARY_SECTIONS: Dict[str, Tuple[str, ...]] = {
+    "company_info": ("sector", "industry", "country", "employees", "website"),
+    "market_data": ("current_price", "market_cap", "volume", "beta", "52_week_high", "52_week_low",
+                    "ma_50", "ma_200"),
+    "valuation": ("pe_trailing", "pe_forward", "peg_ratio", "eps_trailing", "eps_forward", "price_to_book",
+                  "dividend_yield", "profit_margin", "operating_margin", "return_on_equity", "return_on_assets",
+                  "revenue_growth", "total_revenue", "ebitda", "net_income", "total_cash", "total_debt",
+                  "debt_to_equity", "free_cash_flow"),
+    "shareholders": ("shares_outstanding", "float_shares", "insider_percent", "institutional_percent",
+                     "short_ratio"),
+    "financials_annual": ("sec_revenue", "sec_net_income", "sec_total_assets", "sec_total_liabilities",
+                          "sec_stockholders_equity", "sec_operating_cash_flow", "sec_fiscal_year"),
+    "price_history": ("cagr_5y", "annual_volatility", "max_drawdown", "sharpe_ratio", "total_return_5y"),
+    "calculated_metrics": ("calc_ebitda", "calc_fcf", "calc_roic", "calc_net_debt", "calc_interest_coverage",
+                           "calc_ev", "calc_ev_to_ebitda"),
+    "risk_free_rate": ("risk_free_rate_10y", "treasury_yield_source"),
+}
+#: Identifiers a merge keeps from an earlier run when a run lacks them.
+SUMMARY_IDENTITY_COLUMNS: Tuple[str, ...] = ("ticker", "cik", "company_name")
+#: The run's own columns: always the latest run's.
+SUMMARY_RUN_COLUMNS: Tuple[str, ...] = ("collected_at", "data_sources", "warning_count", "error_count")
 
 
 @dataclass
@@ -142,91 +169,91 @@ class StockData:
             ),
         }
 
+        # Every key is always present (None when its section is empty), so the CSV
+        # columns don't depend on which tickers a run happened to collect.
+
         # Company info
-        if self.company_info:
-            summary["sector"] = self.company_info.get("sector")
-            summary["industry"] = self.company_info.get("industry")
-            summary["country"] = self.company_info.get("country")
-            summary["employees"] = self.company_info.get("full_time_employees")
-            summary["website"] = self.company_info.get("website")
+        info = self.company_info or {}
+        summary["sector"] = info.get("sector")
+        summary["industry"] = info.get("industry")
+        summary["country"] = info.get("country")
+        summary["employees"] = info.get("full_time_employees")
+        summary["website"] = info.get("website")
 
         # Market data
-        if self.market_data:
-            summary["current_price"] = self.market_data.get("current_price")
-            summary["market_cap"] = self.market_data.get("market_cap")
-            summary["volume"] = self.market_data.get("volume")
-            summary["beta"] = self.market_data.get("beta")
-            summary["52_week_high"] = self.market_data.get("fifty_two_week_high")
-            summary["52_week_low"] = self.market_data.get("fifty_two_week_low")
-            summary["ma_50"] = self.market_data.get("fifty_day_average")
-            summary["ma_200"] = self.market_data.get("two_hundred_day_average")
+        market = self.market_data or {}
+        summary["current_price"] = market.get("current_price")
+        summary["market_cap"] = market.get("market_cap")
+        summary["volume"] = market.get("volume")
+        summary["beta"] = market.get("beta")
+        summary["52_week_high"] = market.get("fifty_two_week_high")
+        summary["52_week_low"] = market.get("fifty_two_week_low")
+        summary["ma_50"] = market.get("fifty_day_average")
+        summary["ma_200"] = market.get("two_hundred_day_average")
 
         # Valuation metrics
-        if self.valuation:
-            summary["pe_trailing"] = self.valuation.get("pe_trailing")
-            summary["pe_forward"] = self.valuation.get("pe_forward")
-            summary["peg_ratio"] = self.valuation.get("peg_ratio")
-            summary["eps_trailing"] = self.valuation.get("eps_trailing")
-            summary["eps_forward"] = self.valuation.get("eps_forward")
-            summary["price_to_book"] = self.valuation.get("price_to_book")
-            summary["dividend_yield"] = self.valuation.get("dividend_yield")
-            summary["profit_margin"] = self.valuation.get("profit_margin")
-            summary["operating_margin"] = self.valuation.get("operating_margin")
-            summary["return_on_equity"] = self.valuation.get("return_on_equity")
-            summary["return_on_assets"] = self.valuation.get("return_on_assets")
-            summary["revenue_growth"] = self.valuation.get("revenue_growth")
-            summary["total_revenue"] = self.valuation.get("total_revenue")
-            summary["ebitda"] = self.valuation.get("ebitda")
-            summary["net_income"] = self.valuation.get("net_income")
-            summary["total_cash"] = self.valuation.get("total_cash")
-            summary["total_debt"] = self.valuation.get("total_debt")
-            summary["debt_to_equity"] = self.valuation.get("debt_to_equity")
-            summary["free_cash_flow"] = self.valuation.get("free_cash_flow")
+        valuation = self.valuation or {}
+        summary["pe_trailing"] = valuation.get("pe_trailing")
+        summary["pe_forward"] = valuation.get("pe_forward")
+        summary["peg_ratio"] = valuation.get("peg_ratio")
+        summary["eps_trailing"] = valuation.get("eps_trailing")
+        summary["eps_forward"] = valuation.get("eps_forward")
+        summary["price_to_book"] = valuation.get("price_to_book")
+        summary["dividend_yield"] = valuation.get("dividend_yield")
+        summary["profit_margin"] = valuation.get("profit_margin")
+        summary["operating_margin"] = valuation.get("operating_margin")
+        summary["return_on_equity"] = valuation.get("return_on_equity")
+        summary["return_on_assets"] = valuation.get("return_on_assets")
+        summary["revenue_growth"] = valuation.get("revenue_growth")
+        summary["total_revenue"] = valuation.get("total_revenue")
+        summary["ebitda"] = valuation.get("ebitda")
+        summary["net_income"] = valuation.get("net_income")
+        summary["total_cash"] = valuation.get("total_cash")
+        summary["total_debt"] = valuation.get("total_debt")
+        summary["debt_to_equity"] = valuation.get("debt_to_equity")
+        summary["free_cash_flow"] = valuation.get("free_cash_flow")
 
         # Shareholders
-        if self.shareholders:
-            summary["shares_outstanding"] = self.shareholders.get("shares_outstanding")
-            summary["float_shares"] = self.shareholders.get("float_shares")
-            summary["insider_percent"] = self.shareholders.get("insider_percent")
-            summary["institutional_percent"] = self.shareholders.get("institutional_percent")
-            summary["short_ratio"] = self.shareholders.get("short_ratio")
+        holders = self.shareholders or {}
+        summary["shares_outstanding"] = holders.get("shares_outstanding")
+        summary["float_shares"] = holders.get("float_shares")
+        summary["insider_percent"] = holders.get("insider_percent")
+        summary["institutional_percent"] = holders.get("institutional_percent")
+        summary["short_ratio"] = holders.get("short_ratio")
 
-        # Latest SEC financials (if available)
-        if self.financials_annual:
-            # Get the most recent year
-            years = sorted(self.financials_annual.keys(), reverse=True)
-            if years:
-                latest = self.financials_annual[years[0]]
-                summary["sec_revenue"] = latest.get("revenue")
-                summary["sec_net_income"] = latest.get("net_income")
-                summary["sec_total_assets"] = latest.get("total_assets")
-                summary["sec_total_liabilities"] = latest.get("total_liabilities")
-                summary["sec_stockholders_equity"] = latest.get("total_equity")
-                summary["sec_operating_cash_flow"] = latest.get("operating_cash_flow")
-                summary["sec_fiscal_year"] = latest.get("fiscal_year")
+        # Latest SEC financials (the most recent year, if any)
+        annual = self.financials_annual or {}
+        latest = annual[max(annual)] if annual else {}
+        summary["sec_revenue"] = latest.get("revenue")
+        summary["sec_net_income"] = latest.get("net_income")
+        summary["sec_total_assets"] = latest.get("total_assets")
+        summary["sec_total_liabilities"] = latest.get("total_liabilities")
+        summary["sec_stockholders_equity"] = latest.get("total_equity")
+        summary["sec_operating_cash_flow"] = latest.get("operating_cash_flow")
+        summary["sec_fiscal_year"] = latest.get("fiscal_year")
 
         # Price history statistics
-        if self.price_history:
-            summary["cagr_5y"] = self.price_history.get("cagr")
-            summary["annual_volatility"] = self.price_history.get("annual_volatility")
-            summary["max_drawdown"] = self.price_history.get("max_drawdown")
-            summary["sharpe_ratio"] = self.price_history.get("sharpe_ratio_estimate")
-            summary["total_return_5y"] = self.price_history.get("total_return")
+        prices = self.price_history or {}
+        summary["cagr_5y"] = prices.get("cagr")
+        summary["annual_volatility"] = prices.get("annual_volatility")
+        summary["max_drawdown"] = prices.get("max_drawdown")
+        summary["sharpe_ratio"] = prices.get("sharpe_ratio_estimate")
+        summary["total_return_5y"] = prices.get("total_return")
 
         # Calculated metrics for DCF
-        if self.calculated_metrics:
-            summary["calc_ebitda"] = self.calculated_metrics.get("ebitda")
-            summary["calc_fcf"] = self.calculated_metrics.get("free_cash_flow")
-            summary["calc_roic"] = self.calculated_metrics.get("roic")
-            summary["calc_net_debt"] = self.calculated_metrics.get("net_debt")
-            summary["calc_interest_coverage"] = self.calculated_metrics.get("interest_coverage")
-            summary["calc_ev"] = self.calculated_metrics.get("enterprise_value")
-            summary["calc_ev_to_ebitda"] = self.calculated_metrics.get("ev_to_ebitda")
+        metrics = self.calculated_metrics or {}
+        summary["calc_ebitda"] = metrics.get("ebitda")
+        summary["calc_fcf"] = metrics.get("free_cash_flow")
+        summary["calc_roic"] = metrics.get("roic")
+        summary["calc_net_debt"] = metrics.get("net_debt")
+        summary["calc_interest_coverage"] = metrics.get("interest_coverage")
+        summary["calc_ev"] = metrics.get("enterprise_value")
+        summary["calc_ev_to_ebitda"] = metrics.get("ev_to_ebitda")
 
         # Risk-free rate for WACC
-        if self.risk_free_rate:
-            summary["risk_free_rate_10y"] = self.risk_free_rate.get("risk_free_rate")
-            summary["treasury_yield_source"] = self.risk_free_rate.get("source")
+        rates = self.risk_free_rate or {}
+        summary["risk_free_rate_10y"] = rates.get("risk_free_rate")
+        summary["treasury_yield_source"] = rates.get("source")
 
         # Data quality
         summary["data_sources"] = ", ".join(self.data_sources)
@@ -260,6 +287,8 @@ class StockData:
             return
 
         self.add_source("yahoo_finance")
+        for warning in yahoo_data.get("warnings", []):
+            self.add_warning(f"Yahoo Finance: {warning}")
 
         # Company info
         if "company_info" in yahoo_data:
@@ -319,6 +348,11 @@ class StockData:
             return
 
         self.add_source("sec_edgar")
+
+        # A failed request (403, 5xx, timeout) leaves its part empty: an error, not a quiet gap.
+        for key, endpoint in (("company_facts_error", "companyfacts"), ("submissions_error", "submissions")):
+            if sec_data.get(key):
+                self.add_error(f"SEC EDGAR {endpoint}: {sec_data[key]}")
 
         # CIK
         if "cik" in sec_data:

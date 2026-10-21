@@ -2,6 +2,7 @@
 
 from src.validation.integrity import (
     check_cashflow_reconciliation,
+    check_dividend_completeness,
     check_field_outliers,
     check_quarterly_sums,
     check_ratio_bounds,
@@ -286,3 +287,56 @@ def test_quarterly_sum_skips_discontinued_ops_fields():
     assert len(findings) == 1
     assert "revenue" in findings[0].message
     assert "discontinued" not in findings[0].message
+
+
+# ---- dividend completeness: Yahoo's payments vs SEC's declared dividends per share ----
+
+
+def _payments(amount_for, first="2021-03", last="2026-06", skip=()):
+    """Quarterly payments on the 13th, from *first* to *last* (YYYY-MM), minus *skip* months."""
+    months = [f"{y}-{m}" for y in range(2021, 2027) for m in ("03", "06", "09", "12")]
+    return [{"date": f"{ym}-13", "amount": amount_for(ym)}
+            for ym in months if first <= ym <= last and ym not in skip]
+
+
+def _declared(**dps_by_year):
+    return {y[2:]: {"period_end": f"{y[2:]}-12-31", "dividends_per_share": v} for y, v in dps_by_year.items()}
+
+
+def test_dividend_check_flags_payments_yahoo_is_missing():
+    # CB: no payment between 2025-06-13 and 2026-03-13, while SEC declares 3.88 for FY2025.
+    payments = _payments(lambda ym: 0.97, skip={"2025-09", "2025-12"})
+    findings = check_dividend_completeness(_declared(y_2024=3.88, y_2025=3.88), payments, [], {"2024", "2025"})
+    assert [(f.code, f.period, f.severity) for f in findings] == [("dividend_payments_missing", "2025", "medium")]
+    assert "2025-06-13" in findings[0].message and "2026-03-13" in findings[0].message
+
+
+def test_dividend_check_silent_on_a_december_declaration_paid_in_january():
+    # PGR: a large variable dividend declared in December goes ex in January, so FY2025's
+    # payments (4.90) trail the declared 13.90 with no gap in the schedule.
+    payments = _payments(lambda ym: 4.60 if ym.endswith("-03") else 0.10)
+    assert check_dividend_completeness(_declared(y_2025=13.90), payments, [], {"2025"}) == []
+
+
+def test_dividend_check_silent_when_sec_confirms_a_suspension():
+    # A real pause: no payments after 2024-06 until 2025-06, and SEC's declared total agrees.
+    payments = _payments(lambda ym: 0.25, skip={"2024-09", "2024-12", "2025-03"})
+    findings = check_dividend_completeness(_declared(y_2024=0.50, y_2025=0.75), payments, [], {"2024", "2025"})
+    assert findings == []
+
+
+def test_dividend_check_skips_years_before_a_split():
+    # Yahoo's amounts are split-adjusted and SEC's are as filed, so the totals aren't comparable.
+    payments = _payments(lambda ym: 0.97, skip={"2025-09", "2025-12"})
+    splits = [{"date": "2026-01-20", "ratio": 2.0}]
+    assert check_dividend_completeness(_declared(y_2025=3.88), payments, splits, {"2025"}) == []
+
+def test_dividend_check_silent_on_a_first_dividend_declared_before_the_year_end():
+    # MU declared its first dividend in 25 years in August 2021, near the end of FY2021
+    # (2021-09-02), and paid it in FY2022: 0.00 paid against 0.10 declared, after a gap
+    # that began in 1996. That is an initiation, not a missing payment.
+    old = [{"date": d, "amount": 0.05} for d in ("1995-05-07", "1995-08-07", "1995-11-07", "1996-02-07", "1996-05-07")]
+    new = [{"date": d, "amount": 0.10} for d in ("2021-09-30", "2021-12-30", "2022-03-30", "2022-06-30")]
+    annual = {"2021": {"period_end": "2021-09-02", "dividends_per_share": 0.10}}
+    assert check_dividend_completeness(annual, old + new, [], {"2021"}) == []
+

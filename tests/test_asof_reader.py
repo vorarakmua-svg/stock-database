@@ -9,12 +9,12 @@ from src.models.stock_data import StockData
 from src.query.asof import AsOfReader
 
 
-def _build_db(tmp_path, vintages):
+def _build_db(tmp_path, vintages, ticker="PRU"):
     """Write a StockData carrying the given annual vintages and return the db path.
 
     vintages: {fy_str: {accn: period_dict}} exactly as StockData.financials_annual_vintages.
     """
-    s = StockData(ticker="PRU", cik="1", company_name="Prudential")
+    s = StockData(ticker=ticker, cik="1", company_name="Prudential")
     s.financials_annual_vintages = vintages
     db = tmp_path / "stock.db"
     SQLiteStore(db_path=str(db)).export([s])
@@ -190,3 +190,69 @@ def test_history_as_of_unknown_ticker_empty(tmp_path):
     db = _three_years(tmp_path)
     with AsOfReader(db) as r:
         assert r.history_as_of("ZZZZ", "2025-01-01") == {}
+
+
+def test_a_database_under_a_hash_folder_opens(tmp_path):
+    # BUG-080: a '#' in the path cut `?mode=ro` off, and the reader opened, and created, an empty database at "proj".
+    (tmp_path / "proj#1").mkdir()
+    db = _build_db(tmp_path / "proj#1", {
+        "2019": {"a-orig": {"fiscal_year": 2019, "accn": "a-orig",
+                            "filed_date": "2020-02-15", "period_end": "2019-12-31",
+                            "form": "10-K", "calendar_year": 2019, "net_income": 100.0}},
+    })
+    with AsOfReader(db) as reader:
+        assert reader.as_of_value("PRU", 2019, "net_income", "2020-03-01") == 100.0
+    assert [p.name for p in tmp_path.iterdir()] == ["proj#1"]
+
+
+# ---------------------------------------------------------------------------
+# BUG-110: a later 10-K repeats only part of a year
+# ---------------------------------------------------------------------------
+
+def _partial_refilings(tmp_path):
+    """FY2016 as MSFT's 10-Ks file it: whole in its own 10-K and the next one's comparatives, then the
+    FY2018 10-K restating the income statement without the balance sheet, then the FY2019 10-K with only
+    the equity statement's opening balance."""
+    def period(accn, filed, **figures):
+        return {"fiscal_year": 2016, "accn": accn, "filed_date": filed, "period_end": "2016-06-30",
+                "form": "10-K", "calendar_year": 2016, **figures}
+    return _build_db(tmp_path, {"2016": {
+        "k16": period("k16", "2016-07-28", revenue=85.3e9, net_income=16.8e9, total_assets=193.7e9,
+                      total_equity=72.0e9),
+        "k17": period("k17", "2017-08-02", revenue=85.3e9, net_income=16.8e9, total_assets=193.5e9,
+                      total_equity=72.0e9),
+        "k18": period("k18", "2018-08-03", revenue=91.2e9, net_income=20.5e9, total_equity=83.1e9),
+        "k19": period("k19", "2019-08-01", total_equity=83.1e9),
+    }}, ticker="MSFT")
+
+
+def test_a_figure_a_later_filing_leaves_out_keeps_its_last_filed_value(tmp_path):
+    # BUG-110: the latest filing, holding only the opening equity, came back whole: no revenue as of today.
+    db = _partial_refilings(tmp_path)
+    with AsOfReader(db) as r:
+        row = r.as_of_annual("MSFT", 2016, "2026-01-01")
+    assert (row["revenue"], row["net_income"], row["total_assets"], row["total_equity"]) == (
+        91.2e9, 20.5e9, 193.5e9, 83.1e9)
+    assert (row["accn"], row["filed_date"]) == ("k19", "2019-08-01")  # the latest filing's provenance
+    restated = {"accn": "k18", "filed_date": "2018-08-03", "form": "10-K"}
+    assert row["carried_from"] == {"revenue": restated, "net_income": restated,
+                                   "total_assets": {"accn": "k17", "filed_date": "2017-08-02", "form": "10-K"}}
+
+
+def test_a_figure_filed_after_the_date_is_never_carried(tmp_path):
+    db = _partial_refilings(tmp_path)
+    with AsOfReader(db) as r:
+        before = r.as_of_annual("MSFT", 2016, "2018-08-02")
+        after = r.as_of_annual("MSFT", 2016, "2018-08-03")
+    assert (before["revenue"], before["total_assets"], before["accn"], before["carried_from"]) == (
+        85.3e9, 193.5e9, "k17", {})
+    assert (after["revenue"], after["total_assets"], after["accn"]) == (91.2e9, 193.5e9, "k18")
+    assert after["carried_from"] == {"total_assets": {"accn": "k17", "filed_date": "2017-08-02", "form": "10-K"}}
+
+
+def test_as_of_value_and_history_read_each_figure_as_last_filed(tmp_path):
+    db = _partial_refilings(tmp_path)
+    with AsOfReader(db) as r:
+        assert r.as_of_value("MSFT", 2016, "revenue", "2026-01-01") == 91.2e9
+        assert r.history_as_of("MSFT", "2026-01-01")[2016]["total_assets"] == 193.5e9
+

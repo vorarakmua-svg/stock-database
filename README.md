@@ -187,7 +187,7 @@ Each ticker JSON file contains:
     "dividend_yield": 0.0041,
     "payout_ratio": 0.157,
     "dividend_cagr": 0.078,
-    "years_of_dividends": 12,
+    "years_of_data": 12.4,
     "dividend_payments": [ /* full history */ ]
   },
 
@@ -458,14 +458,15 @@ cross-company screening compares like with like:
 
 | Sector | Added ratios | Suppressed generic ratios (stored `NULL` = not applicable) |
 |---|---|---|
-| **Bank** | net interest margin\*, efficiency ratio, loan-to-deposit | EBITDA family, ROIC/NOPAT/invested capital, interest coverage, gross/operating margin, inventory & receivables turnover, asset turnover, working capital, net/total debt, FCF family |
-| **Insurer** | loss ratio, combined ratio\* | EBITDA family, ROIC/NOPAT/invested capital, inventory turnover, gross margin, asset turnover, working capital |
-| **REIT** | FFO\*, AFFO\*, FFO/share, FFO payout | ROIC/NOPAT/invested capital, inventory & receivables turnover, gross margin, asset turnover, FCF family |
+| **Bank** | net interest margin\*, efficiency ratio, loan-to-deposit | EBITDA family, ROIC/NOPAT/invested capital, interest coverage, gross/operating margin, inventory & receivables turnover, asset turnover, working capital, net/total debt, FCF family, EV family (EV, EV/EBITDA, EV/revenue, EV/FCF, FCF yield) |
+| **Insurer** | loss ratio, combined ratio\* | EBITDA family (with EV/EBITDA), ROIC/NOPAT/invested capital, inventory turnover, gross margin, asset turnover, working capital |
+| **REIT** | FFO\*, AFFO\*, FFO/share, FFO payout | ROIC/NOPAT/invested capital, inventory & receivables turnover, gross margin, asset turnover, FCF family (with EV/FCF and FCF yield) |
 
 General operating companies (and utilities/energy) get the full generic ratio
 suite unchanged. A suppressed ratio is stored as `NULL`, so a screen such as
 `WHERE roic > 0.15` automatically excludes sectors where ROIC is undefined
-instead of returning a misleading value.
+instead of returning a misleading value. A ratio built on a suppressed figure goes
+with it, as the EV family goes with a bank's net debt, EBITDA and FCF.
 
 \* **Proxy** (the registry doesn't split out the exact inputs):
 net interest margin = `net_interest_income / total_assets`;
@@ -484,7 +485,7 @@ the `inventory` line resolves from energy-specific tags
 
 ### Integrity checks (data-quality score)
 
-Beyond required-field and accounting-identity checks, the quality layer runs four
+Beyond required-field and accounting-identity checks, the quality layer runs five
 **flag-only** integrity checks (they surface issues via findings + the 0–100 score; they
 never alter data):
 
@@ -494,6 +495,7 @@ never alter data):
 | Cash-flow consistency | the cash-flow statement's reported net change != its own sections + FX effect (a continuing-only statement reconciles once the separately-reported `cash_from_discontinued_operations` line is added) | residual > 1% both bases | −10 |
 | Quarterly-sum | discrete quarters that don't sum to the annual figure; event-driven flows (debt issuance/repayment, buybacks, M&A, impairments/restructuring) are excluded, as for the magnitude-outlier check | per-field > 1% | −10 |
 | Ratio bounds | a computed metric outside its plausible range (e.g. >100% gross margin); roe/roic are not flagged when the equity base is negligible or negative (a buyback-depleted denominator makes the ratio meaningless, not wrong) | impossibility bounds | −3 |
+| Dividend completeness | Yahoo's dividend history missing payments that SEC filings declare: a gap in the payment schedule that begins near the fiscal year, and Yahoo's payments for that year well short of the SEC-declared dividends per share (a December declaration paid in January, a suspension SEC confirms, a first dividend paid after the year ends, and years before a split are not flagged) | interval > 1.7× the usual one and payments < 80% of declared | −10 |
 
 Thresholds are deliberately wide (a $1M materiality floor; the most recent 5 fiscal years are
 scored), so clean filings keep a score of 100. Findings appear in `data_quality.findings` and,
@@ -525,14 +527,43 @@ numbers SEC filings report:
   filed cumulative-to-date in 10-Qs (and full-year in the 10-K). We difference the
   cumulative ladder anchored at the fiscal-year start (`discrete[k] = YTD[k] − YTD[k-1]`),
   which recovers every quarter's standalone performance — including **Q4**, which is never
-  filed as a 10-Q (`Q4 = annual − 9-month YTD`). Derived values are tagged in
-  `_source_tags`.
+  filed as a 10-Q (`Q4 = annual − 9-month YTD`). Until a year's second 10-Q, its first
+  quarter is its own 3-month figure. Derived values are tagged in `_source_tags`.
+- **One split basis per year.** A stock split restates only the filings made after it,
+  so a year's figures can come from both sides of one. Each quarter's per-share figures
+  and share counts are put on the basis of its year's annual figures, as
+  `financials_annual` has them, before Q4 is derived. The parser reads the splits from
+  the filings themselves: counts that two filings give for the same period at a split's
+  ratio. Years that no filing after a split reports keep their older basis, as in
+  `financials_annual`.
+- **One share-count scale per year.** A later filing can tag a year's share count in
+  thousands or millions where its other figures are in units. Before Q4 is derived,
+  each weighted count goes onto the scale its own net income and EPS imply, provided
+  another of the year's counts agrees; otherwise it follows the year's checked counts.
+  A count at or below zero, filed or derived, is left empty.
+- **Outflows by size.** Capex, buybacks, debt repaid and dividends paid are stored as
+  positive amounts, and filers tag them with either sign, sometimes both within one year.
+  Their quarters difference the year-to-date totals' sizes, and a quarter whose total
+  shrinks (a later filing reporting the flow on another basis) is left empty.
+- **Acquisitions as paid.** Acquisitions are net of the cash acquired, so they keep their
+  sign: positive is cash paid, negative cash brought in, where a deal acquired more cash
+  than it cost (Wells Fargo's 2008 with Wachovia, -$11.2B). A filing that tags its other
+  outflows negative has its acquisitions turned back. Their quarters difference the
+  year-to-date totals as they are, so a year's quarters add up to its figure; but a total
+  of payments that falls by half or more is two bases (a restated year beside nine months
+  as first filed), and that quarter is left empty.
+- **Long-term debt beside current debt.** Long-term debt is the balance sheet's noncurrent
+  figure where the filing's short-term debt holds the current maturities (Boeing's FY2025:
+  $45.6B beside $8.5B of current debt, not its $53.8B total, which counted them twice), and
+  the filer's total with the maturities where no short-term figure holds them.
 - **Balance-sheet checkpoints** at every quarter-end (instant facts), full history.
 - **`fiscal_quarter`** (1–4, company calendar) and **`calendar_quarter`** (1–4, calendar)
   are both attached; `calendar_quarter` comes from the SEC frame and is the reliable
   cross-company key.
 - **TTM (`financials_ttm`)** — trailing-twelve-month series (rolling 4 discrete quarters
-  for flows, balance sheet as-of) for seasonality-free, up-to-date comparison.
+  for flows, their average for weighted share counts, balance sheet as-of, and per-share
+  figures and counts on the latest quarter's split basis) for seasonality-free, up-to-date
+  comparison.
 
 ```sql
 -- Discrete quarterly revenue trend for one company (incl. derived Q4):
@@ -553,6 +584,13 @@ pipeline is designed so this never breaks ingestion or silently loses data:
   concept, never by raw tag — a taxonomy change can't break the schema or queries.
 - **Firm variability is resolved** by ordered candidate-tag lists in
   `src/mappings/canonical.py` (both revenue tags → `revenue`).
+- **One revenue figure per year.** Revenue takes the first of its tags a year has, the
+  totals first (`Revenues`, then revenue net of interest expense, then the contract-revenue
+  and sales tags). Of two figures for a year 25% or more apart, one the year's income
+  statement doesn't add up to (operating income plus operating expenses, or cost of revenue
+  plus gross profit) gives way to one it does; where it adds up to neither, a zero gives way
+  to a positive figure, and one below the year's cost of revenue to one that isn't. Revenue
+  including excise taxes only fills a year with no other figure.
 - **Nothing is silently dropped.** Any *material* fact under a tag not yet in the registry
   (a new taxonomy element or an unanticipated tag) is captured in the **`unmapped_facts`**
   table (the tag stored as a row value) — so the data is preserved and visible even before
@@ -592,10 +630,15 @@ plus (added for the web terminal — see [Web interface](#web-interface)) `price
 estimate/actual/surprise per quarter), `dividend_events`, `split_events`,
 `holders` (institutional + mutual-fund), `insider_transactions`, and `officers`.
 `market_snapshots` itself was widened with ~40 point-in-time market/valuation
-columns (P/E, PEG, price/book, debt/equity, short interest, 52-week range,
+columns (P/E, PEG, price/book, debt/equity (Yahoo's, a percent), short interest, 52-week range,
 moving averages, …) — see `SNAPSHOT_SCREEN_COLUMNS` in `src/webapp/screener.py`
 for the subset exposed to the screener. All writes are idempotent upserts, so
-re-runs update in place.
+re-runs update in place. `dividend_events` keeps each payment as Yahoo served it,
+split-adjusted as of `served_on`: the collection's day on Yahoo's calendar, its last
+daily bar or the latest split Yahoo listed, whichever is later (the collector's own date
+can run a day ahead of New York's). The valuation takes each payment to its price's
+split basis by the splits in between, so a run whose dividend request failed can still
+store a split.
 
 The `financials_annual_vintages` table stores **point-in-time** data: one row per
 (ticker, fiscal_year, filing accession), so you can see every filing's view of a year —
@@ -605,13 +648,17 @@ SQLite-only (not in the per-ticker JSON).
 
 ### Point-in-time as-of queries
 
-To read fundamentals **as they were known on a given date** (no look-ahead), resolve each
-year to the latest filing made on or before that date. In SQL:
+To read fundamentals **as they were known on a given date** (no look-ahead), take each
+figure from the latest filing made on or before that date that reports it. A 10-K repeats
+only part of each earlier year (two years of income and cash-flow statements, one balance
+sheet, the equity statement's opening balances), so a later filing's row for a year is
+mostly empty, and a figure it leaves out keeps the value last filed. In SQL, for one figure:
 
 ```sql
 -- Net income for FY2019 as it was known on 2020-06-30:
-SELECT * FROM financials_annual_vintages
+SELECT net_income, filed_date, accn FROM financials_annual_vintages
 WHERE ticker = 'PRU' AND fiscal_year = 2019 AND filed_date <= '2020-06-30'
+  AND net_income IS NOT NULL
 ORDER BY filed_date DESC, accn DESC LIMIT 1;
 ```
 
@@ -627,7 +674,9 @@ with AsOfReader("data/output/stock.db") as r:
 ```
 
 `as_of_date` accepts an ISO `YYYY-MM-DD` string or a `datetime.date`. A year not yet filed
-as of that date resolves to `None` (and is absent from `history_as_of`).
+as of that date resolves to `None` (and is absent from `history_as_of`). A period carries the
+latest filing's `accn`, `filed_date` and `form`, and `carried_from` names the filing of each
+figure last filed earlier (`{"revenue": {"accn": ..., "filed_date": ..., "form": ...}}`).
 
 For point-in-time **ratios** (computed on the as-of financials), use `PointInTimeMetrics`:
 
@@ -708,7 +757,7 @@ The server binds to `127.0.0.1` by default (localhost only).
 - **Companies browser** — filterable list of all tracked companies with sector drill-down.
 - **Cross-company screener** — filter by any fundamental metric (ROIC, net margin, debt/EBITDA, …) *or* market/valuation column (P/E, dividend yield, PEG, short interest, …) *or* the valuation layer's Upside % / verdict, sort, paginate, compare selected companies side-by-side, and download results as CSV.
 - **Point-in-time (as-of) explorer** — look up what financials and ratios looked like as of any historical date (before later restatements), and browse vintage side-by-side tables.
-- **On-demand quote refresh** — re-fetch a single ticker's live price/market snapshot from the workstation without running a full collection (see `STOCK_WEB_ALLOW_QUOTE_REFRESH` below).
+- **On-demand quote refresh** — re-fetch a single ticker's live price/market snapshot from the workstation without running a full collection (see `STOCK_WEB_ALLOW_QUOTE_REFRESH` below). After a stock split the stored valuations don't reflect (one dated after the stored price, as after a collection whose Yahoo quote failed, or one not yet stored since the ticker's last collection with Yahoo), the refresh isn't saved, because those valuations are on the pre-split basis; its status asks for a full collection of the ticker instead. A split here is a share split (a simple ratio such as 2:1, 5:4 or 1:10) or any price factor of 3:2 or more. The stock dividends and smaller spin-off factors Yahoo also lists don't stop a refresh: it stores them with the price and values the ticker again, so its DDM and multiples band move onto the new price's basis, as a full collection would put them. A saved refresh recomputes the snapshot's enterprise value, EV/EBITDA, EV/FCF and FCF yield as a full collection does (its new market cap with the latest year's net debt, EBITDA and FCF), so the columns keep one definition; Yahoo's own enterprise value stays in the JSON's `valuation` section.
 - **CSV export** — download annual financials, annual metrics, or screener results as CSV from any company page or screener view.
 
 ### Terminal command bar

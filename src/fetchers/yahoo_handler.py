@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import yfinance as yf
@@ -71,8 +71,9 @@ class YahooHandler:
         try:
             self.rate_limiter.wait()
             stock = yf.Ticker(ticker)
+            bars, bars_error = self._price_bars_and_error(stock)
 
-            data = {
+            data: Dict[str, Any] = {
                 "company_info": self._get_company_info(stock),
                 "market_data": self._get_market_data(stock),
                 "valuation": self._get_valuation_metrics(stock),
@@ -81,12 +82,25 @@ class YahooHandler:
                 "price_history": self._get_price_history(stock),
                 "analyst_estimates": self._get_analyst_estimates(stock),
                 "dividend_history": self._get_dividend_history(stock),
-                "price_bars": self._get_price_bars(stock),
+                "price_bars": bars,
                 "earnings_history": self._get_earnings_history(stock),
                 "splits": self._get_splits(stock),
                 "fetched_at": datetime.now().isoformat(),
                 "source": "yahoo_finance",
             }
+            warnings: List[str] = []
+            if data["market_data"].get("current_price") is None:
+                warnings.append("quote unavailable; the stored price wasn't refreshed")
+            if "error" in data["dividend_history"]:
+                # The stored dividends keep the day Yahoo served them (``served_on``), which
+                # takes them to the price's basis past any split this run stores (BUG-103).
+                warnings.append(f"dividend history unavailable ({data['dividend_history']['error']}); "
+                                "the stored dividends weren't refreshed")
+            if bars_error:
+                # The stored bars stay as they were beside this run's newer dividends (BUG-084).
+                warnings.append(f"price history unavailable ({bars_error}); the stored daily bars weren't refreshed")
+            if warnings:
+                data["warnings"] = warnings
 
             self.logger.info(f"Successfully fetched Yahoo data for {ticker}")
             return data
@@ -105,16 +119,19 @@ class YahooHandler:
         Makes exactly ONE rate-limited ``yf.Ticker(ticker)`` call and reuses
         the same private extractors ``fetch_all`` uses for market data,
         valuation, and analyst estimates, plus the SCALAR shareholder stats
-        only (no holder-list DataFrame calls, no history/bars call).
+        only (no holder-list DataFrame calls, no bars), and the split history
+        (``_get_splits``, Yahoo's chart request), so the quote job can tell a
+        split since the last full collection, which would put this price on
+        another basis than everything stored (BUG-093).
 
-        Deliberately makes no ``stock.history()`` call, so the returned
-        ``market_data`` never includes ``ma_50``/``ma_200`` here (those
+        Deliberately makes no ``stock.history()`` call of its own, so the
+        returned ``market_data`` never includes ``ma_50``/``ma_200`` here (those
         require the "1y" history call ``_get_market_data`` makes for a full
         collection) — ``SQLiteStore.upsert_quote`` carries the previous
         snapshot's values for those forward instead of leaving them ``None``.
 
         Returns ``{"market_data": ..., "valuation": ..., "shareholders": ...,
-        "analyst_estimates": ...}`` on success, or ``{"error": ...}`` (never
+        "analyst_estimates": ..., "splits": ...}`` on success, or ``{"error": ...}`` (never
         raises) on failure — mirroring ``fetch_all``'s contract so callers
         (e.g. ``CollectionJobManager``'s quote-job worker) can check for the
         ``"error"`` key rather than needing a try/except per ticker.
@@ -123,12 +140,19 @@ class YahooHandler:
         try:
             self.rate_limiter.wait()
             stock = yf.Ticker(ticker)
-            return {
+            quote = {
                 "market_data": self._get_market_data(stock, include_moving_averages=False),
                 "valuation": self._get_valuation_metrics(stock),
                 "shareholders": self._get_shareholder_stats(stock),
                 "analyst_estimates": self._get_analyst_estimates(stock),
+                "splits": self._get_splits(stock),
             }
+            # The extractors swallow Yahoo's errors (a rate limit leaves each one empty),
+            # so a quote without a price is a failed fetch, not a refresh.
+            if quote["market_data"].get("current_price") is None:
+                self.logger.error(f"Yahoo returned no price for {ticker}")
+                return {"error": "Yahoo returned no price"}
+            return quote
         except Exception as e:
             self.logger.error(f"Error fetching Yahoo quote for {ticker}: {e}")
             return {"error": str(e)}
@@ -280,7 +304,7 @@ class YahooHandler:
                 "total_cash": info.get("totalCash"),
                 "total_cash_per_share": info.get("totalCashPerShare"),
                 "total_debt": info.get("totalDebt"),
-                "debt_to_equity": info.get("debtToEquity"),
+                "debt_to_equity": info.get("debtToEquity"),  # a percent: 78.4 is 0.784 times equity
                 "current_ratio": info.get("currentRatio"),
                 "quick_ratio": info.get("quickRatio"),
             }
@@ -679,8 +703,14 @@ class YahooHandler:
         - Dividend yield analysis
         """
         try:
-            info = stock.info
+            # The payments come from the chart, as the splits do, and a failed quote
+            # mustn't keep them from a split the same run stores (BUG-094).
             dividends = stock.dividends
+            try:
+                info = stock.info or {}
+            except Exception as e:  # quoteSummary and v7/quote failed (yfinance raises)
+                self.logger.debug(f"Error getting dividend info: {e}")
+                info = {}
 
             result = {
                 # Current dividend info
@@ -778,12 +808,18 @@ class YahooHandler:
         Get the full daily OHLCV price history, ascending by ISO date.
 
         Returns a list of ``{date, open, high, low, close, volume}`` records,
-        or ``[]`` if no history is available.
+        or ``[]`` if no history is available. Prices are the market's, on today's
+        split basis: yfinance adjusts them for later dividends unless asked not to,
+        and a past day's price then falls with every dividend since (BUG-075).
         """
+        return self._price_bars_and_error(stock)[0]
+
+    def _price_bars_and_error(self, stock: yf.Ticker) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """``_get_price_bars``' bars, and why the request failed, if it did."""
         try:
-            hist = stock.history(period="max", interval="1d")
+            hist = stock.history(period="max", interval="1d", auto_adjust=False)
             if hist is None or hist.empty:
-                return []
+                return [], None
 
             hist = hist.sort_index()
             bars = []
@@ -797,10 +833,10 @@ class YahooHandler:
                     "close": self._safe_float(row.get("Close")),
                     "volume": self._safe_float(row.get("Volume")),
                 })
-            return bars
+            return bars, None
         except Exception as e:
             self.logger.warning(f"Error getting price bars: {e}")
-            return []
+            return [], str(e)
 
     def _get_earnings_history(self, stock: yf.Ticker) -> List[Dict[str, Any]]:
         """

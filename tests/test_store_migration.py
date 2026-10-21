@@ -7,6 +7,9 @@ Covers:
 """
 
 import sqlite3
+from datetime import datetime
+
+import pytest
 
 from src.exporters.sqlite_store import SQLiteStore
 from src.models.stock_data import StockData
@@ -407,3 +410,216 @@ def test_ensure_columns_is_idempotent(tmp_path):
     assert cols.count("b") == 1
     assert cols.count("a") == 1
     conn.close()
+
+
+def _pre_flag_db(tmp_path):
+    """A database from before the dividend-adjusted flag: KO's and PEP's bars, Yahoo's adjusted prices."""
+    db = tmp_path / "stock.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE price_bars (ticker TEXT NOT NULL, date TEXT NOT NULL, open REAL, high REAL, low REAL, "
+                 "close REAL, volume REAL, PRIMARY KEY (ticker, date))")
+    conn.executemany("INSERT INTO price_bars (ticker, date, close) VALUES (?, ?, ?)",
+                     [("KO", "2021-12-31", 51.546), ("PEP", "2021-12-31", 154.0)])
+    conn.commit()
+    conn.close()
+    return db
+
+
+def test_bars_stored_before_market_closes_are_flagged_dividend_adjusted(tmp_path):
+    # BUG-075: every bar stored before the fetch asked for market prices holds Yahoo's dividend-adjusted one. The
+    # migration flags them once; a re-collected ticker's bars are market prices again.
+    db = _pre_flag_db(tmp_path)
+    ko = _full_stock("KO")
+    ko.price_bars = [{"date": "2021-12-31", "open": 59.0, "high": 59.3, "low": 58.9, "close": 59.21, "volume": 1.0e7}]
+    SQLiteStore(db).export([ko])
+    SQLiteStore(db).export([_stub_stock("ZZZ")])  # a later run's migration doesn't flag KO's again
+
+    conn = sqlite3.connect(db)
+    try:
+        rows = conn.execute("SELECT ticker, close, dividend_adjusted FROM price_bars ORDER BY ticker").fetchall()
+    finally:
+        conn.close()
+    assert rows == [("KO", 59.21, None), ("PEP", 154.0, 1)]
+
+
+@pytest.mark.parametrize("failure", [sqlite3.OperationalError("database is locked"), KeyboardInterrupt()])
+def test_a_first_export_that_fails_keeps_the_flags(tmp_path, monkeypatch, failure):
+    # BUG-083 (code review 8): the migration's ALTER TABLE committed at once while its UPDATE waited on the run's
+    # writes, so a first run that failed while writing (logged and swallowed, or Ctrl+C) kept the column and lost every
+    # flag: the bars read as market closes for good, and BUG-075's prices came back.
+    db = _pre_flag_db(tmp_path)
+
+    def failing_write(self, conn, stock):
+        raise failure
+
+    monkeypatch.setattr(SQLiteStore, "_write_stock", failing_write)
+    try:
+        SQLiteStore(db).export([_full_stock("KO")])
+    except KeyboardInterrupt:
+        pass
+    monkeypatch.undo()
+    SQLiteStore(db).export([_stub_stock("ZZZ")])
+
+    conn = sqlite3.connect(db)
+    try:
+        flags = conn.execute("SELECT ticker, dividend_adjusted FROM price_bars ORDER BY ticker").fetchall()
+    finally:
+        conn.close()
+    assert flags == [("KO", 1), ("PEP", 1)]
+
+
+def test_a_migration_interrupted_while_flagging_is_undone_whole(tmp_path, monkeypatch):
+    # BUG-083: the column and the flags arrive together or not at all. Interrupted as the flags are written (Ctrl+C,
+    # a killed process), the copy keeps no column, and the next run migrates again.
+    db = _pre_flag_db(tmp_path)
+    real_connect = SQLiteStore._connect
+
+    class InterruptedWhileFlagging:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, sql, *args):
+            if sql.startswith("UPDATE price_bars SET dividend_adjusted"):
+                raise KeyboardInterrupt
+            return self._conn.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    monkeypatch.setattr(SQLiteStore, "_connect", lambda self: InterruptedWhileFlagging(real_connect(self)))
+    with pytest.raises(KeyboardInterrupt):
+        SQLiteStore(db).export([_stub_stock("ZZZ")])
+    monkeypatch.undo()
+    conn = sqlite3.connect(db)
+    try:
+        assert "dividend_adjusted" not in {row[1] for row in conn.execute("PRAGMA table_info(price_bars)")}
+    finally:
+        conn.close()
+
+    SQLiteStore(db).export([_stub_stock("ZZZ")])
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute("SELECT ticker, dividend_adjusted FROM price_bars ORDER BY ticker").fetchall() == [
+            ("KO", 1), ("PEP", 1)]
+    finally:
+        conn.close()
+
+
+def _served_days(db, ticker):
+    conn = sqlite3.connect(db)
+    try:
+        return conn.execute("SELECT date, served_on FROM dividend_events WHERE ticker = ? ORDER BY date",
+                            (ticker,)).fetchall()
+    finally:
+        conn.close()
+
+
+def test_dividends_keep_the_day_yahoo_served_them(tmp_path):
+    # BUG-103: a payment's amount is Yahoo's, split-adjusted as of the run that fetched it, so that run's day on Yahoo's
+    # calendar, its last bar (BUG-117), goes with it; a later run whose dividend request failed leaves the stored
+    # payments on their day.
+    db = tmp_path / "stock.db"
+    failed = {"error": "chart request failed"}
+    for day, last_bar, history in ((datetime(2026, 6, 1, 9), "2026-05-29", None),
+                                   (datetime(2026, 10, 1, 9), "2026-09-30", failed)):
+        stock = _full_stock("AAA")
+        stock.collected_at, stock.price_bars = day, [{"date": last_bar, "close": 100.0}]
+        if history is not None:
+            stock.dividend_history = history
+        SQLiteStore(db).export([stock])
+    assert _served_days(db, "AAA") == [("2024-01-15", "2026-05-29"), ("2024-04-15", "2026-05-29")]
+    stock = _full_stock("AAA")
+    stock.collected_at, stock.price_bars = datetime(2026, 10, 8, 9), [{"date": "2026-10-07", "close": 100.0}]
+    SQLiteStore(db).export([stock])
+    assert _served_days(db, "AAA") == [("2024-01-15", "2026-10-07"), ("2024-04-15", "2026-10-07")]
+
+
+def _served_after_one_run(tmp_path, collected_at, bars=(), splits=()):
+    db = tmp_path / "stock.db"
+    stock = _full_stock("AAA")
+    stock.collected_at = collected_at
+    stock.price_bars = [{"date": day, "close": 100.0} for day in bars]
+    stock.splits = [{"date": day, "ratio": 10.0} for day in splits]
+    SQLiteStore(db).export([stock])
+    return {served for _, served in _served_days(db, "AAA")}
+
+
+def test_a_run_before_new_yorks_open_dates_its_payments_by_its_last_bar(tmp_path):
+    # BUG-117 (code review 11): the collector's date runs ahead of New York's east of it. A run at 08:00 local (+0700)
+    # on a split's day saw New York's evening before, no split yet, but dated its pre-split payments on the split's
+    # day, so they read as split; after a later run whose dividend request failed, DDM read ten times its value.
+    served = _served_after_one_run(tmp_path, datetime(2026, 6, 12, 8), bars=("2026-06-10", "2026-06-11"))
+    assert served == {"2026-06-11"}
+
+
+def test_a_split_yahoo_lists_dates_the_payments_it_adjusted(tmp_path):
+    # A split Yahoo lists is in the payments it serves, though the split's first bar is still to come.
+    served = _served_after_one_run(tmp_path, datetime(2026, 6, 12, 8), bars=("2026-06-11",), splits=("2026-06-12",))
+    assert served == {"2026-06-12"}
+
+
+def test_a_run_without_bars_or_splits_dates_its_payments_the_day_before_its_own(tmp_path):
+    # Yahoo then lists no split, and any it hasn't applied is dated on New York's day or later: never before the
+    # collector's day less one.
+    assert _served_after_one_run(tmp_path, datetime(2026, 6, 12, 8)) == {"2026-06-11"}
+
+
+def _pre_served_day_db(tmp_path):
+    """A database from before `dividend_events.served_on`: KO's payments beside bars to 2026-08-03; NVDA's beside bars
+    to 2024-06-07 and a split of 2024-06-10 a run stored while its bar request failed; XYZ's with neither."""
+    db = tmp_path / "stock.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE dividend_events (ticker TEXT NOT NULL, date TEXT NOT NULL, amount REAL, "
+                 "PRIMARY KEY (ticker, date))")
+    conn.execute("CREATE TABLE price_bars (ticker TEXT NOT NULL, date TEXT NOT NULL, open REAL, high REAL, low REAL, "
+                 "close REAL, volume REAL, dividend_adjusted INTEGER, PRIMARY KEY (ticker, date))")
+    conn.execute("CREATE TABLE split_events (ticker TEXT NOT NULL, date TEXT NOT NULL, ratio REAL, "
+                 "PRIMARY KEY (ticker, date))")
+    conn.executemany("INSERT INTO dividend_events (ticker, date, amount) VALUES (?, ?, ?)",
+                     [("KO", "2026-06-13", 0.51), ("NVDA", "2024-06-05", 0.01), ("XYZ", "2025-03-01", 1.0)])
+    conn.executemany("INSERT INTO price_bars (ticker, date, close) VALUES (?, ?, ?)",
+                     [("KO", "2026-07-31", 70.0), ("KO", "2026-08-03", 70.5), ("NVDA", "2024-06-07", 1208.88)])
+    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('NVDA', '2024-06-10', 10.0)")
+    conn.commit()
+    conn.close()
+    return db
+
+
+def test_dividends_stored_before_the_served_day_take_their_series_latest_basis(tmp_path):
+    # Until BUG-103's fix, a run stored no split without the dividends from the same chart request, so a payment stored
+    # before the column is on the basis of everything its ticker's series show: the migration dates it by its last bar
+    # or its latest split, whichever is later, the rule it was read by until now. A ticker with neither keeps no day.
+    db = _pre_served_day_db(tmp_path)
+    SQLiteStore(db).export([_stub_stock("ZZZ")])
+    assert [_served_days(db, t) for t in ("KO", "NVDA", "XYZ")] == [
+        [("2026-06-13", "2026-08-03")], [("2024-06-05", "2024-06-10")], [("2025-03-01", None)]]
+
+
+def test_a_migration_interrupted_while_dating_dividends_is_undone_whole(tmp_path, monkeypatch):
+    # As BUG-083's flags: the column and the days arrive together or not at all, committed before the run writes.
+    db = _pre_served_day_db(tmp_path)
+    real_connect = SQLiteStore._connect
+
+    class InterruptedWhileDating:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, sql, *args):
+            if sql.startswith("UPDATE dividend_events SET served_on"):
+                raise KeyboardInterrupt
+            return self._conn.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    monkeypatch.setattr(SQLiteStore, "_connect", lambda self: InterruptedWhileDating(real_connect(self)))
+    with pytest.raises(KeyboardInterrupt):
+        SQLiteStore(db).export([_stub_stock("ZZZ")])
+    monkeypatch.undo()
+    conn = sqlite3.connect(db)
+    try:
+        assert "served_on" not in {row[1] for row in conn.execute("PRAGMA table_info(dividend_events)")}
+    finally:
+        conn.close()
+    SQLiteStore(db).export([_stub_stock("ZZZ")])
+    assert _served_days(db, "KO") == [("2026-06-13", "2026-08-03")]

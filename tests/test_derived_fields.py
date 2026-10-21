@@ -1,5 +1,7 @@
 """Tests for derived-field accounting identities."""
 
+import pytest
+
 from src.parsers.derived_fields import apply_derivations
 
 
@@ -9,6 +11,32 @@ def test_total_liabilities_derived_from_assets_minus_equity():
     assert period["total_liabilities"] == 600.0
     assert "total_liabilities" in derived
     assert period["_source_tags"]["total_liabilities"] == "derived"
+
+
+def test_derived_liabilities_leave_out_the_noncontrolling_interest():
+    # BUG-100: total equity is the parent's (`StockholdersEquity`) whenever that is filed, so assets less it held the
+    # non-controlling interest too: INTC's FY2025 liabilities read $97.15B, where its filed figures give $85.07B.
+    period = {"total_assets": 211.43e9, "total_equity": 114.28e9, "minority_interest": 12.08e9,
+              "_source_tags": {"total_assets": "Assets", "total_equity": "StockholdersEquity",
+                               "minority_interest": "MinorityInterest"}}
+    apply_derivations(period)
+    assert period["total_liabilities"] == pytest.approx(85.07e9)
+
+
+def test_derived_liabilities_beside_equity_that_includes_the_noncontrolling_interest():
+    # VZ's FY2012 equity is the tag that includes the non-controlling interest (its 45% of Verizon Wireless), so
+    # assets less it is already the liabilities.
+    tags = {"total_equity": "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"}
+    period = {"total_assets": 225.22e9, "total_equity": 85.53e9, "minority_interest": 52.38e9, "_source_tags": tags}
+    apply_derivations(period)
+    assert period["total_liabilities"] == pytest.approx(225.22e9 - 85.53e9)
+
+
+def test_derived_liabilities_take_total_equity_as_the_parents_when_its_tag_is_unknown():
+    # `total_equity` is the parent's by definition (its first tag; quality's identity adds the interest to it).
+    period = {"total_assets": 1000.0, "total_equity": 400.0, "minority_interest": 50.0}
+    apply_derivations(period)
+    assert period["total_liabilities"] == 550.0
 
 
 def test_derivation_does_not_overwrite_reported():

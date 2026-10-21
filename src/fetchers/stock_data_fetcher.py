@@ -1,7 +1,9 @@
 """Main orchestrator for stock data collection."""
 
+import json
 import logging
 import os
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +12,7 @@ from typing import Any, Dict, List, Optional
 from ..config import AppConfig, default_config
 from ..exporters.csv_exporter import CSVExporter
 from ..exporters.json_exporter import JSONExporter
-from ..exporters.sqlite_store import SQLiteStore
+from ..exporters.sqlite_store import SQLiteStore, read_only_uri
 from ..models.canonical import validate_period
 from ..models.stock_data import StockData
 from ..parsers.calculated_metrics import CalculatedMetrics
@@ -18,9 +20,10 @@ from ..parsers.derived_fields import apply_derivations
 from ..parsers.share_scale import normalize_share_scale
 from ..parsers.ttm import compute_ttm
 from ..parsers.unmapped import detect_unmapped
-from ..parsers.xbrl_parser import XBRLParser
+from ..parsers.xbrl_parser import XBRLParser, explain_no_annual_financials, explain_stale_annual_financials
 from ..validation.integrity import (
     check_cashflow_reconciliation,
+    check_dividend_completeness,
     check_field_outliers,
     check_quarterly_sums,
     check_ratio_bounds,
@@ -29,6 +32,11 @@ from ..validation.quality import assess_annual, score_for
 from .fred_handler import FREDHandler
 from .sec_handler import SECHandler
 from .yahoo_handler import YahooHandler
+
+#: How the run's warning for a filer whose SEC data gave no annual financials begins.
+NO_ANNUAL_FINANCIALS = "SEC EDGAR: no annual financials"
+#: How it begins for a record that stops where the filer's IFRS reports begin.
+STALE_ANNUAL_FINANCIALS = "SEC EDGAR: annual financials stop"
 
 
 class StockDataFetcher:
@@ -122,6 +130,8 @@ class StockDataFetcher:
         self.logger.info(f"Fetching data for {ticker}")
 
         stock = StockData(ticker=ticker)
+        # Each quarter's split basis, for the trailing years; not a figure to store (BUG-082).
+        split_levels: Dict[str, Dict[str, float]] = {}
 
         # Fetch Yahoo Finance data
         if include_yahoo:
@@ -139,15 +149,25 @@ class StockDataFetcher:
                 stock.merge_sec_data(sec_data)
 
                 # Parse XBRL financials if company facts available
+                annual: Dict[str, Any] = {}
                 if "company_facts" in sec_data and sec_data["company_facts"]:
                     facts = sec_data["company_facts"]
 
                     annual = self.xbrl_parser.extract_annual_financials(
                         facts, years_back=years_back
                     )
+                    # A later filing's tagging error the parser put right (BUG-061).
+                    for fy, period in annual.items():
+                        for r in period.pop("_repairs", []):
+                            stock.add_warning(
+                                f"SEC EDGAR: {ticker} FY{fy} {r['field']} is {r['kept']:.4g}, as earlier "
+                                f"filings report; the filing of {r['filed']} reports {r['dropped']:.4g}, "
+                                f"which looks like a tagging error ({r['kind']})")
                     quarterly = self.xbrl_parser.extract_quarterly_financials(
                         facts, quarters_back=(years_back * 4 if years_back else None)
                     )
+                    split_levels = {end: period.pop("_split_levels") for end, period in quarterly.items()
+                                    if "_split_levels" in period}
                     vintages = self.xbrl_parser.extract_annual_vintages(
                         facts, years_back=years_back
                     )
@@ -159,6 +179,17 @@ class StockDataFetcher:
                     # taxonomy evolution / firm tag variability never silently
                     # drops data.
                     stock.unmapped_facts = detect_unmapped(facts)
+
+                # An empty record otherwise reads like a short history: say why.
+                if sec_data.get("cik") and not annual:
+                    stock.add_warning(self._no_annual_financials(ticker, sec_data))
+                elif annual:
+                    # And one that stops where IFRS reports begin reads as current (BUG-066).
+                    latest = max(annual, key=int)
+                    stale = explain_stale_annual_financials(sec_data.get("company_facts"),
+                                                            annual[latest].get("period_end"))
+                    if stale:
+                        stock.add_warning(f"{STALE_ANNUAL_FINANCIALS} at FY{latest} for {ticker}: {stale}")
 
                 # Get insider transactions
                 if stock.cik:
@@ -173,24 +204,38 @@ class StockDataFetcher:
 
         # Fetch risk-free rate from FRED (for WACC calculation)
         try:
-            risk_free = self.fred_handler.get_risk_free_rate(maturity="10y")
+            rate = self.fred_handler.get_risk_free_rate_details(maturity="10y") or {}
+            risk_free = rate.get("rate")
             market_premium = self.fred_handler.get_market_risk_premium()
 
+            # Where the rate came from (FRED, Treasury.gov or the static estimate) and the
+            # day it is for travel with it, so the valuations can show a stale or estimated rate.
             rate_data = {
                 "risk_free_rate": risk_free,
                 "risk_free_rate_10y": risk_free,
                 "market_risk_premium": market_premium.get("current_estimate"),
-                "source": "fred" if self.fred_handler.api_key else "fallback",
+                "source": rate.get("source") or ("fred" if self.fred_handler.api_key else "fallback"),
+                "date": rate.get("date"),
             }
             stock.merge_risk_free_rate(rate_data)
         except Exception as e:
             self.logger.warning(f"FRED data error for {ticker}: {e}")
             stock.add_warning(f"FRED: {str(e)}")
 
+        # The sector comes from SEC's submissions data. When that request failed, the
+        # stored record still knows it; metrics computed as a general company's would
+        # overwrite every stored year's sector ratios (FFO, net interest margin).
+        if stock.sector_class is None and stock.financials_annual:
+            stored = self._stored_sector(ticker)
+            if stored:
+                stock.sector_class = stored
+                stock.add_warning(f"SEC EDGAR: sector '{stored}' taken from the stored record "
+                                  "(the submissions data is unavailable)")
+
         # Clean, derive identities, and build the TTM series.
         if stock.financials_annual or stock.financials_quarterly:
             try:
-                self._clean_and_derive(stock)
+                self._clean_and_derive(stock, split_levels)
             except Exception as e:
                 self.logger.warning(f"Data cleaning error for {ticker}: {e}")
                 stock.add_warning(f"Data cleaning: {str(e)}")
@@ -218,6 +263,27 @@ class StockDataFetcher:
 
         return stock
 
+    def _stored_sector(self, ticker: str) -> Optional[str]:
+        """The sector already stored for *ticker*: the database's, else the JSON export's (read-only)."""
+        path = Path(self.sqlite_store.db_path)
+        if path.exists():
+            try:
+                conn = sqlite3.connect(read_only_uri(path), uri=True)
+                try:
+                    row = conn.execute("SELECT sector_class FROM companies WHERE ticker = ?", (ticker,)).fetchone()
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                row = None
+            if row and row[0]:
+                return row[0]
+        try:
+            stored = json.loads((Path(self.json_exporter.output_dir) / f"{ticker.upper()}.json")
+                                .read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return stored.get("sector_class") or None if isinstance(stored, dict) else None
+
     def _compute_metrics(self, stock: StockData) -> None:
         """Populate generic + sector-aware derived metrics on the stock.
 
@@ -240,8 +306,10 @@ class StockDataFetcher:
         )
         stock.merge_calculated_metrics(metrics)
 
-    def _clean_and_derive(self, stock: StockData) -> None:
-        """Derive identities, validate/coerce each period, and build the TTM series."""
+    def _clean_and_derive(self, stock: StockData,
+                          split_levels: Optional[Dict[str, Dict[str, float]]] = None) -> None:
+        """Derive identities, validate/coerce each period, and build the TTM series
+        (*split_levels*: each quarter's split basis, the parser's ``_split_levels``)."""
         for attr in ("financials_annual", "financials_quarterly"):
             periods = getattr(stock, attr)
             if not periods:
@@ -271,7 +339,23 @@ class StockDataFetcher:
                 apply_derivations(period)
 
         if stock.financials_quarterly:
-            stock.financials_ttm = compute_ttm(stock.financials_quarterly)
+            stock.financials_ttm = compute_ttm(stock.financials_quarterly, split_levels)
+
+    @staticmethod
+    def _no_annual_financials(ticker: str, sec_data: Dict[str, Any]) -> str:
+        """The run's warning for a filer whose SEC data gave no annual financials."""
+        submissions = sec_data.get("submissions") or {}
+        filings = submissions.get("filings") or []
+        dates = sorted(f["filingDate"] for f in filings if f.get("filingDate"))
+        # SECHandler keeps the latest 100 filings: their first date is the filer's
+        # first only when there are fewer than that.
+        first = dates[0] if dates and len(filings) < 100 else None
+        if sec_data.get("company_facts_error"):
+            reason = f"its companyfacts request failed ({sec_data['company_facts_error']})"
+        else:
+            reason = explain_no_annual_financials(sec_data.get("company_facts"), first)
+        name = submissions.get("name") or "name unknown"
+        return f"{NO_ANNUAL_FINANCIALS} for {ticker} from CIK {sec_data['cik']} ({name}): {reason}"
 
     def _assess(self, stock: StockData) -> None:
         """Attach a data-quality report: sector checks + integrity checks + score.
@@ -292,6 +376,9 @@ class StockDataFetcher:
             report.findings.extend(check_cashflow_reconciliation(annual, scored_years))
             report.findings.extend(check_quarterly_sums(annual, quarterly, scored_years))
             report.findings.extend(check_ratio_bounds(historical, annual, scored_years))
+            report.findings.extend(check_dividend_completeness(
+                annual, (stock.dividend_history or {}).get("dividend_payments") or [],
+                stock.splits or [], scored_years))
             report.score = score_for(report.findings)
 
         stock.data_quality = report.as_dict()
@@ -399,12 +486,13 @@ class StockDataFetcher:
             if csv_path:
                 results["csv"] = [csv_path]
 
-            # Also export financial history
+            # Also export financial history. The summary can fail on its own (Windows
+            # won't replace a file Excel has open), and that must not stop the rest.
             history_path = self.csv_exporter.export_financial_history(
                 data, filename="financial_history.csv"
             )
             if history_path:
-                results["csv"].append(history_path)
+                results.setdefault("csv", []).append(history_path)
 
         if "sqlite" in formats:
             db_path = self.sqlite_store.export(data)

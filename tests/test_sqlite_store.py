@@ -1,9 +1,14 @@
 """Tests for the SQLite store: schema, upserts, and cross-company screening."""
 
+import json
 import sqlite3
+from datetime import datetime
+
+import pytest
 
 from src.exporters.sqlite_store import SQLiteStore
 from src.models.stock_data import StockData
+from src.parsers.calculated_metrics import CalculatedMetrics
 
 
 def _company(ticker, revenue, roic):
@@ -305,3 +310,182 @@ def test_upsert_quote_carries_forward_computed_snapshot_fields(tmp_path):
     finally:
         conn.close()
     assert row == (10.0, 12.0, 1.1, 15.0, 0.07, 0.045, 99.0)
+
+
+def _collected_with_our_ev(tmp_path, financials=True, operating_income=100.0):
+    """A full collection of AAA at a market cap of 1,000 (net debt 250, EBITDA 120, FCF 60), Yahoo's own EV beside;
+    FY2024 before it with other debt."""
+    store = SQLiteStore(db_path=tmp_path / "stock.db")
+    s = StockData(ticker="AAA", cik="1", company_name="AAA Inc.")
+    if financials:
+        year = {"fiscal_year": 2025, "period_end": "2025-12-31", "operating_income": operating_income,
+                "depreciation_amortization": 20.0, "operating_cash_flow": 90.0, "capex": 30.0,
+                "long_term_debt": 300.0, "short_term_debt": 50.0, "cash_and_equivalents": 100.0}
+        s.financials_annual = {"2025": year, "2024": {**year, "fiscal_year": 2024, "period_end": "2024-12-31",
+                                                      "long_term_debt": 900.0}}
+    s.market_data = {"current_price": 10.0, "market_cap": 1000.0}
+    s.valuation = {"enterprise_value": 5000.0, "ev_to_ebitda": 50.0}
+    if financials:
+        s.calculated_metrics = CalculatedMetrics().calculate_all(
+            s.financials_annual["2025"], market_data=s.market_data, valuation=s.valuation)
+    s.collected_at = datetime(2026, 8, 1, 12)
+    store.export([s])
+    return store
+
+
+def _ev_family(db):
+    conn = sqlite3.connect(db)
+    try:
+        return conn.execute("SELECT enterprise_value, ev_to_ebitda, ev_to_fcf, fcf_yield FROM market_snapshots "
+                            "ORDER BY collected_at").fetchall()
+    finally:
+        conn.close()
+
+
+def _refresh(store, market_cap):
+    quote = {"market_data": {"current_price": 10.1, "market_cap": market_cap},
+             "valuation": {"enterprise_value": 5010.0, "ev_to_ebitda": 50.1},
+             "shareholders": {}, "analyst_estimates": {}}
+    store.upsert_quote("AAA", quote, "2026-08-02T12:00:00")
+
+
+def test_a_quote_refresh_keeps_our_enterprise_value(tmp_path):
+    # BUG-126: a collection stores our EV family (Yahoo's market cap with the latest year's net debt, EBITDA and FCF),
+    # and a quote refresh stored Yahoo's own enterpriseValue and enterpriseToEbitda in the same columns, beside the
+    # last collection's EV/FCF and FCF yield: ABT's EV read $187.8B after a collection and $213.1B after a refresh.
+    store = _collected_with_our_ev(tmp_path)
+    _refresh(store, 1010.0)
+    collected, refreshed = _ev_family(tmp_path / "stock.db")
+    assert collected == pytest.approx((1250.0, 1250.0 / 120.0, 1250.0 / 60.0, 0.06))
+    assert refreshed == pytest.approx((1260.0, 1260.0 / 120.0, 1260.0 / 60.0, 60.0 / 1010.0))
+
+
+def test_a_refresh_at_the_collections_market_cap_reads_its_ev_family(tmp_path):
+    store = _collected_with_our_ev(tmp_path)
+    _refresh(store, 1000.0)
+    collected, refreshed = _ev_family(tmp_path / "stock.db")
+    assert refreshed == pytest.approx(collected)
+
+
+def test_a_refresh_carries_no_ev_multiple_ours_doesnt_have(tmp_path):
+    # With EBITDA below zero ours has no EV/EBITDA; an earlier refresh's (Yahoo's 50.1, before BUG-126's fix) stays
+    # out of the new row.
+    store = _collected_with_our_ev(tmp_path, operating_income=-50.0)
+    _refresh(store, 1010.0)
+    conn = sqlite3.connect(tmp_path / "stock.db")
+    conn.execute("UPDATE market_snapshots SET ev_to_ebitda = 50.1 WHERE collected_at = '2026-08-02T12:00:00'")
+    conn.commit()
+    conn.close()
+    store.upsert_quote("AAA", {"market_data": {"current_price": 10.2, "market_cap": 1020.0}, "valuation": {},
+                               "shareholders": {}, "analyst_estimates": {}}, "2026-08-03T12:00:00")
+    assert _ev_family(tmp_path / "stock.db")[-1][1] is None
+
+
+def test_a_refresh_without_a_stored_year_keeps_the_collections_ev_family(tmp_path):
+    # Without annual financials a collection computes no EV family; Yahoo's own isn't ours either.
+    store = _collected_with_our_ev(tmp_path, financials=False)
+    _refresh(store, 1010.0)
+    assert _ev_family(tmp_path / "stock.db") == [(None, None, None, None), (None, None, None, None)]
+
+
+def test_a_failed_recollection_keeps_the_company_details(tmp_path):
+    # A re-collection that got no company info used to overwrite the companies row with NULLs,
+    # so the web header lost the name and sector.
+    store = SQLiteStore(db_path=tmp_path / "stock.db")
+    store.export([_company("AAA", revenue=1.0e9, roic=0.12)])
+    store.export([StockData(ticker="AAA", errors=["Yahoo Finance: HTTP 429 Too Many Requests"])])
+    conn = sqlite3.connect(tmp_path / "stock.db")
+    row = conn.execute("SELECT company_name, cik, sector FROM companies WHERE ticker = 'AAA'").fetchone()
+    conn.close()
+    assert row == ("AAA Inc.", "000", "Technology")
+
+
+def test_a_run_without_market_data_writes_no_snapshot(tmp_path):
+    # A Yahoo failure still gets a risk-free rate (Treasury.gov or the fixed estimate), and the rate alone
+    # used to make a snapshot: the latest one, with no price, market cap, beta or shares, read by the web
+    # header, the screener and the valuations.
+    store = SQLiteStore(db_path=tmp_path / "stock.db")
+    good = _company("AAA", revenue=1.0e9, roic=0.12)
+    good.market_data = {"current_price": 150.0, "market_cap": 1.5e11, "beta": 1.1}
+    good.collected_at = datetime(2026, 8, 4, 12, 0)
+    store.export([good])
+    failed = StockData(ticker="AAA", collected_at=datetime(2026, 10, 20, 9, 0))
+    failed.add_error("Yahoo Finance: HTTP 429 Too Many Requests")
+    failed.merge_risk_free_rate({"risk_free_rate": 0.0435, "source": "fallback"})
+    store.export([failed])
+    conn = sqlite3.connect(tmp_path / "stock.db")
+    latest = conn.execute("SELECT current_price FROM market_snapshots WHERE ticker = 'AAA' "
+                          "ORDER BY collected_at DESC LIMIT 1").fetchone()
+    runs = conn.execute("SELECT count(*) FROM collection_runs WHERE ticker = 'AAA'").fetchone()[0]
+    conn.close()
+    assert latest == (150.0,)
+    assert runs == 2  # the failed run is still recorded
+
+
+def _latest_price_and_count(db_path, ticker):
+    conn = sqlite3.connect(db_path)
+    latest = conn.execute("SELECT current_price FROM market_snapshots WHERE ticker = ? "
+                          "ORDER BY collected_at DESC LIMIT 1", (ticker,)).fetchone()
+    count = conn.execute("SELECT count(*) FROM market_snapshots WHERE ticker = ?", (ticker,)).fetchone()[0]
+    conn.close()
+    return latest, count
+
+
+def _priced_store(tmp_path):
+    store = SQLiteStore(db_path=tmp_path / "stock.db")
+    good = _company("AAA", revenue=1.0e9, roic=0.12)
+    good.market_data = {"current_price": 150.0, "market_cap": 1.5e11, "beta": 1.1, "ma_50": 148.0}
+    good.collected_at = datetime(2026, 8, 4, 12, 0)
+    store.export([good])
+    return store
+
+
+def test_a_quote_without_a_price_writes_no_snapshot(tmp_path):
+    # upsert_quote carried beta, the moving averages and the rate forward, so any quote made a new latest
+    # snapshot, even one a Yahoo rate limit left without a price.
+    store = _priced_store(tmp_path)
+    store.upsert_quote("AAA", {"market_data": {}, "valuation": {"pe_trailing": 25.0}, "shareholders": {},
+                               "analyst_estimates": {}}, "2026-10-20T09:00:00")
+    assert _latest_price_and_count(tmp_path / "stock.db", "AAA") == ((150.0,), 1)
+
+
+def test_a_run_with_only_price_history_writes_no_snapshot(tmp_path):
+    # Yahoo's quote data can come back empty while its price history works: the moving averages alone made a
+    # latest snapshot with no price, market cap, shares or beta.
+    store = _priced_store(tmp_path)
+    partial = StockData(ticker="AAA", collected_at=datetime(2026, 10, 20, 9, 0))
+    partial.market_data = {"ma_50": 343.0, "ma_200": 343.0}
+    partial.merge_risk_free_rate({"risk_free_rate": 0.0419, "source": "fallback"})
+    store.export([partial])
+    assert _latest_price_and_count(tmp_path / "stock.db", "AAA") == ((150.0,), 1)
+
+
+def test_a_snapshot_keeps_the_rates_day_and_source(tmp_path):
+    # The rate's day and source reach the valuations through the snapshot. A quote refresh fetches no rate,
+    # so it carries them forward with the rate.
+    store = SQLiteStore(db_path=tmp_path / "stock.db")
+    stock = _company("AAA", revenue=1.0e9, roic=0.12)
+    stock.market_data = {"current_price": 150.0}
+    stock.collected_at = datetime(2026, 10, 20, 9, 0)
+    stock.merge_risk_free_rate({"risk_free_rate": 0.0515, "source": "treasury_gov", "date": "2026-10-19"})
+    store.export([stock])
+    store.upsert_quote("AAA", {"market_data": {"current_price": 151.0}, "valuation": {}, "shareholders": {},
+                               "analyst_estimates": {}}, "2026-10-20T15:00:00")
+    conn = sqlite3.connect(tmp_path / "stock.db")
+    rows = conn.execute("SELECT risk_free_rate, risk_free_rate_date, risk_free_rate_source FROM market_snapshots "
+                        "WHERE ticker = 'AAA' ORDER BY collected_at").fetchall()
+    conn.close()
+    assert rows == [(0.0515, "2026-10-19", "treasury_gov")] * 2
+
+
+def test_a_collection_run_keeps_its_warnings(tmp_path):
+    # The runs table kept only their count, so the reason for an empty record (BUG-044) never reached the web app.
+    stock = StockData(ticker="TSM", cik="0001046179", collected_at=datetime(2026, 10, 20, 9, 30))
+    stock.add_warning("[data-quality/high] No annual financial data extracted.")
+    stock.add_warning("SEC EDGAR: no annual financials for TSM from CIK 0001046179 (TSMC): it reports in IFRS")
+    SQLiteStore(tmp_path / "s.db").export([stock])
+    conn = sqlite3.connect(tmp_path / "s.db")
+    rows = conn.execute("SELECT warning_count, warnings FROM collection_runs").fetchall()
+    conn.close()
+    assert [(count, json.loads(text)) for count, text in rows] == [(2, stock.warnings)]
+

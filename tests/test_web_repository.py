@@ -6,6 +6,7 @@ All assertions use real values from the ``web_db`` fixture (no mocks).
 from __future__ import annotations
 
 import sqlite3
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -741,3 +742,44 @@ def test_reader_survives_threadpool_hopping(web_db):
         t.start()
         t.join()
     assert errors == []
+
+
+_FOLDER_NAMES = ["proj#1", "pct%41", pytest.param("q?x", marks=pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows forbids '?' in names")), "100% sure", "plain"]
+
+
+@pytest.mark.parametrize("folder", _FOLDER_NAMES)
+def test_a_database_under_any_folder_name_opens_read_only(tmp_path, folder):
+    # BUG-080: the Reader's URI wasn't escaped, so a '#' cut `?mode=ro` off with the rest of the path: it opened, and
+    # created, an empty database at "proj" (every page answered 500), and '%41' read as "A".
+    db = tmp_path / folder / "stock.db"
+    db.parent.mkdir()
+    SQLiteStore(db).export([StockData(ticker="KO", company_name="The Coca-Cola Company")])
+    with Reader(db) as r:
+        assert r.get_company("KO")["company_name"] == "The Coca-Cola Company"
+        with pytest.raises(sqlite3.OperationalError):
+            r.conn.execute("INSERT INTO companies (ticker) VALUES ('INJECT')")
+    assert [p.name for p in tmp_path.iterdir()] == [folder]
+
+
+def test_the_app_serves_a_database_under_a_hash_folder(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from src.webapp import create_app
+
+    db = tmp_path / "proj#1" / "stock.db"
+    db.parent.mkdir()
+    SQLiteStore(db).export([StockData(ticker="KO", company_name="The Coca-Cola Company")])
+    response = TestClient(create_app(db_path=db)).get("/api/companies")
+    assert (response.status_code, [c["ticker"] for c in response.json()["items"]]) == (200, ["KO"])
+
+
+def test_a_unc_path_keeps_its_form():
+    # Path.as_uri() would make a UNC path's server a URI authority, which SQLite refuses; only '%', '#' and '?' change.
+    from pathlib import PureWindowsPath
+
+    from src.exporters.sqlite_store import read_only_uri
+
+    assert read_only_uri(PureWindowsPath("//srv/share/q?1/100%/proj#1/stock.db")) == (
+        r"file:\\srv\share\q%3f1\100%25\proj%231\stock.db?mode=ro")
+

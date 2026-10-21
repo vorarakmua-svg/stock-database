@@ -72,6 +72,23 @@ def test_runs_newest_first(client):
     assert rows[0]["collected_at"] > rows[1]["collected_at"]
 
 
+def test_runs_give_their_warnings_as_a_list(tmp_path):
+    # collection_runs keeps each run's warnings as JSON text (BUG-044); the API returns the list, not the text.
+    from datetime import datetime
+
+    from fastapi.testclient import TestClient
+
+    from src.exporters.sqlite_store import SQLiteStore
+    from src.models.stock_data import StockData
+    from src.webapp import create_app
+
+    stock = StockData(ticker="TSM", cik="0001046179", collected_at=datetime(2026, 10, 20))
+    stock.add_warning("SEC EDGAR: no annual financials for TSM from CIK 0001046179 (TSMC): it reports in IFRS")
+    SQLiteStore(tmp_path / "q.db").export([stock])
+    rows = TestClient(create_app(db_path=tmp_path / "q.db")).get("/api/quality/runs?ticker=TSM").json()
+    assert [row["warnings"] for row in rows] == [stock.warnings]
+
+
 # ---------------------------------------------------------------------------
 # /api/quality/coverage
 # ---------------------------------------------------------------------------

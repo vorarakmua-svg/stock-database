@@ -42,9 +42,13 @@ INSTANT = "instant"
 
 # Sign normalization. "as_reported" keeps the filed value; "abs" stores the
 # magnitude so outflow concepts (capex, dividends, buybacks, repayments) are
-# comparable regardless of whether a filer signs them negative.
+# comparable regardless of whether a filer signs them negative. "net" is an
+# outflow net of an inflow (acquisitions, net of the cash acquired), stored as
+# paid: positive pays, negative brings cash in. A filing that signs its gross
+# outflows negative has it turned back (BUG-127).
 SIGN_AS_REPORTED = "as_reported"
 SIGN_ABS = "abs"
+SIGN_NET = "net"
 
 
 @dataclass(frozen=True)
@@ -78,15 +82,18 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         "revenue", "Revenue", INCOME, UNIT_USD, DURATION,
         (
             "Revenues",
+            # A total too: banks, broker-dealers and card issuers present revenue net of interest expense,
+            # of which their contract revenue is a part (AXP's $41.30B of $72.23B for FY2025, BUG-099).
+            "RevenuesNetOfInterestExpense",
             "RevenueFromContractWithCustomerExcludingAssessedTax",
             "RevenueFromContractWithCustomerIncludingAssessedTax",
             "SalesRevenueNet",
             "SalesRevenueGoodsNet",
-            # Banks/broker-dealers present total revenue net of interest expense.
-            "RevenuesNetOfInterestExpense",
         ),
         description="Total net revenue / sales. For banks, derived from net interest "
-                    "income + noninterest income when no single tag is filed.",
+                    "income + noninterest income when no single tag is filed. A figure "
+                    "the year's other figures show isn't its revenue gives way "
+                    "(XBRLParser._revenue_set_aside).",
     ),
     CanonicalField(
         "cost_of_revenue", "Cost of Revenue", INCOME, UNIT_USD, DURATION,
@@ -145,13 +152,15 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
 
     # ---------------- Per share (duration) ----------------
+    # A filer without dilutive securities may tag one figure for both (SCCO FY2011-18,
+    # SPG, O): it fills the basic and the diluted field when the separate tag is absent.
     CanonicalField(
         "eps_basic", "EPS Basic", PER_SHARE, UNIT_USD_PER_SHARE, DURATION,
-        ("EarningsPerShareBasic",),
+        ("EarningsPerShareBasic", "EarningsPerShareBasicAndDiluted"),
     ),
     CanonicalField(
         "eps_diluted", "EPS Diluted", PER_SHARE, UNIT_USD_PER_SHARE, DURATION,
-        ("EarningsPerShareDiluted",),
+        ("EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"),
     ),
     CanonicalField(
         "dividends_per_share", "Dividends Per Share", PER_SHARE, UNIT_USD_PER_SHARE, DURATION,
@@ -167,7 +176,14 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "cash_and_equivalents", "Cash and Equivalents", BALANCE, UNIT_USD, INSTANT,
-        ("CashAndCashEquivalentsAtCarryingValue", "Cash", "CashEquivalentsAtCarryingValue"),
+        ("CashAndCashEquivalentsAtCarryingValue", "Cash", "CashEquivalentsAtCarryingValue",
+         # Last, the total with restricted cash: some balance sheets tag nothing else (GE's,
+         # CVX's and five more FY2025 10-Ks), and without it net debt was their whole debt
+         # (BUG-139). Where a filer tags both, it runs a median 0.3% above the cash line. Read
+         # on balance-sheet dates only (xbrl_parser._BALANCE_SHEET_ONLY).
+         "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"),
+        description="Cash and cash equivalents; where a balance sheet tags only the total with restricted "
+                    "cash, that total.",
     ),
     CanonicalField(
         "short_term_investments", "Short-Term Investments", BALANCE, UNIT_USD, INSTANT,
@@ -205,7 +221,16 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "long_term_debt", "Long-Term Debt", BALANCE, UNIT_USD, INSTANT,
-        ("LongTermDebtNoncurrent", "LongTermDebt"),
+        # The noncurrent figure or the total, as most filers tag it; then the noncurrent tags of
+        # those who file neither (with finance leases, notes, unsecured or convertible debt: VZ,
+        # ORCL, GS, NOW), and last the notes payable in total (O) (BUG-125). A filing's total
+        # gives way to its noncurrent figure where its current debt holds the current maturities
+        # or the total is below it (``xbrl_parser._debt_totals_set_aside``, BUG-141). Not
+        # DebtInstrumentCarryingAmount: often one instrument's, on days with no balance sheet
+        # (SLB's $0.5B note at 2020-12-31).
+        ("LongTermDebtNoncurrent", "LongTermDebt", "LongTermDebtAndCapitalLeaseObligations",
+         "LongTermNotesPayable", "UnsecuredLongTermDebt", "ConvertibleLongTermNotesPayable",
+         "NotesPayable"),
     ),
     CanonicalField(
         "short_term_debt", "Short-Term Debt", BALANCE, UNIT_USD, INSTANT,
@@ -331,13 +356,16 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         "shares_outstanding", "Shares Outstanding", SHARES, UNIT_SHARES, INSTANT,
         ("CommonStockSharesOutstanding", "EntityCommonStockSharesOutstanding"),
     ),
+    # As with EPS, the combined count fills both fields when the separate one is absent.
     CanonicalField(
         "weighted_avg_shares_basic", "Weighted Avg Shares (Basic)", SHARES, UNIT_SHARES, DURATION,
-        ("WeightedAverageNumberOfSharesOutstandingBasic",),
+        ("WeightedAverageNumberOfSharesOutstandingBasic",
+         "WeightedAverageNumberOfShareOutstandingBasicAndDiluted"),
     ),
     CanonicalField(
         "weighted_avg_shares_diluted", "Weighted Avg Shares (Diluted)", SHARES, UNIT_SHARES, DURATION,
-        ("WeightedAverageNumberOfDilutedSharesOutstanding",),
+        ("WeightedAverageNumberOfDilutedSharesOutstanding",
+         "WeightedAverageNumberOfShareOutstandingBasicAndDiluted"),
     ),
 
     # ---------------- Operating long-tail (general) ----------------
@@ -380,7 +408,7 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     CanonicalField(
         "acquisitions", "Acquisitions (net of cash)", CASHFLOW, UNIT_USD, DURATION,
         ("PaymentsToAcquireBusinessesNetOfCashAcquired",),
-        sign=SIGN_ABS, description="Stored as a positive magnitude (cash outflow).",
+        sign=SIGN_NET, description="Stored as paid: negative where the cash acquired exceeds the price.",
     ),
 
     # ---------------- Bank-specific ----------------
@@ -397,7 +425,8 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "noninterest_income", "Noninterest Income", INCOME, UNIT_USD, DURATION,
-        ("NoninterestIncome", "RevenuesNetOfInterestExpense"),
+        # Not the total net of interest expense, which holds the net interest income (BUG-099).
+        ("NoninterestIncome",),
         sectors=(BANK,),
     ),
     CanonicalField(

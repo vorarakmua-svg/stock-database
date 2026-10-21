@@ -13,6 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -20,6 +21,7 @@ from ..config import AppConfig, StorageConfig
 from ..exporters.sqlite_store import SQLiteStore
 from ..fetchers.stock_data_fetcher import StockDataFetcher
 from ..fetchers.yahoo_handler import YahooHandler
+from ..valuation.inputs import _simple_ratio
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,22 @@ def default_quote_fetcher_factory(config: AppConfig) -> YahooHandler:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _split_since_collection(ticker: str, splits: List[Dict[str, Any]]) -> str:
+    """Why a quote after a split the stored valuations don't reflect isn't saved (BUG-093, BUG-102):
+    a share split by its ratio ("a 5-for-4 split"), any other factor of 3:2 or more as the price
+    adjustment Yahoo records for a spin-off or a merger (BUG-106)."""
+    def name(r: float) -> str:
+        if not _simple_ratio(r):
+            return f"a {r:g} price adjustment (a spin-off or merger)"
+        fraction = Fraction(r if r >= 1 else 1.0 / r).limit_denominator(4)
+        new, old = (fraction.numerator, fraction.denominator) if r >= 1 else (fraction.denominator, fraction.numerator)
+        return f"a {new}-for-{old} split"
+
+    seen = ", ".join(f"{name(float(s['ratio']))} on {str(s['date'])[:10]}" for s in splits)
+    return (f"Yahoo shows {seen} that the stored valuations don't reflect, so the quote wasn't saved. "
+            f"Collect {ticker} in full to update them.")
 
 
 def _collected_at_now() -> str:
@@ -305,20 +323,49 @@ class CollectionJobManager:
 
             successful = 0
             with_errors = 0
+            # Each failed ticker's message, so the DES status can say why a refresh failed.
+            errors: Dict[str, str] = {}
+            # Saved after a stock dividend or a spin-off factor the stored valuations aren't on.
+            rebased: List[str] = []
             for ticker in tickers:
                 with self._lock:
                     self._jobs[job_id].current_ticker = ticker
 
                 quote = handler.fetch_quote(ticker)
+                # A split the stored valuations don't reflect: the price would sit
+                # beside them on another basis, which only a full collection brings
+                # over (BUG-093, BUG-102). Any other factor since (a stock dividend, a
+                # spin-off) is stored with the price, and the ticker valued on it (BUG-128).
+                factors = (store.factors_since_collection(ticker, quote.get("splits") or [])
+                           if "error" not in quote else [])
+                new_splits = (store.splits_since_collection(ticker, quote.get("splits") or [])
+                              if factors else [])
                 if "error" in quote:
                     with_errors += 1
+                    errors[ticker] = str(quote["error"])
+                elif new_splits:
+                    with_errors += 1
+                    errors[ticker] = _split_since_collection(ticker, new_splits)
                 else:
                     collected_at = _collected_at_now()
-                    store.upsert_quote(ticker, quote, collected_at)
+                    store.upsert_quote(ticker, quote, collected_at,
+                                       splits=quote.get("splits") if factors else None)
                     successful += 1
+                    if factors:
+                        rebased.append(ticker)
 
                 with self._lock:
                     self._jobs[job_id].completed += 1
+
+            # A ticker priced after a stock dividend or a spin-off factor is valued on it,
+            # as a collection would (BUG-128). Never-fail, as there: the quotes have
+            # landed. Lazy import so tests can monkeypatch the engine.
+            if rebased:
+                try:
+                    from ..valuation import engine as valuation_engine
+                    valuation_engine.compute_and_store(self.db_path, tickers=rebased, logger=logger)
+                except Exception as exc:  # noqa: BLE001 — job must still succeed
+                    logger.warning(f"Valuation after a quote refresh failed: {exc}")
 
             with self._lock:
                 done_job = self._jobs[job_id]
@@ -330,6 +377,7 @@ class CollectionJobManager:
                     "total": len(tickers),
                     "successful": successful,
                     "with_errors": with_errors,
+                    "errors": errors,
                 }
 
         except Exception as exc:  # noqa: BLE001 — worker must not propagate

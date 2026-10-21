@@ -54,3 +54,11 @@ def test_keeps_most_recent_fact_per_tag():
     ])
     rec = next(r for r in detect_unmapped(facts) if r["tag"] == "BigTagZZZ")
     assert rec["value"] == 3_000_000_000  # latest period kept
+
+
+def test_a_foreign_issuers_annual_report_is_scanned_too():
+    # ARM's 20-F facts never reached the worklist: only 10-K and 10-Q facts were read.
+    facts = _facts(NewRevenueConceptZZZ=[usd(5_000_000_000, end=f"{_YEAR}-03-31", form="20-F",
+                                             filed=f"{_YEAR}-05-28")])
+    assert [r["tag"] for r in detect_unmapped(facts)] == ["NewRevenueConceptZZZ"]
+

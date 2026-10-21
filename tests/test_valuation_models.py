@@ -201,6 +201,150 @@ def test_value_ddm_cagr_uses_calendar_years():
     assert res.assumptions["hist_cagr"] == pytest.approx(0.05)
 
 
+def test_value_ddm_cagr_uses_only_the_last_10_years():
+    # Spec: dividend growth uses a <= 10-year CAGR. 12%/yr growth until 2013, 3%/yr since: as of
+    # mid-2026 the window is 2016-2025, so growth is 3%, not a blend dominated by decades-old growth.
+    divs = []
+    total = 1.0
+    for year in range(1994, 2026):
+        if year > 1994:
+            total *= 1.12 if year <= 2013 else 1.03
+        divs += [(f"{year}-{month:02d}-15", total / 4) for month in (3, 6, 9, 12)]
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 7, 1)))
+    assert res.assumptions["cagr_years"] == 9
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.03)
+
+
+def test_value_ddm_cagr_starts_at_the_first_full_year_of_payments():
+    # MU restarted its dividend late in 2021 (2 payments), then paid 4 a year; measuring from that
+    # short year reported 23%/yr on a flat dividend. Here 2019 has one payment, then 10%/yr.
+    divs = [("2019-11-15", 0.10)] + _quarterly_dividends(2020, 2025, 2.0, 0.10)
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    assert res.assumptions["cagr_years"] == 5
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.10)
+
+
+def test_value_ddm_cagr_skips_every_short_year_at_the_start():
+    # A partial first year, a year without dividends, then a partial restart: growth starts at the first
+    # full year, not at the restart (code review 1: 20.6% on a synthetic 10%/yr series).
+    divs = [("2016-11-15", 0.10), ("2018-11-15", 0.10)] + _quarterly_dividends(2019, 2025, 2.0, 0.10)
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    assert res.assumptions["cagr_years"] == 6
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.10)
+
+
+def test_value_ddm_scales_a_last_year_with_an_extra_payment_to_the_usual_count():
+    # Realty Income pays monthly. January 2026's payment went ex-dividend on 2025-12-31, so 2025 holds
+    # 13 payments, and growth read 4.58% instead of 3.66%. That year counts as its usual 12.
+    rate = {y: 0.25 * 1.03 ** (y - 2016) for y in range(2016, 2027)}
+    divs = [(f"{y}-{m:02d}-01", rate[y]) for y in range(2016, 2026) for m in range(1, 13)]
+    divs += [("2025-12-31", rate[2025])] + [(f"2026-{m:02d}-01", rate[2026]) for m in range(2, 8)]
+    res = value_ddm(_inputs(dividends=sorted(divs), as_of=date(2026, 8, 4)))
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.03)
+
+
+def _cadence_dividends(counts_by_year, growth=0.05):
+    """Yearly totals growing by *growth*, paid in counts_by_year[y] equal installments, plus 2026's
+    payments through July (the TTM window as of 2026-08-04)."""
+    divs = []
+    for year, n in sorted(counts_by_year.items()):
+        total = 2.0 * (1 + growth) ** (year - 2016)
+        paid = max(1, n * 7 // 12) if year == 2026 else n
+        divs += [(f"{year}-{1 + 12 * k // n:02d}-15", total / n) for k in range(paid)]
+    return divs
+
+
+@pytest.mark.parametrize("counts", [
+    {y: 4 if y <= 2020 else 12 for y in range(2016, 2027)},  # quarterly -> monthly
+    {y: 2 if y <= 2020 else 4 for y in range(2016, 2027)},   # semiannual -> quarterly
+    {y: 1 if y <= 2022 else 4 for y in range(2016, 2027)},   # annual -> quarterly
+    {y: 1 if y <= 2018 else 4 for y in range(2016, 2027)},   # PGR: annual years, then quarterly
+    {y: 4 if y <= 2016 else 12 for y in range(2015, 2027)},  # the window opens on the last quarterly year
+    {y: 1 if y <= 2024 else 2 for y in range(2016, 2027)},   # annual -> semiannual in the last full year
+    {y: 1 if y <= 2023 else 2 for y in range(2016, 2027)},   # ... in the last two full years (review 4)
+    {y: 2 if y <= 2017 else 1 for y in range(2016, 2027)},   # semiannual -> annual after two years
+    {y: 4 if y <= 2017 else 3 for y in range(2016, 2027)},   # quarterly -> three a year
+])
+def test_value_ddm_growth_survives_a_payment_frequency_change(counts):
+    # Paying the same yearly amount more often makes neither a partial first year nor a long last
+    # one; the last full year used to be scaled down (or the early years dropped), and 5% read as 0%.
+    res = value_ddm(_inputs(dividends=_cadence_dividends(counts), as_of=date(2026, 8, 4)))
+    assert res.assumptions["cagr_years"] == 9
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.05)
+
+
+def test_value_ddm_skips_a_restart_year_with_as_many_payments_as_the_suspension_year():
+    # A flat quarterly dividend suspended after June 2015 and restarted in September 2016: both years hold
+    # 2 payments, so 2016 passed as a lower-frequency year and growth read 8%/yr on a flat dividend. A lower
+    # frequency pays more each time; a restart pays the same.
+    def quarterly(year, months):
+        return [(f"{year}-{m:02d}-15", 0.25) for m in months]
+
+    divs = quarterly(2014, (3, 6, 9, 12)) + quarterly(2015, (3, 6)) + quarterly(2016, (9, 12))
+    for year in range(2017, 2026):
+        divs += quarterly(year, (3, 6, 9, 12))
+    divs += quarterly(2026, (3, 6))
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    assert res.assumptions["cagr_years"] == 8
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.0)
+
+
+def test_value_ddm_skips_a_first_year_that_opens_the_record_with_one_larger_payment():
+    # HWM's record starts in November 2016 with one payment 1.5x its later quarterly ones (the dividend was
+    # cut after a separation): nothing paid the year before, so it is a partial year, not an annual schedule.
+    divs = [("2016-11-15", 1.0)] + _quarterly_dividends(2017, 2025, 2.0, 0.10)
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    assert res.assumptions["cagr_years"] == 8
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.10)
+
+
+def test_value_ddm_counts_a_first_year_with_a_slipped_payment_at_its_usual_count():
+    # BMY's 2020 holds 5 ex-dates: one payment slipped across the year boundary. As the first year
+    # of the window it counted in full and understated growth; it counts as its usual 4.
+    divs = sorted(_quarterly_dividends(2016, 2025, 2.0, 0.10) + [("2016-01-04", 0.5)])
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    assert res.assumptions["cagr_years"] == 9
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.10)
+
+
+def test_value_ddm_leaves_a_special_in_the_last_year_as_it_is():
+    # A long last year is scaled only for one extra regular-size payment (O's slipped ex-date). A
+    # special dividend stays as it is: whether specials count is the user's question (Q3).
+    divs = sorted(_quarterly_dividends(2016, 2025, 2.0, 0.10) + [("2025-07-01", 7.0)])
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    total_2025 = 2.0 * 1.1 ** 9 + 7.0
+    assert res.assumptions["hist_cagr"] == pytest.approx((total_2025 / 2.0) ** (1 / 9) - 1)
+
+
+def test_value_ddm_keeps_a_short_last_year_as_it_is():
+    # Two payments in the last full year can be a real cut, so that year isn't scaled up.
+    divs = [d for d in _quarterly_dividends(2016, 2025, 2.0, 0.10) if d[0] < "2025-07-01"]
+    divs += [("2026-03-15", 0.5), ("2026-06-15", 0.5)]
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    half_of_2025 = 2.0 * 1.1 ** 9 / 2
+    assert res.assumptions["hist_cagr"] == pytest.approx((half_of_2025 / 2.0) ** (1 / 9) - 1)
+
+
+def test_value_ddm_keeps_a_full_first_year_when_a_later_year_has_a_special():
+    # COST: 2017 adds a $7 special to 4 regular payments. A first year is partial against the
+    # window's usual cadence, not against a neighbour that a special pushed to 5 payments.
+    divs = sorted(_quarterly_dividends(2016, 2025, 2.0, 0.10) + [("2017-07-01", 7.0)])
+    res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
+    assert res.assumptions["cagr_years"] == 9
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.10)
+
+
+@pytest.mark.parametrize("first_year, hist_cagr", [(2021, None), (2020, 0.05)])
+def test_value_ddm_growth_needs_4_full_years_of_dividends(first_year, hist_cagr):
+    # Spec: the historical CAGR "requires >= 4 FYs". DDM stays applicable from 3 calendar years,
+    # but with fewer full years no CAGR is measured (TMUS's 2 full years read 29%/yr from a
+    # single year's change).
+    res = value_ddm(_inputs(dividends=_quarterly_dividends(first_year, 2023, 1.00, 0.05)))
+    assert res.applicable is True
+    assert res.assumptions["hist_cagr"] == (None if hist_cagr is None else pytest.approx(hist_cagr))
+    assert res.assumptions["growth_source"] == ("none" if hist_cagr is None else "hist_only")
+
+
 def test_value_ddm_na_too_short():
     divs = _quarterly_dividends(2022, 2023, 1.0, 0.0)
     res = value_ddm(_inputs(sector_class="bank", dividends=divs))
@@ -490,3 +634,23 @@ def test_owner_earnings_volatility_caps_a_swing_to_a_loss_at_100pct():
     evidence, which defeats the point of showing it."""
     vol = owner_earnings_volatility([10.0, -24.0, 10.0, 10.0])
     assert vol["worst_drop"] == 1.0
+
+
+@pytest.mark.parametrize("source, flagged", [("treasury_gov", False), ("estimate", True)])
+def test_rate_using_models_record_the_rates_day_and_source(source, flagged):
+    # Spec: "the assumption JSON stores the rate and its as-of date so staleness is visible in the UI" (the
+    # VAL tab lists every assumption); the static estimate, which has no day, is flagged.
+    rate = dict(risk_free_rate=0.0515, risk_free_rate_date=None if flagged else "2026-10-19",
+                risk_free_rate_source=source)
+    results = [
+        value_dcf(_inputs(fy_records=[_fy(fy, fcf=100.0 * 1.05 ** i) for i, fy in enumerate(range(2019, 2024))],
+                          **rate)),
+        value_ddm(_inputs(dividends=_quarterly_dividends(2019, 2023, 1.00, 0.05), **rate)),
+        value_owner_earnings(_inputs(fy_records=[_oe_fy(fy) for fy in range(2016, 2026)], **rate)),
+    ]
+    for res in results:
+        assert res.applicable, res.model
+        assert (res.assumptions["risk_free_rate_as_of"], res.assumptions["risk_free_rate_source"]) == (
+            rate["risk_free_rate_date"], source), res.model
+        assert res.assumptions.get("rf_estimate", False) is flagged, res.model
+

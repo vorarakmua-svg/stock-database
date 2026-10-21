@@ -1,12 +1,35 @@
 """Shared pytest fixtures.
 
 No fixture here performs network I/O — all SEC/Yahoo/FRED data is synthetic so the
-test suite is fast and deterministic.
+test suite is fast and deterministic. ``no_network`` holds every test to that.
 """
+
+import socket
 
 import pytest
 
 from src.models.stock_data import StockData
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """Refuse any connection off this machine, and fail the test that tried one: a
+    fetcher test once made a live SEC request that the code under test swallowed
+    (BUG-073). Yields the refused addresses."""
+    refused = []
+    connect = socket.socket.connect
+
+    def guarded(sock, address):
+        host = address[0] if isinstance(address, tuple) else address
+        if sock.family in (socket.AF_INET, socket.AF_INET6) and host not in ("127.0.0.1", "::1", "localhost"):
+            refused.append(address)
+            raise OSError(f"the test suite doesn't use the network: refused {address}")
+        return connect(sock, address)
+
+    monkeypatch.setattr(socket.socket, "connect", guarded)
+    yield refused
+    if refused:
+        pytest.fail(f"the test tried to connect to {refused}")
 
 
 def usd(val, start=None, end=None, fy=None, fp="FY", form="10-K", filed=None, frame=None):

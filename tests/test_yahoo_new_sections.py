@@ -10,6 +10,7 @@ import pytest
 
 from src.fetchers import yahoo_handler as yh_module
 from src.fetchers.yahoo_handler import YahooHandler
+from src.models.stock_data import StockData
 
 
 class _FakeTicker:
@@ -28,7 +29,7 @@ class _FakeTicker:
             "preMarketPrice": 99.25,
         }
 
-    def history(self, period="1y", interval="1d"):
+    def history(self, period="1y", interval="1d", **kwargs):
         if period == "max" and interval == "1d":
             dates = pd.date_range("2024-01-01", periods=30, freq="D")
             return pd.DataFrame(
@@ -136,7 +137,7 @@ class _FakeTickerBadEarnings(_FakeTicker):
 class _FakeTickerTzAware(_FakeTicker):
     """Fake Ticker returning timezone-aware DatetimeIndex (matching real yfinance)."""
 
-    def history(self, period="1y", interval="1d"):
+    def history(self, period="1y", interval="1d", **kwargs):
         if period == "max" and interval == "1d":
             dates = pd.date_range("2024-01-01", periods=3, freq="D", tz="America/New_York")
             return pd.DataFrame(
@@ -295,3 +296,95 @@ def test_fetch_all_dividend_yield_none_stays_none(monkeypatch):
     assert data["valuation"]["dividend_yield"] is None
     assert data["dividend_history"]["dividend_yield"] is None
     assert data["dividend_history"]["five_year_avg_dividend_yield"] is None
+
+
+class _FakeTickerAdjusting(_FakeTicker):
+    """Like yfinance 1.0: history() adjusts every price for later dividends unless auto_adjust=False is asked for."""
+
+    def history(self, period="1y", interval="1d", auto_adjust=True, **kwargs):
+        if period != "max":
+            return pd.DataFrame()
+        market = [59.0, 59.1, 59.21]
+        later_dividends = 0.8706  # Yahoo's factor for the dividends paid since
+        frame = {"Open": market, "High": market, "Low": market, "Close": market, "Volume": [1.0e7] * 3}
+        if auto_adjust:
+            frame = {k: v if k == "Volume" else [p * later_dividends for p in v] for k, v in frame.items()}
+        else:
+            frame["Adj Close"] = [p * later_dividends for p in market]
+        return pd.DataFrame(frame, index=pd.date_range("2021-12-29", periods=3, freq="D"))
+
+
+def test_price_bars_are_market_closes_not_dividend_adjusted(monkeypatch):
+    # BUG-075: history() adjusts for dividends by default, so KO's 2021-12-31 close was stored as 51.55, not the 59.21
+    # it closed at, and the multiples band read P/Es lowered by every dividend paid since.
+    _patch_ticker(monkeypatch, _FakeTickerAdjusting)
+    bars = YahooHandler(rate_limit_delay=0.0).fetch_all("KO")["price_bars"]
+    assert [b["close"] for b in bars] == [59.0, 59.1, 59.21]
+
+
+class _FakeTickerBarsFail(_FakeTicker):
+    """Every request works but the price history's (auto_adjust=False)."""
+
+    def history(self, period="1y", interval="1d", auto_adjust=True, **kwargs):
+        if auto_adjust is False:
+            raise RuntimeError("chart request failed")
+        return super().history(period=period, interval=interval, **kwargs)
+
+
+def test_a_failed_price_history_request_is_a_run_warning(monkeypatch):
+    # BUG-084 (code review 8): a failed bar request returned no bars and was only logged, so a run could store newer
+    # dividends beside the old bars with nothing to say they hadn't been refreshed.
+    _patch_ticker(monkeypatch, _FakeTickerBarsFail)
+    data = YahooHandler(rate_limit_delay=0.0).fetch_all("AAA")
+    assert data["price_bars"] == []
+    stock = StockData(ticker="AAA")
+    stock.merge_yahoo_data(data)
+    assert [w for w in stock.warnings if "price history" in w] == [
+        "Yahoo Finance: price history unavailable (chart request failed); the stored daily bars weren't refreshed"]
+
+
+class _FakeTickerQuoteFails(_FakeTicker):
+    """yfinance 1.0 when quoteSummary and v7/quote both fail: info raises, the chart (history, dividends, splits)
+    answers."""
+
+    @property
+    def info(self):
+        raise TypeError("argument of type 'NoneType' is not iterable")
+
+    @property
+    def dividends(self):
+        return pd.Series([0.5, 0.05], index=pd.to_datetime(["2024-05-15", "2024-08-15"]))
+
+
+def test_a_failed_quote_still_brings_the_dividends_with_the_splits(monkeypatch):
+    # BUG-094 (code review 9): the dividend history read `info` before `dividends`, so a failed quote kept the stored
+    # dividends from before a split the run stored from the chart, and DDM took them back by it: ten times over.
+    _patch_ticker(monkeypatch, _FakeTickerQuoteFails)
+    data = YahooHandler(rate_limit_delay=0.0).fetch_all("AAA")
+    assert [p["date"] for p in data["dividend_history"]["dividend_payments"]] == ["2024-05-15", "2024-08-15"]
+    assert data["splits"] == [{"date": "2024-06-10", "ratio": 2.0}]
+    stock = StockData(ticker="AAA")
+    stock.merge_yahoo_data(data)
+    assert "Yahoo Finance: quote unavailable; the stored price wasn't refreshed" in stock.warnings
+
+
+class _FakeTickerDividendsFail(_FakeTicker):
+    """The chart answers the split request but not the dividend one."""
+
+    @property
+    def dividends(self):
+        raise RuntimeError("chart request failed")
+
+
+def test_a_run_whose_dividends_fail_keeps_its_splits(monkeypatch):
+    # BUG-103 (code review 10): BUG-094's fix dropped the splits whenever the dividend history failed, which helped only
+    # when the quote failed too: with the quote and bars on the new basis, nothing recorded the split, and Graham and
+    # Lynch read ten times their value. The stored dividends keep the day Yahoo served them (`served_on`), which takes
+    # them to the price's basis instead.
+    _patch_ticker(monkeypatch, _FakeTickerDividendsFail)
+    data = YahooHandler(rate_limit_delay=0.0).fetch_all("AAA")
+    assert data["splits"] == [{"date": "2024-06-10", "ratio": 2.0}]
+    stock = StockData(ticker="AAA")
+    stock.merge_yahoo_data(data)
+    assert [w for w in stock.warnings if "dividend history" in w] == [
+        "Yahoo Finance: dividend history unavailable (chart request failed); the stored dividends weren't refreshed"]

@@ -131,7 +131,7 @@ METRIC_KINDS: Dict[str, str] = {
     "peg_ratio": "mult",
     "price_to_sales": "mult",
     "price_to_book": "mult",
-    "debt_to_equity": "mult",
+    "debt_to_equity": "percent",  # Yahoo's debtToEquity, a percent (BUG-135)
     "current_ratio": "mult",
     # market/valuation — raw
     "beta": "raw",

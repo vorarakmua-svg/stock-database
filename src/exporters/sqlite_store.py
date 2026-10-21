@@ -18,14 +18,17 @@ All writes are idempotent upserts on the natural keys.
 import json
 import logging
 import sqlite3
+from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
 
 if TYPE_CHECKING:  # avoid a runtime exporters -> valuation dependency
     from ..valuation.models import ValuationResult
 
 from ..mappings.canonical import CANONICAL_FIELDS
 from ..models.stock_data import StockData
+from ..parsers.calculated_metrics import CalculatedMetrics
+from ..valuation.inputs import SPLIT_JUMP_THRESHOLD, _simple_ratio
 
 # Canonical line-item columns shared by the annual/quarterly financial tables.
 _CANONICAL_COLUMNS = [f.key for f in CANONICAL_FIELDS]
@@ -60,7 +63,7 @@ _SNAPSHOT_COLUMNS = [
 ]
 
 # Snapshot columns that are text, not numeric (kept separate so _cols_ddl can type them).
-_SNAPSHOT_TEXT_COLUMNS = ["ex_dividend_date"]
+_SNAPSHOT_TEXT_COLUMNS = ["ex_dividend_date", "risk_free_rate_date", "risk_free_rate_source"]
 
 # One row per collection: analyst price targets / recommendations (from analyst_estimates).
 _ANALYST_COLUMNS = [
@@ -74,8 +77,51 @@ _ANALYST_COLUMNS = [
 # (see export_benchmark_bars), which writes into this same table.
 _PRICE_BAR_COLUMNS = ["open", "high", "low", "close", "volume"]
 
+#: The snapshot's price-dependent metrics a full collection computes itself (``calculated_metrics``).
+_EV_FAMILY = ("enterprise_value", "ev_to_ebitda", "ev_to_fcf", "fcf_yield")
+
 # Earnings-surprise history, one row per (ticker, quarter).
 _EARNINGS_HISTORY_COLUMNS = ["eps_estimate", "eps_actual", "surprise_pct"]
+
+
+def read_only_uri(path: Union[str, Path]) -> str:
+    """A ``mode=ro`` SQLite URI for the database at *path*.
+
+    SQLite decodes ``%HH`` in a URI's path, and a ``?`` or ``#`` ends the path, so
+    those three are escaped: unescaped, a '#' in a folder name cut ``mode=ro`` off
+    with the rest of the path, and SQLite opened, read-write, a database it created
+    at the truncated path (BUG-080). The rest of the path is left as it is, so a
+    UNC path still opens: ``Path.as_uri`` would make its server a URI authority,
+    which SQLite refuses.
+    """
+    text = str(path)
+    for char, escape in (("%", "%25"), ("#", "%23"), ("?", "%3f")):
+        text = text.replace(char, escape)
+    return f"file:{text}?mode=ro"
+
+
+def _moves_per_share(ratio: float) -> bool:
+    """A factor of Yahoo's split history that moves the stored per-share figures: a share
+    split (a simple ratio, 5:4 or 1:10 too) or any factor of 3:2 or more (ABT's 2.084 for
+    AbbVie), as the valuation reads them (``inputs._apply_later_splits``)."""
+    return ratio > 0 and ratio != 1.0 and (_simple_ratio(ratio) or ratio >= SPLIT_JUMP_THRESHOLD
+                                           or ratio <= 1.0 / SPLIT_JUMP_THRESHOLD)
+
+
+def _served_day(stock: StockData, collected_at: str) -> str:
+    """The day on Yahoo's calendar a run's dividends were served: the run's last daily bar or
+    the latest split Yahoo lists, whichever is later, as a payment stored before
+    ``served_on`` is dated. The collector's own date runs ahead of New York's east of it: a
+    run before the open on a split's day, which Yahoo hadn't applied yet, dated its pre-split
+    payments on the split's day, so they read as split, and DDM read ten times its value after
+    a later run whose dividend request failed (BUG-117). A run with neither takes the day
+    before its own: Yahoo listed no split, and one it hasn't applied is dated on New York's
+    day or later, never before the collector's day less one."""
+    days = [str(rec["date"])[:10] for rec in list(stock.price_bars or []) + list(stock.splits or [])
+            if rec.get("date")]
+    if days:
+        return max(days)
+    return (date.fromisoformat(collected_at[:10]) - timedelta(days=1)).isoformat()
 
 
 def _cols_ddl(columns: Sequence[str], col_type: str = "REAL") -> str:
@@ -201,7 +247,7 @@ class SQLiteStore:
             );
 
             CREATE TABLE IF NOT EXISTS dividend_events (
-                ticker TEXT NOT NULL, date TEXT NOT NULL, amount REAL,
+                ticker TEXT NOT NULL, date TEXT NOT NULL, amount REAL, served_on TEXT,
                 PRIMARY KEY (ticker, date)
             );
 
@@ -227,6 +273,7 @@ class SQLiteStore:
             CREATE TABLE IF NOT EXISTS price_bars (
                 ticker TEXT NOT NULL, date TEXT NOT NULL,
                 {_cols_ddl(_PRICE_BAR_COLUMNS)},
+                dividend_adjusted INTEGER,
                 PRIMARY KEY (ticker, date)
             );
 
@@ -248,6 +295,7 @@ class SQLiteStore:
                 warning_count INTEGER,
                 error_count INTEGER,
                 quality_score INTEGER,
+                warnings TEXT,
                 PRIMARY KEY (ticker, collected_at)
             );
 
@@ -330,20 +378,67 @@ class SQLiteStore:
             "metrics_annual": {c: "REAL" for c in _METRIC_COLUMNS},
             "market_snapshots": {**{c: "REAL" for c in _SNAPSHOT_COLUMNS},
                                  **{c: "TEXT" for c in _SNAPSHOT_TEXT_COLUMNS}},
+            "collection_runs": {"warnings": "TEXT"},
         }
         for table, columns in expected.items():
             self._ensure_columns(conn, table, columns)
+        # Bars stored before the fetch asked for market prices are Yahoo's
+        # dividend-adjusted ones (yfinance's default; BUG-075). Flag them once,
+        # as the column arrives, so readers rebuild their market closes: in one
+        # transaction, committed before the run writes anything, since an ALTER
+        # outside it commits at once and a run that then failed kept the column
+        # and lost the flags for good (BUG-083).
+        bar_columns = {row[1] for row in conn.execute("PRAGMA table_info(price_bars)")}
+        if bar_columns and "dividend_adjusted" not in bar_columns:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                # Another process may have migrated while this one waited for the lock.
+                if "dividend_adjusted" not in {row[1] for row in conn.execute("PRAGMA table_info(price_bars)")}:
+                    conn.execute("ALTER TABLE price_bars ADD COLUMN dividend_adjusted INTEGER")
+                    conn.execute("UPDATE price_bars SET dividend_adjusted = 1")
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
+        # A payment's amount is Yahoo's, split-adjusted as of the day it served it, which
+        # each row now keeps (BUG-103). Until then a run stored no split without the
+        # dividends from the same chart request, so a payment stored before the column
+        # is on the basis of everything its ticker's series show: dated by its last bar
+        # or its latest split, whichever is later, the rule it was read by. As the flags:
+        # in one transaction, committed before the run writes anything (BUG-083).
+        dividend_columns = {row[1] for row in conn.execute("PRAGMA table_info(dividend_events)")}
+        if dividend_columns and "served_on" not in dividend_columns:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                if "served_on" not in {row[1] for row in conn.execute("PRAGMA table_info(dividend_events)")}:
+                    conn.execute("ALTER TABLE dividend_events ADD COLUMN served_on TEXT")
+                    conn.execute(
+                        "UPDATE dividend_events SET served_on = (SELECT max(day) FROM ("
+                        "SELECT substr(max(date), 1, 10) AS day FROM price_bars WHERE ticker = dividend_events.ticker "
+                        "UNION ALL SELECT substr(max(date), 1, 10) FROM split_events "
+                        "WHERE ticker = dividend_events.ticker))")
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
 
     # ---- upsert helper ----------------------------------------------------
 
     @staticmethod
     def _upsert(conn: sqlite3.Connection, table: str, keys: Sequence[str],
-                row: Dict[str, Any]) -> None:
-        """Insert or update ``row`` in ``table`` keyed on ``keys``."""
+                row: Dict[str, Any], keep_existing: bool = False) -> None:
+        """Insert or update ``row`` in ``table`` keyed on ``keys``.
+
+        With ``keep_existing``, a NULL in ``row`` leaves the stored value as it is: a
+        run that didn't get a field (a failed fetch) mustn't erase it.
+        """
         columns = list(row.keys())
         placeholders = ", ".join("?" for _ in columns)
         col_list = ", ".join(f'"{c}"' for c in columns)
-        updates = ", ".join(f'"{c}"=excluded."{c}"' for c in columns if c not in keys)
+        updates = ", ".join(
+            f'"{c}"=COALESCE(excluded."{c}", "{c}")' if keep_existing else f'"{c}"=excluded."{c}"'
+            for c in columns if c not in keys
+        )
         conflict = ", ".join(f'"{k}"' for k in keys)
         sql = (
             f'INSERT INTO {table} ({col_list}) VALUES ({placeholders}) '
@@ -418,7 +513,7 @@ class SQLiteStore:
             "hq_city": info.get("hq_city") or info.get("city"),
             "hq_state": info.get("hq_state") or info.get("state"),
             "updated_at": collected_at,
-        })
+        }, keep_existing=True)
 
         # financials_annual + metrics_annual
         historical = (stock.calculated_metrics or {}).get("historical", {})
@@ -512,8 +607,12 @@ class SQLiteStore:
         snapshot["ev_to_fcf"] = cm.get("ev_to_fcf")
         snapshot["fcf_yield"] = cm.get("fcf_yield")
         snapshot["risk_free_rate"] = rf.get("risk_free_rate")
-        # Only record a snapshot if we have any market data.
-        if any(snapshot.get(c) is not None for c in _SNAPSHOT_COLUMNS + _SNAPSHOT_TEXT_COLUMNS):
+        snapshot["risk_free_rate_date"] = rf.get("date")
+        snapshot["risk_free_rate_source"] = rf.get("source")
+        # Only record a snapshot when the run got a price: the latest snapshot is where the
+        # price, verdict and upside come from. A Yahoo failure still gets a risk-free rate,
+        # and the price history (the moving averages) can work while the quote fails.
+        if snapshot.get("current_price") is not None:
             self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)
 
         # collection_runs
@@ -524,6 +623,8 @@ class SQLiteStore:
             "warning_count": len(stock.warnings),
             "error_count": len(stock.errors),
             "quality_score": quality_score,
+            # The text too: the web app shows why a record came back empty.
+            "warnings": json.dumps(stock.warnings),
         })
 
         # unmapped_facts (tags not yet in the canonical registry; tag is a row value)
@@ -551,8 +652,9 @@ class SQLiteStore:
         # analyst_snapshots (one row per collection)
         self._write_analyst_snapshot(conn, stock.ticker, collected_at, stock.analyst_estimates or {})
 
-        # dividend_events (upsert all known payments)
-        self._write_dividend_events(conn, stock.ticker, stock.dividend_history or {})
+        # dividend_events (upsert all known payments, with the day Yahoo served them)
+        self._write_dividend_events(conn, stock.ticker, stock.dividend_history or {},
+                                    _served_day(stock, collected_at))
 
         # price_bars / earnings_history / split_events (upsert all known records)
         self._write_price_bars(conn, stock.ticker, stock.price_bars or [])
@@ -664,8 +766,11 @@ class SQLiteStore:
             self._upsert(conn, "analyst_snapshots", ["ticker", "collected_at"], row)
 
     def _write_dividend_events(self, conn: sqlite3.Connection, ticker: str,
-                                dividend_history: Dict[str, Any]) -> None:
-        """Upsert every known dividend payment (append-only in practice; history rarely changes)."""
+                                dividend_history: Dict[str, Any], served_on: str) -> None:
+        """Upsert every known dividend payment (append-only in practice; history rarely changes),
+        each with *served_on*, the run's day on Yahoo's calendar (``_served_day``): Yahoo
+        split-adjusts a payment for every split up to the day it serves it (BUG-103). A run
+        whose dividend request failed writes none, so the stored ones keep their day."""
         for rec in dividend_history.get("dividend_payments") or []:
             date = rec.get("date")
             if not date:
@@ -674,6 +779,7 @@ class SQLiteStore:
                 "ticker": ticker,
                 "date": date,
                 "amount": rec.get("amount"),
+                "served_on": served_on,
             })
 
     def _write_price_bars(self, conn: sqlite3.Connection, ticker: str,
@@ -686,6 +792,7 @@ class SQLiteStore:
                 continue
             row = {"ticker": ticker, "date": date}
             row.update({c: bar.get(c) for c in _PRICE_BAR_COLUMNS})
+            row["dividend_adjusted"] = None  # market prices (see _migrate)
             self._upsert(conn, "price_bars", ["ticker", "date"], row)
 
     def _write_earnings_history(self, conn: sqlite3.Connection, ticker: str,
@@ -712,9 +819,75 @@ class SQLiteStore:
                 "ratio": rec.get("ratio"),
             })
 
-    def upsert_quote(self, ticker: str, quote: Dict[str, Any], collected_at: str) -> None:
+    def splits_since_collection(self, ticker: str, splits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Of the factors since the last collection (``factors_since_collection``), those
+        a refresh can't put right: a share split (a simple ratio) or a factor of 3:2 or
+        more moves the stored per-share figures, which only a full collection restates
+        (BUG-093, BUG-106). Yahoo's split history also holds stock dividends (SCCO's
+        quarterly 1.01) and spin-off price factors (HON's 0.9535): a saved refresh
+        stores them, and the quote job values the ticker on them (BUG-128).
+        """
+        return [s for s in self.factors_since_collection(ticker, splits) if _moves_per_share(float(s["ratio"]))]
+
+    def factors_since_collection(self, ticker: str, splits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Of *splits* (Yahoo's ``{date, ratio}`` history for *ticker*), those the
+        stored valuations aren't on the basis of, so a quote after them would sit
+        beside them on another (BUG-093).
+
+        The valuations are compared with the latest snapshot's price, as the engine
+        reads it (``inputs.load_inputs``' ``priced_on``), so a split dated after that
+        price's day counts even when stored: a later collection whose quote failed
+        stores the split but keeps the older price (BUG-102). A split missing from
+        ``split_events`` counts from the price's day, or from the ticker's
+        last collection with Yahoo if that is earlier (Yahoo can list a split days
+        after a refresh priced it): a split on either day may have come after it.
+        Every factor counts but 1.0: a stock dividend's or a spin-off's rebases
+        Yahoo's prices and dividends, which the DDM and the multiples band are
+        built on, like a split of its size (BUG-128).
+        """
+        candidates = [s for s in splits if s.get("date") and s.get("ratio") and float(s["ratio"]) > 0
+                      and float(s["ratio"]) != 1.0]
+        if not candidates:
+            return []
+        try:
+            conn = sqlite3.connect(read_only_uri(self.db_path), uri=True)
+        except sqlite3.Error:
+            return []  # nothing stored yet
+        try:
+            known = {str(d)[:10] for (d,) in conn.execute(
+                "SELECT date FROM split_events WHERE ticker = ?", (ticker,))}
+            snap = conn.execute("SELECT collected_at, current_price FROM market_snapshots WHERE ticker = ? "
+                                "ORDER BY collected_at DESC LIMIT 1", (ticker,)).fetchone()
+            priced_on = str(snap[0])[:10] if snap and snap[0] and snap[1] is not None else None
+            since = None
+            # The last collection with Yahoo: its run row, else (no such row) its
+            # latest price bar, which only Yahoo gives.
+            for sql in ("SELECT max(collected_at) FROM collection_runs WHERE ticker = ? "
+                        "AND data_sources LIKE '%yahoo%'",
+                        "SELECT max(date) FROM price_bars WHERE ticker = ?"):
+                row = conn.execute(sql, (ticker,)).fetchone()
+                if row and row[0]:
+                    since = str(row[0])[:10]
+                    break
+        except sqlite3.Error:
+            return []
+        finally:
+            conn.close()
+        starts = [day for day in (priced_on, since) if day]
+        if not starts:
+            return []
+        return [s for s in candidates
+                if (priced_on and str(s["date"])[:10] > priced_on)
+                or (str(s["date"])[:10] not in known and str(s["date"])[:10] >= min(starts))]
+
+    def upsert_quote(self, ticker: str, quote: Dict[str, Any], collected_at: str,
+                     splits: Optional[List[Dict[str, Any]]] = None) -> None:
         """Write ONE ``market_snapshots`` row + ONE ``analyst_snapshots`` row from
-        a quote-only fetch (``YahooHandler.fetch_quote``) — nothing else.
+        a quote-only fetch (``YahooHandler.fetch_quote``) — nothing else, but for
+        *splits*: Yahoo's split history, stored with the price as a collection
+        stores it, which the quote job passes when it holds a stock dividend or a
+        spin-off factor the stored valuations aren't on (the price is on its basis)
+        and then values the ticker on it (BUG-128).
 
         ``market_snapshots``' primary key is ``(ticker, collected_at)``, so
         this INSERTS a new row rather than overwriting the snapshot from the
@@ -724,19 +897,19 @@ class SQLiteStore:
         ``fetch_quote``'s ``market_data`` omits ``ma_50``/``ma_200`` (no
         history call is made for a quote-only refresh). Rather than let the
         DES page's moving averages go blank after every quote refresh, this
-        carries the PREVIOUS snapshot's ``ma_50``/``ma_200``/``beta``, plus
-        ``ev_to_fcf``/``fcf_yield``/``risk_free_rate`` (computed only during a
-        full export's ``calculated_metrics``/``risk_free_rate`` pass — a
-        quote-only fetch has no way to derive them), forward into the new row
-        whenever the fresh quote didn't return them (a one-row read-only
-        ``SELECT`` against ``market_snapshots``, no writer contention — this
-        method is only ever called from the single-writer job worker).
+        carries the PREVIOUS snapshot's ``ma_50``/``ma_200``/``beta`` and
+        ``risk_free_rate`` (computed only during a full export's pass) forward
+        into the new row whenever the fresh quote didn't return them (a one-row
+        read-only ``SELECT`` against ``market_snapshots``, no writer contention —
+        this method is only ever called from the single-writer job worker).
 
-        ``ev_to_ebitda``/``enterprise_value`` are NOT carried forward here:
-        unlike ``ev_to_fcf``/``fcf_yield``, ``fetch_quote`` returns these two
-        directly from yfinance on quote rows, whereas a full-export row
-        computes them internally via ``calculated_metrics`` — so a fresh
-        quote value (when present) should win rather than the stale prior one.
+        The EV family (``_EV_FAMILY``) is ours, as a full export's
+        ``calculated_metrics`` computes it: the quote's market cap with the latest
+        stored year's net debt, EBITDA and FCF (``_ev_family``). Yahoo's own
+        ``enterpriseValue`` and ``enterpriseToEbitda`` are another definition,
+        more than 5% off ours for 47 of 111 companies, about 2x for the banks, and
+        a refresh wrote them into the same columns (BUG-126). Without a market cap
+        or a stored year, the previous snapshot's carry forward.
         """
         try:
             conn = self._connect()
@@ -755,19 +928,27 @@ class SQLiteStore:
                 for col in _SNAPSHOT_TEXT_COLUMNS:
                     snapshot[col] = merged.get(col)
 
-                # Carry forward ma_50/ma_200/beta/ev_to_fcf/fcf_yield/risk_free_rate
-                # from the latest prior snapshot when this quote-only fetch didn't
-                # return them.
-                prev = self._latest_snapshot_row(conn, ticker)
-                if prev is not None:
-                    for col in ("ma_50", "ma_200", "beta",
-                                "ev_to_fcf", "fcf_yield", "risk_free_rate"):
-                        if snapshot.get(col) is None:
-                            snapshot[col] = prev.get(col)
-
-                if any(snapshot.get(c) is not None
-                       for c in _SNAPSHOT_COLUMNS + _SNAPSHOT_TEXT_COLUMNS):
+                # A quote without a price writes no snapshot: with the fields carried
+                # forward below it would become the latest one, with no price, verdict
+                # or upside behind it (a Yahoo rate limit leaves every extractor empty).
+                if snapshot.get("current_price") is not None:
+                    ours = self._ev_family(conn, ticker, md, val)
+                    carried = ["ma_50", "ma_200", "beta", "risk_free_rate", "risk_free_rate_date",
+                               "risk_free_rate_source"]
+                    if ours is None:
+                        snapshot.update(dict.fromkeys(_EV_FAMILY))
+                        carried += _EV_FAMILY
+                    else:
+                        snapshot.update(ours)
+                    # Carry the rest forward from the latest prior snapshot when this
+                    # quote-only fetch didn't return them.
+                    prev = self._latest_snapshot_row(conn, ticker)
+                    if prev is not None:
+                        for col in carried:
+                            if snapshot.get(col) is None:
+                                snapshot[col] = prev.get(col)
                     self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)
+                    self._write_split_events(conn, ticker, splits or [])
 
                 self._write_analyst_snapshot(
                     conn, ticker, collected_at, quote.get("analyst_estimates") or {}
@@ -778,6 +959,25 @@ class SQLiteStore:
                 conn.close()
         except Exception as e:
             self.logger.error(f"Error writing quote for {ticker}: {e}")
+
+    @staticmethod
+    def _ev_family(conn: sqlite3.Connection, ticker: str, market_data: Dict[str, Any],
+                   valuation: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """A quote's EV family as a full export's ``calculated_metrics`` has it: the
+        calculator on the latest stored year, the quote's market data and the company's
+        sector. ``None`` without a market cap or a stored year."""
+        if not market_data.get("market_cap"):
+            return None
+        cur = conn.execute("SELECT * FROM financials_annual WHERE ticker = ? ORDER BY fiscal_year DESC LIMIT 1",
+                           (ticker,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        year = dict(zip([d[0] for d in cur.description], row))
+        sector = conn.execute("SELECT sector_class FROM companies WHERE ticker = ?", (ticker,)).fetchone()
+        metrics = CalculatedMetrics().calculate_all(year, market_data=market_data, valuation=valuation,
+                                                    sector=sector[0] if sector else None)
+        return {col: metrics.get(col) for col in _EV_FAMILY}
 
     @staticmethod
     def _latest_snapshot_row(conn: sqlite3.Connection, ticker: str) -> Optional[Dict[str, Any]]:
