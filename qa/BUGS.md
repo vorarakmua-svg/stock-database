@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 9 · P3 83 · NEEDS-USER 12 · Verified: 77
+**Open:** P0 0 · P1 0 · P2 9 · P3 83 · NEEDS-USER 13 · Verified: 77
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1380,3 +1380,9 @@ Status: NEEDS-USER
 Found: build iteration 1. PR #28 (the QA loop's) was merged on 2026-10-19, and CI runs only on pull requests and on pushes to `main`, so the branch's pushes since then have run no CI (Python 3.9-3.12).
 Default applied: no PR; the local gates (Python 3.13) and ruff's py39 target stand in for CI. Opening a PR publishes the branch on GitHub, so it waits for you.
 Decision needed: open a draft PR "Build loop: GuruFocus roadmap" against `main`, so CI runs on every push?
+
+### Q11 [VAL] NEEDS-USER: how should the quality composite (our GF Score) weigh its five ranks?
+Status: NEEDS-USER
+Found: build iteration 11 (M2's design, `docs/superpowers/specs/2026-10-21-quality-scores-design.md`)
+Default applied: equal weights. The composite is 10 x the mean of the financial strength, profitability, growth, valuation and momentum ranks (1-10 each), with at least four available.
+Decision needed: keep equal weights, or weigh them like GuruFocus? GuruFocus gives profitability and growth the most weight and the other three less, fitted on a 2006-2021 backtest, without publishing the numbers. Our weights, whatever they are, are published with the score.

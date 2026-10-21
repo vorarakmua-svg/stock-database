@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 4 · DOING 1 · DONE 9 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 12 · DOING 1 · DONE 10 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -32,7 +32,16 @@
 
 | ID | Task | Status | Commit | Evidence |
 |---|---|---|---|---|
-| M2-0 | Design M2 (plan section "Milestones 2-5"): spec in `docs/superpowers/specs/`, then the task rows here | TODO | | |
+| M2-0 | Design M2: `docs/superpowers/specs/2026-10-21-quality-scores-design.md`, then these rows | DONE | this commit | the spec |
+| M2-1 | `src/scores/fundamentals.py`: per-share series on today's split basis, 3/5/10-year CAGRs; with tests | TODO | | |
+| M2-2 | `src/scores/scores.py`: Piotroski F (9 tests), Altman Z, Beneish M, Sloan, ROIC vs WACC, predictability stars; with tests | TODO | | |
+| M2-3 | `src/scores/signs.py`: the 20 warning signs; with tests | TODO | | |
+| M2-4 | Storage (`per_share_annual`, `quality_scores`, `warning_signs`), the engine hooks, `rank_universe` (ranks, composite, momentum, Magic Formula); with tests | TODO | | |
+| M2-5 | Independent oracle `qa/oracle/scores_oracle.py` and real-data validation (distributions, severe signs traced) | TODO | | |
+| M2-6 | `GET /api/stocks/{t}/scores` and the STAT tab's Quality section (radar, ranks, tests, growth, signs), browser-checked; with tests | TODO | | |
+| M2-7 | Screener fields from `quality_scores` (table-exists switch) and the preset screens; with tests | TODO | | |
+| M2-8 | Docs: README and USAGE_GUIDE | TODO | | |
+| M2-9 | Milestone close: code review 16 (opus) with Critical and Important findings fixed; backup and offline backfill of the user's DB | TODO | | |
 
 ## M3: SEC ownership (Form 4 insiders, 13F gurus)
 
@@ -56,6 +65,7 @@
 
 - Q10 [OPS]: a draft PR so CI runs on the branch. Default: no PR; local gates and ruff's py39 target.
 - BUG-172 [VAL]: the multiples band's basis and outliers (GE's bull case $8,498.58); fixing it moves the median. Default: unchanged.
+- Q11 [VAL]: the quality composite's weights. Default: equal.
 
 ## Log
 
@@ -267,3 +277,24 @@ Evidence: `qa/evidence/m1-9-dryrun-{diff,oracle}.txt`
 Gates: unchanged since a3c8a77 (no code change)
 Commit: (this commit) chore(qa): build iteration 10, code review 15 dispatched and the backfill's dry run
 Next: M1-9 (the review's findings, then the live backfill). While the review runs: M2-0.
+
+### Build iteration 11: 2026-10-21 21:30: M2-0 (while code review 15 runs)
+Did:
+- M1-9 waits on code review 15, still running, so this iteration took the next task that doesn't depend
+  on it.
+- M2's design, `docs/superpowers/specs/2026-10-21-quality-scores-design.md`, gives every formula as
+  published:
+  - Piotroski F's nine tests; Altman Z, the original (Z'' waits for M5's SIC codes); Beneish M's eight
+    variables; Sloan; ROIC vs WACC on the DCF's CAPM.
+  - Predictability stars: our own formula, the R² of log-linear revenue/share and EBITDA/share trends over
+    10 years, 1 star on any EBITDA loss or a falling trend.
+  - 20 warning signs, five percentile ranks (within the sector when it has 10 peers), a composite with
+    equal weights, and the Magic Formula.
+  - Storage, the engine hooks, the API, the STAT section, the screener fields and 5 preset screens,
+    validated by an independent oracle.
+- Nine task rows (M2-1 to M2-9) replace M2-0. Q11 (the composite's weights) is recorded as NEEDS-USER,
+  default equal.
+Evidence: the spec
+Gates: unchanged (docs only)
+Commit: (this commit) docs: Milestone 2's design, quality scores and ranks
+Next: M1-9 when the review reports; otherwise M2-1.
