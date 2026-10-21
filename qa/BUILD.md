@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 12 · DOING 0 · DONE 2 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 11 · DOING 0 · DONE 3 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -19,7 +19,7 @@
 | ID | Task | Status | Commit | Evidence |
 |---|---|---|---|---|
 | M1-1 | `src/valuation/history_inputs.py`: share series normalization, price factors, known dates, field choice, `load_history_inputs`; with tests | DONE | this commit | `qa/evidence/valhist-m1-1-*.txt` |
-| M1-2 | `src/valuation/history.py`: multiples, window statistics, implied prices, the fair-value line, labels, `compute_history`; with tests | TODO | | |
+| M1-2 | `src/valuation/history.py`: multiples, window statistics, implied prices, the fair-value line, labels, `compute_history`; with tests | DONE | this commit | `qa/evidence/valhist-m1-2-*.txt` |
 | M1-3 | Storage (`valuation_history`, `valuation_ranges`, `export_valuation_history`) and the engine hook in `compute_and_store`, covering backfill; with tests | TODO | | |
 | M1-4 | Real-data validation: `qa/oracle/history_vs_yahoo.py` on a backfilled DB copy; the spec's gates; split continuity; jumps traced; misses explained | TODO | | |
 | M1-5 | Repository readers and `GET /api/stocks/{t}/valuation-history`; with tests | TODO | | |
@@ -95,3 +95,24 @@ Evidence: `qa/evidence/valhist-m1-1-{red,mutants,realdata}.txt`
 Gates: ruff ✓ mypy ✓ pytest 1212 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
 Commit: (this commit) feat(valuation): history inputs put every quarter's shares on the price bars' basis
 Next: M1-2.
+
+### Build iteration 3: 2026-10-21 16:05: M1-2
+Did:
+- `src/valuation/history.py`: each month's multiples on totals (P/E, P/S, P/B, P/FCF, EV/EBITDA, P/FFO,
+  dividend yield), the trailing 10-year window statistics (36 months needed), and the historical value.
+  The value is the median across the sector's metrics of the trailing-median multiple applied to that
+  month's trailing year; low and high use the quartiles. The labels use the approved cutoffs.
+- TDD: 24 tests (RED: the module missing); 16 mutants, each killed. The first run left "full-window
+  medians" alive, as a one-month change can't move a median; the look-ahead test now doubles the price for
+  most of the series.
+- A preview on the real-data copy (read-only), 6.7 s for 127 tickers:
+  - The historical value is set for 119.
+  - Labels: far above 40, above 24, near 27, below 17, far below 11.
+  - Current multiples against Yahoo's: P/E 100/119 within 5% and 110 within 10%; P/S 109/121 and 115;
+    P/B 101/113 and 107. All three pass M1-4's gates already.
+  - Misses beyond 20%: COF P/S, JNJ P/E (29.7 vs 39.4) and TSLA P/S and P/B (the share-count lag noted in
+    M1-1). These are for M1-4.
+Evidence: `qa/evidence/valhist-m1-2-{red,mutants,realdata}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1236 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
+Commit: (this commit) feat(valuation): the valuation history's multiples, 10-year ranges and historical value
+Next: M1-3.
