@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 7 · DOING 1 · DONE 15 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 6 · DOING 1 · DONE 16 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -38,7 +38,7 @@
 | M2-3 | `src/scores/signs.py`: the 20 warning signs; with tests | DONE | this commit | `qa/evidence/scores-m2-3-*.txt` |
 | M2-4 | Storage (`per_share_annual`, `quality_scores`, `warning_signs`), the engine hooks, `rank_universe` (ranks, composite, momentum, Magic Formula); with tests | DONE | this commit | `qa/evidence/scores-m2-4-*.txt` |
 | M2-5 | Independent oracle `qa/oracle/scores_oracle.py` and real-data validation (distributions, severe signs traced) | DOING (the oracle's worker is running; the 14 severe signs judged) | | `qa/evidence/scores-m2-5-*.txt` |
-| M2-6 | `GET /api/stocks/{t}/scores` and the STAT tab's Quality section (radar, ranks, tests, growth, signs), browser-checked; with tests | TODO | | |
+| M2-6 | `GET /api/stocks/{t}/scores` and the STAT tab's Quality section (radar, ranks, tests, growth, signs), browser-checked; with tests | DONE | this commit | `qa/evidence/scores-m2-6-*.txt` |
 | M2-7 | Screener fields from `quality_scores` (table-exists switch) and the preset screens; with tests | TODO | | |
 | M2-8 | Docs: README and USAGE_GUIDE | TODO | | |
 | M2-9 | Milestone close: code review 16 (opus) with Critical and Important findings fixed; backup and offline backfill of the user's DB | TODO | | |
@@ -501,3 +501,21 @@ Evidence: `qa/evidence/scores-m2-5-severe-judged.txt`
 Gates: ruff ✓ mypy ✓ pytest 1357 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) chore(build): build iteration 21, the scores oracle's worker dispatched
 Next: M2-6 while the oracle's worker runs; then M2-5's results (gates, disagreements, distributions).
+
+### Build iteration 22: 2026-10-21 22:58: M2-6 (while M2-5's oracle worker runs)
+Did:
+- `src/webapp/quality.py` builds one view of the stored scores for the API and the STAT tab: the tests in the
+  spec's order with labels, Altman's zone, Beneish's flag, Sloan's band, ROIC vs WACC, the stars, the five ranks
+  and the composite, the growth table, the per-share rows, and the signs, severe first. N/A reasons come from
+  `na_reasons`. Three reader methods return nothing before their tables exist.
+- `GET /api/stocks/{t}/scores` (404 for an unknown ticker or ^GSPC; "not computed yet" before a row exists).
+- The STAT tab loads a Quality section (`/ui/stocks/{t}/scores`): the composite, a Plotly radar of the ranks
+  (a missing rank is a gap the polygon skips, not a zero), and the ranks, scores, tests, growth and signs tables.
+- Tests: 16 (14 failing first); 98 web tests pass.
+- Browser (headless Chrome, a scratch server on the backfilled copy, collection and refresh off): AAPL, JPM,
+  NVDA and O render with no console errors. Fixed what the screenshots showed: a clipped radar label, and a bank's
+  empty Magic Formula row now says banks aren't ranked. The server was stopped and port 8765 is free.
+Evidence: `qa/evidence/scores-m2-6-{red,green}.txt`; screenshots in `%LOCALAPPDATA%\stockdb-qa\build\m0\shots\*-stat.png`
+Gates: ruff ✓ mypy ✓ pytest 1373 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) feat(web): the quality scores' API and the STAT tab's Quality section
+Next: M2-5's results when its worker reports (the oracle is written; its run is pending); then M2-7.

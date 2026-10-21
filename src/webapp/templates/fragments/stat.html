@@ -33,3 +33,7 @@
     {% endfor %}
   </div>
 </section>
+
+<div id="stat-quality" hx-get="/ui/stocks/{{ ticker }}/scores" hx-trigger="load" hx-swap="outerHTML">
+  <p class="text-muted">Loading the quality scores…</p>
+</div>

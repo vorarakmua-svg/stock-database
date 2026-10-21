@@ -419,6 +419,33 @@ class Reader:
             return []
         return [dict(row) for row in cur.fetchall()]
 
+    def quality_scores(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """The ticker's ``quality_scores`` row, or None before it's computed (or before the table exists)."""
+        try:
+            cur = self._conn.execute("SELECT * FROM quality_scores WHERE ticker = ?", (ticker,))
+        except sqlite3.OperationalError:
+            return None
+        row = cur.fetchone()
+        return dict(row) if row is not None else None
+
+    def warning_signs(self, ticker: str) -> List[Dict[str, Any]]:
+        """The ticker's ``warning_signs`` rows, the ones that fired. [] before the table exists."""
+        try:
+            cur = self._conn.execute("SELECT * FROM warning_signs WHERE ticker = ?", (ticker,))
+        except sqlite3.OperationalError:
+            return []
+        return [dict(row) for row in cur.fetchall()]
+
+    def per_share_annual(self, ticker: str) -> List[Dict[str, Any]]:
+        """The ticker's ``per_share_annual`` rows, ascending by fiscal year. [] before the table exists."""
+        try:
+            cur = self._conn.execute(
+                "SELECT * FROM per_share_annual WHERE ticker = ? ORDER BY fiscal_year", (ticker,)
+            )
+        except sqlite3.OperationalError:
+            return []
+        return [dict(row) for row in cur.fetchall()]
+
     def earnings_history(self, ticker: str) -> List[Dict[str, Any]]:
         """All ``earnings_history`` rows ascending by ``quarter``."""
         cur = self._conn.execute(

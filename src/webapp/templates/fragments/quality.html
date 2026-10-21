@@ -1,0 +1,89 @@
+<section class="section" id="stat-quality">
+  <h2 class="section-heading">Quality</h2>
+  {% if not computed %}
+  <div class="empty-state">No quality scores computed yet — click UPDATE DATA above.</div>
+  {% else %}
+  <div class="chip-row">
+    {% if composite %}
+    <span class="pill verdict-none">Composite {{ composite }} / 100</span>
+    {% else %}
+    <span class="pill verdict-none">No composite</span>
+    {% endif %}
+    <span class="text-muted">Five ranks of 1-10 against the universe (or the sector, given 10 peers), equal weights
+      · fiscal year {{ fiscal_year }} · computed {{ computed_at }}</span>
+  </div>
+  <div class="two-col mt-2">
+    <div id="quality-radar" class="gp-chart"></div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Rank</th><th class="num">1-10</th></tr></thead>
+        <tbody>
+          {% for k in ranks %}
+          <tr><td class="row-label">{{ k.label }}</td><td class="num">{{ k.value }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <script>
+    var _qualityCfg = {{ cfg_json | safe }};
+    renderQualityRadar('quality-radar', _qualityCfg);
+  </script>
+
+  <div class="table-wrap mt-2">
+    <table class="data-table">
+      <thead><tr><th>Score</th><th class="num">Value</th><th>Reading</th></tr></thead>
+      <tbody>
+        {% for s in scores %}
+        <tr><td class="row-label">{{ s.label }}</td><td class="num">{{ s.value }}</td>
+          <td class="text-muted">{{ s.note }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if tests %}
+  <div class="table-wrap mt-2">
+    <table class="data-table">
+      <thead><tr><th>Piotroski test</th><th>Result</th></tr></thead>
+      <tbody>
+        {% for t in tests %}
+        <tr><td class="row-label">{{ t.label }}</td>
+          <td>{% if t.passed %}<span class="pill up">Pass</span>{% else %}<span class="pill down">Fail</span>{% endif %}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <div class="table-wrap mt-2">
+    <table class="data-table">
+      <thead><tr><th>Growth (CAGR)</th>{% for span in spans %}<th class="num">{{ span }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        {% for g in growth %}
+        <tr><td class="row-label">{{ g.label }}</td>{% for span in spans %}<td class="num">{{ g[span] }}</td>{% endfor %}</tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <h3 class="section-heading mt-2">Warning signs</h3>
+  {% if signs %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <tbody>
+        {% for s in signs %}
+        <tr><td>{% if s.severity == "severe" %}<span class="pill down">Severe</span>{% else %}<span class="pill verdict-none">Medium</span>{% endif %}</td>
+          <td>{{ s.message }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-muted">No warning signs fired.</p>
+  {% endif %}
+  <p class="text-muted mt-2">Every formula, cutoff and weight is published (the README's "Quality scores"); the
+    figures are the latest fiscal year's, as later restated. The composite weighs the five ranks equally until you
+    choose otherwise. The scores flag what to look into, not what to buy.</p>
+  {% endif %}
+</section>

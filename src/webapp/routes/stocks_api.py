@@ -40,6 +40,7 @@ from ...valuation.models import ValuationResult
 from ..dependencies import get_job_manager, get_reader, get_settings
 from ..indicators import indicator_bundle, normalize_pct
 from ..jobs import CollectionJobManager
+from ..quality import quality_view
 from ..repository import Reader
 from ..schemas import (
     AnalystOut,
@@ -447,6 +448,16 @@ def valuation_history(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str,
             **{column: [row.get(column) for row in rows] for column in ("close", "fair_value") + METRICS},
         },
     }
+
+
+@router.get("/{ticker}/scores")
+def scores(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
+    """The quality scores: Piotroski with its nine tests, Altman, Beneish, Sloan, ROIC vs WACC, predictability,
+    the five ranks and the composite, the growth table and the warning signs, severe first
+    (docs/superpowers/specs/2026-10-21-quality-scores-design.md)."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    return quality_view(r, ticker)
 
 
 @router.get("/{ticker}/earnings", response_model=List[EarningsRow])

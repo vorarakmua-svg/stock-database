@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ...fetchers.stock_data_fetcher import NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS
+from ...scores.ranks import MAGIC_EXCLUDED
 from ...valuation.assumptions import DISCOUNT_SPREAD, GROWTH_CAP
 from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
 from ...valuation.history import HISTORICAL_VALUE_CUTOFFS, METRICS, historical_value_label
@@ -22,6 +23,7 @@ from ...valuation.models import ValuationResult, dcf_per_share
 from ..dependencies import get_job_manager, get_reader, get_settings
 from ..formatting import fmt_count, fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
 from ..jobs import CollectionJobManager
+from ..quality import GROWTH_SPANS, RANK_LABELS, quality_view
 from ..repository import Reader
 from ..settings import WebSettings
 from .pages import _STATEMENT_ROWS, _build_statement_display, templates
@@ -1020,6 +1022,79 @@ def val_history_fragment(
             "window": _window_text(fv),
             "rows": table,
             "has_chart": bool(rows),
+            # The XSS defense of the other inline configs: "</" can't close the <script>.
+            "cfg_json": json.dumps(cfg).replace("</", "<\\/"),
+        },
+    )
+
+
+def _stars(stars: Optional[float]) -> str:
+    """Predictability as "4.5 / 5", or "—"."""
+    return f"{stars:g} / 5" if stars is not None else "—"
+
+
+@router.get("/ui/stocks/{ticker}/scores", response_class=HTMLResponse)
+def scores_fragment(
+    ticker: str,
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """The STAT panel's Quality section: the composite and its radar, the five ranks, the scores with their tests,
+    the growth table and the warning signs (docs/superpowers/specs/2026-10-21-quality-scores-design.md)."""
+    company = r.get_company(ticker)
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    q = quality_view(r, ticker)
+    if not q["computed"]:
+        return templates.TemplateResponse(request, "fragments/quality.html",
+                                          {"request": request, "ticker": ticker, "computed": False})
+    ranks = q["composite"]["ranks"]
+    cfg = {"labels": [RANK_LABELS[k] for k in ranks], "values": list(ranks.values())}
+    p, a, b, s, w = q["piotroski"], q["altman"], q["beneish"], q["sloan"], q["roic_vs_wacc"]
+    pred, magic = q["predictability"], q["magic_formula"]
+    scores = [
+        {"label": "Piotroski F", "value": f"{p['f']} / {p['tested']}" if p["f"] is not None else "—",
+         "note": p["na_reason"] or "tests passed, of the nine those with their inputs"},
+        {"label": "Altman Z", "value": fmt_raw2(a["z"]),
+         "note": a["na_reason"] or f"{a['zone']} zone (distress below 1.81, safe above 2.99)"},
+        {"label": "Beneish M", "value": fmt_raw2(b["m"]),
+         "note": b["na_reason"] or ("above -1.78: the earnings may be managed" if b["flagged"]
+                                    else "below -1.78: no sign of managed earnings")},
+        {"label": "Sloan ratio", "value": fmt_pct(s["ratio"]),
+         "note": s["na_reason"] or f"{s['zone']} (within 10% safe, beyond 25% flagged)"},
+        {"label": "ROIC - WACC", "value": fmt_pct(w["spread"]),
+         "note": w["na_reason"] or f"ROIC {fmt_pct(w['roic'])} against WACC {fmt_pct(w['wacc'])}"},
+        {"label": "Predictability", "value": _stars(pred["stars"]),
+         "note": pred["na_reason"] or "10-year consistency of revenue and EBITDA per share"},
+        {"label": "Magic Formula rank", "value": str(magic["rank"]) if magic["rank"] is not None else "—",
+         "note": "not ranked for banks, insurers, utilities and REITs"
+                 if magic["rank"] is None and company.get("sector_class") in MAGIC_EXCLUDED
+                 else f"earnings yield {fmt_pct(magic['earnings_yield'])}, return on capital "
+                      f"{fmt_pct(magic['return_on_capital'])}"},
+        {"label": "NCAV / share", "value": fmt_price(q["ncav_per_share"]),
+         "note": "current assets less all liabilities, per share (Graham's net-net)"},
+        {"label": "Momentum", "value": fmt_pct(q["momentum"]),
+         "note": "mean of the 12-1 and 6-1 month returns, over beta"},
+    ]
+    growth = [{"label": g["label"], **{span: fmt_pct(g[f"cagr_{span}"]) for span in GROWTH_SPANS}}
+              for g in q["growth"]]
+    composite = q["composite"]["score"]
+    return templates.TemplateResponse(
+        request,
+        "fragments/quality.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "computed": True,
+            "fiscal_year": q["fiscal_year"],
+            "computed_at": str(q["computed_at"] or "")[:10],
+            "composite": f"{composite:.1f}" if composite is not None else None,
+            "ranks": [{"label": RANK_LABELS[k], "value": v if v is not None else "—"} for k, v in ranks.items()],
+            "scores": scores,
+            "tests": p["tests"],
+            "growth": growth,
+            "spans": GROWTH_SPANS,
+            "signs": q["warning_signs"],
             # The XSS defense of the other inline configs: "</" can't close the <script>.
             "cfg_json": json.dumps(cfg).replace("</", "<\\/"),
         },

@@ -503,6 +503,33 @@ function renderValHistory(chartId, metricChartId, selectId, cfg) {
 }
 
 /**
+ * The STAT tab's Quality radar: the five ranks (1-10) as one closed Plotly scatterpolar trace.
+ * A rank that isn't available is a gap the polygon skips, not a zero.
+ * @param {string} elId - The DOM element id to render into.
+ * @param {{labels: string[], values: Array<number|null>}} cfg - The ranks, null where not available.
+ */
+function renderQualityRadar(elId, cfg) {
+  if (typeof Plotly === 'undefined' || !cfg.labels || cfg.labels.length === 0) return;
+  var r = cfg.values.concat([cfg.values[0]]);
+  var theta = cfg.labels.concat([cfg.labels[0]]);
+  Plotly.newPlot(elId, [{
+    type: 'scatterpolar', r: r, theta: theta, mode: 'lines+markers', connectgaps: true,
+    fill: 'toself', fillcolor: SLATE.accentFill, line: { color: SLATE.accent, width: 2 }, marker: { size: 6 },
+    text: r.map(function (v) { return v === null ? 'n/a' : String(v); }),
+    hovertemplate: '%{theta}: %{text}<extra></extra>',
+  }], slateLayout({
+    polar: {
+      bgcolor: 'transparent',
+      radialaxis: { range: [0, 10], dtick: 2, gridcolor: SLATE.grid, linecolor: SLATE.grid,
+                    tickfont: { family: SLATE.fontMono, size: 10, color: SLATE.muted } },
+      angularaxis: { gridcolor: SLATE.grid, linecolor: SLATE.grid,
+                     tickfont: { family: SLATE.fontUI, size: 11, color: SLATE.ink } },
+    },
+    margin: { t: 28, r: 104, b: 28, l: 104 },
+  }), { displayModeBar: false, responsive: true });
+}
+
+/**
  * HTMX tab-active helper.
  * When a tab button triggers an HTMX request, mark it active and remove
  * active from its siblings.
