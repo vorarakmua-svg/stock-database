@@ -198,3 +198,12 @@ def test_one_year_is_not_enough_for_the_changes():
     s = compute_scores(Fundamentals(ticker="AAA", rows=[_row(2025)]), Market(market_cap=2000.0))
     assert s.piotroski_f is None and s.beneish_m is None
     assert s.altman_z is not None  # a single year's balance sheet suffices
+
+
+def test_a_utility_has_no_altman_z():
+    # The original Z was fitted on manufacturers: a regulated utility's heavy assets and slow turnover read as
+    # distress (D, DUK, NEE, SO all below 1.2). Z'' for non-manufacturers waits for M5's SIC codes.
+    s = compute_scores(_steady(sector="utility"), Market(market_cap=2000.0, risk_free_rate=0.04, beta=1.2))
+    assert s.altman_z is None and s.na_reasons["altman"] == "not meaningful for utilities"
+    assert s.beneish_m is not None and s.wacc is not None  # the rest apply
+

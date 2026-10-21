@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 10 · DOING 1 · DONE 12 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 9 · DOING 1 · DONE 13 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -35,7 +35,7 @@
 | M2-0 | Design M2: `docs/superpowers/specs/2026-10-21-quality-scores-design.md`, then these rows | DONE | this commit | the spec |
 | M2-1 | `src/scores/fundamentals.py`: per-share series on today's split basis, 3/5/10-year CAGRs; with tests | DONE | this commit | `qa/evidence/scores-m2-1-*.txt` |
 | M2-2 | `src/scores/scores.py`: Piotroski F (9 tests), Altman Z, Beneish M, Sloan, ROIC vs WACC, predictability stars; with tests | DONE | this commit | `qa/evidence/scores-m2-2-*.txt` |
-| M2-3 | `src/scores/signs.py`: the 20 warning signs; with tests | TODO | | |
+| M2-3 | `src/scores/signs.py`: the 20 warning signs; with tests | DONE | this commit | `qa/evidence/scores-m2-3-*.txt` |
 | M2-4 | Storage (`per_share_annual`, `quality_scores`, `warning_signs`), the engine hooks, `rank_universe` (ranks, composite, momentum, Magic Formula); with tests | TODO | | |
 | M2-5 | Independent oracle `qa/oracle/scores_oracle.py` and real-data validation (distributions, severe signs traced) | TODO | | |
 | M2-6 | `GET /api/stocks/{t}/scores` and the STAT tab's Quality section (radar, ranks, tests, growth, signs), browser-checked; with tests | TODO | | |
@@ -344,3 +344,20 @@ Evidence: `qa/evidence/scores-m2-2-{red,mutants,realdata}.txt`
 Gates: ruff ✓ mypy ✓ pytest 1302 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
 Commit: (this commit) feat(scores): Piotroski F, Altman Z, Beneish M, Sloan, ROIC vs WACC and predictability
 Next: M1-9 when the review reports; otherwise M2-3.
+
+### Build iteration 14: 2026-10-21 23:40: M2-3 (code review 15 still running, started about 20 minutes before)
+Did:
+- `src/scores/signs.py`: the spec's 20 warning signs. Each carries its severity, a message stating the
+  figure, the figure and its threshold; severe signs come first. `HistoryContext` carries M1's price / value
+  and P/E percentile.
+- TDD: 24 tests (RED: the module missing). A healthy company fires none, and each sign fires alone on its own
+  rule. 20 mutants, one per rule, each killed.
+- Real data: 18 severe signs. Altman flagged every regulated utility as in distress (D 0.67, DUK 0.68,
+  NEE 1.10, SO 0.97), a known misfit of the original model, so Altman Z is now N/A for utilities (RED test
+  first; Z'' waits for M5's SIC codes). Telecoms stay flagged (T, VZ, TMUS). Beneish's 5 and Sloan's 4 are
+  hyper-growers. Medium signs most often: goodwill over half of equity (43, the buyback-thinned equity of
+  large caps), price far above value (42). 23 companies fire none.
+Evidence: `qa/evidence/scores-m2-3-{red,mutants,realdata}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1327 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
+Commit: (this commit) feat(scores): twenty warning signs, and no Altman Z for utilities
+Next: M1-9 when the review reports; otherwise M2-4.

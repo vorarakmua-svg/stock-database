@@ -48,9 +48,10 @@ are N/A where the sector rules suppress an input (`sector_metrics`), with a reas
   - MVE is the latest snapshot's market cap. WC = current assets - current liabilities. EBIT = operating
     income.
   - Zones: below 1.81 distress, 1.81-2.99 grey, above 2.99 safe.
-  - N/A for banks, insurers and REITs.
-  - Z'' for non-manufacturers needs the SIC code, which M5 stores. Until then the original applies to all
-    non-financials, as GuruFocus shows it.
+  - N/A for banks, insurers, REITs and utilities. A regulated utility's heavy assets and slow turnover read
+    as distress under the original model: D, DUK, NEE and SO all scored below 1.2 on the real data.
+  - Z'' for non-manufacturers needs the SIC code, which M5 stores. Until then the original applies to the
+    other non-financials.
 - **Beneish M** (8 variables):
   `M = -4.84 + 0.920·DSRI + 0.528·GMI + 0.404·AQI + 0.892·SGI + 0.115·DEPI - 0.172·SGAI + 4.679·TATA - 0.327·LVGI`.
   - The variables:

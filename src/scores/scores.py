@@ -28,11 +28,13 @@ PREDICTABILITY_YEARS = 10
 _FINANCIALS = ("bank", "insurance")
 _NOT_SCORED = {
     "piotroski": _FINANCIALS,
-    "altman": _FINANCIALS + ("reit",),
+    # The original Altman Z was fitted on manufacturers; a regulated utility's asset-heavy balance sheet reads as
+    # distress. Z'' for non-manufacturers needs the SIC code (M5).
+    "altman": _FINANCIALS + ("reit", "utility"),
     "beneish": _FINANCIALS + ("reit",),
     "wacc": _FINANCIALS,
 }
-_SECTOR_NAMES = {"bank": "banks", "insurance": "insurers", "reit": "REITs"}
+_SECTOR_NAMES = {"bank": "banks", "insurance": "insurers", "reit": "REITs", "utility": "utilities"}
 
 PIOTROSKI_TESTS = ("roa_positive", "cfo_positive", "roa_up", "cfo_above_ni", "leverage_down",
                    "current_ratio_up", "no_new_shares", "gross_margin_up", "asset_turnover_up")
