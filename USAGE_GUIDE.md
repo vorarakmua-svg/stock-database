@@ -11,6 +11,7 @@ A comprehensive guide on how to use the output data from the Stock Data Collecti
 3. [Working with JSON Data](#working-with-json-data)
 4. [Working with CSV Data](#working-with-csv-data)
 5. [Valuation Layer](#valuation-layer) — built-in, stored fair-value models
+   - [Valuation history](#valuation-history) — monthly multiples, 10-year ranges, the historical value
    - [Owner Earnings ("Buffett mode")](#owner-earnings-buffett-mode) — separate lens, excluded from the median
 6. [Updating Data from the Web](#updating-data-from-the-web) — UPDATE DATA button, fetching new tickers
 7. [Valuation Models](#valuation-models) — DIY formulas over the raw JSON/CSV
@@ -372,6 +373,55 @@ Valuations stored for 50 tickers in data/output/stock.db
   `applicable`/`na_reason`/`assumptions`); `GET /api/screen?verdict=cheap` filters the
   screener by verdict; `GET /api/export/screen.csv` includes `median_base` and
   `val_upside_pct` columns.
+
+### Valuation history
+
+Alongside the models, every company gets a **valuation history**. It is computed with the valuations,
+so the backfill above fills it too, and holds:
+- each month's multiples since its filings begin;
+- each multiple's 10-year range;
+- a *historical value* drawn against the price.
+
+See the README's [Valuation history](README.md#valuation-history) for the method. Two tables hold it:
+
+- **`valuation_history`**: one row per (ticker, month-end):
+  - `close`, `market_cap`, `enterprise_value`, and the trailing year used (`ttm_period_end`);
+  - `pe`, `ps`, `pb`, `pfcf`, `ev_ebitda`, `pffo`, `div_yield`;
+  - `fair_value` (per share, on the price bars' basis), with `fair_value_n`, the number of multiples it
+    combined.
+- **`valuation_ranges`**: one row per (ticker, metric) at the latest month:
+  - `applicable` / `na_reason`, `window_start`, `n_months`;
+  - `current_value`, `pct_rank`, `min`, `p25`, `median`, `p75`, `max`;
+  - `implied_value` (the price that metric's 10-year median implies) and `in_fair_value`.
+
+  The historical value itself is the row with `metric = 'fair_value'`: its `current_value`, its range in
+  `p25` / `p75`, and `n_metrics`.
+
+```sql
+-- AAPL's P/E and historical value over the last ten years, month by month
+SELECT date, close, pe, fair_value
+FROM valuation_history
+WHERE ticker = 'AAPL' AND date >= date('now', '-10 years')
+ORDER BY date;
+
+-- Every company's historical value against its latest price, cheapest first
+SELECT v.ticker, v.current_value AS historical_value, v.p25 AS low, v.p75 AS high,
+       m.current_price, m.current_price / v.current_value AS price_to_value
+FROM valuation_ranges v
+JOIN market_snapshots m ON m.ticker = v.ticker
+ AND m.collected_at = (SELECT MAX(collected_at) FROM market_snapshots WHERE ticker = v.ticker)
+WHERE v.metric = 'fair_value' AND v.applicable = 1
+ORDER BY price_to_value;
+```
+
+It is also shown in three places:
+- **Web**: the **VAL** tab's *Historical Value* section, with the label against the live price, the two
+  charts and the ranges table.
+- **Screener**: the *Historical value* fields, `pe_pct_10y` … `div_yield_pct_10y` (a multiple's
+  percentile in its 10 years, as a fraction) and `price_to_hist_value`.
+- **API**: `GET /api/stocks/{ticker}/valuation-history`.
+
+It changes none of the models, their median or the verdict.
 
 ### Owner Earnings ("Buffett mode")
 

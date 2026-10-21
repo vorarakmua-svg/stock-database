@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 9 · P3 83 · NEEDS-USER 11 · Verified: 77
+**Open:** P0 0 · P1 0 · P2 9 · P3 83 · NEEDS-USER 12 · Verified: 77
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1286,6 +1286,14 @@ Repro: `financials_quarterly`, TMUS: `long_term_debt` is NULL for 2025-Q1 to Q3 
 Expected: each quarter's long-term debt from its 10-Q.   Actual: NULL, so a quarter's total debt (`CalculatedMetrics._calculate_total_debt`) is short-term debt alone, and TMUS's enterprise value read $174B against Yahoo's $287B.
 Root cause: not yet traced. Likely the 10-Qs tag the long-term debt under concepts the quarterly resolution doesn't take (BUG-141's set-aside, or the noncurrent fallbacks), to be checked against the filings.
 Notes: the valuation history now treats such a quarter's net debt as unknown, so it has no EV and no EV/EBITDA, rather than a wrong one (M1-4). The quarterly ladder and TTM debt figures elsewhere still carry the gap.
+
+### BUG-172 [P2][VAL] The multiples band prices spin-adjusted closes over as-reported EPS, and one tiny-earnings year sets its bull case: GE's band reads 12.2x to 1,044x
+Status: NEEDS-USER
+Found: the build's design pass for Milestone 1 (2026-10-21), confirmed in build iteration 9 | Fixed: | Regression test:
+Repro: GE's `multiples` row in `valuations`: P/E band low 12.18x, median 32.84x, high 1,044.05x over 4 years, on the latest EPS of $8.14, so a bull value of $8,498.58 (the VAL tab shows it). The FY2022 close in `price_bars` is $52.20: Yahoo's close divided by the later spin-off factors (1.281 for GE HealthCare, 1.253 for GE Vernova), about $83.78 as traded. FY2022's diluted EPS is $0.05.
+Expected: each fiscal year's multiple taken on the price as traded then (the close times the spin-off factors after it), as the valuation history does (`history_inputs.price_factor_after`); and a band that one tiny-earnings year can't stretch to 1,044x.   Actual: closes before a spin-off sit 1.6x low against that year's EPS, so the band mixes bases (here it understates FY2022's P/E: 1,676x as traded). The band's max then multiplies the latest EPS.
+Root cause: `src/valuation/inputs.py` `load_inputs` takes `fy_end_prices` from the `price_bars` closes (put back to the market close and the price's split basis) without undoing Yahoo's non-split price factors. `src/valuation/models.py` (the multiples band) takes the min and max of the yearly multiples, so a single outlier year sets bear or bull.
+Notes / decision needed: either fix moves the multiples band, a member of the five-model median, so verdicts can change: a valuation-policy change the protocol leaves to you. Options: (a) take the closes as traded (reuse `price_factor_after`); (b) bound the band by quartiles rather than min/max, as the valuation history's range does; (c) both. Default until you decide: unchanged.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

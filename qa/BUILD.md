@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 6 · DOING 0 · DONE 8 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 5 · DOING 0 · DONE 9 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -25,7 +25,7 @@
 | M1-5 | Repository readers and `GET /api/stocks/{t}/valuation-history`; with tests | DONE | this commit | `qa/evidence/valhist-m1-5-*.txt` |
 | M1-6 | The VAL tab section (fragment, `renderValHistory`), checked in Chrome on a scratch server; with tests | DONE | this commit | `qa/evidence/valhist-m1-6-*` |
 | M1-7 | Screener columns (`*_pct_10y`, `price_to_hist_value`), filters, CSV; with tests | DONE | this commit | `qa/evidence/valhist-m1-7-*.txt` |
-| M1-8 | Docs: README "Valuation history", USAGE_GUIDE, the stale "no price series" text; the multiples-band basis bug logged (NEEDS-USER) | TODO | | |
+| M1-8 | Docs: README "Valuation history", USAGE_GUIDE, the stale "no price series" text; the multiples-band basis bug logged (NEEDS-USER) | DONE | this commit | README, USAGE_GUIDE; `qa/BUGS.md` BUG-172 |
 | M1-9 | Milestone close: code review 15 (opus, 16f3005..HEAD) with Critical and Important findings fixed; then backup and offline backfill of the user's DB; verdict changes reported | TODO | | |
 
 ## M2: quality scores and ranks
@@ -55,6 +55,7 @@
 ## NEEDS-USER (each also recorded in `qa/BUGS.md`)
 
 - Q10 [OPS]: a draft PR so CI runs on the branch. Default: no PR; local gates and ruff's py39 target.
+- BUG-172 [VAL]: the multiples band's basis and outliers (GE's bull case $8,498.58); fixing it moves the median. Default: unchanged.
 
 ## Log
 
@@ -230,3 +231,25 @@ Evidence: `qa/evidence/valhist-m1-7-{red,mutants,realdata}.txt`
 Gates: ruff ✓ mypy ✓ pytest 1273 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
 Commit: (this commit) feat(web): screen by each multiple's 10-year percentile and by price / historical value
 Next: M1-8.
+
+### Build iteration 9: 2026-10-21 20:40: M1-8
+Did:
+- README: a "Valuation history" section under the valuation layer (method, no look-ahead and its
+  restatement exception, ranges, the historical value and its labels, tables, VAL tab, API, screener,
+  the check against Yahoo, limitations). Also:
+  - a feature bullet;
+  - the API row;
+  - the new tables, with a screening SQL example;
+  - the stale "no historical per-date price series is stored" now points at the history.
+- USAGE_GUIDE: a "Valuation history" subsection (tables, two SQL examples, where it shows) and a
+  contents entry. Prose and SQL only, as `test_docs_usage_guide` runs the Python blocks.
+- `src/query/pit_metrics.py`: the docstring's stale "no price series" claim is put right.
+- BUG-172 recorded as NEEDS-USER. GE's multiples band is 12.18x to 1,044x (bull $8,498.58): spin-adjusted
+  closes over as-reported EPS, and one tiny-earnings year (FY2022, EPS $0.05) setting the max. A fix moves
+  the median, so the choice is the user's.
+- All three SQL examples run on the backfilled copy: 22 companies in the README's screen, 121 AAPL months,
+  120 historical values.
+Evidence: the docs test (2 passed); the SQL examples run read-only on the backfilled copy (this log)
+Gates: ruff ✓ mypy ✓ pytest 1273 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
+Commit: (this commit) docs: the valuation history in the README and the usage guide
+Next: M1-9 (milestone close: code review 15, then the user's DB backfill).

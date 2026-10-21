@@ -32,6 +32,12 @@ A professional-grade Python data pipeline for collecting US stock fundamentals f
   textbook DCF, and is deliberately kept out of this five-model median instead
   of folded into it. See [Valuation layer](#valuation-layer) below.
 
+- **Valuation history** — each company's monthly P/E, P/S, P/B, P/FCF, EV/EBITDA
+  and dividend yield since its filings begin, each multiple's 10-year range and
+  percentile, and a published *historical value* (our GF Value counterpart) drawn
+  against the price, with no look-ahead. On the VAL tab, in the screener and the
+  API. See [Valuation history](#valuation-history).
+
 - **Database-Like Behavior**
   - Merge mode preserves historical data across runs
   - Tracks collection history and price snapshots
@@ -356,6 +362,65 @@ interface, the workstation's **VAL** tab shows the full per-model breakdown and 
 sensitivity grid, the **DES** tab shows an at-a-glance verdict pill, and the
 [screener](#web-interface) adds sortable Upside % and verdict columns/filter.
 
+### Valuation history
+
+Beside the models, `src/valuation/history.py` keeps each company's **valuation history**:
+- every month's P/E, P/S, P/B, P/FCF, EV/EBITDA, P/FFO (REITs) and dividend yield since its filings
+  begin (2009 for most);
+- each multiple's range over the trailing 10 years;
+- a **historical value** drawn against the price. It is the transparent counterpart of GuruFocus's GF
+  Value line ([design](docs/superpowers/specs/2026-10-21-valuation-history-design.md)).
+
+How it's built:
+- **No look-ahead.** Each month-end close is paired with the trailing twelve months *known* that month:
+  a quarter 45 days after it ends, a fiscal year on its 10-K's first filing day (from the vintages).
+  Quarters from before the listing are left out, and windows are trailing only. The one exception is
+  restatement: the quarters are the latest *restated* figures, as SEC's company facts give them, and
+  revenue was restated by more than 1% in 8% of the years.
+- **Multiples on totals.** Market cap = the close × the spin-off factors after that day × the quarter's
+  share count, put on the price bars' split basis. Dividing a price by a filed EPS would cross split
+  bases. Zero or negative earnings, book, FCF or EBITDA give no multiple, and the sector rules apply: no
+  P/FCF or EV/EBITDA for banks, and P/FFO in place of P/E for REITs.
+- **Ranges.** Each multiple's min, quartiles, median and max, and the current value's percentile, over
+  the trailing 10 years. They need 36 months of values, so GEV and SNDK show their multiples without a
+  range.
+- **The historical value.** Each month, the median, across the sector's multiples, of each multiple's
+  trailing 10-year median applied to that month's trailing year; at least two multiples are needed.
+  - The multiples: P/E, P/S, P/B, P/FCF and EV/EBITDA; banks P/E, P/S and P/B; insurers add P/FCF; REITs
+    P/FFO, P/S, P/B and EV/EBITDA.
+  - Its low and high use the quartile multiples.
+  - No fitted weights and no adjustment factor: every step is published.
+- **Labels**, against the live price: below 0.7× the value is *far below*, up to 0.9× *below*, 0.9-1.1×
+  *near*, up to 1.3× *above*, and beyond that *far above*.
+
+It is a separate indicator: it changes none of the six models, their median or the verdicts. It is
+computed with the valuations, after a collection, a web job or `python -m src.valuation.backfill`, into
+two tables:
+- `valuation_history`: one row per month;
+- `valuation_ranges`: each metric's range at the latest month, with the historical value as
+  `metric = 'fair_value'`.
+
+Where it shows:
+- **VAL tab**: a chart of the price against the value and its bands, a chart of any multiple against
+  its 10-year low/median/high, and the ranges table.
+- **API**: `GET /api/stocks/{ticker}/valuation-history` returns the same.
+- **Screener**: filters and sorts by `pe_pct_10y` … `div_yield_pct_10y` (a multiple's percentile in its
+  10 years) and by `price_to_hist_value`.
+
+Checked against Yahoo's own figures by `qa/oracle/history_vs_yahoo.py`, which imports nothing from
+`src`:
+- current P/E within 10% for 110 of 120 companies, P/S for 115 of 122, P/B for 108 of 114;
+- share counts within 5% for 118 of 122;
+- market cap continuous across all 10 share splits since 2009.
+
+Limitations:
+- It's a history of how the market priced a company, not a forecast. A business that changed (a
+  spin-off, a new segment) or a short history reads poorly, as GuruFocus warns of its own GF Value.
+- It isn't available for share classes that the filings and the quote count differently (BRK-B, V, BX;
+  Q7), or without trailing years (SPCX).
+- Yahoo normalizes EBITDA, so our EV/EBITDA can read apart from Yahoo's (MRK, PFE). A quarter whose 10-Q
+  lacks the long-term debt its 10-Ks report has no EV (BUG-171).
+
 ## Project Structure
 
 ```
@@ -628,7 +693,24 @@ plus (added for the web terminal — see [Web interface](#web-interface)) `price
 (daily OHLCV, also used for the `^GSPC` S&P 500 benchmark), `analyst_snapshots`
 (point-in-time price targets/recommendations), `earnings_history` (EPS
 estimate/actual/surprise per quarter), `dividend_events`, `split_events`,
-`holders` (institutional + mutual-fund), `insider_transactions`, and `officers`.
+`holders` (institutional + mutual-fund), `insider_transactions`, and `officers`; and the valuation
+layer's `valuations`, `valuation_summary`, `valuation_history` and `valuation_ranges` (see
+[Valuation history](#valuation-history)):
+
+```sql
+-- Cheap against their own history: P/E in the bottom quarter of its last 10 years,
+-- and the price under 0.9x the historical value.
+SELECT r.ticker, r.current_value AS pe, r.pct_rank, r.median AS pe_median_10y,
+       m.current_price / v.current_value AS price_to_value
+FROM valuation_ranges r
+JOIN valuation_ranges v ON v.ticker = r.ticker AND v.metric = 'fair_value' AND v.applicable = 1
+JOIN market_snapshots m ON m.ticker = r.ticker
+ AND m.collected_at = (SELECT MAX(collected_at) FROM market_snapshots WHERE ticker = r.ticker)
+WHERE r.metric = 'pe' AND r.applicable = 1 AND r.pct_rank <= 0.25
+  AND m.current_price / v.current_value < 0.9
+ORDER BY r.pct_rank;
+```
+
 `market_snapshots` itself was widened with ~40 point-in-time market/valuation
 columns (P/E, PEG, price/book, debt/equity (Yahoo's, a percent), short interest, 52-week range,
 moving averages, …) — see `SNAPSHOT_SCREEN_COLUMNS` in `src/webapp/screener.py`
@@ -698,8 +780,8 @@ with PointInTimeMetrics.from_path("data/output/stock.db") as pm:
 Sector is auto-read from the `companies` table, so banks/insurers/REITs get their sector
 ratios (e.g. `net_interest_margin`) with inapplicable generic ratios suppressed. Only
 **fundamental** ratios are produced — valuation/EV ratios (`ev_to_ebitda`, `fcf_yield`, …)
-are intentionally excluded, since they require the share price as of that date and no
-historical per-date price series is stored.
+are left to the [valuation history](#valuation-history), which pairs each month's close
+(`price_bars`) with the trailing year known that month.
 
 ## Development
 
@@ -812,6 +894,7 @@ Key endpoints:
 | `GET /api/companies/{ticker}/financials/annual` | Annual financials |
 | `GET /api/companies/{ticker}/metrics` | Annual metrics |
 | `GET /api/stocks/{ticker}/valuation` | Per-model fair-value ranges, assumptions, verdict, upside % |
+| `GET /api/stocks/{ticker}/valuation-history` | Valuation history: the historical value against the price, each multiple's 10-year range, the monthly series |
 | `GET /api/screen` | Cross-company screener (supports `verdict=cheap\|fair\|expensive`) |
 | `GET /api/export/company/{ticker}/annual.csv` | Annual financials as CSV |
 | `GET /api/export/company/{ticker}/metrics.csv` | Annual metrics as CSV |
