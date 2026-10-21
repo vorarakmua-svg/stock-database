@@ -23,7 +23,6 @@ from .inputs import (
     SPLIT_JUMP_THRESHOLD,
     _dividend_onto,
     _drop_spin_off_dividends,
-    _eps_moved_inversely,
     _simple_ratio,
     _yahoo_dividend_factors,
     bars_to_price_factor,
@@ -56,6 +55,17 @@ YAHOO_SHARE_GAP = 1.25
 #: a declared split dated after its older quarter and no more than this many days after its newer one.
 #: Unbounded, an older seam would take a split after the latest quarter (APH's 2026-09-03; BUG-174).
 SEAM_RESTATEMENT_DAYS = 3 * 365 + 120
+#: An undeclared seam folds by its own ratio only on a split's two marks: EPS of the same sign on both sides
+#: moved against the count by at least this share of the seam's ratio (in log terms), and revenue didn't move
+#: with the count by as much. A stock-paid merger brings its revenue and earnings with it (DUK's Progress
+#: Energy: 1.567x the shares, revenue 1.88x, EPS 0.99 to 0.86), and an exchange offer's EPS changes sign
+#: (Citigroup's 2009, 2.242x): both stay organic (BUG-175).
+SPLIT_EVIDENCE_SHARE = 0.5
+#: The listing's quarter, the first one ending on or after the first bar and within this many days of it (a
+#: 14-week quarter), averages the private company's count with the public one: preferred stock converting,
+#: shares sold (UBER's 2019 Q2: 1.11B against 1.70B after). An undeclared seam right after it is the
+#: listing's, and the public count applies back to it, as to every bar.
+LISTING_QUARTER_DAYS = 98
 #: A quarter ending within this many days of a fiscal year's end is its fourth (the 52/53-week years).
 YEAR_END_DAYS = 7
 
@@ -191,6 +201,8 @@ def pick_share_field(rows: Sequence[Mapping[str, Any]]) -> Optional[str]:
 def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]],
                            eps: Sequence[Optional[float]], splits: Sequence[Tuple[str, float]],
                            yahoo_count: Optional[float] = None,
+                           revenue: Optional[Sequence[Optional[float]]] = None,
+                           listed: Optional[str] = None,
                            ) -> Tuple[List[Optional[float]], List[Tuple[str, float]]]:
     """Every quarter's share count on the bars' split basis, today's, as Yahoo's closes are.
 
@@ -202,8 +214,9 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
     - A seam within DECLARED_SPLIT_TOLERANCE of a declared split, or run of splits, dated after the
       older quarter (and filed by the newer one), and nearer that run than 1.0, folds the run in.
       Each declared split explains one seam.
-    - An undeclared seam of SPLIT_JUMP_THRESHOLD or more folds by its own ratio, but only if EPS moved
-      inversely. A stock-paid merger brings its earnings with it, so it stays organic.
+    - An undeclared seam of SPLIT_JUMP_THRESHOLD or more folds by its own ratio after the quarter of the
+      listing on *listed* (LISTING_QUARTER_DAYS), or on a split's marks in EPS and *revenue*
+      (SPLIT_EVIDENCE_SHARE). Otherwise it stays organic, as a merger or an exchange offer does.
     - A seam beyond MAX_SPLIT_RATIO is a change of units: the older quarters are dropped.
 
     A gap then carries the count before it. A split after the latest quarter, which no stored quarter
@@ -241,9 +254,12 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
             unused = [s for s in unused if s not in run]
             factor *= run_ratio
             applied.extend(run)
-        elif ((ratio >= SPLIT_JUMP_THRESHOLD or ratio <= 1.0 / SPLIT_JUMP_THRESHOLD)
-              and _eps_moved_inversely(ratio, eps[i], eps[j])):
-            factor *= ratio
+        elif ratio >= SPLIT_JUMP_THRESHOLD or ratio <= 1.0 / SPLIT_JUMP_THRESHOLD:
+            listing = (i == 0 and listed is not None and (date.fromisoformat(str(ends[0])[:10])
+                       - timedelta(days=LISTING_QUARTER_DAYS)).isoformat() < listed[:10])
+            if listing or _split_marks(ratio, eps[i], eps[j], revenue[i] if revenue else None,
+                                       revenue[j] if revenue else None):
+                factor *= ratio
         out[i] = older * factor
     carried: Optional[float] = None
     for i in range(first, n):
@@ -259,6 +275,21 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
             out = [c * moved if c is not None else None for c in out]
             applied.extend(later)
     return out, sorted(applied)
+
+
+def _split_marks(ratio: float, eps_older: Optional[float], eps_newer: Optional[float],
+                 revenue_older: Optional[float], revenue_newer: Optional[float]) -> bool:
+    """Whether an undeclared seam of *ratio* bears a split's marks (SPLIT_EVIDENCE_SHARE): EPS of one sign that
+    moved against the count by enough, and revenue, where both quarters have it, that didn't move with it."""
+    if not eps_older or not eps_newer or (eps_older > 0) != (eps_newer > 0):
+        return False
+    direction = 1.0 if ratio > 1.0 else -1.0
+    enough = SPLIT_EVIDENCE_SHARE * abs(math.log(ratio))
+    if -direction * math.log(eps_newer / eps_older) < enough:
+        return False
+    if revenue_older and revenue_newer and revenue_older > 0 and revenue_newer > 0:
+        return direction * math.log(revenue_newer / revenue_older) < enough
+    return True
 
 
 def _seam_run(observed: float, after: str, splits: Sequence[Tuple[str, float]]) -> List[Tuple[str, float]]:
@@ -382,7 +413,7 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
     share_splits = [(when, ratio) for when, ratio in splits if is_share_split(ratio) and when <= x.last_bar]
     counts, x.splits_applied = normalize_share_series(
         ends, [_share_count(q, x.share_field) for q in quarters], [q.get("eps_diluted") for q in quarters],
-        share_splits, x.yahoo_shares)
+        share_splits, x.yahoo_shares, revenue=[q.get("revenue") for q in quarters], listed=first_bar)
     shares_at = dict(zip(ends, counts))
 
     first_filed: Dict[int, str] = {}

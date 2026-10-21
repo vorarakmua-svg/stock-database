@@ -26,7 +26,7 @@
 | M1-6 | The VAL tab section (fragment, `renderValHistory`), checked in Chrome on a scratch server; with tests | DONE | this commit | `qa/evidence/valhist-m1-6-*` |
 | M1-7 | Screener columns (`*_pct_10y`, `price_to_hist_value`), filters, CSV; with tests | DONE | this commit | `qa/evidence/valhist-m1-7-*.txt` |
 | M1-8 | Docs: README "Valuation history", USAGE_GUIDE, the stale "no price series" text; the multiples-band basis bug logged (NEEDS-USER) | DONE | this commit | README, USAGE_GUIDE; `qa/BUGS.md` BUG-172 |
-| M1-9 | Milestone close: code review 15 (opus, 16f3005..HEAD) with Critical and Important findings fixed; then backup and offline backfill of the user's DB; verdict changes reported | DOING (review 15's fixes: BUG-174 and BUG-176 done; BUG-175 and BUG-177 next) | 7189bf7, 61181e7 | `qa/evidence/m1-9-dryrun-*.txt`, `qa/evidence/review15-*.txt` |
+| M1-9 | Milestone close: code review 15 (opus, 16f3005..HEAD) with Critical and Important findings fixed; then backup and offline backfill of the user's DB; verdict changes reported | DOING (review 15's fixes: BUG-174, BUG-176 and BUG-175 done; BUG-177 next) | 7189bf7, 61181e7, 0ffde44 | `qa/evidence/m1-9-dryrun-*.txt`, `qa/evidence/review15-*.txt` |
 
 ## M2: quality scores and ranks
 
@@ -427,3 +427,19 @@ Gates: ruff ✓ mypy ✓ pytest 1348 passed, 1 skipped, 1 warning | CI: no PR (Q
 Commit: (this commit) fix(valuation): the history checks shares against the latest priced quote (BUG-176)
 Next, still M1-9: BUG-175 (mergers folded as splits), BUG-177 (the oracle's seam gate and the README); then
 the oracle and the dry run again, and the live backfill.
+
+### Build iteration 18: 2026-10-21 22:22: M1-9 (code review 15's BUG-175)
+Did:
+- Fixed BUG-175. An undeclared share seam of 1.5x or more folds only on a split's marks: same-sign EPS that
+  moved against the count at least halfway (log terms), and revenue that didn't move with it as far. The
+  listing's quarter takes the public count, so the six IPO quarters the old fallback folded stay as they were.
+- Tests: six (eight failing cases first); nine mutants, each killed. The spec and the README say so.
+- Real data: four tickers change. DUK, Citigroup and TMUS only before 2013. HON's 174 months to 2026-04 double
+  back to the filed counts: its 2026 reverse split hides in Yahoo's 0.9535 price factor. HON's 10-year P/E
+  median goes from 12.0 to 23.8 and its historical value from $212.50 to $416.24, as its trailing year still
+  holds the business before that day's distribution. Opened BUG-184 (P3): one HON month at half.
+Evidence: `qa/evidence/review15-bug175-{scan,red,green,mutants,realdata}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1357 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(valuation): an unexplained share jump folds only on a split's marks (BUG-175)
+Next, still M1-9: BUG-177 (the oracle's seam gate and the README's continuity claim); then the oracle and the
+dry run again, and the live backfill.

@@ -99,6 +99,51 @@ def test_an_undeclared_seam_folds_only_when_eps_moved_inversely():
     assert out[:2] == pytest.approx([200e6, 202e6])  # folded by the seam's own ratio, 2.0
 
 
+def test_a_merger_seam_with_an_eps_dip_stays_organic():
+    # DUK-like (BUG-175): Progress Energy's stock-paid merger, 1.567x the shares while EPS dipped from 0.99 to
+    # 0.86. A split would have cut EPS by about the ratio.
+    counts = [446e6, 446e6, 699e6, 704e6, 705e6]
+    out, applied = normalize_share_series(ENDS, counts, [0.98, 0.99, 0.86, 0.95, 1.0], [])
+    assert out == pytest.approx(counts)
+    assert applied == []
+
+
+@pytest.mark.parametrize("eps", [(4.90, -5.00), (-0.16, 2.58), (None, 1.0), (0.0, -0.05)])
+def test_a_seam_without_comparable_eps_stays_organic(eps):
+    # Citigroup's 2009 exchange offer (2.242x, EPS 4.90 to -5.00) and HON's 2026 halving (EPS -0.16 to 2.58):
+    # EPS that changes sign, or is missing or zero, says nothing of a split (BUG-175).
+    counts = [100e6, 100e6, 224e6, 225e6, 226e6]
+    out, _ = normalize_share_series(ENDS, counts, [eps[0], eps[0], eps[1], eps[1], eps[1]], [])
+    assert out == pytest.approx(counts)
+
+
+def test_revenue_rising_with_the_count_marks_a_merger():
+    # EPS fell by the seam's ratio, as across a split, but revenue doubled with the shares (BUG-175).
+    counts = [100e6, 101e6, 202e6, 203e6, 204e6]
+    eps = [2.0, 2.0, 1.0, 1.0, 1.0]
+    out, _ = normalize_share_series(ENDS, counts, eps, [], revenue=[1.0e9, 1.0e9, 2.1e9, 2.1e9, 2.2e9])
+    assert out == pytest.approx(counts)
+    out, _ = normalize_share_series(ENDS, counts, eps, [], revenue=[1.0e9, 1.0e9, 1.1e9, 1.1e9, 1.2e9])
+    assert out[:2] == pytest.approx([200e6, 202e6])  # revenue held: a split's marks, so it folds
+
+
+def test_the_listing_quarter_takes_the_public_count():
+    # UBER-like: the quarter of the 2019-05-10 listing averages the private count with the public one (1.11B
+    # against 1.70B after), and its EPS changed sign. Every bar is public, so the public count applies back.
+    ends = ["2019-06-30", "2019-09-30", "2019-12-31"]
+    counts = [1.11e9, 1.70e9, 1.72e9]
+    eps = [-5.72, 1.19, -0.64]
+    out, _ = normalize_share_series(ends, counts, eps, [], listed="2019-05-10")
+    assert out == pytest.approx([1.70e9, 1.70e9, 1.72e9])
+    # A first quarter long after the listing is like any other: no comparable EPS, so no fold.
+    out, _ = normalize_share_series(ends, counts, eps, [], listed="2012-05-18")
+    assert out == pytest.approx(counts)
+    # PLTR-like, listed on a quarter's last day: only that quarter is the listing's, not the one after it.
+    ends = ["2020-09-30", "2020-12-31", "2021-03-31"]
+    out, _ = normalize_share_series(ends, [2.0e9, 2.0e9, 3.1e9], [None] * 3, [], listed="2020-09-30")
+    assert out == pytest.approx([2.0e9, 2.0e9, 3.1e9])
+
+
 def test_a_one_quarter_spike_is_dropped():
     counts = [100e6, 100e6, 130e6, 101e6, 100e6]
     out, _ = normalize_share_series(ENDS, counts, [None] * 5, [])
@@ -360,3 +405,45 @@ def test_without_any_priced_snapshot_the_history_says_so(tmp_path):
     _priceless_snapshot(conn)
     assert load_history_inputs(conn, "AAA").na_reason == "no quote with a price to check the share count against"
 
+
+def _seam_db(tmp_path, quarters, first_bar, yahoo_count):
+    # One ticker, MMM, with quarters of (end, weighted shares, diluted EPS, revenue), a flat $30 monthly close
+    # from *first_bar*, and a quote that counts *yahoo_count* shares.
+    store = SQLiteStore(db_path=tmp_path / "merge.db")
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('MMM', 'general')")
+    for end, shares, eps, revenue in quarters:
+        conn.execute("INSERT INTO financials_quarterly (ticker, period_end, fiscal_quarter, weighted_avg_shares_basic, "
+                     "eps_diluted, net_income, revenue) VALUES ('MMM', ?, ?, ?, ?, 1.0e8, ?)",
+                     (end, int(end[5:7]) // 3, shares, eps, revenue))
+        conn.execute("INSERT INTO financials_ttm (ticker, period_end, revenue, net_income, total_equity) "
+                     "VALUES ('MMM', ?, 1.6e10, 4.0e8, 2.0e9)", (end,))
+    months = [date(y, m, 28).isoformat() for y in range(2011, 2014) for m in range(1, 13)]
+    conn.executemany("INSERT INTO price_bars (ticker, date, close) VALUES ('MMM', ?, 30.0)",
+                     [(d,) for d in months if d >= first_bar])
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price, market_cap) "
+                 "VALUES ('MMM', '2014-01-03T10:00:00', 30.0, ?)", (30.0 * yahoo_count,))
+    conn.commit()
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def test_load_history_inputs_reads_revenue_across_a_seam(tmp_path):
+    # DUK-like, end to end: EPS fell by the seam's ratio, but revenue rose 1.86x with the shares (BUG-175).
+    ends = _quarter_ends(2011, "2013-12-31")
+    conn = _seam_db(tmp_path, [(e, 446e6, 1.0, 3.6e9) if e <= "2012-06-30" else (e, 699e6, 0.62, 6.7e9)
+                               for e in ends], "2011-01-01", 699e6)
+    x = load_history_inputs(conn, "MMM")
+    assert x.na_reason is None
+    assert x.points[0].shares == pytest.approx(446e6)
+
+
+def test_load_history_inputs_gives_the_listing_quarter_the_public_count(tmp_path):
+    # UBER-like, end to end: listed 2012-05-28, so 2012's Q1 is left out and Q2 averages the private count.
+    ends = _quarter_ends(2012, "2013-12-31")
+    conn = _seam_db(tmp_path, [(e, 0.9e9 if e < "2012-06-30" else 1.11e9 if e == "2012-06-30" else 1.70e9,
+                                -5.72 if e <= "2012-06-30" else 1.19, 2.0e9) for e in ends], "2012-05-28", 1.70e9)
+    x = load_history_inputs(conn, "MMM")
+    assert x.na_reason is None
+    assert x.points[0].period_end == "2012-06-30" and x.points[0].shares == pytest.approx(1.70e9)

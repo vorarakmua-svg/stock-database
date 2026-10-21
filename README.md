@@ -381,6 +381,12 @@ How it's built:
   share count, put on the price bars' split basis. Dividing a price by a filed EPS would cross split
   bases. Zero or negative earnings, book, FCF or EBITDA give no multiple, and the sector rules apply: no
   P/FCF or EV/EBITDA for banks, and P/FFO in place of P/E for REITs.
+- **Share counts.** A filed count jumps where the filings stopped restating it for a split, so a jump
+  within 1.25× of a declared split folds by that split. A jump of 1.5× or more that no split explains
+  folds by its own ratio only on a split's marks: EPS of one sign moved against the count at least
+  halfway (in log terms), and revenue didn't move with it as far. A merger's or an exchange offer's
+  jump stays (DUK 2012, Citigroup 2009). The quarter of a listing, whose weighted count blends the
+  private one, takes the public count after it.
 - **Ranges.** Each multiple's min, quartiles, median and max, and the current value's percentile, over
   the trailing 10 years. They need 36 months of values, so GEV and SNDK show their multiples without a
   range.

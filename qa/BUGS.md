@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 13 · P3 88 · NEEDS-USER 13 · Verified: 79
+**Open:** P0 0 · P1 0 · P2 12 · P3 89 · NEEDS-USER 13 · Verified: 80
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1318,12 +1318,19 @@ Fix (build iteration 16):
 Evidence: `qa/evidence/review15-c1-{red,mutants,realdata}.txt`
 
 ### BUG-175 [P2][VAL] The valuation history folds a stock-paid merger's share jump as if it were a split when quarterly EPS dips
-Status: OPEN
-Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Status: VERIFIED (build iteration 18)
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: (this commit) | Regression test: tests/test_valuation_history_inputs.py::test_a_merger_seam_with_an_eps_dip_stays_organic, ::test_a_seam_without_comparable_eps_stays_organic, ::test_revenue_rising_with_the_count_marks_a_merger, ::test_the_listing_quarter_takes_the_public_count, ::test_load_history_inputs_reads_revenue_across_a_seam, ::test_load_history_inputs_gives_the_listing_quarter_the_public_count
 Repro: DUK's Progress Energy seam (446M to 699M shares, x1.567, 2012-06-30 to 2012-09-30) folded because EPS went from 0.99 to 0.86. Citigroup's 2009 exchange-offer seam (x2.242) folded the same way.
 Expected: an undeclared seam of a merger stays organic (the spec).   Actual: every older quarter is rescaled by the seam's ratio. DUK's 2012-06-29 market cap reads $48.4B (truly $30.9B) and its historical value reads up to 35% high through 2012-2021 (2014-12-31: $93.34 against $69.39, "below" where it should be "above").
 Root cause: `history_inputs.normalize_share_series` folds an undeclared seam of 1.5x or more on `inputs._eps_moved_inversely`, which counts a missing or zero EPS, or a sign change, as agreement, on noisy quarter-over-quarter EPS.
 Notes: today's 10-year window is clean for both; a future stock merger of 1.5x or more with an EPS dip would corrupt it. Revenue per share moves with a merger's shares (DUK x1.88, LIN x1.93) and stays near 1 across a split.
+Fix (build iteration 18):
+- An undeclared seam of 1.5x or more folds by its own ratio only on a split's marks (`SPLIT_EVIDENCE_SHARE`): EPS of one sign on both sides moved against the count by at least half the seam's ratio in log terms, and revenue, where both quarters have it, didn't move with the count by as much. A missing or zero EPS, or one that changes sign, no longer counts as agreement.
+- The listing's quarter (`LISTING_QUARTER_DAYS`) takes the public count after it, since its weighted count blends the private one. Six IPO quarters had folded only through the old fallback (ANET, CRWD, NOW, PANW, PLTR, UBER); they're unchanged.
+- The real data's 13 undeclared seams of 1.5x or more: 10 folded before, 6 now, all of them listings (`qa/evidence/review15-bug175-scan.txt`).
+- Tests: six (one of them four cases), eight failing first; nine mutants, each killed.
+- Real data, every ticker's history with HEAD's code and the fix on the backfilled copy: four tickers change. DUK: 42 months to 2012-10 x0.638 (2012-06-29: $30.9B). Citigroup: 3 months of 2009 x0.446. TMUS: 21 months to 2012-01 x0.343 (revenue x14.1 across that seam). HON: 174 months to 2026-04 x2.001. Its 2026 1:2 reverse split hides in Yahoo's 0.9535 price factor, so the bars before it are raw and folding its seam had halved every market cap before it (mid-2025: $75.4B, where the 635M shares filed give $150.9B). HON's 10-year P/E median goes from 11.99 to 23.82 and its historical value from $212.50 to $416.24 (price $213.32). Its trailing year still holds the quarters before that day's distribution, the spin-off limitation the README names. No other ticker's ranges move. One HON month stays half: BUG-184.
+Evidence: `qa/evidence/review15-bug175-{scan,red,green,mutants,realdata}.txt`
 
 ### BUG-176 [P2][VAL] A latest snapshot without a price switches off the valuation history's share-class guard and its later-split confirmation
 Status: VERIFIED (build iteration 17)
@@ -1378,6 +1385,13 @@ Status: OPEN
 Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
 Repro: `history.py`: `enterprise_value` is stored only when net debt is known, while `multiples_at` takes an unknown net debt as 0 for EV/EBITDA.
 Expected: the stored EV and EV/EBITDA agree (both on the same net debt, or both empty).
+
+### BUG-184 [P3][VAL] A share split that Yahoo lists only inside a combined factor can't fold its seam, so a month between the restated quarter and the split reads half
+Status: OPEN
+Found: build iteration 18 (BUG-175's real-data check), build M1-9 | Fixed: | Regression test:
+Repro: HON. Its Q2 2026 10-Q restated 2025's weighted counts by half (637.5M to 318.8M for 2025's Q2), a 1:2 reverse split's mark, and Yahoo lists only a 0.9535 factor on 2026-06-29 (0.5 x 1.907: the split with a distribution). `is_share_split(0.9535)` is false, so it's a price factor and the bars before it stay on the raw basis, where the unfolded counts are right. But the stored 2026 Q1 count (317.35M, derived from the restated half year) is already on the split's basis: the 2026-05-29 sample pairs a raw close ($237.86) with it, a market cap of $75.5B where about $151B was true.
+Expected: the quarters filed on the split's basis before the split meet closes on the same basis.   Actual: one monthly sample (2026-05-29) at half the market cap; from 2026-06-30 the post-split count and close agree.
+Notes: one of HON's 121 months in its window. A fix needs the split apart from the factor: the restatement shows it (the same period's count halved between two filings), Yahoo doesn't.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

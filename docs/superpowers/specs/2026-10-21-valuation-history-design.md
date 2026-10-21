@@ -78,12 +78,20 @@ Helpers, each unit-tested:
   coverage, in this order: `weighted_avg_shares_basic`, `shares_outstanding`,
   `weighted_avg_shares_diluted`, then `net_income / eps_diluted`. Diluted counts flip in loss
   quarters, as BX and PANW show.
-- `normalize_share_series(ends, counts, eps, splits) -> (counts_on_bar_basis, applied)`:
+- `normalize_share_series(ends, counts, eps, splits, yahoo_count, revenue, listed) ->
+  (counts_on_bar_basis, applied)`:
   - Drop a one-quarter spike: a move above 15% that comes back within 5%.
   - Walk newest to oldest. A quarter-to-quarter ratio within 1.25x of a run of declared splits dated
     after the older quarter, and nearer that run than 1.0, folds the run in.
-  - An undeclared seam of 1.5x or more folds only if `_eps_moved_inversely`
-    (`src/valuation/inputs.py:149`) agrees. A merger stays organic, as COF's 1.56x does.
+  - An undeclared seam of 1.5x or more folds by its own ratio only on a split's marks (BUG-175):
+    - EPS of one sign on both sides moved against the count by at least half the seam's ratio, in
+      log terms. A missing or zero EPS, or one that changes sign, says nothing.
+    - Revenue, where both quarters have it, didn't move with the count by as much.
+    - A merger stays organic, as COF's 1.56x and DUK's 1.567x (EPS 0.99 to 0.86, revenue 1.88x)
+      do, and so does an exchange offer (Citigroup's 2.242x in 2009, EPS changing sign).
+  - The quarter of the listing (the first ending on or after the first bar, within 98 days of it)
+    averages the private count with the public one, so an undeclared seam right after it folds:
+    the public count applies back to it, as to every bar (UBER's 2019 Q2: 1.11B against 1.70B).
   - Fill gaps by carrying the last normalized count forward.
   - Splits after the latest quarter apply only when they move our count toward Yahoo's implied count
     (APH, 2026-09-03).
@@ -247,7 +255,9 @@ its own try/except, so a history failure never blocks the valuations. One hook c
 
 1. History inputs:
    - An AAPL-like 3.97x seam folds the declared 4:1 split.
-   - A COF-like 1.56x merger stays organic.
+   - A COF-like 1.56x merger stays organic, and so do a DUK-like merger with an EPS dip, a seam
+     whose EPS changes sign or is missing, and one whose revenue rose with the count (BUG-175).
+   - A listing quarter takes the public count; a first quarter long after the listing doesn't.
    - A one-quarter spike is dropped.
    - An APH-like split after the latest quarter is confirmed by Yahoo's count.
    - A 0.125 GE reverse split stays out of PF, and a 1.281 spin-off factor goes into it.
