@@ -2,6 +2,7 @@
 
 docs/superpowers/specs/2026-10-21-valuation-history-design.md
 """
+import sqlite3
 from datetime import date
 
 import pytest
@@ -269,4 +270,72 @@ def test_a_quarter_without_its_long_term_debt_has_no_net_debt(tmp_path):
     assert by_end["2025-09-30"].debt_missing
     assert by_end["2025-12-31"].net_debt == 7.0e8  # 9e8 + 1e8 - 3e8
     assert not by_end["2025-12-31"].debt_missing
+
+
+def _quarter_ends(first_year, last):
+    ends = [date(y, m, d).isoformat() for y in range(first_year, 2030) for m, d in ((3, 31), (6, 30), (9, 30), (12, 31))]
+    return [e for e in ends if e <= last]
+
+
+def test_a_seam_years_before_its_split_folds_by_it():
+    # NFLX-like (BUG-174): the stored quarters are the latest restated, so the 10:1 of 2025-11-17 shows as a
+    # seam at 2022-12-31 -> 2023-03-31, 2.6 years before; EPS rose across it, so only the declared split explains it.
+    ends = _quarter_ends(2021, "2025-09-30")
+    counts = [445e6 if e <= "2022-12-31" else 4452e6 for e in ends]
+    eps = [0.12 if e <= "2022-12-31" else 0.288 for e in ends]
+    out, applied = normalize_share_series(ends, counts, eps, [("2015-07-15", 7.0), ("2025-11-17", 10.0)])
+    assert out[0] == pytest.approx(4450e6)
+    assert ("2025-11-17", 10.0) in applied
+
+
+def test_an_earlier_split_takes_its_seam_and_leaves_the_later_one():
+    # APH-like: 2:1 splits of 2021-03-05, 2024-06-12 and 2026-09-03, the last after the latest quarter. The
+    # 2024 seam must take the 2024 split, leaving the 2026 one for Yahoo's count to confirm.
+    ends = _quarter_ends(2019, "2026-06-30")
+    counts = [300e6 if e <= "2020-12-31" else 600e6 if e <= "2023-12-31" else 1200e6 for e in ends]
+    splits = [("2021-03-05", 2.0), ("2024-06-12", 2.0), ("2026-09-03", 2.0)]
+    out, applied = normalize_share_series(ends, counts, [None] * len(ends), splits, yahoo_count=2400e6)
+    assert applied == splits
+    assert out[0] == pytest.approx(2400e6) and out[-1] == pytest.approx(2400e6)
+
+
+def test_market_cap_stays_continuous_across_a_restated_seam(tmp_path):
+    # End to end: a 4:1 split of 2020-08-31 whose seam sits at 2017-12-31 (AAPL-like), EPS rising across it.
+    store = SQLiteStore(db_path=tmp_path / "seam.db")
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('SSS', 'general')")
+    ends = _quarter_ends(2015, "2021-12-31")
+    for e in ends:
+        pre = e <= "2017-09-30"
+        conn.execute("INSERT INTO financials_quarterly (ticker, period_end, fiscal_quarter, weighted_avg_shares_basic, "
+                     "eps_diluted, net_income) VALUES ('SSS', ?, ?, ?, ?, ?)",
+                     (e, int(e[5:7]) // 3, 1000e6 if pre else 4000e6, 0.40 if pre else 0.50, 1.0e9))
+        if e >= "2015-12-31":
+            conn.execute("INSERT INTO financials_ttm (ticker, period_end, revenue, net_income, total_equity) "
+                         "VALUES ('SSS', ?, 2.0e10, 4.0e9, 1.0e10)", (e,))
+    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('SSS', '2020-08-31', 4.0)")
+    months = [m for m in (date(y, mo, 28).isoformat() for y in range(2015, 2022) for mo in range(1, 13))]
+    conn.executemany("INSERT INTO price_bars (ticker, date, close) VALUES ('SSS', ?, 25.0)", [(m,) for m in months])
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price, market_cap) "
+                 "VALUES ('SSS', '2022-01-03T10:00:00', 25.0, 1.0e11)")
+    conn.commit()
+    conn.row_factory = sqlite3.Row
+    x = load_history_inputs(conn, "SSS")
+    assert x.na_reason is None and ("2020-08-31", 4.0) in x.splits_applied
+    from src.valuation.history import compute_history
+    caps = [r.market_cap for r in compute_history(x).rows if r.market_cap]
+    assert caps and max(caps) / min(caps) == pytest.approx(1.0)  # a flat price, one share count: no seam jump
+
+
+def test_a_seam_years_older_than_the_restatements_reach_takes_no_split():
+    # A 2x merger seam in 2016 (EPS not inverted) and a 2:1 split after the latest quarter, ten years on: the
+    # merger stays organic, and the split is left for Yahoo's count to confirm.
+    ends = _quarter_ends(2015, "2026-06-30")
+    counts = [500e6 if e <= "2016-06-30" else 1000e6 for e in ends]
+    eps = [1.0 if e <= "2016-06-30" else 1.1 for e in ends]
+    out, applied = normalize_share_series(ends, counts, eps, [("2026-09-03", 2.0)], yahoo_count=2000e6)
+    assert out[0] == pytest.approx(1000e6)  # 500M, x2 for the later split only
+    assert out[-1] == pytest.approx(2000e6)  # the latest quarter carries the later split too
+    assert applied == [("2026-09-03", 2.0)]
 

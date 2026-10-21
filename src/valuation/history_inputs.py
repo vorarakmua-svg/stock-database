@@ -18,9 +18,9 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..parsers.calculated_metrics import CalculatedMetrics
 from .inputs import (
+    DECLARED_SPLIT_TOLERANCE,
     MAX_SPLIT_RATIO,
     SPLIT_JUMP_THRESHOLD,
-    _declared_run,
     _dividend_onto,
     _drop_spin_off_dividends,
     _eps_moved_inversely,
@@ -50,9 +50,12 @@ SPIKE_MOVE = 0.15
 SPIKE_RETURN = 0.05
 #: Our latest count and Yahoo's (market cap / price) this far apart means another class or units (Q7).
 YAHOO_SHARE_GAP = 1.25
-#: A split restates the quarters filed after it, so a seam it explains lies after the older quarter's end
-#: and no later than this many days after the newer quarter's end, when that quarter was filed.
-SEAM_FILING_DAYS = 120
+#: The stored quarters are the latest restated figures, and later filings restate the quarters before a
+#: split for up to three years, so a split's seam can sit up to three years and a filing's lag before it
+#: (AAPL's 4:1 of 2020-08-31 shows at 2017-12-30, NFLX's 10:1 of 2025-11-17 at 2023-03-31): a seam matches
+#: a declared split dated after its older quarter and no more than this many days after its newer one.
+#: Unbounded, an older seam would take a split after the latest quarter (APH's 2026-09-03; BUG-174).
+SEAM_RESTATEMENT_DAYS = 3 * 365 + 120
 #: A quarter ending within this many days of a fiscal year's end is its fourth (the 52/53-week years).
 YEAR_END_DAYS = 7
 
@@ -231,8 +234,8 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
         if ratio > MAX_SPLIT_RATIO or ratio < 1.0 / MAX_SPLIT_RATIO:
             first = j  # a change of units: nothing older compares
             break
-        horizon = (date.fromisoformat(str(ends[j])[:10]) + timedelta(days=SEAM_FILING_DAYS)).isoformat()
-        run = _declared_run(ratio, ends[i], [s for s in unused if s[0] <= horizon])
+        horizon = (date.fromisoformat(str(ends[j])[:10]) + timedelta(days=SEAM_RESTATEMENT_DAYS)).isoformat()
+        run = _seam_run(ratio, ends[i], [s for s in unused if s[0] <= horizon])
         run_ratio = math.prod(r for _, r in run) if run else 1.0
         if run and abs(math.log(ratio / run_ratio)) < abs(math.log(ratio)):
             unused = [s for s in unused if s not in run]
@@ -256,6 +259,24 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
             out = [c * moved if c is not None else None for c in out]
             applied.extend(later)
     return out, sorted(applied)
+
+
+def _seam_run(observed: float, after: str, splits: Sequence[Tuple[str, float]]) -> List[Tuple[str, float]]:
+    """The run of consecutive declared splits dated after *after* whose ratio is nearest the seam's, within
+    DECLARED_SPLIT_TOLERANCE, the earliest winning a tie: ``inputs._declared_run`` with ties going to the split
+    nearest the seam, so a later split of the same ratio stays for the seam it made (or for after the latest
+    quarter)."""
+    later = sorted((when, ratio) for when, ratio in splits if ratio and ratio > 0 and when > after[:10])
+    best: List[Tuple[str, float]] = []
+    best_gap = math.log(DECLARED_SPLIT_TOLERANCE)
+    for start in range(len(later)):
+        run = 1.0
+        for end in range(start, len(later)):
+            run *= later[end][1]
+            gap = abs(math.log(observed / run))
+            if gap < best_gap or (gap == best_gap and not best):
+                best, best_gap = later[start:end + 1], gap
+    return best
 
 
 def _rows(conn: sqlite3.Connection, sql: str, params: Sequence[Any] = ()) -> List[Dict[str, Any]]:

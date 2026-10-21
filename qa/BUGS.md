@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 10 · P3 83 · NEEDS-USER 13 · Verified: 77
+**Open:** P0 0 · P1 1 · P2 14 · P3 88 · NEEDS-USER 13 · Verified: 77
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1302,6 +1302,71 @@ Repro: `load_inputs(conn, "GOOGL").fy_records`, FY2020: `shares` 0.675B with `sp
 Expected: each year's count on its EPS's basis, the one the split detection folded.   Actual: FY2020's count is 20x short, so its book value per share reads 20x high, as does any per-share figure built on `FYRecord.shares` for such a year.
 Root cause: `src/valuation/inputs.py` `load_inputs` takes `shares` from weighted diluted else shares outstanding, while the detection takes weighted diluted else net income / EPS else shares outstanding. Where the two differ, their split bases can differ.
 Notes: the valuation models read old years' `shares` only through `bvps()`: the P/B multiples band of banks and insurers whose weighted count is missing in some years (the Graham number uses the latest year). The quality scores take the count on the EPS's basis instead (`scores.fundamentals._count_on_eps_basis`, M2-1), so their series are right; GOOGL's revenue/share 5-year CAGR is 19.9%, not -34.4%. A fix in `load_inputs` may move a band and so the median: to be weighed with BUG-172.
+
+### BUG-174 [P1][VAL] The valuation history folds a split seam only within 120 days of its split, so NFLX's 10-year history is 10x off and PANW's 2x
+Status: OPEN
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Repro: `history_inputs.normalize_share_series`: a seam matches a declared split only if the split is dated no more than `SEAM_FILING_DAYS` (120) after the newer quarter's end. The stored quarters are the latest restated figures, so real seams sit 1.9 to 2.9 years before their split (AAPL 2017-12-30 for 2020-08-31, NVDA 2022-05-01 for 2024-06-10, WMT 2021-04-30 for 2024-02-26). Only APH, CRWD, BKNG and GOOGL match; every other seam falls to the EPS test, which fails when EPS rose across it.
+Expected: NFLX's 10x seam (445M to 4,452M shares, 2022-12-31 to 2023-03-31) folded by the declared 10:1 of 2025-11-17.   Actual: left in place. Market cap jumps from $14.7B to $176.0B between 2023-04 and 2023-05 and P/E from 3.27 to 41.90. Today: P/E percentile 0.53 (folded: 0.06), historical value $49.34 (folded: $152.84), the label "far above" where it should be "far below". PANW: a 2.010x seam folded by neither, value $74.72 (folded: $139.82).
+Root cause: `src/valuation/history_inputs.py` `SEAM_FILING_DAYS = 120` bounds the declared-split match to a first filing's reach, not the later filings' restatements.
+Notes: the reviewer's fix: a window of about three years plus 120 days; only NFLX and PANW move by more than 2%. Not unbounded: an older seam would then take APH's 2026-09-03 split and APH would turn N/A.
+
+### BUG-175 [P2][VAL] The valuation history folds a stock-paid merger's share jump as if it were a split when quarterly EPS dips
+Status: OPEN
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Repro: DUK's Progress Energy seam (446M to 699M shares, x1.567, 2012-06-30 to 2012-09-30) folded because EPS went from 0.99 to 0.86. Citigroup's 2009 exchange-offer seam (x2.242) folded the same way.
+Expected: an undeclared seam of a merger stays organic (the spec).   Actual: every older quarter is rescaled by the seam's ratio. DUK's 2012-06-29 market cap reads $48.4B (truly $30.9B) and its historical value reads up to 35% high through 2012-2021 (2014-12-31: $93.34 against $69.39, "below" where it should be "above").
+Root cause: `history_inputs.normalize_share_series` folds an undeclared seam of 1.5x or more on `inputs._eps_moved_inversely`, which counts a missing or zero EPS, or a sign change, as agreement, on noisy quarter-over-quarter EPS.
+Notes: today's 10-year window is clean for both; a future stock merger of 1.5x or more with an EPS dip would corrupt it. Revenue per share moves with a merger's shares (DUK x1.88, LIN x1.93) and stays near 1 across a split.
+
+### BUG-176 [P2][VAL] A latest snapshot without a price switches off the valuation history's share-class guard and its later-split confirmation
+Status: OPEN
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Repro: `history_inputs.load_history_inputs` reads the latest snapshot whether or not it has a price. The real copy holds 50 snapshots with a NULL price, market cap and share count, each the latest when it was written.
+Expected: the guard and the confirmation read the latest snapshot with a price, or the history is N/A with a reason.   Actual: with no `yahoo_shares` there's no guard and no later split. BX turns from N/A ("differ 1.49x") into a full history (P/E 25.08); APH loses its 2026-09-03 2:1, halving its whole series.
+Root cause: `src/valuation/history_inputs.py` takes `current_price`, `priced_on` and `yahoo_shares` from the newest snapshot row.
+
+### BUG-177 [P2][QA] The valuation history's oracle can't see a split seam left unfolded, and the README claims continuity across all splits
+Status: OPEN
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Repro: `qa/oracle/history_vs_yahoo.py` checks market-cap continuity only on split dates, where bars and normalized counts both sit on today's basis whatever the seams do. Its jump tracer counts any filed share-count change as an explanation, so it "traced" NFLX's x10.001 and PANW's x2.010 seams. README: "market cap continuous across all 10 share splits since 2009".
+Expected: a gate per declared share split since the first bar, checking the normalized series is continuous at the raw seam; a jump within about 2% of a declared split's ratio flagged as a defect.   Actual: M1-4 and M1-9's dry run passed every gate with BUG-174 in place.
+
+### BUG-178 [P3][VAL] A spin-off factor between the last bar and the snapshot shrinks Yahoo's share count in the valuation history's guard
+Status: OPEN
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Repro: `history_inputs.load_history_inputs` converts Yahoo's count with `bars_to_price`, which includes non-split factors; a spin-off doesn't change the count. A 1.30 factor on the snapshot's day reads Yahoo's count 23% low (verified on a synthetic DB) and the ticker goes N/A as "another share class or units".
+Notes: the real path is the quote refresh's recompute (BUG-128), which stores the factor and a price but no bars, until the next full collection. Fix: convert the count with a split-only factor.
+
+### BUG-179 [P2][STORE] A run whose predecessor read failed rewrites the successor's years as if complete, clearing what only the predecessor filed
+Status: OPEN
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Repro: `sqlite_store._write_stock` sets `restated = bool(stock.financials_annual)`. BLK's successor (CIK 2012383) has filed 10-Ks since 2025 but carries balance sheets only from 2023-12-31. A run whose predecessor fetch returns a 503 or 404 still has annual records, so it rewrites FY2022 and earlier with NULLs where only the old BlackRock filed (verified by reading the code, the vintages and the cached facts; not run end to end).
+Notes: until the next good run. XOM is exposed the same way after its first 10-K. Fix: a run with `predecessor_error` only adds (BUG-029's guard).
+
+### BUG-180 [P3][UI] The VAL tab's history pill reads "Price None historical value" when the quote has no price
+Status: OPEN
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Repro: `templates/fragments/val_history.html:8`, `routes/workstation.py:969`: a historical value with no live price (EEE in the test fixtures; the price-less snapshots of BUG-176 on real data).
+Expected: a "no live price" state.   Actual: "Price None historical value".
+
+### BUG-181 [P3][UI] A full 10-year window with gaps is labelled as if the history were short
+Status: OPEN
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Repro: `routes/workstation.py` `_window_text`: BA's P/E window starts 2016-10-31 but holds 49 months of values (loss years between), and shows "since 2016-10 (49 months)".
+Expected: the window's span and its count apart.
+
+### BUG-182 [P3][UI] A failed history computation keeps the previous run's rows with no sign they are stale
+Status: OPEN
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Repro: `valuation/engine.compute_and_store` logs a history failure and moves on; the VAL section doesn't show `computed_at`, so stale rows look current.
+Expected: the section shows when its history was computed, or a failure is stored as an N/A reason.
+
+### BUG-183 [P3][VAL] The valuation history can store an EV/EBITDA without its enterprise value
+Status: OPEN
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Repro: `history.py`: `enterprise_value` is stored only when net debt is known, while `multiples_at` takes an unknown net debt as 0 for EV/EBITDA.
+Expected: the stored EV and EV/EBITDA agree (both on the same net debt, or both empty).
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
