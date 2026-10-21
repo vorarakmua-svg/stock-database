@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 12 · DOING 0 · DONE 19 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 11 · DOING 0 · DONE 20 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -48,7 +48,7 @@
 | ID | Task | Status | Commit | Evidence |
 |---|---|---|---|---|
 | M3-0 | Design M3: `docs/superpowers/specs/2026-10-22-sec-ownership-design.md`, then these rows | DONE | this commit | the spec |
-| M3-1 | `src/ownership/form4.py`: the Form 4 parser (owners and roles, non-derivative and derivative rows, 10b5-1, amendments), with real-document fixtures; with tests | TODO | | |
+| M3-1 | `src/ownership/form4.py`: the Form 4 parser (owners and roles, non-derivative and derivative rows, 10b5-1, amendments), with real-document fixtures; with tests | DONE | this commit | `qa/evidence/ownership-m3-1-*.txt` |
 | M3-2 | Form 4 collection (full submissions feeds back three years, cached XML, incremental), storage (`insider_filings`, `insider_trades`) and `stock-data ownership --insiders`; with tests | TODO | | |
 | M3-3 | Insider aggregates, the INS tab, `GET /api/stocks/{t}/insiders`, screener fields; checked against Yahoo's insider rows, browser-checked; with tests | TODO | | |
 | M3-4 | 13F: the guru list (`src/ownership/gurus.py`, each CIK checked), the information-table parser with its checksums, storage; with tests | TODO | | |
@@ -613,3 +613,24 @@ Evidence: the spec's "Facts" section (read-only queries of the SEC cache)
 Gates: ruff ✓ mypy ✓ pytest 1395 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) docs: Milestone 3's design, SEC ownership
 Next: M2-8's docs when its worker reports; M2-9's review findings; then M3-1.
+
+### Build iteration 31: 2026-10-22 03:24: M3-1
+Did:
+- Fetched 63 real Form 4 documents (five issuers' latest, and three 4/A) through the app's own SEC handler (its
+  User-Agent and rate limiter), into a scratch folder. Six became fixtures: a director's purchase (PFE), a CEO
+  buying through a trust (INTC), a 10b5-1 sale (AAPL), an exercise with its withholding, sales, a gift and the
+  derivative row (AAPL), an officer's gift (BA), an amendment (PG). None holds an email address.
+- `src/ownership/form4.py` parses the `ownershipDocument`:
+  - the issuer and each reporting owner with their role and title;
+  - every non-derivative and derivative transaction (code, shares, price, acquired or disposed, holding after,
+    direct or indirect; for derivatives the exercise price and underlying);
+  - the 10b5-1 flag (both 1/0 and true/false), and an amendment's original filing day.
+  A footnote-only price is None with the footnote's id. A document that isn't one raises `Form4Error`.
+- Tests: 8 (the module missing first); five mutants, each killed. All 63 sampled documents parse, with every
+  trade dated, coded and counted. JPM's cached feed held no Form 4 among its latest 100 filings (structured-note
+  prospectuses), which the full-feed fetch of M3-2 covers.
+- M2-8's docs worker and code review 16 still run.
+Evidence: `qa/evidence/ownership-m3-1-{red,green,mutants,realdata}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1403 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) feat(ownership): read insiders' Form 4 filings from their XML (M3-1)
+Next: M2-8's docs when its worker reports; M2-9's review findings; M3-2 (Form 4 collection and storage).
