@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 1 · P2 14 · P3 88 · NEEDS-USER 13 · Verified: 77
+**Open:** P0 0 · P1 0 · P2 14 · P3 88 · NEEDS-USER 13 · Verified: 78
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1304,12 +1304,18 @@ Root cause: `src/valuation/inputs.py` `load_inputs` takes `shares` from weighted
 Notes: the valuation models read old years' `shares` only through `bvps()`: the P/B multiples band of banks and insurers whose weighted count is missing in some years (the Graham number uses the latest year). The quality scores take the count on the EPS's basis instead (`scores.fundamentals._count_on_eps_basis`, M2-1), so their series are right; GOOGL's revenue/share 5-year CAGR is 19.9%, not -34.4%. A fix in `load_inputs` may move a band and so the median: to be weighed with BUG-172.
 
 ### BUG-174 [P1][VAL] The valuation history folds a split seam only within 120 days of its split, so NFLX's 10-year history is 10x off and PANW's 2x
-Status: OPEN
-Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Status: VERIFIED (build iteration 16)
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: 7189bf7 | Regression test: tests/test_valuation_history_inputs.py::test_a_seam_years_before_its_split_folds_by_it, ::test_an_earlier_split_takes_its_seam_and_leaves_the_later_one, ::test_market_cap_stays_continuous_across_a_restated_seam, ::test_a_seam_years_older_than_the_restatements_reach_takes_no_split
 Repro: `history_inputs.normalize_share_series`: a seam matches a declared split only if the split is dated no more than `SEAM_FILING_DAYS` (120) after the newer quarter's end. The stored quarters are the latest restated figures, so real seams sit 1.9 to 2.9 years before their split (AAPL 2017-12-30 for 2020-08-31, NVDA 2022-05-01 for 2024-06-10, WMT 2021-04-30 for 2024-02-26). Only APH, CRWD, BKNG and GOOGL match; every other seam falls to the EPS test, which fails when EPS rose across it.
 Expected: NFLX's 10x seam (445M to 4,452M shares, 2022-12-31 to 2023-03-31) folded by the declared 10:1 of 2025-11-17.   Actual: left in place. Market cap jumps from $14.7B to $176.0B between 2023-04 and 2023-05 and P/E from 3.27 to 41.90. Today: P/E percentile 0.53 (folded: 0.06), historical value $49.34 (folded: $152.84), the label "far above" where it should be "far below". PANW: a 2.010x seam folded by neither, value $74.72 (folded: $139.82).
 Root cause: `src/valuation/history_inputs.py` `SEAM_FILING_DAYS = 120` bounds the declared-split match to a first filing's reach, not the later filings' restatements.
 Notes: the reviewer's fix: a window of about three years plus 120 days; only NFLX and PANW move by more than 2%. Not unbounded: an older seam would then take APH's 2026-09-03 split and APH would turn N/A.
+Fix (build iteration 16):
+- A seam matches a declared split dated up to three years and 120 days after its newer quarter (`SEAM_RESTATEMENT_DAYS`), the reach of later filings' restatements.
+- `_seam_run` gives a tie to the earliest split, so a later split of the same ratio stays for its own seam or for after the latest quarter. Unbounded, or with ties going to the later split, APH's 2026-09-03 split went to its 2024 seam.
+- Four tests: two RED (NFLX-like, end-to-end continuity) and two pinning APH and the bound. Three mutants, each killed.
+- On a backfilled copy, only NFLX ($49.34 to $152.84; P/E percentile 0.53 to 0.06) and PANW ($74.72 to $139.82) move by more than 2%, as the reviewer found. 41 declared splits now fold (4 before), and APH keeps all four of its splits.
+Evidence: `qa/evidence/review15-c1-{red,mutants,realdata}.txt`
 
 ### BUG-175 [P2][VAL] The valuation history folds a stock-paid merger's share jump as if it were a split when quarterly EPS dips
 Status: OPEN

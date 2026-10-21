@@ -387,3 +387,29 @@ transcript, and its findings go to `qa/BUGS.md` in M1-9
 Gates: ruff ✓ mypy ✓ pytest 1342 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
 Commit: (this commit) feat(scores): store the quality scores, rank them across the universe, compute them with the valuations
 Next: M1-9 (code review 15's findings: C1, I1, I2, I3 fixed test-first, the minors logged; then the live backfill).
+
+### Build iteration 16: 2026-10-22 01:10: M1-9 (code review 15's C1)
+Did:
+- Recorded code review 15's findings: BUG-174 (P1, C1); BUG-175, BUG-176, BUG-177 and BUG-179 (P2); BUG-178
+  and BUG-180 to BUG-183 (P3).
+- Fixed BUG-174 (7189bf7). A split's seam now matches its declared split up to three years and 120 days
+  later, the reach of later filings' restatements. Ties go to the earliest split, so APH's 2026 split stays
+  for after its latest quarter.
+- Tests: four (two RED); three mutants, each killed. "Unbounded" survived until the bound's test checked the
+  latest quarter.
+- Real data: only NFLX ($49.34 to $152.84) and PANW ($74.72 to $139.82) move by more than 2%. 41 declared
+  splits fold (4 before).
+- A gate miss:
+  - 7189bf7 was committed and pushed with a ruff E501 (a test line of 121 characters) and without the full
+    pytest run.
+  - Cause: the commit sat on its own line after a heredoc, so it ran although the gate chain before it had
+    failed, and the step recording BUG-174 never ran.
+  - This commit wraps the line, runs every gate (green) and records BUG-174. Commits now take their message
+    from a file, so the gates and the commit run as one `&&` chain.
+Evidence: `qa/evidence/review15-c1-{red,mutants,realdata}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1346 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
+Commit: 7189bf7 fix(valuation): a split's seam years before it folds by the declared split (BUG-174); (this commit) chore(qa): wrap a test line, record BUG-174 verified
+Next, still M1-9:
+- BUG-175 (mergers folded as splits), BUG-176 (a price-less latest snapshot), BUG-177 (the oracle's seam gate
+  and the README).
+- Then the oracle and the dry run again, and the live backfill.

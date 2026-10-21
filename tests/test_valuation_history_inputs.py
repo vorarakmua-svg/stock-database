@@ -273,7 +273,8 @@ def test_a_quarter_without_its_long_term_debt_has_no_net_debt(tmp_path):
 
 
 def _quarter_ends(first_year, last):
-    ends = [date(y, m, d).isoformat() for y in range(first_year, 2030) for m, d in ((3, 31), (6, 30), (9, 30), (12, 31))]
+    quarters = ((3, 31), (6, 30), (9, 30), (12, 31))
+    ends = [date(y, m, d).isoformat() for y in range(first_year, 2030) for m, d in quarters]
     return [e for e in ends if e <= last]
 
 
