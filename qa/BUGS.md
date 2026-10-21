@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 89 · NEEDS-USER 13 · Verified: 82
+**Open:** P0 0 · P1 0 · P2 11 · P3 89 · NEEDS-USER 15 · Verified: 82
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1504,3 +1504,15 @@ Status: NEEDS-USER
 Found: build iteration 11 (M2's design, `docs/superpowers/specs/2026-10-21-quality-scores-design.md`)
 Default applied: equal weights. The composite is 10 x the mean of the financial strength, profitability, growth, valuation and momentum ranks (1-10 each), with at least four available.
 Decision needed: keep equal weights, or weigh them like GuruFocus? GuruFocus gives profitability and growth the most weight and the other three less, fitted on a 2006-2021 backtest, without publishing the numbers. Our weights, whatever they are, are published with the score.
+
+### Q12 [OPS] NEEDS-USER: may M3 download the SEC's bulk insider and 13F data sets?
+Status: NEEDS-USER
+Found: build iteration 30 (M3's design, `docs/superpowers/specs/2026-10-22-sec-ownership-design.md`)
+Default applied: no bulk downloads. M3 fetches each Form 4 (three years) and each guru's 13F-HR (eight quarters) one filing at a time, rate-limited and cached.
+Decision needed: download the SEC's Insider Transactions Data Sets (quarterly ZIPs from 2006) and Form 13F Data Sets (from 2013), hundreds of MB, for a longer history? The plan leaves bulk downloads to you.
+
+### Q13 [OPS] NEEDS-USER: which investors make the guru list?
+Status: NEEDS-USER
+Found: build iteration 30 (M3's design)
+Default applied: about 30 well-known value investors (Berkshire Hathaway, Baupost, Pershing Square, Greenlight, Oaktree, Markel, Akre, Gardner Russo, Ruane Cunniff, Southeastern, Tweedy Browne, Yacktman, Weitz, First Eagle, Dodge & Cox, Davis, Pzena, Himalaya, Trian, ValueAct, Third Point, Appaloosa, Icahn, Scion, Duquesne and others), each checked against the SEC before it's added, kept in `src/ownership/gurus.py`.
+Decision needed: keep that list, or add and drop names?

@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 5 · DOING 0 · DONE 18 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 12 · DOING 0 · DONE 19 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -47,7 +47,15 @@
 
 | ID | Task | Status | Commit | Evidence |
 |---|---|---|---|---|
-| M3-0 | Design M3: spec, then the task rows | TODO | | |
+| M3-0 | Design M3: `docs/superpowers/specs/2026-10-22-sec-ownership-design.md`, then these rows | DONE | this commit | the spec |
+| M3-1 | `src/ownership/form4.py`: the Form 4 parser (owners and roles, non-derivative and derivative rows, 10b5-1, amendments), with real-document fixtures; with tests | TODO | | |
+| M3-2 | Form 4 collection (full submissions feeds back three years, cached XML, incremental), storage (`insider_filings`, `insider_trades`) and `stock-data ownership --insiders`; with tests | TODO | | |
+| M3-3 | Insider aggregates, the INS tab, `GET /api/stocks/{t}/insiders`, screener fields; checked against Yahoo's insider rows, browser-checked; with tests | TODO | | |
+| M3-4 | 13F: the guru list (`src/ownership/gurus.py`, each CIK checked), the information-table parser with its checksums, storage; with tests | TODO | | |
+| M3-5 | The CUSIP map (curated for our universe, OpenFIGI for the rest) and quarter-over-quarter changes; with tests | TODO | | |
+| M3-6 | Guru pages (`/gurus`, `/gurus/{cik}`, `/gurus/portfolio`), the HDS tab's Gurus section, the API, browser-checked; with tests | TODO | | |
+| M3-7 | Docs: README and USAGE_GUIDE | TODO | | |
+| M3-8 | Milestone close: code review 17 (opus) with Critical and Important findings fixed; backup, then the live ownership collection into the user's DB, checked against Yahoo and the 13F checksums | TODO | | |
 
 ## M4: more valuation tools and market pages
 
@@ -584,3 +592,24 @@ Evidence: `qa/evidence/scores-m2-5-{oracle,severe-judged}.txt`
 Gates: ruff ✓ mypy ✓ pytest 1395 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) test(qa): the quality scores' independent oracle (M2-5)
 Next: M2-8 (docs: README and USAGE_GUIDE for the quality scores).
+
+### Build iteration 30: 2026-10-22 03:16: M3-0
+Did:
+- Wrote M3's design, `docs/superpowers/specs/2026-10-22-sec-ownership-design.md`, from the plan's outline and
+  verified facts:
+  - The cached submissions feeds hold 6,507 Form 4s (median 54 a company over about eight months), so three
+    years is some 30,000 small XML fetches, about 1.7 hours at a polite rate.
+  - Every Form 4's primary document is a rendered `xslF345X0n/` path over the raw XML.
+  - Every company's feed carries its SIC code (for M5).
+- Form 4: parsed from each filing's XML, cached, incremental, amendments superseding. Aggregates: open-market
+  net buying, CEO/CFO buys, cluster buys, 10b5-1 sales. The INS tab, the API and the screener.
+- 13F: a checked list of about 30 value investors in the code, eight quarters, values put in dollars across the
+  SEC's 2023 change, each filing checked against its own entry count and value total. A CUSIP map with OpenFIGI.
+  Guru pages, the HDS tab's section, the aggregated portfolio.
+- Replaced the M3-0 row with M3-1 to M3-8. Logged Q12 (the SEC's bulk data sets) and Q13 (the guru list) as
+  NEEDS-USER, each with a default that changes nothing.
+- M2-8's docs worker and code review 16 run meanwhile.
+Evidence: the spec's "Facts" section (read-only queries of the SEC cache)
+Gates: ruff ✓ mypy ✓ pytest 1395 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) docs: Milestone 3's design, SEC ownership
+Next: M2-8's docs when its worker reports; M2-9's review findings; then M3-1.
