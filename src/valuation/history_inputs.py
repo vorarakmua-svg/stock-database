@@ -38,8 +38,13 @@ Q4_LAG_DAYS = 75
 Q4_FILING_WINDOW_DAYS = 120
 #: Fundamentals known for more than this many days at a date are stale there: a quarter or more was missed.
 STALE_DAYS = 200
-#: A share field must cover this share of the quarters to be the ticker's.
+#: A share field must cover this share of the latest RECENT_QUARTERS quarters to be the ticker's: the
+#: quarters the 10-year window reads. PRU files weighted counts only from 2016, 57% of all its quarters.
 SHARE_FIELD_COVERAGE = 0.6
+RECENT_QUARTERS = 40
+#: A count from net income / diluted EPS needs EPS of at least this much: EPS is filed to the cent, so a
+#: smaller one is up to 5% off or more (PRU's 2009 Q1: $14M over $0.01).
+MIN_EPS_FOR_COUNT = 0.10
 #: A quarter whose count moves more than SPIKE_MOVE and comes back within SPIKE_RETURN is a glitch.
 SPIKE_MOVE = 0.15
 SPIKE_RETURN = 0.05
@@ -73,6 +78,8 @@ class TTMPoint:
     ebitda: Optional[float] = None
     net_debt: Optional[float] = None
     ffo: Optional[float] = None
+    #: The quarter lacks the long-term debt its company's 10-Ks report: no net debt, so no enterprise value.
+    debt_missing: bool = False
 
 
 @dataclass
@@ -156,22 +163,24 @@ def known_on(period_end: str, fiscal_quarter: Optional[int], first_annual_filed:
 def _share_count(row: Mapping[str, Any], name: str) -> Optional[float]:
     if name == NI_OVER_EPS:
         ni, eps = row.get("net_income"), row.get("eps_diluted")
-        return abs(ni / eps) if ni is not None and eps else None
+        return abs(ni / eps) if ni is not None and eps and abs(eps) >= MIN_EPS_FOR_COUNT else None
     value = row.get(name)
     return float(value) if value is not None and value > 0 else None
 
 
 def pick_share_field(rows: Sequence[Mapping[str, Any]]) -> Optional[str]:
-    """The ticker's one share field: the first covering at least SHARE_FIELD_COVERAGE of the quarters.
+    """The ticker's one share field: the first covering at least SHARE_FIELD_COVERAGE of the latest
+    RECENT_QUARTERS quarters (*rows* oldest first).
 
     The order is weighted basic, shares outstanding, weighted diluted, then net income / diluted
     EPS. Diluted counts flip in loss quarters, when anti-dilution leaves them basic (BX, PANW).
     """
-    if not rows:
+    recent = list(rows)[-RECENT_QUARTERS:]
+    if not recent:
         return None
     for name in SHARE_FIELDS + (NI_OVER_EPS,):
-        have = sum(1 for r in rows if _share_count(r, name) is not None)
-        if have / len(rows) >= SHARE_FIELD_COVERAGE - 1e-9:
+        have = sum(1 for r in recent if _share_count(r, name) is not None)
+        if have / len(recent) >= SHARE_FIELD_COVERAGE - 1e-9:
             return name
     return None
 
@@ -294,11 +303,19 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
     # load_inputs does for the fiscal year ends.
     flagged = "dividend_adjusted" in _columns(conn, "price_bars")
     month_ends: Dict[str, Dict[str, Any]] = {}
+    first_bar: Optional[str] = None
     for bar in _rows(conn, "SELECT date, close" + (", dividend_adjusted" if flagged else "") + " FROM price_bars "
                      "WHERE ticker = ? AND close IS NOT NULL ORDER BY date", (ticker,)):
         month_ends[str(bar["date"])[:7]] = bar
-    if not month_ends:
+        first_bar = first_bar or str(bar["date"])[:10]
+    if not month_ends or first_bar is None:
         x.na_reason = "no price history"
+        return x
+    # A quarter that ended before the first bar is from before the listing: its share count is the pre-IPO
+    # base (UBER's 454M in 2019 Q1 against 1.7B after), and no price met it.
+    ttm = [row for row in ttm if str(row["period_end"])[:10] >= first_bar]
+    if not ttm:
+        x.na_reason = "no trailing-twelve-month financials since the listing"
         return x
     factors: Optional[List[Tuple[str, float]]] = None
     for month in sorted(month_ends):
@@ -332,8 +349,8 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
     cash = _drop_spin_off_dividends([(str(p["date"])[:10], float(p["amount"])) for p in payments], splits)
     x.dividends = [(day, amount * _dividend_onto(splits, x.last_bar, served_on.get(day))) for day, amount in cash]
 
-    quarters = _rows(conn, "SELECT * FROM financials_quarterly WHERE ticker = ? AND period_end IS NOT NULL "
-                     "ORDER BY period_end", (ticker,))
+    quarters = _rows(conn, "SELECT * FROM financials_quarterly WHERE ticker = ? AND period_end >= ? "
+                     "ORDER BY period_end", (ticker, first_bar))
     x.share_field = pick_share_field(quarters)
     if x.share_field is None:
         x.na_reason = "no share counts in the quarterly financials"
@@ -352,9 +369,12 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
             "GROUP BY fiscal_year", (ticker,)):
         if r["fiscal_year"] is not None:
             first_filed[int(r["fiscal_year"])] = str(r["filed"])[:10]
-    year_ends = [d for d in (_day(r["period_end"]) for r in _rows(
-        conn, "SELECT period_end FROM financials_annual WHERE ticker = ? AND period_end IS NOT NULL",
-        (ticker,))) if d is not None]
+    annual = _rows(conn, "SELECT period_end, long_term_debt FROM financials_annual WHERE ticker = ? "
+                   "AND period_end IS NOT NULL", (ticker,))
+    year_ends = [d for d in (_day(r["period_end"]) for r in annual) if d is not None]
+    # A company whose 10-Ks report long-term debt but whose 10-Q lacks it (TMUS's $81B in 2026's Q1 and Q2)
+    # would read a net debt short by all of it: unknown, then, rather than wrong.
+    files_long_term_debt = any((r["long_term_debt"] or 0) > 0 for r in annual)
     by_end = {str(q["period_end"])[:10]: q for q in quarters}
     calc = CalculatedMetrics()
     for row in ttm:
@@ -366,6 +386,7 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
         fiscal_year = row.get("fiscal_year") or quarter.get("fiscal_year")
         metrics = calc.calculate_all(row, sector=x.sector_class)
         equity = row.get("total_equity")
+        debt_missing = files_long_term_debt and row.get("long_term_debt") is None
         x.points.append(TTMPoint(
             period_end=end,
             known_on=known_on(end, fiscal_quarter,
@@ -378,8 +399,9 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
             # Operating cash flow alone isn't free cash flow: without capex there is none.
             fcf=metrics.get("free_cash_flow") if row.get("capex") is not None else None,
             ebitda=metrics.get("ebitda"),
-            net_debt=metrics.get("net_debt"),
+            net_debt=None if debt_missing else metrics.get("net_debt"),
             ffo=metrics.get("ffo"),
+            debt_missing=debt_missing,
         ))
 
     latest = next((c for c in reversed(counts) if c), None)

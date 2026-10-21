@@ -61,6 +61,20 @@ def test_share_field_is_the_first_covering_most_quarters():
     assert pick_share_field([{}] * 4) is None
 
 
+def test_share_field_coverage_counts_the_latest_40_quarters():
+    # PRU-like: weighted shares filed only for the latest 40 of 80 quarters, net income / EPS for all of them.
+    old, recent = {"net_income": 1.0e9, "eps_diluted": 2.0}, {"weighted_avg_shares_basic": 5e8}
+    rows = [dict(old) for _ in range(40)] + [dict(old, **recent) for _ in range(40)]
+    assert pick_share_field(rows) == "weighted_avg_shares_basic"
+
+
+def test_a_count_from_eps_of_cents_is_rounding_noise():
+    # PRU's 2009 Q1: $14M over EPS of $0.01 reads 1.4B shares; to the cent, EPS that small is up to 50% off.
+    assert pick_share_field([{"net_income": 14e6, "eps_diluted": 0.01}] * 4) is None
+    assert pick_share_field([{"net_income": -52e6, "eps_diluted": -0.09}] * 4) is None
+    assert pick_share_field([{"net_income": 1.0e9, "eps_diluted": 0.10}] * 4) == "net_income/eps_diluted"
+
+
 def test_a_declared_split_folds_its_seam():
     # AAPL-like: the 4:1 of 2020-08-31 shows as 3.97x between the June and September quarters.
     counts = [4.40e9, 4.36e9, 4.33e9, 17.19e9, 17.11e9]
@@ -151,8 +165,8 @@ def _db(tmp_path, sector="general", yahoo_cap=4.0e9, ttm=True):
                  "VALUES ('AAA', 2024, 'acc-2025', '2026-02-19', '2024-12-31', '10-K')")
     conn.executemany("INSERT INTO split_events (ticker, date, ratio) VALUES ('AAA', ?, ?)",
                      [("2025-05-15", 2.0), ("2025-08-01", 1.1)])
-    bars = [("2025-01-15", 10.0), ("2025-01-31", 11.0), ("2025-02-27", 12.0), ("2025-02-28", 12.5),
-            ("2025-12-31", 20.0), ("2026-02-24", 21.0)]
+    bars = [("2023-12-29", 9.0), ("2025-01-15", 10.0), ("2025-01-31", 11.0), ("2025-02-27", 12.0),
+            ("2025-02-28", 12.5), ("2025-12-31", 20.0), ("2026-02-24", 21.0)]
     conn.executemany("INSERT INTO price_bars (ticker, date, close) VALUES ('AAA', ?, ?)", bars)
     conn.executemany("INSERT INTO dividend_events (ticker, date, amount) VALUES ('AAA', ?, ?)",
                      [("2025-03-01", 0.10), ("2025-09-01", 0.10)])
@@ -181,7 +195,8 @@ def test_load_history_inputs_puts_every_quarter_on_the_bars_basis(tmp_path):
     assert (p.revenue, p.net_income, p.common_equity) == (1.0e9, 4.4e8, 1.9e9)
     assert (p.fcf, p.ebitda, p.net_debt) == (4.0e8, 7.0e8, 6.0e8)
     # One sample per month, its last bar; the latest bar last.
-    assert x.months == [("2025-01-31", 11.0), ("2025-02-28", 12.5), ("2025-12-31", 20.0), ("2026-02-24", 21.0)]
+    assert x.months == [("2023-12-29", 9.0), ("2025-01-31", 11.0), ("2025-02-28", 12.5), ("2025-12-31", 20.0),
+                        ("2026-02-24", 21.0)]
     assert x.last_bar == "2026-02-24"
     assert x.price_factors == [("2025-08-01", 1.1)]  # the spin-off factor only
     assert x.yahoo_shares == pytest.approx(4.0e9 / 21.0)
@@ -232,3 +247,26 @@ def test_a_spin_off_factor_never_folds_a_share_seam(tmp_path):
     by_end = {p.period_end: p for p in load_history_inputs(conn, "AAA").points}
     assert by_end["2024-06-30"].shares == pytest.approx(200e6)  # 100M as filed, folded by the 2:1 only
     assert by_end["2024-12-31"].shares == pytest.approx(260e6)  # the acquisition's 130M, likewise
+
+
+def test_quarters_before_the_listing_are_left_out(tmp_path):
+    # UBER-like: the first bar is after 2024's quarters, whose counts are the pre-IPO share base.
+    conn = _db(tmp_path)
+    conn.execute("DELETE FROM price_bars WHERE date < '2025-01-01'")
+    x = load_history_inputs(conn, "AAA")
+    assert [p.period_end for p in x.points] == ["2025-03-31", "2025-06-30", "2025-09-30", "2025-12-31"]
+
+
+def test_a_quarter_without_its_long_term_debt_has_no_net_debt(tmp_path):
+    # TMUS-like: the 10-Qs carry no long-term debt the 10-Ks report ($81B), so a net debt from what's left
+    # would be short by all of it. Unknown, then, not wrong.
+    conn = _db(tmp_path)
+    conn.execute("UPDATE financials_annual SET long_term_debt = 9.0e8")
+    conn.execute("UPDATE financials_ttm SET short_term_debt = 1.0e8")
+    conn.execute("UPDATE financials_ttm SET long_term_debt = NULL WHERE period_end = '2025-09-30'")
+    by_end = {p.period_end: p for p in load_history_inputs(conn, "AAA").points}
+    assert by_end["2025-09-30"].net_debt is None  # not 1e8 short-term - 3e8 cash
+    assert by_end["2025-09-30"].debt_missing
+    assert by_end["2025-12-31"].net_debt == 7.0e8  # 9e8 + 1e8 - 3e8
+    assert not by_end["2025-12-31"].debt_missing
+

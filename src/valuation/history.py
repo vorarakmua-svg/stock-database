@@ -111,7 +111,7 @@ def multiples_at(market_cap: float, close: float, point: TTMPoint, ttm_dps: floa
             if base is not None and base > 0:
                 m[metric] = market_cap / base
         ev = market_cap + (point.net_debt or 0.0)
-        if point.ebitda is not None and point.ebitda > 0 and ev > 0:
+        if point.ebitda is not None and point.ebitda > 0 and ev > 0 and not point.debt_missing:
             m["ev_ebitda"] = ev / point.ebitda
     if ttm_dps and ttm_dps > 0 and close > 0:
         m["div_yield"] = ttm_dps / close
@@ -139,7 +139,7 @@ def implied_price(metric: str, multiple: Optional[float], point: TTMPoint,
     For EV/EBITDA it is (multiple x EBITDA - net debt) / shares. *shares_bars* is the count times PF,
     so the price is on the bars' basis. A zero or negative fundamental, or implied value, gives None.
     """
-    if multiple is None or not shares_bars or shares_bars <= 0:
+    if multiple is None or not shares_bars or shares_bars <= 0 or (metric == "ev_ebitda" and point.debt_missing):
         return None
     base = getattr(point, _FUNDAMENTAL[metric])
     if base is None or base <= 0:

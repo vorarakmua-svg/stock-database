@@ -33,6 +33,13 @@ def test_multiples_are_taken_on_totals():
     assert m["pffo"] is None  # no FFO outside REITs
 
 
+def test_missing_debt_gives_no_enterprise_value_multiple():
+    p = _point(net_debt=None, debt_missing=True)
+    assert multiples_at(2000.0, 20.0, p, 0.0)["ev_ebitda"] is None
+    assert implied_price("ev_ebitda", 11.5, p, 100.0) is None
+    assert multiples_at(2000.0, 20.0, p, 0.0)["pe"] == pytest.approx(20.0)  # the rest stand
+
+
 def test_a_denominator_of_zero_or_less_gives_none():
     m = multiples_at(2000.0, 20.0, _point(net_income=-5.0, revenue=0.0, common_equity=-1.0, fcf=None,
                                           ebitda=0.0), 0.0)

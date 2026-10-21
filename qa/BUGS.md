@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 7 · P3 83 · NEEDS-USER 11 · Verified: 77
+**Open:** P0 0 · P1 0 · P2 9 · P3 83 · NEEDS-USER 11 · Verified: 77
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1270,6 +1270,22 @@ Repro: `CalculatedMetrics()._calculate_levered_fcf` on OCF 250, capex 50, intere
 Expected: 200. US GAAP puts interest paid in operating cash flow (ASC 230), and the spec's basis is "OCF - capex, interest already through OCF" (`docs/superpowers/specs/2026-07-13-valuation-layer-design.md`).   Actual: 180, so every DCF basis was short by the year's interest expense.
 Root cause: `src/parsers/calculated_metrics.py` `_calculate_levered_fcf` returned FCF - |interest|, and `src/valuation/inputs.py` `load_inputs` preferred it to `free_cash_flow`. The oracle read the same stored column (`coalesce(levered_fcf, free_cash_flow)`), so it agreed; it was put right first (59e0678), when it flagged 54 DCF rows.
 Notes: On two backup-API copies of the real DB, backfilled with the code before and after: 66 of 127 DCF rows change. Of the 91 applicable, 28 rise by 10% or more and 11 by 25% or more (DE $245.39 to $542.95, T $29.80 to $50.03, D $61.11 to $98.12, AMGN $159.15 to $241.18); 14 fall a little (WDC 0.82x the most), since the 10-year FCF CAGR is now measured on the right series. The median value moves for 24 tickers (0.95x to 1.52x), and two verdicts change, MCD and PFE from expensive to fair (fair 16 to 18, expensive 108 to 106); the median upside goes from -58.3% to -56.1%. The oracle on the fixed copy: level 1, 522 rows, 0 beyond 0.5%; level 2, 487 rows, 8 beyond, all of them the Graham bear cases (BUG-007). The stored `metrics_annual.levered_fcf` (FA tab, screener) keeps its old value until a ticker is re-collected; the DCF reads `free_cash_flow`, so an offline backfill is right at once. The user's DB gets that backfill at M1-9 (`qa/evidence/levfcf-{red,green,oracle-before,oracle-flags,oracle-after,realdata}.txt`).
+
+### BUG-170 [P2][VALID] D&A misses the amortization of intangibles a filer tags apart: ABBV's $0.76B of about $7.8B
+Status: OPEN
+Found: build iteration 5 via M1-4 (the valuation history's EV/EBITDA against Yahoo's) | Fixed: | Regression test:
+Repro: `financials_annual` / `financials_ttm`, ABBV FY2025: `depreciation_amortization` $0.76B. ABBV files `Depreciation` and, apart, `AmortizationOfIntangibleAssets` (about $7B a year, in `unmapped_facts`); DHR likewise ($0.75B of about $2.4B).
+Expected: D&A = depreciation + amortization of intangibles when the filer tags no combined total (Yahoo's EBITDA for ABBV is $30.76B).   Actual: EBITDA = operating income + depreciation only, $17.65B, so EBITDA, EV/EBITDA and debt/EBITDA read high or low by the missing amortization, and so does owner earnings' D&A.
+Root cause: `src/mappings/canonical.py` `depreciation_amortization` takes the first of DepreciationDepletionAndAmortization, DepreciationAmortizationAndAccretionNet, DepreciationAmortizationAndOther, DepreciationAndAmortization and Depreciation; `Depreciation` alone is a component, and AmortizationOfIntangibleAssets is mapped nowhere.
+Notes: the valuation history's own figures stay consistent: its EV/EBITDA history carries the same understated EBITDA throughout, so the implied price moves little (`qa/evidence/valhist-m1-4-explained.txt`). A fix moves owner earnings (display-only), not the five-model median.
+
+### BUG-171 [P2][VALID] The 10-Q quarters lack the long-term debt the 10-Ks report: TMUS's $81B shows only in Q4
+Status: OPEN
+Found: build iteration 5 via M1-4 | Fixed: | Regression test:
+Repro: `financials_quarterly`, TMUS: `long_term_debt` is NULL for 2025-Q1 to Q3 and 2026-Q1 and Q2, and $81.15B at 2025-12-31 (the 10-K). The latest quarter lacks it for CAT, CVX, ORCL and TMUS while their latest year has it ($30.7B, $39.8B, $122.3B, $81.1B).
+Expected: each quarter's long-term debt from its 10-Q.   Actual: NULL, so a quarter's total debt (`CalculatedMetrics._calculate_total_debt`) is short-term debt alone, and TMUS's enterprise value read $174B against Yahoo's $287B.
+Root cause: not yet traced. Likely the 10-Qs tag the long-term debt under concepts the quarterly resolution doesn't take (BUG-141's set-aside, or the noncurrent fallbacks), to be checked against the filings.
+Notes: the valuation history now treats such a quarter's net debt as unknown, so it has no EV and no EV/EBITDA, rather than a wrong one (M1-4). The quarterly ladder and TTM debt figures elsewhere still carry the gap.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

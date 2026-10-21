@@ -91,10 +91,11 @@ def test_compute_and_store_writes_the_history(tmp_path):
     conn = sqlite3.connect(db)
     rows = conn.execute("SELECT date, market_cap, pe FROM valuation_history WHERE ticker = 'AAA' "
                         "ORDER BY date").fetchall()
-    assert [r[0] for r in rows] == ["2025-01-31", "2025-02-28", "2025-12-31", "2026-02-24"]
-    assert rows[0][1] is None  # no trailing year known yet
-    assert rows[1][1] == pytest.approx(12.5 * 1.1 * 200e6)  # before the 1.1 spin-off factor
-    assert rows[-1][1] == pytest.approx(21.0 * 200e6)
+    assert [r[0] for r in rows] == ["2023-12-29", "2025-01-31", "2025-02-28", "2025-12-31", "2026-02-24"]
+    caps = {r[0]: r[1] for r in rows}
+    assert caps["2023-12-29"] is None and caps["2025-01-31"] is None  # no trailing year known yet
+    assert caps["2025-02-28"] == pytest.approx(12.5 * 1.1 * 200e6)  # before the 1.1 spin-off factor
+    assert caps["2026-02-24"] == pytest.approx(21.0 * 200e6)
     applicable, reason, current = conn.execute(
         "SELECT applicable, na_reason, current_value FROM valuation_ranges WHERE ticker = 'AAA' AND metric = 'pe'"
     ).fetchone()

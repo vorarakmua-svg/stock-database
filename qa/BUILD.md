@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 10 · DOING 0 · DONE 4 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 9 · DOING 0 · DONE 5 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -21,7 +21,7 @@
 | M1-1 | `src/valuation/history_inputs.py`: share series normalization, price factors, known dates, field choice, `load_history_inputs`; with tests | DONE | this commit | `qa/evidence/valhist-m1-1-*.txt` |
 | M1-2 | `src/valuation/history.py`: multiples, window statistics, implied prices, the fair-value line, labels, `compute_history`; with tests | DONE | this commit | `qa/evidence/valhist-m1-2-*.txt` |
 | M1-3 | Storage (`valuation_history`, `valuation_ranges`, `export_valuation_history`) and the engine hook in `compute_and_store`, covering backfill; with tests | DONE | this commit | `qa/evidence/valhist-m1-3-*.txt` |
-| M1-4 | Real-data validation: `qa/oracle/history_vs_yahoo.py` on a backfilled DB copy; the spec's gates; split continuity; jumps traced; misses explained | TODO | | |
+| M1-4 | Real-data validation: `qa/oracle/history_vs_yahoo.py` on a backfilled DB copy; the spec's gates; split continuity; jumps traced; misses explained | DONE | this commit | `qa/evidence/valhist-m1-4-*.txt` |
 | M1-5 | Repository readers and `GET /api/stocks/{t}/valuation-history`; with tests | TODO | | |
 | M1-6 | The VAL tab section (fragment, `renderValHistory`), checked in Chrome on a scratch server; with tests | TODO | | |
 | M1-7 | Screener columns (`*_pct_10y`, `price_to_hist_value`), filters, CSV; with tests | TODO | | |
@@ -137,3 +137,34 @@ Evidence: `qa/evidence/valhist-m1-3-{red,trim-red,mutants,realdata}.txt`
 Gates: ruff ✓ mypy ✓ pytest 1245 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
 Commit: (this commit) feat(valuation): store the valuation history and compute it with the valuations
 Next: M1-4.
+
+### Build iteration 5: 2026-10-21 18:10: M1-4
+Did:
+- `qa/oracle/history_vs_yahoo.py` (imports nothing from `src`) checks the spec's gates on a backfilled
+  backup-API copy. All pass:
+  - P/E within 10% of Yahoo's for 110/120, P/S 115/122, P/B 108/114; EV/EBITDA within 20% for 72/87.
+  - Share counts within 5% for 118/122; trailing years at fiscal year ends against `metrics_annual`
+    within 1% for 4,196/4,245.
+  - Market cap across all 10 share splits within 5% (0.989 to 1.001).
+  - The valuations and summaries are identical to the M0 copy's.
+- Its first run found 9 monthly market-cap moves it couldn't trace; three fixes in the history inputs,
+  each RED first (6 mutants, each killed):
+  - PRU (8 moves): share-field coverage now counts the latest 40 quarters, and a count from EPS under $0.10
+    is dropped as rounding noise.
+  - UBER (1 move): quarters ending before the first price bar (pre-IPO counts) are left out.
+  - TMUS, CAT, CVX and ORCL: a quarter lacking the long-term debt the 10-Ks report has no net debt, so no EV
+    and no EV/EBITDA, rather than one short by up to $122B.
+  After them: 78 moves, each traced to a filed share-count change or a spin-off factor.
+- The 12 remaining misses are each explained in `qa/evidence/valhist-m1-4-explained.txt`:
+  - EBITDA normalized by Yahoo: INTC, MRK, PFE, MO, GEV.
+  - Definitions: COF's revenue, WELL as a REIT.
+  - The share-count lag: TSLA.
+  - JNJ: ours matches its filings.
+  - ABBV and DHR: our D&A lacks the intangible amortization they tag apart.
+- Two upstream data bugs opened, for the QA queue: BUG-170 (D&A without intangible amortization) and
+  BUG-171 (10-Q quarters without long-term debt).
+- The restatement look-ahead, measured: revenue restated by more than 1% in 8% of years, net income in 4%.
+Evidence: `qa/evidence/valhist-m1-4-{red,oracle-before,oracle,misses,mutants,explained}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1250 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
+Commit: (this commit) feat(valuation): validate the valuation history against Yahoo's figures and fix what it found
+Next: M1-5.
