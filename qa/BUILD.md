@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 8 · DOING 1 · DONE 14 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 8 · DOING 0 · DONE 15 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -26,7 +26,7 @@
 | M1-6 | The VAL tab section (fragment, `renderValHistory`), checked in Chrome on a scratch server; with tests | DONE | this commit | `qa/evidence/valhist-m1-6-*` |
 | M1-7 | Screener columns (`*_pct_10y`, `price_to_hist_value`), filters, CSV; with tests | DONE | this commit | `qa/evidence/valhist-m1-7-*.txt` |
 | M1-8 | Docs: README "Valuation history", USAGE_GUIDE, the stale "no price series" text; the multiples-band basis bug logged (NEEDS-USER) | DONE | this commit | README, USAGE_GUIDE; `qa/BUGS.md` BUG-172 |
-| M1-9 | Milestone close: code review 15 (opus, 16f3005..HEAD) with Critical and Important findings fixed; then backup and offline backfill of the user's DB; verdict changes reported | DOING (review 15's Critical and Important findings fixed: BUG-174 to BUG-177; next the live backfill) | 7189bf7, 61181e7, 0ffde44, 5efe18e | `qa/evidence/m1-9-dryrun-*.txt`, `qa/evidence/review15-*.txt` |
+| M1-9 | Milestone close: code review 15 (opus, 16f3005..HEAD) with Critical and Important findings fixed; then backup and offline backfill of the user's DB; verdict changes reported | DONE | 7189bf7, 61181e7, 0ffde44, 5efe18e, e226b31, this commit (live backfill) | `qa/evidence/m1-9-*.txt`, `qa/evidence/review15-*` |
 
 ## M2: quality scores and ranks
 
@@ -462,3 +462,24 @@ Gates: ruff ✓ mypy ✓ pytest 1357 passed, 1 skipped, 1 warning | CI: no PR (Q
 Commit: (this commit) fix(qa): the history's oracle checks market cap at every split's seam (BUG-177)
 Next, M1-9's live step: back up the user's DB, run the offline backfill on it, check it with the oracle and
 report the verdict changes; record code review 15 in `qa/LOG.md`; then M1-9 is DONE.
+
+### Build iteration 20: 2026-10-21 22:38: M1-9 (the live backfill; M0 and M1 closed)
+Did:
+- Backed up the user's DB to `%LOCALAPPDATA%\stockdb-backups\2026-10-21-e`: the backup API from a mode=ro
+  connection, plus json/ and csv/. Integrity ok; every table's row count and all 131 files match.
+- Ran `python -m src.valuation.backfill --db data/output/stock.db` (offline, 6 s). It stored valuations for 127
+  tickers, the valuation history (23,310 months, 1,016 ranges), and M2's tables: 1,358 per-share rows, 127
+  quality scores, 248 warning signs. M2-9 recomputes M2's tables.
+- Checked: every oracle gate passes on the live DB (40/40 split seams, 80/80 moves traced). Every backfilled
+  row equals the dry run's, timestamps aside.
+- What changed for the user:
+  - Two verdicts, from M0's levered-FCF fix: MCD and PFE from expensive to fair (fair 16 to 18, expensive
+    108 to 106). The median upside goes from -58.3% to -56.1%, and the median value moved for 24 tickers.
+  - New: each company's valuation history and historical value, in the VAL tab, the API and the screener.
+- Code review 15 is recorded in `qa/LOG.md` as the QA loop's review 15 (iteration 103). Its Critical and
+  Important findings are fixed (BUG-174 to BUG-177). Its six Minor findings stay open as bugs: BUG-178 to
+  BUG-183, with BUG-179 at P2.
+Evidence: `qa/evidence/m1-9-live-{backup,backfill,oracle,diff,vs-dryrun}.txt`, `qa/evidence/review15-report.md`
+Gates: ruff ✓ mypy ✓ pytest 1357 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) chore(build): close M1, with the user's DB backed up and backfilled
+Next: M2-5 (the scores oracle and real-data validation).

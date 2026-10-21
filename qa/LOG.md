@@ -1855,3 +1855,20 @@ Gates: ruff ✓ mypy ✓ pytest 1193 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) feat(sec): BLK reads the old BlackRock's filings, a predecessor's counted up to the successor's first report
 Next: the P2s oldest first: BUG-142, BUG-149, BUG-150, BUG-151, BUG-159, BUG-160, BUG-161. Fixes since review 14's
 range (16f3005): 5 (BUG-140, BUG-141, BUG-029, Q6, BLK): code review 15 due.
+
+## Iteration 103: 2026-10-21 22:38: review (code review 15, run by the build loop)
+Picked: code review 15, due after five fixes since review 14's range (16f3005). The build loop's milestone close
+M1-9 ran it over 16f3005..a3c8a77: the QA fixes since review 14 (BUG-140, BUG-141, BUG-029, Q6, BLK), with M0 and M1.
+Did: an opus reviewer, read-only, in six passes; its report is `qa/evidence/review15-report.md`. It found one
+Critical issue: C1, split seams more than 120 days before their split never folded (NFLX 10x off, PANW 2x). It found
+three Important ones: I1, stock-paid mergers folded as splits; I2, a price-less latest snapshot switching off the
+share guard; I3, an oracle blind to seams. It also found six Minor ones, M1 to M6. The build loop fixed C1 and I1 to I3,
+each test-first and each checked on real copies: BUG-174 (7189bf7, 61181e7), BUG-176 (0ffde44), BUG-175 (5efe18e),
+BUG-177 (e226b31). Then the user's DB was backed up and backfilled offline (build iteration 20).
+Evidence: `qa/evidence/review15-report.md`, `qa/evidence/review15-*.txt`, `qa/evidence/m1-9-live-*.txt`
+Result: BUG-174 (P1), BUG-175, BUG-176 and BUG-177 VERIFIED. Still open: BUG-179 (P2, from M2); BUG-178 and
+BUG-180 to BUG-183 (P3, from M1 and M3 to M6); BUG-184 (P3, found while fixing I1).
+Gates: ruff ✓ mypy ✓ pytest 1357 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) chore(build): close M1, with the user's DB backed up and backfilled
+Next: the P2s oldest first: BUG-142, BUG-149, BUG-150, BUG-151, BUG-159, BUG-160, BUG-161, BUG-179. Code review 16
+(M2's close) covers the next range.
