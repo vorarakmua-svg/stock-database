@@ -23,6 +23,7 @@ from ..repository import Reader
 from ..screener import (
     DEFAULT_COMPARE_METRICS,
     METRIC_KINDS,
+    PRESETS,
     SNAPSHOT_SCREEN_COLUMNS,
     parse_screen_params,
 )
@@ -165,6 +166,35 @@ SCREENER_HISTORY_OPTIONS: List[tuple[str, str]] = [
     ("P/FFO percentile (10y)", "pffo_pct_10y"),
     ("Dividend yield percentile (10y)", "div_yield_pct_10y"),
     ("Price / historical value", "price_to_hist_value"),
+]
+
+# The valuation models' upsides (screener.VALUATION_EXPRS), fractions.
+SCREENER_VALUATION_OPTIONS: List[tuple[str, str]] = [
+    ("Upside to the median value", "val_upside_pct"),
+    ("Owner-earnings upside", "oe_upside_pct"),
+    ("Lynch model upside", "lynch_upside_pct"),
+]
+
+# The quality scores' fields (screener.QUALITY_EXPRS): ranks 1-10, the composite 0-100, the rest as stored.
+SCREENER_QUALITY_OPTIONS: List[tuple[str, str]] = [
+    ("Piotroski F", "piotroski_f"),
+    ("Altman Z", "altman_z"),
+    ("Beneish M", "beneish_m"),
+    ("Sloan ratio", "sloan_ratio"),
+    ("Predictability stars", "predictability_stars"),
+    ("Revenue / share CAGR (5y)", "rev_ps_cagr_5y"),
+    ("EPS CAGR (5y)", "eps_cagr_5y"),
+    ("ROIC - WACC", "roic_minus_wacc"),
+    ("Financial strength rank", "rank_strength"),
+    ("Profitability rank", "rank_profitability"),
+    ("Growth rank", "rank_growth"),
+    ("Valuation rank", "rank_valuation"),
+    ("Momentum rank", "rank_momentum"),
+    ("Composite score", "composite_score"),
+    ("Momentum", "momentum"),
+    ("Magic Formula rank", "magic_formula_rank"),
+    ("Warning signs", "warning_count"),
+    ("Price / NCAV", "price_to_ncav"),
 ]
 
 
@@ -505,6 +535,14 @@ def screener_page(
             {"key": key, "label": label, "group": "Historical value"}
             for label, key in SCREENER_HISTORY_OPTIONS
         ]
+        + [
+            {"key": key, "label": label, "group": "Valuation models"}
+            for label, key in SCREENER_VALUATION_OPTIONS
+        ]
+        + [
+            {"key": key, "label": label, "group": "Quality scores"}
+            for label, key in SCREENER_QUALITY_OPTIONS
+        ]
     )
     return templates.TemplateResponse(
         request,
@@ -515,6 +553,7 @@ def screener_page(
             "metric_options": metric_options,
             "snapshot_options": snapshot_options,
             "metric_json": metric_json,
+            "presets": PRESETS,
         },
     )
 

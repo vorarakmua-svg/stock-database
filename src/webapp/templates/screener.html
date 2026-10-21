@@ -14,6 +14,12 @@
 
 <div class="card mb-3">
   <div class="form-row" id="chip-bar">
+    <select id="preset-select" class="form-control form-control-sm" title="Fill the filters with a preset screen">
+      <option value="">Preset screens…</option>
+    {% for key, label, qs in presets %}
+      <option value="{{ qs }}">{{ label }}</option>
+    {% endfor %}
+    </select>
     <select id="sector-select" class="form-control form-control-sm">
       <option value="">All sectors</option>
     {% for s in sectors %}

@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 6 · DOING 1 · DONE 16 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 5 · DOING 1 · DONE 17 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -39,7 +39,7 @@
 | M2-4 | Storage (`per_share_annual`, `quality_scores`, `warning_signs`), the engine hooks, `rank_universe` (ranks, composite, momentum, Magic Formula); with tests | DONE | this commit | `qa/evidence/scores-m2-4-*.txt` |
 | M2-5 | Independent oracle `qa/oracle/scores_oracle.py` and real-data validation (distributions, severe signs traced) | DOING (the oracle's worker is running; the 14 severe signs judged) | | `qa/evidence/scores-m2-5-*.txt` |
 | M2-6 | `GET /api/stocks/{t}/scores` and the STAT tab's Quality section (radar, ranks, tests, growth, signs), browser-checked; with tests | DONE | this commit | `qa/evidence/scores-m2-6-*.txt` |
-| M2-7 | Screener fields from `quality_scores` (table-exists switch) and the preset screens; with tests | TODO | | |
+| M2-7 | Screener fields from `quality_scores` (table-exists switch) and the preset screens; with tests | DONE | this commit | `qa/evidence/scores-m2-7-*.txt` |
 | M2-8 | Docs: README and USAGE_GUIDE | TODO | | |
 | M2-9 | Milestone close: code review 16 (opus) with Critical and Important findings fixed; backup and offline backfill of the user's DB | TODO | | |
 
@@ -519,3 +519,27 @@ Evidence: `qa/evidence/scores-m2-6-{red,green}.txt`; screenshots in `%LOCALAPPDA
 Gates: ruff ✓ mypy ✓ pytest 1373 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) feat(web): the quality scores' API and the STAT tab's Quality section
 Next: M2-5's results when its worker reports (the oracle is written; its run is pending); then M2-7.
+
+### Build iteration 23: 2026-10-22 02:47: M2-7 (and M2-5's oracle reported)
+Did:
+- Screener: 17 fields of `quality_scores` and price / NCAV (none when NCAV isn't positive), joined only when the
+  table exists; the Lynch model's upside beside the median's and owner earnings'; all in the CSV. The page lists
+  them under "Quality scores" and "Valuation models"; the results add Composite and F-score columns.
+- The spec's five preset screens fill the filters from a dropdown: Buffett-Munger, Peter Lynch, Graham net-net,
+  Magic Formula (a rank of at least 1 leaves out banks, insurers, utilities and REITs) and Undervalued-predictable.
+  On the backfilled copy: 13, 2, 0, 49 and 13 matches.
+- Tests: 17 (the module failing to import first); three mutants. Two survived at first: the fixture's schema
+  already holds an empty `quality_scores`, so the test now drops it; the Lynch test now counts AAA's rows. Then
+  all three were killed.
+- Browser (headless Chrome, scratch server, collection and refresh off): the Magic Formula preset's URL renders
+  its chip and 49 ranked rows, with no console errors. Server stopped; port 8765 free.
+- M2-5's worker reported (the rate limit had paused it): 5 of its 9 gates pass. Piotroski, Altman, Sloan, the
+  ranks, the composite and the Magic Formula rank agree exactly. The misses: the annual share normalization
+  (`inputs._normalize_splits`) folds share jumps that aren't splits (mergers, unit swings, listing jumps, spin
+  factors) for 8 tickers. The oracle's own count is approximate where no weighted count is filed (GOOGL, XOM). The
+  vintages hold 5 counts in thousands (COP, AMT). Beneish reads a missing long-term debt as zero.
+Evidence: `qa/evidence/scores-m2-7-{red,green,mutants,presets}.txt`, `qa/evidence/scores-m2-5-oracle.txt`
+Gates: ruff ✓ mypy ✓ pytest 1390 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) feat(web): screen on the quality scores, with the five preset screens
+Next: M2-5. Diagnose the annual path's folds (is it BUG-175 again, and does fixing it move a verdict?), refine
+the oracle where its method is approximate, and settle the long-term-debt reading.

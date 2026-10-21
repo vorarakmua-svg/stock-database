@@ -21,6 +21,7 @@
   var sectorSel = document.getElementById('sector-select');
   var verdictSel = document.getElementById('verdict-select');
   var oeVerdictSel = document.getElementById('oe-verdict-select');
+  var presetSel = document.getElementById('preset-select');
   var popover = document.getElementById('filter-popover');
   var popSearch = document.getElementById('popover-search');
   var popList = document.getElementById('popover-list');
@@ -215,6 +216,17 @@
     state.oeVerdict = oeVerdictSel.value;
     sync();
   });
+  // A preset replaces the filters with its own query string, as loading a saved screen does.
+  if (presetSel) {
+    presetSel.addEventListener('change', function () {
+      if (!presetSel.value) return;
+      state = parseQS(presetSel.value);
+      sectorSel.value = state.sector;
+      verdictSel.value = state.verdict;
+      oeVerdictSel.value = state.oeVerdict;
+      sync();
+    });
+  }
   document.getElementById('scr-save').addEventListener('click', function () {
     var qs = buildQS();
     if (!qs) { note.textContent = 'Add at least one filter before saving.'; return; }

@@ -7,8 +7,9 @@ Column names placed into SQL come ONLY from whitelists: ``_METRIC_COLUMNS``
 metrics), ``SNAPSHOT_SCREEN_COLUMNS`` (qualified ``ms."col"``, latest
 market/valuation snapshot), ``VALUATION_EXPRS`` (a fixed name -> SQL
 expression mapping for computed valuation fields such as ``val_upside_pct``),
-and ``HISTORY_EXPRS`` (the valuation history's percentiles and price / value,
-over fixed-literal joins of ``valuation_ranges``).
+``HISTORY_EXPRS`` (the valuation history's percentiles and price / value,
+over fixed-literal joins of ``valuation_ranges``) and ``QUALITY_EXPRS`` (the
+quality scores' columns of ``quality_scores``, and price / NCAV).
 The first two sets are disjoint (enforced by a test), so resolution is
 deterministic; a filter/sort field is looked up in the metric set first, then
 the snapshot set, then the valuation-expression set, and any field in none of
@@ -51,6 +52,9 @@ VALUATION_EXPRS: Dict[str, str] = {
         '((vsum."median_base" - ms."current_price") / NULLIF(ms."current_price", 0))',
     "oe_upside_pct":
         '((oe."value_base" - ms."current_price") / NULLIF(ms."current_price", 0))',
+    # The Lynch model's base value over the price, for the Peter Lynch preset.
+    "lynch_upside_pct":
+        '((ly."value_base" - ms."current_price") / NULLIF(ms."current_price", 0))',
 }
 VALUATION_SELECT_COLUMNS: List[str] = ["median_bear", "median_base", "median_bull"]
 
@@ -69,6 +73,31 @@ _HISTORY_JOIN: str = "\n".join(
      f"AND vr_{m}.metric = '{m}' AND vr_{m}.applicable = 1" for m in HISTORY_METRICS]
     + ["LEFT JOIN valuation_ranges vr_fv ON vr_fv.ticker = ma.ticker "
        "AND vr_fv.metric = 'fair_value' AND vr_fv.applicable = 1"]
+)
+# The quality scores (quality_scores, one row per ticker): its columns, and Graham's price / NCAV per share,
+# none when NCAV isn't positive. One LEFT JOIN, made only when the table exists, so a database from before the
+# scores screens on with these fields NULL (docs/superpowers/specs/2026-10-21-quality-scores-design.md).
+QUALITY_FIELDS: Tuple[str, ...] = (
+    "piotroski_f", "altman_z", "beneish_m", "sloan_ratio", "predictability_stars", "rev_ps_cagr_5y", "eps_cagr_5y",
+    "roic_minus_wacc", "rank_strength", "rank_profitability", "rank_growth", "rank_valuation", "rank_momentum",
+    "composite_score", "momentum", "magic_formula_rank", "warning_count",
+)
+QUALITY_EXPRS: Dict[str, str] = {
+    **{f: f'qs."{f}"' for f in QUALITY_FIELDS},
+    "price_to_ncav": '(CASE WHEN qs."ncav_per_share" > 0 THEN ms."current_price" / qs."ncav_per_share" END)',
+}
+_QUALITY_JOIN: str = "LEFT JOIN quality_scores qs ON qs.ticker = ma.ticker"
+
+# The spec's preset screens: (key, label, the query string each fills the screener with).
+PRESETS: Tuple[Tuple[str, str, str], ...] = (
+    ("buffett_munger", "Buffett-Munger",
+     "predictability_stars_gte=4&roic_minus_wacc_gt=0&debt_to_ebitda_lte=3&price_to_hist_value_lte=1.1"),
+    ("lynch", "Peter Lynch", "lynch_upside_pct_gt=0&sort=lynch_upside_pct&sort_dir=desc"),
+    ("graham_net_net", "Graham net-net", "price_to_ncav_lte=0.67&sort=price_to_ncav&sort_dir=asc"),
+    # Banks, insurers, utilities and REITs have no Magic Formula rank, so a rank of at least 1 leaves them out.
+    ("magic_formula", "Magic Formula", "magic_formula_rank_gte=1&sort=magic_formula_rank&sort_dir=asc"),
+    ("undervalued_predictable", "Undervalued-predictable",
+     "predictability_stars_gte=4&price_to_hist_value_lt=0.9&sort=price_to_hist_value&sort_dir=asc"),
 )
 ALLOWED_VERDICTS = ("cheap", "fair", "expensive")
 
@@ -95,6 +124,7 @@ SCREEN_COLUMNS: List[str] = (
     + OWNER_EARNINGS_SELECT
     + list(VALUATION_EXPRS)
     + list(HISTORY_EXPRS)
+    + list(QUALITY_EXPRS)
 )
 
 # Default metrics for the compare view — single source of truth.
@@ -163,9 +193,18 @@ METRIC_KINDS: Dict[str, str] = {
     # valuation — computed percentage
     "val_upside_pct": "pct",
     "oe_upside_pct": "pct",
+    "lynch_upside_pct": "pct",
     # valuation history — percentiles in the 10-year window, and price / value
     **{f"{m}_pct_10y": "pct" for m in HISTORY_METRICS},
     "price_to_hist_value": "mult",
+    # quality scores — the scores and ranks are raw, the ratios and growth percentages
+    **{f: "raw" for f in QUALITY_FIELDS},
+    "sloan_ratio": "pct",
+    "rev_ps_cagr_5y": "pct",
+    "eps_cagr_5y": "pct",
+    "roic_minus_wacc": "pct",
+    "momentum": "pct",
+    "price_to_ncav": "mult",
 }
 
 # SQL fragment for the latest-fiscal-year-per-ticker sub-join (shared between
@@ -204,6 +243,12 @@ _OWNER_EARNINGS_JOIN: str = (
     "AND oe.model = 'owner_earnings' AND oe.applicable = 1"
 )
 
+# The Lynch model's row per ticker, for lynch_upside_pct; a LEFT JOIN like the owner-earnings one.
+_LYNCH_JOIN: str = (
+    "LEFT JOIN valuations ly ON ly.ticker = ma.ticker "
+    "AND ly.model = 'lynch' AND ly.applicable = 1"
+)
+
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -239,7 +284,8 @@ class ScreenSpec:
 # ---------------------------------------------------------------------------
 
 
-def _qualify_column(field_name: str, *, context: str = "filter", history: bool = True) -> str:
+def _qualify_column(field_name: str, *, context: str = "filter", history: bool = True,
+                    quality: bool = True) -> str:
     """Resolve *field_name* to a qualified, quoted SQL column reference.
 
     Metric columns (``_METRIC_COL_SET``) resolve to ``ma."col"``; snapshot
@@ -251,7 +297,8 @@ def _qualify_column(field_name: str, *, context: str = "filter", history: bool =
     Raises ``ValueError`` if *field_name* is in neither whitelist. *context*
     (``"filter"`` or ``"sort"``) is folded into the message only, to match the
     caller's existing error-matching expectations. A ``HISTORY_EXPRS`` field
-    is NULL when *history* is False (no ``valuation_ranges`` table).
+    is NULL when *history* is False (no ``valuation_ranges`` table), and a
+    ``QUALITY_EXPRS`` field when *quality* is False (no ``quality_scores``).
     """
     if field_name in _METRIC_COL_SET:
         return f'ma."{field_name}"'
@@ -261,13 +308,15 @@ def _qualify_column(field_name: str, *, context: str = "filter", history: bool =
         return VALUATION_EXPRS[field_name]
     if field_name in HISTORY_EXPRS:
         return HISTORY_EXPRS[field_name] if history else "NULL"
+    if field_name in QUALITY_EXPRS:
+        return QUALITY_EXPRS[field_name] if quality else "NULL"
     raise ValueError(
         f"Invalid {context} field {field_name!r}: not in whitelisted "
-        "_METRIC_COLUMNS, SNAPSHOT_SCREEN_COLUMNS, VALUATION_EXPRS, or HISTORY_EXPRS."
+        "_METRIC_COLUMNS, SNAPSHOT_SCREEN_COLUMNS, VALUATION_EXPRS, HISTORY_EXPRS, or QUALITY_EXPRS."
     )
 
 
-def _build_where(spec: ScreenSpec, history: bool = True) -> Tuple[str, List[Any]]:
+def _build_where(spec: ScreenSpec, history: bool = True, quality: bool = True) -> Tuple[str, List[Any]]:
     """Validate filters/sector and build the WHERE clause + ordered params.
 
     Raises ``ValueError`` for any non-whitelisted field or unknown op.
@@ -277,7 +326,7 @@ def _build_where(spec: ScreenSpec, history: bool = True) -> Tuple[str, List[Any]
     clauses: List[str] = []
 
     for f in spec.filters:
-        col = _qualify_column(f.field, context="filter", history=history)
+        col = _qualify_column(f.field, context="filter", history=history, quality=quality)
         if f.op == "between":
             if f.value2 is None:
                 raise ValueError(
@@ -349,7 +398,7 @@ def _build_where(spec: ScreenSpec, history: bool = True) -> Tuple[str, List[Any]
 # ---------------------------------------------------------------------------
 
 
-def build_screen_query(spec: ScreenSpec, history: bool = True) -> Tuple[str, List[Any]]:
+def build_screen_query(spec: ScreenSpec, history: bool = True, quality: bool = True) -> Tuple[str, List[Any]]:
     """Return ``(sql, params)`` for the full screen query.
 
     Pure function — does NOT touch the database.
@@ -370,10 +419,10 @@ def build_screen_query(spec: ScreenSpec, history: bool = True) -> Tuple[str, Lis
     # Validate sort column (may be either a metric or a snapshot column)
     sort_col: Optional[str] = None
     if spec.sort is not None:
-        sort_col = _qualify_column(spec.sort, context="sort", history=history)
+        sort_col = _qualify_column(spec.sort, context="sort", history=history, quality=quality)
 
     # Build WHERE (also validates filters)
-    where_sql, params = _build_where(spec, history)
+    where_sql, params = _build_where(spec, history, quality)
 
     # Build ORDER BY with NULLs-last
     if sort_col is not None:
@@ -393,10 +442,14 @@ def build_screen_query(spec: ScreenSpec, history: bool = True) -> Tuple[str, Lis
     history_exprs_sql = ", ".join(
         f"{expr if history else 'NULL'} AS {name}" for name, expr in HISTORY_EXPRS.items()
     )
+    quality_exprs_sql = ", ".join(
+        f"{expr if quality else 'NULL'} AS {name}" for name, expr in QUALITY_EXPRS.items()
+    )
     select_sql = (
         f"c.ticker, c.company_name, c.sector_class, ma.fiscal_year, "
         f"{metric_cols_sql}, {snapshot_cols_sql}, "
-        f"{valuation_cols_sql}, {oe_cols_sql}, {valuation_exprs_sql}, {history_exprs_sql}"
+        f"{valuation_cols_sql}, {oe_cols_sql}, {valuation_exprs_sql}, {history_exprs_sql}, "
+        f"{quality_exprs_sql}"
     )
 
     sql = (
@@ -406,7 +459,9 @@ def build_screen_query(spec: ScreenSpec, history: bool = True) -> Tuple[str, Lis
         f"{_SNAPSHOT_JOIN}\n"
         f"{_VALUATION_JOIN}\n"
         f"{_OWNER_EARNINGS_JOIN}\n"
+        f"{_LYNCH_JOIN}\n"
         f"{_HISTORY_JOIN if history else ''}\n"
+        f"{_QUALITY_JOIN if quality else ''}\n"
         f"{where_sql}\n"
         f"{order_sql}\n"
         f"LIMIT ? OFFSET ?"
@@ -416,14 +471,14 @@ def build_screen_query(spec: ScreenSpec, history: bool = True) -> Tuple[str, Lis
     return sql, params
 
 
-def build_count_query(spec: ScreenSpec, history: bool = True) -> Tuple[str, List[Any]]:
+def build_count_query(spec: ScreenSpec, history: bool = True, quality: bool = True) -> Tuple[str, List[Any]]:
     """Return ``(sql, params)`` for a ``COUNT(*)`` version of the same query.
 
     Used by ``Reader.screen`` to compute the total without LIMIT/OFFSET.
     Validates filters and sector (same as ``build_screen_query``) but does NOT
     validate sort/sort_dir (not needed for a count).
     """
-    where_sql, params = _build_where(spec, history)
+    where_sql, params = _build_where(spec, history, quality)
 
     sql = (
         f"SELECT COUNT(*)\n"
@@ -432,7 +487,9 @@ def build_count_query(spec: ScreenSpec, history: bool = True) -> Tuple[str, List
         f"{_SNAPSHOT_JOIN}\n"
         f"{_VALUATION_JOIN}\n"
         f"{_OWNER_EARNINGS_JOIN}\n"
+        f"{_LYNCH_JOIN}\n"
         f"{_HISTORY_JOIN if history else ''}\n"
+        f"{_QUALITY_JOIN if quality else ''}\n"
         f"{where_sql}"
     ).strip()
 
