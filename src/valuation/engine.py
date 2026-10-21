@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from ..exporters.sqlite_store import SQLiteStore
+from ..scores import engine as scores_engine
+from ..scores.engine import rank_all
 from .history import compute_history
 from .history_inputs import load_history_inputs
 from .inputs import ValuationInputs, load_inputs
@@ -180,6 +182,17 @@ def compute_and_store(db_path: Union[str, Path],
                 store.export_valuation_history(ticker, history, computed_at)
             except Exception as e:
                 log.warning(f"Valuation history failed for {ticker}: {e}")
+            # The quality scores, after the history they read; likewise isolated
+            # (docs/superpowers/specs/2026-10-21-quality-scores-design.md).
+            try:
+                scores_engine.store_ticker(conn, store, ticker, computed_at)
+            except Exception as e:
+                log.warning(f"Quality scores failed for {ticker}: {e}")
+        # The ranks are percentiles across every stored company, so any run re-ranks them all.
+        try:
+            rank_all(db_path, computed_at)
+        except Exception as e:
+            log.warning(f"Quality ranks failed: {e}")
         return stored
     finally:
         conn.close()

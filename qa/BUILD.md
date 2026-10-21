@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 9 · DOING 1 · DONE 13 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 8 · DOING 1 · DONE 14 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -36,7 +36,7 @@
 | M2-1 | `src/scores/fundamentals.py`: per-share series on today's split basis, 3/5/10-year CAGRs; with tests | DONE | this commit | `qa/evidence/scores-m2-1-*.txt` |
 | M2-2 | `src/scores/scores.py`: Piotroski F (9 tests), Altman Z, Beneish M, Sloan, ROIC vs WACC, predictability stars; with tests | DONE | this commit | `qa/evidence/scores-m2-2-*.txt` |
 | M2-3 | `src/scores/signs.py`: the 20 warning signs; with tests | DONE | this commit | `qa/evidence/scores-m2-3-*.txt` |
-| M2-4 | Storage (`per_share_annual`, `quality_scores`, `warning_signs`), the engine hooks, `rank_universe` (ranks, composite, momentum, Magic Formula); with tests | TODO | | |
+| M2-4 | Storage (`per_share_annual`, `quality_scores`, `warning_signs`), the engine hooks, `rank_universe` (ranks, composite, momentum, Magic Formula); with tests | DONE | this commit | `qa/evidence/scores-m2-4-*.txt` |
 | M2-5 | Independent oracle `qa/oracle/scores_oracle.py` and real-data validation (distributions, severe signs traced) | TODO | | |
 | M2-6 | `GET /api/stocks/{t}/scores` and the STAT tab's Quality section (radar, ranks, tests, growth, signs), browser-checked; with tests | TODO | | |
 | M2-7 | Screener fields from `quality_scores` (table-exists switch) and the preset screens; with tests | TODO | | |
@@ -361,3 +361,29 @@ Evidence: `qa/evidence/scores-m2-3-{red,mutants,realdata}.txt`
 Gates: ruff ✓ mypy ✓ pytest 1327 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
 Commit: (this commit) feat(scores): twenty warning signs, and no Altman Z for utilities
 Next: M1-9 when the review reports; otherwise M2-4.
+
+### Build iteration 15: 2026-10-22 00:30: M2-4; code review 15 reported
+Did:
+- New tables `per_share_annual`, `quality_scores` (`QUALITY_COLUMNS`) and `warning_signs`.
+  `export_quality_scores` replaces a ticker's rows in one transaction; `update_quality_ranks` writes the rank
+  pass.
+- `src/scores/engine.py` computes a ticker's row: scores, CAGRs, momentum, the rank components (JSON) and the
+  signs. `src/scores/ranks.py` holds momentum, the component percentiles (within the sector at 10 peers), the
+  ranks, the composite and the Magic Formula.
+- `compute_and_store` stores the scores after each ticker's history, in its own try/except, then re-ranks
+  every ticker after the loop. Valuations and the history are unchanged.
+- TDD: 8 rank and 7 store tests (RED: the modules missing); 10 mutants, each killed. "One-component ranks
+  need two" first survived: the requirement had been capped at the component count, so `REQUIRED` is now the
+  single rule.
+- Real data (a fresh backfilled copy): 6.2 s with the history and the scores. 127 score rows, 1,358
+  per-share rows, 249 signs. Composite for 118 (median 56): SCHW 90, MU 86 and NVDA 84 lead; BA, SO and IBM
+  trail. 49 companies eligible for the Magic Formula. Valuations identical to the earlier copies.
+- Code review 15 came back while this ran. It is "with fixes": C1 (split seams fold only within 120 days of
+  their split: NFLX's history is 10x off, PANW's 2x), I1 (mergers folded as splits: DUK, C), I2 (a price-less
+  latest snapshot switches off the share guard), I3 (the oracle can't see seam defects; the README overclaims
+  continuity), and six minors. M1-9 takes them next, before the live backfill.
+Evidence: `qa/evidence/scores-m2-4-{red,mutants,realdata}.txt`; the review's report is in this session's
+transcript, and its findings go to `qa/BUGS.md` in M1-9
+Gates: ruff ✓ mypy ✓ pytest 1342 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
+Commit: (this commit) feat(scores): store the quality scores, rank them across the universe, compute them with the valuations
+Next: M1-9 (code review 15's findings: C1, I1, I2, I3 fixed test-first, the minors logged; then the live backfill).

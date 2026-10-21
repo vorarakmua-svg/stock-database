@@ -20,7 +20,7 @@ import logging
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
 if TYPE_CHECKING:  # avoid a runtime exporters -> valuation dependency
     from ..valuation.history import HistoryResult
@@ -127,6 +127,30 @@ def _served_day(stock: StockData, collected_at: str) -> str:
 
 def _cols_ddl(columns: Sequence[str], col_type: str = "REAL") -> str:
     return ", ".join(f'"{c}" {col_type}' for c in columns)
+
+
+#: The quality scores' columns (Milestone 2), in table order. Column names in the export come only from here.
+QUALITY_COLUMNS: Tuple[str, ...] = (
+    "ticker", "fiscal_year",
+    "rev_ps_cagr_3y", "rev_ps_cagr_5y", "rev_ps_cagr_10y", "eps_cagr_3y", "eps_cagr_5y", "eps_cagr_10y",
+    "ebitda_ps_cagr_3y", "ebitda_ps_cagr_5y", "ebitda_ps_cagr_10y", "fcf_ps_cagr_5y", "book_ps_cagr_5y",
+    "piotroski_f", "piotroski_tested", "piotroski_tests", "altman_z", "altman_zone", "beneish_m",
+    "beneish_variables", "sloan_ratio", "roic", "wacc", "roic_minus_wacc", "predictability_stars",
+    "predictability_r2", "ncav_per_share", "earnings_yield", "return_on_capital", "momentum",
+    "rank_strength", "rank_profitability", "rank_growth", "rank_valuation", "rank_momentum", "composite_score",
+    "magic_formula_rank", "components", "warning_count", "na_reasons", "computed_at", "ranked_at",
+)
+#: The columns the rank pass writes.
+RANK_COLUMNS: Tuple[str, ...] = ("rank_strength", "rank_profitability", "rank_growth", "rank_valuation",
+                                 "rank_momentum", "composite_score", "magic_formula_rank")
+_QUALITY_TYPES: Dict[str, str] = {
+    "ticker": "TEXT PRIMARY KEY", "fiscal_year": "INTEGER", "piotroski_f": "INTEGER", "piotroski_tested": "INTEGER",
+    "piotroski_tests": "TEXT", "altman_zone": "TEXT", "beneish_variables": "TEXT", "predictability_r2": "TEXT",
+    "rank_strength": "INTEGER", "rank_profitability": "INTEGER", "rank_growth": "INTEGER",
+    "rank_valuation": "INTEGER", "rank_momentum": "INTEGER", "magic_formula_rank": "INTEGER",
+    "components": "TEXT", "warning_count": "INTEGER", "na_reasons": "TEXT", "computed_at": "TEXT NOT NULL",
+    "ranked_at": "TEXT",
+}
 
 
 class SQLiteStore:
@@ -371,7 +395,32 @@ class SQLiteStore:
             );
 
             CREATE INDEX IF NOT EXISTS idx_unmapped_tag ON unmapped_facts (tag);
+
+            -- The quality scores (docs/superpowers/specs/2026-10-21-quality-scores-design.md):
+            -- each fiscal year's per-share series on today's split basis, and the warning signs.
+            CREATE TABLE IF NOT EXISTS per_share_annual (
+                ticker TEXT NOT NULL,
+                fiscal_year INTEGER NOT NULL,
+                revenue_ps REAL, eps REAL, ebitda_ps REAL, fcf_ps REAL, book_ps REAL,
+                PRIMARY KEY (ticker, fiscal_year)
+            );
+
+            CREATE TABLE IF NOT EXISTS warning_signs (
+                ticker TEXT NOT NULL,
+                code TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                message TEXT,
+                value REAL,
+                threshold REAL,
+                computed_at TEXT NOT NULL,
+                PRIMARY KEY (ticker, code)
+            );
             """
+        )
+        # One row per ticker: every score, the CAGRs, the ranks and the composite (QUALITY_COLUMNS).
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS quality_scores ("
+            + ", ".join(f"{c} {_QUALITY_TYPES.get(c, 'REAL')}" for c in QUALITY_COLUMNS) + ")"
         )
 
     @staticmethod
@@ -1087,6 +1136,46 @@ class SQLiteStore:
                 "median_bull": summary["median_bull"],
                 "computed_at": computed_at,
             })
+            conn.commit()
+        finally:
+            conn.close()
+
+    def export_quality_scores(self, ticker: str, row: Dict[str, Any], per_share: List[Dict[str, Any]],
+                              signs: Sequence[Any], computed_at: str) -> None:
+        """Replace one ticker's quality scores, per-share rows and warning signs, in one transaction. Its
+        ranks stay empty until the rank pass (``update_quality_ranks``)."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            for table in ("per_share_annual", "warning_signs", "quality_scores"):
+                conn.execute(f"DELETE FROM {table} WHERE ticker = ?", (ticker,))
+            conn.executemany(
+                "INSERT INTO per_share_annual (ticker, fiscal_year, revenue_ps, eps, ebitda_ps, fcf_ps, book_ps) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(ticker, r["fiscal_year"], r.get("revenue_ps"), r.get("eps"), r.get("ebitda_ps"), r.get("fcf_ps"),
+                  r.get("book_ps")) for r in per_share])
+            values = {**row, "ticker": ticker, "computed_at": computed_at}
+            columns = [c for c in QUALITY_COLUMNS if c in values]
+            conn.execute(
+                f"INSERT INTO quality_scores ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
+                [values[c] for c in columns])
+            conn.executemany(
+                "INSERT INTO warning_signs (ticker, code, severity, message, value, threshold, computed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(ticker, s.code, s.severity, s.message, s.value, s.threshold, computed_at) for s in signs])
+            conn.commit()
+        finally:
+            conn.close()
+
+    def update_quality_ranks(self, ranks: Dict[str, Dict[str, Any]], ranked_at: str) -> None:
+        """Write the rank pass's ranks, composite and Magic Formula rank for every ticker, in one transaction."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            assignments = ", ".join(f"{c} = ?" for c in RANK_COLUMNS)
+            conn.executemany(
+                f"UPDATE quality_scores SET {assignments}, ranked_at = ? WHERE ticker = ?",
+                [[result.get(c) for c in RANK_COLUMNS] + [ranked_at, ticker] for ticker, result in ranks.items()])
             conn.commit()
         finally:
             conn.close()
