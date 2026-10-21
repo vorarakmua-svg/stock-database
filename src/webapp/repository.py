@@ -394,6 +394,31 @@ class Reader:
         row = cur.fetchone()
         return dict(row) if row is not None else None
 
+    def valuation_history(self, ticker: str) -> List[Dict[str, Any]]:
+        """The ``valuation_history`` monthly rows for a ticker, ascending by date.
+
+        Returns [] when the table does not exist yet (DB predates the
+        valuation history), like ``valuations``.
+        """
+        try:
+            cur = self._conn.execute(
+                "SELECT * FROM valuation_history WHERE ticker = ? ORDER BY date", (ticker,)
+            )
+        except sqlite3.OperationalError:
+            return []
+        return [dict(row) for row in cur.fetchall()]
+
+    def valuation_ranges(self, ticker: str) -> List[Dict[str, Any]]:
+        """The ``valuation_ranges`` rows for a ticker: each metric's 10-year range and
+        the historical value ('fair_value'). [] before the table exists."""
+        try:
+            cur = self._conn.execute(
+                "SELECT * FROM valuation_ranges WHERE ticker = ? ORDER BY metric", (ticker,)
+            )
+        except sqlite3.OperationalError:
+            return []
+        return [dict(row) for row in cur.fetchall()]
+
     def earnings_history(self, ticker: str) -> List[Dict[str, Any]]:
         """All ``earnings_history`` rows ascending by ``quarter``."""
         cur = self._conn.execute(

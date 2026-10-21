@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 9 · DOING 0 · DONE 5 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 8 · DOING 0 · DONE 6 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -22,7 +22,7 @@
 | M1-2 | `src/valuation/history.py`: multiples, window statistics, implied prices, the fair-value line, labels, `compute_history`; with tests | DONE | this commit | `qa/evidence/valhist-m1-2-*.txt` |
 | M1-3 | Storage (`valuation_history`, `valuation_ranges`, `export_valuation_history`) and the engine hook in `compute_and_store`, covering backfill; with tests | DONE | this commit | `qa/evidence/valhist-m1-3-*.txt` |
 | M1-4 | Real-data validation: `qa/oracle/history_vs_yahoo.py` on a backfilled DB copy; the spec's gates; split continuity; jumps traced; misses explained | DONE | this commit | `qa/evidence/valhist-m1-4-*.txt` |
-| M1-5 | Repository readers and `GET /api/stocks/{t}/valuation-history`; with tests | TODO | | |
+| M1-5 | Repository readers and `GET /api/stocks/{t}/valuation-history`; with tests | DONE | this commit | `qa/evidence/valhist-m1-5-*.txt` |
 | M1-6 | The VAL tab section (fragment, `renderValHistory`), checked in Chrome on a scratch server; with tests | TODO | | |
 | M1-7 | Screener columns (`*_pct_10y`, `price_to_hist_value`), filters, CSV; with tests | TODO | | |
 | M1-8 | Docs: README "Valuation history", USAGE_GUIDE, the stale "no price series" text; the multiples-band basis bug logged (NEEDS-USER) | TODO | | |
@@ -168,3 +168,21 @@ Evidence: `qa/evidence/valhist-m1-4-{red,oracle-before,oracle,misses,mutants,exp
 Gates: ruff ✓ mypy ✓ pytest 1250 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
 Commit: (this commit) feat(valuation): validate the valuation history against Yahoo's figures and fix what it found
 Next: M1-5.
+
+### Build iteration 6: 2026-10-21 18:40: M1-5
+Did:
+- `Reader.valuation_history` and `Reader.valuation_ranges` return [] before the tables exist.
+- `GET /api/stocks/{t}/valuation-history` returns:
+  - the historical value against the live quote: value, low, high, label, price/value, the metrics
+    combined, and the cutoffs;
+  - the ranges, in the fixed metric order;
+  - the monthly series: closes, historical values and the seven multiples.
+  An unknown ticker or ^GSPC gets 404; a ticker not computed yet gets "not computed yet".
+- TDD: 6 tests (RED: 4 failing, the route missing); 6 mutants, each killed.
+- Real data (the backfilled copy, through the test client): AAPL "far above" ($339.50 against $240.66),
+  NVDA "below", JPM "above", O "below"; GEV, BRK-B, SPCX and BX give their reasons. About 14 ms and
+  30-35 KB a request.
+Evidence: `qa/evidence/valhist-m1-5-{red,mutants,realdata}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1256 passed, 1 skipped (1 known warning) | CI: no PR (Q10)
+Commit: (this commit) feat(web): the valuation history's API route
+Next: M1-6.

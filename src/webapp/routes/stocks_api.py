@@ -35,6 +35,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 
 from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
+from ...valuation.history import HISTORICAL_VALUE_CUTOFFS, METRICS, historical_value_label
 from ...valuation.models import ValuationResult
 from ..dependencies import get_job_manager, get_reader, get_settings
 from ..indicators import indicator_bundle, normalize_pct
@@ -385,6 +386,66 @@ def valuation(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
         "models": models,
         "owner_earnings_verdict": oe_v,
         "owner_earnings_verdict_label": VERDICT_LABELS[oe_v],
+    }
+
+
+def _range_out(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "metric": row["metric"],
+        "applicable": bool(row["applicable"]),
+        "na_reason": row.get("na_reason"),
+        "as_of": row.get("as_of"),
+        "window_start": row.get("window_start"),
+        "n_months": row.get("n_months"),
+        "current": row.get("current_value"),
+        "pct_rank": row.get("pct_rank"),
+        "min": row.get("min"),
+        "p25": row.get("p25"),
+        "median": row.get("median"),
+        "p75": row.get("p75"),
+        "max": row.get("max"),
+        "implied_value": row.get("implied_value"),
+        "in_fair_value": bool(row.get("in_fair_value")),
+    }
+
+
+@router.get("/{ticker}/valuation-history")
+def valuation_history(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
+    """The valuation history: each metric's 10-year range, the historical value against
+    the live price, and the monthly series of closes, historical values and multiples
+    (docs/superpowers/specs/2026-10-21-valuation-history-design.md)."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    quote = r.quote(ticker)
+    price = quote.get("current_price") if quote else None
+    ranges = {row["metric"]: row for row in r.valuation_ranges(ticker)}
+    rows = r.valuation_history(ticker)
+    fv = ranges.get("fair_value") or {}
+    value = fv.get("current_value")
+    return {
+        "ticker": ticker,
+        "price": price,
+        "as_of": fv.get("as_of"),
+        "computed_at": fv.get("computed_at"),
+        "historical_value": {
+            "applicable": bool(fv.get("applicable")),
+            "na_reason": fv.get("na_reason") if fv else "not computed yet",
+            "value": value,
+            "low": fv.get("p25"),
+            "high": fv.get("p75"),
+            "n_metrics": fv.get("n_metrics"),
+            "window_start": fv.get("window_start"),
+            "n_months": fv.get("n_months"),
+            "metrics": [m for m in METRICS if m in ranges and ranges[m].get("in_fair_value")],
+            "label": historical_value_label(price, value),
+            "price_to_value": price / value if price and value else None,
+            "cutoffs": list(HISTORICAL_VALUE_CUTOFFS),
+        },
+        "ranges": [_range_out(ranges[m]) for m in METRICS if m in ranges],
+        "series": {
+            "dates": [row["date"] for row in rows],
+            **{column: [row.get(column) for row in rows] for column in ("close", "fair_value") + METRICS},
+        },
     }
 
 
