@@ -12,6 +12,30 @@ import requests
 
 from .rate_limiter import RateLimiter, RetryHandler, is_transient_error
 
+#: A registrant SEC's ticker map now sends to a successor formed to take its place (a holding
+#: company reorganization), mapped from the successor's CIK: the successor's company facts are
+#: read with the predecessor's, so the ticker keeps its history. XOM since 2026-07: ExxonMobil
+#: Holdings Corp, whose 10-Qs follow Exxon Mobil Corp's 20 years (Q6, the user's decision of
+#: 2026-10-21).
+PREDECESSOR_CIKS: Dict[str, str] = {
+    "0002115436": "0000034088",
+}
+
+
+def merge_company_facts(current: Dict[str, Any], earlier: Dict[str, Any]) -> Dict[str, Any]:
+    """*current*'s company facts with a predecessor's (*earlier*) beside them: each tag's entries
+    from both filers, whose accession numbers never coincide, and the successor's own name."""
+    facts: Dict[str, Dict[str, Any]] = {}
+    for source in (earlier, current):
+        for taxonomy, tags in (source.get("facts") or {}).items():
+            merged = facts.setdefault(taxonomy, {})
+            for tag, body in tags.items():
+                into = merged.setdefault(tag, {**{k: v for k, v in body.items() if k != "units"}, "units": {}})
+                for unit, entries in (body.get("units") or {}).items():
+                    into["units"].setdefault(unit, []).extend(entries)
+    return {**current, "facts": facts}
+
+
 # Default time-to-live for cached SEC payloads (companyfacts/submissions).
 # These update at most quarterly, so a week-long cache is safe and slashes
 # repeated network load when re-running over many tickers.
@@ -188,6 +212,22 @@ class SECHandler:
         except Exception as e:
             self.logger.error(f"Error fetching company facts: {e}")
             data["company_facts_error"] = str(e)
+
+        # A successor's history is its predecessor's filings (PREDECESSOR_CIKS).
+        predecessor = PREDECESSOR_CIKS.get(cik)
+        if predecessor and data.get("company_facts"):
+            data["predecessor_cik"] = predecessor
+            try:
+                earlier = self.get_company_facts(predecessor)
+            except Exception as e:
+                earlier = None
+                data["predecessor_error"] = str(e) or type(e).__name__
+            if earlier:
+                data["company_facts"] = merge_company_facts(data["company_facts"], earlier)
+                data["predecessor_name"] = earlier.get("entityName")
+            else:
+                data.setdefault("predecessor_error", "no XBRL data")
+                self.logger.warning(f"Predecessor CIK {predecessor} of {ticker} not read: {data['predecessor_error']}")
 
         # Fetch submissions (filing history)
         try:

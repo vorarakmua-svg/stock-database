@@ -180,6 +180,17 @@ class StockDataFetcher:
                     # drops data.
                     stock.unmapped_facts = detect_unmapped(facts)
 
+                # A successor read with its predecessor's filings says so (sec_handler.PREDECESSOR_CIKS).
+                if sec_data.get("predecessor_error"):
+                    stock.add_warning(f"SEC EDGAR: {ticker}'s predecessor, CIK {sec_data['predecessor_cik']}, "
+                                      f"couldn't be read ({sec_data['predecessor_error']}), so its history is "
+                                      f"missing from this run")
+                elif sec_data.get("predecessor_cik"):
+                    name = (sec_data.get("submissions") or {}).get("name") or "name unknown"
+                    stock.add_warning(f"SEC EDGAR: {ticker} reads CIK {sec_data['cik']} ({name}) with its "
+                                      f"predecessor's filings, CIK {sec_data['predecessor_cik']} "
+                                      f"({sec_data.get('predecessor_name') or 'name unknown'})")
+
                 # An empty record otherwise reads like a short history: say why.
                 if sec_data.get("cik") and not annual:
                     stock.add_warning(self._no_annual_financials(ticker, sec_data))

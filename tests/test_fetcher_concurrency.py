@@ -404,3 +404,31 @@ def test_a_collected_quarterly_record_and_its_trailing_years_sit_on_one_split_ba
     assert stock.financials_ttm["2019-12-31"]["eps_diluted"] == pytest.approx(23.01)
     assert not [end for end, period in stock.financials_quarterly.items() if "_split_levels" in period]
 
+
+
+def test_a_successor_registrant_is_noted_with_its_predecessor(tmp_path, monkeypatch):
+    # Q6: XOM reads ExxonMobil Holdings Corp with Exxon Mobil Corp's filings; the run says so, where it used to say
+    # there were no annual financials.
+    year = {"val": 339.2e9, "start": "2025-01-01", "end": "2025-12-31", "fy": 2025, "fp": "FY", "form": "10-K",
+            "filed": "2026-02-18", "accn": "0000034088-26-000009"}
+    stock = _collect_from_sec(tmp_path, monkeypatch, {
+        "cik": "0002115436", "ticker": "XOM", "source": "sec_edgar",
+        "predecessor_cik": "0000034088", "predecessor_name": "EXXON MOBIL CORP",
+        "company_facts": {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [year]}}}}},
+        "submissions": {"name": "ExxonMobil Holdings Corp", "filings": []}})
+    assert stock.financials_annual["2025"]["revenue"] == 339.2e9
+    assert ("SEC EDGAR: XOM reads CIK 0002115436 (ExxonMobil Holdings Corp) with its predecessor's filings, "
+            "CIK 0000034088 (EXXON MOBIL CORP)") in stock.warnings
+    assert not any(w.startswith("SEC EDGAR: no annual financials") for w in stock.warnings)
+
+
+def test_a_predecessor_that_couldnt_be_read_is_named(tmp_path, monkeypatch):
+    entry = {"val": 81.0e9, "start": "2026-04-01", "end": "2026-06-30", "fy": 2026, "fp": "Q2", "form": "10-Q",
+             "filed": "2026-08-01"}
+    stock = _collect_from_sec(tmp_path, monkeypatch, {
+        "cik": "0002115436", "ticker": "XOM", "source": "sec_edgar",
+        "predecessor_cik": "0000034088", "predecessor_error": "503 Server Error",
+        "company_facts": {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [entry]}}}}},
+        "submissions": {"name": "ExxonMobil Holdings Corp", "filings": []}})
+    assert ("SEC EDGAR: XOM's predecessor, CIK 0000034088, couldn't be read (503 Server Error), so its history is "
+            "missing from this run") in stock.warnings

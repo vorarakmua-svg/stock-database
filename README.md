@@ -635,7 +635,10 @@ moving averages, …) — see `SNAPSHOT_SCREEN_COLUMNS` in `src/webapp/screener.
 for the subset exposed to the screener. All writes are idempotent upserts, so
 re-runs update in place: a ticker's run that parses its annual record rewrites every period it
 gives, so a figure the current rules leave empty is cleared, while periods it doesn't give and a
-filer with no 10-K yet (a new registrant) keep what's stored. `dividend_events` keeps each payment as Yahoo served it,
+filer with no 10-K yet (a new registrant) keep what's stored. A ticker SEC now maps to a
+successor formed to take a registrant's place reads the predecessor's filings too
+(`sec_handler.PREDECESSOR_CIKS`): XOM is ExxonMobil Holdings Corp's 10-Qs with Exxon Mobil Corp's
+history, and the run notes both. `dividend_events` keeps each payment as Yahoo served it,
 split-adjusted as of `served_on`: the collection's day on Yahoo's calendar, its last
 daily bar or the latest split Yahoo listed, whichever is later (the collector's own date
 can run a day ahead of New York's). The valuation takes each payment to its price's

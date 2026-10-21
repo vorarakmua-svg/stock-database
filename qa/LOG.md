@@ -1824,3 +1824,18 @@ Gates: ruff ✓ mypy ✓ pytest 1185 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) fix(store): a re-collection clears what its parse leaves empty
 Next: the P2s oldest first: BUG-142, BUG-149, BUG-150, BUG-151, BUG-159, BUG-160, BUG-161. Fixes since review 14's
 range (16f3005): 3 (BUG-140, BUG-141, BUG-029).
+
+## Iteration 101: 2026-10-21 10:26: decision (the user's)
+Picked: Q6, which the user decided ("XOM keep Exxon Mobil Corp history"): option (a), an explicit successor map.
+Did: `sec_handler.PREDECESSOR_CIKS` (2115436 to 34088) and `merge_company_facts`; `fetch_all` reads both filers'
+company facts, and the run notes it. TDD (four tests RED, one guard: a filer without a predecessor reads its own
+filings only); six mutants, each failing a test. The real filings merged give Exxon Mobil Corp's 20 years cell for
+cell and 77 quarters to 2026-06-30, with all 143 figures the holding company's quarters lack. A backup, then XOM
+re-collected live (0 errors): the note recorded, its history whole, its rows re-parsed with today's rules for the
+first time since August (long-term debt in 12 years; share counts of 0 corrected), the valuation unchanged.
+Evidence: `qa/evidence/q6-{red,green,mutants,realdata,live}.txt`
+Result: Q6 decided and VERIFIED; MATCH-01's and VALID-01's notes updated.
+Gates: ruff ✓ mypy ✓ pytest 1190 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) feat(sec): XOM reads its predecessor's filings and keeps Exxon Mobil Corp's history
+Next: BLK's predecessor, if the user wants it; the P2s oldest first: BUG-142, BUG-149, BUG-150, BUG-151, BUG-159,
+BUG-160, BUG-161. Fixes since review 14's range (16f3005): 4 (BUG-140, BUG-141, BUG-029, Q6).
