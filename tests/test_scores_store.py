@@ -122,6 +122,25 @@ def test_a_ranking_failure_leaves_the_scores(tmp_path, monkeypatch, caplog):
     assert "ranking broke" in caplog.text
 
 
+def test_the_scores_read_the_latest_snapshot_with_a_price(tmp_path):
+    """BUG-187: a later run whose quote failed leaves a snapshot without price, market cap or beta."""
+    clean = _seed(tmp_path / "clean.db")
+    failed = _seed(tmp_path / "failed.db")
+    conn = sqlite3.connect(failed)
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, risk_free_rate) "
+                 "VALUES ('AAA', '2026-02-26T10:00:00', 0.04)")
+    conn.commit()
+    conn.close()
+    compute_and_store(clean)
+    compute_and_store(failed)
+
+    def scores(db):
+        return {k: v for k, v in _scores(db)["AAA"].items() if k not in ("computed_at", "ranked_at")}
+
+    assert scores(failed)["altman_z"] is not None and scores(failed)["wacc"] is not None
+    assert scores(failed) == scores(clean)
+
+
 def test_the_backfill_writes_the_scores(tmp_path):
     db = _seed(tmp_path / "s.db")
     assert backfill_main(["--db", str(db)]) == 0

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 17 · P3 100 · NEEDS-USER 15 · Verified: 82
+**Open:** P0 0 · P1 0 · P2 15 · P3 100 · NEEDS-USER 15 · Verified: 84
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1414,16 +1414,20 @@ Fix (build iteration 24):
 Evidence: `qa/evidence/bug185-{red,green,mutants,realdata}.txt`
 
 ### BUG-186 [P2][UI] The STAT tab shows a Piotroski test that couldn't run as "Fail"
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (build iteration 35)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression test: tests/test_web_scores.py::test_a_piotroski_test_that_could_not_run_is_not_a_fail
 Repro: `templates/fragments/quality.html` renders `passed: null` as Fail. ANET's headline reads "4 / 8" with 5 Fails in the table (its debt-free leverage test can't run); V's "5 / 7" shows 4 Fails, among them "Gross margin rose" (no cost of revenue).
 Expected: a third state, "Not tested", as the API and the usage guide already say (null = not run).   Actual: 39 of the 105 scored companies show a Fail that is no failure (gross margin 31, leverage 8, current ratio 6, shares 1).
+Fix (build iteration 35): a test whose `passed` is null reads "Not tested" (a muted pill, with a tooltip saying an input is missing); only real failures read "Fail". The test failed first (the cell read Fail).
+Evidence: `qa/evidence/bug186-{red,green}.txt`
 
 ### BUG-187 [P2][SCORES] The quality scores read the latest snapshot even when it has no price (BUG-176's twin)
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (build iteration 35)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression test: tests/test_scores_store.py::test_the_scores_read_the_latest_snapshot_with_a_price
 Repro: `src/scores/engine.py` `_market` takes the newest `market_snapshots` row. A collection whose quote failed leaves one without price, market cap or beta (50 such rows from the 2026-06-28 run) and computes the scores straight after. AAPL with such a row: Altman 12.68, WACC 9.82% and the earnings yield go to None ("no market cap"), momentum moves (beta 1), the valuation component switches to the P/E percentile, `price_far_above_value` disappears and AAPL leaves the Magic Formula.
 Expected: the latest snapshot with a price, as `history_inputs` reads since BUG-176.   Actual: the newest row, priced or not.
+Fix (build iteration 35): `_market` reads the latest snapshot with a price, as `history_inputs` does. With a later price-less row, every stored score equals the run without it; before the fix Altman Z went to None (the RED run, which is also the mutant: the filter removed).
+Evidence: `qa/evidence/bug187-{red,green}.txt`
 
 ### BUG-188 [P2][VAL] BUG-185's listing rule folds a stock-paid merger in a year before the listing
 Status: OPEN

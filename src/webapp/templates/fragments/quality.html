@@ -49,7 +49,7 @@
       <tbody>
         {% for t in tests %}
         <tr><td class="row-label">{{ t.label }}</td>
-          <td>{% if t.passed %}<span class="pill up">Pass</span>{% else %}<span class="pill down">Fail</span>{% endif %}</td></tr>
+          <td>{% if t.passed is none %}<span class="pill verdict-none" title="an input is missing, so the test didn't run">Not tested</span>{% elif t.passed %}<span class="pill up">Pass</span>{% else %}<span class="pill down">Fail</span>{% endif %}</td></tr>
         {% endfor %}
       </tbody>
     </table>

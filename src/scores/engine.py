@@ -27,8 +27,10 @@ def _rows(conn: sqlite3.Connection, sql: str, params: Tuple[Any, ...]) -> List[D
 
 
 def _market(conn: sqlite3.Connection, ticker: str) -> Market:
-    snap = _rows(conn, "SELECT * FROM market_snapshots WHERE ticker = ? ORDER BY collected_at DESC LIMIT 1",
-                 (ticker,))
+    # The latest snapshot with a price: a run whose quote failed stores one without price, market cap or beta
+    # (BUG-187, as BUG-176 for the history).
+    snap = _rows(conn, "SELECT * FROM market_snapshots WHERE ticker = ? AND current_price IS NOT NULL "
+                 "ORDER BY collected_at DESC LIMIT 1", (ticker,))
     s = snap[0] if snap else {}
     return Market(market_cap=s.get("market_cap"), price=s.get("current_price"),
                   risk_free_rate=s.get("risk_free_rate"), beta=s.get("beta"))

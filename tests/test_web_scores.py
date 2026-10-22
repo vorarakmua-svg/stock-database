@@ -3,6 +3,7 @@ the growth table and the warning signs (docs/superpowers/specs/2026-10-21-qualit
 import json
 import re
 
+from src.scores.scores import PIOTROSKI_TESTS
 from tests.test_web_api_scores import _row, _seed
 
 
@@ -41,6 +42,17 @@ def test_the_signs_list_severe_first(client, web_db):
     severe = html.index("interest coverage of 1.2x is below 1.5x")
     medium = html.index("accruals of 12% of assets")
     assert severe < medium
+
+
+def test_a_piotroski_test_that_could_not_run_is_not_a_fail(client, web_db):
+    """BUG-186: a test without its inputs (passed null) reads "Not tested"; only real failures read "Fail"."""
+    tests = {code: code != "cfo_above_ni" for code in PIOTROSKI_TESTS}
+    tests["gross_margin_up"] = None
+    _seed(web_db, row=_row(piotroski_f=7, piotroski_tested=8, piotroski_tests=json.dumps(tests)))
+    html = client.get("/ui/stocks/AAA/scores").text
+    cell = re.search(r"Gross margin rose</td>\s*<td>(.*?)</td>", html, re.S)
+    assert cell and "Not tested" in cell.group(1)
+    assert html.count(">Fail<") == 1 and html.count(">Pass<") == 7
 
 
 def test_a_bank_shows_why_its_scores_are_missing(client, web_db):
