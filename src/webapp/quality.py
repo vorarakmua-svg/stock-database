@@ -86,7 +86,7 @@ def quality_view(r: Reader, ticker: str) -> Dict[str, Any]:
         "predictability": {"stars": row.get("predictability_stars"), "r2": _json(row.get("predictability_r2")),
                            "na_reason": na.get("predictability")},
         "magic_formula": {"rank": row.get("magic_formula_rank"), "earnings_yield": row.get("earnings_yield"),
-                          "return_on_capital": row.get("return_on_capital")},
+                          "return_on_capital": row.get("return_on_capital"), "na_reason": na.get("magic_formula")},
         "ncav_per_share": row.get("ncav_per_share"),
         "momentum": row.get("momentum"),
         "growth": [{"key": key, "label": label,

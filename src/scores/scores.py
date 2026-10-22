@@ -281,7 +281,7 @@ def compute_scores(f: Fundamentals, market: Market) -> Scores:
     s = Scores()
     if not f.rows:
         s.na_reasons = {k: "no annual financials" for k in ("piotroski", "altman", "beneish", "sloan", "wacc",
-                                                              "predictability")}
+                                                              "predictability", "magic_formula")}
         return s
     cur = f.rows[-1]
     prev = f.rows[-2] if len(f.rows) > 1 else None
@@ -336,15 +336,44 @@ def compute_scores(f: Fundamentals, market: Market) -> Scores:
     ebit = c.get("ebit") if c.get("ebit") is not None else c.get("operating_income")
     debt, ebitda = _total_debt(cur), c.get("ebitda")
     s.debt_to_ebitda = debt / ebitda if debt is not None and ebitda is not None and ebitda > 0 else None
-    if ebit is not None and market.market_cap and sector not in _FINANCIALS:
-        if cur.debt_unknown:
-            s.na_reasons["magic_formula"] = DEBT_UNKNOWN
-        else:
-            ev = market.market_cap + (c.get("net_debt") or 0.0)
-            s.earnings_yield = ebit / ev if ev > 0 else None
-        if ca is not None and cl is not None and ppe is not None:
-            # Greenblatt's capital: net working capital without cash or short-term debt, plus net PPE.
-            nwc = (ca - (c.get("cash_and_equivalents") or 0.0)) - (cl - (c.get("short_term_debt") or 0.0))
-            capital = nwc + ppe
-            s.return_on_capital = ebit / capital if capital > 0 else None
+    if sector not in _FINANCIALS:
+        s.earnings_yield, s.return_on_capital, reason = _magic_inputs(cur, ebit, market)
+        if reason:
+            s.na_reasons["magic_formula"] = reason
     return s
+
+
+def _magic_inputs(cur: AnnualRow, ebit: Optional[float],
+                  market: Market) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+    """Greenblatt's earnings yield (EBIT / EV) and return on capital (EBIT / (net working capital + net PPE)),
+    and why the rank can't use them where either is missing (BUG-191)."""
+    if ebit is None:
+        return None, None, "no operating income (EBIT)"
+    if not market.market_cap:
+        return None, None, "no market cap"
+    c = cur.figures
+    ey = roc = None
+    reasons: List[str] = []
+    if cur.debt_unknown:
+        reasons.append(DEBT_UNKNOWN)
+    else:
+        ev = market.market_cap + (c.get("net_debt") or 0.0)
+        if ev > 0:
+            ey = ebit / ev
+        else:
+            reasons.append("enterprise value of 0 or less")
+    ca, cl, ppe = (c.get(k) for k in ("current_assets", "current_liabilities", "ppe_net"))
+    if ca is None or cl is None:
+        reasons.append("no current assets or liabilities")
+    elif ppe is None:
+        reasons.append("no net PP&E figure")
+    else:
+        # Greenblatt's capital: net working capital without cash or short-term debt, plus net PPE. Below 0 the
+        # working capital counts as none: a business its customers fund (MA, V, BKNG) ties up only its PPE.
+        nwc = (ca - (c.get("cash_and_equivalents") or 0.0)) - (cl - (c.get("short_term_debt") or 0.0))
+        capital = max(nwc, 0.0) + ppe
+        if capital > 0:
+            roc = ebit / capital
+        else:
+            reasons.append("no capital employed")
+    return ey, roc, "; ".join(reasons) or None

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 12 · P3 100 · NEEDS-USER 15 · Verified: 87
+**Open:** P0 0 · P1 0 · P2 11 · P3 101 · NEEDS-USER 15 · Verified: 88
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1463,10 +1463,17 @@ Expected: no debt tagged and no interest expense read as zero debt, as Beneish a
 Fix (build iteration 35): with BUG-189, which records the fix and the real-data effects.
 
 ### BUG-191 [P2][SCORES] The Magic Formula ranks 49 of the 93 eligible companies and doesn't say why the rest are missing
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (build iteration 35)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression test: tests/test_scores_scores.py::test_negative_working_capital_counts_as_none, ::test_the_magic_formula_says_why_a_company_has_no_rank, tests/test_web_scores.py::test_an_unranked_company_says_why
 Repro: `src/scores/scores.py`: 12 have Greenblatt capital of 0 or less (MA, V, ADBE, BKNG, SPGI, NFLX, NOW, ABBV, MO, DELL, CRWD, PANW), often the best returns on capital; 17 lack PP&E (`ppe_net` maps only `PropertyPlantAndEquipmentNet`; UNP, HD and TSLA tag the lease-inclusive tag; META, GOOGL, LOW, T); 15 lack operating income (JNJ, LLY, MRK, PFE, XOM, CVX, IBM, GE, DE, KLAC...), which leaves Altman N/A too. The preset reads "ranked, best first" over that subset.
 Expected: capital of 0 or less with positive EBIT ranked (net working capital floored at 0), the reason shown in the STAT row and the README, and the tag gaps opened as a data task.   Actual: silently unranked.
+Fix (build iteration 35):
+- Greenblatt's net working capital counts as 0 when negative, so the capital of a business its customers fund is its net PP&E; the 12 with capital of 0 or less are ranked (BKNG 1, ADBE 2, MO 3, SPGI 5, NFLX 7, MA 8, V 13). The floor also stops a negative working capital nearly cancelling the PP&E of companies already ranked: AAPL's return on capital goes from 15.5x to 2.7x and its rank from 12 to 21.
+- `na_reasons.magic_formula` says why a company has no rank (no operating income, no market cap, unknown debt, an enterprise value of 0 or less, no current assets or liabilities, no net PP&E figure, no capital employed, no annual financials), and the STAT row and the API show it. The README gives the counts.
+- The tag gaps are BUG-203.
+- Tests: four (each failing first); six mutants, each killed.
+- Real data (a backfilled copy against BUG-190's): no valuation row, median or verdict moves. Ranked: 61 of the 94 eligible (was 49). Unranked: 17 with no net PP&E figure, 15 with no operating income, and SPCX (no annual financials).
+Evidence: `qa/evidence/bug191-{red,green,mutants,realdata}.txt`
 
 ### BUG-192 [P3][SCORES] Predictability's N/A reasons and notes are off
 Status: OPEN
@@ -1533,6 +1540,13 @@ Status: OPEN
 Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
 Repro: as BUG-182 for the history; `computed_at` is shown, so it's visible.
 Expected: a failure stored as an N/A reason, or the row marked stale.   Actual: the old row.
+
+### BUG-203 [P3][DATA] Three tags the mapping doesn't read: lease-inclusive PP&E, the combined debt, and no operating income without a fallback
+Status: OPEN
+Found: code review 16's recommendations, build M2-9 (BUG-189, BUG-191) | Fixed: | Regression test:
+Repro: `src/mappings/canonical.py`: `ppe_net` maps only `PropertyPlantAndEquipmentNet`, so 17 of the 94 Magic Formula candidates have no PP&E (UNP, HD and TSLA tag `PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization`; also META, GOOGL, LOW, T...). 15 tag no `OperatingIncomeLoss` (JNJ, LLY, MRK, PFE, XOM, CVX, IBM, GE, DE, KLAC...), which leaves their Altman Z and Magic Formula rank N/A. PGR files its $8.39B of debt as `DebtLongtermAndShorttermCombinedAmount`, which no field maps (so its debt reads unknown, BUG-189).
+Expected: the tags mapped, with fallbacks, and an EBIT definition chosen for the filers without operating income (GuruFocus uses pretax income + interest expense).   Actual: N/A, with the reason shown (BUG-191).
+Notes: a mapping change reaches the stored figures only at the next collection, which is live (not in M2's offline backfill). Operating income feeds EBITDA, M1's EV/EBITDA history and the fair-value line, and the screener, so a fallback needs a valuation-policy check first.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

@@ -556,8 +556,12 @@ any run re-ranks everyone.
   choosing ours is left to the user (Q11 in `qa/BUGS.md`).
 - The **Magic Formula rank** (Greenblatt) sums the ranks of the earnings yield (EBIT / EV, EV = market cap +
   net debt) and the return on capital (EBIT / (net working capital + net PP&E), net working capital = current
-  assets - cash - (current liabilities - short-term debt)), across the companies with both (49 of the 127;
-  banks, insurers, utilities and REITs are left out). 1 is best, and a tie goes to the higher earnings yield.
+  assets - cash - (current liabilities - short-term debt), counted as 0 when negative: a business its
+  customers fund, as MA's, V's or BKNG's, ties up only its PP&E). It ranks the companies with both, 61 of the
+  94 outside banks, insurers, utilities and REITs; 1 is best, and a tie goes to the higher earnings yield. The
+  STAT tab says why the others have no rank (BUG-191): 17 file no `PropertyPlantAndEquipmentNet` (UNP, HD and
+  TSLA tag a lease-inclusive PP&E instead; META, GOOGL, LOW and T are among them) and 15 no operating income
+  (JNJ, LLY, MRK, PFE, XOM, CVX, IBM, GE, DE, KLAC and others), gaps in the tag mapping open as BUG-203.
 
 It is computed with the valuations, after a collection, a web job or `python -m src.valuation.backfill`, into
 three tables (columns and queries are in the [USAGE_GUIDE](USAGE_GUIDE.md#quality-scores)):
@@ -584,7 +588,8 @@ Where it shows:
     value ≤ 1.1;
   - Peter Lynch: the Lynch model's base value above the price, most upside first;
   - Graham net-net: price / NCAV per share ≤ 0.67, lowest first;
-  - Magic Formula: ranked, best first (banks, insurers, utilities and REITs have no rank, so they drop out);
+  - Magic Formula: ranked, best first (banks, insurers, utilities and REITs have no rank, nor have the
+    companies missing an input, each with its reason in the STAT tab);
   - Undervalued-predictable: predictability ≥ 4 and price / historical value < 0.9, lowest first.
 
 Checked by `qa/oracle/scores_oracle.py`, which imports nothing from `src` and recomputes from the raw tables,

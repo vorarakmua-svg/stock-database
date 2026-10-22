@@ -253,3 +253,31 @@ def test_a_utility_has_no_altman_z():
     assert s.altman_z is None and s.na_reasons["altman"] == "not meaningful for utilities"
     assert s.beneish_m is not None and s.wacc is not None  # the rest apply
 
+
+def _magic(**latest):
+    f = _steady()
+    f.rows[-1].figures.update(latest)
+    return compute_scores(f, _market())
+
+
+def test_negative_working_capital_counts_as_none():
+    # BUG-191: a business its customers fund (MA, V, BKNG) has net working capital below 0, which left Greenblatt's
+    # capital at 0 or less and the company unranked. Floored at 0, its capital is its net PPE.
+    s = _magic(current_assets=300.0, cash_and_equivalents=80.0, current_liabilities=600.0, short_term_debt=20.0,
+               ppe_net=200.0)
+    assert s.return_on_capital == pytest.approx(150.0 / 200.0)
+    assert "magic_formula" not in s.na_reasons
+
+
+def test_the_magic_formula_says_why_a_company_has_no_rank():
+    assert _magic(operating_income=None, ebit=None).na_reasons["magic_formula"] == "no operating income (EBIT)"
+    assert _magic(ppe_net=None).na_reasons["magic_formula"] == "no net PP&E figure"
+    assert _magic(current_assets=None).na_reasons["magic_formula"] == "no current assets or liabilities"
+    s = _magic(ppe_net=0.0, current_assets=100.0, current_liabilities=600.0)
+    assert s.return_on_capital is None and s.na_reasons["magic_formula"] == "no capital employed"
+    s = _magic(net_debt=-2500.0)  # cash beyond the market cap
+    assert s.earnings_yield is None and s.na_reasons["magic_formula"] == "enterprise value of 0 or less"
+    assert compute_scores(_steady(), Market()).na_reasons["magic_formula"] == "no market cap"
+    # SPCX: no annual financials at all, so no reason was given for its missing rank.
+    assert compute_scores(Fundamentals(ticker="SPCX"), _market()).na_reasons["magic_formula"] == (
+        "no annual financials")

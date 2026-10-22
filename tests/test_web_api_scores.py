@@ -78,7 +78,8 @@ def test_the_endpoint_gives_the_scores_the_ranks_the_growth_and_the_signs(client
     assert body["sloan"] == {"ratio": 0.12, "zone": "warning", "na_reason": None}
     assert body["roic_vs_wacc"] == {"roic": 0.18, "wacc": 0.09, "spread": 0.09, "na_reason": None}
     assert body["predictability"] == {"stars": 4.5, "r2": {"revenue": 0.93, "ebitda": 0.88}, "na_reason": None}
-    assert body["magic_formula"] == {"rank": 4, "earnings_yield": 0.05, "return_on_capital": 0.4}
+    assert body["magic_formula"] == {"rank": 4, "earnings_yield": 0.05, "return_on_capital": 0.4,
+                                     "na_reason": None}
     assert (body["ncav_per_share"], body["momentum"]) == (-12.0, 0.12)
     growth = {g["key"]: g for g in body["growth"]}
     assert list(growth) == ["rev_ps", "eps", "ebitda_ps", "fcf_ps", "book_ps"]
@@ -137,3 +138,11 @@ def test_roic_minus_wacc_gives_the_reason_roic_is_missing(client, web_db):
     _seed(web_db, row=_row(roic=None, roic_minus_wacc=None, na_reasons=json.dumps(reasons)))
     body = client.get("/api/stocks/AAA/scores").json()
     assert body["roic_vs_wacc"]["na_reason"] == "no ROIC: invested capital (equity + debt - cash) of 0 or less"
+
+
+def test_the_magic_formula_gives_the_reason_it_has_no_rank(client, web_db):
+    # BUG-191: the 44 eligible companies the formula couldn't rank were left out silently.
+    _seed(web_db, row=_row(return_on_capital=None, na_reasons=json.dumps({"magic_formula": "no net PP&E figure"})),
+          ranks={"magic_formula_rank": None})
+    body = client.get("/api/stocks/AAA/scores").json()
+    assert body["magic_formula"]["rank"] is None and body["magic_formula"]["na_reason"] == "no net PP&E figure"

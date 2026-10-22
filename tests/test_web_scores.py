@@ -71,3 +71,10 @@ def test_a_ticker_not_computed_yet(client):
 
 def test_an_unknown_ticker_is_404(client):
     assert client.get("/ui/stocks/ZZZZ/scores").status_code == 404
+
+
+def test_an_unranked_company_says_why(client, web_db):
+    _seed(web_db, row=_row(return_on_capital=None, na_reasons=json.dumps({"magic_formula": "no net PP&E figure"})),
+          ranks={"magic_formula_rank": None})
+    html = client.get("/ui/stocks/AAA/scores").text
+    assert "not ranked: no net PP&amp;E figure" in html

@@ -1099,6 +1099,7 @@ def scores_fragment(
         {"label": "Magic Formula rank", "value": str(magic["rank"]) if magic["rank"] is not None else "—",
          "note": "not ranked for banks, insurers, utilities and REITs"
                  if magic["rank"] is None and company.get("sector_class") in MAGIC_EXCLUDED
+                 else f"not ranked: {magic['na_reason']}" if magic["rank"] is None and magic["na_reason"]
                  else f"earnings yield {fmt_pct(magic['earnings_yield'])}, return on capital "
                       f"{fmt_pct(magic['return_on_capital'])}"},
         {"label": "NCAV / share", "value": fmt_price(q["ncav_per_share"]),

@@ -159,7 +159,11 @@ re-ranks everyone.
 - **Magic Formula** (Greenblatt):
   - earnings yield = EBIT / EV, where EV = market cap + net debt (N/A when the debt is unknown);
   - return on capital = EBIT / (net working capital + net PPE), where net working capital = current
-    assets - cash - (current liabilities - short-term debt);
+    assets - cash - (current liabilities - short-term debt), floored at 0: a business its customers fund
+    (MA, V, BKNG) ties up only its PPE (BUG-191);
+  - `na_reasons.magic_formula` says why a company has no rank: no operating income (EBIT), no market cap,
+    unknown debt, an enterprise value of 0 or less, no current assets or liabilities, no net PP&E figure, no
+    capital employed, or no annual financials;
   - the combined rank is the sum of the two ranks across the universe, excluding banks, insurers,
     utilities and REITs; a tie in the sum goes to the higher earnings yield.
 
