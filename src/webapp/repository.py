@@ -583,7 +583,11 @@ class Reader:
             "SELECT name FROM sqlite_master WHERE type = 'table' "
             "AND name IN ('valuation_ranges', 'quality_scores', 'insider_trades', 'insider_filings')"
         )}
-        history, quality = "valuation_ranges" in tables, "quality_scores" in tables
+        history = "valuation_ranges" in tables
+        # A scores table from older code may lack a column a field reads (debt_to_ebitda): that field is NULL.
+        quality: Union[bool, FrozenSet[str]] = (
+            frozenset(row[1] for row in self._conn.execute("PRAGMA table_info(quality_scores)"))
+            if "quality_scores" in tables else False)
         insiders = {"insider_trades", "insider_filings"} <= tables
         sql, params = build_screen_query(spec, history, quality, insiders)
         count_sql, count_params = build_count_query(spec, history, quality, insiders)

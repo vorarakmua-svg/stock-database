@@ -6,7 +6,7 @@ import sqlite3
 import pytest
 
 from src.exporters.sqlite_store import SQLiteStore
-from src.scores.fundamentals import _count_on_eps_basis, cagr, growth, load_fundamentals, per_share_rows
+from src.scores.fundamentals import _count_on_eps_basis, cagr, growth, load_fundamentals, per_share_rows, read_debt
 from src.valuation.inputs import load_inputs
 
 YEARS = list(range(2013, 2026))  # 13 fiscal years
@@ -156,3 +156,60 @@ def test_a_count_from_eps_of_cents_falls_back_to_the_filed_count():
     assert _count_on_eps_basis(100e6, 0.5, {"net_income": 60e6}) == pytest.approx(120e6)
     assert _count_on_eps_basis(100e6, 0.5, {"net_income": 60e6, "weighted_avg_shares_diluted": 99e6}) == 100e6
 
+
+def _no_debt(**overrides):
+    """A year with no debt tagged and no interest expense (ISRG's shape)."""
+    figures = dict(total_debt=None, net_debt=None, roic=None, long_term_debt=None, short_term_debt=None,
+                   commercial_paper=None, interest_expense=None, cash_and_equivalents=300.0,
+                   short_term_investments=200.0, total_equity=1300.0, operating_income=250.0, pretax_income=260.0,
+                   income_tax_expense=52.0)
+    figures.update(overrides)
+    return figures
+
+
+def test_no_debt_tagged_and_no_interest_reads_as_zero_debt():
+    # BUG-190: ISRG, ANET, PANW, PLTR and VRTX tag no debt and report no interest, so metrics_annual has no total
+    # debt, net debt or ROIC for them.
+    figures = _no_debt()
+    assert read_debt(figures, "general") is False
+    assert figures["total_debt"] == 0.0 and figures["net_debt"] == -500.0
+    # ROIC as metrics_annual computes it: NOPAT at the effective 20% tax, over equity + 0 debt - cash.
+    assert figures["roic"] == pytest.approx(250.0 * 0.8 / (1300.0 - 300.0))
+
+
+def test_zeros_filed_as_such_stay_zero():
+    # SNDK files its long-term and short-term debt as 0 and reports no interest.
+    figures = _no_debt(total_debt=0.0, net_debt=-500.0, roic=0.2, long_term_debt=0.0, short_term_debt=0.0)
+    assert read_debt(figures, "general") is False
+    assert figures["total_debt"] == 0.0 and figures["net_debt"] == -500.0 and figures["roic"] == 0.2
+
+
+def test_interest_paid_with_no_debt_tagged_leaves_the_debt_unknown():
+    # BUG-189: PGR's short-term debt is 0 and its long-term debt untagged (DebtLongtermAndShorttermCombinedAmount,
+    # $8.39B, isn't mapped), yet it paid $278M of interest: the 0 is a phantom.
+    figures = _no_debt(total_debt=0.0, net_debt=-125.0, roic=0.9, short_term_debt=0.0, interest_expense=278.0)
+    assert read_debt(figures, "insurance") is True
+    assert figures["total_debt"] is None and figures["net_debt"] is None and figures["roic"] is None
+
+
+def test_tagged_debt_stays_as_filed():
+    figures = _no_debt(total_debt=500.0, net_debt=0.0, roic=0.12, long_term_debt=500.0)
+    before = dict(figures)
+    assert read_debt(figures, "general") is False and figures == before
+
+
+def test_a_bank_or_an_insurer_without_debt_tags_keeps_its_debt_unknown():
+    # KKR (a bank here) tags neither its debt nor its interest; a financial's debt has no zero to read.
+    for sector in ("bank", "insurance"):
+        figures = _no_debt()
+        before = dict(figures)
+        assert read_debt(figures, sector) is False and figures == before
+
+
+def test_each_year_reads_its_own_debt(tmp_path):
+    conn = _db(tmp_path)  # AAA tags no debt and no interest
+    conn.execute("UPDATE financials_annual SET interest_expense = 5e6 WHERE fiscal_year = 2024")
+    conn.commit()
+    by_year = {r.fiscal_year: r for r in load_fundamentals(conn, "AAA").rows}
+    assert by_year[2025].figures["total_debt"] == 0.0 and not by_year[2025].debt_unknown
+    assert by_year[2024].figures["total_debt"] is None and by_year[2024].debt_unknown

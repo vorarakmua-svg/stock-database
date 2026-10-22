@@ -129,3 +129,11 @@ def test_a_ticker_not_computed_yet(client, web_db):
 def test_an_unknown_ticker_is_404(client):
     assert client.get("/api/stocks/ZZZZ/scores").status_code == 404
     assert client.get("/api/stocks/^GSPC/scores").status_code == 404
+
+
+def test_roic_minus_wacc_gives_the_reason_roic_is_missing(client, web_db):
+    # BUG-190: the reason ROIC is N/A, when WACC is there.
+    reasons = {"roic": "no ROIC: invested capital (equity + debt - cash) of 0 or less"}
+    _seed(web_db, row=_row(roic=None, roic_minus_wacc=None, na_reasons=json.dumps(reasons)))
+    body = client.get("/api/stocks/AAA/scores").json()
+    assert body["roic_vs_wacc"]["na_reason"] == "no ROIC: invested capital (equity + debt - cash) of 0 or less"

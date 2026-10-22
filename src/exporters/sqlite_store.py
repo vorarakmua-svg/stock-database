@@ -135,7 +135,7 @@ QUALITY_COLUMNS: Tuple[str, ...] = (
     "rev_ps_cagr_3y", "rev_ps_cagr_5y", "rev_ps_cagr_10y", "eps_cagr_3y", "eps_cagr_5y", "eps_cagr_10y",
     "ebitda_ps_cagr_3y", "ebitda_ps_cagr_5y", "ebitda_ps_cagr_10y", "fcf_ps_cagr_5y", "book_ps_cagr_5y",
     "piotroski_f", "piotroski_tested", "piotroski_tests", "altman_z", "altman_zone", "beneish_m",
-    "beneish_variables", "sloan_ratio", "roic", "wacc", "roic_minus_wacc", "predictability_stars",
+    "beneish_variables", "sloan_ratio", "roic", "wacc", "roic_minus_wacc", "debt_to_ebitda", "predictability_stars",
     "predictability_r2", "ncav_per_share", "earnings_yield", "return_on_capital", "momentum",
     "rank_strength", "rank_profitability", "rank_growth", "rank_valuation", "rank_momentum", "composite_score",
     "magic_formula_rank", "components", "warning_count", "na_reasons", "computed_at", "ranked_at",
@@ -1195,6 +1195,8 @@ class SQLiteStore:
         conn = self._connect()
         try:
             self._create_schema(conn)
+            # A table from before the scores' own debt / EBITDA (BUG-190).
+            self._ensure_columns(conn, "quality_scores", {"debt_to_ebitda": "REAL"})
             for table in ("per_share_annual", "warning_signs", "quality_scores"):
                 conn.execute(f"DELETE FROM {table} WHERE ticker = ?", (ticker,))
             conn.executemany(

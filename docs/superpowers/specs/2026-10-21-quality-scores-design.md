@@ -32,6 +32,15 @@ the existing models, median and verdicts are untouched. The package is `src/scor
   private count (`FYRecord.private_count`): a merger around the listing jumps the same way (DELL's EMC),
   so the scores give that year no per-share figures and keep its totals. The listing's own year keeps the
   public count, as the history's listing quarter does (BUG-188).
+- **Debt** (`read_debt`, BUG-189, BUG-190). A year where no debt tag holds a positive amount:
+  - with interest expense: the debt is in a tag the mapping doesn't read (PGR's
+    `DebtLongtermAndShorttermCombinedAmount`), so total debt, net debt and ROIC are None and the row is
+    `debt_unknown`: no WACC or earnings yield, no cash/debt or debt/revenue;
+  - without, outside banks and insurers: no debt (ISRG, ANET, PANW, PLTR, VRTX): total debt 0, net debt
+    = -(cash + short-term investments), and ROIC by `CalculatedMetrics` on zero debt;
+  - a bank or an insurer keeps its debt as filed (KKR tags neither debt nor interest).
+  A missing interest figure alone decides nothing: many filers with debt tag their interest under an
+  unmapped name. `metrics_annual` itself is unchanged.
 - **CAGRs** over 3, 5 and 10 years: `(last / first) ** (1 / years) - 1`. Both ends must be positive, and the
   start year must exist exactly `years` fiscal years back; otherwise None.
 
@@ -78,13 +87,16 @@ are N/A where the sector rules suppress an input (`sector_metrics`), with a reas
 - **Sloan ratio**: (NI - CFO - CFI) / total assets.
   - Within ±10% is safe, 10-25% is a warning, and beyond ±25% is flagged.
 - **ROIC vs WACC**:
-  - ROIC is `metrics_annual.roic`.
+  - ROIC is `metrics_annual.roic`, or the same formula on zero debt for a debt-free year (see Debt). Where it
+    is None, `na_reasons.roic` says why: not meaningful for banks, insurers and REITs (the sector rules
+    suppress it), unknown debt, no operating income, no equity or debt figure, or invested capital of 0 or
+    less.
   - WACC = E/(D+E)·Re + D/(D+E)·Rd·(1-t), where:
     - E is the market cap and D is the total debt;
     - Re is the DCF's CAPM cost of equity (`valuation.assumptions`, with its floor and cap);
     - Rd = interest expense / total debt, clamped to [rf, rf + 10%];
     - t is the effective tax rate, clamped to 0-35% (21% when unknown).
-  - The spread is ROIC - WACC. N/A for banks and insurers.
+  - The spread is ROIC - WACC. N/A for banks and insurers, and WACC is N/A when the debt is unknown.
 - **Predictability**, 1-5 stars in half steps, from the last 10 fiscal years. It's our own published
   formula; GuruFocus's is unpublished.
   - Fewer than 10 years is N/A. Any year with revenue or EBITDA per share ≤ 0 is 1 star (as GuruFocus
@@ -145,7 +157,7 @@ re-ranks everyone.
   **equal by default**. Choosing them is the user's call (NEEDS-USER, Q11). GuruFocus weighs Profitability
   and Growth most, with unpublished weights.
 - **Magic Formula** (Greenblatt):
-  - earnings yield = EBIT / EV, where EV = market cap + net debt;
+  - earnings yield = EBIT / EV, where EV = market cap + net debt (N/A when the debt is unknown);
   - return on capital = EBIT / (net working capital + net PPE), where net working capital = current
     assets - cash - (current liabilities - short-term debt);
   - the combined rank is the sum of the two ranks across the universe, excluding banks, insurers,
@@ -160,7 +172,7 @@ re-ranks everyone.
   - Piotroski: piotroski_f, piotroski_tested, piotroski_tests (JSON);
   - Altman: altman_z, altman_zone;
   - beneish_m and sloan_ratio;
-  - roic, wacc, roic_minus_wacc;
+  - roic, wacc, roic_minus_wacc, and debt_to_ebitda on the scores' debt (for the Buffett-Munger screen);
   - predictability_stars, plus the R² of each series;
   - ncav_per_share (for the Graham net-net screen), earnings_yield, return_on_capital;
   - momentum;
@@ -193,9 +205,10 @@ Nothing in the valuations or the history changes. The backfill covers it as befo
 - **Screener**: new fields from `quality_scores`, through a LEFT JOIN made only when the table exists (as
   M1 does): piotroski_f, altman_z, beneish_m, sloan_ratio, predictability_stars, rev_ps_cagr_5y,
   eps_cagr_5y, roic_minus_wacc, the five ranks, composite_score, momentum, magic_formula_rank, plus a count
-  of warning signs.
+  of warning signs, and scores_debt_to_ebitda (the stored debt_to_ebitda).
 - **Preset screens**, a dropdown that fills the filters:
-  - Buffett-Munger: predictability ≥ 4, ROIC - WACC > 0, debt/EBITDA ≤ 3, price / historical value ≤ 1.1.
+  - Buffett-Munger: predictability ≥ 4, ROIC - WACC > 0, scores_debt_to_ebitda ≤ 3 (a debt-free filer's is 0,
+    where metrics_annual's debt_to_ebitda is empty), price / historical value ≤ 1.1.
   - Peter Lynch: the Lynch model's base above the price, via a `lynch_upside_pct` expression.
   - Graham net-net: price / NCAV per share ≤ 0.67.
   - Magic Formula: sorted by magic_formula_rank, with financials, utilities and REITs excluded.

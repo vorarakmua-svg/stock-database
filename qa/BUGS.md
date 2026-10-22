@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 14 · P3 100 · NEEDS-USER 15 · Verified: 85
+**Open:** P0 0 · P1 0 · P2 12 · P3 100 · NEEDS-USER 15 · Verified: 87
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1442,16 +1442,25 @@ Fix (build iteration 35): the scores no longer guess. `_normalize_splits` marks 
 Evidence: `qa/evidence/bug188-{probe,red,red2,green,mutants,realdata,oracle}.txt`
 
 ### BUG-189 [P2][SCORES] A phantom zero debt reads as the strongest balance sheet
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (build iteration 35)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression test: tests/test_scores_fundamentals.py::test_interest_paid_with_no_debt_tagged_leaves_the_debt_unknown, tests/test_scores_scores.py::test_unknown_debt_leaves_wacc_and_the_earnings_yield_unknown
 Repro: `src/scores/ranks.py`: PGR's `total_debt` is 0.0 (short-term debt 0.0, long-term debt NULL) while it pays $278M of interest and tags `DebtLongtermAndShorttermCombinedAmount` ($8.39B, unmapped). Cash/debt takes the cap of 10 and debt/revenue reads 0; its strength rank of 8 rests on those two, and the composite reads 68 (65 without them). Debt/EBITDA reads 0 for the Buffett-Munger filter.
 Expected: debt unknown when it's 0 with long-term debt missing, or with interest expense; SNDK's real 0.0 (long-term debt filed as 0) stays.   Actual: the zero taken as filed.
+Fix (build iteration 35, with BUG-190): `read_debt` (src/scores/fundamentals.py) settles each year's debt where no debt tag holds a positive amount, for the scores only (`metrics_annual`, the screener's metrics and the history keep the figures as filed):
+- interest paid with no debt tagged: the debt is in a tag the mapping doesn't read, so total debt, net debt and ROIC are None and the year is `debt_unknown`: no WACC or earnings yield (with the reason), no cash/debt or debt/revenue;
+- no interest either, outside banks and insurers: no debt. Total debt 0, net debt less cash and short-term investments, and ROIC on equity less cash by `CalculatedMetrics` (its sector rules included);
+- a bank or an insurer keeps its debt as filed (KKR tags neither its debt nor its interest).
+A missing interest figure alone decides nothing: 54 filers with debt tag their interest under unmapped names (AAPL, MSFT, JNJ...). ROIC - WACC now says why ROIC is missing (sector, unknown debt, no operating income, no equity or debt figure, invested capital of 0 or less). The scores store their own debt/EBITDA, and the Buffett-Munger preset reads it (`scores_debt_to_ebitda`). A scores table from before that column screens on with the field NULL instead of failing, as the user's database would have until M2-9's backfill.
+- Tests: 19 new, each failing first; 13 mutants, each killed (the sector reason and the old-table screen are their RED runs).
+- Real data (a backfilled copy against BUG-188's): no valuation row, median or verdict moves; the scores oracle passes 9 of 9. PGR's strength rank goes from 8 to N/A and its composite from 68 to 65, as the review predicted. ROIC (and ROIC - WACC) appear for ISRG 17.7% (+6.0%), ANET 30.6% (+18.3%), PLTR 23.4% (+11.1%), VRTX 26.2% (+18.2%) and PANW 1.6% (-7.7%, so PANW's `roic_below_wacc` sign now fires: its equity swelled with the stock-paid CyberArk deal). VRTX's strength rank goes from 9 to 10 and PANW's from 8 to 9; ten others move down one. Buffett-Munger: 14 companies, ISRG among them.
+Evidence: `qa/evidence/bug189-190-{red,green,mutants,realdata,oracle}.txt`, `qa/evidence/bug189-debt-probe.txt`, `qa/evidence/bug190-debt-years.txt`
 
 ### BUG-190 [P2][SCORES] Debt-free filers lose ROIC, two strength components and the Buffett-Munger screen
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (build iteration 35)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression test: tests/test_scores_fundamentals.py::test_no_debt_tagged_and_no_interest_reads_as_zero_debt, tests/test_scores_scores.py::test_roic_minus_wacc_says_why_roic_is_missing, tests/test_web_screener_quality.py::test_a_debt_free_filer_passes_the_scores_debt_test
 Repro: ISRG, ANET, PANW, PLTR and VRTX tag no debt, so `metrics_annual.roic`, net debt and debt/EBITDA are NULL (ISRG: no ROIC in 20 years). ROIC - WACC shows "—" with no reason; roic_10y_median, cash/debt and debt/revenue drop out; EV ignores their cash. ISRG (4.5 stars, price / historical value 0.79) misses Buffett-Munger only for that.
 Expected: no debt tagged and no interest expense read as zero debt, as Beneish already reads a missing long-term debt (ROIC from equity less cash, cash/debt at its cap, debt/revenue 0, EV less cash); the reason shown where it's still N/A.   Actual: N/A without a reason.
+Fix (build iteration 35): with BUG-189, which records the fix and the real-data effects.
 
 ### BUG-191 [P2][SCORES] The Magic Formula ranks 49 of the 93 eligible companies and doesn't say why the rest are missing
 Status: OPEN

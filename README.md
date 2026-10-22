@@ -462,6 +462,13 @@ Inputs:
   per-share figures: APP, CRWD, DELL, PLTR and UBER lose their pre-listing years, and their CAGRs start
   after them. The listing's own year keeps the public count, as the history's listing quarter does
   (BUG-188).
+- **Debt.** A year with no debt tagged and no interest expense is debt-free, outside banks and insurers (ISRG,
+  ANET, PANW, PLTR and VRTX tag none): total debt 0, net debt less its cash and short-term investments, and
+  ROIC on equity less cash, by `metrics_annual`'s formulas (it leaves all three empty for them). A year that
+  paid interest with no debt tagged has debt the mapping doesn't read (PGR files its $8.4B under a combined
+  tag), so its debt, net debt and ROIC are unknown, and so are its WACC, earnings yield, cash / debt and debt
+  / revenue (BUG-189, BUG-190). A missing interest figure alone proves nothing: many filers with debt tag
+  their interest under a name not mapped. `metrics_annual` keeps its figures as filed.
 - **CAGRs** over 3, 5 and 10 years (revenue, EPS and EBITDA per share) or 5 (FCF and book value per share):
   `(last / first) ** (1 / years) - 1`, when both ends are positive and the start year is exactly that many
   fiscal years back.
@@ -470,9 +477,9 @@ The scores. Each is N/A, with its reason stored, where its inputs are missing:
 - **Piotroski F**, 0-9, a point for each test passed: ROA (net income / total assets) above zero; operating
   cash flow (CFO) above zero; ROA up; CFO above net income; long-term debt / total assets down (untested when
   either year's debt is missing); current ratio up; no new shares (the split-normalized count up by no more
-  than 0.5%); gross margin up; asset turnover up. A test with missing inputs counts as a fail, and the tests
-  that could run are stored ("F out of N tested"). N/A for banks and insurers (no current ratio or gross
-  margin).
+  than 0.5%); gross margin up; asset turnover up. A test with missing inputs doesn't run: it scores no point
+  and shows as "Not tested" (BUG-186), and the tests that ran are stored ("F out of N tested"). N/A for
+  banks and insurers (no current ratio or gross margin).
 - **Altman Z**, the original model: `1.2·WC/TA + 1.4·RE/TA + 3.3·EBIT/TA + 0.6·MVE/TL + 1.0·Sales/TA`, with
   WC = current assets - current liabilities, EBIT = operating income and MVE the latest snapshot's market cap.
   Below 1.81 is the distress zone, 1.81-2.99 grey, above 2.99 safe. N/A for banks, insurers, REITs and
@@ -494,7 +501,9 @@ The scores. Each is N/A, with its reason stored, where its inputs are missing:
   is the market cap and D the total debt. Re is the DCF's CAPM cost of equity, the risk-free rate + beta ×
   4.5%, held between 8% and 14%. Rd = interest expense / D, clamped between the risk-free rate and 10 points
   above it (the risk-free rate with no debt or no interest figure). t = income tax / pretax income, clamped to
-  0-35%, and 21% where pretax income is missing or not positive.
+  0-35%, and 21% where pretax income is missing or not positive. Where ROIC is missing, the row says why: no
+  operating income, invested capital (equity + debt - cash) of 0 or less, or unknown debt; banks, insurers
+  and REITs have none.
 - **Predictability**, 1-5 stars in half steps, from the last 10 fiscal years (fewer is N/A): our own formula,
   as GuruFocus's is unpublished. A year with revenue or EBITDA per share at or below zero, or a falling trend
   (a log-linear slope of zero or less in either series), is 1 star. Otherwise
@@ -567,9 +576,12 @@ Where it shows:
 - **Screener**: filters and sorts by `piotroski_f`, `altman_z`, `beneish_m`, `sloan_ratio`,
   `predictability_stars`, `rev_ps_cagr_5y`, `eps_cagr_5y`, `roic_minus_wacc`, the five `rank_*`,
   `composite_score`, `momentum`, `magic_formula_rank` and `warning_count`, by `price_to_ncav` (price / NCAV
-  per share, where NCAV is positive) and by `lynch_upside_pct` (the Lynch model's base value over the price).
+  per share, where NCAV is positive), by `scores_debt_to_ebitda` (debt / EBITDA on the scores' reading of the
+  debt: 0 for a debt-free filer, which `metrics_annual` leaves empty) and by `lynch_upside_pct` (the Lynch
+  model's base value over the price).
   A *Preset screens* dropdown fills the filters:
-  - Buffett-Munger: predictability ≥ 4, ROIC - WACC > 0, debt / EBITDA ≤ 3, price / historical value ≤ 1.1;
+  - Buffett-Munger: predictability ≥ 4, ROIC - WACC > 0, the scores' debt / EBITDA ≤ 3, price / historical
+    value ≤ 1.1;
   - Peter Lynch: the Lynch model's base value above the price, most upside first;
   - Graham net-net: price / NCAV per share ≤ 0.67, lowest first;
   - Magic Formula: ranked, best first (banks, insurers, utilities and REITs have no rank, so they drop out);

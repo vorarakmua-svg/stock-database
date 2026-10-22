@@ -186,6 +186,52 @@ def test_compute_scores_puts_it_together():
     assert s.return_on_capital == pytest.approx(150.0 / ((450.0 - 80.0) - (210.0 - 20.0) + 300.0))
 
 
+
+def _market():
+    return Market(market_cap=2000.0, risk_free_rate=0.04, beta=1.2, price=20.0)
+
+
+def test_unknown_debt_leaves_wacc_and_the_earnings_yield_unknown():
+    # BUG-189: interest paid on debt no mapped tag holds (PGR's shape): WACC's weights and the enterprise value
+    # would read no debt at all.
+    f = _steady()
+    f.rows[-1].debt_unknown = True
+    f.rows[-1].figures.update(long_term_debt=None, short_term_debt=0.0, total_debt=None, net_debt=None, roic=None)
+    s = compute_scores(f, _market())
+    assert s.wacc is None and s.na_reasons["wacc"] == "debt unknown: interest paid on debt no mapped tag holds"
+    assert s.earnings_yield is None and s.debt_to_ebitda is None
+    assert s.na_reasons["magic_formula"] == "debt unknown: interest paid on debt no mapped tag holds"
+
+
+def test_roic_minus_wacc_says_why_roic_is_missing():
+    # BUG-190: the STAT row read "ROIC - against WACC 12.3%" with no reason.
+    f = _steady()
+    f.rows[-1].figures.update(roic=None, total_equity=50.0, cash_and_equivalents=400.0)
+    s = compute_scores(f, _market())
+    assert s.roic_minus_wacc is None and s.wacc is not None
+    assert s.na_reasons["roic"] == "no ROIC: invested capital (equity + debt - cash) of 0 or less"
+    f.rows[-1].figures.update(operating_income=None)
+    assert compute_scores(f, _market()).na_reasons["roic"] == "no ROIC: no operating income"
+
+
+
+def test_a_reit_has_no_roic_by_its_sector():
+    # metrics_annual suppresses ROIC for banks, insurers and REITs (sector_metrics.SUPPRESSED_BY_SECTOR).
+    for sector, name in (("reit", "REITs"), ("bank", "banks"), ("insurance", "insurers")):
+        s = compute_scores(_steady(sector=sector, roic=None), _market())
+        assert s.na_reasons["roic"] == f"no ROIC: not meaningful for {name}"
+
+
+def test_debt_to_ebitda_reads_the_years_debt():
+    # The Buffett-Munger screen's debt test on the scores' debt: a debt-free filer's is 0 (BUG-190).
+    f = _steady()
+    assert compute_scores(f, _market()).debt_to_ebitda == pytest.approx(300.0 / f.rows[-1].figures["ebitda"])
+    f.rows[-1].figures.update(long_term_debt=0.0, short_term_debt=0.0, total_debt=0.0)
+    assert compute_scores(f, _market()).debt_to_ebitda == 0.0
+    f.rows[-1].figures.update(ebitda=-5.0)
+    assert compute_scores(f, _market()).debt_to_ebitda is None
+
+
 def test_a_bank_gets_reasons_not_scores():
     f = _steady(sector="bank")
     s = compute_scores(f, Market(market_cap=2000.0, risk_free_rate=0.04, beta=1.2, price=20.0))

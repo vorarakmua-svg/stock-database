@@ -81,6 +81,7 @@ def compute_ticker(conn: sqlite3.Connection, ticker: str) -> Tuple[Dict[str, Any
         "ncav_per_share": s.ncav_per_share,
         "earnings_yield": s.earnings_yield,
         "return_on_capital": s.return_on_capital,
+        "debt_to_ebitda": s.debt_to_ebitda,
         "momentum": mom,
         "components": json.dumps(components(f, s, g, history, mom)),
         "warning_count": len(signs),

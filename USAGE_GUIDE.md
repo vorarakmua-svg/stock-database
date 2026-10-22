@@ -441,8 +441,9 @@ them:
   - `piotroski_f`, `piotroski_tested` (the tests that could run) and `piotroski_tests` (JSON: each test true,
     false or null);
   - `altman_z` and `altman_zone` (`distress`, `grey` or `safe`), `beneish_m` and `beneish_variables` (JSON),
-    `sloan_ratio`, `roic`, `wacc` and `roic_minus_wacc`, `predictability_stars` and `predictability_r2`
-    (JSON);
+    `sloan_ratio`, `roic`, `wacc` and `roic_minus_wacc`, `debt_to_ebitda` (on the scores' reading of the
+    debt: 0 for a filer tagging no debt and paying no interest), `predictability_stars` and
+    `predictability_r2` (JSON);
   - `ncav_per_share`, `earnings_yield`, `return_on_capital` and `momentum`;
   - `rank_strength`, `rank_profitability`, `rank_growth`, `rank_valuation` and `rank_momentum` (1-10),
     `composite_score` (out of 100) and `magic_formula_rank`;

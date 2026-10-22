@@ -4,6 +4,8 @@ universe-wide rank pass. docs/superpowers/specs/2026-10-21-quality-scores-design
 import json
 import sqlite3
 
+import pytest
+
 from src.exporters.sqlite_store import SQLiteStore
 from src.scores import engine as scores_engine
 from src.valuation import engine
@@ -156,3 +158,14 @@ def test_an_old_database_gains_the_tables(tmp_path):
     conn.close()
     compute_and_store(db)
     assert set(_scores(db)) == {"AAA", "BBB"}
+
+
+def test_the_scores_store_their_debt_to_ebitda(tmp_path):
+    db = _seed(tmp_path / "s.db")
+    conn = sqlite3.connect(db)
+    if "debt_to_ebitda" in {r[1] for r in conn.execute("PRAGMA table_info(quality_scores)")}:
+        conn.execute("ALTER TABLE quality_scores DROP COLUMN debt_to_ebitda")  # a table from before BUG-190's fix
+    conn.commit()
+    conn.close()
+    compute_and_store(db)
+    assert _scores(db)["AAA"].get("debt_to_ebitda") == pytest.approx(5.0)  # debt = revenue, EBITDA 20% of it

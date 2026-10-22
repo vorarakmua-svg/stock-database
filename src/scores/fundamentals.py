@@ -10,6 +10,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from ..parsers.calculated_metrics import CalculatedMetrics
 from ..valuation.inputs import load_inputs
 
 #: Eleven fiscal years: a 10-year CAGR needs the year ten years back.
@@ -26,6 +27,11 @@ ANNUAL_FIELDS: Tuple[str, ...] = (
     "goodwill", "retained_earnings", "total_equity", "operating_cash_flow", "investing_cash_flow", "capex",
     "depreciation_amortization", "dividends_paid", "shares_outstanding", "weighted_avg_shares_diluted",
 )
+#: The debt tags behind ``metrics_annual``'s total debt.
+DEBT_FIELDS: Tuple[str, ...] = ("long_term_debt", "short_term_debt", "commercial_paper")
+#: Banks and insurers keep their debt as filed: theirs has no zero to read (KKR, a bank here, tags neither its
+#: debt nor its interest).
+DEBT_AS_FILED: Tuple[str, ...] = ("bank", "insurance")
 #: The computed figures each year carries, from ``metrics_annual``.
 METRIC_FIELDS: Tuple[str, ...] = ("ebitda", "ebit", "free_cash_flow", "roic", "operating_margin",
                                   "interest_coverage", "total_debt", "net_debt")
@@ -43,13 +49,15 @@ GROWTH: Tuple[Tuple[str, int], ...] = (
 
 @dataclass
 class AnnualRow:
-    """One fiscal year: its totals, and its share count and EPS on today's split basis."""
+    """One fiscal year: its totals, and its share count and EPS on today's split basis. ``debt_unknown`` when
+    it paid interest on debt no mapped tag holds (``read_debt``)."""
 
     fiscal_year: int
     period_end: Optional[str]
     shares: Optional[float]
     eps: Optional[float]
     figures: Dict[str, Optional[float]] = field(default_factory=dict)
+    debt_unknown: bool = False
 
     def per_share(self, key: str) -> Optional[float]:
         """A total over the year's share count, or None."""
@@ -115,17 +123,44 @@ def load_fundamentals(conn: sqlite3.Connection, ticker: str) -> Fundamentals:
             figures[name] = (annual.get(rec.fiscal_year) or {}).get(name)
         for name in METRIC_FIELDS:
             figures[name] = (metrics.get(rec.fiscal_year) or {}).get(name)
+        debt_unknown = read_debt(figures, f.sector_class)
         if rec.private_count:
             # A year before the listing on the private count, which only the listing's jump put on the public one:
             # a merger around the listing jumps the same way (DELL's EMC), so the year has no per-share figures;
             # its totals stay (BUG-188).
             f.rows.append(AnnualRow(fiscal_year=rec.fiscal_year, period_end=rec.period_end, shares=None, eps=None,
-                                    figures=figures))
+                                    figures=figures, debt_unknown=debt_unknown))
             continue
         f.rows.append(AnnualRow(fiscal_year=rec.fiscal_year, period_end=rec.period_end,
                                 shares=_count_on_eps_basis(rec.shares, rec.eps_diluted, figures),
-                                eps=rec.eps_diluted, figures=figures))
+                                eps=rec.eps_diluted, figures=figures, debt_unknown=debt_unknown))
     return f
+
+
+def read_debt(figures: Dict[str, Optional[float]], sector_class: str) -> bool:
+    """Settle a year's debt where no debt tag holds a positive amount; True when it's unknown (BUG-189, BUG-190).
+
+    Interest paid with no debt tagged is debt the mapping doesn't read (PGR files its $8.4B under
+    DebtLongtermAndShorttermCombinedAmount), so total debt, net debt and ROIC become unknown. Neither, outside
+    banks and insurers, is no debt (ISRG, ANET, PANW, PLTR and VRTX tag none): total debt 0, net debt less the
+    cash and short-term investments, and ROIC on equity less cash, as ``metrics_annual`` computes them. A
+    missing interest figure alone says nothing: filers with debt often tag their interest under a name not
+    mapped (AAPL, MSFT). The stored metrics stay as they are, for the screener and the history.
+    """
+    tags = [figures.get(name) for name in DEBT_FIELDS + ("total_debt",)]
+    if any(v is not None and v > 0 for v in tags):
+        return False
+    if (figures.get("interest_expense") or 0.0) > 0:
+        figures.update(total_debt=None, net_debt=None, roic=None)
+        return True
+    if sector_class in DEBT_AS_FILED:
+        return False
+    cash = (figures.get("cash_and_equivalents") or 0.0) + (figures.get("short_term_investments") or 0.0)
+    figures["total_debt"], figures["net_debt"] = 0.0, -cash
+    if figures.get("roic") is None:
+        figures["roic"] = CalculatedMetrics().calculate_all({**figures, "long_term_debt": 0.0},
+                                                            sector=sector_class)["roic"]
+    return False
 
 
 def _count_on_eps_basis(shares: Optional[float], eps: Optional[float],

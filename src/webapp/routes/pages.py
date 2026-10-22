@@ -195,6 +195,7 @@ SCREENER_QUALITY_OPTIONS: List[tuple[str, str]] = [
     ("Magic Formula rank", "magic_formula_rank"),
     ("Warning signs", "warning_count"),
     ("Price / NCAV", "price_to_ncav"),
+    ("Debt / EBITDA (debt-free filers at 0)", "scores_debt_to_ebitda"),
 ]
 
 # Insiders' open-market trades over the last year, from the SEC's Form 4 filings (screener.INSIDER_EXPRS).

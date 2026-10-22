@@ -25,7 +25,7 @@ A calendar-year alignment option is explicitly out of scope (log as future work)
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import AbstractSet, Any, Dict, FrozenSet, List, Optional, Tuple, Union
 
 from ..exporters.sqlite_store import _METRIC_COLUMNS
 
@@ -85,8 +85,17 @@ QUALITY_FIELDS: Tuple[str, ...] = (
 QUALITY_EXPRS: Dict[str, str] = {
     **{f: f'qs."{f}"' for f in QUALITY_FIELDS},
     "price_to_ncav": '(CASE WHEN qs."ncav_per_share" > 0 THEN ms."current_price" / qs."ncav_per_share" END)',
+    # The scores' debt / EBITDA: 0 for a filer tagging no debt and paying no interest, which metrics_annual
+    # leaves NULL; NULL where interest is paid on debt no mapped tag holds, where it reads 0 (BUG-189, BUG-190).
+    "scores_debt_to_ebitda": 'qs."debt_to_ebitda"',
 }
 _QUALITY_JOIN: str = "LEFT JOIN quality_scores qs ON qs.ticker = ma.ticker"
+#: The quality_scores column each quality field reads.
+QUALITY_NEEDS: Dict[str, str] = {**{f: f for f in QUALITY_FIELDS}, "price_to_ncav": "ncav_per_share",
+                                 "scores_debt_to_ebitda": "debt_to_ebitda"}
+#: What a query can read of quality_scores: True for every column, False without the table, or the table's
+#: columns, since a table the scores wrote with older code may lack one a field reads (BUG-190).
+QualityColumns = Union[bool, AbstractSet[str]]
 
 # Insiders' open-market trades from the SEC's Form 4 filings (insider_trades, insider_filings), over the last 365
 # days, from filings no amendment superseded: correlated subqueries, NULL when the tables don't exist
@@ -121,7 +130,7 @@ INSIDER_EXPRS: Dict[str, str] = {
 # The spec's preset screens: (key, label, the query string each fills the screener with).
 PRESETS: Tuple[Tuple[str, str, str], ...] = (
     ("buffett_munger", "Buffett-Munger",
-     "predictability_stars_gte=4&roic_minus_wacc_gt=0&debt_to_ebitda_lte=3&price_to_hist_value_lte=1.1"),
+     "predictability_stars_gte=4&roic_minus_wacc_gt=0&scores_debt_to_ebitda_lte=3&price_to_hist_value_lte=1.1"),
     ("lynch", "Peter Lynch", "lynch_upside_pct_gt=0&sort=lynch_upside_pct&sort_dir=desc"),
     ("graham_net_net", "Graham net-net", "price_to_ncav_lte=0.67&sort=price_to_ncav&sort_dir=asc"),
     # Banks, insurers, utilities and REITs have no Magic Formula rank, so a rank of at least 1 leaves them out.
@@ -236,6 +245,7 @@ METRIC_KINDS: Dict[str, str] = {
     "roic_minus_wacc": "pct",
     "momentum": "pct",
     "price_to_ncav": "mult",
+    "scores_debt_to_ebitda": "mult",
     # insiders (SEC Form 4)
     "ins_net_buy_12m": "money",
     "ins_buyers_12m": "raw",
@@ -320,8 +330,15 @@ class ScreenSpec:
 # ---------------------------------------------------------------------------
 
 
+def _quality_expr(name: str, quality: QualityColumns) -> str:
+    """A quality field's SQL, or NULL without the table or the column it reads."""
+    if quality is True or (not isinstance(quality, bool) and QUALITY_NEEDS[name] in quality):
+        return QUALITY_EXPRS[name]
+    return "NULL"
+
+
 def _qualify_column(field_name: str, *, context: str = "filter", history: bool = True,
-                    quality: bool = True, insiders: bool = True) -> str:
+                    quality: QualityColumns = True, insiders: bool = True) -> str:
     """Resolve *field_name* to a qualified, quoted SQL column reference.
 
     Metric columns (``_METRIC_COL_SET``) resolve to ``ma."col"``; snapshot
@@ -334,7 +351,7 @@ def _qualify_column(field_name: str, *, context: str = "filter", history: bool =
     (``"filter"`` or ``"sort"``) is folded into the message only, to match the
     caller's existing error-matching expectations. A ``HISTORY_EXPRS`` field
     is NULL when *history* is False (no ``valuation_ranges`` table), and a
-    ``QUALITY_EXPRS`` field when *quality* is False (no ``quality_scores``).
+    ``QUALITY_EXPRS`` field when *quality* is False (no ``quality_scores``) or lacks the column it reads.
     """
     if field_name in _METRIC_COL_SET:
         return f'ma."{field_name}"'
@@ -345,7 +362,7 @@ def _qualify_column(field_name: str, *, context: str = "filter", history: bool =
     if field_name in HISTORY_EXPRS:
         return HISTORY_EXPRS[field_name] if history else "NULL"
     if field_name in QUALITY_EXPRS:
-        return QUALITY_EXPRS[field_name] if quality else "NULL"
+        return _quality_expr(field_name, quality)
     if field_name in INSIDER_EXPRS:
         return INSIDER_EXPRS[field_name] if insiders else "NULL"
     raise ValueError(
@@ -354,7 +371,7 @@ def _qualify_column(field_name: str, *, context: str = "filter", history: bool =
     )
 
 
-def _build_where(spec: ScreenSpec, history: bool = True, quality: bool = True,
+def _build_where(spec: ScreenSpec, history: bool = True, quality: QualityColumns = True,
                  insiders: bool = True) -> Tuple[str, List[Any]]:
     """Validate filters/sector and build the WHERE clause + ordered params.
 
@@ -437,7 +454,7 @@ def _build_where(spec: ScreenSpec, history: bool = True, quality: bool = True,
 # ---------------------------------------------------------------------------
 
 
-def build_screen_query(spec: ScreenSpec, history: bool = True, quality: bool = True,
+def build_screen_query(spec: ScreenSpec, history: bool = True, quality: QualityColumns = True,
                        insiders: bool = True) -> Tuple[str, List[Any]]:
     """Return ``(sql, params)`` for the full screen query.
 
@@ -484,7 +501,7 @@ def build_screen_query(spec: ScreenSpec, history: bool = True, quality: bool = T
         f"{expr if history else 'NULL'} AS {name}" for name, expr in HISTORY_EXPRS.items()
     )
     quality_exprs_sql = ", ".join(
-        f"{expr if quality else 'NULL'} AS {name}" for name, expr in QUALITY_EXPRS.items()
+        f"{_quality_expr(name, quality)} AS {name}" for name in QUALITY_EXPRS
     )
     insider_exprs_sql = ", ".join(
         f"{expr if insiders else 'NULL'} AS {name}" for name, expr in INSIDER_EXPRS.items()
@@ -515,7 +532,7 @@ def build_screen_query(spec: ScreenSpec, history: bool = True, quality: bool = T
     return sql, params
 
 
-def build_count_query(spec: ScreenSpec, history: bool = True, quality: bool = True,
+def build_count_query(spec: ScreenSpec, history: bool = True, quality: QualityColumns = True,
                       insiders: bool = True) -> Tuple[str, List[Any]]:
     """Return ``(sql, params)`` for a ``COUNT(*)`` version of the same query.
 

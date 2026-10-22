@@ -9,6 +9,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from ..parsers.sector_metrics import SUPPRESSED_BY_SECTOR
 from ..valuation.assumptions import derive_discount
 from .fundamentals import AnnualRow, Fundamentals
 
@@ -74,6 +75,7 @@ class Scores:
     ncav_per_share: Optional[float] = None
     earnings_yield: Optional[float] = None
     return_on_capital: Optional[float] = None
+    debt_to_ebitda: Optional[float] = None
     na_reasons: Dict[str, str] = field(default_factory=dict)
 
 
@@ -90,11 +92,31 @@ def _gross_margin(row: AnnualRow) -> Optional[float]:
     return _div(gp, revenue)
 
 
+#: Why a figure that needs the debt is N/A in a year that paid interest on debt no mapped tag holds (BUG-189).
+DEBT_UNKNOWN = "debt unknown: interest paid on debt no mapped tag holds"
+
+
 def _total_debt(row: AnnualRow) -> Optional[float]:
+    if row.debt_unknown:
+        return None
     if row.figures.get("total_debt") is not None:
         return row.figures["total_debt"]
     parts = [row.figures.get(k) for k in ("long_term_debt", "short_term_debt", "commercial_paper")]
     return sum(p for p in parts if p is not None) if any(p is not None for p in parts) else None
+
+
+def _roic_reason(row: AnnualRow, sector: str) -> str:
+    """Why the year has no ROIC (BUG-190): ``metrics_annual``'s NOPAT over equity + debt - cash, which its sector
+    rules suppress for banks, insurers and REITs."""
+    if "roic" in SUPPRESSED_BY_SECTOR.get(sector, frozenset()):
+        return f"no ROIC: not meaningful for {_SECTOR_NAMES[sector]}"
+    if row.debt_unknown:
+        return "no ROIC: " + DEBT_UNKNOWN
+    if row.figures.get("operating_income") is None:
+        return "no ROIC: no operating income"
+    if row.figures.get("total_equity") is None or _total_debt(row) is None:
+        return "no ROIC: no equity or debt figure"
+    return "no ROIC: invested capital (equity + debt - cash) of 0 or less"
 
 
 def _higher(a: Optional[float], b: Optional[float]) -> Optional[bool]:
@@ -293,12 +315,17 @@ def compute_scores(f: Fundamentals, market: Market) -> Scores:
     if s.sloan_ratio is None:
         s.na_reasons["sloan"] = "an input is missing"
     s.roic = cur.figures.get("roic")
+    if s.roic is None:
+        s.na_reasons["roic"] = _roic_reason(cur, sector)
     if not skipped("wacc"):
-        s.wacc = wacc(cur, market)
-        if s.wacc is None:
-            s.na_reasons["wacc"] = "no market cap"
-        elif s.roic is not None:
-            s.roic_minus_wacc = s.roic - s.wacc
+        if cur.debt_unknown:
+            s.na_reasons["wacc"] = DEBT_UNKNOWN
+        else:
+            s.wacc = wacc(cur, market)
+            if s.wacc is None:
+                s.na_reasons["wacc"] = "no market cap"
+            elif s.roic is not None:
+                s.roic_minus_wacc = s.roic - s.wacc
     s.predictability_stars, s.predictability_r2 = predictability(f)
     if s.predictability_stars is None:
         s.na_reasons["predictability"] = f"fewer than {PREDICTABILITY_YEARS} fiscal years of data"
@@ -307,9 +334,14 @@ def compute_scores(f: Fundamentals, market: Market) -> Scores:
     if ca is not None and tl is not None and cur.shares:
         s.ncav_per_share = (ca - tl) / cur.shares
     ebit = c.get("ebit") if c.get("ebit") is not None else c.get("operating_income")
+    debt, ebitda = _total_debt(cur), c.get("ebitda")
+    s.debt_to_ebitda = debt / ebitda if debt is not None and ebitda is not None and ebitda > 0 else None
     if ebit is not None and market.market_cap and sector not in _FINANCIALS:
-        ev = market.market_cap + (c.get("net_debt") or 0.0)
-        s.earnings_yield = ebit / ev if ev > 0 else None
+        if cur.debt_unknown:
+            s.na_reasons["magic_formula"] = DEBT_UNKNOWN
+        else:
+            ev = market.market_cap + (c.get("net_debt") or 0.0)
+            s.earnings_yield = ebit / ev if ev > 0 else None
         if ca is not None and cl is not None and ppe is not None:
             # Greenblatt's capital: net working capital without cash or short-term debt, plus net PPE.
             nwc = (ca - (c.get("cash_and_equivalents") or 0.0)) - (cl - (c.get("short_term_debt") or 0.0))
