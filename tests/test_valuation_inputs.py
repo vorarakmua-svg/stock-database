@@ -641,6 +641,56 @@ def test_a_listing_jump_folds_though_eps_changed_sign(tmp_path):
     assert factors[2018] == pytest.approx(342.8 / 214.9) and factors[2020] == 1.0
 
 
+def _private_counts(db):
+    conn = _connect(db)
+    records = load_inputs(conn, "SPL").fy_records
+    conn.close()
+    return {r.fiscal_year: r.private_count for r in records}, {r.fiscal_year: r.split_factor for r in records}
+
+
+def test_years_before_the_listing_that_its_jump_folds_carry_the_private_count(tmp_path):
+    # BUG-188: a merger around the listing jumps like the converted preferred (DELL's EMC, 1.92x, its first bar
+    # after FY2016's end), so a year that ended before the first bar and that only the listing's jump folds is
+    # marked: the valuations fold it, the quality scores leave its per-share figures out.
+    # FY2019's jump bears a split's marks (EPS fell with it) and folds as one; FY2018's (EPS rose) is the listing's.
+    db = _seam_db(tmp_path, "pltr.db", [
+        (2017, -580.0, -1.07, 544.0),
+        (2018, -580.0, -1.01, 577.0),
+        (2019, -1170.0, -1.19, 979.0),
+        (2020, -520.0, -0.27, 1923.6),
+        (2021, -373.0, -0.19, 1960.0),
+    ], first_bar="2020-09-30")
+    private, factors = _private_counts(db)
+    assert private == {2017: True, 2018: True, 2019: False, 2020: False, 2021: False}
+    assert factors[2018] == pytest.approx(1923.6 / 577.0)  # still folded for the valuations
+
+
+def test_the_listing_year_keeps_the_public_count_its_jump_gives_it(tmp_path):
+    # The listing's own year blends the private count with the public one (as the history's listing quarter):
+    # it takes the public count after it, and only the years that ended before the first bar are private.
+    rows = [(2018, -100.0, -0.47, 212.4), (2019, -120.0, -0.56, 214.9), (2020, 35.0, 0.10, 342.8),
+            (2021, 360.0, 0.98, 367.0), (2022, -190.0, -0.51, 373.0)]
+    private, factors = _private_counts(_seam_db(tmp_path, "listed_2019.db", rows, first_bar="2019-06-03"))
+    assert private == {2018: True, 2019: False, 2020: False, 2021: False, 2022: False}
+    assert factors[2019] == pytest.approx(342.8 / 214.9)
+    private, _ = _private_counts(_seam_db(tmp_path, "listed_2020.db", rows, first_bar="2020-04-15"))
+    assert private == {2018: True, 2019: True, 2020: False, 2021: False, 2022: False}
+
+
+def test_a_split_before_the_listing_is_no_estimate(tmp_path):
+    # A declared 2:1 split folds its seam whatever the listing: the count is a split's, not the listing's.
+    db = _seam_db(tmp_path, "split_pre.db", [
+        (2017, 100.0, 1.00, 100.0),
+        (2018, 105.0, 0.52, 201.0),
+        (2019, 110.0, 0.55, 202.0),
+        (2020, 115.0, 0.57, 203.0),
+        (2021, 120.0, 0.59, 204.0),
+    ], splits=[("2018-06-01", 2.0)], first_bar="2020-09-30")
+    private, factors = _private_counts(db)
+    assert factors[2017] == pytest.approx(2.0)
+    assert not any(private.values())
+
+
 def test_a_declared_split_explains_one_seam_only(tmp_path):
     # A 2:1 split in 2021 shows at the FY2020 -> FY2021 seam. An older acquisition that doubled the share
     # count (EPS up, FY2018) dates before the same split, but the split can't explain both seams.

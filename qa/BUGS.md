@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 15 · P3 100 · NEEDS-USER 15 · Verified: 84
+**Open:** P0 0 · P1 0 · P2 14 · P3 100 · NEEDS-USER 15 · Verified: 85
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1430,11 +1430,16 @@ Fix (build iteration 35): `_market` reads the latest snapshot with a price, as `
 Evidence: `qa/evidence/bug187-{red,green}.txt`
 
 ### BUG-188 [P2][VAL] BUG-185's listing rule folds a stock-paid merger in a year before the listing
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (build iteration 35)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression test: tests/test_valuation_inputs.py::test_years_before_the_listing_that_its_jump_folds_carry_the_private_count, ::test_the_listing_year_keeps_the_public_count_its_jump_gives_it, ::test_a_split_before_the_listing_is_no_estimate, tests/test_scores_fundamentals.py::test_years_with_the_private_count_have_no_per_share_figures
 Repro: `src/valuation/inputs.py`: any jump of 1.5x or more whose older year ends before the first bar + 366 days folds. DELL's first bar is 2016-08-17; FY2016's 405M shares jump to 778M in FY2017 with the EMC merger (September 2016). Stored FY2016 revenue/share $65.44 (unfolded $125.71); rev_ps_cagr_10y 9.76% (2.82%); ebitda_ps_cagr_10y 18.35% (about 10.9%), shown in the STAT tab's growth table.
 Expected: a merger stays organic, as the README says; only a listing's own jump folds.   Actual: the merger folded; the oracle skips pre-listing years, so it can't see it.
 Notes: DELL's total assets went 2.6x with the count: a merger's mark. The valuations are unaffected today (FY2016 is outside their window).
+Root cause: the listing rule folds every jump of 1.5x or more whose older year ends within a year of the first bar, and nothing in the stored figures tells an IPO's converted preferred from a stock-paid merger at the listing. On real data it fires for six seams (APP, CRWD, DELL, PLTR twice, UBER). Total assets don't separate them: CRWD's (3.24x against a 3.30x count) and APP's moved with the count too, from IPO cash and acquisitions, and the preferred sits in an unmapped temporary-equity tag.
+Fix (build iteration 35): the scores no longer guess. `_normalize_splits` marks a year that ended before the first bar and that only a listing's jump folds (`FYRecord.private_count`); `load_fundamentals` gives it no share count or EPS, so no per-share figures, and keeps its totals. The listing's own year keeps the public count, as the history's listing quarter does, and the history already drops the quarters before the first bar. The valuations still fold these years by the jump's ratio: changing that is valuation policy, and DELL's FY2016 is outside their 10-year window.
+- Tests: four (three failing first, then two more for the listing-year refinement); seven mutants, each killed.
+- Real data (a backfilled copy against BUG-185's): no valuation row, median or verdict moves. The years now without per-share figures: APP FY2019-20, CRWD FY2018-19, DELL FY2016 (revenue/share $65.44), PLTR FY2018-19, UBER FY2017-18. DELL's 10-year revenue/share and EBITDA/share CAGRs go to N/A. APP's 5-year CAGRs wait for FY2026 (its FY2020 ended before the April 2021 listing), so its growth rank goes from 10 to N/A and its composite from 68 to 60; AMT, ETN, LLY, NOW, RTX and SLB move up one growth rank. The scores oracle passes 9 of 9.
+Evidence: `qa/evidence/bug188-{probe,red,red2,green,mutants,realdata,oracle}.txt`
 
 ### BUG-189 [P2][SCORES] A phantom zero debt reads as the strongest balance sheet
 Status: OPEN

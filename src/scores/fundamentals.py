@@ -115,6 +115,13 @@ def load_fundamentals(conn: sqlite3.Connection, ticker: str) -> Fundamentals:
             figures[name] = (annual.get(rec.fiscal_year) or {}).get(name)
         for name in METRIC_FIELDS:
             figures[name] = (metrics.get(rec.fiscal_year) or {}).get(name)
+        if rec.private_count:
+            # A year before the listing on the private count, which only the listing's jump put on the public one:
+            # a merger around the listing jumps the same way (DELL's EMC), so the year has no per-share figures;
+            # its totals stay (BUG-188).
+            f.rows.append(AnnualRow(fiscal_year=rec.fiscal_year, period_end=rec.period_end, shares=None, eps=None,
+                                    figures=figures))
+            continue
         f.rows.append(AnnualRow(fiscal_year=rec.fiscal_year, period_end=rec.period_end,
                                 shares=_count_on_eps_basis(rec.shares, rec.eps_diluted, figures),
                                 eps=rec.eps_diluted, figures=figures))

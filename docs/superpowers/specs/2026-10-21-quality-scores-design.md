@@ -26,8 +26,12 @@ the existing models, median and verdicts are untouched. The package is `src/scor
   EPS (the record's diluted EPS), EBITDA/share, FCF/share (`free_cash_flow`), book/share (total equity).
   The FY records fold a share-count jump by a declared share split, by its own ratio on a split's marks (EPS
   against the count, revenue not with it, the EPS-implied count moving with it), or when the older year ends
-  before the listing or in its year (pre-listing counts leave out converted preferred). Mergers, exchange
-  offers, swinging counts and spin-off price factors fold nothing (BUG-185, as BUG-175 for the history).
+  before the listing or in its year (pre-listing counts leave out converted preferred). Otherwise mergers,
+  exchange offers, swinging counts and spin-off price factors fold nothing (BUG-185, as BUG-175 for the
+  history). A year that ended before the first price bar and that only the listing's jump folds has the
+  private count (`FYRecord.private_count`): a merger around the listing jumps the same way (DELL's EMC),
+  so the scores give that year no per-share figures and keep its totals. The listing's own year keeps the
+  public count, as the history's listing quarter does (BUG-188).
 - **CAGRs** over 3, 5 and 10 years: `(last / first) ** (1 / years) - 1`. Both ends must be positive, and the
   start year must exist exactly `years` fiscal years back; otherwise None.
 

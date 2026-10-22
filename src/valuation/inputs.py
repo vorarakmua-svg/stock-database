@@ -94,7 +94,10 @@ class FYRecord:
     the same convention Yahoo's adjusted price bars use — so that multi-year
     per-share series and price/EPS multiples are comparable across a split.
     ``split_factor`` records the factor that was applied to this year (1.0 =
-    as reported).
+    as reported). ``private_count`` marks a year that ended before the listing
+    and that only a listing's jump put on the public count: the converted
+    preferred that jump stands for can't be told from a merger around the
+    listing (BUG-188).
 
     ``depreciation_amortization`` and ``capex`` are absolute dollar figures, not
     per-share, so they are never split-adjusted.
@@ -111,6 +114,7 @@ class FYRecord:
     depreciation_amortization: Optional[float] = None
     capex: Optional[float] = None
     split_factor: float = 1.0
+    private_count: bool = False
 
     def eps(self) -> Optional[float]:
         """Diluted EPS as reported, else net income / shares."""
@@ -207,7 +211,7 @@ def _normalize_splits(records: List[FYRecord],
                       splits: Sequence[Tuple[str, float]] = (),
                       detect_filed: Optional[Sequence[Optional[str]]] = None,
                       revenue: Optional[Sequence[Optional[float]]] = None,
-                      listed: Optional[str] = None,
+                      first_bar: Optional[str] = None,
                       ) -> Tuple[List[FYRecord], bool]:
     """Restate every year's per-share figures onto the current share basis.
 
@@ -225,11 +229,14 @@ def _normalize_splits(records: List[FYRecord],
       which scales the older years' per-share values UP and their share counts
       DOWN — exactly the correction a reverse split needs.
       Either folds by a declared share split (a simple ratio: a spin-off's price
-      factor changes no share count), by its own ratio when the older year ends
-      before the listing (*listed*) or in its year (LISTING_YEAR_DAYS), or by its
-      own ratio on a split's marks in EPS and *revenue* (``_split_marks``) when
-      the count EPS implies moved with it (``_implied_count_moves``). Otherwise
-      it stays: a merger, an exchange offer, a count that swings alone (BUG-185).
+      factor changes no share count), by its own ratio on a split's marks in EPS
+      and *revenue* (``_split_marks``) when the count EPS implies moved with it
+      (``_implied_count_moves``), or by its own ratio when the older year ends
+      before the listing (*first_bar*) or in its year (LISTING_YEAR_DAYS).
+      Otherwise it stays: a merger, an exchange offer, a count that swings alone
+      (BUG-185). A year that ended before the first bar and that only a listing's
+      jump folds is marked ``private_count``: a merger around the listing jumps
+      the same way (DELL's EMC, BUG-188).
     * beyond ``+/- 50x`` -> not a credible corporate action. The source data
       mixes units across fiscal years (thousands vs units), so everything older
       than this seam is on an unknown scale and simply CANNOT be compared to the
@@ -250,6 +257,10 @@ def _normalize_splits(records: List[FYRecord],
     correct.
     """
     factor = 1.0
+    listed = ((date.fromisoformat(str(first_bar)[:10]) + timedelta(days=LISTING_YEAR_DAYS)).isoformat()
+              if first_bar else None)
+    # From a seam only the listing explains, the years that ended before the first bar have the private count.
+    private = False
     # The walk rescales each year as it goes, so the EPS test reads the figures
     # as reported, on the basis the share counts are.
     reported_eps = [rec.eps_diluted for rec in records]
@@ -275,14 +286,18 @@ def _normalize_splits(records: List[FYRecord],
                 if run:
                     unused = [split for split in unused if split not in run]
                     factor *= math.prod(split_ratio for _, split_ratio in run)
-                elif listing or (
-                        _split_marks(ratio, reported_eps[i], reported_eps[i + 1],
-                                     revenue[i] if revenue else None, revenue[i + 1] if revenue else None)
-                        and _implied_count_moves(ratio, records[i], records[i + 1],
-                                                 reported_eps[i], reported_eps[i + 1])):
+                elif (_split_marks(ratio, reported_eps[i], reported_eps[i + 1],
+                                   revenue[i] if revenue else None, revenue[i + 1] if revenue else None)
+                      and _implied_count_moves(ratio, records[i], records[i + 1],
+                                               reported_eps[i], reported_eps[i + 1])):
                     factor *= ratio
+                elif listing:
+                    factor *= ratio
+                    private = True
         rec = records[i]
         rec.split_factor = factor
+        rec.private_count = (private and first_bar is not None and rec.period_end is not None
+                             and str(rec.period_end)[:10] < str(first_bar)[:10])
         if factor == 1.0:
             continue
         if rec.eps_diluted is not None:
@@ -628,10 +643,9 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
     # moves every year by it instead.
     restated = [s for s in splits if not filed or str(s[0])[:10] <= str(filed)[:10]]
     first_bar = conn.execute("SELECT MIN(date) FROM price_bars WHERE ticker = ?", (ticker,)).fetchone()[0]
-    listed = ((date.fromisoformat(str(first_bar)[:10]) + timedelta(days=LISTING_YEAR_DAYS)).isoformat()
-              if first_bar else None)
     records, history_truncated = _normalize_splits(records, shares_detect, restated, detect_filed,
-                                                   [r["revenue"] for r in fy_rows[-max_years:]], listed)
+                                                   [r["revenue"] for r in fy_rows[-max_years:]],
+                                                   str(first_bar)[:10] if first_bar else None)
 
     # SELECT *: a database not yet migrated lacks the rate's date and source columns,
     # and the backfill reads it without migrating.

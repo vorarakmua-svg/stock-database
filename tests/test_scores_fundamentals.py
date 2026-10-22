@@ -67,6 +67,27 @@ def test_per_share_figures_are_on_todays_split_basis(tmp_path):
     assert by_year[2019].eps == pytest.approx(1000e6 * 1.1 ** 6 * 0.1 / 200e6)
 
 
+def test_years_with_the_private_count_have_no_per_share_figures(tmp_path):
+    """BUG-188: the jump into the listing's count folds for the valuations, but a merger around the listing jumps
+    the same way (DELL's EMC), so the years that ended before the first bar and that only that jump folds have no
+    per-share figures in the scores; their totals stay. The listing's own year takes the public count."""
+    conn = _db(tmp_path)
+    # No split: the 2020 doubling is the listing's (the first bar in June 2019), across a loss, so no split's marks.
+    conn.execute("DELETE FROM split_events")
+    conn.execute("UPDATE financials_annual SET net_income = -net_income, eps_diluted = -eps_diluted "
+                 "WHERE fiscal_year = 2019")
+    conn.execute("INSERT INTO price_bars (ticker, date, close) VALUES ('AAA', '2019-06-03', 20.0)")
+    conn.commit()
+    f = load_fundamentals(conn, "AAA")
+    by_year = {r.fiscal_year: r for r in f.rows}
+    assert by_year[2018].shares is None and by_year[2018].eps is None and by_year[2015].shares is None
+    assert by_year[2018].per_share("revenue") is None and by_year[2018].figures["revenue"] is not None
+    assert by_year[2019].shares == pytest.approx(200e6) and by_year[2019].eps is not None  # the listing's year
+    g = growth(f)
+    assert g["rev_ps_cagr_5y"] == pytest.approx(0.10)  # FY2020 -> FY2025, after the jump
+    assert g["rev_ps_cagr_10y"] is None
+
+
 def test_growth_gives_the_cagrs_of_each_series(tmp_path):
     g = growth(load_fundamentals(_db(tmp_path), "AAA"))
     for key in ("rev_ps_cagr_3y", "rev_ps_cagr_5y", "rev_ps_cagr_10y", "eps_cagr_5y", "ebitda_ps_cagr_10y",
