@@ -93,7 +93,8 @@ Nothing in the valuations, the history or the scores changes.
 - **HDS tab**: a "Gurus" section above Yahoo's holders.
 - **Pages**: `/gurus` (the list, each with its latest quarter's value and positions), `/gurus/{cik}` (holdings
   and changes), `/gurus/portfolio` (the aggregated portfolio).
-- **API**: `/api/stocks/{t}/insiders`, `/api/stocks/{t}/gurus`, `/api/gurus`, `/api/gurus/{cik}`.
+- **API**: `/api/stocks/{t}/form4` (the existing `/api/stocks/{t}/insiders` keeps serving Yahoo's rows),
+  `/api/stocks/{t}/gurus`, `/api/gurus`, `/api/gurus/{cik}`.
 - **Screener**: net open-market buying (12 months, dollars), CEO/CFO buys (12 months), cluster buys (12 months),
   gurus holding.
 

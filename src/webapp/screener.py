@@ -88,6 +88,36 @@ QUALITY_EXPRS: Dict[str, str] = {
 }
 _QUALITY_JOIN: str = "LEFT JOIN quality_scores qs ON qs.ticker = ma.ticker"
 
+# Insiders' open-market trades from the SEC's Form 4 filings (insider_trades, insider_filings), over the last 365
+# days, from filings no amendment superseded: correlated subqueries, NULL when the tables don't exist
+# (docs/superpowers/specs/2026-10-22-sec-ownership-design.md). A joint filing counts each of its owners.
+_LIVE_TRADES = ("FROM insider_trades {t} JOIN insider_filings {f} ON {f}.accession = {t}.accession "
+                "WHERE {t}.ticker = ma.ticker AND {t}.kind = 'nonderivative' AND {f}.superseded_by IS NULL ")
+INSIDER_EXPRS: Dict[str, str] = {
+    # Open-market dollars bought less sold (code P less S), each trade once.
+    "ins_net_buy_12m":
+        "(SELECT SUM(CASE t.code WHEN 'P' THEN t.shares * t.price ELSE -t.shares * t.price END) "
+        "FROM insider_trades t WHERE t.ticker = ma.ticker AND t.kind = 'nonderivative' "
+        "AND t.code IN ('P', 'S') AND t.price IS NOT NULL AND t.date >= date('now', '-365 days') "
+        "AND NOT EXISTS (SELECT 1 FROM insider_filings f WHERE f.accession = t.accession "
+        "AND f.superseded_by IS NOT NULL))",
+    # Distinct insiders buying in the open market.
+    "ins_buyers_12m":
+        "(SELECT COUNT(DISTINCT f.owner_cik) " + _LIVE_TRADES.format(t="t", f="f")
+        + "AND t.code = 'P' AND t.date >= date('now', '-365 days'))",
+    # Open-market purchases by the company's CEO or CFO (filings).
+    "ins_ceo_cfo_buys_12m":
+        "(SELECT COUNT(DISTINCT t.accession) " + _LIVE_TRADES.format(t="t", f="f")
+        + "AND t.code = 'P' AND f.is_ceo_cfo = 1 AND t.date >= date('now', '-365 days'))",
+    # The most distinct insiders buying within 30 days of one purchase: 3 or more is a cluster buy.
+    "ins_cluster_buyers_12m":
+        "(SELECT MAX((SELECT COUNT(DISTINCT f2.owner_cik) " + _LIVE_TRADES.format(t="t2", f="f2")
+        .replace("t2.ticker = ma.ticker", "t2.ticker = t1.ticker")
+        + "AND t2.code = 'P' AND t2.date BETWEEN t1.date AND date(t1.date, '+30 days'))) "
+        "FROM insider_trades t1 WHERE t1.ticker = ma.ticker AND t1.kind = 'nonderivative' AND t1.code = 'P' "
+        "AND t1.date >= date('now', '-365 days'))",
+}
+
 # The spec's preset screens: (key, label, the query string each fills the screener with).
 PRESETS: Tuple[Tuple[str, str, str], ...] = (
     ("buffett_munger", "Buffett-Munger",
@@ -125,6 +155,7 @@ SCREEN_COLUMNS: List[str] = (
     + list(VALUATION_EXPRS)
     + list(HISTORY_EXPRS)
     + list(QUALITY_EXPRS)
+    + list(INSIDER_EXPRS)
 )
 
 # Default metrics for the compare view — single source of truth.
@@ -205,6 +236,11 @@ METRIC_KINDS: Dict[str, str] = {
     "roic_minus_wacc": "pct",
     "momentum": "pct",
     "price_to_ncav": "mult",
+    # insiders (SEC Form 4)
+    "ins_net_buy_12m": "money",
+    "ins_buyers_12m": "raw",
+    "ins_ceo_cfo_buys_12m": "raw",
+    "ins_cluster_buyers_12m": "raw",
 }
 
 # SQL fragment for the latest-fiscal-year-per-ticker sub-join (shared between
@@ -285,7 +321,7 @@ class ScreenSpec:
 
 
 def _qualify_column(field_name: str, *, context: str = "filter", history: bool = True,
-                    quality: bool = True) -> str:
+                    quality: bool = True, insiders: bool = True) -> str:
     """Resolve *field_name* to a qualified, quoted SQL column reference.
 
     Metric columns (``_METRIC_COL_SET``) resolve to ``ma."col"``; snapshot
@@ -310,13 +346,16 @@ def _qualify_column(field_name: str, *, context: str = "filter", history: bool =
         return HISTORY_EXPRS[field_name] if history else "NULL"
     if field_name in QUALITY_EXPRS:
         return QUALITY_EXPRS[field_name] if quality else "NULL"
+    if field_name in INSIDER_EXPRS:
+        return INSIDER_EXPRS[field_name] if insiders else "NULL"
     raise ValueError(
-        f"Invalid {context} field {field_name!r}: not in whitelisted "
-        "_METRIC_COLUMNS, SNAPSHOT_SCREEN_COLUMNS, VALUATION_EXPRS, HISTORY_EXPRS, or QUALITY_EXPRS."
+        f"Invalid {context} field {field_name!r}: not in whitelisted _METRIC_COLUMNS, "
+        "SNAPSHOT_SCREEN_COLUMNS, VALUATION_EXPRS, HISTORY_EXPRS, QUALITY_EXPRS, or INSIDER_EXPRS."
     )
 
 
-def _build_where(spec: ScreenSpec, history: bool = True, quality: bool = True) -> Tuple[str, List[Any]]:
+def _build_where(spec: ScreenSpec, history: bool = True, quality: bool = True,
+                 insiders: bool = True) -> Tuple[str, List[Any]]:
     """Validate filters/sector and build the WHERE clause + ordered params.
 
     Raises ``ValueError`` for any non-whitelisted field or unknown op.
@@ -326,7 +365,7 @@ def _build_where(spec: ScreenSpec, history: bool = True, quality: bool = True) -
     clauses: List[str] = []
 
     for f in spec.filters:
-        col = _qualify_column(f.field, context="filter", history=history, quality=quality)
+        col = _qualify_column(f.field, context="filter", history=history, quality=quality, insiders=insiders)
         if f.op == "between":
             if f.value2 is None:
                 raise ValueError(
@@ -398,7 +437,8 @@ def _build_where(spec: ScreenSpec, history: bool = True, quality: bool = True) -
 # ---------------------------------------------------------------------------
 
 
-def build_screen_query(spec: ScreenSpec, history: bool = True, quality: bool = True) -> Tuple[str, List[Any]]:
+def build_screen_query(spec: ScreenSpec, history: bool = True, quality: bool = True,
+                       insiders: bool = True) -> Tuple[str, List[Any]]:
     """Return ``(sql, params)`` for the full screen query.
 
     Pure function — does NOT touch the database.
@@ -419,10 +459,11 @@ def build_screen_query(spec: ScreenSpec, history: bool = True, quality: bool = T
     # Validate sort column (may be either a metric or a snapshot column)
     sort_col: Optional[str] = None
     if spec.sort is not None:
-        sort_col = _qualify_column(spec.sort, context="sort", history=history, quality=quality)
+        sort_col = _qualify_column(spec.sort, context="sort", history=history, quality=quality,
+                                   insiders=insiders)
 
     # Build WHERE (also validates filters)
-    where_sql, params = _build_where(spec, history, quality)
+    where_sql, params = _build_where(spec, history, quality, insiders)
 
     # Build ORDER BY with NULLs-last
     if sort_col is not None:
@@ -445,11 +486,14 @@ def build_screen_query(spec: ScreenSpec, history: bool = True, quality: bool = T
     quality_exprs_sql = ", ".join(
         f"{expr if quality else 'NULL'} AS {name}" for name, expr in QUALITY_EXPRS.items()
     )
+    insider_exprs_sql = ", ".join(
+        f"{expr if insiders else 'NULL'} AS {name}" for name, expr in INSIDER_EXPRS.items()
+    )
     select_sql = (
         f"c.ticker, c.company_name, c.sector_class, ma.fiscal_year, "
         f"{metric_cols_sql}, {snapshot_cols_sql}, "
         f"{valuation_cols_sql}, {oe_cols_sql}, {valuation_exprs_sql}, {history_exprs_sql}, "
-        f"{quality_exprs_sql}"
+        f"{quality_exprs_sql}, {insider_exprs_sql}"
     )
 
     sql = (
@@ -471,14 +515,15 @@ def build_screen_query(spec: ScreenSpec, history: bool = True, quality: bool = T
     return sql, params
 
 
-def build_count_query(spec: ScreenSpec, history: bool = True, quality: bool = True) -> Tuple[str, List[Any]]:
+def build_count_query(spec: ScreenSpec, history: bool = True, quality: bool = True,
+                      insiders: bool = True) -> Tuple[str, List[Any]]:
     """Return ``(sql, params)`` for a ``COUNT(*)`` version of the same query.
 
     Used by ``Reader.screen`` to compute the total without LIMIT/OFFSET.
     Validates filters and sector (same as ``build_screen_query``) but does NOT
     validate sort/sort_dir (not needed for a count).
     """
-    where_sql, params = _build_where(spec, history, quality)
+    where_sql, params = _build_where(spec, history, quality, insiders)
 
     sql = (
         f"SELECT COUNT(*)\n"

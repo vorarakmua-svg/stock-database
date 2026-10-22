@@ -441,6 +441,7 @@ class SQLiteStore:
                 is_ten_percent INTEGER,
                 is_other INTEGER,
                 aff10b5one INTEGER,
+                is_ceo_cfo INTEGER,
                 superseded_by TEXT,
                 collected_at TEXT NOT NULL,
                 PRIMARY KEY (accession, owner_cik)
@@ -1220,20 +1221,24 @@ class SQLiteStore:
         Each filing's rows are replaced by accession, so a filing an earlier run stored and this one couldn't
         fetch stays. Then every 4/A marks the original it amends: the same owner's Form 4 filed on the 4/A's
         original filing day, for the same period where both give one."""
+        from ..ownership.insiders import ceo_or_cfo
+
         conn = self._connect()
         try:
             self._create_schema(conn)
+            self._ensure_columns(conn, "insider_filings", {"is_ceo_cfo": "INTEGER"})
             for ref, filing in filings:
                 conn.execute("DELETE FROM insider_trades WHERE accession = ?", (ref.accession,))
                 conn.execute("DELETE FROM insider_filings WHERE accession = ?", (ref.accession,))
                 conn.executemany(
                     "INSERT INTO insider_filings (accession, owner_cik, ticker, form, filed_date, period_of_report, "
                     "original_filed, owner_name, is_director, is_officer, officer_title, is_ten_percent, is_other, "
-                    "aff10b5one, collected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "aff10b5one, is_ceo_cfo, collected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [(ref.accession, owner.cik or "", ticker, filing.form or ref.form, ref.filed,
                       filing.period_of_report, filing.original_filed, owner.name, int(owner.is_director),
                       int(owner.is_officer), owner.officer_title, int(owner.is_ten_percent), int(owner.is_other),
-                      None if filing.aff10b5one is None else int(filing.aff10b5one), collected_at)
+                      None if filing.aff10b5one is None else int(filing.aff10b5one),
+                      int(ceo_or_cfo(owner.officer_title)), collected_at)
                      for owner in filing.owners])
                 conn.executemany(
                     "INSERT INTO insider_trades (accession, seq, ticker, kind, security_title, date, code, shares, "

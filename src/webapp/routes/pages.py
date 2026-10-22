@@ -197,6 +197,14 @@ SCREENER_QUALITY_OPTIONS: List[tuple[str, str]] = [
     ("Price / NCAV", "price_to_ncav"),
 ]
 
+# Insiders' open-market trades over the last year, from the SEC's Form 4 filings (screener.INSIDER_EXPRS).
+SCREENER_INSIDER_OPTIONS: List[tuple[str, str]] = [
+    ("Insider net buying, 12 months ($)", "ins_net_buy_12m"),
+    ("Insiders buying, 12 months", "ins_buyers_12m"),
+    ("CEO/CFO buys, 12 months", "ins_ceo_cfo_buys_12m"),
+    ("Insiders buying within 30 days (cluster)", "ins_cluster_buyers_12m"),
+]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -542,6 +550,10 @@ def screener_page(
         + [
             {"key": key, "label": label, "group": "Quality scores"}
             for label, key in SCREENER_QUALITY_OPTIONS
+        ]
+        + [
+            {"key": key, "label": label, "group": "Insiders (SEC)"}
+            for label, key in SCREENER_INSIDER_OPTIONS
         ]
     )
     return templates.TemplateResponse(

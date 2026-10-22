@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 8 · DOING 1 · DONE 22 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 7 · DOING 1 · DONE 23 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -50,7 +50,7 @@
 | M3-0 | Design M3: `docs/superpowers/specs/2026-10-22-sec-ownership-design.md`, then these rows | DONE | this commit | the spec |
 | M3-1 | `src/ownership/form4.py`: the Form 4 parser (owners and roles, non-derivative and derivative rows, 10b5-1, amendments), with real-document fixtures; with tests | DONE | this commit | `qa/evidence/ownership-m3-1-*.txt` |
 | M3-2 | Form 4 collection (full submissions feeds back three years, cached XML, incremental), storage (`insider_filings`, `insider_trades`) and `python -m src.ownership.collect --insiders`; with tests | DONE | this commit | `qa/evidence/ownership-m3-2-*.txt` |
-| M3-3 | Insider aggregates, the INS tab, `GET /api/stocks/{t}/insiders`, screener fields; checked against Yahoo's insider rows, browser-checked; with tests | TODO | | |
+| M3-3 | Insider aggregates, the INS tab, `GET /api/stocks/{t}/form4`, screener fields; checked against Yahoo's insider rows, browser-checked; with tests | DONE | this commit | `qa/evidence/ownership-m3-3-*.txt` |
 | M3-4 | 13F: the guru list (`src/ownership/gurus.py`, each CIK checked), the information-table parser with its checksums, storage; with tests | TODO | | |
 | M3-5 | The CUSIP map (curated for our universe, OpenFIGI for the rest) and quarter-over-quarter changes; with tests | TODO | | |
 | M3-6 | Guru pages (`/gurus`, `/gurus/{cik}`, `/gurus/portfolio`), the HDS tab's Gurus section, the API, browser-checked; with tests | TODO | | |
@@ -667,3 +667,34 @@ Evidence: `qa/evidence/ownership-m3-2-{red,green,mutants,realdata}.txt`
 Gates: ruff ✓ mypy ✓ pytest 1411 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) feat(ownership): collect and store insiders' Form 4 filings (M3-2)
 Next: M2-9's review findings when it reports; meanwhile M3-3 (the insider aggregates, the INS tab, the API).
+
+### Build iteration 33: 2026-10-22 08:06: M3-3
+Did:
+- `src/ownership/insiders.py` (pure):
+  - Open-market purchases and sales (P and S) over 3, 6 and 12 months: shares, dollars, net, buyers and sellers.
+  - CEO and CFO purchases. A title naming a unit, such as BA's "EVP, Pres. & CEO, BGS", belongs to that unit's
+    head; the flag is stored per filing for the screener.
+  - Cluster buys: 3 or more insiders within 30 days.
+  - The share of sales made under a 10b5-1 plan, where the filings say.
+- The web (`src/webapp/insiders.py`, shared):
+  - `GET /api/stocks/{t}/form4`. The existing `/insiders` keeps serving Yahoo's rows, which its clients and
+    tests rely on; the spec now says so.
+  - The INS tab's SEC section (summary, cluster and CEO/CFO lines, the trades with their codes' meanings),
+    with Yahoo's table only where no Form 4 is stored.
+  - Four screener fields (net buying, buyers, CEO/CFO buys, the largest 30-day cluster, all over 12 months),
+    each NULL when the tables don't exist.
+- Tests: 25 (the modules missing first); six mutants. One was equivalent and the redundant filter it touched is
+  gone; one exposed a test gap (no superseded purchase), now covered. All six killed.
+- Real data (PFE, AAPL; scratch copy):
+  - PFE: three insiders bought $2.96M in August 2026, a cluster, including the CEO's $1.00M.
+  - AAPL: $207M sold by 8 insiders, 56% of it under 10b5-1 plans.
+  - Against Yahoo's rows where both cover the same months: PFE 26 of 34 and AAPL 80 of 100 match an SEC trade
+    on the same day with the same shares, or the day's total for that insider and code. The rest are kinds
+    Yahoo labels or sums differently: option conversions, multi-day sale ranges, rows without text.
+- Browser (headless Chrome, scratch server): PFE's INS tab renders the SEC section; MSFT, without Form 4s, falls
+  back to Yahoo's table; no console errors. Server stopped; port 8765 free.
+- Code review 16 reported (no Critical; I1-I6 Important); M2-9 fixes them next.
+Evidence: `qa/evidence/ownership-m3-3-{red,green,mutants,realdata}.txt`; `shots/PFE-ins.png`
+Gates: ruff ✓ mypy ✓ pytest 1436 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) feat(ownership): insider aggregates on the INS tab, the API and the screener (M3-3)
+Next: M2-9: record code review 16 and fix I1-I6 test-first, then M2's live backfill.

@@ -22,6 +22,7 @@ from ...valuation.history import HISTORICAL_VALUE_CUTOFFS, METRICS, historical_v
 from ...valuation.models import ValuationResult, dcf_per_share
 from ..dependencies import get_job_manager, get_reader, get_settings
 from ..formatting import fmt_count, fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
+from ..insiders import insider_view
 from ..jobs import CollectionJobManager
 from ..quality import GROWTH_SPANS, RANK_LABELS, quality_view
 from ..repository import Reader
@@ -876,9 +877,38 @@ def ins_fragment(
     request: Request,
     r: Reader = Depends(get_reader),
 ) -> Any:
-    """INS panel: insider transaction table, tinted green/red by buy/sell keyword."""
+    """INS panel: the SEC's Form 4 trades with their open-market aggregates; else Yahoo's insider rows, tinted
+    green/red by buy/sell keyword."""
     if r.get_company(ticker) is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    view = insider_view(r, ticker)
+    if view["source"] == "sec":
+        s = view["summary"]
+        year = s["windows"]["12m"]
+        sec = {
+            "bought": fmt_money(year["bought_value"]), "buyers": year["buyers"],
+            "sold": fmt_money(year["sold_value"]), "sellers": year["sellers"],
+            "windows": [{"label": label, "net": fmt_money(s["windows"][key]["net_value"])}
+                        for key, label in (("3m", "3 months"), ("6m", "6 months"), ("12m", "12 months"))],
+            "ceo_cfo": [{"date": b["date"], "name": b["owner_name"], "title": b["officer_title"],
+                         "shares": fmt_count(b["shares"]), "value": fmt_money(b["value"])}
+                        for b in s["ceo_cfo_buys_12m"]],
+            "clusters": [{"start": c["start"], "end": c["end"], "buyers": c["buyers"],
+                          "names": ", ".join(c["names"]), "value": fmt_money(c["value"])}
+                         for c in s["clusters_12m"]],
+            "planned": fmt_pct(s["planned_sale_share_12m"]),
+            "trades": [{"date": t["date"], "insider": t["owner_name"], "role": t["role"], "code": t["code"],
+                        "meaning": t["meaning"], "derivative": t["kind"] == "derivative",
+                        "shares": fmt_count(t["shares"]), "price": fmt_price(t["price"]),
+                        "value": fmt_money(t["value"]), "after": fmt_count(t["owned_after"]),
+                        "plan": "yes" if t["plan"] else "", "form": t["form"],
+                        "tint_class": "up" if t["code"] == "P" else "down" if t["code"] == "S" else "flat"}
+                       for t in view["trades"][:200]],
+            "count": len(view["trades"]),
+        }
+        return templates.TemplateResponse(request, "fragments/ins.html",
+                                          {"request": request, "ticker": ticker, "sec": sec, "rows": []})
 
     transactions = r.insider_transactions(ticker)
     rows = [

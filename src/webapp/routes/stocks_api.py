@@ -39,6 +39,7 @@ from ...valuation.history import HISTORICAL_VALUE_CUTOFFS, METRICS, historical_v
 from ...valuation.models import ValuationResult
 from ..dependencies import get_job_manager, get_reader, get_settings
 from ..indicators import indicator_bundle, normalize_pct
+from ..insiders import insider_view
 from ..jobs import CollectionJobManager
 from ..quality import quality_view
 from ..repository import Reader
@@ -448,6 +449,16 @@ def valuation_history(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str,
             **{column: [row.get(column) for row in rows] for column in ("close", "fair_value") + METRICS},
         },
     }
+
+
+@router.get("/{ticker}/form4")
+def form4_insiders(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
+    """Insiders' trades: the SEC's Form 4 filings with their open-market aggregates (3, 6 and 12 months, CEO/CFO
+    buys, cluster buys, planned sales), or Yahoo's rows where no Form 4 was collected
+    (docs/superpowers/specs/2026-10-22-sec-ownership-design.md)."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    return insider_view(r, ticker)
 
 
 @router.get("/{ticker}/scores")

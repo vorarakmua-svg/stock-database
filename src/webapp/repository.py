@@ -490,6 +490,24 @@ class Reader:
         )
         return [dict(row) for row in cur.fetchall()]
 
+    def sec_insider_trades(self, ticker: str) -> List[Dict[str, Any]]:
+        """The ticker's Form 4 trades from filings no amendment superseded, each with its filing (form, filed
+        date, 10b5-1 flag) and its first reporting owner (name, role, title, CEO/CFO flag), newest first.
+        [] before the tables exist."""
+        try:
+            cur = self._conn.execute(
+                "SELECT t.*, f.form, f.filed_date, f.owner_cik, f.owner_name, f.is_director, f.is_officer, "
+                "f.officer_title, f.is_ten_percent, f.is_ceo_cfo, f.aff10b5one "
+                "FROM insider_trades t JOIN insider_filings f ON f.accession = t.accession "
+                "AND f.owner_cik = (SELECT MIN(owner_cik) FROM insider_filings WHERE accession = t.accession) "
+                "WHERE t.ticker = ? AND f.superseded_by IS NULL "
+                "ORDER BY t.date DESC, f.filed_date DESC, t.accession, t.seq",
+                (ticker,),
+            )
+        except sqlite3.OperationalError:
+            return []
+        return [dict(row) for row in cur.fetchall()]
+
     def insider_transactions(self, ticker: str, limit: int = 100) -> List[Dict[str, Any]]:
         """``insider_transactions`` rows for ``ticker``, descending by ``start_date``."""
         cur = self._conn.execute(
@@ -559,15 +577,16 @@ class Reader:
         ``spec`` is validated inside ``build_screen_query``; raises
         ``ValueError`` if any field/sort/op is not whitelisted.
         """
-        # The valuation history's and the quality scores' fields are NULL in a database from before
-        # their tables.
+        # The valuation history's, the quality scores' and the insiders' fields are NULL in a database from
+        # before their tables.
         tables = {row[0] for row in self._conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' "
-            "AND name IN ('valuation_ranges', 'quality_scores')"
+            "AND name IN ('valuation_ranges', 'quality_scores', 'insider_trades', 'insider_filings')"
         )}
         history, quality = "valuation_ranges" in tables, "quality_scores" in tables
-        sql, params = build_screen_query(spec, history, quality)
-        count_sql, count_params = build_count_query(spec, history, quality)
+        insiders = {"insider_trades", "insider_filings"} <= tables
+        sql, params = build_screen_query(spec, history, quality, insiders)
+        count_sql, count_params = build_count_query(spec, history, quality, insiders)
 
         cur = self._conn.execute(sql, params)
         items = [dict(row) for row in cur.fetchall()]
