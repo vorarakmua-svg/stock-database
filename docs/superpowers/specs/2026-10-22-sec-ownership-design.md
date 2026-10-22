@@ -79,10 +79,34 @@ Nothing in the valuations, the history or the scores changes.
     sum within rounding. Each entry's value and the total are rounded to the unit, so they may differ by half
     a unit per entry plus half a unit: 13 of the first 248 filings differ by 1 to 4 units. A filing that fails
     is stored with a flag and kept out of the aggregates.
-- **CUSIP to ticker**: `cusip_map` (CUSIP, ticker, name, source). Our 127 companies' CUSIPs are curated from the
-  information tables' issuer names, checked by hand-listed name matches; the others through OpenFIGI's mapping
-  API without a key (25 requests a minute, 10 CUSIPs each), cached. Unmapped CUSIPs keep their issuer name.
-- **Changes**: per guru and CUSIP, quarter over quarter: new, added, reduced, sold out, unchanged (shares).
+- **CUSIP to ticker**: `cusip_map` (cusip PK, ticker, name, source, security_type, mapped_at; source
+  'universe', 'openfigi' or 'none').
+  - Our companies' codes are curated in `src/ownership/cusips.py`: 124 codes for 121 tickers. Each 13F code's
+    OpenFIGI listing (the US composite) is kept where its ticker is ours, and read against its 13F issuer name
+    (`qa/evidence/ownership-m3-5-universe-review.txt`).
+  - Added by hand: the other common class (GOOG, BRK-A), the codes that changed in the window (Honeywell's
+    before its 2026 reverse split, Exxon Mobil Corp's before ExxonMobil Holdings took XOM), and a filer's
+    typo of Allstate's. Our preferred shares and convertible notes keep their own OpenFIGI tickers.
+  - Every other code goes to OpenFIGI's mapping API without a key (10 a request, 25 requests a minute),
+    cached on disk. A code starting with a letter is a CINS (a foreign issuer: Chubb, Linde, Seagate), asked
+    as `ID_CINS`; as `ID_CUSIP` OpenFIGI finds nothing. "No identifier found" and "Invalid idValue format"
+    (a malformed code: a filer's bad check digit) are answers, mapped 'none'; another job error fails only its
+    own code; three failed requests in a row stop the mapping until the next run. Unmapped codes keep their
+    issuer name.
+- **A guru's quarter** (`src/ownership/portfolio.py`), from the filings that pass the checksum:
+  - per filer and period, the latest of the original 13F-HR and its RESTATEMENTs, plus the NEW HOLDINGS
+    amendments filed after it; a filer with no usable filing leaves the quarter incomplete;
+  - a NEW HOLDINGS amendment's rows that repeat its base's (same CUSIP, put/call, shares and value), matched
+    one for one, are left out: First Eagle's Q2 2026 amendment repeats all 614 rows of its 13F-HR and adds 2,
+    while Berkshire's Q1 2025 one adds 202 Lennar B shares to a code the base holds;
+  - the guru's filers summed (Pershing Square Inc. with Pershing Square Capital Management);
+  - positions keyed by security (the mapped ticker, else the CUSIP, so a changed code doesn't read as a sale
+    and a purchase) and put/call (options apart), rows of one key summed; weights by value.
+- **Changes**, against the previous quarter only: new, added, reduced, sold out, unchanged, by shares. The
+  earlier quarter's shares are adjusted for our tickers' share splits between the two period ends (simple
+  ratios: Yahoo's spin-off price factors change no holder's count, and stock dividends such as SCCO's 1% read
+  as small additions); other securities have no split data. HON's 2026 reverse split is inside a combined
+  factor, so its change reads -50% (BUG-184).
 
 ## Storage (`src/exporters/sqlite_store.py`)
 

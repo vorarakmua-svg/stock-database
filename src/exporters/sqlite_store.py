@@ -516,6 +516,16 @@ class SQLiteStore:
             );
             CREATE INDEX IF NOT EXISTS idx_guru_holdings_cusip ON guru_holdings (cusip);
             CREATE INDEX IF NOT EXISTS idx_guru_holdings_guru ON guru_holdings (guru_cik);
+            -- The holdings' CUSIPs and their tickers: our universe's from the curated map ('universe'), the others'
+            -- through OpenFIGI ('openfigi', or 'none' where it found nothing: no ticker, the holdings' issuer).
+            CREATE TABLE IF NOT EXISTS cusip_map (
+                cusip TEXT PRIMARY KEY,
+                ticker TEXT,
+                name TEXT,
+                source TEXT NOT NULL,
+                security_type TEXT,
+                mapped_at TEXT NOT NULL
+            );
             """
         )
 
@@ -1347,6 +1357,19 @@ class SQLiteStore:
                     "shares, share_type, put_call, discretion) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [(ref.accession, h.row, guru.cik, h.cusip, h.issuer, h.title_of_class, h.value_usd, h.shares,
                       h.share_type, h.put_call, h.discretion) for h in filing.holdings])
+            conn.commit()
+        finally:
+            conn.close()
+
+    def export_cusip_map(self, rows: Sequence[Dict[str, Any]]) -> None:
+        """Upsert ``cusip_map`` rows (cusip, ticker, name, source, security_type, mapped_at), in one transaction: a
+        row replaces its CUSIP's earlier one."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            for row in rows:
+                self._upsert(conn, "cusip_map", ["cusip"], {column: row.get(column) for column in (
+                    "cusip", "ticker", "name", "source", "security_type", "mapped_at")})
             conn.commit()
         finally:
             conn.close()

@@ -6,10 +6,11 @@ the cutoff), then each Form 4 and 4/A's raw XML, parsed (``form4.parse_form4``) 
 its filers' feeds, then each 13F-HR and 13F-HR/A whose period falls in the last *quarters* quarters before the
 current one, read from its full submission text (``thirteenf.parse_13f``) and stored under the guru. A document is
 cached on disk once it parses, so a later run fetches only new filings. One that fails to fetch or parse is reported
-and left out, and what an earlier run stored stays.
+and left out, and what an earlier run stored stays. Then the holdings' CUSIPs are mapped to tickers (``map_cusips``):
+our universe's from ``cusips.UNIVERSE_CUSIPS``, the others through OpenFIGI (``openfigi``), unless --no-openfigi.
 
     python -m src.ownership.collect --insiders [--years 3] [--db PATH] [TICKERS...]
-    python -m src.ownership.collect --gurus [--quarters 8] [--db PATH] [--cache-dir DIR]
+    python -m src.ownership.collect --gurus [--quarters 8] [--no-openfigi] [--db PATH] [--cache-dir DIR]
 """
 from __future__ import annotations
 
@@ -17,14 +18,17 @@ import argparse
 import re
 import sqlite3
 import sys
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple, TypeVar
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple, TypeVar
 
 from ..exporters.sqlite_store import SQLiteStore
+from .cusips import UNIVERSE_CUSIPS
 from .form4 import Form4, Form4Error, parse_form4
 from .gurus import Guru
+from .openfigi import BATCH_SIZE, CUSIP, JobErrors, OpenFIGI
 from .thirteenf import ThirteenF, ThirteenFError, parse_13f
 
 FORM4_FORMS = ("4", "4/A")
@@ -35,6 +39,9 @@ ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{folder}/{document}
 #: A Form 4's primary document is its rendered page (xslF345X05/, xslF345X06/); the raw XML sits beside it.
 _RENDERED = re.compile(r"^xslF345X\d+/")
 _FEED_COLUMNS = ("accessionNumber", "form", "filingDate", "reportDate", "primaryDocument")
+#: OpenFIGI is taken to be down after this many failed requests in a row (each retried once by the client): the
+#: CUSIPs not asked yet are left for the next run, which reads the answers so far from the cache.
+OPENFIGI_FAILURES_IN_A_ROW = 3
 _Parsed = TypeVar("_Parsed")
 
 
@@ -228,6 +235,97 @@ def collect_gurus(db_path: Path, gurus: Sequence[Guru], quarters: int, source: T
     return summary
 
 
+def _issuers(conn: sqlite3.Connection) -> Dict[str, Optional[str]]:
+    """Each CUSIP the gurus hold, in order, and the issuer's name most of its entries give (a tie: the first
+    alphabetically). Empty for a database without the holdings' table."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'guru_holdings'").fetchone():
+        return {}
+    names: Dict[str, Dict[str, int]] = {}
+    for cusip, issuer, count in conn.execute(
+            "SELECT cusip, issuer, COUNT(*) FROM guru_holdings WHERE cusip IS NOT NULL GROUP BY cusip, issuer"):
+        counts = names.setdefault(cusip, {})
+        if issuer is not None:
+            counts[issuer] = count
+    return {cusip: min(counts, key=lambda name: (-counts[name], name)) if counts else None
+            for cusip, counts in sorted(names.items())}
+
+
+def _ask_openfigi(client: OpenFIGI, cusips: Sequence[str], issuers: Mapping[str, Optional[str]], mapped_at: str,
+                  log: Callable[[str], None]) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """The ``cusip_map`` rows OpenFIGI gives *cusips*, asked 10 at a time so a failed request loses only its own,
+    and the errors: a failed request, a code OpenFIGI refuses (``JobErrors``: the request's other codes are kept),
+    a CUSIP that can't be asked. After OPENFIGI_FAILURES_IN_A_ROW failed requests in a row OpenFIGI is taken to be
+    down, and the CUSIPs not asked yet are left for the next run."""
+    errors = [f"{cusip}: not a CUSIP (9 letters or digits)" for cusip in cusips if not CUSIP.fullmatch(cusip)]
+    ask = [cusip for cusip in cusips if CUSIP.fullmatch(cusip)]
+    rows: List[Dict[str, Any]] = []
+    failures = 0
+    for start in range(0, len(ask), BATCH_SIZE):
+        chunk = ask[start:start + BATCH_SIZE]
+        try:
+            found = client.lookup(chunk)
+        except JobErrors as exc:
+            found = exc.found
+            for cusip, error in exc.failed.items():
+                errors.append(f"{cusip}: OpenFIGI: {error}")
+                log(errors[-1])
+        except OSError as exc:
+            errors.append(f"{', '.join(chunk)}: {exc}")
+            log(errors[-1])
+            failures += 1
+            rest = len(ask) - start - len(chunk)
+            if failures >= OPENFIGI_FAILURES_IN_A_ROW and rest:
+                errors.append(f"OpenFIGI: {failures} requests failed in a row; {rest} CUSIPs not asked, left for "
+                              f"the next run")
+                log(errors[-1])
+                break
+            continue
+        failures = 0
+        for cusip in chunk:
+            if cusip not in found:  # refused: reported, left for the next run
+                continue
+            listing = found[cusip]
+            if listing is None:
+                rows.append({"cusip": cusip, "ticker": None, "name": issuers.get(cusip), "source": "none",
+                             "mapped_at": mapped_at})
+            else:
+                rows.append({"cusip": cusip, "ticker": listing.ticker, "name": listing.name, "source": "openfigi",
+                             "security_type": listing.security_type, "mapped_at": mapped_at})
+        if (start // BATCH_SIZE + 1) % 20 == 0:
+            log(f"OpenFIGI: {start + len(chunk)} of {len(ask)} CUSIPs asked")
+    return rows, errors
+
+
+def map_cusips(db_path: Path, client: Optional[OpenFIGI], universe: Mapping[str, str] = UNIVERSE_CUSIPS,
+               log: Callable[[str], None] = lambda line: None) -> Dict[str, Any]:
+    """Map the CUSIPs the gurus hold to tickers (``cusip_map``), in one transaction. Those of our universe
+    (*universe*, CUSIP -> ticker) are written every time as 'universe', overriding an earlier row; every other CUSIP
+    without a row is asked of OpenFIGI (*client*; None asks nothing): a match is written as 'openfigi', no match as
+    'none' (no ticker). A 'universe' or 'none' row is named by the holdings' issuer (``_issuers``), an 'openfigi' one
+    by OpenFIGI. A request that fails is reported and its CUSIPs are left for the next run, never stored as no match.
+    Returns the rows written by source, and the errors."""
+    with closing(sqlite3.connect(str(db_path))) as conn:
+        issuers = _issuers(conn)
+        mapped = set()
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cusip_map'").fetchone():
+            mapped = {cusip for (cusip,) in conn.execute("SELECT cusip FROM cusip_map")}
+    mapped_at = datetime.now(timezone.utc).isoformat()
+    rows = [{"cusip": cusip, "ticker": universe[cusip], "name": name, "source": "universe", "mapped_at": mapped_at}
+            for cusip, name in issuers.items() if cusip in universe]
+    errors: List[str] = []
+    if client is not None:
+        found, errors = _ask_openfigi(client, [c for c in issuers if c not in universe and c not in mapped], issuers,
+                                      mapped_at, log)
+        rows += found
+    SQLiteStore(db_path=db_path).export_cusip_map(rows)
+    summary: Dict[str, Any] = {source: sum(row["source"] == source for row in rows)
+                               for source in ("universe", "openfigi", "none")}
+    summary["errors"] = errors
+    log(f"CUSIP map: {summary['universe']} from our universe, {summary['openfigi']} by OpenFIGI, {summary['none']} "
+        f"that OpenFIGI doesn't know; {len(errors)} errors")
+    return summary
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     from ..config import AppConfig, StorageConfig
     from ..fetchers.sec_handler import SECHandler
@@ -243,7 +341,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="How many quarters before the current one for gurus (default: 8)")
     parser.add_argument("--db", type=Path, default=None, help="SQLite DB path (default: the standard store location)")
     parser.add_argument("--cache-dir", type=Path, default=Path("data/cache"),
-                        help="The SEC cache (default: data/cache)")
+                        help="The SEC cache, and OpenFIGI's under openfigi/ (default: data/cache)")
+    parser.add_argument("--no-openfigi", action="store_true",
+                        help="With --gurus: map only our universe's CUSIPs, asking OpenFIGI nothing")
     args = parser.parse_args(argv)
     if not (args.insiders or args.gurus):
         parser.error("choose what to collect: --insiders, --gurus or both")
@@ -269,6 +369,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             errors = sum(len(s["errors"]) for s in summary.values())
             print(f"13F filings stored: {stored} for {len(summary)} gurus; checksum failures: {failures}; "
                   f"errors: {errors}")
+            mapped = map_cusips(db_path, None if args.no_openfigi else OpenFIGI(args.cache_dir),
+                                log=lambda line: print(line, flush=True))
+            print(f"CUSIPs mapped: {mapped['universe']} from our universe, {mapped['openfigi']} by OpenFIGI, "
+                  f"{mapped['none']} not found; errors: {len(mapped['errors'])}")
     finally:
         sec.close()
     return 0

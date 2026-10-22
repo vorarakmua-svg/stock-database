@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 102 · NEEDS-USER 15 · Verified: 88
+**Open:** P0 0 · P1 0 · P2 11 · P3 103 · NEEDS-USER 15 · Verified: 88
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1398,6 +1398,7 @@ Found: build iteration 18 (BUG-175's real-data check), build M1-9 | Fixed: | Reg
 Repro: HON. Its Q2 2026 10-Q restated 2025's weighted counts by half (637.5M to 318.8M for 2025's Q2), a 1:2 reverse split's mark, and Yahoo lists only a 0.9535 factor on 2026-06-29 (0.5 x 1.907: the split with a distribution). `is_share_split(0.9535)` is false, so it's a price factor and the bars before it stay on the raw basis, where the unfolded counts are right. But the stored 2026 Q1 count (317.35M, derived from the restated half year) is already on the split's basis: the 2026-05-29 sample pairs a raw close ($237.86) with it, a market cap of $75.5B where about $151B was true.
 Expected: the quarters filed on the split's basis before the split meet closes on the same basis.   Actual: one monthly sample (2026-05-29) at half the market cap; from 2026-06-30 the post-split count and close agree.
 Notes: one of HON's 121 months in its window. A fix needs the split apart from the factor: the restatement shows it (the same period's count halved between two filings), Yahoo doesn't.
+Also (build iteration 37, M3-5): the gurus' quarter-over-quarter 13F changes adjust shares by `split_events`, so Dodge & Cox's HON reads "reduced" by 50% (8,019 to 4,010 shares) across the same 2026-06-29 split, its CUSIP changing with it (438516106 to 438516205). The same fix would correct it.
 
 ### BUG-185 [P2][VAL] The annual share normalization folds share jumps that aren't splits: mergers, swinging counts, spin-off price factors
 Status: VERIFIED (build iteration 24)
@@ -1554,6 +1555,17 @@ Found: build iteration 35 (M2-9's web smoke test) | Fixed: | Regression test:
 Repro: ANET's STAT tab: the Profitability and Leverage cards show ROIC "—" and Debt/EBITDA "—" (from `metrics_annual`, which has no total debt for a filer tagging none), while the Quality section below shows ROIC 30.6% and ROIC - WACC 18.3% from the scores' reading of the debt (BUG-190).
 Expected: one reading on the page, or the cards saying why they're empty.   Actual: "—" above, figures below.
 Notes: BUG-190's fix kept `metrics_annual` as filed on purpose: the screener's metric columns and M1's EV/EBITDA history read it, and the history has its own rule for missing debt. Applying the reading there means checking M1's fair-value line first.
+
+### BUG-205 [P3][OWNERSHIP] Four edge cases of the CUSIP map and the gurus' quarters
+Status: OPEN
+Found: build iteration 37 (M3-5's worker report), build M3-5 | Fixed: | Regression test:
+Repro / Actual:
+- A code later removed from `UNIVERSE_CUSIPS` keeps its 'universe' row in `cusip_map` and is never asked of OpenFIGI.
+- A NEW HOLDINGS amendment or a later restatement that fails the checksum leaves the quarter `complete`: only a filer without any standing base marks it incomplete.
+- Repeated rows are matched against the base only: a second NEW HOLDINGS amendment repeating the first's rows would add them again.
+- OpenFIGI's tickers can carry an asterisk ("ATAI*" for both of ATAI's codes, which merge correctly).
+Expected: the stale row re-asked; the quarter marked incomplete when any filing it should stand on fails; repeats matched against every earlier standing filing; the asterisk dropped from tickers.
+Notes: none of the four shows in today's data (0 checksum failures, no double amendments).
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

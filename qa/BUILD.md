@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 6 · DOING 0 · DONE 25 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 5 · DOING 0 · DONE 26 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -52,7 +52,7 @@
 | M3-2 | Form 4 collection (full submissions feeds back three years, cached XML, incremental), storage (`insider_filings`, `insider_trades`) and `python -m src.ownership.collect --insiders`; with tests | DONE | this commit | `qa/evidence/ownership-m3-2-*.txt` |
 | M3-3 | Insider aggregates, the INS tab, `GET /api/stocks/{t}/form4`, screener fields; checked against Yahoo's insider rows, browser-checked; with tests | DONE | this commit | `qa/evidence/ownership-m3-3-*.txt` |
 | M3-4 | 13F: the guru list (`src/ownership/gurus.py`, each CIK checked), the information-table parser with its checksums, storage; with tests | DONE | this commit | `qa/evidence/ownership-m3-4-*.txt` |
-| M3-5 | The CUSIP map (curated for our universe, OpenFIGI for the rest) and quarter-over-quarter changes; with tests | TODO | | |
+| M3-5 | The CUSIP map (curated for our universe, OpenFIGI for the rest) and quarter-over-quarter changes; with tests | DONE | this commit | `qa/evidence/ownership-m3-5-*.txt` |
 | M3-6 | Guru pages (`/gurus`, `/gurus/{cik}`, `/gurus/portfolio`), the HDS tab's Gurus section, the API, browser-checked; with tests | TODO | | |
 | M3-7 | Docs: README and USAGE_GUIDE | TODO | | |
 | M3-8 | Milestone close: code review 17 (opus) with Critical and Important findings fixed; backup, then the live ownership collection into the user's DB, checked against Yahoo and the 13F checksums | TODO | | |
@@ -791,3 +791,41 @@ Commit: (this commit) feat(ownership): the gurus' 13F holdings: the curated list
 storage and collection (M3-4)
 Next: M3-5 (the CUSIP map and quarter-over-quarter changes). Its aggregation also takes the latest RESTATEMENT of a
 period and adds its NEW HOLDINGS amendments.
+
+### Build iteration 37: 2026-10-22 18:20: M3-5
+Did:
+- The universe map (`src/ownership/cusips.py`, mine): 124 codes for 121 tickers.
+  - Every one of the 1,941 13F codes was looked up on OpenFIGI, and each match to our tickers read against its
+    13F issuer name.
+  - OpenFIGI finds a foreign issuer's CINS (a code starting with a letter: Chubb, Linde, Seagate) only as
+    `ID_CINS`.
+  - Added by hand: GOOG and BRK-A; Honeywell's and Exxon Mobil Corp's codes from before they changed; Trian's typo
+    of Allstate's.
+  - No guru holds ANET, CRWD, DUK, ETN, HWM, MRVL, PRU or SO.
+- The code (an opus worker, reviewed; its run stopped at the usage limit once and was resumed):
+  - `src/ownership/openfigi.py`: keyless, 10 codes a request 2.5 s apart, cached.
+  - The `cusip_map` table, `map_cusips`, `--gurus` mapping after collecting (`--no-openfigi` to skip).
+  - `src/ownership/portfolio.py`: a guru's quarters and their changes.
+- My refinements, each from the real data:
+  - Positions are keyed by the mapped ticker, else the CUSIP, so a changed code isn't a sale plus a purchase.
+  - A NEW HOLDINGS amendment's rows that repeat the base are left out one for one. First Eagle's Q2 2026
+    amendment repeats its whole report: the quarter read $120.7B instead of $60.75B, and MSFT +193% instead of
+    +46%.
+  - OpenFIGI's "Invalid idValue format" (a filer's bad check digit) is an answer, mapped 'none'.
+- The worker found and fixed one more: a job error failed its request's 9 other codes.
+- Tests: 87 new, each failing first (the worker's 83, my 4). Mutants: 103, each killed; I re-ran them.
+- Real data (the scratch copy):
+  - Map: 124 universe, 1,796 OpenFIGI, 21 'none', 0 errors.
+  - Quarters: all 235 equal their filings' totals; none incomplete.
+  - Berkshire Q2 2026: GOOG/GOOGL, DAL and M added; COF, NUE and KR reduced.
+  - Pershing: Q1 2026 sums both filers (HHH 18.85M + 9M), and Q2 reads unchanged.
+  - Oaktree Q1 2026: the latest restatement is used.
+  - Splits: NFLX's 10:1 and BKNG's 25:1 adjust (+2,460% unadjusted, +2.4% adjusted).
+  - My SQL recomputation of First Eagle's Q2 2026 agrees: $60,750,982,695, MSFT +46.4%.
+- Records:
+  - HON's reverse split, inside a combined Yahoo factor, reads as a 50% sale. Added to BUG-184 (same cause).
+  - BUG-205 (P3): the edge cases left.
+Evidence: `qa/evidence/ownership-m3-5-{universe-review,red,green,mutants,mutants-rerun,realdata,gates}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1587 passed, 1 skipped | CI: no PR (Q10)
+Commit: (this commit) feat(ownership): the CUSIP map and each guru's quarter-over-quarter changes (M3-5)
+Next: M3-6 (guru pages, the HDS tab's Gurus section, the API; the cross-guru aggregates).

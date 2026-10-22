@@ -3,13 +3,14 @@ years or quarters, each document fetched once and cached, parsed and stored, wit
 didn't bring (docs/superpowers/specs/2026-10-22-sec-ownership-design.md)."""
 import json
 import sqlite3
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 from src.exporters.sqlite_store import SQLiteStore
+from src.fetchers.rate_limiter import RateLimiter
 from src.ownership import collect
 from src.ownership.collect import (
     Form4Source,
@@ -17,11 +18,13 @@ from src.ownership.collect import (
     collect_gurus,
     collect_insiders,
     form4_refs,
+    map_cusips,
     quarter_start,
     raw_document,
     thirteenf_refs,
 )
 from src.ownership.gurus import GURUS, Guru
+from src.ownership.openfigi import JobErrors, Listing, OpenFIGI
 from src.ownership.thirteenf import Holding, ThirteenF, ThirteenFError
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ownership"
@@ -463,3 +466,243 @@ def test_the_cli_refuses_to_collect_nothing(tmp_path, capsys):
     with pytest.raises(SystemExit):
         collect.main(["--db", str(tmp_path / "x.db")])
     assert "--gurus" in capsys.readouterr().err
+
+
+# ---- the CUSIP map ------------------------------------------------------------------------------------------------
+
+APPLE = "037833100"
+AON = "G0403H108"
+AON_LISTING = Listing(ticker="AON", name="AON PLC-CLASS A", security_type="Common Stock", exch_code="US",
+                      figi="BBG00LLW2MF2")
+
+
+class _FIGI:
+    """A fake OpenFIGI client: each CUSIP's listing (None: no match), the error a lookup holding it raises, or the
+    error OpenFIGI answers its job with (a str: the lookup raises JobErrors, the others answered). Records each
+    lookup's CUSIPs."""
+
+    def __init__(self, answers):
+        self.answers = answers
+        self.asked = []
+
+    def lookup(self, cusips):
+        self.asked.append(list(cusips))
+        for cusip in cusips:
+            if isinstance(self.answers.get(cusip), Exception):
+                raise self.answers[cusip]
+        failed = {cusip: self.answers[cusip] for cusip in cusips if isinstance(self.answers[cusip], str)}
+        found = {cusip: self.answers[cusip] for cusip in cusips if cusip not in failed}
+        if failed:
+            raise JobErrors(found, failed)
+        return found
+
+
+def _holdings_db(tmp_path, rows):
+    """A database whose gurus hold *rows*, (cusip, issuer) each, in one filing."""
+    store = SQLiteStore(db_path=tmp_path / "map.db")
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.executemany("INSERT INTO guru_holdings (accession, row, guru_cik, cusip, issuer) VALUES ('A-1', ?, ?, ?, ?)",
+                     [(i, "1067983", cusip, issuer) for i, (cusip, issuer) in enumerate(rows)])
+    conn.commit()
+    conn.close()
+    return tmp_path / "map.db"
+
+
+def test_the_cusip_map_table(tmp_path):
+    store = SQLiteStore(db_path=tmp_path / "gurus.db")
+    conn = store._connect()
+    store._create_schema(conn)
+    columns = [(r[1], r[2], r[3], r[5]) for r in conn.execute("PRAGMA table_info(cusip_map)")]
+    conn.close()
+    assert columns == [("cusip", "TEXT", 0, 1), ("ticker", "TEXT", 0, 0), ("name", "TEXT", 0, 0),
+                       ("source", "TEXT", 1, 0), ("security_type", "TEXT", 0, 0), ("mapped_at", "TEXT", 1, 0)]
+
+
+def test_the_cusip_map_is_upserted_in_one_transaction(tmp_path):
+    db = tmp_path / "gurus.db"
+    store = SQLiteStore(db_path=db)
+    row = {"cusip": APPLE, "ticker": "AAPL", "name": "APPLE INC", "source": "openfigi", "security_type": "Common Stock",
+           "mapped_at": "2026-10-22T00:00:00+00:00"}
+    store.export_cusip_map([row])
+    store.export_cusip_map([dict(row, ticker="AAPL2", source="universe", security_type=None)])
+    assert _rows(db, "SELECT cusip, ticker, name, source, security_type FROM cusip_map") == [
+        (APPLE, "AAPL2", "APPLE INC", "universe", None)]
+    with pytest.raises(sqlite3.IntegrityError):  # a row without its source: nothing of the batch is written
+        store.export_cusip_map([dict(row, cusip=AON, ticker="AON"), dict(row, cusip="000000000", source=None)])
+    assert _rows(db, "SELECT cusip FROM cusip_map") == [(APPLE,)]
+
+
+def test_map_cusips_takes_ours_from_the_universe_and_asks_openfigi_for_the_rest(tmp_path):
+    db = _holdings_db(tmp_path, [(APPLE, "APPLE INC"), (AON, "AON PLC"), ("000000000", "GONE CORP")])
+    figi = _FIGI({AON: AON_LISTING, "000000000": None})
+    summary = map_cusips(db, figi, universe={APPLE: "AAPL", "594918104": "MSFT"})  # no guru holds MSFT
+    assert summary == {"universe": 1, "openfigi": 1, "none": 1, "errors": []}
+    assert figi.asked == [["000000000", AON]]  # not Apple
+    assert _rows(db, "SELECT cusip, ticker, name, source, security_type FROM cusip_map ORDER BY cusip") == [
+        ("000000000", None, "GONE CORP", "none", None),  # OpenFIGI found nothing: the holdings' name
+        (APPLE, "AAPL", "APPLE INC", "universe", None),
+        (AON, "AON", "AON PLC-CLASS A", "openfigi", "Common Stock")]
+    [(mapped_at,)] = _rows(db, "SELECT DISTINCT mapped_at FROM cusip_map")  # the run's time, in UTC
+    assert datetime.fromisoformat(mapped_at).utcoffset() == timedelta(0)
+
+
+def test_the_universe_overrides_an_earlier_row_and_a_mapped_cusip_isnt_asked_again(tmp_path):
+    db = _holdings_db(tmp_path, [(APPLE, "APPLE INC"), (AON, "AON PLC")])
+    map_cusips(db, _FIGI({APPLE: Listing("AAPL", "APPLE INC", "Common Stock", "US", "BBG000B9XRY4"),
+                          AON: AON_LISTING}), universe={})
+    figi = _FIGI({})
+    summary = map_cusips(db, figi, universe={APPLE: "AAPL"})
+    assert figi.asked == [] and summary == {"universe": 1, "openfigi": 0, "none": 0, "errors": []}
+    assert _rows(db, "SELECT cusip, ticker, source FROM cusip_map ORDER BY cusip") == [
+        (APPLE, "AAPL", "universe"), (AON, "AON", "openfigi")]
+
+
+def test_a_failed_lookup_is_reported_and_its_cusips_are_left_for_the_next_run(tmp_path):
+    cusips = [f"{i:09d}" for i in range(25)]
+    db = _holdings_db(tmp_path, [(cusip, f"ISSUER {cusip}") for cusip in cusips])
+    answers = dict.fromkeys(cusips)
+    answers[cusips[12]] = OSError("OpenFIGI: HTTP 503")
+    figi = _FIGI(answers)
+    summary = map_cusips(db, figi, universe={})
+    assert figi.asked == [cusips[:10], cusips[10:20], cusips[20:]]  # a request's CUSIPs apart: a failure loses its own
+    assert (summary["none"], len(summary["errors"])) == (15, 1)
+    assert "HTTP 503" in summary["errors"][0] and all(cusip in summary["errors"][0] for cusip in cusips[10:20])
+    assert _rows(db, "SELECT COUNT(*), MIN(cusip), MAX(cusip) FROM cusip_map WHERE cusip BETWEEN '000000010' AND "
+                     "'000000019'") == [(0, None, None)]  # never stored as no match
+    again = _FIGI(dict.fromkeys(cusips))
+    map_cusips(db, again, universe={})
+    assert again.asked == [cusips[10:20]]
+
+
+def test_a_code_openfigi_refuses_is_reported_and_its_neighbours_are_stored(tmp_path):
+    # A job OpenFIGI answers with an error is that code's failure alone, and a request that is answered isn't a
+    # failed one (four in a row don't stop the run).
+    cusips = [f"{i:09d}" for i in range(40)]
+    db = _holdings_db(tmp_path, [(cusip, f"ISSUER {cusip}") for cusip in cusips])
+    answers = dict.fromkeys(cusips)
+    refused = cusips[4::10]
+    for cusip in refused:
+        answers[cusip] = "Unexpected error."
+    figi = _FIGI(answers)
+    summary = map_cusips(db, figi, universe={})
+    assert len(figi.asked) == 4
+    assert summary["none"] == 36 and summary["errors"] == [f"{c}: OpenFIGI: Unexpected error." for c in refused]
+    stored = {cusip for (cusip,) in _rows(db, "SELECT cusip FROM cusip_map")}
+    assert len(stored) == 36 and not stored & set(refused)  # a refused code never stored as no match
+    again = _FIGI(answers)
+    map_cusips(db, again, universe={})
+    assert again.asked == [refused]  # only the refused codes asked again
+
+
+def test_after_three_failed_requests_in_a_row_the_rest_is_left_for_the_next_run(tmp_path):
+    cusips = [f"{i:09d}" for i in range(80)]
+    db = _holdings_db(tmp_path, [(cusip, f"ISSUER {cusip}") for cusip in cusips])
+    answers = dict.fromkeys(cusips)
+    for request in (0, 1, 3, 4, 5):  # two fail, one is answered, then three fail in a row
+        answers[cusips[request * 10]] = OSError("OpenFIGI: connect timed out")
+    figi = _FIGI(answers)
+    summary = map_cusips(db, figi, universe={})
+    assert figi.asked == [cusips[i:i + 10] for i in range(0, 60, 10)]  # the last two requests never made
+    assert summary["none"] == 10 and len(summary["errors"]) == 6
+    assert summary["errors"][-1] == ("OpenFIGI: 3 requests failed in a row; 20 CUSIPs not asked, left for the next "
+                                     "run")
+    assert collect.OPENFIGI_FAILURES_IN_A_ROW == 3
+
+
+class _NoMatchServer:
+    """OpenFIGI's mapping API knowing none of the codes asked but *table*'s (code -> its job's result); the request
+    numbered *stop_at* raises *stop* instead. Records each request's codes."""
+
+    def __init__(self, stop_at=None, stop=None, table=None):
+        self.stop_at, self.stop, self.table = stop_at, stop, table or {}
+        self.requests = []
+
+    def post(self, url, **kwargs):
+        jobs = kwargs["json"]
+        self.requests.append([job["idValue"] for job in jobs])
+        if len(self.requests) == self.stop_at:
+            raise self.stop
+        return _Response(200, [self.table.get(job["idValue"], {"warning": "No identifier found."}) for job in jobs])
+
+
+def _figi_client(tmp_path, server):
+    """The app's OpenFIGI client on a fake *server*, its cache under *tmp_path*, without waits."""
+    return OpenFIGI(tmp_path / "cache", session=server, limiter=RateLimiter(min_interval=0), sleep=lambda seconds: None)
+
+
+def test_a_mapping_stopped_midway_is_resumed_from_the_cache(tmp_path):
+    cusips = [f"{i:09d}" for i in range(25)]
+    db = _holdings_db(tmp_path, [(cusip, f"ISSUER {cusip}") for cusip in cusips])
+    with pytest.raises(KeyboardInterrupt):  # the run stopped at its third request, before it stored a row
+        map_cusips(db, _figi_client(tmp_path, _NoMatchServer(stop_at=3, stop=KeyboardInterrupt())), universe={})
+    assert _rows(db, "SELECT COUNT(*) FROM cusip_map") == [(0,)]
+    server = _NoMatchServer()
+    summary = map_cusips(db, _figi_client(tmp_path, server), universe={})
+    assert server.requests == [cusips[20:]]  # the first twenty answered from the cache
+    assert summary == {"universe": 0, "openfigi": 0, "none": 25, "errors": []}
+
+
+def test_a_malformed_code_is_mapped_as_not_found_with_its_holdings_name(tmp_path):
+    # OpenFIGI answers "Invalid idValue format." for a code whose check digit is wrong (a filer's 78462F953): the
+    # code will never map, so it is 'none', not an error on every run.
+    db = _holdings_db(tmp_path, [("78462F953", "SPDR S&P 500 ETF TR"), ("000000000", "GONE CORP")])
+    server = _NoMatchServer(table={"78462F953": {"error": "Invalid idValue format."}})
+    summary = map_cusips(db, _figi_client(tmp_path, server), universe={})
+    assert summary == {"universe": 0, "openfigi": 0, "none": 2, "errors": []}
+    assert _rows(db, "SELECT cusip, ticker, name, source FROM cusip_map ORDER BY cusip") == [
+        ("000000000", None, "GONE CORP", "none"), ("78462F953", None, "SPDR S&P 500 ETF TR", "none")]
+
+
+def test_without_openfigi_only_the_universe_rows(tmp_path):
+    db = _holdings_db(tmp_path, [(APPLE, "APPLE INC"), (AON, "AON PLC")])
+    summary = map_cusips(db, None, universe={APPLE: "AAPL"})
+    assert summary == {"universe": 1, "openfigi": 0, "none": 0, "errors": []}
+    assert _rows(db, "SELECT cusip, ticker, source FROM cusip_map") == [(APPLE, "AAPL", "universe")]
+
+
+def test_a_cusip_that_isnt_one_is_reported_not_asked(tmp_path):
+    db = _holdings_db(tmp_path, [(APPLE, "APPLE INC"), ("12345", "SHORT CORP"), ("03783310*", "STAR CORP")])
+    figi = _FIGI({APPLE: None})
+    summary = map_cusips(db, figi, universe={})
+    assert figi.asked == [[APPLE]] and summary["none"] == 1
+    assert summary["errors"] == ["03783310*: not a CUSIP (9 letters or digits)",
+                                 "12345: not a CUSIP (9 letters or digits)"]
+
+
+def test_a_cusips_name_is_the_one_most_of_its_holdings_give(tmp_path):
+    db = _holdings_db(tmp_path, [(APPLE, "Apple Inc"), (APPLE, "APPLE INC"), (APPLE, "Apple Inc"),
+                                 ("000000000", "B CORP"), ("000000000", "A CORP"), ("000000000", None)])
+    map_cusips(db, _FIGI({"000000000": None}), universe={APPLE: "AAPL"})
+    assert _rows(db, "SELECT cusip, name FROM cusip_map ORDER BY cusip") == [
+        ("000000000", "A CORP"), (APPLE, "Apple Inc")]  # a tie: the first alphabetically
+
+
+def test_map_cusips_on_a_database_without_holdings(tmp_path):
+    summary = map_cusips(tmp_path / "fresh.db", _FIGI({}), universe={APPLE: "AAPL"})
+    assert summary == {"universe": 0, "openfigi": 0, "none": 0, "errors": []}
+    assert _rows(tmp_path / "fresh.db", "SELECT COUNT(*) FROM cusip_map") == [(0,)]
+
+
+def test_the_cli_maps_the_cusips_after_collecting_the_gurus(tmp_path, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(collect, "collect_insiders", lambda db, tickers, years, source, **kw: calls.append(
+        "insiders") or {})
+    monkeypatch.setattr(collect, "collect_gurus", lambda db, gurus, quarters, source, **kw: calls.append(
+        "gurus") or {})
+    monkeypatch.setattr(collect, "map_cusips", lambda db, client, **kw: calls.append(("map", db, client)) or {
+        "universe": 2, "openfigi": 3, "none": 1, "errors": ["X: HTTP 503"]})
+    db = tmp_path / "x.db"
+    args = ["--gurus", "--db", str(db), "--cache-dir", str(tmp_path / "cache")]
+    assert collect.main(args) == 0
+    (gurus, (step, mapped_db, client)) = calls
+    assert (gurus, step, mapped_db) == ("gurus", "map", db)
+    assert isinstance(client, OpenFIGI) and client.cache == tmp_path / "cache" / "openfigi"
+    out = capsys.readouterr().out
+    assert "CUSIPs mapped: 2 from our universe, 3 by OpenFIGI, 1 not found; errors: 1" in out and out.isascii()
+    calls.clear()
+    collect.main(args + ["--no-openfigi"])
+    assert calls == ["gurus", ("map", db, None)]  # the universe rows only
+    calls.clear()
+    collect.main(["--insiders", "--db", str(_db(tmp_path)), "--cache-dir", str(tmp_path / "cache")])
+    assert calls == ["insiders"]  # the insiders alone map nothing
