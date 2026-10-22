@@ -12,6 +12,7 @@ A comprehensive guide on how to use the output data from the Stock Data Collecti
 4. [Working with CSV Data](#working-with-csv-data)
 5. [Valuation Layer](#valuation-layer) — built-in, stored fair-value models
    - [Valuation history](#valuation-history) — monthly multiples, 10-year ranges, the historical value
+   - [Quality scores](#quality-scores) — Piotroski F, Altman Z, Beneish M, ranks, warning signs
    - [Owner Earnings ("Buffett mode")](#owner-earnings-buffett-mode) — separate lens, excluded from the median
 6. [Updating Data from the Web](#updating-data-from-the-web) — UPDATE DATA button, fetching new tickers
 7. [Valuation Models](#valuation-models) — DIY formulas over the raw JSON/CSV
@@ -420,6 +421,76 @@ It is also shown in three places:
 - **Screener**: the *Historical value* fields, `pe_pct_10y` … `div_yield_pct_10y` (a multiple's
   percentile in its 10 years, as a fraction) and `price_to_hist_value`.
 - **API**: `GET /api/stocks/{ticker}/valuation-history`.
+
+It changes none of the models, their median or the verdict.
+
+### Quality scores
+
+Every company also gets **quality scores**: Piotroski F, Altman Z, Beneish M, the Sloan ratio, ROIC vs WACC,
+predictability stars, 20 warning signs, five percentile ranks and a composite out of 100. They are computed
+with the valuations, so the backfill above fills them too, and any run re-ranks every company. See the
+README's [Quality scores](README.md#quality-scores) for the formulas, cutoffs and weights. Three tables hold
+them:
+
+- **`per_share_annual`**: one row per (ticker, fiscal_year), the latest 11 years, on today's split basis:
+  - `revenue_ps`, `eps`, `ebitda_ps`, `fcf_ps`, `book_ps`.
+- **`quality_scores`**: one row per ticker, for its latest `fiscal_year`:
+  - the CAGRs, as fractions (NULL where undefined): `rev_ps_cagr_3y`, `rev_ps_cagr_5y`, `rev_ps_cagr_10y`,
+    `eps_cagr_3y`, `eps_cagr_5y`, `eps_cagr_10y`, `ebitda_ps_cagr_3y`, `ebitda_ps_cagr_5y`,
+    `ebitda_ps_cagr_10y`, `fcf_ps_cagr_5y` and `book_ps_cagr_5y`;
+  - `piotroski_f`, `piotroski_tested` (the tests that could run) and `piotroski_tests` (JSON: each test true,
+    false or null);
+  - `altman_z` and `altman_zone` (`distress`, `grey` or `safe`), `beneish_m` and `beneish_variables` (JSON),
+    `sloan_ratio`, `roic`, `wacc` and `roic_minus_wacc`, `predictability_stars` and `predictability_r2`
+    (JSON);
+  - `ncav_per_share`, `earnings_yield`, `return_on_capital` and `momentum`;
+  - `rank_strength`, `rank_profitability`, `rank_growth`, `rank_valuation` and `rank_momentum` (1-10),
+    `composite_score` (out of 100) and `magic_formula_rank`;
+  - `components` (JSON: the values each rank is built from), `warning_count`, `na_reasons` (JSON: why a score
+    is NULL), `computed_at` and `ranked_at`.
+- **`warning_signs`**: one row per (ticker, code) for each sign that fires: `severity` (`severe` or `medium`),
+  `message`, `value` and `threshold`.
+
+The JSON columns read with SQLite's JSON functions, e.g. `json_extract(piotroski_tests, '$.cfo_above_ni')` (1
+passed, 0 failed, NULL not run).
+
+```sql
+-- The ten highest composite scores, with the five ranks behind them
+SELECT q.ticker, c.company_name, q.composite_score,
+       q.rank_strength, q.rank_profitability, q.rank_growth, q.rank_valuation, q.rank_momentum
+FROM quality_scores q
+JOIN companies c ON c.ticker = q.ticker
+WHERE q.composite_score IS NOT NULL
+ORDER BY q.composite_score DESC, q.ticker
+LIMIT 10;
+
+-- Piotroski F of 8 or more, out of how many tests could run
+SELECT ticker, piotroski_f, piotroski_tested, altman_zone, predictability_stars
+FROM quality_scores
+WHERE piotroski_f >= 8
+ORDER BY piotroski_f DESC, piotroski_tested DESC, ticker;
+
+-- NVDA's warning signs, severe first
+SELECT code, severity, message
+FROM warning_signs
+WHERE ticker = 'NVDA'
+ORDER BY CASE severity WHEN 'severe' THEN 0 ELSE 1 END, code;
+
+-- AAPL's per-share series on today's split basis, newest year first
+SELECT fiscal_year, revenue_ps, eps, ebitda_ps, fcf_ps, book_ps
+FROM per_share_annual
+WHERE ticker = 'AAPL'
+ORDER BY fiscal_year DESC;
+```
+
+It is also shown in three places:
+- **Web**: the **STAT** tab's *Quality* section: the composite with a radar of the five ranks, the ranks, each
+  score with its reading, the nine Piotroski tests, the growth table and the warning signs, severe first.
+- **Screener**: the quality fields (`piotroski_f`, `altman_z`, `composite_score`, `rank_strength` …
+  `rank_momentum`, `warning_count` and the rest), `price_to_ncav` and `lynch_upside_pct`, and a *Preset
+  screens* dropdown: Buffett-Munger, Peter Lynch, Graham net-net, Magic Formula and Undervalued-predictable
+  (the README lists their filters).
+- **API**: `GET /api/stocks/{ticker}/scores`.
 
 It changes none of the models, their median or the verdict.
 

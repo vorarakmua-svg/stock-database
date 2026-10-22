@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 11 · DOING 0 · DONE 20 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 9 · DOING 1 · DONE 21 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -40,8 +40,8 @@
 | M2-5 | Independent oracle `qa/oracle/scores_oracle.py` and real-data validation (distributions, severe signs traced) | DONE | a312d54 (BUG-185), this commit | `qa/evidence/scores-m2-5-*.txt`, `qa/evidence/bug185-*.txt` |
 | M2-6 | `GET /api/stocks/{t}/scores` and the STAT tab's Quality section (radar, ranks, tests, growth, signs), browser-checked; with tests | DONE | this commit | `qa/evidence/scores-m2-6-*.txt` |
 | M2-7 | Screener fields from `quality_scores` (table-exists switch) and the preset screens; with tests | DONE | this commit | `qa/evidence/scores-m2-7-*.txt` |
-| M2-8 | Docs: README and USAGE_GUIDE | TODO | | |
-| M2-9 | Milestone close: code review 16 (opus) with Critical and Important findings fixed; backup and offline backfill of the user's DB | TODO | | |
+| M2-8 | Docs: README and USAGE_GUIDE | DONE | this commit | README "Quality scores", USAGE_GUIDE "Quality scores" |
+| M2-9 | Milestone close: code review 16 (opus) with Critical and Important findings fixed; backup and offline backfill of the user's DB | DOING (code review 16 running) | | |
 
 ## M3: SEC ownership (Form 4 insiders, 13F gurus)
 
@@ -634,3 +634,16 @@ Evidence: `qa/evidence/ownership-m3-1-{red,green,mutants,realdata}.txt`
 Gates: ruff ✓ mypy ✓ pytest 1403 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) feat(ownership): read insiders' Form 4 filings from their XML (M3-1)
 Next: M2-8's docs when its worker reports; M2-9's review findings; M3-2 (Form 4 collection and storage).
+
+### Build iteration 32: 2026-10-22 07:50: M2-8, and M2-9 started
+Did:
+- A sonnet worker wrote the docs from the spec, the code's constants and the oracle's evidence: the README's "Quality scores" (every formula, cutoff and N/A rule, the 20 signs, the ranks and composite, the tables, the STAT tab, API and screener presets, the oracle's result, the limits) and the usage guide's (the columns and four SQL examples, each run read-only on the copy: 10, 17, 3 and 11 rows). The spec now matches the code in four places the worker found it silent or looser.
+- Reviewed them myself against the spec and the code; ran every SQL example read-only on the backfilled copy;
+  the docs test passes.
+- Started M2-9 while the docs were written: code review 16 dispatched (opus, read-only, a3c8a77..0356db8: M2
+  and the fixes since review 15). M3-0 and M3-1 were committed meanwhile; a usage limit paused both workers
+  for a while, and each resumed where it stopped.
+Evidence: README.md and USAGE_GUIDE.md ("Quality scores")
+Gates: ruff ✓ mypy ✓ pytest 1411 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) docs: the quality scores in the README and the usage guide (M2-8)
+Next: M2-9's review findings when it reports; meanwhile M3-2.

@@ -38,6 +38,12 @@ A professional-grade Python data pipeline for collecting US stock fundamentals f
   against the price, with no look-ahead. On the VAL tab, in the screener and the
   API. See [Valuation history](#valuation-history).
 
+- **Quality scores** — Piotroski F, Altman Z, Beneish M, the Sloan ratio, ROIC vs
+  WACC, predictability stars, 20 warning signs, five percentile ranks and a 0-100
+  composite (our GF Score counterpart), with every formula and weight published.
+  On the STAT tab, in the screener (with five preset screens) and the API. See
+  [Quality scores](#quality-scores).
+
 - **Database-Like Behavior**
   - Merge mode preserves historical data across runs
   - Tracks collection history and price snapshots
@@ -433,6 +439,163 @@ Limitations:
 - Yahoo normalizes EBITDA, so our EV/EBITDA can read apart from Yahoo's (MRK, PFE). A quarter whose 10-Q
   lacks the long-term debt its 10-Ks report has no EV (BUG-171).
 
+### Quality scores
+
+`src/scores/` scores each company's quality beside the models and the valuation history: our counterparts of
+GuruFocus's GF Score, its predictability rank and its warning signs, with every formula, cutoff and weight
+published ([design](docs/superpowers/specs/2026-10-21-quality-scores-design.md)). It changes none of the six
+models, their median or the verdicts, and it grades the company, not the collected data (that is the
+[data-quality score](#integrity-checks-data-quality-score)).
+
+Inputs:
+- **Two fiscal years.** Each score is on the latest fiscal year (t) against the one before (t-1), from the
+  latest restated figures. The latest 11 years are read, so a 10-year CAGR has its start year.
+- **Per-share series** (revenue, EPS, EBITDA, FCF and book value per share) on today's split basis. A
+  share-count jump of 1.5× or more folds into it only for a declared share split, on a split's marks (EPS
+  moved against the count, revenue didn't move with it, the count EPS implies moved with it), or when the
+  older year ends before the listing or in its year (a pre-listing count leaves out converted preferred). A
+  merger, an exchange offer, a count that swings on its own and a spin-off's price factor fold nothing
+  (BUG-185).
+- **CAGRs** over 3, 5 and 10 years (revenue, EPS and EBITDA per share) or 5 (FCF and book value per share):
+  `(last / first) ** (1 / years) - 1`, when both ends are positive and the start year is exactly that many
+  fiscal years back.
+
+The scores. Each is N/A, with its reason stored, where its inputs are missing:
+- **Piotroski F**, 0-9, a point for each test passed: ROA (net income / total assets) above zero; operating
+  cash flow (CFO) above zero; ROA up; CFO above net income; long-term debt / total assets down (untested when
+  either year's debt is missing); current ratio up; no new shares (the split-normalized count up by no more
+  than 0.5%); gross margin up; asset turnover up. A test with missing inputs counts as a fail, and the tests
+  that could run are stored ("F out of N tested"). N/A for banks and insurers (no current ratio or gross
+  margin).
+- **Altman Z**, the original model: `1.2·WC/TA + 1.4·RE/TA + 3.3·EBIT/TA + 0.6·MVE/TL + 1.0·Sales/TA`, with
+  WC = current assets - current liabilities, EBIT = operating income and MVE the latest snapshot's market cap.
+  Below 1.81 is the distress zone, 1.81-2.99 grey, above 2.99 safe. N/A for banks, insurers, REITs and
+  utilities (a regulated utility's heavy assets read as distress: D, DUK, NEE and SO all score below 1.2).
+  Z'', Altman's variant for non-manufacturers, needs the SIC code, which isn't stored yet, so the original
+  applies to the rest.
+- **Beneish M**, eight variables, each a figure in t over the same figure in t-1 (GMI and DEPI the other way
+  round); above -1.78 flags a likely manipulator:
+  `M = -4.84 + 0.920·DSRI + 0.528·GMI + 0.404·AQI + 0.892·SGI + 0.115·DEPI - 0.172·SGAI + 4.679·TATA - 0.327·LVGI`
+  - DSRI is receivables / sales; GMI the gross margin; AQI 1 - (current assets + PP&E) / total assets; SGI
+    sales; DEPI D&A / (D&A + PP&E); SGAI SG&A / sales; LVGI (current liabilities + long-term debt) / total
+    assets. TATA, the exception, is (net income - CFO) / total assets in t.
+  - SGAI and DEPI are 1 (neutral) when their inputs are missing, and a missing long-term debt reads as zero in
+    LVGI (7 companies: ANET, DE, GEV, ISRG, PANW, PLTR, VRTX). Any other missing variable makes M N/A, and the
+    reason names it. Banks, insurers and REITs are N/A too.
+- **Sloan ratio**: `(net income - CFO - investing cash flow) / total assets`. Within ±10% is safe, 10-25% a
+  warning, and beyond ±25% flagged.
+- **ROIC vs WACC**: the stored ROIC less `WACC = E/(D+E)·Re + D/(D+E)·Rd·(1-t)`, N/A for banks and insurers. E
+  is the market cap and D the total debt. Re is the DCF's CAPM cost of equity, the risk-free rate + beta ×
+  4.5%, held between 8% and 14%. Rd = interest expense / D, clamped between the risk-free rate and 10 points
+  above it (the risk-free rate with no debt or no interest figure). t = income tax / pretax income, clamped to
+  0-35%, and 21% where pretax income is missing or not positive.
+- **Predictability**, 1-5 stars in half steps, from the last 10 fiscal years (fewer is N/A): our own formula,
+  as GuruFocus's is unpublished. A year with revenue or EBITDA per share at or below zero, or a falling trend
+  (a log-linear slope of zero or less in either series), is 1 star. Otherwise
+  `stars = 1 + 4 × min(R²_revenue, R²_EBITDA)`, the R² of ln(revenue per share) and ln(EBITDA per share)
+  against the year, rounded down to the half star. Banks and insurers use EPS where EBITDA is suppressed.
+
+**Warning signs**: twenty published rules. Each that fires is stored with its severity and a message stating
+the figure, the value and the threshold; severe signs come first.
+
+| Code | Severity | Fires when |
+|---|---|---|
+| `altman_distress` | severe | Altman Z below 1.81 |
+| `beneish_flag` | severe | Beneish M above -1.78 |
+| `sloan_high` | severe / medium | Sloan ratio beyond ±25% / beyond ±10% |
+| `piotroski_low` | medium | F of 3 or less, with at least 7 tests run |
+| `interest_coverage_low` | severe / medium | operating income covers interest less than 1.5 times / less than 3 times |
+| `revenue_decline` | medium | revenue fell in each of the last 3 years |
+| `margin_decline` | medium | operating margin fell by more than 5 points over 5 years |
+| `fcf_negative` | medium | free cash flow below zero in 2 of the last 3 years |
+| `dilution` | medium | the split-normalized share count grew by more than 3% a year over 3 years |
+| `debt_outgrows_revenue` | medium | total-debt CAGR above the revenue CAGR by more than 10 points over 3 years |
+| `receivables_outgrow_revenue` | medium | receivables per dollar of revenue up more than 20% over 3 years |
+| `inventory_outgrows_revenue` | medium | inventory per dollar of revenue up more than 20% over 3 years |
+| `assets_outgrow_revenue` | medium | total-asset CAGR above the revenue CAGR by more than 10 points over 3 years |
+| `goodwill_heavy` | medium | goodwill above 50% of total equity (equity above zero) |
+| `negative_equity` | medium | total equity below zero |
+| `payout_over_fcf` | medium | dividends paid above zero and above free cash flow (which may be negative) |
+| `roic_below_wacc` | medium | ROIC below WACC |
+| `price_far_above_value` | medium | price / historical value above 1.3 (the history's *far above*) |
+| `pe_at_high` | medium | P/E at or above its 95th percentile of the last 10 years |
+| `gross_margin_decline` | medium | gross margin fell by more than 5 points over 5 years |
+
+**Ranks**: five, each 1-10 (10 best), computed across the universe after every company's scores are stored, so
+any run re-ranks everyone.
+
+| Rank | Components |
+|---|---|
+| Financial strength | interest coverage (capped at 100), Altman Z, equity / assets, cash / debt (capped at 10), debt / revenue (lower is better) |
+| Profitability | operating margin, its 10-year mean and 5-year slope, the share of Piotroski tests passed, predictability stars, 10-year median ROIC, profitable years out of 10 |
+| Growth | revenue per share CAGR over 3 and 5 years, EBITDA per share CAGR over 5 years (EPS for banks and insurers) |
+| Valuation | price / historical value (lower is better), else the P/E's percentile in its 10 years (lower is better) |
+| Momentum | the mean of the 12-1 and 6-1 month returns (the close a month back against 12 and 6 months back), over max(beta, 0.5) |
+
+- Each component becomes a percentile in (0, 1]: the share of its group at or below it (at or above, where
+  lower is better). The group is the company's sector class when at least 10 companies have that component,
+  else the whole universe. A rank is `ceil(10 × mean)` of its components' percentiles, given at least two
+  components (financial strength, profitability, growth) or its one (valuation, momentum).
+- The **composite**, out of 100, is `10 × the mean of the five ranks`, with at least four available. The
+  weights are equal by default: GuruFocus weighs profitability and growth most, with unpublished weights, and
+  choosing ours is left to the user (Q11 in `qa/BUGS.md`).
+- The **Magic Formula rank** (Greenblatt) sums the ranks of the earnings yield (EBIT / EV, EV = market cap +
+  net debt) and the return on capital (EBIT / (net working capital + net PP&E), net working capital = current
+  assets - cash - (current liabilities - short-term debt)), across the companies with both (49 of the 127;
+  banks, insurers, utilities and REITs are left out). 1 is best, and a tie goes to the higher earnings yield.
+
+It is computed with the valuations, after a collection, a web job or `python -m src.valuation.backfill`, into
+three tables (columns and queries are in the [USAGE_GUIDE](USAGE_GUIDE.md#quality-scores)):
+- `per_share_annual`: one row per company and fiscal year, the five per-share series;
+- `quality_scores`: one row per company, with every score and its inputs, the CAGRs, the ranks, the composite,
+  the Magic Formula rank, NCAV per share (current assets less total liabilities, over the share count),
+  `na_reasons` and the components behind each rank (JSON);
+- `warning_signs`: one row per sign that fires.
+
+Where it shows:
+- **STAT tab**: a Quality section with the composite and a radar of the five ranks, the ranks, each score with
+  its reading, the nine Piotroski tests, the growth table (the CAGRs) and the warning signs, severe first.
+- **API**: `GET /api/stocks/{ticker}/scores` returns the same as JSON, with the Beneish variables, the
+  predictability fit's R² and the per-share series. It answers 404 for an unknown ticker and
+  `"computed": false` before its scores exist.
+- **Screener**: filters and sorts by `piotroski_f`, `altman_z`, `beneish_m`, `sloan_ratio`,
+  `predictability_stars`, `rev_ps_cagr_5y`, `eps_cagr_5y`, `roic_minus_wacc`, the five `rank_*`,
+  `composite_score`, `momentum`, `magic_formula_rank` and `warning_count`, by `price_to_ncav` (price / NCAV
+  per share, where NCAV is positive) and by `lynch_upside_pct` (the Lynch model's base value over the price).
+  A *Preset screens* dropdown fills the filters:
+  - Buffett-Munger: predictability ≥ 4, ROIC - WACC > 0, debt / EBITDA ≤ 3, price / historical value ≤ 1.1;
+  - Peter Lynch: the Lynch model's base value above the price, most upside first;
+  - Graham net-net: price / NCAV per share ≤ 0.67, lowest first;
+  - Magic Formula: ranked, best first (banks, insurers, utilities and REITs have no rank, so they drop out);
+  - Undervalued-predictable: predictability ≥ 4 and price / historical value < 0.9, lowest first.
+
+Checked by `qa/oracle/scores_oracle.py`, which imports nothing from `src` and recomputes from the raw tables,
+with its own split basis (each year's count from its latest filing, times the declared splits after it). All 9
+gates pass on the 127 companies (`qa/evidence/scores-m2-5-oracle.txt`): the fiscal year scored (127/127), the
+per-share series within 2% (6,630/6,630 values), the CAGRs within 0.5 points (1,367/1,367), each Piotroski
+test and F (1,397/1,397), Altman Z and its zone within 0.5% (127/127), Beneish M and its variables within 0.5%
+(1,143/1,143), the Sloan ratio within 0.1 points (127/127), predictability stars exactly (321/321), and the
+ranks, composite and Magic Formula rank recomputed from the stored components (889/889). Years ending before a
+company's first price bar plus a year (160 per-share values, 30 CAGRs) aren't compared: their basis is an
+approximation the filings don't state.
+
+The oracle's first run found BUG-185: the fiscal years folded mergers, spin-off price factors and a swinging
+count as if they were splits (RTX, DELL, LIN, BX; BX's 10-year EPS CAGR read 1.51% against 14.04%). The 14
+severe warning signs (5 Altman, 5 Beneish, 4 Sloan) were each traced to their raw figures: none is a data error.
+
+Limitations:
+- The original Altman model, fitted on manufacturers, reads capital-heavy telecoms as distress: T (0.85), VZ
+  (1.26) and TMUS (1.45). It is N/A for 49 of the 127 companies and Beneish M for 75: the sectors above, and
+  any company missing an input.
+- Beneish flags hypergrowth (its sales-growth variable) and one-off gains: LRCX, MRVL, NVDA and SNDK grew
+  sales 26%, 42%, 65% and 175%, and WDC's net income of $9.4B came with $3.9B of operating cash flow.
+- The cash-flow Sloan ratio counts purchases of marketable securities as accruals (PLTR, MU, NVDA). GuruFocus
+  publishes the same definition.
+- Years before a listing are on an approximate share basis: nothing in the filings says what converted then.
+- Ranks are percentiles within a 127-company universe, so they move when it changes. A sector class is ranked
+  within itself only with at least 10 companies, which only general (90) and banks (13) have.
+- The composite's equal weights are a default, not a finding.
+
 ## Project Structure
 
 ```
@@ -707,7 +870,8 @@ plus (added for the web terminal — see [Web interface](#web-interface)) `price
 estimate/actual/surprise per quarter), `dividend_events`, `split_events`,
 `holders` (institutional + mutual-fund), `insider_transactions`, and `officers`; and the valuation
 layer's `valuations`, `valuation_summary`, `valuation_history` and `valuation_ranges` (see
-[Valuation history](#valuation-history)):
+[Valuation history](#valuation-history)); and the quality scores' `per_share_annual`,
+`quality_scores` and `warning_signs` (see [Quality scores](#quality-scores)):
 
 ```sql
 -- Cheap against their own history: P/E in the bottom quarter of its last 10 years,
@@ -852,10 +1016,10 @@ The server binds to `127.0.0.1` by default (localhost only).
 ### Features
 
 - **Terminal command bar** — a Bloomberg-style `TICKER CODE` command line (focus with `` ` `` or `/`) that jumps straight to any workstation tab or global tool. See [Terminal command bar](#terminal-command-bar) below.
-- **Company workstation** — a single per-ticker page (`/stocks/{ticker}`) with 10 tabs: description/overview, price chart with indicators, financial statements, earnings, key stats, historical prices, dividends, holders, insider activity, and valuation.
+- **Company workstation** — a single per-ticker page (`/stocks/{ticker}`) with 10 tabs: description/overview, price chart with indicators, financial statements, earnings, key stats (with the quality scores), historical prices, dividends, holders, insider activity, and valuation.
 - **Dashboard** — data quality score, field coverage bar chart, freshness summary, unmapped-fact tracker.
 - **Companies browser** — filterable list of all tracked companies with sector drill-down.
-- **Cross-company screener** — filter by any fundamental metric (ROIC, net margin, debt/EBITDA, …) *or* market/valuation column (P/E, dividend yield, PEG, short interest, …) *or* the valuation layer's Upside % / verdict, sort, paginate, compare selected companies side-by-side, and download results as CSV.
+- **Cross-company screener** — filter by any fundamental metric (ROIC, net margin, debt/EBITDA, …) *or* market/valuation column (P/E, dividend yield, PEG, short interest, …) *or* the valuation layer's Upside % / verdict *or* the quality scores (Piotroski F, Altman Z, the ranks and composite, …, with five preset screens), sort, paginate, compare selected companies side-by-side, and download results as CSV.
 - **Point-in-time (as-of) explorer** — look up what financials and ratios looked like as of any historical date (before later restatements), and browse vintage side-by-side tables.
 - **On-demand quote refresh** — re-fetch a single ticker's live price/market snapshot from the workstation without running a full collection (see `STOCK_WEB_ALLOW_QUOTE_REFRESH` below). After a stock split the stored valuations don't reflect (one dated after the stored price, as after a collection whose Yahoo quote failed, or one not yet stored since the ticker's last collection with Yahoo), the refresh isn't saved, because those valuations are on the pre-split basis; its status asks for a full collection of the ticker instead. A split here is a share split (a simple ratio such as 2:1, 5:4 or 1:10) or any price factor of 3:2 or more. The stock dividends and smaller spin-off factors Yahoo also lists don't stop a refresh: it stores them with the price and values the ticker again, so its DDM and multiples band move onto the new price's basis, as a full collection would put them. A saved refresh recomputes the snapshot's enterprise value, EV/EBITDA, EV/FCF and FCF yield as a full collection does (its new market cap with the latest year's net debt, EBITDA and FCF), so the columns keep one definition; Yahoo's own enterprise value stays in the JSON's `valuation` section.
 - **CSV export** — download annual financials, annual metrics, or screener results as CSV from any company page or screener view.
@@ -872,7 +1036,7 @@ Per-ticker function codes (`TICKER CODE` → `/stocks/{TICKER}?tab=...`):
 | `GP` | Graph | Price chart with MA50/MA200/RSI/MACD indicators and `^GSPC` overlay |
 | `FA` | Financial analysis | Annual/quarterly/TTM statements |
 | `ERN` | Earnings | Earnings-surprise history (EPS estimate vs. actual) |
-| `STAT` | Key statistics | Valuation & market snapshot (P/E, market cap, beta, …) |
+| `STAT` | Key statistics | Valuation & market snapshot (P/E, market cap, beta, …) and the Quality section (composite, ranks, scores, warning signs) |
 | `HP` | Historical prices | Daily OHLCV price table |
 | `DVD` | Dividends | Dividend payments and stock splits |
 | `HDS` | Holders | Institutional and mutual-fund holders |
@@ -907,6 +1071,7 @@ Key endpoints:
 | `GET /api/companies/{ticker}/metrics` | Annual metrics |
 | `GET /api/stocks/{ticker}/valuation` | Per-model fair-value ranges, assumptions, verdict, upside % |
 | `GET /api/stocks/{ticker}/valuation-history` | Valuation history: the historical value against the price, each multiple's 10-year range, the monthly series |
+| `GET /api/stocks/{ticker}/scores` | Quality scores: Piotroski with its nine tests, Altman, Beneish, Sloan, ROIC vs WACC, predictability, the five ranks and the composite, the growth table, the warning signs |
 | `GET /api/screen` | Cross-company screener (supports `verdict=cheap\|fair\|expensive`) |
 | `GET /api/export/company/{ticker}/annual.csv` | Annual financials as CSV |
 | `GET /api/export/company/{ticker}/metrics.csv` | Annual metrics as CSV |

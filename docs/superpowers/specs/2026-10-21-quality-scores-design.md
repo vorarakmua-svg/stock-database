@@ -38,7 +38,7 @@ are N/A where the sector rules suppress an input (`sector_metrics`), with a reas
 
 - **Piotroski F**, 0-9. Each of the nine tests is stored with its pass/fail. N/A for banks and insurers
   (the current ratio and gross margin don't exist for them). A test whose inputs are missing counts as a
-  fail, and the number missing is stored, so F is "out of 9 tested".
+  fail, and the number of tests that could run is stored (`piotroski_tested`), so F is "out of N tested".
   - ROA = NI / total assets > 0.
   - CFO > 0.
   - ROA rose.
@@ -83,7 +83,8 @@ are N/A where the sector rules suppress an input (`sector_metrics`), with a reas
   - The spread is ROIC - WACC. N/A for banks and insurers.
 - **Predictability**, 1-5 stars in half steps, from the last 10 fiscal years. It's our own published
   formula; GuruFocus's is unpublished.
-  - Fewer than 10 years is N/A. Any year with EBITDA ≤ 0 is 1 star (as GuruFocus treats an operating loss).
+  - Fewer than 10 years is N/A. Any year with revenue or EBITDA per share ≤ 0 is 1 star (as GuruFocus
+    treats an operating loss).
   - Otherwise, fit ln(series) against the year for revenue/share and EBITDA/share. If either slope is ≤ 0,
     1 star. Else stars = 1 + 4·min(R²_revenue, R²_EBITDA), rounded down to the half star.
   - For banks and insurers, EPS takes EBITDA's place (EBITDA is suppressed).
@@ -124,8 +125,9 @@ re-ranks everyone.
 - Each **component** becomes a percentile in (0, 1], computed within the company's `sector_class` when the
   class has at least 10 companies with the component, and within the whole universe otherwise. It is
   oriented so that higher is better.
-- A **rank** is the mean of its available components' percentiles (at least two, or N/A), mapped to 1-10
-  as ceil(10·p), with a minimum of 1.
+- A **rank** is the mean of its available components' percentiles (at least two for financial strength,
+  profitability and growth; valuation and momentum have one component each), else N/A, mapped to 1-10 as
+  ceil(10·p), with a minimum of 1.
 
 | Rank | Components |
 |---|---|
@@ -143,7 +145,7 @@ re-ranks everyone.
   - return on capital = EBIT / (net working capital + net PPE), where net working capital = current
     assets - cash - (current liabilities - short-term debt);
   - the combined rank is the sum of the two ranks across the universe, excluding banks, insurers,
-    utilities and REITs.
+    utilities and REITs; a tie in the sum goes to the higher earnings yield.
 
 ## Storage
 
