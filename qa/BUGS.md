@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 101 · NEEDS-USER 15 · Verified: 88
+**Open:** P0 0 · P1 0 · P2 11 · P3 102 · NEEDS-USER 15 · Verified: 88
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1547,6 +1547,13 @@ Found: code review 16's recommendations, build M2-9 (BUG-189, BUG-191) | Fixed: 
 Repro: `src/mappings/canonical.py`: `ppe_net` maps only `PropertyPlantAndEquipmentNet`, so 17 of the 94 Magic Formula candidates have no PP&E (UNP, HD and TSLA tag `PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization`; also META, GOOGL, LOW, T...). 15 tag no `OperatingIncomeLoss` (JNJ, LLY, MRK, PFE, XOM, CVX, IBM, GE, DE, KLAC...), which leaves their Altman Z and Magic Formula rank N/A. PGR files its $8.39B of debt as `DebtLongtermAndShorttermCombinedAmount`, which no field maps (so its debt reads unknown, BUG-189).
 Expected: the tags mapped, with fallbacks, and an EBIT definition chosen for the filers without operating income (GuruFocus uses pretax income + interest expense).   Actual: N/A, with the reason shown (BUG-191).
 Notes: a mapping change reaches the stored figures only at the next collection, which is live (not in M2's offline backfill). Operating income feeds EBITDA, M1's EV/EBITDA history and the fair-value line, and the screener, so a fallback needs a valuation-policy check first.
+
+### BUG-204 [P3][UI] The STAT tab's metric cards and its Quality section read a debt-free filer's debt differently
+Status: OPEN
+Found: build iteration 35 (M2-9's web smoke test) | Fixed: | Regression test:
+Repro: ANET's STAT tab: the Profitability and Leverage cards show ROIC "—" and Debt/EBITDA "—" (from `metrics_annual`, which has no total debt for a filer tagging none), while the Quality section below shows ROIC 30.6% and ROIC - WACC 18.3% from the scores' reading of the debt (BUG-190).
+Expected: one reading on the page, or the cards saying why they're empty.   Actual: "—" above, figures below.
+Notes: BUG-190's fix kept `metrics_annual` as filed on purpose: the screener's metric columns and M1's EV/EBITDA history read it, and the history has its own rule for missing debt. Applying the reading there means checking M1's fair-value line first.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

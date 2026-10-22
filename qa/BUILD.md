@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 7 · DOING 1 · DONE 23 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 7 · DOING 0 · DONE 24 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -41,7 +41,7 @@
 | M2-6 | `GET /api/stocks/{t}/scores` and the STAT tab's Quality section (radar, ranks, tests, growth, signs), browser-checked; with tests | DONE | this commit | `qa/evidence/scores-m2-6-*.txt` |
 | M2-7 | Screener fields from `quality_scores` (table-exists switch) and the preset screens; with tests | DONE | this commit | `qa/evidence/scores-m2-7-*.txt` |
 | M2-8 | Docs: README and USAGE_GUIDE | DONE | this commit | README "Quality scores", USAGE_GUIDE "Quality scores" |
-| M2-9 | Milestone close: code review 16 (opus) with Critical and Important findings fixed; backup and offline backfill of the user's DB | DOING (review 16 reported: BUG-186 to BUG-191 to fix) | | `qa/evidence/review16-report.md` |
+| M2-9 | Milestone close: code review 16 (opus) with Critical and Important findings fixed; backup and offline backfill of the user's DB | DONE | d26990d, e340bd4, 9b9a34b, 86f3c05, this commit | `qa/evidence/review16-report.md`, `qa/evidence/bug18[6-9]-*`, `bug19[01]-*`, `m2-9-*` |
 
 ## M3: SEC ownership (Form 4 insiders, 13F gurus)
 
@@ -715,3 +715,43 @@ Evidence: `qa/evidence/review16-report.md`
 Gates: ruff ✓ mypy ✓ pytest 1436 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) chore(qa): record code review 16
 Next: M2-9: BUG-186 to BUG-191, each test-first; then M2's live backfill.
+
+### Build iteration 35: 2026-10-22 09:03: M2-9 (review 16's fixes, M2's live backfill)
+Did:
+- Fixed code review 16's six Important findings, each test-first, with mutants:
+  - BUG-186: an untested Piotroski test reads "Not tested", not "Fail" (d26990d).
+  - BUG-187: the scores read the latest snapshot with a price (d26990d).
+  - BUG-188: a year that ended before the first bar on the private count, which only the listing's jump folds,
+    has no per-share figures in the scores. A merger around the listing jumps the same way (DELL's EMC), and
+    total assets can't separate them (CRWD's and APP's moved with the count too). The listing's own year keeps
+    the public count, as the history's listing quarter does; the valuations still fold (e340bd4).
+  - BUG-189 and BUG-190: `read_debt` reads a year with interest paid and no debt tagged as unknown debt (PGR), and
+    one with neither, outside banks and insurers, as zero debt with ROIC on equity less cash (ISRG, ANET, PANW,
+    PLTR, VRTX). The ROIC - WACC row gives the reason ROIC is missing. The scores' own debt/EBITDA feeds the
+    Buffett-Munger preset, and a scores table from before that column screens with the field NULL (9b9a34b).
+  - BUG-191: Greenblatt's net working capital counts as 0 when negative, and the STAT row and the API say why a
+    company has no Magic Formula rank. The tag gaps behind the rest are open as BUG-203 (86f3c05).
+- Each fix left every valuation row, median and verdict unchanged on a backfilled copy; the scores oracle
+  passed 9 of 9 after each.
+- M2's live step:
+  - Dry run on a backup-API copy of the user's DB. The scores oracle passed 9 of 9 and the history oracle all
+    gates.
+  - Against the user's DB: valuations change only in RTX's Lynch row (BUG-185's bull, $29.02 to $24.80); no
+    median or verdict moves. Scores change for 126 of 127: the Magic Formula ranks 61 (was 49), the composite
+    moves for 23 (APP 68 to 60, PGR 68 to 65, VRTX 70 to 72...), warning signs 248 to 249 (PANW's ROIC below
+    WACC), and Buffett-Munger gains ISRG (14).
+  - Web smoke test on the dry-run copy (scratch server; port freed): ANET's STAT tab shows "4 / 8" with one
+    "Not tested", ROIC - WACC 18.3% and Magic Formula rank 54. JNJ's rows say "no ROIC: no operating income"
+    and "not ranked: no operating income (EBIT)".
+  - Backup to `%LOCALAPPDATA%\stockdb-backups\2026-10-22`: the DB by the backup API, integrity ok, row counts
+    equal, plus json/ (128 files) and csv/ (3).
+  - Ran `python -m src.valuation.backfill --db data/output/stock.db` (offline). The ten tables are identical
+    to the dry run's apart from timestamps; the scores oracle passes 9 of 9 on the live DB.
+- Opened BUG-204 (P3): the STAT tab's metric cards show `metrics_annual`'s ROIC and debt/EBITDA ("—" for a
+  debt-free filer) above the Quality section's reading of the debt.
+Evidence: `qa/evidence/bug186-*`, `bug187-*`, `bug188-*`, `bug189-190-*`, `bug191-*`, `m2-9-{gates-a..d,dryrun,
+dryrun-valuations,dryrun-scores,dryrun-summary,oracles,web,backup,live,live-vs-dry}.txt`;
+`%LOCALAPPDATA%\stockdb-qa\build\m29\shots\ANET-stat.png`
+Gates: ruff ✓ mypy ✓ pytest 1460 passed, 1 skipped | CI: no PR (Q10)
+Commit: (this commit) chore(qa): close M2-9: review 16's fixes and M2's live backfill
+Next: M3-4 (13F: the guru list, the information-table parser, storage).
