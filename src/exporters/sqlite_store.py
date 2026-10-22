@@ -422,6 +422,53 @@ class SQLiteStore:
             "CREATE TABLE IF NOT EXISTS quality_scores ("
             + ", ".join(f"{c} {_QUALITY_TYPES.get(c, 'REAL')}" for c in QUALITY_COLUMNS) + ")"
         )
+        # Insiders' Form 4 filings (Milestone 3): one row per filing and reporting owner, and the filing's
+        # transactions; a 4/A marks the original it amends (superseded_by).
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS insider_filings (
+                accession TEXT NOT NULL,
+                owner_cik TEXT NOT NULL,
+                ticker TEXT NOT NULL,
+                form TEXT,
+                filed_date TEXT,
+                period_of_report TEXT,
+                original_filed TEXT,
+                owner_name TEXT,
+                is_director INTEGER,
+                is_officer INTEGER,
+                officer_title TEXT,
+                is_ten_percent INTEGER,
+                is_other INTEGER,
+                aff10b5one INTEGER,
+                superseded_by TEXT,
+                collected_at TEXT NOT NULL,
+                PRIMARY KEY (accession, owner_cik)
+            );
+            CREATE INDEX IF NOT EXISTS idx_insider_filings_ticker ON insider_filings (ticker, filed_date);
+            CREATE TABLE IF NOT EXISTS insider_trades (
+                accession TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                ticker TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                security_title TEXT,
+                date TEXT,
+                code TEXT,
+                shares REAL,
+                price REAL,
+                price_footnotes TEXT,
+                acquired_disposed TEXT,
+                owned_after REAL,
+                direct_indirect TEXT,
+                nature_of_ownership TEXT,
+                exercise_price REAL,
+                underlying_title TEXT,
+                underlying_shares REAL,
+                PRIMARY KEY (accession, seq)
+            );
+            CREATE INDEX IF NOT EXISTS idx_insider_trades_ticker ON insider_trades (ticker, date);
+            """
+        )
 
     @staticmethod
     def _ensure_columns(conn: sqlite3.Connection, table: str, columns: Dict[str, str]) -> None:
@@ -1163,6 +1210,50 @@ class SQLiteStore:
                 "INSERT INTO warning_signs (ticker, code, severity, message, value, threshold, computed_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [(ticker, s.code, s.severity, s.message, s.value, s.threshold, computed_at) for s in signs])
+            conn.commit()
+        finally:
+            conn.close()
+
+    def export_insider_filings(self, ticker: str, filings: Sequence[Any], collected_at: str) -> None:
+        """Store one company's Form 4 filings, ``(FilingRef, Form4)`` pairs, in one transaction.
+
+        Each filing's rows are replaced by accession, so a filing an earlier run stored and this one couldn't
+        fetch stays. Then every 4/A marks the original it amends: the same owner's Form 4 filed on the 4/A's
+        original filing day, for the same period where both give one."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            for ref, filing in filings:
+                conn.execute("DELETE FROM insider_trades WHERE accession = ?", (ref.accession,))
+                conn.execute("DELETE FROM insider_filings WHERE accession = ?", (ref.accession,))
+                conn.executemany(
+                    "INSERT INTO insider_filings (accession, owner_cik, ticker, form, filed_date, period_of_report, "
+                    "original_filed, owner_name, is_director, is_officer, officer_title, is_ten_percent, is_other, "
+                    "aff10b5one, collected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(ref.accession, owner.cik or "", ticker, filing.form or ref.form, ref.filed,
+                      filing.period_of_report, filing.original_filed, owner.name, int(owner.is_director),
+                      int(owner.is_officer), owner.officer_title, int(owner.is_ten_percent), int(owner.is_other),
+                      None if filing.aff10b5one is None else int(filing.aff10b5one), collected_at)
+                     for owner in filing.owners])
+                conn.executemany(
+                    "INSERT INTO insider_trades (accession, seq, ticker, kind, security_title, date, code, shares, "
+                    "price, price_footnotes, acquired_disposed, owned_after, direct_indirect, nature_of_ownership, "
+                    "exercise_price, underlying_title, underlying_shares) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(ref.accession, t.seq, ticker, t.table, t.security_title, t.date, t.code, t.shares, t.price,
+                      ",".join(t.price_footnotes) or None, t.acquired_disposed, t.owned_after, t.direct_indirect,
+                      t.nature_of_ownership, t.exercise_price, t.underlying_title, t.underlying_shares)
+                     for t in filing.trades])
+            conn.execute("UPDATE insider_filings SET superseded_by = NULL WHERE ticker = ?", (ticker,))
+            conn.execute(
+                "UPDATE insider_filings SET superseded_by = ("
+                "SELECT a.accession FROM insider_filings a WHERE a.ticker = insider_filings.ticker "
+                "AND a.form = '4/A' AND a.owner_cik = insider_filings.owner_cik "
+                "AND a.original_filed = insider_filings.filed_date "
+                "AND (a.period_of_report IS NULL OR insider_filings.period_of_report IS NULL "
+                "OR a.period_of_report = insider_filings.period_of_report) "
+                "ORDER BY a.filed_date DESC LIMIT 1) "
+                "WHERE ticker = ? AND form = '4'", (ticker,))
             conn.commit()
         finally:
             conn.close()

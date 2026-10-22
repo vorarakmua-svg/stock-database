@@ -99,7 +99,9 @@ Nothing in the valuations, the history or the scores changes.
 
 ## Collection
 
-- `stock-data ownership [--insiders] [--gurus] [--years 3] [TICKERS...]`: incremental through the caches, with
+- `python -m src.ownership.collect --insiders [--gurus] [--years 3] [--db PATH] [TICKERS...]`, a module like
+  the backfill (the `stock-data` command's positional tickers leave no room for a subcommand): incremental
+  through the caches, with
   progress logged; a failed fetch is retried once, then reported, never stored as empty.
 - The live step runs it into the user's DB after a backup, in the background.
 

@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 9 · DOING 1 · DONE 21 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 8 · DOING 1 · DONE 22 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -49,7 +49,7 @@
 |---|---|---|---|---|
 | M3-0 | Design M3: `docs/superpowers/specs/2026-10-22-sec-ownership-design.md`, then these rows | DONE | this commit | the spec |
 | M3-1 | `src/ownership/form4.py`: the Form 4 parser (owners and roles, non-derivative and derivative rows, 10b5-1, amendments), with real-document fixtures; with tests | DONE | this commit | `qa/evidence/ownership-m3-1-*.txt` |
-| M3-2 | Form 4 collection (full submissions feeds back three years, cached XML, incremental), storage (`insider_filings`, `insider_trades`) and `stock-data ownership --insiders`; with tests | TODO | | |
+| M3-2 | Form 4 collection (full submissions feeds back three years, cached XML, incremental), storage (`insider_filings`, `insider_trades`) and `python -m src.ownership.collect --insiders`; with tests | DONE | this commit | `qa/evidence/ownership-m3-2-*.txt` |
 | M3-3 | Insider aggregates, the INS tab, `GET /api/stocks/{t}/insiders`, screener fields; checked against Yahoo's insider rows, browser-checked; with tests | TODO | | |
 | M3-4 | 13F: the guru list (`src/ownership/gurus.py`, each CIK checked), the information-table parser with its checksums, storage; with tests | TODO | | |
 | M3-5 | The CUSIP map (curated for our universe, OpenFIGI for the rest) and quarter-over-quarter changes; with tests | TODO | | |
@@ -647,3 +647,23 @@ Evidence: README.md and USAGE_GUIDE.md ("Quality scores")
 Gates: ruff ✓ mypy ✓ pytest 1411 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) docs: the quality scores in the README and the usage guide (M2-8)
 Next: M2-9's review findings when it reports; meanwhile M3-2.
+
+### Build iteration 32: 2026-10-22 07:53: M3-2
+Did:
+- `src/ownership/collect.py`: a company's submissions feed back N years (the `recent` block, then the older
+  pages whose filings reach the cutoff), each Form 4 and 4/A's raw XML through the app's SEC handler (a new
+  public `SECHandler.get_raw`), parsed, and cached once it parses. A failed fetch or parse is reported and left
+  out. `python -m src.ownership.collect --insiders [--years 3] [--db PATH] [TICKERS...]`.
+- Storage (`insider_filings`, one row per filing and owner; `insider_trades`): each filing's rows replaced by
+  accession, so a filing an earlier run stored stays when this one can't fetch it. Each 4/A marks the original it
+  amends (the same owner's Form 4 filed on its original day, for the same period).
+- Tests: 8 (the module missing first); five mutants, each killed (one caught a rule to keep: a document is cached
+  only once it parses).
+- Live, into a scratch copy with a scratch cache: PFE and AAPL, three years, 452 filings in 107 s, 0 errors.
+  PFE's two amendments each supersede their original. AAPL: 116 sales, 40 filings under a 10b5-1 plan. PFE: six
+  open-market purchases ($2.96M over the last year).
+- M2-8 committed (707c06b); code review 16 runs.
+Evidence: `qa/evidence/ownership-m3-2-{red,green,mutants,realdata}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1411 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) feat(ownership): collect and store insiders' Form 4 filings (M3-2)
+Next: M2-9's review findings when it reports; meanwhile M3-3 (the insider aggregates, the INS tab, the API).

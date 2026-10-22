@@ -495,6 +495,11 @@ class SECHandler:
 
         return form4_filings
 
+    def get_raw(self, url: str) -> requests.Response:
+        """GET any SEC URL (a filing's document, a submissions page) through this handler's rate limiter,
+        retries and User-Agent; the caller reads the status and the body."""
+        return self._request(url, timeout=30)
+
     def close(self) -> None:
         """Close the session."""
         self.session.close()
