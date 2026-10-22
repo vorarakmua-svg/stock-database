@@ -123,27 +123,39 @@ Nothing in the valuations, the history or the scores changes.
 - `cusip_map` (M3-5).
 - Each company's or guru's rows are replaced in one transaction.
 
-## Aggregates (computed at read time)
+## Aggregates
 
 - **Open-market net buying** over 3, 6 and 12 months: purchases (code P) less sales (code S), in shares and
   dollars, from non-superseded filings.
 - **CEO and CFO buys**: code P by an officer whose title names the chief executive or financial officer.
 - **Cluster buys**: three or more distinct insiders buying (code P) within 30 days.
 - **10b5-1 sales**: the share of sales under a plan (where the flag is filed).
-- **Gurus holding** a stock: which, how many shares, the value, the quarter's change; and the aggregated guru
-  portfolio: per stock, the number of gurus and the summed value.
+  The insiders' are computed at read time.
+- **The gurus' quarters are materialized when collecting** (M3-6): the holders tab, the aggregated portfolio
+  and the screener all need every guru's latest quarter, too slow to rebuild per request, and an SQL screen
+  can't call Python. After mapping, `--gurus` stores each guru's quarters (`guru_quarters`: total, positions,
+  complete, whether the prior quarter is there, the accessions) and positions with their changes
+  (`guru_positions`: one row per security and put/call, put/call '' for shares, plus a 'sold_out' row for each
+  position of the quarter before that's gone); `--positions` rebuilds them offline.
+- **Gurus holding** a stock: over each guru's latest quarter, its shares (and options) of the stock or its
+  other class (GOOGL with GOOG, BRK-B with BRK-A), with the value, weight and the quarter's change, then the
+  quarter's sellers out. The **aggregated guru portfolio**: per security, the gurus holding it, their summed
+  shares and value, and the buyers and sellers of the latest quarter.
 
 ## Web
 
 - **INS tab**: the SEC trades (date, insider, role, code with its meaning, shares, price, value, holding after,
   plan), the aggregates above, and Yahoo's rows only where there's no SEC data.
-- **HDS tab**: a "Gurus" section above Yahoo's holders.
-- **Pages**: `/gurus` (the list, each with its latest quarter's value and positions), `/gurus/{cik}` (holdings
-  and changes), `/gurus/portfolio` (the aggregated portfolio).
+- **HDS tab**: a "Gurus" section above Yahoo's holders: each guru's latest quarter, its quarter shown per row
+  (Scion's stops at Q3 2025), then the quarter's sellers out. Hidden until a quarter is stored.
+- **Pages**: `/gurus` (the list, each with its latest quarter's value, positions, new and sold out),
+  `/gurus/{cik}` (`?period=`: holdings with weights and changes, the changes summary, the filings linked to
+  EDGAR), `/gurus/portfolio` (the aggregated portfolio); a Gurus link in the nav.
 - **API**: `/api/stocks/{t}/form4` (the existing `/api/stocks/{t}/insiders` keeps serving Yahoo's rows),
-  `/api/stocks/{t}/gurus`, `/api/gurus`, `/api/gurus/{cik}`.
-- **Screener**: net open-market buying (12 months, dollars), CEO/CFO buys (12 months), cluster buys (12 months),
-  gurus holding.
+  `/api/stocks/{t}/gurus`, `/api/gurus`, `/api/gurus/portfolio`, `/api/gurus/{cik}`.
+- **Screener**: net open-market buying (12 months, dollars), CEO/CFO buys (12 months), cluster buys (12 months);
+  `gurus_holding` and `gurus_buying` (new or added) in their latest quarters, each guru counted once over the
+  stock's share classes, shown as one "Gurus (buying)" column.
 
 ## Collection
 

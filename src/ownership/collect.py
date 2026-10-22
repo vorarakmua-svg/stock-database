@@ -8,9 +8,13 @@ current one, read from its full submission text (``thirteenf.parse_13f``) and st
 cached on disk once it parses, so a later run fetches only new filings. One that fails to fetch or parse is reported
 and left out, and what an earlier run stored stays. Then the holdings' CUSIPs are mapped to tickers (``map_cusips``):
 our universe's from ``cusips.UNIVERSE_CUSIPS``, the others through OpenFIGI (``openfigi``), unless --no-openfigi.
+Last, each guru's quarters and positions with their changes are built from its stored filings and stored
+(``store_guru_positions``: ``guru_quarters``, ``guru_positions``), for the web; --positions rebuilds them alone,
+without the network.
 
     python -m src.ownership.collect --insiders [--years 3] [--db PATH] [TICKERS...]
     python -m src.ownership.collect --gurus [--quarters 8] [--no-openfigi] [--db PATH] [--cache-dir DIR]
+    python -m src.ownership.collect --positions [--db PATH]
 """
 from __future__ import annotations
 
@@ -24,11 +28,12 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple, TypeVar
 
-from ..exporters.sqlite_store import SQLiteStore
+from ..exporters.sqlite_store import SQLiteStore, read_only_uri
 from .cusips import UNIVERSE_CUSIPS
 from .form4 import Form4, Form4Error, parse_form4
 from .gurus import Guru
 from .openfigi import BATCH_SIZE, CUSIP, JobErrors, OpenFIGI
+from .portfolio import GuruQuarters, load_guru
 from .thirteenf import ThirteenF, ThirteenFError, parse_13f
 
 FORM4_FORMS = ("4", "4/A")
@@ -326,6 +331,32 @@ def map_cusips(db_path: Path, client: Optional[OpenFIGI], universe: Mapping[str,
     return summary
 
 
+def _load_guru(db_path: Path, guru_cik: str) -> GuruQuarters:
+    """The guru's quarters and changes from its stored filings, read through a read-only connection; none from a
+    database that isn't there yet."""
+    if not Path(db_path).exists():
+        return GuruQuarters(guru_cik)
+    with closing(sqlite3.connect(read_only_uri(db_path), uri=True)) as conn:
+        return load_guru(conn, guru_cik)
+
+
+def store_guru_positions(db_path: Path, gurus: Sequence[Guru], log: Callable[[str], None] = lambda line: None,
+                         ) -> Dict[str, Dict[str, int]]:
+    """Store each guru's quarters and positions with their changes (``guru_quarters``, ``guru_positions``), built
+    from its stored 13F filings (``portfolio.load_guru``), without any network: each guru's rows are replaced in one
+    transaction (``SQLiteStore.export_guru_positions``), a guru without filings left with none. Returns, per guru
+    (its CIK), the quarters and the position rows stored."""
+    store = SQLiteStore(db_path=db_path)
+    computed_at = datetime.now(timezone.utc).isoformat()
+    summary: Dict[str, Dict[str, int]] = {}
+    for guru in gurus:
+        loaded = _load_guru(db_path, guru.cik)
+        rows = store.export_guru_positions(loaded, computed_at)
+        summary[guru.cik] = {"quarters": len(loaded.quarters), "positions": rows}
+        log(f"{guru.manager} ({guru.cik}): {len(loaded.quarters)} quarters, {rows} position rows stored")
+    return summary
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     from ..config import AppConfig, StorageConfig
     from ..fetchers.sec_handler import SECHandler
@@ -344,37 +375,46 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="The SEC cache, and OpenFIGI's under openfigi/ (default: data/cache)")
     parser.add_argument("--no-openfigi", action="store_true",
                         help="With --gurus: map only our universe's CUSIPs, asking OpenFIGI nothing")
+    parser.add_argument("--positions", action="store_true",
+                        help="Rebuild the gurus' quarters and positions from the stored 13F filings, offline "
+                             "(--gurus stores them after mapping the CUSIPs)")
     args = parser.parse_args(argv)
-    if not (args.insiders or args.gurus):
-        parser.error("choose what to collect: --insiders, --gurus or both")
+    if not (args.insiders or args.gurus or args.positions):
+        parser.error("choose what to collect: --insiders, --gurus or both (or --positions, to rebuild the gurus' "
+                     "quarters offline)")
     db_path = args.db or StorageConfig().database_path
     tickers: List[str] = []
     if args.insiders:
         with sqlite3.connect(str(db_path)) as conn:
             tickers = [t.upper() for t in args.tickers] or [t for (t,) in conn.execute(
                 "SELECT ticker FROM companies WHERE cik IS NOT NULL ORDER BY ticker")]
-    sec = SECHandler(user_agent=AppConfig().sec.user_agent, cache_dir=args.cache_dir)
-    try:
-        if args.insiders:
-            summary = collect_insiders(db_path, tickers, args.years, Form4Source(sec, args.cache_dir),
-                                       log=lambda line: print(line, flush=True))
-            stored = sum(s["stored"] for s in summary.values())
-            errors = sum(len(s["errors"]) for s in summary.values())
-            print(f"Form 4 filings stored: {stored} for {len(summary)} tickers; errors: {errors}")
-        if args.gurus:
-            summary = collect_gurus(db_path, GURUS, args.quarters, ThirteenFSource(sec, args.cache_dir),
+    if args.insiders or args.gurus:
+        sec = SECHandler(user_agent=AppConfig().sec.user_agent, cache_dir=args.cache_dir)
+        try:
+            if args.insiders:
+                summary = collect_insiders(db_path, tickers, args.years, Form4Source(sec, args.cache_dir),
+                                           log=lambda line: print(line, flush=True))
+                stored = sum(s["stored"] for s in summary.values())
+                errors = sum(len(s["errors"]) for s in summary.values())
+                print(f"Form 4 filings stored: {stored} for {len(summary)} tickers; errors: {errors}")
+            if args.gurus:
+                summary = collect_gurus(db_path, GURUS, args.quarters, ThirteenFSource(sec, args.cache_dir),
+                                        log=lambda line: print(line, flush=True))
+                stored = sum(s["stored"] for s in summary.values())
+                failures = sum(len(s["checksum_failures"]) for s in summary.values())
+                errors = sum(len(s["errors"]) for s in summary.values())
+                print(f"13F filings stored: {stored} for {len(summary)} gurus; checksum failures: {failures}; "
+                      f"errors: {errors}")
+                mapped = map_cusips(db_path, None if args.no_openfigi else OpenFIGI(args.cache_dir),
                                     log=lambda line: print(line, flush=True))
-            stored = sum(s["stored"] for s in summary.values())
-            failures = sum(len(s["checksum_failures"]) for s in summary.values())
-            errors = sum(len(s["errors"]) for s in summary.values())
-            print(f"13F filings stored: {stored} for {len(summary)} gurus; checksum failures: {failures}; "
-                  f"errors: {errors}")
-            mapped = map_cusips(db_path, None if args.no_openfigi else OpenFIGI(args.cache_dir),
-                                log=lambda line: print(line, flush=True))
-            print(f"CUSIPs mapped: {mapped['universe']} from our universe, {mapped['openfigi']} by OpenFIGI, "
-                  f"{mapped['none']} not found; errors: {len(mapped['errors'])}")
-    finally:
-        sec.close()
+                print(f"CUSIPs mapped: {mapped['universe']} from our universe, {mapped['openfigi']} by OpenFIGI, "
+                      f"{mapped['none']} not found; errors: {len(mapped['errors'])}")
+        finally:
+            sec.close()
+    if args.gurus or args.positions:  # after the mapping, once; offline
+        built = store_guru_positions(db_path, GURUS, log=lambda line: print(line, flush=True))
+        print(f"Guru quarters stored: {sum(s['quarters'] for s in built.values())} quarters, "
+              f"{sum(s['positions'] for s in built.values())} position rows for {len(built)} gurus")
     return 0
 
 

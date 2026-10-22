@@ -206,6 +206,12 @@ SCREENER_INSIDER_OPTIONS: List[tuple[str, str]] = [
     ("Insiders buying within 30 days (cluster)", "ins_cluster_buyers_12m"),
 ]
 
+# The gurus holding the stock in their latest 13F quarter, and of those the ones buying (screener.GURU_EXPRS).
+SCREENER_GURU_OPTIONS: List[tuple[str, str]] = [
+    ("Gurus holding (latest 13F)", "gurus_holding"),
+    ("Gurus buying (new or added)", "gurus_buying"),
+]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -555,6 +561,10 @@ def screener_page(
         + [
             {"key": key, "label": label, "group": "Insiders (SEC)"}
             for label, key in SCREENER_INSIDER_OPTIONS
+        ]
+        + [
+            {"key": key, "label": label, "group": "Gurus (13F)"}
+            for label, key in SCREENER_GURU_OPTIONS
         ]
     )
     return templates.TemplateResponse(

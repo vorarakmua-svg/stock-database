@@ -10,7 +10,7 @@ value), each base row matching one, is a duplicate and left out: First Eagle's Q
 two, so the quarter is $60.75B, not twice that; Berkshire's Q1 2025 one adds 202 Lennar class B shares to the
 152,572 its base reports, a row of its own. A filer whose original and restatements all fail the checksum (or that
 has none) leaves the quarter incomplete, and its rows are left out. The guru's quarter is the union of its filers'
-(Pershing Square Inc. and Pershing Square Capital Management are one guru).
+(Pershing Square Inc. and Pershing Square Capital Management are one guru), filed on the latest of its filings' days.
 
 **Positions** are keyed (security, put/call): the security is the CUSIP's ticker in ``cusip_map`` when it has one,
 else the CUSIP, as one security can take two CUSIPs within the window (Honeywell's 438516106 and 438516205 across
@@ -24,6 +24,9 @@ value over the quarter's total.
 added, reduced or unchanged by the shares, the shares before times the share splits of the security's ticker dated
 after the earlier period's end and on or before the later one (``split_factor``). A security without a ticker has no
 split data (``split_events`` covers our universe), so its shares aren't adjusted.
+
+**Share classes**: each class keeps its own ticker, and a company's other class is the ticker of our universe whose
+CUSIP has the same issuer, its first six characters (``share_classes``: GOOGL with GOOG, BRK-B with BRK-A).
 """
 from __future__ import annotations
 
@@ -34,6 +37,7 @@ from datetime import date, timedelta
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from ..valuation.inputs import _simple_ratio
+from .cusips import UNIVERSE_CUSIPS
 
 #: A position's key: its security (the CUSIP's ticker, else the CUSIP) and put/call (None for shares and principal).
 Key = Tuple[Optional[str], Optional[str]]
@@ -99,13 +103,15 @@ class Position:
 @dataclass
 class Quarter:
     """A guru's quarter: its positions by key, in the order the filings give them, their total value, whether every
-    filer's report stands, and the filings it stands on in (filed, accession) order."""
+    filer's report stands, the filings it stands on in (filed, accession) order, and the latest of their filing
+    dates (None when it stands on none)."""
 
     period: str
     positions: Dict[Key, Position]
     total_value: float
     complete: bool
     accessions: Tuple[str, ...]
+    filed: Optional[str] = None
 
 
 @dataclass
@@ -218,7 +224,8 @@ def build_quarter(period: str, filings: Iterable[Filing], entries: Iterable[Entr
     for position in positions.values():
         position.weight = position.value_usd / total if total else None
     return Quarter(period=period, positions=positions, total_value=total, complete=complete,
-                   accessions=tuple(f.accession for f, _ in used))
+                   accessions=tuple(f.accession for f, _ in used),
+                   filed=max((f.filed for f, _ in used if f.filed), default=None))
 
 
 def build_quarters(filings: Iterable[Filing], entries: Iterable[Entry],
@@ -320,3 +327,11 @@ def load_guru(conn: sqlite3.Connection, guru_cik: str) -> GuruQuarters:
     changes = {period: quarter_changes(quarter, quarters.get(previous_period(period)), splits)
                for period, quarter in quarters.items()}
     return GuruQuarters(guru_cik, quarters, changes)
+
+
+def share_classes(ticker: str, universe: Mapping[str, str] = UNIVERSE_CUSIPS) -> Tuple[str, ...]:
+    """The ticker and its other share classes, its own first and the others in order: the tickers of our universe's
+    CUSIPs (*universe*, CUSIP -> ticker) whose issuer, the first six characters, is one of the ticker's (GOOGL with
+    GOOG, BRK-B with BRK-A). A ticker outside the universe has none."""
+    issuers = {cusip[:6] for cusip, mapped in universe.items() if mapped == ticker}
+    return (ticker,) + tuple(sorted({mapped for cusip, mapped in universe.items() if cusip[:6] in issuers} - {ticker}))

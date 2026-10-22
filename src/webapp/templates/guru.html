@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}{{ g.name }} — Gurus — Stock DB{% endblock %}
+
+{% macro security(p) -%}
+{%- if p.ours %}<a href="/stocks/{{ p.ticker }}">{{ p.ticker }}</a>{% elif p.ticker %}{{ p.ticker }}{% else %}<span class="text-muted" title="CUSIP">{{ p.security }}</span>{% endif -%}
+{%- if p.put_call %} <span class="pill verdict-none">{{ p.put_call }}</span>{% endif -%}
+{%- endmacro %}
+
+{# A change in the summary: the security, its issuer when it has no ticker, and what changed: a new position's value,
+   the change in shares of an addition or a reduction, what a position sold out held. #}
+{% macro change_item(p) -%}
+{{ security(p) }}{% if not p.ticker %} <span class="text-muted">{{ p.issuer }}</span>{% endif -%}
+{%- if p.before %} <span class="text-muted">({{ p.before }})</span>
+{%- elif p.change and p.change.pct %} <span class="text-muted">{{ p.change.pct }}</span>
+{%- else %} <span class="text-muted">{{ p.value }}</span>{% endif -%}
+{%- endmacro %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ g.name }}</h1>
+    <p class="page-subtitle">{{ g.filers | join(", ") or "—" }} &middot; CIK {{ g.cik }} &middot; <a href="/gurus">All gurus</a></p>
+  </div>
+  <form method="get" action="/gurus/{{ g.cik }}" class="form-row">
+    <label class="filter-label" for="period-select">Quarter</label>
+    <select name="period" id="period-select" class="form-control form-control-sm" onchange="this.form.submit()">
+      {% for p in g.periods %}
+      <option value="{{ p }}"{% if p == g.period %} selected{% endif %}>{{ p }}</option>
+      {% endfor %}
+    </select>
+    <noscript><button class="btn btn-sm" type="submit">Show</button></noscript>
+  </form>
+</div>
+
+<div class="summary-grid">
+  <div class="summary-item"><span class="summary-label">Quarter ended</span><span class="summary-value">{{ g.period }}</span></div>
+  <div class="summary-item"><span class="summary-label">Filed</span><span class="summary-value">{{ g.filed or "—" }}</span></div>
+  <div class="summary-item"><span class="summary-label">Value reported</span><span class="summary-value">{{ g.value }}</span></div>
+  <div class="summary-item"><span class="summary-label">Positions</span><span class="summary-value">{{ g.shares_count }}{% if g.options_count %} + {{ g.options_count }} option{{ "" if g.options_count == 1 else "s" }}{% endif %}</span></div>
+</div>
+
+{% if not g.complete %}
+<div class="alert alert-danger mt-2">Incomplete: a filer's report for this quarter failed its checksum or wasn't
+  collected, so its holdings are left out of the figures.</div>
+{% endif %}
+{% if not g.has_prior %}
+<div class="alert alert-info mt-2">No prior quarter: the quarter before isn't stored, so the changes aren't known.</div>
+{% endif %}
+
+{% if changes %}
+<section class="section">
+  <h2 class="section-heading">Changes from the quarter before</h2>
+  <div class="table-wrap">
+    <table class="data-table">
+      <tbody>
+        {% for group in changes %}
+        <tr>
+          <td class="row-label" style="width:9rem;"><span class="pill {{ group.pill }}">{{ group.label }}</span> {{ group.rows | length }}</td>
+          <td>
+            {% for p in group.rows %}{{ change_item(p) }}{% if not loop.last %} &middot; {% endif %}{% else %}<span class="text-muted">none</span>{% endfor %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<section class="section">
+  <h2 class="section-heading">Holdings</h2>
+  {% if g.positions %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Security</th>
+          <th>Issuer</th>
+          <th>Class</th>
+          <th class="num">Shares</th>
+          <th class="num">Value</th>
+          <th class="num">Weight</th>
+          <th>Change</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in g.positions %}
+        <tr>
+          <td class="row-label">{{ security(p) }}</td>
+          <td>{{ p.issuer }}</td>
+          <td>{{ p.title_of_class }}</td>
+          <td class="num">{{ p.shares }}{% if p.principal %} <span class="text-muted" title="principal amount">prn</span>{% endif %}</td>
+          <td class="num">{{ p.value }}</td>
+          <td class="num">{{ p.weight }}</td>
+          <td>{% if p.change %}<span class="pill {{ p.change.pill }}">{{ p.change.label }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">No holdings in this quarter's filings.</div>
+  {% endif %}
+</section>
+
+<section class="section">
+  <h2 class="section-heading">Filings</h2>
+  {% if filings %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>Accession</th><th>Form</th><th>Filed</th><th>Filer</th></tr></thead>
+      <tbody>
+        {% for f in filings %}
+        <tr>
+          <td class="row-label">{% if f.href %}<a href="{{ f.href }}">{{ f.accession }}</a>{% else %}{{ f.accession }}{% endif %}</td>
+          <td>{{ f.form or "—" }}{% if f.amendment_type %} ({{ f.amendment_type | lower }}){% endif %}</td>
+          <td>{{ f.filed or "—" }}</td>
+          <td>{{ f.filer or f.filer_cik or "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">No filing stands for this quarter.</div>
+  {% endif %}
+</section>
+{% endblock %}

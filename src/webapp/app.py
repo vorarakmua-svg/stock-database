@@ -15,6 +15,8 @@ from .routes import (
     collection_api,
     companies,
     export_api,
+    gurus,
+    gurus_api,
     pages,
     quality_api,
     screener_api,
@@ -71,6 +73,8 @@ def create_app(
     app.include_router(pages.router)
     app.include_router(companies.router)
     app.include_router(workstation.router)
+    app.include_router(gurus.router)
+    app.include_router(gurus_api.router)
     app.include_router(asof_api.router)
     app.include_router(stocks_api.router)
     app.include_router(screener_api.router)

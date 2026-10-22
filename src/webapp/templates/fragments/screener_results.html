@@ -25,7 +25,7 @@
         <th>Company</th>
         <th>Sector</th>
         <th>FY</th>
-        {% set sortable_cols = [('roic', 'ROIC'), ('roe', 'ROE'), ('net_margin', 'Net margin'), ('debt_to_ebitda', 'Debt/EBITDA'), ('val_upside_pct', 'Upside %'), ('oe_upside_pct', 'Buffett upside %'), ('price_to_hist_value', 'Price / hist. value'), ('pe_pct_10y', 'P/E pct (10y)'), ('composite_score', 'Composite'), ('piotroski_f', 'F-score')] %}
+        {% set sortable_cols = [('roic', 'ROIC'), ('roe', 'ROE'), ('net_margin', 'Net margin'), ('debt_to_ebitda', 'Debt/EBITDA'), ('val_upside_pct', 'Upside %'), ('oe_upside_pct', 'Buffett upside %'), ('price_to_hist_value', 'Price / hist. value'), ('pe_pct_10y', 'P/E pct (10y)'), ('composite_score', 'Composite'), ('piotroski_f', 'F-score'), ('gurus_holding', 'Gurus (buying)')] %}
         {% for col, label in sortable_cols %}
         {% set dir = 'asc' if (sort == col and sort_dir == 'desc') else 'desc' %}
         {% set sep = '&' if base_params else '' %}
@@ -60,6 +60,7 @@
         {% set composite = row.get("composite_score") %}
         <td>{{ "%.1f"|format(composite) if composite is not none else "—" }}</td>
         <td>{{ row.get("piotroski_f") if row.get("piotroski_f") is not none else "—" }}</td>
+        <td>{% if row.get("gurus_holding") is not none %}{{ row.get("gurus_holding") }} <span class="text-muted" title="Of them buying: a new position or an addition in their latest 13F">({{ row.get("gurus_buying") }})</span>{% else %}—{% endif %}</td>
         <td>{% if row.get("val_verdict") == "cheap" %}<span class="pill verdict-cheap">Looks cheap</span>
             {% elif row.get("val_verdict") == "expensive" %}<span class="pill verdict-expensive">Looks expensive</span>
             {% elif row.get("val_verdict") == "fair" %}<span class="pill verdict-fair">Fairly valued</span>

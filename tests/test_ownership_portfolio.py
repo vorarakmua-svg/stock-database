@@ -21,6 +21,7 @@ from src.ownership.portfolio import (
     load_guru,
     previous_period,
     quarter_changes,
+    share_classes,
     split_factor,
 )
 from src.ownership.thirteenf import Holding, ThirteenF
@@ -157,6 +158,15 @@ def test_filings_of_one_day_go_by_accession():
     q = build_quarter(Q2, late, _entries("0000949509-26-000006", ("A", 6, 60))
                       + _entries("0000949509-26-000007", ("A", 7, 70)))
     assert q.accessions == ("0000949509-26-000007",)
+
+
+def test_a_quarters_filing_date_is_the_latest_of_the_filings_it_stands_on():
+    filings = [_filing("A-1", filed="2026-08-14"), _new_holdings("A-2", "2026-09-02"),
+               _filing("A-0", filed="2026-08-01", ok=False),  # fails the checksum: not stood on
+               _restatement("A-9", "2026-10-30", ok=False)]
+    quarter = build_quarter(Q2, filings, _entries("A-1", ("X", 1, 1)) + _entries("A-2", ("Y", 1, 1)))
+    assert (quarter.accessions, quarter.filed) == (("A-1", "A-2"), "2026-09-02")
+    assert build_quarter(Q2, [_filing("A-0", ok=False)], []).filed is None  # stands on none
 
 
 def test_a_filing_that_fails_the_checksum_is_left_out():
@@ -341,6 +351,17 @@ def test_the_splits_counted_are_those_after_the_quarter_before_through_this_one(
     # Only share splits, a reverse one too: not SCCO's stock dividends (1.01), HON's 0.9535, a missing ratio.
     assert split_factor([("2026-05-13", 1.01), ("2026-06-29", 0.9535), ("2026-04-02", 1.5), ("2026-04-03", 0.1),
                          ("2026-04-04", None), ("2026-04-05", 0.0)], Q1, Q2) == pytest.approx(0.15)
+
+
+def test_a_tickers_other_share_classes_are_those_of_its_issuer():
+    # Our universe's tickers whose CUSIPs share an issuer (the first six characters) with one of the ticker's.
+    assert share_classes("GOOGL") == ("GOOGL", "GOOG") and share_classes("GOOG") == ("GOOG", "GOOGL")
+    assert share_classes("BRK-B") == ("BRK-B", "BRK-A")
+    assert share_classes("XOM") == ("XOM",)  # two issuers' codes (Exxon Mobil Corp's, ExxonMobil Holdings'), one class
+    assert share_classes("AAPL") == ("AAPL",) and share_classes("ZZZZ") == ("ZZZZ",)
+    universe = {"123456101": "B", "123456200": "C", "123456309": "A", "654321100": "D", "654321209": "D"}
+    assert share_classes("B", universe) == ("B", "A", "C")  # its own first, the others in order
+    assert share_classes("D", universe) == ("D",)
 
 
 # ---- the loader ---------------------------------------------------------------------------------------------------

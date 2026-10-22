@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 5 · DOING 0 · DONE 26 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 4 · DOING 0 · DONE 27 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -53,7 +53,7 @@
 | M3-3 | Insider aggregates, the INS tab, `GET /api/stocks/{t}/form4`, screener fields; checked against Yahoo's insider rows, browser-checked; with tests | DONE | this commit | `qa/evidence/ownership-m3-3-*.txt` |
 | M3-4 | 13F: the guru list (`src/ownership/gurus.py`, each CIK checked), the information-table parser with its checksums, storage; with tests | DONE | this commit | `qa/evidence/ownership-m3-4-*.txt` |
 | M3-5 | The CUSIP map (curated for our universe, OpenFIGI for the rest) and quarter-over-quarter changes; with tests | DONE | this commit | `qa/evidence/ownership-m3-5-*.txt` |
-| M3-6 | Guru pages (`/gurus`, `/gurus/{cik}`, `/gurus/portfolio`), the HDS tab's Gurus section, the API, browser-checked; with tests | TODO | | |
+| M3-6 | Guru pages (`/gurus`, `/gurus/{cik}`, `/gurus/portfolio`), the HDS tab's Gurus section, the API, browser-checked; with tests | DONE | this commit | `qa/evidence/ownership-m3-6-*.txt` |
 | M3-7 | Docs: README and USAGE_GUIDE | TODO | | |
 | M3-8 | Milestone close: code review 17 (opus) with Critical and Important findings fixed; backup, then the live ownership collection into the user's DB, checked against Yahoo and the 13F checksums | TODO | | |
 
@@ -829,3 +829,36 @@ Evidence: `qa/evidence/ownership-m3-5-{universe-review,red,green,mutants,mutants
 Gates: ruff ✓ mypy ✓ pytest 1587 passed, 1 skipped | CI: no PR (Q10)
 Commit: (this commit) feat(ownership): the CUSIP map and each guru's quarter-over-quarter changes (M3-5)
 Next: M3-6 (guru pages, the HDS tab's Gurus section, the API; the cross-guru aggregates).
+
+### Build iteration 38: 2026-10-23 01:10: M3-6
+Did:
+- My design decision: the gurus' quarters are materialized when collecting. The holders tab, the aggregated
+  portfolio and a screener field all need every guru's latest quarter; that's too slow per request, and SQL can't
+  call Python.
+  - `guru_quarters` and `guru_positions` (plus sold-out rows), written after `map_cusips`.
+  - `python -m src.ownership.collect --positions` rebuilds them offline.
+  - The spec says so.
+- The code (an opus worker, reviewed; resumed once after the usage limit):
+  - `src/webapp/gurus.py`: the list, a guru's quarter, the gurus holding a stock (with its other share class),
+    the aggregated portfolio.
+  - Pages `/gurus`, `/gurus/{cik}` (`?period=`) and `/gurus/portfolio`, and a nav link.
+  - The HDS tab's Gurus section.
+  - `/api/gurus`, `/api/gurus/portfolio`, `/api/gurus/{cik}`, `/api/stocks/{t}/gurus`.
+  - Screener `gurus_holding` and `gurus_buying`, shown as one "Gurus (buying)" column.
+  - The worker found an oversized CIK in a URL giving a 500; it's a 404 now.
+- Tests: 43 new, each failing first or killed by its rule's mutant. Mutants: 79, each killed; I re-ran them.
+- Real data (a scratch copy):
+  - `--positions` in 3.3 s: 235 quarters, 16,813 position rows.
+  - Stored rows against `load_guru` for all 34 gurus: 0 mismatches.
+  - AAPL: 8 gurus. GOOGL with GOOG: 20.
+  - The portfolio's top: GOOGL 16, GOOG 15, BRK-B 14, V/AMZN/MSFT 13.
+  - The screener's counts equal direct counts (AAPL 8, GOOGL 20, KO 4, PFE 4).
+- Browser (headless Chrome, scratch server; port freed):
+  - Nine screenshots, four looked at by me: the list, Berkshire's Q2 2026, GOOGL's holders tab, the portfolio.
+  - Pages answer in 61 ms or less, with no server errors.
+Evidence: `qa/evidence/ownership-m3-6-{red,green,mutants,mutants-rerun,realdata,gates,gates-rerun}.txt`;
+`%LOCALAPPDATA%\stockdb-qa\build\m36\shots\*.png`
+Gates: ruff ✓ mypy ✓ pytest 1630 passed, 1 skipped | CI: no PR (Q10)
+Commit: (this commit) feat(ownership): the guru pages, the holders tab's Gurus section, the API and the screener
+fields (M3-6)
+Next: M3-7 (README and USAGE_GUIDE for Milestone 3).

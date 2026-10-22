@@ -577,11 +577,12 @@ class Reader:
         ``spec`` is validated inside ``build_screen_query``; raises
         ``ValueError`` if any field/sort/op is not whitelisted.
         """
-        # The valuation history's, the quality scores' and the insiders' fields are NULL in a database from
-        # before their tables.
+        # The valuation history's, the quality scores', the insiders' and the gurus' fields are NULL in a database
+        # from before their tables.
         tables = {row[0] for row in self._conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' "
-            "AND name IN ('valuation_ranges', 'quality_scores', 'insider_trades', 'insider_filings')"
+            "AND name IN ('valuation_ranges', 'quality_scores', 'insider_trades', 'insider_filings', "
+            "'guru_quarters', 'guru_positions')"
         )}
         history = "valuation_ranges" in tables
         # A scores table from older code may lack a column a field reads (debt_to_ebitda): that field is NULL.
@@ -589,8 +590,9 @@ class Reader:
             frozenset(row[1] for row in self._conn.execute("PRAGMA table_info(quality_scores)"))
             if "quality_scores" in tables else False)
         insiders = {"insider_trades", "insider_filings"} <= tables
-        sql, params = build_screen_query(spec, history, quality, insiders)
-        count_sql, count_params = build_count_query(spec, history, quality, insiders)
+        gurus = {"guru_quarters", "guru_positions"} <= tables
+        sql, params = build_screen_query(spec, history, quality, insiders, gurus)
+        count_sql, count_params = build_count_query(spec, history, quality, insiders, gurus)
 
         cur = self._conn.execute(sql, params)
         items = [dict(row) for row in cur.fetchall()]

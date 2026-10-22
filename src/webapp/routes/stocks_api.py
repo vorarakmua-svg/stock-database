@@ -34,10 +34,12 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 
+from ...ownership.portfolio import share_classes
 from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
 from ...valuation.history import HISTORICAL_VALUE_CUTOFFS, METRICS, historical_value_label
 from ...valuation.models import ValuationResult
 from ..dependencies import get_job_manager, get_reader, get_settings
+from ..gurus import gurus_holding
 from ..indicators import indicator_bundle, normalize_pct
 from ..insiders import insider_view
 from ..jobs import CollectionJobManager
@@ -459,6 +461,16 @@ def form4_insiders(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, An
     if r.get_company(ticker) is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
     return insider_view(r, ticker)
+
+
+@router.get("/{ticker}/gurus")
+def gurus(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
+    """The gurus' positions in the stock or its other share class in each one's latest 13F quarter: the shares held,
+    then the options, then the positions sold out that quarter (``gurus.gurus_holding``;
+    docs/superpowers/specs/2026-10-22-sec-ownership-design.md)."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    return {"ticker": ticker, "classes": list(share_classes(ticker)), "gurus": gurus_holding(r, ticker)}
 
 
 @router.get("/{ticker}/scores")

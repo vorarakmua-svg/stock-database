@@ -22,7 +22,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
-if TYPE_CHECKING:  # avoid a runtime exporters -> valuation dependency
+if TYPE_CHECKING:  # avoid a runtime exporters -> valuation (or ownership) dependency
+    from ..ownership.portfolio import Change, GuruQuarters, Position
     from ..valuation.history import HistoryResult
     from ..valuation.models import ValuationResult
 
@@ -151,6 +152,22 @@ _QUALITY_TYPES: Dict[str, str] = {
     "components": "TEXT", "warning_count": "INTEGER", "na_reasons": "TEXT", "computed_at": "TEXT NOT NULL",
     "ranked_at": "TEXT",
 }
+#: The columns of ``guru_positions``, in table order.
+_GURU_POSITION_COLUMNS: Tuple[str, ...] = (
+    "guru_cik", "period", "security", "put_call", "ticker", "cusips", "issuer", "title_of_class", "share_type",
+    "shares", "value_usd", "weight", "action", "shares_before", "value_before", "split_factor", "change_pct")
+
+
+def _position_row(guru_cik: str, period: str, held: "Optional[Position]",
+                  change: "Optional[Change]") -> Tuple[Any, ...]:
+    """A ``guru_positions`` row: of a position *held* in the quarter, with its *change* from the quarter before (None
+    without it), or, *held* None, of a position gone (*change* its 'sold_out'), with no shares, value or weight."""
+    source: Any = held if held is not None else change
+    after = (held.shares, held.value_usd, held.weight) if held is not None else (None, None, None)
+    before = ((change.action, change.shares_before, change.value_before, change.split_factor, change.change_pct)
+              if change is not None else (None, None, None, None, None))
+    return ((guru_cik, period, source.security, source.put_call or "", source.ticker, ",".join(source.cusips),
+             source.issuer, source.title_of_class, source.share_type) + after + before)
 
 
 class SQLiteStore:
@@ -526,6 +543,46 @@ class SQLiteStore:
                 security_type TEXT,
                 mapped_at TEXT NOT NULL
             );
+            -- Each guru's quarters as the collector builds them (ownership.portfolio), for the pages, the holders tab
+            -- and the screener: the quarter's total, held positions, completeness, whether the quarter before is
+            -- there (so the changes exist), its filings (a JSON list) and the latest of their filing dates.
+            CREATE TABLE IF NOT EXISTS guru_quarters (
+                guru_cik TEXT NOT NULL,
+                period TEXT NOT NULL,
+                total_value REAL,
+                positions INTEGER,
+                complete INTEGER,
+                has_prior INTEGER,
+                accessions TEXT,
+                filed TEXT,
+                computed_at TEXT NOT NULL,
+                PRIMARY KEY (guru_cik, period)
+            );
+            -- One row per position of the quarter (put_call '' for shares and principal amounts, else 'Put' or
+            -- 'Call') with its change from the quarter before (action NULL without it), and a 'sold_out' row, its
+            -- shares, value and weight NULL, for each position of the quarter before that's gone.
+            CREATE TABLE IF NOT EXISTS guru_positions (
+                guru_cik TEXT NOT NULL,
+                period TEXT NOT NULL,
+                security TEXT,
+                put_call TEXT NOT NULL,
+                ticker TEXT,
+                cusips TEXT,
+                issuer TEXT,
+                title_of_class TEXT,
+                share_type TEXT,
+                shares REAL,
+                value_usd REAL,
+                weight REAL,
+                action TEXT,
+                shares_before REAL,
+                value_before REAL,
+                split_factor REAL,
+                change_pct REAL,
+                PRIMARY KEY (guru_cik, period, security, put_call)
+            );
+            CREATE INDEX IF NOT EXISTS idx_guru_positions_ticker ON guru_positions (ticker);
+            CREATE INDEX IF NOT EXISTS idx_guru_positions_guru ON guru_positions (guru_cik, period);
             """
         )
 
@@ -1373,6 +1430,42 @@ class SQLiteStore:
             conn.commit()
         finally:
             conn.close()
+
+    def export_guru_positions(self, guru: "GuruQuarters", computed_at: str) -> int:
+        """Replace one guru's quarters and positions (``guru_quarters``, ``guru_positions``) with *guru*'s, as
+        ``ownership.portfolio.load_guru`` builds them, in one transaction. Returns the position rows written.
+
+        Each quarter's row: its total value, the positions it holds, whether every filer's report stands, whether the
+        quarter before is there (so its changes exist), its filings as a JSON list and the latest of their filing
+        dates. Each position held, put/call '' for shares and principal amounts, with its change from the quarter
+        before (none without it); then a 'sold_out' row for each position of the quarter before that's gone, without
+        shares, value or weight."""
+        written = 0
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            conn.execute("DELETE FROM guru_positions WHERE guru_cik = ?", (guru.guru_cik,))
+            conn.execute("DELETE FROM guru_quarters WHERE guru_cik = ?", (guru.guru_cik,))
+            for period, quarter in guru.quarters.items():
+                changes = guru.changes.get(period)
+                conn.execute(
+                    "INSERT INTO guru_quarters (guru_cik, period, total_value, positions, complete, has_prior, "
+                    "accessions, filed, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (guru.guru_cik, period, quarter.total_value, len(quarter.positions), int(quarter.complete),
+                     int(changes is not None), json.dumps(list(quarter.accessions)), quarter.filed, computed_at))
+                change_of = {(c.security, c.put_call): c for c in changes or ()}
+                rows = [_position_row(guru.guru_cik, period, held, change_of.get(key))
+                        for key, held in quarter.positions.items()]
+                rows += [_position_row(guru.guru_cik, period, None, c) for c in changes or ()
+                         if c.action == "sold_out"]
+                conn.executemany(
+                    f"INSERT INTO guru_positions ({', '.join(_GURU_POSITION_COLUMNS)}) "
+                    f"VALUES ({', '.join('?' * len(_GURU_POSITION_COLUMNS))})", rows)
+                written += len(rows)
+            conn.commit()
+        finally:
+            conn.close()
+        return written
 
     def update_quality_ranks(self, ranks: Dict[str, Dict[str, Any]], ranked_at: str) -> None:
         """Write the rank pass's ranks, composite and Magic Formula rank for every ticker, in one transaction."""

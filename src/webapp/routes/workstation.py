@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ...fetchers.stock_data_fetcher import NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS
+from ...ownership.portfolio import share_classes
 from ...scores.ranks import MAGIC_EXCLUDED
 from ...valuation.assumptions import DISCOUNT_SPREAD, GROWTH_CAP
 from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
@@ -22,11 +23,13 @@ from ...valuation.history import HISTORICAL_VALUE_CUTOFFS, METRICS, historical_v
 from ...valuation.models import ValuationResult, dcf_per_share
 from ..dependencies import get_job_manager, get_reader, get_settings
 from ..formatting import fmt_count, fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
+from ..gurus import gurus_holding, has_gurus
 from ..insiders import insider_view
 from ..jobs import CollectionJobManager
 from ..quality import GROWTH_SPANS, RANK_LABELS, quality_view
 from ..repository import Reader
 from ..settings import WebSettings
+from .gurus import holder_rows
 from .pages import _STATEMENT_ROWS, _build_statement_display, templates
 from .stocks_api import VALID_RANGES, resolve_range_start
 
@@ -828,7 +831,8 @@ def hds_fragment(
     request: Request,
     r: Reader = Depends(get_reader),
 ) -> Any:
-    """HDS panel: institutional + mutual-fund holder tables."""
+    """HDS panel: the gurus holding the stock or its other class in their latest 13F quarter (once any is stored),
+    above Yahoo's institutional + mutual-fund holder tables."""
     if r.get_company(ticker) is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
 
@@ -841,6 +845,8 @@ def hds_fragment(
         {
             "request": request,
             "ticker": ticker,
+            "gurus": holder_rows(gurus_holding(r, ticker)) if has_gurus(r) else None,
+            "other_classes": share_classes(ticker)[1:],
             "institutional": institutional,
             "mutualfund": mutualfund,
         },
