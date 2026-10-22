@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 7 · DOING 0 · DONE 24 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 6 · DOING 0 · DONE 25 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -51,7 +51,7 @@
 | M3-1 | `src/ownership/form4.py`: the Form 4 parser (owners and roles, non-derivative and derivative rows, 10b5-1, amendments), with real-document fixtures; with tests | DONE | this commit | `qa/evidence/ownership-m3-1-*.txt` |
 | M3-2 | Form 4 collection (full submissions feeds back three years, cached XML, incremental), storage (`insider_filings`, `insider_trades`) and `python -m src.ownership.collect --insiders`; with tests | DONE | this commit | `qa/evidence/ownership-m3-2-*.txt` |
 | M3-3 | Insider aggregates, the INS tab, `GET /api/stocks/{t}/form4`, screener fields; checked against Yahoo's insider rows, browser-checked; with tests | DONE | this commit | `qa/evidence/ownership-m3-3-*.txt` |
-| M3-4 | 13F: the guru list (`src/ownership/gurus.py`, each CIK checked), the information-table parser with its checksums, storage; with tests | TODO | | |
+| M3-4 | 13F: the guru list (`src/ownership/gurus.py`, each CIK checked), the information-table parser with its checksums, storage; with tests | DONE | this commit | `qa/evidence/ownership-m3-4-*.txt` |
 | M3-5 | The CUSIP map (curated for our universe, OpenFIGI for the rest) and quarter-over-quarter changes; with tests | TODO | | |
 | M3-6 | Guru pages (`/gurus`, `/gurus/{cik}`, `/gurus/portfolio`), the HDS tab's Gurus section, the API, browser-checked; with tests | TODO | | |
 | M3-7 | Docs: README and USAGE_GUIDE | TODO | | |
@@ -755,3 +755,39 @@ dryrun-valuations,dryrun-scores,dryrun-summary,oracles,web,backup,live,live-vs-d
 Gates: ruff ✓ mypy ✓ pytest 1460 passed, 1 skipped | CI: no PR (Q10)
 Commit: (this commit) chore(qa): close M2-9: review 16's fixes and M2's live backfill
 Next: M3-4 (13F: the guru list, the information-table parser, storage).
+
+### Build iteration 36: 2026-10-22 13:23: M3-4
+Did:
+- The guru list (`src/ownership/gurus.py`, mine): 34 gurus, each CIK checked against its submissions feed (name,
+  13F-HR filings). A guru may have earlier filers, each with its own name: Pershing Square Inc. reports Bill
+  Ackman's portfolio from Q2 2026, when Pershing Square Capital Management's filing became a 13F-NT notice (before,
+  the two reported different holdings). DME Capital Management files David Einhorn's since Greenlight's last 13F
+  (Q4 2023). Scion stopped after Q3 2025.
+- Two design decisions, now in the spec:
+  - Each filing is read from its full submission text, which types every document; `index.json` doesn't.
+  - The eight-quarter window goes by period of report.
+- The 13F code (an opus worker, reviewed; its first run stopped at the usage limit and was resumed):
+  - `src/ownership/thirteenf.py`: the documents split by type, tags matched on local names, values in dollars.
+  - Storage: `guru_filers`, `guru_filings`, `guru_holdings`.
+  - `collect.py`: a shared filer source, `--gurus [--quarters 8]`, a guru's quarter the union of its filers'
+    13F-HRs.
+- The real data decided two rules (mine):
+  - The checksum allows rounding: entries exact, the value sum within half a unit per entry plus half. The 13
+    failures of the first run were gaps of 1 to 4 units.
+  - Units by the holdings' prices where the filing date gives impossible ones. Baupost and Duquesne still state
+    thousands after the 2023 switch, so their totals read $5.4M instead of $5.4B. The multiplier used is stored.
+- `qa/oracle/thirteenf_oracle.py` (new, mine, no `src` imports) re-reads every cached filing with plain patterns.
+- Tests: 47 new, each failing first (the worker's 44, my 3). Mutants: 60, each killed (the worker's 59, re-run by
+  me, plus one).
+- Real data (a scratch copy, re-run by me):
+  - 248 filings, 20,538 holdings, 34 gurus, 0 errors, 0 checksum failures; 13 totals off by rounding only.
+  - Units inferred for Baupost's 7 and Duquesne's 7, nothing else.
+  - Berkshire's Q2 2026: 89 entries, $299,253,556,246 on both sides.
+  - The oracle passes all its gates.
+Evidence: `qa/evidence/ownership-m3-4-{gurus-check,gurus-red,gurus-green,red,green,mutants,mutants-rerun,realdata,
+oracle,filers-red,filers-green,gates}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1507 passed, 1 skipped | CI: no PR (Q10)
+Commit: (this commit) feat(ownership): the gurus' 13F holdings: the curated list, the parser with its checksum,
+storage and collection (M3-4)
+Next: M3-5 (the CUSIP map and quarter-over-quarter changes). Its aggregation also takes the latest RESTATEMENT of a
+period and adds its NEW HOLDINGS amendments.

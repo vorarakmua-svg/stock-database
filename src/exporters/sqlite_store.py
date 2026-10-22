@@ -470,6 +470,54 @@ class SQLiteStore:
             CREATE INDEX IF NOT EXISTS idx_insider_trades_ticker ON insider_trades (ticker, date);
             """
         )
+        # The gurus' 13F filings (Milestone 3): the curated filers, one row per filing with the cover's totals
+        # beside the parsed ones, and each filing's entries as filed (one CUSIP may take several rows). Values are
+        # in dollars.
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS guru_filers (
+                filer_cik TEXT PRIMARY KEY,
+                guru_cik TEXT NOT NULL,
+                name TEXT,
+                manager TEXT
+            );
+            CREATE TABLE IF NOT EXISTS guru_filings (
+                accession TEXT PRIMARY KEY,
+                guru_cik TEXT NOT NULL,
+                filer_cik TEXT NOT NULL,
+                form TEXT,
+                period TEXT,
+                filed TEXT,
+                report_type TEXT,
+                amendment_type TEXT,
+                entry_total INTEGER,
+                value_total REAL,
+                rows INTEGER,
+                rows_value REAL,
+                checksum_ok INTEGER,
+                confidential_omitted INTEGER,
+                collected_at TEXT NOT NULL,
+                multiplier INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_guru_filings_guru ON guru_filings (guru_cik, period);
+            CREATE TABLE IF NOT EXISTS guru_holdings (
+                accession TEXT NOT NULL,
+                row INTEGER NOT NULL,
+                guru_cik TEXT NOT NULL,
+                cusip TEXT,
+                issuer TEXT,
+                title_of_class TEXT,
+                value_usd REAL,
+                shares REAL,
+                share_type TEXT,
+                put_call TEXT,
+                discretion TEXT,
+                PRIMARY KEY (accession, row)
+            );
+            CREATE INDEX IF NOT EXISTS idx_guru_holdings_cusip ON guru_holdings (cusip);
+            CREATE INDEX IF NOT EXISTS idx_guru_holdings_guru ON guru_holdings (guru_cik);
+            """
+        )
 
     @staticmethod
     def _ensure_columns(conn: sqlite3.Connection, table: str, columns: Dict[str, str]) -> None:
@@ -1261,6 +1309,44 @@ class SQLiteStore:
                 "OR a.period_of_report = insider_filings.period_of_report) "
                 "ORDER BY a.filed_date DESC LIMIT 1) "
                 "WHERE ticker = ? AND form = '4'", (ticker,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def export_guru_filings(self, guru: Any, filings: Sequence[Any], collected_at: str) -> None:
+        """Store one guru's 13F filings, ``(FilingRef, ThirteenF)`` pairs, in one transaction.
+
+        The guru's filers are upserted from the curated list (``ownership.gurus``), one row per filer CIK with
+        that filer's own name. Each
+        filing's row and entries are replaced by accession, so a filing an earlier run stored and this one couldn't
+        fetch stays. The filing's own form, filing date and period are stored, else the feed's; values in dollars by
+        the units the filing was read in (*multiplier*), the cover's totals beside the parsed ones."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            # A table from before the units were read from the holdings' prices.
+            self._ensure_columns(conn, "guru_filings", {"multiplier": "INTEGER"})
+            for cik, name in guru.filers:
+                self._upsert(conn, "guru_filers", ["filer_cik"], {
+                    "filer_cik": cik, "guru_cik": guru.cik, "name": name, "manager": guru.manager})
+            for ref, filing in filings:
+                conn.execute("DELETE FROM guru_holdings WHERE accession = ?", (ref.accession,))
+                conn.execute("DELETE FROM guru_filings WHERE accession = ?", (ref.accession,))
+                conn.execute(
+                    "INSERT INTO guru_filings (accession, guru_cik, filer_cik, form, period, filed, report_type, "
+                    "amendment_type, entry_total, value_total, rows, rows_value, checksum_ok, confidential_omitted, "
+                    "collected_at, multiplier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (ref.accession, guru.cik, ref.cik, filing.form or ref.form, filing.period or ref.report_date,
+                     filing.filed or ref.filed, filing.report_type, filing.amendment_type, filing.entry_total,
+                     filing.dollars(filing.value_total), filing.rows, filing.dollars(filing.rows_value),
+                     int(filing.checksum_ok),
+                     None if filing.confidential_omitted is None else int(filing.confidential_omitted), collected_at,
+                     filing.multiplier))
+                conn.executemany(
+                    "INSERT INTO guru_holdings (accession, row, guru_cik, cusip, issuer, title_of_class, value_usd, "
+                    "shares, share_type, put_call, discretion) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(ref.accession, h.row, guru.cik, h.cusip, h.issuer, h.title_of_class, h.value_usd, h.shares,
+                      h.share_type, h.put_call, h.discretion) for h in filing.holdings])
             conn.commit()
         finally:
             conn.close()

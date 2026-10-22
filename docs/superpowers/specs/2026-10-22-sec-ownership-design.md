@@ -48,18 +48,37 @@ Nothing in the valuations, the history or the scores changes.
 
 ## 13F (`src/ownership/thirteenf.py`)
 
-- **The gurus**: `src/ownership/gurus.py`, a tuple of (CIK, name, manager) kept in the code (nothing under
-  `data/` is committed). About 30 value investors (Berkshire Hathaway,
-  Baupost, Pershing Square, Greenlight, Oaktree, Markel, Akre, Gardner Russo, Ruane Cunniff, Southeastern,
-  Tweedy Browne, Yacktman, Weitz, First Eagle, Dodge & Cox, Davis, Pzena, Himalaya, Trian, ValueAct, Third Point,
-  Appaloosa, Icahn, Scion, Duquesne, ...). Each CIK is checked against its submissions feed (name, 13F-HR filer)
-  before it's added.
-- **Fetch**: each guru's 13F-HR and 13F-HR/A for the last eight quarters; the information table from the
-  filing's index (`index.json`, the document of type INFORMATION TABLE), cached like Form 4.
-- **Parse**: each entry's issuer, class, CUSIP, value, shares or principal, put/call, discretion. Values are in
-  thousands of dollars before 2023 and in dollars after (the SEC's change for filings from 2023-01-03): stored in
-  dollars. **Checksum**: the primary document's `tableEntryTotal` and `tableValueTotal` must equal the parsed
-  count and sum; a filing that disagrees is stored with a flag and kept out of the aggregates.
+- **The gurus**: `src/ownership/gurus.py`, a tuple of `Guru(cik, name, manager, former)` kept in the code
+  (nothing under `data/` is committed): the current 13F filer's CIK (the guru's id) and name as the SEC lists
+  it, the investor followed, and any earlier filers of the same portfolio, each (CIK, name). 34 gurus (Berkshire
+  Hathaway,
+  Baupost, Pershing Square, Einhorn's DME Capital, Oaktree, Markel, Akre, Gardner Russo, Ruane Cunniff,
+  Southeastern, Tweedy Browne, Yacktman, Weitz, First Eagle, Dodge & Cox, Davis, Pzena, Himalaya, Trian,
+  ValueAct, Third Point, Appaloosa, Icahn, Scion, Duquesne, Fairholme, Fairfax, Fundsmith, TCI, Harris,
+  Brave Warrior, Dalal Street, Daily Journal, the Gates Foundation Trust). Each CIK was checked against its
+  submissions feed (name, 13F-HR filings) on 2026-10-22 (`qa/evidence/ownership-m3-4-gurus-check.txt`).
+  - A guru's quarter is the union of its filers' 13F-HRs. Pershing Square Inc. (2026053) reports Bill Ackman's
+    portfolio from Q2 2026, when Pershing Square Capital Management's own filing (1336528) became a 13F-NT
+    notice pointing to it; before, the two reported different holdings. DME Capital Management (1489933) has
+    filed David Einhorn's since Greenlight Capital's (1079114) last 13F, for Q4 2023.
+  - Scion's last 13F-HR covers Q3 2025: Michael Burry deregistered it.
+- **Fetch**: each filer's 13F-HR and 13F-HR/A whose period of report falls in the last eight quarters before
+  the current one (13F-NT notices hold no holdings and are skipped). Each filing's full submission text
+  (`{accession}.txt`) carries the cover and the INFORMATION TABLE, each under its `<TYPE>`: one request per
+  filing, cached like Form 4 (`index.json` lists a filing's files without their document types).
+- **Parse** (`src/ownership/thirteenf.py`): each entry's issuer, class, CUSIP, value, shares or principal,
+  put/call, discretion, and the cover's period, form, report type, amendment type and totals.
+  - **Units**: values are in thousands of dollars in filings made before 2023-01-03 and in dollars from that
+    day (the SEC's rule goes by the filing date), stored in dollars. The holdings' prices overrule the date
+    where it gives impossible ones: when the median price of a filing's share rows (value / shares) falls
+    outside $1 to $100,000 under the date's units and inside them at 1,000 times more or less, the filing
+    states the other units. Baupost and Duquesne still state thousands after the switch (their 14 filings in
+    the window). `guru_filings.multiplier` keeps the units used. A pre-2023 filing stated in dollars is caught
+    only when its median price is above $100; none falls in the window.
+  - **Checksum**: the cover's `tableEntryTotal` must equal the parsed entries, and its `tableValueTotal` their
+    sum within rounding. Each entry's value and the total are rounded to the unit, so they may differ by half
+    a unit per entry plus half a unit: 13 of the first 248 filings differ by 1 to 4 units. A filing that fails
+    is stored with a flag and kept out of the aggregates.
 - **CUSIP to ticker**: `cusip_map` (CUSIP, ticker, name, source). Our 127 companies' CUSIPs are curated from the
   information tables' issuer names, checked by hand-listed name matches; the others through OpenFIGI's mapping
   API without a key (25 requests a minute, 10 CUSIPs each), cached. Unmapped CUSIPs keep their issuer name.
@@ -71,9 +90,13 @@ Nothing in the valuations, the history or the scores changes.
   is_director, is_officer, officer_title, is_ten_percent, is_other, aff10b5one, superseded_by.
 - `insider_trades`: (accession, seq) PK, ticker, owner_cik, table ('nonderivative' or 'derivative'),
   security_title, date, code, shares, price, acquired_disposed, owned_after, direct_indirect, exercise_price.
-- `guru_filers`, `guru_filings` (accession PK, cik, period, filed, form, entries, value_total, checksum_ok),
-  `guru_holdings` (accession, row) PK, cusip, issuer, class, value_usd, shares, share_type, put_call),
-  `cusip_map`.
+- `guru_filers` (filer_cik PK, guru_cik, name, manager): the curated list, one row per filer.
+- `guru_filings` (accession PK, guru_cik, filer_cik, form, period, filed, report_type, amendment_type,
+  entry_total and value_total as the cover states them, rows and rows_value as parsed, checksum_ok,
+  confidential_omitted, collected_at, multiplier), and `guru_holdings` ((accession, row) PK, guru_cik, cusip, issuer,
+  title_of_class, value_usd, shares, share_type, put_call, discretion), as filed: one CUSIP may take several
+  rows. Values are in dollars.
+- `cusip_map` (M3-5).
 - Each company's or guru's rows are replaced in one transaction.
 
 ## Aggregates (computed at read time)
@@ -100,7 +123,8 @@ Nothing in the valuations, the history or the scores changes.
 
 ## Collection
 
-- `python -m src.ownership.collect --insiders [--gurus] [--years 3] [--db PATH] [TICKERS...]`, a module like
+- `python -m src.ownership.collect --insiders [--gurus] [--years 3] [--quarters 8] [--db PATH] [TICKERS...]`, a
+  module like
   the backfill (the `stock-data` command's positional tickers leave no room for a subcommand): incremental
   through the caches, with
   progress logged; a failed fetch is retried once, then reported, never stored as empty.
