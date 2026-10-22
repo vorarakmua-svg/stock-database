@@ -41,7 +41,7 @@
 | M2-6 | `GET /api/stocks/{t}/scores` and the STAT tab's Quality section (radar, ranks, tests, growth, signs), browser-checked; with tests | DONE | this commit | `qa/evidence/scores-m2-6-*.txt` |
 | M2-7 | Screener fields from `quality_scores` (table-exists switch) and the preset screens; with tests | DONE | this commit | `qa/evidence/scores-m2-7-*.txt` |
 | M2-8 | Docs: README and USAGE_GUIDE | DONE | this commit | README "Quality scores", USAGE_GUIDE "Quality scores" |
-| M2-9 | Milestone close: code review 16 (opus) with Critical and Important findings fixed; backup and offline backfill of the user's DB | DOING (code review 16 running) | | |
+| M2-9 | Milestone close: code review 16 (opus) with Critical and Important findings fixed; backup and offline backfill of the user's DB | DOING (review 16 reported: BUG-186 to BUG-191 to fix) | | `qa/evidence/review16-report.md` |
 
 ## M3: SEC ownership (Form 4 insiders, 13F gurus)
 
@@ -698,3 +698,20 @@ Evidence: `qa/evidence/ownership-m3-3-{red,green,mutants,realdata}.txt`; `shots/
 Gates: ruff ✓ mypy ✓ pytest 1436 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) feat(ownership): insider aggregates on the INS tab, the API and the screener (M3-3)
 Next: M2-9: record code review 16 and fix I1-I6 test-first, then M2's live backfill.
+
+### Build iteration 34: 2026-10-22 08:09: M2-9 (code review 16 recorded)
+Did:
+- Code review 16 (opus, read-only, a3c8a77..0356db8 and the docs commit) reported "with fixes": no Critical
+  issue, six Important, eleven Minor. Its report is `qa/evidence/review16-report.md`.
+  - Confirmed: the six models' medians and verdicts are unchanged apart from RTX's documented Lynch bull.
+  - It recomputed, independently, every rank component, WACC, NCAV, earnings yield, return on capital,
+    momentum and all 248 warning signs: no disagreement.
+- Recorded them as bugs:
+  - P2: BUG-186 (an untested Piotroski test shown as Fail), BUG-187 (the scores read a price-less snapshot),
+    BUG-188 (the listing rule folds DELL's merger), BUG-189 (PGR's phantom zero debt), BUG-190 (debt-free
+    filers lose ROIC), BUG-191 (the Magic Formula ranks 49 of 93, silently).
+  - P3: BUG-192 to BUG-202 (the minors).
+Evidence: `qa/evidence/review16-report.md`
+Gates: ruff ✓ mypy ✓ pytest 1436 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) chore(qa): record code review 16
+Next: M2-9: BUG-186 to BUG-191, each test-first; then M2's live backfill.

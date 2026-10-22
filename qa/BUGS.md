@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 89 · NEEDS-USER 15 · Verified: 82
+**Open:** P0 0 · P1 0 · P2 17 · P3 100 · NEEDS-USER 15 · Verified: 82
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1412,6 +1412,109 @@ Fix (build iteration 24):
 - Tests: five (four failing first); six mutants, each killed.
 - Real data (a backfilled copy against today's): no median and no verdict moves. RTX's Lynch bull goes from $29.02 to $24.80, its 9-year EPS CAGR from +2.9% to -2.3%. The quality scores move for BX, DELL, LIN and RTX, and through the bank ranks for C, COF, USB and WFC (BX's stars changed). Per-share rows change for BX, DELL, LIN, PLTR and RTX.
 Evidence: `qa/evidence/bug185-{red,green,mutants,realdata}.txt`
+
+### BUG-186 [P2][UI] The STAT tab shows a Piotroski test that couldn't run as "Fail"
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: `templates/fragments/quality.html` renders `passed: null` as Fail. ANET's headline reads "4 / 8" with 5 Fails in the table (its debt-free leverage test can't run); V's "5 / 7" shows 4 Fails, among them "Gross margin rose" (no cost of revenue).
+Expected: a third state, "Not tested", as the API and the usage guide already say (null = not run).   Actual: 39 of the 105 scored companies show a Fail that is no failure (gross margin 31, leverage 8, current ratio 6, shares 1).
+
+### BUG-187 [P2][SCORES] The quality scores read the latest snapshot even when it has no price (BUG-176's twin)
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: `src/scores/engine.py` `_market` takes the newest `market_snapshots` row. A collection whose quote failed leaves one without price, market cap or beta (50 such rows from the 2026-06-28 run) and computes the scores straight after. AAPL with such a row: Altman 12.68, WACC 9.82% and the earnings yield go to None ("no market cap"), momentum moves (beta 1), the valuation component switches to the P/E percentile, `price_far_above_value` disappears and AAPL leaves the Magic Formula.
+Expected: the latest snapshot with a price, as `history_inputs` reads since BUG-176.   Actual: the newest row, priced or not.
+
+### BUG-188 [P2][VAL] BUG-185's listing rule folds a stock-paid merger in a year before the listing
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: `src/valuation/inputs.py`: any jump of 1.5x or more whose older year ends before the first bar + 366 days folds. DELL's first bar is 2016-08-17; FY2016's 405M shares jump to 778M in FY2017 with the EMC merger (September 2016). Stored FY2016 revenue/share $65.44 (unfolded $125.71); rev_ps_cagr_10y 9.76% (2.82%); ebitda_ps_cagr_10y 18.35% (about 10.9%), shown in the STAT tab's growth table.
+Expected: a merger stays organic, as the README says; only a listing's own jump folds.   Actual: the merger folded; the oracle skips pre-listing years, so it can't see it.
+Notes: DELL's total assets went 2.6x with the count: a merger's mark. The valuations are unaffected today (FY2016 is outside their window).
+
+### BUG-189 [P2][SCORES] A phantom zero debt reads as the strongest balance sheet
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: `src/scores/ranks.py`: PGR's `total_debt` is 0.0 (short-term debt 0.0, long-term debt NULL) while it pays $278M of interest and tags `DebtLongtermAndShorttermCombinedAmount` ($8.39B, unmapped). Cash/debt takes the cap of 10 and debt/revenue reads 0; its strength rank of 8 rests on those two, and the composite reads 68 (65 without them). Debt/EBITDA reads 0 for the Buffett-Munger filter.
+Expected: debt unknown when it's 0 with long-term debt missing, or with interest expense; SNDK's real 0.0 (long-term debt filed as 0) stays.   Actual: the zero taken as filed.
+
+### BUG-190 [P2][SCORES] Debt-free filers lose ROIC, two strength components and the Buffett-Munger screen
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: ISRG, ANET, PANW, PLTR and VRTX tag no debt, so `metrics_annual.roic`, net debt and debt/EBITDA are NULL (ISRG: no ROIC in 20 years). ROIC - WACC shows "—" with no reason; roic_10y_median, cash/debt and debt/revenue drop out; EV ignores their cash. ISRG (4.5 stars, price / historical value 0.79) misses Buffett-Munger only for that.
+Expected: no debt tagged and no interest expense read as zero debt, as Beneish already reads a missing long-term debt (ROIC from equity less cash, cash/debt at its cap, debt/revenue 0, EV less cash); the reason shown where it's still N/A.   Actual: N/A without a reason.
+
+### BUG-191 [P2][SCORES] The Magic Formula ranks 49 of the 93 eligible companies and doesn't say why the rest are missing
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: `src/scores/scores.py`: 12 have Greenblatt capital of 0 or less (MA, V, ADBE, BKNG, SPGI, NFLX, NOW, ABBV, MO, DELL, CRWD, PANW), often the best returns on capital; 17 lack PP&E (`ppe_net` maps only `PropertyPlantAndEquipmentNet`; UNP, HD and TSLA tag the lease-inclusive tag; META, GOOGL, LOW, T); 15 lack operating income (JNJ, LLY, MRK, PFE, XOM, CVX, IBM, GE, DE, KLAC...), which leaves Altman N/A too. The preset reads "ranked, best first" over that subset.
+Expected: capital of 0 or less with positive EBIT ranked (net working capital floored at 0), the reason shown in the STAT row and the README, and the tag gaps opened as a data task.   Actual: silently unranked.
+
+### BUG-192 [P3][SCORES] Predictability's N/A reasons and notes are off
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: `scores.py` says "fewer than 10 fiscal years" for 9 of 16 N/As that have 10-11 years but miss a value (GOOGL, AXP, BRK-B, DUK, KKR, NEE, V, CRWD, UBER); the STAT note says "revenue and EBITDA" for banks and insurers, which use EPS; a 1-star result doesn't say whether a loss year or a falling trend gave it.
+Expected: the actual reason.   Actual: a wrong or vague one.
+
+### BUG-193 [P3][UI] Several N/A scores name no input
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: Altman's "an input is missing" (15 companies) doesn't say which; the Magic Formula row with capital of 0 or less and ROIC - WACC without ROIC give no reason.
+Expected: the missing input named.   Actual: no name.
+
+### BUG-194 [P3][SCORES] FCF/share and book/share CAGRs exist only for 5 years
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: `fundamentals.py`; the plan asks for 3/5/10 for all five series, and the STAT growth table shows four unexplained "—" cells.
+Expected: the CAGRs, or the cells labelled.   Actual: "—".
+
+### BUG-195 [P3][PLAN] Altman Z'' is deferred to M5 without an M5 item
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: the M2 spec defers Z'' for non-manufacturers until M5 stores the SIC code; nothing on the board says so. T, VZ and TMUS carry severe distress signs meanwhile (documented).
+Expected: an M5 task row for Z''.   Actual: only the spec mentions it.
+
+### BUG-196 [P3][QA] The scores oracle reads the parsed tables, not raw companyfacts
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: the plan says the oracle computes "from raw companyfacts"; it reads `financials_annual`, so mapping errors are shared with the code (BUG-189 and BUG-191 are two).
+Expected: a companyfacts spot-check for PP&E, debt and operating income.   Actual: none.
+
+### BUG-197 [P3][SCORES] The Sloan ratio applies to banks
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: JPM 10.6% and WFC 11% fire medium signs; accrual measures conventionally leave out financials, as the spec does for Beneish (GuruFocus does compute it).
+Expected: N/A or a caveat for banks and insurers.   Actual: a sign.
+
+### BUG-198 [P3][SCORES] t-1 is the previous stored row, not fiscal year t-1
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: `scores.py`; signs use `rows[-k]`, while the oracle reads FY t-1. No gaps today, but a gap year would compare t with t-2 silently.
+Expected: FY t-1 exactly, else N/A.   Actual: the previous row.
+
+### BUG-199 [P3][SCORES] The gross-margin sign lacks the revenue - cost of revenue fallback
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: `signs._gross_margin_change` doesn't fall back as `_gross_margin` does. No effect on today's data.
+Expected: the same fallback.   Actual: none.
+
+### BUG-200 [P3][SCORES] Profitable years is a count, not a share
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: `ranks.py`: short histories (GEV, SNDK) can't rank high on it.
+Expected: a share of the years available.   Actual: a count.
+
+### BUG-201 [P3][UI] Quality display nits
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: SPCX shows "fiscal year None" and "No warning signs fired" with no data behind it; a negative NCAV prints as "$-67.48"; the screener results don't show the presets' own key columns (Magic rank, price / NCAV, Lynch upside, stars).
+Expected: clean states and the key columns.   Actual: as described.
+
+### BUG-202 [P3][SCORES] A failed scores run keeps the previous row
+Status: OPEN
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Repro: as BUG-182 for the history; `computed_at` is shown, so it's visible.
+Expected: a failure stored as an N/A reason, or the row marked stale.   Actual: the old row.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
