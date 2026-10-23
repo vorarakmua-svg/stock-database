@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 4 · DOING 0 · DONE 27 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 3 · DOING 0 · DONE 28 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -54,7 +54,7 @@
 | M3-4 | 13F: the guru list (`src/ownership/gurus.py`, each CIK checked), the information-table parser with its checksums, storage; with tests | DONE | this commit | `qa/evidence/ownership-m3-4-*.txt` |
 | M3-5 | The CUSIP map (curated for our universe, OpenFIGI for the rest) and quarter-over-quarter changes; with tests | DONE | this commit | `qa/evidence/ownership-m3-5-*.txt` |
 | M3-6 | Guru pages (`/gurus`, `/gurus/{cik}`, `/gurus/portfolio`), the HDS tab's Gurus section, the API, browser-checked; with tests | DONE | this commit | `qa/evidence/ownership-m3-6-*.txt` |
-| M3-7 | Docs: README and USAGE_GUIDE | TODO | | |
+| M3-7 | Docs: README and USAGE_GUIDE | DONE | this commit | `qa/evidence/m3-7-gates.txt` |
 | M3-8 | Milestone close: code review 17 (opus) with Critical and Important findings fixed; backup, then the live ownership collection into the user's DB, checked against Yahoo and the 13F checksums | TODO | | |
 
 ## M4: more valuation tools and market pages
@@ -862,3 +862,23 @@ Gates: ruff ✓ mypy ✓ pytest 1630 passed, 1 skipped | CI: no PR (Q10)
 Commit: (this commit) feat(ownership): the guru pages, the holders tab's Gurus section, the API and the screener
 fields (M3-6)
 Next: M3-7 (README and USAGE_GUIDE for Milestone 3).
+
+### Build iteration 39: 2026-10-23 07:29: M3-7
+Did:
+- Milestone 3's docs (a sonnet worker, reviewed; resumed once after the usage limit):
+  - README: a new section "SEC ownership: insiders and gurus", with insiders (Form 4), gurus (13F), collecting
+    (commands, options, what each touches and takes) and limitations.
+  - README, shorter updates: the features list, the data sources (OpenFIGI added), the project tree, the tables
+    sentence, the tab table, the JSON API table (five rows) and the web features.
+  - USAGE_GUIDE: a new "SEC Ownership" section with every table's columns, the pages, the API and the screener
+    fields. Its 14 SQL examples run read-only on the scratch copies, with sensible rows (GOOGL's gurus holding
+    and buying read (20, 9), as the screener does).
+- I read the README section against the code and the evidence. Its Yahoo cross-check wording ("same day, shares
+  within 1%") matches M3-3's evidence.
+- The worker found two quirks in the insider aggregates. Both are documented as limitations and recorded:
+  - BUG-206: a joint Form 4 counts one buyer on the INS tab and the API, every owner in the screener.
+  - BUG-207: a title like "CEO, Chairman" isn't counted as a CEO buy.
+Evidence: `qa/evidence/m3-7-gates.txt`
+Gates: ruff ✓ mypy ✓ pytest 1630 passed, 1 skipped (the docs tests included) | CI: no PR (Q10)
+Commit: (this commit) docs: SEC ownership in the README and the usage guide (M3-7)
+Next: M3-8 (code review 17, then the backup and the live ownership collection into the user's DB).

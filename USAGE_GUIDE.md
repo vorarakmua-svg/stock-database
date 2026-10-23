@@ -14,16 +14,21 @@ A comprehensive guide on how to use the output data from the Stock Data Collecti
    - [Valuation history](#valuation-history) — monthly multiples, 10-year ranges, the historical value
    - [Quality scores](#quality-scores) — Piotroski F, Altman Z, Beneish M, ranks, warning signs
    - [Owner Earnings ("Buffett mode")](#owner-earnings-buffett-mode) — separate lens, excluded from the median
-6. [Updating Data from the Web](#updating-data-from-the-web) — UPDATE DATA button, fetching new tickers
-7. [Valuation Models](#valuation-models) — DIY formulas over the raw JSON/CSV
+6. [SEC Ownership](#sec-ownership) — insiders' Form 4 trades and the gurus' 13F holdings
+   - [Collecting ownership data](#collecting-ownership-data) — the commands and what each touches
+   - [Insiders (Form 4)](#insiders-form-4) — `insider_filings`, `insider_trades` and queries
+   - [Gurus (13F)](#gurus-13f) — the six 13F tables, what a position's change means, and queries
+   - [Viewing ownership](#viewing-ownership) — the web pages, the API and the screener fields
+7. [Updating Data from the Web](#updating-data-from-the-web) — UPDATE DATA button, fetching new tickers
+8. [Valuation Models](#valuation-models) — DIY formulas over the raw JSON/CSV
    - [DCF (Discounted Cash Flow)](#dcf-discounted-cash-flow)
    - [Graham Number](#graham-number)
    - [Peter Lynch Fair Value](#peter-lynch-fair-value)
    - [Buffett-Style Analysis](#buffett-style-analysis)
-8. [Financial Analysis Examples](#financial-analysis-examples)
-9. [Building Dashboards](#building-dashboards)
-10. [Data Quality Checks](#data-quality-checks)
-11. [Common Use Cases](#common-use-cases)
+9. [Financial Analysis Examples](#financial-analysis-examples)
+10. [Building Dashboards](#building-dashboards)
+11. [Data Quality Checks](#data-quality-checks)
+12. [Common Use Cases](#common-use-cases)
 
 ---
 
@@ -583,6 +588,312 @@ this model exists to value properly.
   `GET /api/export/screen.csv`.
 - Computed by the same `python -m src.valuation.backfill` as the other five
   models, and recomputed automatically after each collection run.
+
+---
+
+## SEC Ownership
+
+`src/ownership/` stores what the SEC's own filings say about a company's insiders and about a list of 34
+gurus: each insider's Form 4 trades of the last three years, and each guru's 13F holdings of the last eight
+quarters, mapped to tickers. See the README's
+[SEC ownership: insiders and gurus](README.md#sec-ownership-insiders-and-gurus) for the rules and the limits.
+It changes none of the models, scores or histories, and neither `python -m src.main` nor the web interface's
+update collects it: it has its own command, and eight tables hold it.
+
+### Collecting ownership data
+
+```bash
+# Insiders: three years of Form 4s for every company in the database
+python -m src.ownership.collect --insiders
+
+# Some tickers only, or another look-back in years
+python -m src.ownership.collect --insiders AAPL PFE --years 1
+
+# Gurus: the last eight quarters' 13F-HRs, their CUSIPs mapped to tickers, then the quarters and positions
+python -m src.ownership.collect --gurus
+
+# The same, asking OpenFIGI nothing (only our companies' CUSIPs are mapped)
+python -m src.ownership.collect --gurus --no-openfigi
+
+# Rebuild the gurus' quarters and positions from the stored filings (offline)
+python -m src.ownership.collect --positions
+
+# Another database or cache
+python -m src.ownership.collect --insiders --gurus --db data/output/stock.db --cache-dir data/cache
+```
+
+The collector sends the SEC User-Agent of `SEC_USER_AGENT` (in `.env` or the environment, as the README's
+[SEC User-Agent Requirement](README.md#sec-user-agent-requirement) describes); it has no `--sec-user-agent`
+option. `--insiders` reads each company's CIK from `companies`, so run a collection first.
+
+The first run takes what the SEC's rate limit allows: about two hours for every company's Form 4s (an
+estimate: PFE's and AAPL's 452 filings took 107 seconds), under two minutes for the gurus' 248 13F filings,
+and at least 7.5 minutes more for OpenFIGI's 1,817 codes. `--positions` takes seconds and touches no network.
+Later runs fetch only what the caches (`data/cache/form4/`, `13f/` and `openfigi/`) lack. Each run prints a
+line per company or guru and a total; the end of `--positions` looks like:
+
+```
+Warren Buffett (1067983): 7 quarters, 283 position rows stored
+...
+Guru quarters stored: 235 quarters, 16813 position rows for 34 gurus
+```
+
+### Insiders (Form 4)
+
+Two tables hold each company's Form 4 and 4/A filings of the last three years:
+
+- **`insider_filings`**: one row per (`accession`, `owner_cik`), a filing and one of its reporting owners:
+  - `ticker` (our company, the issuer), `form` (`4` or `4/A`), `filed_date`, `period_of_report` (the date the
+    report covers) and `original_filed` (for a 4/A, the day its original was filed);
+  - the owner: `owner_name`, `is_director`, `is_officer`, `officer_title`, `is_ten_percent` and `is_other` (1
+    or 0), and `is_ceo_cfo` (1 when the title names the chief executive or financial officer);
+  - `aff10b5one`: 1 when the filing says its trades were made under a Rule 10b5-1 plan, 0 when it says they
+    weren't, NULL when it doesn't say;
+  - `superseded_by`: the accession of the 4/A that replaced this filing, NULL for a filing that stands. A
+    superseded filing stays in the table, and every aggregate, the INS tab and the screener leave it out, so
+    test `superseded_by IS NULL`;
+  - `collected_at`.
+- **`insider_trades`**: one row per transaction, (`accession`, `seq`), `seq` being its place in the filing:
+  - `ticker`, `kind` (`nonderivative` or `derivative`), `security_title`, `date`, and `code`, the SEC's
+    transaction code: `P` is an open-market purchase and `S` an open-market sale; the others (`A` grant or
+    award, `M` exercise or conversion, `F` shares withheld for tax, `G` gift, ...) are shown but never summed;
+  - `shares`, `price` (NULL where the filing states none: a footnote alone, whose ids `price_footnotes`
+    keeps), `acquired_disposed` (`A` or `D`), `owned_after` (NULL where the filing doesn't say),
+    `direct_indirect` (`D` or `I`) and `nature_of_ownership`;
+  - a derivative row (an option, an RSU) also has `exercise_price`, `underlying_title` and
+    `underlying_shares`.
+
+A filing with several reporting owners has a row in `insider_filings` for each, so a join on `accession`
+repeats its trades once per owner: add dollars from `insider_trades` alone, as the first query does. The INS
+tab and the API name the first owner (the lowest `owner_cik`) and count one buyer; the screener's
+`ins_buyers_12m` and `ins_cluster_buyers_12m` count every owner.
+
+```sql
+-- Open-market dollars bought and sold over the last 12 months, per company, the biggest net buyers first
+SELECT t.ticker,
+       SUM(CASE WHEN t.code = 'P' THEN t.shares * t.price ELSE 0 END) AS bought,
+       SUM(CASE WHEN t.code = 'S' THEN t.shares * t.price ELSE 0 END) AS sold,
+       SUM(CASE t.code WHEN 'P' THEN t.shares * t.price ELSE -t.shares * t.price END) AS net
+FROM insider_trades t
+WHERE t.kind = 'nonderivative' AND t.code IN ('P', 'S') AND t.price IS NOT NULL
+  AND t.date >= date('now', '-365 days')
+  AND NOT EXISTS (SELECT 1 FROM insider_filings f
+                  WHERE f.accession = t.accession AND f.superseded_by IS NOT NULL)
+GROUP BY t.ticker
+ORDER BY net DESC;
+
+-- PFE's open-market purchases over the last 12 months: who bought, and what they held after
+SELECT t.date, f.owner_name, f.officer_title, f.is_director,
+       t.shares, t.price, t.shares * t.price AS value, t.owned_after
+FROM insider_trades t
+JOIN insider_filings f ON f.accession = t.accession
+WHERE t.ticker = 'PFE' AND t.kind = 'nonderivative' AND t.code = 'P'
+  AND f.superseded_by IS NULL AND t.date >= date('now', '-365 days')
+ORDER BY t.date;
+
+-- Purchases by a company's CEO or CFO, newest first
+SELECT t.ticker, t.date, f.owner_name, f.officer_title, t.shares, t.price, t.shares * t.price AS value
+FROM insider_trades t
+JOIN insider_filings f ON f.accession = t.accession
+WHERE t.kind = 'nonderivative' AND t.code = 'P' AND f.is_ceo_cfo = 1 AND f.superseded_by IS NULL
+ORDER BY t.date DESC;
+
+-- The filings an amendment replaced, with the 4/A that replaced each
+SELECT o.ticker, o.owner_name, o.filed_date AS filed, a.accession AS amended_by, a.filed_date AS amended_on
+FROM insider_filings o
+JOIN insider_filings a ON a.accession = o.superseded_by AND a.owner_cik = o.owner_cik
+ORDER BY o.ticker, o.filed_date;
+```
+
+### Gurus (13F)
+
+Six tables hold the gurus' 13F-HR filings and what they add up to. A guru's id, `guru_cik`, is its current 13F
+filer's CIK, as text without leading zeros.
+
+- **`guru_filers`**: one row per 13F filer, `filer_cik`: its `guru_cik`, the filer's `name` as the SEC lists
+  it and the `manager` the list follows (Warren Buffett). A guru with an earlier filer has two rows with one
+  `guru_cik`; the current filer's own row has `filer_cik = guru_cik`.
+- **`guru_filings`**: one row per 13F-HR or 13F-HR/A, `accession`:
+  - `guru_cik`, `filer_cik`, `form`, `period` (the quarter's last day), `filed`, `report_type`
+    (`13F HOLDINGS REPORT` or `13F COMBINATION REPORT`) and `amendment_type` (`RESTATEMENT` or `NEW HOLDINGS`
+    for an amendment, else NULL);
+  - the cover's totals, `entry_total` and `value_total`, beside the parsed ones, `rows` and `rows_value`, all
+    values in dollars;
+  - `checksum_ok`: 1 when `entry_total` equals the entries parsed and `value_total` is within rounding of
+    their sum (half a unit per entry plus half a unit, in the units the filing states). A filing with 0 stays
+    in the table and out of every quarter;
+  - `multiplier`: the units the filing's values were read in, 1000 for thousands of dollars and 1 for dollars,
+    so `value_usd` is the value as filed times it. By the filing date it is 1000 before 2023-01-03 and 1 from
+    then, unless the holdings' prices overrule it: Baupost's and Duquesne's filings are 1000 after the switch;
+  - `confidential_omitted` (the cover's flag, NULL where it isn't stated) and `collected_at`.
+- **`guru_holdings`**: one row per entry of a filing's information table, (`accession`, `row`), as filed:
+  - `guru_cik`, `cusip` (nine characters; a letter first for a foreign issuer's CINS), `issuer` and
+    `title_of_class`;
+  - `value_usd` (dollars), `shares` (the shares or the principal amount) and `share_type` (`SH` or `PRN`),
+    `put_call` (`Put`, `Call`, or NULL for the security itself) and `discretion`;
+  - one CUSIP may take several rows of a filing (other managers, discretion).
+- **`cusip_map`**: one row per CUSIP: `ticker` (NULL where there is none), `name`, `security_type`
+  (OpenFIGI's), `mapped_at`, and `source`: `universe` for our companies' codes, curated in
+  `src/ownership/cusips.py`; `openfigi` for a listing OpenFIGI gave; `none` where OpenFIGI knows no listing,
+  so there is no ticker and `name` is the issuer's name from the holdings.
+- **`guru_quarters`**: one row per (`guru_cik`, `period`), a guru's quarter as built from the filings that
+  stand: `total_value`, `positions` (held, options too), `complete` (0 when a filer's report for the quarter
+  is missing or fails its checksum: its rows are left out), `has_prior` (1 when the quarter before is stored,
+  so the changes exist), `accessions` (a JSON list of the filings it stands on), `filed` (the latest of their
+  filing days) and `computed_at`.
+- **`guru_positions`**: one row per position of a quarter, (`guru_cik`, `period`, `security`, `put_call`):
+  - `security` is the ticker where `cusip_map` has one, else the CUSIP; `ticker` is NULL where there is none;
+    `cusips` lists the CUSIPs the position covers, comma-separated; `issuer`, `title_of_class` and
+    `share_type` are its first row's;
+  - `put_call = ''` (an empty string, not NULL) is a position in shares or principal amounts; `'Put'` and
+    `'Call'` are options, apart from the shares, so filter `put_call = ''` for the shares;
+  - `shares` and `value_usd`, summed over the position's rows, and `weight`, its value over the quarter's
+    total (options included);
+  - the change from the quarter before: `action` (`new`, `added`, `reduced` or `unchanged`), `shares_before`
+    and `value_before`, `split_factor` (the share splits between the two quarters, applied to the shares
+    before) and `change_pct` (the change in shares against the split-adjusted shares before, as a fraction:
+    0.25 is a quarter more; NULL for a new position). `action` is NULL on every row of a quarter whose quarter
+    before isn't stored (`has_prior = 0`);
+  - a `sold_out` row for each position of the quarter before that is gone: `shares`, `value_usd` and `weight`
+    are NULL, and `shares_before` and `value_before` say what the guru held. To leave these out use
+    `action IS NOT 'sold_out'`: `<> 'sold_out'` also drops the rows whose `action` is NULL.
+
+Each guru has its own latest quarter (`MAX(period)` in `guru_quarters`): Scion's is Q3 2025, the others'
+Q2 2026. `guru_positions` is derived from `guru_filings`, `guru_holdings`, `cusip_map` and `split_events`, and
+`--positions` rebuilds it.
+
+```sql
+-- Each guru's latest quarter: when it was filed, what it holds, and whether it stands complete
+SELECT g.manager, q.period, q.filed, q.total_value, q.positions, q.complete, q.has_prior
+FROM guru_quarters q
+JOIN guru_filers g ON g.filer_cik = q.guru_cik
+WHERE q.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = q.guru_cik)
+ORDER BY q.total_value DESC;
+
+-- Berkshire Hathaway's ten largest positions in its latest quarter
+SELECT p.ticker, p.issuer, p.shares, p.value_usd, ROUND(p.weight * 100, 1) AS weight_pct, p.action
+FROM guru_positions p
+WHERE p.guru_cik IN (SELECT guru_cik FROM guru_filers WHERE manager = 'Warren Buffett')
+  AND p.put_call = '' AND p.action IS NOT 'sold_out'
+  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik)
+ORDER BY p.weight DESC
+LIMIT 10;
+
+-- The gurus holding GOOGL or its other class GOOG in their latest quarter, the largest first
+SELECT g.manager, p.ticker, p.period, p.shares, p.value_usd, ROUND(p.weight * 100, 1) AS weight_pct,
+       p.action, ROUND(p.change_pct * 100, 1) AS change_pct
+FROM guru_positions p
+JOIN guru_filers g ON g.filer_cik = p.guru_cik
+WHERE p.ticker IN ('GOOGL', 'GOOG') AND p.put_call = '' AND p.action IS NOT 'sold_out'
+  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik)
+ORDER BY p.value_usd DESC;
+
+-- How many gurus hold it (each counted once, as the screener's gurus_holding) and how many are buying it
+SELECT COUNT(DISTINCT CASE WHEN p.action IS NOT 'sold_out' THEN p.guru_cik END) AS holding,
+       COUNT(DISTINCT CASE WHEN p.action IN ('new', 'added') THEN p.guru_cik END) AS buying
+FROM guru_positions p
+WHERE p.ticker IN ('GOOGL', 'GOOG') AND p.put_call = ''
+  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik);
+
+-- The gurus that sold GOOGL or GOOG out in their latest quarter, and what they held before
+SELECT g.manager, p.ticker, p.period, p.shares_before, p.value_before
+FROM guru_positions p
+JOIN guru_filers g ON g.filer_cik = p.guru_cik
+WHERE p.ticker IN ('GOOGL', 'GOOG') AND p.put_call = '' AND p.action = 'sold_out'
+  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik);
+
+-- What the gurus hold together: per security, the gurus holding it, their shares and value summed,
+-- and how many bought (new or added) and sold (reduced or sold out) it in their latest quarter
+SELECT p.security, MIN(p.issuer) AS issuer,
+       COUNT(DISTINCT CASE WHEN p.action IS NOT 'sold_out' THEN p.guru_cik END) AS gurus,
+       SUM(p.shares) AS shares, SUM(p.value_usd) AS value,
+       COUNT(DISTINCT CASE WHEN p.action IN ('new', 'added') THEN p.guru_cik END) AS buyers,
+       COUNT(DISTINCT CASE WHEN p.action IN ('reduced', 'sold_out') THEN p.guru_cik END) AS sellers
+FROM guru_positions p
+JOIN (SELECT guru_cik, MAX(period) AS period FROM guru_quarters GROUP BY guru_cik) l
+  ON l.guru_cik = p.guru_cik AND l.period = p.period
+WHERE p.put_call = ''
+GROUP BY p.security
+HAVING gurus > 0
+ORDER BY gurus DESC, value DESC
+LIMIT 15;
+
+-- Berkshire Hathaway's buys and sells in its latest quarter, by the value involved
+SELECT p.action, p.security, p.issuer, p.shares_before, p.shares,
+       ROUND(p.change_pct * 100, 1) AS change_pct, p.value_before, p.value_usd
+FROM guru_positions p
+WHERE p.guru_cik IN (SELECT guru_cik FROM guru_filers WHERE manager = 'Warren Buffett')
+  AND p.put_call = '' AND p.action IN ('new', 'added', 'reduced', 'sold_out')
+  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik)
+ORDER BY p.action, MAX(COALESCE(p.value_usd, 0), COALESCE(p.value_before, 0)) DESC;
+
+-- The filings whose values the holdings' prices put in thousands after the SEC's switch to dollars
+SELECT g.manager, f.period, f.filed, f.multiplier
+FROM guru_filings f
+JOIN guru_filers g ON g.filer_cik = f.filer_cik
+WHERE f.multiplier = 1000 AND f.filed >= '2023-01-03'
+ORDER BY g.manager, f.period;
+
+-- The filings whose cover totals differ from their entries, in the units as filed: a sum within half a unit
+-- per entry plus half a unit is rounding; a sum beyond it, or another count, sets checksum_ok to 0
+SELECT g.manager, f.accession, f.period, f.checksum_ok, f.entry_total, f.rows,
+       (f.rows_value - f.value_total) / f.multiplier AS off_by_units
+FROM guru_filings f
+JOIN guru_filers g ON g.filer_cik = f.filer_cik
+WHERE f.rows <> f.entry_total OR f.rows_value <> f.value_total
+ORDER BY ABS(off_by_units) DESC, f.accession;
+
+-- The codes OpenFIGI doesn't know: no ticker, the issuer's name, and what the gurus hold in them
+SELECT m.cusip, m.name, COUNT(*) AS entries, SUM(h.value_usd) AS value_usd
+FROM cusip_map m
+JOIN guru_holdings h ON h.cusip = m.cusip
+WHERE m.source = 'none'
+GROUP BY m.cusip
+ORDER BY value_usd DESC;
+```
+
+### Viewing ownership
+
+- **Web**:
+  - the **INS** tab (`/stocks/{ticker}?tab=ins`, or `AAPL INS` in the command bar): the SEC's Form 4 trades
+    with their aggregates, and Yahoo's rows for a company with no Form 4 stored;
+  - the **HDS** tab (`?tab=hds`): a Gurus section above Yahoo's holders, once any quarter is stored;
+  - `/gurus` (each guru at its latest quarter), `/gurus/{cik}` (a guru's holdings, the changes from the
+    quarter before and its filings; `?period=2026-03-31` for an earlier quarter) and `/gurus/portfolio` (what
+    they hold together). The nav has a Gurus link. A guru or quarter that isn't stored answers 404.
+- **API** (values in dollars; a position's `value_usd` is `value`):
+  - `GET /api/stocks/{ticker}/form4` returns `{ticker, source, summary, trades}`. `source` is `sec`, `yahoo`
+    (no Form 4 stored: `summary` is null and `trades` are Yahoo's rows) or null. `summary` holds `windows`
+    (`3m`, `6m` and `12m`, each with `bought_shares`, `bought_value`, `sold_shares`, `sold_value`,
+    `net_value`, `buyers` and `sellers`), `ceo_cfo_buys_12m`, `clusters_12m` and `planned_sale_share_12m`.
+    Each trade has its `date`, `code` and `meaning`, `kind`, `shares`, `price`, `value`, `owned_after`, the
+    owner's `owner_name`, `role` and `is_ceo_cfo`, and `plan` (true, false or null), among others;
+  - `GET /api/stocks/{ticker}/gurus` returns `{ticker, classes, gurus}`: the ticker and its other share
+    classes (`GOOGL` with `GOOG`), and each guru's positions in them in its latest quarter (the guru's `cik`,
+    `manager`, `period`, `filed` and `complete`, and the position's `put_call` (null for shares), `shares`,
+    `value`, `weight`, `action`, `shares_before`, `value_before`, `split_factor` and `change_pct`): the shares
+    first, then the options, then the positions sold out;
+  - `GET /api/gurus` returns each guru at its latest quarter: `cik`, `manager`, `filers`, `period`, `filed`,
+    `total_value`, `positions` (held in shares or principal amounts), `new` and `sold_out` (null without the
+    quarter before), `complete` and `has_prior`;
+  - `GET /api/gurus/portfolio?limit=200` (1 to 10,000) returns the securities held by most gurus: `security`,
+    `ticker`, `issuer`, `gurus`, `shares`, `value`, `buyers` and `sellers`;
+  - `GET /api/gurus/{cik}?period=2026-03-31` returns one guru's quarter (its latest without `period`):
+    `periods` (those stored, newest first), `filed`, `total_value`, `complete`, `has_prior`, `accessions` and
+    `filings`, `positions` (the shares before the options, the largest first) and `changes`, the positions
+    grouped as `new`, `added`, `reduced` and `sold_out` (null without the quarter before).
+- **Screener**: the *Insiders (SEC)* fields `ins_net_buy_12m` (open-market dollars bought less sold),
+  `ins_buyers_12m`, `ins_ceo_cfo_buys_12m` (filings with a CEO/CFO purchase) and `ins_cluster_buyers_12m` (the
+  most insiders buying within 30 days of one purchase: 3 or more is a cluster), and the *Gurus (13F)* fields
+  `gurus_holding` and `gurus_buying` (the gurus holding the stock in their latest quarter and, of them, the
+  ones whose position is new or added; each guru counted once over the stock's share classes), shown as one
+  "Gurus (buying)" column. For example `GET /api/screen?gurus_buying_gte=5&sort=gurus_buying&sort_dir=desc` or
+  `GET /api/screen?ins_cluster_buyers_12m_gte=3`.
+
+A company with no Form 4 collected reads 0 in `ins_buyers_12m` and `ins_ceo_cfo_buys_12m`, as one whose
+insiders bought nothing does, and empty in `ins_net_buy_12m` and `ins_cluster_buyers_12m`; a company no guru
+holds reads 0 in `gurus_holding` and `gurus_buying`. A database without the ownership tables screens with all
+six fields empty.
 
 ---
 

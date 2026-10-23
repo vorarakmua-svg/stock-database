@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 103 · NEEDS-USER 15 · Verified: 88
+**Open:** P0 0 · P1 0 · P2 11 · P3 105 · NEEDS-USER 15 · Verified: 88
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1566,6 +1566,19 @@ Repro / Actual:
 - OpenFIGI's tickers can carry an asterisk ("ATAI*" for both of ATAI's codes, which merge correctly).
 Expected: the stale row re-asked; the quarter marked incomplete when any filing it should stand on fails; repeats matched against every earlier standing filing; the asterisk dropped from tickers.
 Notes: none of the four shows in today's data (0 checksum failures, no double amendments).
+
+### BUG-206 [P3][OWNERSHIP] A joint Form 4 counts one buyer on the INS tab and every owner in the screener
+Status: OPEN
+Found: build iteration 39 (M3-7's docs worker), build M3-7 | Fixed: | Regression test:
+Repro: a Form 4 with two reporting owners buying. `Reader.sec_insider_trades` joins each trade to its filing's first owner (`MIN(owner_cik)`), so the INS tab, `/api/stocks/{t}/form4` and `summarize` count 1 buyer. The screener's `ins_buyers_12m` and `ins_cluster_buyers_12m` count each owner (2). A temporary database showed 1 against 2; no joint filing is in the data collected so far.
+Expected: one rule for both, chosen and documented.   Actual: two, documented as a limitation in the README and the usage guide.
+
+### BUG-207 [P3][OWNERSHIP] A CEO or CFO title written "CEO, Chairman" isn't counted as a CEO/CFO buy
+Status: OPEN
+Found: build iteration 39 (M3-7's docs worker), build M3-7 | Fixed: | Regression test:
+Repro: `src/ownership/insiders.py` `ceo_or_cfo("CEO, Chairman")` is False. The rule that makes "EVP, Pres. & CEO, BGS" a unit's head (a comma right after the name) catches a real CEO whose title lists the role first.
+Expected: True.   Actual: False; the real titles collected so far all classify correctly.
+Notes: documented as a limitation in the README.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

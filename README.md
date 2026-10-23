@@ -44,6 +44,12 @@ A professional-grade Python data pipeline for collecting US stock fundamentals f
   On the STAT tab, in the screener (with five preset screens) and the API. See
   [Quality scores](#quality-scores).
 
+- **SEC ownership** — insiders' Form 4 trades (every filing of the last 3 years, with open-market buying,
+  CEO/CFO buys, cluster buys and 10b5-1 sales) and the 13F holdings of 34 gurus (the last 8 quarters, with
+  each quarter's new, added, reduced and sold-out positions), read from the SEC's own filings
+  (`src/ownership/`). On the INS and HDS tabs, the Gurus pages, the screener and the API. See
+  [SEC ownership](#sec-ownership-insiders-and-gurus).
+
 - **Database-Like Behavior**
   - Merge mode preserves historical data across runs
   - Tracks collection history and price snapshots
@@ -282,16 +288,25 @@ python diagnose.py AAPL MSFT GOOGL
 - Official financial statements (10-K, 10-Q)
 - Complete XBRL data (all US-GAAP tags)
 - Company submissions and filings
-- Insider transactions (Form 4)
+- Insider transactions (Form 4): each filing's XML for the last 3 years, parsed (see
+  [SEC ownership](#sec-ownership-insiders-and-gurus))
+- Institutional holdings reports (13F-HR) of 34 gurus, from each filing's full submission text
 
 **Rate Limits:**
 - SEC EDGAR: 10 requests/second (we use 0.12s delay)
 - Yahoo Finance: Conservative 2.5s delay between tickers
+- OpenFIGI: 25 requests/minute without a key (we send 10 CUSIPs every 2.5s)
 
 ### FRED (Federal Reserve Economic Data)
 
 - 10-Year Treasury Constant Maturity Rate (DGS10)
 - Used for WACC discount rate calculations
+
+### OpenFIGI
+
+- Maps the CUSIPs of the gurus' 13F holdings to tickers (`src/ownership/openfigi.py`), asked only by
+  `python -m src.ownership.collect --gurus`
+- No API key: 10 codes a request, answers cached on disk
 
 ## Valuation Model Support
 
@@ -619,6 +634,267 @@ Limitations:
   within itself only with at least 10 companies, which only general (90) and banks (13) have.
 - The composite's equal weights are a default, not a finding.
 
+## SEC ownership: insiders and gurus
+
+`src/ownership/` reads two kinds of SEC filings into the database: what a company's **insiders** buy and sell
+(Form 4) and what a list of **gurus**, value investors and other managers, hold (13F-HR). They are our
+counterparts of GuruFocus's insider trades and guru holdings
+([design](docs/superpowers/specs/2026-10-22-sec-ownership-design.md)). Both come from the filings themselves
+(the gurus' CUSIPs are mapped to tickers with OpenFIGI), and nothing collected before changes: not a model, a
+score or a history. It has its own command, `python -m src.ownership.collect` (see
+[Collecting ownership data](#collecting-ownership-data)); neither `stock-data` nor the web interface's update
+runs it.
+
+### Insiders (Form 4)
+
+Collected:
+- Every Form 4 and 4/A of our companies filed in the last 3 years (`--years`). Each company's submissions feed
+  at the SEC lists them (its `recent` block and the older pages that reach back that far), then each filing's
+  raw XML is fetched (the primary document without its `xslF345X0n/` rendering folder).
+- Each XML is cached once it parses (`data/cache/form4/{accession}.xml`), so a later run fetches only the new
+  filings. A document that isn't a readable ownership document is skipped and counted as an error, never
+  guessed or stored as empty, and what an earlier run stored stays.
+
+Parsed (the SEC's `ownershipDocument`):
+- the reporting owners (CIK, name) and their roles (director, officer and title, 10% owner, other), the period
+  of report, the 10b5-1 flag (`aff10b5One`, written 1/0 or true/false) and, for a 4/A, the day of the
+  original;
+- each **non-derivative** transaction: security, date, transaction code, shares, price, acquired or disposed,
+  shares owned after, and direct or indirect ownership;
+- each **derivative** transaction too (grants, exercises), with its exercise price and underlying security;
+- only what the filing states: a price given as a footnote alone (an RSU's) stays empty with the footnote's id
+  kept, shares owned after are never derived, and holding rows that record no transaction aren't kept.
+
+Amendments: a 4/A replaces the original it amends, the same owner's Form 4 filed on the day the 4/A names as
+its original's, for the same period of report where both give one. The original stays, marked `superseded_by`
+the 4/A's accession, and the aggregates, the INS tab and the screener leave it out. A filing with several
+reporting owners has a row for each in `insider_filings` and its trades once in `insider_trades`.
+
+The aggregates, computed at read time from the trades of the filings no amendment superseded:
+- **Open-market buying and selling** over 3, 6 and 12 months (91, 182 and 365 days back from today): the
+  purchases (code P) and sales (code S) of non-derivative securities, in shares and dollars (`shares × price`;
+  a trade without a price counts in shares only), the net (`bought - sold`, in dollars) and the distinct
+  buyers and sellers. Grants (A), exercises (M), tax withholding (F), gifts (G) and the other codes are stored
+  and shown with their meaning, never summed.
+- **CEO and CFO buys**: a purchase in the last 12 months by an officer whose title names the chief executive
+  or financial officer ("CEO", "CFO", "Chief Executive Officer" or "Chief Financial Officer", in any case). A
+  comma, "of" or a dash right after the name makes it a unit's head ("EVP, Pres. & CEO, BGS", "CEO of
+  Payments", "CEO - Americas"), which doesn't count. The flag is stored per filing
+  (`insider_filings.is_ceo_cfo`).
+- **Cluster buys**: 3 or more distinct insiders buying (code P) within 30 days of the first of them, over the
+  last 12 months. A purchase belongs to one cluster at most.
+- **Sales under a 10b5-1 plan**: of the shares sold in the last 12 months in filings that state the flag, the
+  share sold under a plan; empty where no filing states it.
+
+Where it shows:
+- **INS tab**: the last 12 months' open-market buying and selling, the net buying over 3, 6 and 12 months, the
+  CEO/CFO buys and the share of sales under a plan, a line for each cluster buy and CEO/CFO buy, then the
+  trades newest first (the latest 200): date, insider, role, the code with its meaning, shares, price, value,
+  holding after and plan. A company with no Form 4 stored keeps Yahoo's rows, as before.
+- **API**: `GET /api/stocks/{ticker}/form4` returns `source` (`sec`, `yahoo` with Yahoo's rows where no Form 4
+  is stored, or null for neither), the aggregates in `summary` and the `trades`.
+  `GET /api/stocks/{ticker}/insiders` still serves Yahoo's rows.
+- **Screener**: filters and sorts by `ins_net_buy_12m` (open-market dollars bought less sold),
+  `ins_buyers_12m` (insiders buying), `ins_ceo_cfo_buys_12m` (filings with a CEO/CFO purchase) and
+  `ins_cluster_buyers_12m` (the most insiders buying within 30 days of one purchase: 3 or more is a cluster),
+  each over the last 12 months.
+
+Checked on PFE and AAPL, collected into a scratch copy (452 filings in 107 seconds, 0 errors). On 2026-10-23,
+PFE's 3 buying insiders had bought $2.96M in the last 12 months, all in August 2026 (a cluster that includes
+the CEO's $1.00M), and its two amendments each superseded their original; AAPL's 8 selling insiders had sold
+$207M, 56% of the shares under 10b5-1 plans. Of Yahoo's rows for the same months, 26 of PFE's 34 and 80 of
+AAPL's 100 match an SEC trade on the same day with shares within 1%; the rest are kinds Yahoo labels or sums
+differently (option conversions, multi-day sale ranges, rows without text).
+
+### Gurus (13F)
+
+The gurus are the 34 in `src/ownership/gurus.py`, value investors and the other managers GuruFocus follows:
+Berkshire Hathaway (Warren Buffett), Baupost (Seth Klarman), Pershing Square (Bill Ackman), DME Capital (David
+Einhorn), Oaktree (Howard Marks), Markel (Tom Gayner), Duquesne (Stanley Druckenmiller), Scion (Michael
+Burry), Third Point (Dan Loeb), Appaloosa (David Tepper), Himalaya (Li Lu), Dalal Street (Mohnish Pabrai),
+Fundsmith (Terry Smith), TCI, Dodge & Cox, First Eagle, the Gates Foundation Trust and others.
+- A guru is its current 13F filer's CIK, and may have earlier filers of the same portfolio, whose reports are
+  summed into one quarter. Pershing Square Inc. reports Ackman's portfolio from Q2 2026, when Pershing Square
+  Capital Management's own filing became a 13F-NT notice pointing to it (before, the two reported different
+  holdings). DME Capital Management has filed Einhorn's since Greenlight Capital's last 13F, for Q4 2023.
+- The list is the user's to change: a tuple of `Guru(cik, name, manager, former)` in `src/ownership/gurus.py`.
+  Each CIK was checked against its submissions feed on 2026-10-22
+  (`qa/evidence/ownership-m3-4-gurus-check.txt`). After adding or dropping a filer, run `--gurus` again; a
+  guru dropped from the list keeps the rows already stored.
+
+Fetched:
+- Each filer's 13F-HR and 13F-HR/A whose period of report falls in the last 8 quarters before the current one
+  (`--quarters`): on 2026-10-22, the periods from 2024-10-01. That is 7 quarters, Q4 2024 to Q2 2026, until
+  the Q3 2026 reports are filed (up to 45 days after the quarter ends). A 13F-NT notice holds no holdings and
+  is skipped.
+- Each filing's full submission text (`{accession}.txt`), which carries the cover and the INFORMATION TABLE
+  each under its `<TYPE>`: one request per filing, cached once it parses (`data/cache/13f/`). On 2026-10-22:
+  248 filings and 20,538 entries for the 34 gurus.
+
+Parsed:
+- each entry's issuer, class, CUSIP, value, shares or principal amount (`SH` or `PRN`), put/call and
+  investment discretion, and the cover's period, form, report type, amendment type and totals. Tags are
+  matched on their local names, as filers' namespaces vary.
+- **Units**: values are in thousands of dollars in filings made before 2023-01-03 and in dollars from that day
+  (the SEC's rule goes by the filing date, not the period), and are stored in dollars. The holdings' prices
+  overrule the date where it gives impossible ones: when the median price of a filing's share rows (value /
+  shares) falls outside $1 to $100,000 under the date's units and inside them at 1,000 times more or less, the
+  filing states the other units. Baupost and Duquesne still state thousands after the switch (14 filings in
+  the window). `guru_filings.multiplier` keeps the units used (1000 or 1). A pre-2023 filing stated in dollars
+  is caught only when its median price is above $100; none falls in the window.
+- **Checksum**: the cover's `tableEntryTotal` must equal the entries parsed, and its `tableValueTotal` their
+  sum within rounding. Each entry's value and the total are rounded to the unit, so they may differ by half a
+  unit per entry plus half a unit: 13 of the 248 filings differ, by 1 to 4 units. A filing that fails is
+  stored with `checksum_ok = 0` and kept out of the guru's quarters (none did).
+
+The CUSIP map (`cusip_map`) turns each holding's CUSIP into a ticker:
+- Our companies' codes are curated in `src/ownership/cusips.py`: 124 codes for 121 tickers (source
+  `universe`). Each is the OpenFIGI listing (the US composite) of a code in the gurus' filings, kept where its
+  ticker is ours and read against the filing's issuer name (`qa/evidence/ownership-m3-5-universe-review.txt`).
+  Added by hand: the other common class (GOOG beside GOOGL, BRK-A beside BRK-B), the codes that changed in the
+  window (Honeywell's before its 2026 reverse split, Exxon Mobil Corp's before ExxonMobil Holdings took XOM)
+  and a filer's typo of Allstate's. A company's preferred shares and convertible notes keep their own OpenFIGI
+  tickers.
+- Every other code goes to OpenFIGI's mapping API (source `openfigi`) without a key: 10 codes a request, 25
+  requests a minute, each answer cached on disk (`data/cache/openfigi/{cusip}.json`). A code that starts with
+  a letter is a CINS, a foreign issuer's (Chubb, Linde, Seagate), asked as `ID_CINS`: as `ID_CUSIP` OpenFIGI
+  finds nothing. "No identifier found" and "Invalid idValue format" (a malformed code: a filer's bad check
+  digit) are answers, stored as source `none`. Another error fails only its own code, which the next run asks
+  again, and three requests failing in a row stop the mapping until the next run. A `none` code has no ticker
+  and keeps its issuer's name from the filing.
+- On 2026-10-22, 1,941 codes: 124 `universe`, 1,796 `openfigi` and 21 `none`.
+
+A guru's quarter (`src/ownership/portfolio.py`) is built from the filings that pass the checksum:
+- per filer and period, the latest original 13F-HR or RESTATEMENT amendment (a 13F-HR/A with no amendment type
+  counts as one), plus the NEW HOLDINGS amendments filed after it. A filer with no usable filing leaves the
+  quarter incomplete (`guru_quarters.complete = 0`) and its rows out;
+- a NEW HOLDINGS amendment's rows that repeat its base's (the same CUSIP, put/call, shares and value), matched
+  one for one, are left out: First Eagle's Q2 2026 amendment repeats all 614 rows of its 13F-HR and adds 2, so
+  counting it whole would read the quarter as $120.7B, not $60.75B, while Berkshire's Q1 2025 one adds 202
+  Lennar class B shares to a code the base holds;
+- the guru's filers summed (Pershing Square Inc. with Pershing Square Capital Management);
+- positions keyed by security and put/call: the security is the mapped ticker, else the CUSIP, so a code that
+  changed doesn't read as a sale and a purchase, and options (puts and calls) stay apart from shares. The rows
+  of one key are summed (one CUSIP may take several rows: other managers, discretion), and a position's weight
+  is its value over the quarter's total.
+
+The changes compare a quarter with the one before it only (a guru's first quarter in the window, or one after
+a gap, has none): each position is **new**, **added**, **reduced**, **sold out** or **unchanged**, by shares.
+The earlier quarter's shares are first adjusted for the share splits of our tickers dated between the two
+period ends (simple ratios only: Yahoo's spin-off price factors change no holder's count, and stock dividends
+such as SCCO's 1% read as small additions); other securities have no split data. The change is
+`(shares - adjusted shares before) / adjusted shares before`. Dodge & Cox's BKNG, 997,498 shares before the
+25:1 split of 2026-04-06 and 25,536,950 after, reads +2.4%, not +2,460%.
+
+The quarters are materialized when collecting, as the holders tab, the aggregated portfolio and the screener
+all need every guru's latest quarter, too slow to rebuild per request. After mapping, `--gurus` stores each
+guru's quarters (`guru_quarters`: the total value, the positions held, whether it is complete, whether the
+quarter before is there, the filings it stands on) and positions with their changes (`guru_positions`: one row
+per security and put/call, put/call `''` for shares and principal amounts, and a `sold_out` row for each
+position of the quarter before that's gone); `--positions` rebuilds them offline. Each guru's rows are
+replaced in one transaction.
+
+Where it shows:
+- **Pages**: `/gurus` lists the gurus, each at its latest quarter: the value, the positions held in shares or
+  principal amounts, and of them the new and the sold-out ones. `/gurus/{cik}` (`?period=` for an earlier
+  quarter) shows a guru's holdings with weights and changes, the changes grouped, and the filings the quarter
+  stands on, linked to EDGAR. `/gurus/portfolio` aggregates the gurus: per security, the gurus holding it,
+  their summed shares and value, and the buyers (new or added) and sellers (reduced or sold out) of the latest
+  quarter. The nav has a Gurus link.
+- **HDS tab**: a Gurus section above Yahoo's holders: each guru's latest quarter, shown on each row (Scion's
+  stops at Q3 2025), with its position in the stock or its other share class (GOOGL with GOOG, BRK-B with
+  BRK-A) and the change from the quarter before, then the gurus that sold it out that quarter. Hidden until a
+  quarter is stored.
+- **API**: `GET /api/stocks/{ticker}/gurus`, `GET /api/gurus`, `GET /api/gurus/portfolio` and
+  `GET /api/gurus/{cik}` return the same.
+- **Screener**: filters and sorts by `gurus_holding` (the gurus holding the stock in their latest quarter) and
+  `gurus_buying` (of those, the ones whose position is new or added), each guru counted once over the stock's
+  share classes. The results show them as one "Gurus (buying)" column.
+
+Checked by `qa/oracle/thirteenf_oracle.py`, which imports nothing from `src` and re-reads every cached filing
+with plain patterns. On the first collection (2026-10-22, a scratch copy) all its gates pass on the 248
+filings (each one's form, date and period, the units, the cover's totals, the entries' count, CUSIPs and
+values, and `checksum_ok`). Each of the 235 quarters equals its filings' totals, none is incomplete, and the
+stored quarters and positions equal what `load_guru` builds from the filings for all 34 gurus.
+
+### Collecting ownership data
+
+```bash
+# Insiders: three years of Form 4s for every company in the database
+python -m src.ownership.collect --insiders
+
+# Some tickers only, with another look-back (in years)
+python -m src.ownership.collect --insiders AAPL PFE --years 1
+
+# Gurus: the last 8 quarters' 13F-HRs, the CUSIP map, then the quarters and positions
+python -m src.ownership.collect --gurus
+
+# The same, asking OpenFIGI nothing (only our companies' CUSIPs are mapped)
+python -m src.ownership.collect --gurus --no-openfigi
+
+# Rebuild the gurus' quarters and positions from what is stored (offline)
+python -m src.ownership.collect --positions
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `tickers` | With `--insiders`: the tickers whose insiders to collect | every company with a CIK |
+| `--insiders` | Collect insiders' Form 4 filings | `false` |
+| `--gurus` | Collect the gurus' 13F holdings, map their CUSIPs, then store their quarters and positions | `false` |
+| `--positions` | Rebuild the gurus' quarters and positions from the stored filings, offline | `false` |
+| `--years` | How far back for insiders, in years | `3` |
+| `--quarters` | How many quarters before the current one for gurus | `8` |
+| `--no-openfigi` | With `--gurus`: map only our companies' CUSIPs, asking OpenFIGI nothing | `false` |
+| `--db` | SQLite database path | `data/output/stock.db` |
+| `--cache-dir` | The SEC cache (OpenFIGI's answers go under `openfigi/`) | `data/cache` |
+
+At least one of `--insiders`, `--gurus` and `--positions` is required. A run is incremental: the caches hold
+every filing that parsed, a company's or guru's rows are replaced in one transaction, a failed fetch or parse
+is counted and reported, and what an earlier run stored stays. What each one touches and takes (timed on
+2026-10-22, from empty caches):
+- `--insiders`: the SEC (each company's submissions feed and each Form 4's XML), through the app's SEC
+  handler: its User-Agent (`SEC_USER_AGENT`, see [SEC User-Agent Requirement](#sec-user-agent-requirement))
+  and its rate limit of about 8 requests a second. It reads each company's CIK from `companies`, so the
+  database needs a collection first, and writes `insider_filings` and `insider_trades`. PFE's and AAPL's three
+  years, 452 filings, took 107 seconds, about 4 filings a second: the first run for every company, an
+  estimated 30,000 filings, should take about two hours. A later run reads each feed again and fetches only
+  the filings not cached.
+- `--gurus`: the SEC (each filer's feed and each filing's text) and OpenFIGI (`api.openfigi.com`; none with
+  `--no-openfigi`). It writes `guru_filers`, `guru_filings`, `guru_holdings` and `cusip_map`, then
+  `guru_quarters` and `guru_positions`. The 248 filings took 1 minute 41 seconds. OpenFIGI answers 10 codes a
+  request, 2.5 seconds apart, so the first run's 1,817 codes need 7.5 minutes at least; a later run asks only
+  the codes with no `cusip_map` row.
+- `--positions`: nothing on the network. It reads the stored filings and entries, `cusip_map` and
+  `split_events`, and writes `guru_quarters` and `guru_positions`: 3.3 seconds for 235 quarters. The changes
+  read `split_events` when they are built, so run it after a collection brings new splits.
+
+The columns and queries are in the [USAGE_GUIDE](USAGE_GUIDE.md#sec-ownership).
+
+### Ownership limitations
+
+- A 13F is part of a portfolio, as it stood up to four and a half months before: the long positions in
+  US-listed stocks, ETFs, options and convertible notes at a quarter's end, filed up to 45 days after it. It
+  reports no short positions, cash, bonds or non-US listings, so a guru's weights are shares of what it
+  reports.
+- A guru's latest quarter can be stale. Scion's last 13F-HR covers Q3 2025 (Michael Burry deregistered it), so
+  it stays at that quarter in the aggregated portfolio, which mixes quarters; the list and the holders tab
+  show each guru's quarter.
+- OpenFIGI leaves some codes unmapped: 21 of the 1,817 it was asked, 7 of them CINS codes. A position in one
+  has no ticker, is keyed by its CUSIP and shows its issuer's name from the filing.
+- Stock dividends aren't adjusted: SCCO's 1% stock dividends read as small additions.
+- HON's 2026 reverse split is inside a combined price factor in Yahoo's split history, which isn't a share
+  split, so Dodge & Cox's HON reads as a 50% sale (8,019 to 4,010 shares; BUG-184).
+- Form 4 history is the last 3 years and the 13F history the last 8 quarters (`--years`, `--quarters`); the
+  SEC's bulk data sets would reach further and aren't used. A quarter whose previous one isn't stored has no
+  changes.
+- A title that puts the CEO or CFO before a comma ("CEO, Chairman") reads as a unit's head and isn't counted
+  as a CEO/CFO buy.
+- A joint Form 4 (several reporting owners) is read two ways: the INS tab, the API and their aggregates name
+  its first owner (the lowest CIK) and count one buyer, while the screener's `ins_buyers_12m` and
+  `ins_cluster_buyers_12m` count every owner.
+- Four edge cases of the CUSIP map and the quarters are open as BUG-205; none shows in the data collected so
+  far.
+
 ## Project Structure
 
 ```
@@ -641,6 +917,15 @@ stock-database/
 │   ├── exporters/
 │   │   ├── json_exporter.py       # JSON output (with merge)
 │   │   └── csv_exporter.py        # CSV summary
+│   ├── ownership/
+│   │   ├── form4.py               # Form 4 parser (insiders' filings)
+│   │   ├── insiders.py            # Insider aggregates
+│   │   ├── gurus.py               # The gurus (13F filers)
+│   │   ├── thirteenf.py           # 13F parser: units and checksum
+│   │   ├── cusips.py              # Our companies' CUSIPs
+│   │   ├── openfigi.py            # OpenFIGI CUSIP-to-ticker client
+│   │   ├── portfolio.py           # A guru's quarters and changes
+│   │   └── collect.py             # CLI: python -m src.ownership.collect
 │   └── mappings/
 │       └── xbrl_tags.py           # GAAP tag mappings
 ├── data/
@@ -894,7 +1179,9 @@ estimate/actual/surprise per quarter), `dividend_events`, `split_events`,
 `holders` (institutional + mutual-fund), `insider_transactions`, and `officers`; and the valuation
 layer's `valuations`, `valuation_summary`, `valuation_history` and `valuation_ranges` (see
 [Valuation history](#valuation-history)); and the quality scores' `per_share_annual`,
-`quality_scores` and `warning_signs` (see [Quality scores](#quality-scores)):
+`quality_scores` and `warning_signs` (see [Quality scores](#quality-scores)); and the SEC ownership tables
+`insider_filings`, `insider_trades`, `guru_filers`, `guru_filings`, `guru_holdings`, `cusip_map`,
+`guru_quarters` and `guru_positions` (see [SEC ownership](#sec-ownership-insiders-and-gurus)):
 
 ```sql
 -- Cheap against their own history: P/E in the bottom quarter of its last 10 years,
@@ -1003,6 +1290,8 @@ rate-limiter/retry logic.
 - **Rate Limits**: SEC allows 10 req/sec; we're conservative at ~8 req/sec
 - **Historical Depth**: SEC XBRL data typically available from 2009+
 - **Real-Time Data**: Yahoo Finance data may have 15-20 minute delay
+- **Ownership Data**: Form 4 history is 3 years and 13F history 8 quarters; a 13F reports only long
+  positions, up to 45 days after its quarter ends (see [Ownership limitations](#ownership-limitations))
 
 ## Contributing
 
@@ -1039,10 +1328,11 @@ The server binds to `127.0.0.1` by default (localhost only).
 ### Features
 
 - **Terminal command bar** — a Bloomberg-style `TICKER CODE` command line (focus with `` ` `` or `/`) that jumps straight to any workstation tab or global tool. See [Terminal command bar](#terminal-command-bar) below.
-- **Company workstation** — a single per-ticker page (`/stocks/{ticker}`) with 10 tabs: description/overview, price chart with indicators, financial statements, earnings, key stats (with the quality scores), historical prices, dividends, holders, insider activity, and valuation.
+- **Company workstation** — a single per-ticker page (`/stocks/{ticker}`) with 10 tabs: description/overview, price chart with indicators, financial statements, earnings, key stats (with the quality scores), historical prices, dividends, holders (the gurus' 13F positions above Yahoo's holders), insider activity (the SEC's Form 4 trades with their aggregates), and valuation.
+- **Gurus** — `/gurus` lists the 34 gurus at their latest 13F quarter, `/gurus/{cik}` shows a guru's holdings with weights, the changes from the quarter before and its filings, and `/gurus/portfolio` what they hold together. See [SEC ownership](#sec-ownership-insiders-and-gurus).
 - **Dashboard** — data quality score, field coverage bar chart, freshness summary, unmapped-fact tracker.
 - **Companies browser** — filterable list of all tracked companies with sector drill-down.
-- **Cross-company screener** — filter by any fundamental metric (ROIC, net margin, debt/EBITDA, …) *or* market/valuation column (P/E, dividend yield, PEG, short interest, …) *or* the valuation layer's Upside % / verdict *or* the quality scores (Piotroski F, Altman Z, the ranks and composite, …, with five preset screens), sort, paginate, compare selected companies side-by-side, and download results as CSV.
+- **Cross-company screener** — filter by any fundamental metric (ROIC, net margin, debt/EBITDA, …) *or* market/valuation column (P/E, dividend yield, PEG, short interest, …) *or* the valuation layer's Upside % / verdict *or* the quality scores (Piotroski F, Altman Z, the ranks and composite, …, with five preset screens) *or* the insiders' open-market trades and the gurus' holdings (`ins_*`, `gurus_holding`, `gurus_buying`), sort, paginate, compare selected companies side-by-side, and download results as CSV.
 - **Point-in-time (as-of) explorer** — look up what financials and ratios looked like as of any historical date (before later restatements), and browse vintage side-by-side tables.
 - **On-demand quote refresh** — re-fetch a single ticker's live price/market snapshot from the workstation without running a full collection (see `STOCK_WEB_ALLOW_QUOTE_REFRESH` below). After a stock split the stored valuations don't reflect (one dated after the stored price, as after a collection whose Yahoo quote failed, or one not yet stored since the ticker's last collection with Yahoo), the refresh isn't saved, because those valuations are on the pre-split basis; its status asks for a full collection of the ticker instead. A split here is a share split (a simple ratio such as 2:1, 5:4 or 1:10) or any price factor of 3:2 or more. The stock dividends and smaller spin-off factors Yahoo also lists don't stop a refresh: it stores them with the price and values the ticker again, so its DDM and multiples band move onto the new price's basis, as a full collection would put them. A saved refresh recomputes the snapshot's enterprise value, EV/EBITDA, EV/FCF and FCF yield as a full collection does (its new market cap with the latest year's net debt, EBITDA and FCF), so the columns keep one definition; Yahoo's own enterprise value stays in the JSON's `valuation` section.
 - **CSV export** — download annual financials, annual metrics, or screener results as CSV from any company page or screener view.
@@ -1062,8 +1352,8 @@ Per-ticker function codes (`TICKER CODE` → `/stocks/{TICKER}?tab=...`):
 | `STAT` | Key statistics | Valuation & market snapshot (P/E, market cap, beta, …) and the Quality section (composite, ranks, scores, warning signs) |
 | `HP` | Historical prices | Daily OHLCV price table |
 | `DVD` | Dividends | Dividend payments and stock splits |
-| `HDS` | Holders | Institutional and mutual-fund holders |
-| `INS` | Insiders | Insider transaction history |
+| `HDS` | Holders | The gurus' 13F positions in the stock (a Gurus section), then Yahoo's institutional and mutual-fund holders |
+| `INS` | Insiders | The SEC's Form 4 trades with open-market, CEO/CFO and cluster-buy aggregates (Yahoo's rows where none is stored) |
 | `VAL` | Valuation | Fair-value ranges per model (DCF/DDM/Graham/Lynch/multiples), assumptions, DCF sensitivity |
 
 Global codes (no ticker needed):
@@ -1095,6 +1385,11 @@ Key endpoints:
 | `GET /api/stocks/{ticker}/valuation` | Per-model fair-value ranges, assumptions, verdict, upside % |
 | `GET /api/stocks/{ticker}/valuation-history` | Valuation history: the historical value against the price, each multiple's 10-year range, the monthly series |
 | `GET /api/stocks/{ticker}/scores` | Quality scores: Piotroski with its nine tests, Altman, Beneish, Sloan, ROIC vs WACC, predictability, the five ranks and the composite, the growth table, the warning signs |
+| `GET /api/stocks/{ticker}/form4` | Insiders' trades from the SEC's Form 4 filings with their aggregates (open-market buying and selling over 3, 6 and 12 months, CEO/CFO buys, cluster buys, sales under a 10b5-1 plan); Yahoo's rows where none is stored |
+| `GET /api/stocks/{ticker}/gurus` | The gurus holding the stock or its other share class in their latest 13F quarter, with the quarter's change, then the ones that sold it out |
+| `GET /api/gurus` | Each guru at its latest quarter: the total value, the positions, the new and sold-out ones |
+| `GET /api/gurus/portfolio` | The gurus' aggregated portfolio: per security the gurus holding it, their summed shares and value, the buyers and sellers (`limit`, default 200) |
+| `GET /api/gurus/{cik}` | One guru's quarter (`period` for an earlier one): holdings with weights and changes, the changes grouped, the filings; 404 if not stored |
 | `GET /api/screen` | Cross-company screener (supports `verdict=cheap\|fair\|expensive`) |
 | `GET /api/export/company/{ticker}/annual.csv` | Annual financials as CSV |
 | `GET /api/export/company/{ticker}/metrics.csv` | Annual metrics as CSV |
@@ -1132,6 +1427,10 @@ shareholder data, a full collection now makes roughly 6 extra Yahoo Finance
 calls per ticker (`history()`, `dividends`, `splits`, `institutional_holders`,
 `mutualfund_holders`, `insider_transactions`) plus one benchmark call
 (`^GSPC` price history) made once per collection run, not per ticker.
+
+The INS tab's SEC trades and the HDS tab's Gurus section aren't part of a collection: they read what
+`python -m src.ownership.collect` stores (see [SEC ownership](#sec-ownership-insiders-and-gurus)); without it,
+INS shows Yahoo's rows and HDS no Gurus section.
 
 ## License
 
