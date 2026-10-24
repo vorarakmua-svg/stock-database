@@ -654,6 +654,11 @@ Collected:
 - Each XML is cached once it parses (`data/cache/form4/{accession}.xml`), so a later run fetches only the new
   filings. A document that isn't a readable ownership document is skipped and counted as an error, never
   guessed or stored as empty, and what an earlier run stored stays.
+- Only the company's own filings: a feed also lists the Form 4s the company filed as an owner of another
+  issuer's shares (PFE's of Cerevel, Berkshire's of OXY or Bank of America), which aren't its insiders' trades
+  and are left out, counted as "other issuer". A company that succeeded another (`PREDECESSOR_CIKS`: XOM from
+  Exxon Mobil Corp in 2026, BLK from the old BlackRock in 2024) also reads its predecessor's own Form 4s filed
+  before its first.
 
 Parsed (the SEC's `ownershipDocument`):
 - the reporting owners (CIK, name) and their roles (director, officer and title, 10% owner, other), the period
@@ -665,12 +670,16 @@ Parsed (the SEC's `ownershipDocument`):
 - only what the filing states: a price given as a footnote alone (an RSU's) stays empty with the footnote's id
   kept, shares owned after are never derived, and holding rows that record no transaction aren't kept.
 
-Amendments: a 4/A replaces the original it amends, the same owner's Form 4 filed on the day the 4/A names as
-its original's, for the same period of report where both give one. The original stays, marked `superseded_by`
-the 4/A's accession, and the aggregates, the INS tab and the screener leave it out. A filing with several
-reporting owners has a row for each in `insider_filings` and its trades once in `insider_trades`.
+Amendments: a 4/A amends the same owner's filing made on the day the 4/A names as its original's (a Form 4 or
+an earlier 4/A; the period of report only chooses between several) and replaces only the trades it restates:
+one of the same table, code and security on the same date or with the same shares and price, or one with the
+same date, shares and price under another code (a code correction), matched one for one. The amended filing's
+other trades stand, as a 4/A often adds a trade its original omitted (both of PFE's do). A restated trade stays,
+marked `superseded_by` the 4/A's accession in `insider_trades`, and the aggregates, the INS tab and the
+screener leave it out; `insider_filings.superseded_by` notes the amending 4/A. A filing with several reporting
+owners has a row for each in `insider_filings` and its trades once in `insider_trades`.
 
-The aggregates, computed at read time from the trades of the filings no amendment superseded:
+The aggregates, computed at read time from the trades no amendment restated:
 - **Open-market buying and selling** over 3, 6 and 12 months (91, 182 and 365 days back from today): the
   purchases (code P) and sales (code S) of non-derivative securities, in shares and dollars (`shares × price`;
   a trade without a price counts in shares only), the net (`bought - sold`, in dollars) and the distinct
@@ -701,7 +710,8 @@ Where it shows:
 
 Checked on PFE and AAPL, collected into a scratch copy (452 filings in 107 seconds, 0 errors). On 2026-10-23,
 PFE's 3 buying insiders had bought $2.96M in the last 12 months, all in August 2026 (a cluster that includes
-the CEO's $1.00M), and its two amendments each superseded their original; AAPL's 8 selling insiders had sold
+the CEO's $1.00M), its two amendments each added a trade their original omitted, and its Form 4 as Cerevel's
+owner is left out; AAPL's 8 selling insiders had sold
 $207M, 56% of the shares under 10b5-1 plans. Of Yahoo's rows for the same months, 26 of PFE's 34 and 80 of
 AAPL's 100 match an SEC trade on the same day with shares within 1%; the rest are kinds Yahoo labels or sums
 differently (option conversions, multi-day sale ranges, rows without text).
@@ -814,8 +824,10 @@ Where it shows:
 Checked by `qa/oracle/thirteenf_oracle.py`, which imports nothing from `src` and re-reads every cached filing
 with plain patterns. On the first collection (2026-10-22, a scratch copy) all its gates pass on the 248
 filings (each one's form, date and period, the units, the cover's totals, the entries' count, CUSIPs and
-values, and `checksum_ok`). Each of the 235 quarters equals its filings' totals, none is incomplete, and the
-stored quarters and positions equal what `load_guru` builds from the filings for all 34 gurus.
+values, and `checksum_ok`). Each of the 235 quarters equals the totals of the filings it stands on, less the
+rows a NEW HOLDINGS amendment repeats (First Eagle's Q2 2026: $60.75B, where its two covers add to
+$120.67B), none is incomplete, and the stored quarters and positions equal what `load_guru` builds from the
+filings for all 34 gurus.
 
 ### Collecting ownership data
 

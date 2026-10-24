@@ -43,8 +43,17 @@ Nothing in the valuations, the history or the scores changes.
   security title, date, transaction code, shares, price, acquired or disposed, shares owned after, direct or
   indirect. Derivative transactions are kept with their code, shares, exercise price and underlying. Footnote
   references stay as their ids. A malformed document is skipped and logged, never guessed.
-- **Amendments**: a 4/A replaces the original filing of the same owner and period of report; the original is
-  kept, marked superseded.
+- **Only the company's own filings** (BUG-208): a feed also lists the Form 4s the company filed as an owner of
+  another issuer's shares (PFE's of Cerevel, Berkshire's of OXY); a filing is kept only when its issuer CIK is
+  the company's, the rest counted as "other issuer". A successor company (`PREDECESSOR_CIKS`: XOM from Exxon
+  Mobil Corp, BLK from the old BlackRock) also reads its predecessor's own Form 4s filed before its first
+  (BUG-210).
+- **Amendments** (BUG-209): a 4/A amends the same owner's filing made on the day it names as its original's (a
+  4 or an earlier 4/A, a chain; the period of report only chooses between several) and replaces only the trades
+  it restates: the same table, code and security on the same date or with the same shares and price, or the same
+  date, shares and price under another code (a code correction), matched one for one. The amended filing's other
+  trades stand (both of PFE's 4/As add an omitted trade). A restated trade is kept, marked
+  `insider_trades.superseded_by`; `insider_filings.superseded_by` notes the amending 4/A.
 
 ## 13F (`src/ownership/thirteenf.py`)
 

@@ -491,16 +491,17 @@ class Reader:
         return [dict(row) for row in cur.fetchall()]
 
     def sec_insider_trades(self, ticker: str) -> List[Dict[str, Any]]:
-        """The ticker's Form 4 trades from filings no amendment superseded, each with its filing (form, filed
-        date, 10b5-1 flag) and its first reporting owner (name, role, title, CEO/CFO flag), newest first.
-        [] before the tables exist."""
+        """The ticker's Form 4 trades that no amendment restated (``insider_trades.superseded_by``), each with its
+        filing (form, filed date, 10b5-1 flag) and its first reporting owner (name, role, title, CEO/CFO flag),
+        newest first. [] before the tables exist, or while the trades lack their amendment note (a table from
+        older code, until the next collection)."""
         try:
             cur = self._conn.execute(
                 "SELECT t.*, f.form, f.filed_date, f.owner_cik, f.owner_name, f.is_director, f.is_officer, "
                 "f.officer_title, f.is_ten_percent, f.is_ceo_cfo, f.aff10b5one "
                 "FROM insider_trades t JOIN insider_filings f ON f.accession = t.accession "
                 "AND f.owner_cik = (SELECT MIN(owner_cik) FROM insider_filings WHERE accession = t.accession) "
-                "WHERE t.ticker = ? AND f.superseded_by IS NULL "
+                "WHERE t.ticker = ? AND t.superseded_by IS NULL "
                 "ORDER BY t.date DESC, f.filed_date DESC, t.accession, t.seq",
                 (ticker,),
             )
@@ -589,7 +590,9 @@ class Reader:
         quality: Union[bool, FrozenSet[str]] = (
             frozenset(row[1] for row in self._conn.execute("PRAGMA table_info(quality_scores)"))
             if "quality_scores" in tables else False)
-        insiders = {"insider_trades", "insider_filings"} <= tables
+        # The insiders' fields read each trade's amendment note, which a trades table from older code lacks.
+        insiders = {"insider_trades", "insider_filings"} <= tables and "superseded_by" in {
+            row[1] for row in self._conn.execute("PRAGMA table_info(insider_trades)")}
         gurus = {"guru_quarters", "guru_positions"} <= tables
         sql, params = build_screen_query(spec, history, quality, insiders, gurus)
         count_sql, count_params = build_count_query(spec, history, quality, insiders, gurus)

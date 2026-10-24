@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 3 · DOING 0 · DONE 28 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 2 · DOING 1 · DONE 28 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -55,7 +55,7 @@
 | M3-5 | The CUSIP map (curated for our universe, OpenFIGI for the rest) and quarter-over-quarter changes; with tests | DONE | this commit | `qa/evidence/ownership-m3-5-*.txt` |
 | M3-6 | Guru pages (`/gurus`, `/gurus/{cik}`, `/gurus/portfolio`), the HDS tab's Gurus section, the API, browser-checked; with tests | DONE | this commit | `qa/evidence/ownership-m3-6-*.txt` |
 | M3-7 | Docs: README and USAGE_GUIDE | DONE | this commit | `qa/evidence/m3-7-gates.txt` |
-| M3-8 | Milestone close: code review 17 (opus) with Critical and Important findings fixed; backup, then the live ownership collection into the user's DB, checked against Yahoo and the 13F checksums | TODO | | |
+| M3-8 | Milestone close: code review 17 (opus) with Critical and Important findings fixed; backup, then the live ownership collection into the user's DB, checked against Yahoo and the 13F checksums | DOING (review 17 fixed; the live collection next) | | |
 
 ## M4: more valuation tools and market pages
 

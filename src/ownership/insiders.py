@@ -1,14 +1,14 @@
-"""Insider aggregates (Milestone 3), from the stored Form 4 trades
+"""Insider aggregates (Milestone 3), from the stored Form 4 trades, and the trades each 4/A restates
 (docs/superpowers/specs/2026-10-22-sec-ownership-design.md).
 
-Only open-market trades count: purchases (code P) and sales (S) in the non-derivative table, from filings no
-amendment superseded. Grants, exercises, tax withholding and gifts are shown but never summed.
+Only open-market trades count: purchases (code P) and sales (S) in the non-derivative table, that no amendment
+restated (``supersessions``). Grants, exercises, tax withholding and gifts are shown but never summed.
 """
 from __future__ import annotations
 
 import re
 from datetime import date, timedelta
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 #: The Form 4 transaction codes (the SEC's General Instructions, item 8).
 CODE_MEANINGS: Dict[str, str] = {
@@ -66,6 +66,119 @@ def _clusters(buys: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
         else:
             i += 1
     return out
+
+
+_Row = Mapping[str, Any]
+
+
+def _table_and_title(trade: _Row) -> Tuple[Any, str]:
+    """What a restatement always keeps of a trade: its table and its security's title, the title's case and spacing
+    aside."""
+    return trade.get("kind"), " ".join((trade.get("security_title") or "").split()).casefold()
+
+
+def _same_security(a: _Row, b: _Row) -> bool:
+    """The same table, security and transaction code."""
+    return _table_and_title(a) == _table_and_title(b) and a.get("code") == b.get("code")
+
+
+def _same_day(a: _Row, b: _Row) -> bool:
+    return a.get("date") == b.get("date")
+
+
+def _same_amount(a: _Row, b: _Row) -> bool:
+    return (a.get("shares"), a.get("price")) == (b.get("shares"), b.get("price"))
+
+
+def _same_trade(a: _Row, b: _Row) -> bool:
+    return _same_security(a, b) and _same_day(a, b) and _same_amount(a, b)
+
+
+def _code_corrected(a: _Row, b: _Row) -> bool:
+    """The same trade but for its code: a purchase filed as a sale, say. Left standing, the two would cancel each
+    other in the net buying."""
+    return _table_and_title(a) == _table_and_title(b) and _same_day(a, b) and _same_amount(a, b)
+
+
+def _date_corrected(a: _Row, b: _Row) -> bool:
+    """Its date corrected."""
+    return _same_security(a, b) and _same_amount(a, b)
+
+
+def _amount_corrected(a: _Row, b: _Row) -> bool:
+    """Its shares or its price corrected."""
+    return _same_security(a, b) and _same_day(a, b)
+
+
+#: How an amendment's trade finds the trade it restates, each way tried over all its trades before the next: the
+#: same trade; the same but for its code; the same security, shares and price (its date corrected); the same
+#: security and date (its shares or price corrected).
+_RESTATES: Tuple[Callable[[_Row, _Row], bool], ...] = (_same_trade, _code_corrected, _date_corrected,
+                                                        _amount_corrected)
+
+
+def _amended(amendment: _Row, earlier: Sequence[_Row], owners: Mapping[str, Set[str]]) -> Optional[str]:
+    """The filing a 4/A amends, of those filed before it: a reporting owner's own, filed on the 4/A's original filing
+    day (a Form 4, or an earlier 4/A); of several, the one of the 4/A's period of report."""
+    day, mine = amendment.get("original_filed"), owners[amendment["accession"]]
+    found = [f for f in earlier if day and f.get("filed_date") == day and owners[f["accession"]] & mine]
+    if len(found) > 1:
+        found = [f for f in found if f.get("period_of_report") == amendment.get("period_of_report")] or found
+    return found[-1]["accession"] if found else None
+
+
+def supersessions(filings: Iterable[_Row], trades: Iterable[_Row]
+                  ) -> Tuple[Dict[str, str], Dict[Tuple[str, int], str]]:
+    """What one company's 4/As amend: each filing's latest amendment, and each trade an amendment restates.
+
+    *filings* has a row per filing and reporting owner (accession, owner_cik, form, filed_date, period_of_report,
+    original_filed); *trades* a row per trade (accession, seq, kind, code, security_title, date, shares, price).
+    A 4/A amends the filing ``_amended`` finds, and joins its chain: the first filing and its amendments. Taken in
+    the order they were filed, each restates a trade of its chain that still stands when it has a trade of the same
+    table, code and security on the same date or with the same shares and price, or the same trade but for its code
+    (``_RESTATES``), matched one for one. Every other trade stands: an amendment adding an omitted trade replaces
+    none.
+
+    Returns the filings amended (accession -> its latest amendment's) and the trades restated ((accession, seq) ->
+    the restating amendment's accession)."""
+    first: Dict[str, _Row] = {}
+    owners: Dict[str, Set[str]] = {}  # each filing's reporting owners' CIKs, a blank one aside
+    for row in filings:
+        first.setdefault(row["accession"], row)
+        ciks = owners.setdefault(row["accession"], set())
+        if row.get("owner_cik"):
+            ciks.add(row["owner_cik"])
+    own: Dict[str, List[_Row]] = {}
+    for trade in sorted(trades, key=lambda t: (t["accession"], t["seq"])):
+        own.setdefault(trade["accession"], []).append(trade)
+    # The order filed, a day's Form 4s before its 4/As.
+    order = sorted(first.values(), key=lambda f: (f.get("filed_date") or "", f.get("form") == "4/A", f["accession"]))
+    amended_by: Dict[str, str] = {}
+    restated: Dict[Tuple[str, int], str] = {}
+    chains: Dict[str, List[str]] = {}  # each filing's chain, first filing first (one list shared by its members)
+    for i, filing in enumerate(order):
+        accession = filing["accession"]
+        parent = _amended(filing, order[:i], owners) if filing.get("form") == "4/A" else None
+        if parent is None:
+            chains[accession] = [accession]
+            continue
+        amended_by[parent] = accession
+        chain = chains[accession] = chains[parent]
+        standing = [t for member in chain for t in own.get(member, [])]
+        mine = own.get(accession, [])
+        matched: Set[int] = set()
+        for same in _RESTATES:
+            for j, trade in enumerate(mine):
+                if j in matched:
+                    continue
+                for old in standing:
+                    key = (old["accession"], old["seq"])
+                    if key not in restated and same(old, trade):
+                        restated[key] = accession
+                        matched.add(j)
+                        break
+        chain.append(accession)
+    return amended_by, restated
 
 
 def summarize(trades: Sequence[Mapping[str, Any]], today: str) -> Dict[str, Any]:

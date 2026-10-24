@@ -440,7 +440,8 @@ class SQLiteStore:
             + ", ".join(f"{c} {_QUALITY_TYPES.get(c, 'REAL')}" for c in QUALITY_COLUMNS) + ")"
         )
         # Insiders' Form 4 filings (Milestone 3): one row per filing and reporting owner, and the filing's
-        # transactions; a 4/A marks the original it amends (superseded_by).
+        # transactions. A filing amended by a 4/A notes its latest amendment (insider_filings.superseded_by), and a
+        # trade a 4/A restates names that amendment (insider_trades.superseded_by): the readers count the others.
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS insider_filings (
@@ -482,6 +483,7 @@ class SQLiteStore:
                 exercise_price REAL,
                 underlying_title TEXT,
                 underlying_shares REAL,
+                superseded_by TEXT,
                 PRIMARY KEY (accession, seq)
             );
             CREATE INDEX IF NOT EXISTS idx_insider_trades_ticker ON insider_trades (ticker, date);
@@ -1332,18 +1334,26 @@ class SQLiteStore:
         finally:
             conn.close()
 
-    def export_insider_filings(self, ticker: str, filings: Sequence[Any], collected_at: str) -> None:
+    def export_insider_filings(self, ticker: str, filings: Sequence[Any], collected_at: str,
+                               left_out: Sequence[str] = ()) -> None:
         """Store one company's Form 4 filings, ``(FilingRef, Form4)`` pairs, in one transaction.
 
         Each filing's rows are replaced by accession, so a filing an earlier run stored and this one couldn't
-        fetch stays. Then every 4/A marks the original it amends: the same owner's Form 4 filed on the 4/A's
-        original filing day, for the same period where both give one."""
-        from ..ownership.insiders import ceo_or_cfo
+        fetch stays; the company's rows of the accessions *left_out* (the collector's: another issuer's filings,
+        say) are removed. Then the company's amendments are worked out again from all its stored filings
+        (``insiders.supersessions``): each filing amended notes its latest 4/A (``insider_filings.superseded_by``),
+        and each trade a 4/A restates names it (``insider_trades.superseded_by``)."""
+        from ..ownership.insiders import ceo_or_cfo, supersessions
 
         conn = self._connect()
         try:
             self._create_schema(conn)
             self._ensure_columns(conn, "insider_filings", {"is_ceo_cfo": "INTEGER"})
+            # A table from before a trade had its own amendment note.
+            self._ensure_columns(conn, "insider_trades", {"superseded_by": "TEXT"})
+            for accession in left_out:
+                conn.execute("DELETE FROM insider_trades WHERE accession = ? AND ticker = ?", (accession, ticker))
+                conn.execute("DELETE FROM insider_filings WHERE accession = ? AND ticker = ?", (accession, ticker))
             for ref, filing in filings:
                 conn.execute("DELETE FROM insider_trades WHERE accession = ?", (ref.accession,))
                 conn.execute("DELETE FROM insider_filings WHERE accession = ?", (ref.accession,))
@@ -1366,16 +1376,20 @@ class SQLiteStore:
                       ",".join(t.price_footnotes) or None, t.acquired_disposed, t.owned_after, t.direct_indirect,
                       t.nature_of_ownership, t.exercise_price, t.underlying_title, t.underlying_shares)
                      for t in filing.trades])
+            filing_columns = ("accession", "owner_cik", "form", "filed_date", "period_of_report", "original_filed")
+            trade_columns = ("accession", "seq", "kind", "code", "security_title", "date", "shares", "price")
+            amended_by, restated = supersessions(
+                [dict(zip(filing_columns, row)) for row in conn.execute(
+                    f"SELECT {', '.join(filing_columns)} FROM insider_filings WHERE ticker = ?", (ticker,))],
+                [dict(zip(trade_columns, row)) for row in conn.execute(
+                    f"SELECT {', '.join(trade_columns)} FROM insider_trades WHERE ticker = ?", (ticker,))])
             conn.execute("UPDATE insider_filings SET superseded_by = NULL WHERE ticker = ?", (ticker,))
-            conn.execute(
-                "UPDATE insider_filings SET superseded_by = ("
-                "SELECT a.accession FROM insider_filings a WHERE a.ticker = insider_filings.ticker "
-                "AND a.form = '4/A' AND a.owner_cik = insider_filings.owner_cik "
-                "AND a.original_filed = insider_filings.filed_date "
-                "AND (a.period_of_report IS NULL OR insider_filings.period_of_report IS NULL "
-                "OR a.period_of_report = insider_filings.period_of_report) "
-                "ORDER BY a.filed_date DESC LIMIT 1) "
-                "WHERE ticker = ? AND form = '4'", (ticker,))
+            conn.execute("UPDATE insider_trades SET superseded_by = NULL WHERE ticker = ?", (ticker,))
+            conn.executemany("UPDATE insider_filings SET superseded_by = ? WHERE accession = ? AND ticker = ?",
+                             [(amendment, accession, ticker) for accession, amendment in amended_by.items()])
+            conn.executemany(
+                "UPDATE insider_trades SET superseded_by = ? WHERE accession = ? AND seq = ? AND ticker = ?",
+                [(amendment, accession, seq, ticker) for (accession, seq), amendment in restated.items()])
             conn.commit()
         finally:
             conn.close()

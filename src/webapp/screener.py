@@ -103,18 +103,18 @@ QUALITY_NEEDS: Dict[str, str] = {**{f: f for f in QUALITY_FIELDS}, "price_to_nca
 QualityColumns = Union[bool, AbstractSet[str]]
 
 # Insiders' open-market trades from the SEC's Form 4 filings (insider_trades, insider_filings), over the last 365
-# days, from filings no amendment superseded: correlated subqueries, NULL when the tables don't exist
-# (docs/superpowers/specs/2026-10-22-sec-ownership-design.md). A joint filing counts each of its owners.
+# days, those no amendment restated (insider_trades.superseded_by): correlated subqueries, NULL when the tables or
+# that column don't exist (docs/superpowers/specs/2026-10-22-sec-ownership-design.md). A joint filing counts each of
+# its owners.
 _LIVE_TRADES = ("FROM insider_trades {t} JOIN insider_filings {f} ON {f}.accession = {t}.accession "
-                "WHERE {t}.ticker = ma.ticker AND {t}.kind = 'nonderivative' AND {f}.superseded_by IS NULL ")
+                "WHERE {t}.ticker = ma.ticker AND {t}.kind = 'nonderivative' AND {t}.superseded_by IS NULL ")
 INSIDER_EXPRS: Dict[str, str] = {
     # Open-market dollars bought less sold (code P less S), each trade once.
     "ins_net_buy_12m":
         "(SELECT SUM(CASE t.code WHEN 'P' THEN t.shares * t.price ELSE -t.shares * t.price END) "
         "FROM insider_trades t WHERE t.ticker = ma.ticker AND t.kind = 'nonderivative' "
         "AND t.code IN ('P', 'S') AND t.price IS NOT NULL AND t.date >= date('now', '-365 days') "
-        "AND NOT EXISTS (SELECT 1 FROM insider_filings f WHERE f.accession = t.accession "
-        "AND f.superseded_by IS NOT NULL))",
+        "AND t.superseded_by IS NULL)",
     # Distinct insiders buying in the open market.
     "ins_buyers_12m":
         "(SELECT COUNT(DISTINCT f.owner_cik) " + _LIVE_TRADES.format(t="t", f="f")
@@ -129,7 +129,7 @@ INSIDER_EXPRS: Dict[str, str] = {
         .replace("t2.ticker = ma.ticker", "t2.ticker = t1.ticker")
         + "AND t2.code = 'P' AND t2.date BETWEEN t1.date AND date(t1.date, '+30 days'))) "
         "FROM insider_trades t1 WHERE t1.ticker = ma.ticker AND t1.kind = 'nonderivative' AND t1.code = 'P' "
-        "AND t1.date >= date('now', '-365 days'))",
+        "AND t1.superseded_by IS NULL AND t1.date >= date('now', '-365 days'))",
 }
 
 #: A ticker as it may be written into SQL as a literal: our universe's are all this shape.
@@ -390,7 +390,8 @@ def _qualify_column(field_name: str, *, context: str = "filter", history: bool =
     caller's existing error-matching expectations. A ``HISTORY_EXPRS`` field
     is NULL when *history* is False (no ``valuation_ranges`` table), and a
     ``QUALITY_EXPRS`` field when *quality* is False (no ``quality_scores``) or lacks the column it reads; an
-    ``INSIDER_EXPRS`` or ``GURU_EXPRS`` field when *insiders* or *gurus* is False (no tables).
+    ``INSIDER_EXPRS`` or ``GURU_EXPRS`` field when *insiders* or *gurus* is False (no tables; for the insiders, or
+    no trade-level amendment note).
     """
     if field_name in _METRIC_COL_SET:
         return f'ma."{field_name}"'

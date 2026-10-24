@@ -147,9 +147,10 @@ def _trade(node: ET.Element, table: str, seq: int) -> Trade:
 
 
 def parse_form4(xml: bytes, accession: str) -> Form4:
-    """Parse one Form 4 or 4/A document (its raw XML, not the rendered page)."""
+    """Parse one Form 4 or 4/A document (its raw XML, not the rendered page). Whitespace around it is ignored: an
+    XML declaration after a blank line isn't well-formed."""
     try:
-        root = ET.fromstring(xml)
+        root = ET.fromstring(xml.strip())
     except ET.ParseError as exc:
         raise Form4Error(f"{accession}: not well-formed XML ({exc})") from exc
     if root.tag != "ownershipDocument":

@@ -649,9 +649,8 @@ Two tables hold each company's Form 4 and 4/A filings of the last three years:
     or 0), and `is_ceo_cfo` (1 when the title names the chief executive or financial officer);
   - `aff10b5one`: 1 when the filing says its trades were made under a Rule 10b5-1 plan, 0 when it says they
     weren't, NULL when it doesn't say;
-  - `superseded_by`: the accession of the 4/A that replaced this filing, NULL for a filing that stands. A
-    superseded filing stays in the table, and every aggregate, the INS tab and the screener leave it out, so
-    test `superseded_by IS NULL`;
+  - `superseded_by`: the accession of the 4/A that amended this filing, NULL otherwise; the trades the 4/A
+    restated are marked in `insider_trades`, and the filing's other trades stand;
   - `collected_at`.
 - **`insider_trades`**: one row per transaction, (`accession`, `seq`), `seq` being its place in the filing:
   - `ticker`, `kind` (`nonderivative` or `derivative`), `security_title`, `date`, and `code`, the SEC's
@@ -661,7 +660,10 @@ Two tables hold each company's Form 4 and 4/A filings of the last three years:
     keeps), `acquired_disposed` (`A` or `D`), `owned_after` (NULL where the filing doesn't say),
     `direct_indirect` (`D` or `I`) and `nature_of_ownership`;
   - a derivative row (an option, an RSU) also has `exercise_price`, `underlying_title` and
-    `underlying_shares`.
+    `underlying_shares`;
+  - `superseded_by`: the accession of the 4/A that restated this trade, NULL for a trade that stands. A
+    restated trade stays in the table, and every aggregate, the INS tab and the screener leave it out, so test
+    `t.superseded_by IS NULL`.
 
 A filing with several reporting owners has a row in `insider_filings` for each, so a join on `accession`
 repeats its trades once per owner: add dollars from `insider_trades` alone, as the first query does. The INS
@@ -676,9 +678,7 @@ SELECT t.ticker,
        SUM(CASE t.code WHEN 'P' THEN t.shares * t.price ELSE -t.shares * t.price END) AS net
 FROM insider_trades t
 WHERE t.kind = 'nonderivative' AND t.code IN ('P', 'S') AND t.price IS NOT NULL
-  AND t.date >= date('now', '-365 days')
-  AND NOT EXISTS (SELECT 1 FROM insider_filings f
-                  WHERE f.accession = t.accession AND f.superseded_by IS NOT NULL)
+  AND t.date >= date('now', '-365 days') AND t.superseded_by IS NULL
 GROUP BY t.ticker
 ORDER BY net DESC;
 
@@ -688,21 +688,21 @@ SELECT t.date, f.owner_name, f.officer_title, f.is_director,
 FROM insider_trades t
 JOIN insider_filings f ON f.accession = t.accession
 WHERE t.ticker = 'PFE' AND t.kind = 'nonderivative' AND t.code = 'P'
-  AND f.superseded_by IS NULL AND t.date >= date('now', '-365 days')
+  AND t.superseded_by IS NULL AND t.date >= date('now', '-365 days')
 ORDER BY t.date;
 
 -- Purchases by a company's CEO or CFO, newest first
 SELECT t.ticker, t.date, f.owner_name, f.officer_title, t.shares, t.price, t.shares * t.price AS value
 FROM insider_trades t
 JOIN insider_filings f ON f.accession = t.accession
-WHERE t.kind = 'nonderivative' AND t.code = 'P' AND f.is_ceo_cfo = 1 AND f.superseded_by IS NULL
+WHERE t.kind = 'nonderivative' AND t.code = 'P' AND f.is_ceo_cfo = 1 AND t.superseded_by IS NULL
 ORDER BY t.date DESC;
 
--- The filings an amendment replaced, with the 4/A that replaced each
-SELECT o.ticker, o.owner_name, o.filed_date AS filed, a.accession AS amended_by, a.filed_date AS amended_on
-FROM insider_filings o
-JOIN insider_filings a ON a.accession = o.superseded_by AND a.owner_cik = o.owner_cik
-ORDER BY o.ticker, o.filed_date;
+-- The trades a 4/A restated, with the 4/A that restated each
+SELECT t.ticker, t.accession AS amended, t.date, t.code, t.shares, t.price, t.superseded_by AS restated_by
+FROM insider_trades t
+WHERE t.superseded_by IS NOT NULL
+ORDER BY t.ticker, t.date;
 ```
 
 ### Gurus (13F)

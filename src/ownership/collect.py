@@ -2,7 +2,10 @@
 (docs/superpowers/specs/2026-10-22-sec-ownership-design.md).
 
 For each company: its submissions feed back *years* (the ``recent`` block, and the older pages whose filings reach
-the cutoff), then each Form 4 and 4/A's raw XML, parsed (``form4.parse_form4``) and stored. For each guru: each of
+the cutoff), then each Form 4 and 4/A's raw XML, parsed (``form4.parse_form4``) and stored where the company is its
+issuer: the feed also lists the company's own filings as another issuer's owner, which are left out. A successor
+company (``sec_handler.PREDECESSOR_CIKS``) also takes its predecessor's Form 4s as issuer filed before its own first
+one. One company's failure is reported and the run goes on. For each guru: each of
 its filers' feeds, then each 13F-HR and 13F-HR/A whose period falls in the last *quarters* quarters before the
 current one, read from its full submission text (``thirteenf.parse_13f``) and stored under the guru. A document is
 cached on disk once it parses, so a later run fetches only new filings. One that fails to fetch or parse is reported
@@ -29,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple, TypeVar
 
 from ..exporters.sqlite_store import SQLiteStore, read_only_uri
+from ..fetchers.sec_handler import PREDECESSOR_CIKS
 from .cusips import UNIVERSE_CUSIPS
 from .form4 import Form4, Form4Error, parse_form4
 from .gurus import Guru
@@ -170,11 +174,85 @@ class ThirteenFSource(_FilerSource):
         return self._document(f"{ref.accession}.txt", url, lambda content: parse_13f(content, ref.accession))
 
 
+def _insiders_summary(listed: int = 0, stored: int = 0, other_issuer: int = 0, from_predecessor: int = 0,
+                      errors: Optional[List[str]] = None) -> Dict[str, Any]:
+    return {"listed": listed, "stored": stored, "other_issuer": other_issuer, "from_predecessor": from_predecessor,
+            "errors": errors or []}
+
+
+def _with_issuers(source: Form4Source, cik: str, refs: Sequence[FilingRef], errors: List[str]
+                  ) -> Iterator[Tuple[FilingRef, Form4, int]]:
+    """Each of *refs*, from the feed of *cik*, parsed, with its issuer's CIK as a number. One that fails to fetch or
+    parse, or names no issuer, is reported in *errors*."""
+    for ref in refs:
+        try:
+            filing = source.filing(cik, ref)
+        except (OSError, Form4Error) as exc:
+            errors.append(f"{ref.accession}: {exc}")
+            continue
+        try:
+            issuer = int(filing.issuer_cik or "")
+        except ValueError:
+            errors.append(f"{ref.accession}: no issuer CIK")
+            continue
+        yield ref, filing, issuer
+
+
+def _company_insiders(store: SQLiteStore, ticker: str, cik: str, since: str, source: Form4Source,
+                      predecessor: Optional[str], collected_at: str) -> Dict[str, Any]:
+    """Collect and store one company's Form 4 filings (``collect_insiders``), and return its summary."""
+    errors: List[str] = []
+    try:
+        refs = form4_refs(source.feed_pages(cik, since), since)
+    except (OSError, ValueError) as exc:
+        return _insiders_summary(errors=[f"submissions: {exc}"])
+    kept: List[Tuple[FilingRef, Form4]] = []
+    left_out: List[str] = []  # parsed, but not the company's: their rows go, should an earlier run have stored them
+    for ref, filing, issuer in _with_issuers(source, cik, refs, errors):
+        if issuer == int(cik):
+            kept.append((ref, filing))
+        else:
+            left_out.append(ref.accession)
+    other_issuer, from_predecessor = len(left_out), 0
+    if predecessor:
+        # The predecessor's own Form 4s filed before the successor's first as issuer, or all of them without one.
+        start = min((ref.filed for ref, _ in kept), default=None)
+        listed = {ref.accession for ref in refs}
+        try:
+            theirs = [ref for ref in form4_refs(source.feed_pages(predecessor, since), since)
+                      if ref.accession not in listed]
+        except (OSError, ValueError) as exc:
+            errors.append(f"predecessor {predecessor} submissions: {exc}")
+            theirs = []
+        before = [ref for ref in theirs if start is None or ref.filed < start]
+        left_out += [ref.accession for ref in theirs if start is not None and ref.filed >= start]
+        refs = refs + before
+        for ref, filing, issuer in _with_issuers(source, predecessor, before, errors):
+            if issuer == int(predecessor):
+                kept.append((ref, filing))
+                from_predecessor += 1
+            else:
+                left_out.append(ref.accession)
+                other_issuer += 1
+    try:
+        store.export_insider_filings(ticker, kept, collected_at, left_out=left_out)
+    except sqlite3.Error as exc:  # this company's batch is rolled back and reported; what it stored before stays
+        errors.append(f"store: {type(exc).__name__}: {exc}")
+        kept, from_predecessor = [], 0
+    return _insiders_summary(len(refs), len(kept), other_issuer, from_predecessor, errors)
+
+
 def collect_insiders(db_path: Path, tickers: Sequence[str], years: float, source: Form4Source,
                      today: Optional[str] = None, log: Callable[[str], None] = lambda line: None,
-                     ) -> Dict[str, Dict[str, Any]]:
-    """Fetch, parse and store each company's Form 4 filings of the last *years*. Returns, per ticker, the
-    filings listed, stored, and the errors (a failed fetch or parse; a company without a CIK)."""
+                     predecessors: Mapping[str, str] = PREDECESSOR_CIKS) -> Dict[str, Dict[str, Any]]:
+    """Fetch, parse and store each company's Form 4 filings of the last *years* whose issuer is the company (its CIK
+    read as a number), and, for a successor in *predecessors* (successor CIK -> predecessor CIK), its predecessor's
+    as issuer filed before the successor's first, all of them where it has none yet, under the company's ticker.
+
+    Returns, per ticker, the filings listed (the predecessor's from the successor's first on aren't), stored (of
+    them, ``from_predecessor``), the company's own filings as another issuer's owner, left out (``other_issuer``),
+    and the errors: a failed feed, fetch, parse or store; a filing naming no issuer; a company without a CIK. One
+    company's failure is reported and the run goes on."""
     day = date.fromisoformat(today) if today else date.today()
     since = (day - timedelta(days=round(365.25 * years))).isoformat()
     with sqlite3.connect(str(db_path)) as conn:
@@ -184,22 +262,19 @@ def collect_insiders(db_path: Path, tickers: Sequence[str], years: float, source
     for ticker in tickers:
         cik = ciks.get(ticker)
         if not cik:
-            summary[ticker] = {"listed": 0, "stored": 0, "errors": ["no CIK"]}
+            summary[ticker] = _insiders_summary(errors=["no CIK"])
             continue
+        predecessor = None
         try:
-            refs = form4_refs(source.feed_pages(cik, since), since)
-        except (OSError, ValueError) as exc:
-            summary[ticker] = {"listed": 0, "stored": 0, "errors": [f"submissions: {exc}"]}
-            continue
-        parsed, errors = [], []
-        for ref in refs:
-            try:
-                parsed.append((ref, source.filing(cik, ref)))
-            except (OSError, Form4Error) as exc:
-                errors.append(f"{ref.accession}: {exc}")
-        store.export_insider_filings(ticker, parsed, datetime.now(timezone.utc).isoformat())
-        summary[ticker] = {"listed": len(refs), "stored": len(parsed), "errors": errors}
-        log(f"{ticker}: {len(refs)} Form 4 filings since {since}, {len(parsed)} stored, {len(errors)} errors")
+            predecessor = predecessors.get(f"{int(cik):010d}")
+            summary[ticker] = _company_insiders(store, ticker, cik, since, source, predecessor,
+                                                datetime.now(timezone.utc).isoformat())
+        except Exception as exc:  # anything else one company raises is its own: the run goes on
+            summary[ticker] = _insiders_summary(errors=[f"{type(exc).__name__}: {exc}"])
+        s = summary[ticker]
+        log(f"{ticker}: {s['listed']} Form 4 filings since {since}, {s['stored']} stored"
+            + (f" ({s['from_predecessor']} its predecessor's, CIK {predecessor})" if predecessor else "")
+            + f", {s['other_issuer']} of other issuers left out, {len(s['errors'])} errors")
     return summary
 
 
@@ -395,8 +470,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 summary = collect_insiders(db_path, tickers, args.years, Form4Source(sec, args.cache_dir),
                                            log=lambda line: print(line, flush=True))
                 stored = sum(s["stored"] for s in summary.values())
+                other = sum(s["other_issuer"] for s in summary.values())
                 errors = sum(len(s["errors"]) for s in summary.values())
-                print(f"Form 4 filings stored: {stored} for {len(summary)} tickers; errors: {errors}")
+                print(f"Form 4 filings stored: {stored} for {len(summary)} tickers; other issuers' filings left out: "
+                      f"{other}; errors: {errors}")
             if args.gurus:
                 summary = collect_gurus(db_path, GURUS, args.quarters, ThirteenFSource(sec, args.cache_dir),
                                         log=lambda line: print(line, flush=True))

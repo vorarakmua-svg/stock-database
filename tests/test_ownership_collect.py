@@ -13,6 +13,7 @@ from src.exporters.sqlite_store import SQLiteStore
 from src.fetchers.rate_limiter import RateLimiter
 from src.ownership import collect
 from src.ownership.collect import (
+    FilingRef,
     Form4Source,
     ThirteenFSource,
     collect_gurus,
@@ -23,13 +24,17 @@ from src.ownership.collect import (
     raw_document,
     thirteenf_refs,
 )
+from src.ownership.form4 import Form4, Owner, Trade, parse_form4
 from src.ownership.gurus import GURUS, Guru
 from src.ownership.openfigi import JobErrors, Listing, OpenFIGI
 from src.ownership.thirteenf import Holding, ThirteenF, ThirteenFError
+from src.webapp.repository import Reader
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ownership"
 FEED = "https://data.sec.gov/submissions/CIK0000080424.json"
 ARCHIVE = "https://www.sec.gov/Archives/edgar/data/80424"
+PFE_FEED = "https://data.sec.gov/submissions/CIK0000078003.json"
+PFE_ARCHIVE = "https://www.sec.gov/Archives/edgar/data/78003"
 
 
 def _page(rows):
@@ -68,11 +73,11 @@ def _original_of_the_amendment():
     return (xml[:start] + xml[end + len("</dateOfOriginalSubmission>"):]).encode("utf-8")
 
 
-def _db(tmp_path):
+def _db(tmp_path, companies=(("PG", "0000080424"),)):
     store = SQLiteStore(db_path=tmp_path / "own.db")
     conn = store._connect()
     store._create_schema(conn)
-    conn.execute("INSERT INTO companies (ticker, cik, sector_class) VALUES ('PG', '0000080424', 'general')")
+    conn.executemany("INSERT INTO companies (ticker, cik, sector_class) VALUES (?, ?, 'general')", companies)
     conn.commit()
     conn.close()
     return tmp_path / "own.db"
@@ -133,22 +138,299 @@ def test_each_document_is_fetched_once_then_read_from_the_cache(tmp_path):
     assert len(sec.requests) == 1
 
 
-def test_collect_stores_each_owner_and_trade_and_the_amendment_supersedes_its_original(tmp_path):
+def test_collect_stores_each_owner_and_trade_and_the_amendment_supersedes_the_trade_it_restates(tmp_path):
     db = _db(tmp_path)
     summary = collect_insiders(db, ["PG"], 3, Form4Source(_SEC(_routes()), tmp_path / "cache"), today="2026-10-22")
     assert summary["PG"]["stored"] == 2 and summary["PG"]["errors"] == []
     conn = sqlite3.connect(db)
     filings = conn.execute("SELECT accession, form, filed_date, owner_cik, officer_title, superseded_by "
                            "FROM insider_filings ORDER BY accession").fetchall()
-    assert filings == [
+    assert filings == [  # the filing-level note: amended by
         ("0000080424-26-000150", "4", "2026-08-24", "0001825382", "Chf Rsch, Dev & Innov Officer",
          "0000080424-26-000160"),
         ("0000080424-26-000160", "4/A", "2026-08-27", "0001825382", "Chf Rsch, Dev & Innov Officer", None),
     ]
-    trades = conn.execute("SELECT accession, seq, ticker, kind, date, code, shares, price FROM insider_trades "
-                          "ORDER BY accession").fetchall()
-    assert trades == [("0000080424-26-000150", 0, "PG", "nonderivative", "2026-08-20", "S", 3053.0, 143.79),
-                      ("0000080424-26-000160", 0, "PG", "nonderivative", "2026-08-20", "S", 3053.0, 143.79)]
+    trades = conn.execute("SELECT accession, seq, ticker, kind, date, code, shares, price, superseded_by "
+                          "FROM insider_trades ORDER BY accession").fetchall()
+    assert trades == [
+        ("0000080424-26-000150", 0, "PG", "nonderivative", "2026-08-20", "S", 3053.0, 143.79, "0000080424-26-000160"),
+        ("0000080424-26-000160", 0, "PG", "nonderivative", "2026-08-20", "S", 3053.0, 143.79, None)]
+
+
+def test_a_4a_correcting_the_earliest_date_supersedes_the_trade_it_restates(tmp_path):
+    # PG's 4/A was filed "solely to correct the date of the stock sale": the original, here, sold on 2026-08-21, the
+    # day its period of report gives, and the 4/A's period is 2026-08-20. The same shares and price make it the trade.
+    routes = _routes()
+    original = _original_of_the_amendment().replace(b"2026-08-20", b"2026-08-21")
+    routes[f"{ARCHIVE}/000008042426000150/form4.xml"] = (200, original)
+    db = _db(tmp_path)
+    collect_insiders(db, ["PG"], 3, Form4Source(_SEC(routes), tmp_path / "cache"), today="2026-10-22")
+    assert _rows(db, "SELECT t.accession, f.period_of_report, t.date, t.superseded_by FROM insider_trades t "
+                     "JOIN insider_filings f ON f.accession = t.accession ORDER BY t.accession") == [
+        ("0000080424-26-000150", "2026-08-21", "2026-08-21", "0000080424-26-000160"),
+        ("0000080424-26-000160", "2026-08-20", "2026-08-20", None)]
+
+
+def _pfe_pair_routes():
+    """PFE's feed with the Form 4 of 2025-02-25 (an officer's SAR earn-out: five trades) and its 4/A of 2025-03-03,
+    filed to add the 2025-02-24 withholding the Form 4 left out, both as filed."""
+    page = _page([
+        ("0001225208-25-002701", "4/A", "2025-03-03", "2025-02-22", "xslF345X05/form4a.xml"),
+        ("0001225208-25-002397", "4", "2025-02-25", "2025-02-22", "xslF345X05/form4.xml"),
+    ])
+    return {
+        PFE_FEED: (200, {"filings": {"recent": page, "files": []}}),
+        f"{PFE_ARCHIVE}/000122520825002701/form4a.xml": (200, (FIXTURES / "pfe_amendment_adding_a_trade.xml")
+                                                          .read_bytes()),
+        f"{PFE_ARCHIVE}/000122520825002397/form4.xml": (200, (FIXTURES / "pfe_sar_earnout.xml").read_bytes()),
+    }
+
+
+def test_an_amendment_adding_a_trade_leaves_its_originals_trades_standing(tmp_path):
+    db = _db(tmp_path, [("PFE", "0000078003")])
+    summary = collect_insiders(db, ["PFE"], 3, Form4Source(_SEC(_pfe_pair_routes()), tmp_path / "cache"),
+                               today="2026-10-22")
+    assert (summary["PFE"]["stored"], summary["PFE"]["errors"]) == (2, [])
+    assert _rows(db, "SELECT accession, seq, kind, code, date, shares, superseded_by FROM insider_trades "
+                     "ORDER BY accession, seq") == [
+        ("0001225208-25-002397", 0, "nonderivative", "M", "2025-02-22", 8741.0, None),
+        ("0001225208-25-002397", 1, "nonderivative", "F", "2025-02-22", 340.0, None),
+        ("0001225208-25-002397", 2, "nonderivative", "F", "2025-02-22", 7798.0, None),
+        ("0001225208-25-002397", 3, "nonderivative", "F", "2025-02-23", 662.0, None),
+        ("0001225208-25-002397", 4, "derivative", "M", "2025-02-22", 8741.0, None),
+        ("0001225208-25-002701", 0, "nonderivative", "F", "2025-02-24", 403.0, None)]
+    assert _rows(db, "SELECT accession, superseded_by FROM insider_filings ORDER BY accession") == [
+        ("0001225208-25-002397", "0001225208-25-002701"), ("0001225208-25-002701", None)]  # amended by, still
+    with Reader(db) as r:  # the readers show all six
+        assert sorted((t["accession"], t["seq"]) for t in r.sec_insider_trades("PFE")) == [
+            ("0001225208-25-002397", seq) for seq in range(5)] + [("0001225208-25-002701", 0)]
+
+
+def _stored(accession, filed, form="4", original=None, shares=100.0, owner="0000000001"):
+    """A stored filing as the collector passes it: one owner, one sale of *shares* at $10 on 2026-08-20."""
+    trade = Trade(table="nonderivative", seq=0, security_title="Common Stock", date="2026-08-20", code="S",
+                  shares=shares, price=10.0)
+    filing = Form4(accession=accession, form=form, period_of_report="2026-08-20", original_filed=original,
+                   issuer_cik="0000080424", owners=[Owner(cik=owner, name=f"OWNER {owner}")], trades=[trade])
+    return FilingRef(accession, form, filed, "2026-08-20", "doc.xml"), filing
+
+
+def test_a_4a_of_a_4a_supersedes_the_trade_the_first_one_restated(tmp_path):
+    db = tmp_path / "own.db"
+    SQLiteStore(db_path=db).export_insider_filings("PG", [
+        _stored("F-1", "2026-08-24", shares=100.0),
+        _stored("F-2", "2026-08-27", form="4/A", original="2026-08-24", shares=90.0),
+        _stored("F-3", "2026-09-02", form="4/A", original="2026-08-27", shares=95.0),
+    ], "2026-10-22T00:00:00+00:00")
+    assert _rows(db, "SELECT accession, shares, superseded_by FROM insider_trades ORDER BY accession") == [
+        ("F-1", 100.0, "F-2"), ("F-2", 90.0, "F-3"), ("F-3", 95.0, None)]
+    assert _rows(db, "SELECT accession, superseded_by FROM insider_filings ORDER BY accession") == [
+        ("F-1", "F-2"), ("F-2", "F-3"), ("F-3", None)]
+
+
+def test_an_insider_trades_table_from_before_the_trades_own_note_gets_its_column(tmp_path):
+    db = tmp_path / "own.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE insider_trades (accession TEXT NOT NULL, seq INTEGER NOT NULL, ticker TEXT NOT NULL, "
+                 "kind TEXT NOT NULL, security_title TEXT, date TEXT, code TEXT, shares REAL, price REAL, "
+                 "price_footnotes TEXT, acquired_disposed TEXT, owned_after REAL, direct_indirect TEXT, "
+                 "nature_of_ownership TEXT, exercise_price REAL, underlying_title TEXT, underlying_shares REAL, "
+                 "PRIMARY KEY (accession, seq))")
+    conn.commit()
+    conn.close()
+    SQLiteStore(db_path=db).export_insider_filings("PG", [
+        _stored("F-1", "2026-08-24"), _stored("F-2", "2026-08-27", form="4/A", original="2026-08-24", shares=90.0),
+    ], "2026-10-22T00:00:00+00:00")
+    assert _rows(db, "SELECT accession, superseded_by FROM insider_trades ORDER BY accession") == [
+        ("F-1", "F-2"), ("F-2", None)]
+
+
+# ---- only the company's own filings, and a successor's predecessor ------------------------------------------------
+
+CERE = "0000078003-24-000169"  # Pfizer's Form 4 as Cerevel's former 10% owner, in Pfizer's feed
+PFE_PURCHASE = "0001225208-26-006944"  # a director's purchase of Pfizer stock
+
+
+def _pfe_routes(purchase=None):
+    page = _page([
+        (PFE_PURCHASE, "4", "2026-08-07", "2026-08-05", "xslF345X05/form4.xml"),
+        (CERE, "4", "2024-08-05", "2024-08-01", "xslF345X05/wf-form4.xml"),
+    ])
+    return {
+        PFE_FEED: (200, {"filings": {"recent": page, "files": []}}),
+        f"{PFE_ARCHIVE}/000122520826006944/form4.xml": (
+            200, purchase if purchase is not None else (FIXTURES / "pfe_director_purchase.xml").read_bytes()),
+        f"{PFE_ARCHIVE}/000007800324000169/wf-form4.xml": (200, (FIXTURES / "pfe_owner_of_cerevel.xml").read_bytes()),
+    }
+
+
+def test_a_filing_of_another_issuer_is_left_out_and_counted(tmp_path):
+    db = _db(tmp_path, [("PFE", "0000078003")])
+    lines = []
+    summary = collect_insiders(db, ["PFE"], 3, Form4Source(_SEC(_pfe_routes()), tmp_path / "cache"),
+                               today="2026-10-22", log=lines.append)
+    assert summary["PFE"] == {"listed": 2, "stored": 1, "other_issuer": 1, "from_predecessor": 0, "errors": []}
+    assert _rows(db, "SELECT DISTINCT accession FROM insider_filings") == [(PFE_PURCHASE,)]
+    assert _rows(db, "SELECT DISTINCT accession FROM insider_trades") == [(PFE_PURCHASE,)]
+    assert (tmp_path / "cache" / "form4" / f"{CERE}.xml").exists()  # it parsed: cached, not fetched again
+    assert len(lines) == 1 and lines[0].isascii() and "1 of other issuers" in lines[0]
+
+
+def test_an_issuer_cik_is_read_as_a_number(tmp_path):
+    purchase = (FIXTURES / "pfe_director_purchase.xml").read_bytes().replace(
+        b"<issuerCik>0000078003</issuerCik>", b"<issuerCik>78003</issuerCik>")
+    assert b"<issuerCik>78003</issuerCik>" in purchase
+    db = _db(tmp_path, [("PFE", "0000078003")])
+    summary = collect_insiders(db, ["PFE"], 3, Form4Source(_SEC(_pfe_routes(purchase)), tmp_path / "cache"),
+                               today="2026-10-22")
+    assert (summary["PFE"]["stored"], summary["PFE"]["other_issuer"]) == (1, 1)
+
+
+def test_a_filing_naming_no_issuer_is_reported_not_stored(tmp_path):
+    purchase = (FIXTURES / "pfe_director_purchase.xml").read_bytes().replace(
+        b"<issuerCik>0000078003</issuerCik>", b"")
+    assert b"<issuerCik>" not in purchase
+    db = _db(tmp_path, [("PFE", "0000078003")])
+    summary = collect_insiders(db, ["PFE"], 3, Form4Source(_SEC(_pfe_routes(purchase)), tmp_path / "cache"),
+                               today="2026-10-22")["PFE"]
+    assert (summary["stored"], summary["other_issuer"]) == (0, 1)  # not another issuer's: unknown
+    assert summary["errors"] == [f"{PFE_PURCHASE}: no issuer CIK"]
+    assert _rows(db, "SELECT COUNT(*) FROM insider_filings") == [(0,)]
+
+
+def test_another_issuers_filing_an_earlier_run_stored_is_removed(tmp_path):
+    db = _db(tmp_path, [("PFE", "0000078003")])
+    cerevel = parse_form4((FIXTURES / "pfe_owner_of_cerevel.xml").read_bytes(), CERE)
+    SQLiteStore(db_path=db).export_insider_filings(  # as the code before this check stored it
+        "PFE", [(FilingRef(CERE, "4", "2024-08-05", "2024-08-01", "wf-form4.xml"), cerevel)], "2026-10-01T00:00:00")
+    collect_insiders(db, ["PFE"], 3, Form4Source(_SEC(_pfe_routes()), tmp_path / "cache"), today="2026-10-22")
+    assert _rows(db, "SELECT DISTINCT accession FROM insider_filings") == [(PFE_PURCHASE,)]
+    assert _rows(db, "SELECT DISTINCT accession FROM insider_trades") == [(PFE_PURCHASE,)]
+
+
+def test_the_issuers_own_copy_of_a_filing_left_out_stays(tmp_path):
+    # Cerevel's own rows of the filing (were it a company of ours) aren't Pfizer's to remove.
+    db = _db(tmp_path, [("PFE", "0000078003"), ("CERE", "0001805387")])
+    cerevel = parse_form4((FIXTURES / "pfe_owner_of_cerevel.xml").read_bytes(), CERE)
+    SQLiteStore(db_path=db).export_insider_filings(
+        "CERE", [(FilingRef(CERE, "4", "2024-08-05", "2024-08-01", "wf-form4.xml"), cerevel)], "2026-10-01T00:00:00")
+    collect_insiders(db, ["PFE"], 3, Form4Source(_SEC(_pfe_routes()), tmp_path / "cache"), today="2026-10-22")
+    assert _rows(db, "SELECT DISTINCT ticker, accession FROM insider_filings ORDER BY ticker") == [
+        ("CERE", CERE), ("PFE", PFE_PURCHASE)]
+    assert _rows(db, "SELECT DISTINCT ticker, accession FROM insider_trades ORDER BY ticker") == [
+        ("CERE", CERE), ("PFE", PFE_PURCHASE)]
+
+
+#: ExxonMobil Holdings (XOM since 2026-07) and Exxon Mobil Corp before it (sec_handler.PREDECESSOR_CIKS).
+XOM, EXXON = "0002115436", "0000034088"
+
+
+def _form4(accession, issuer, form="4", day="2026-08-20", owner="0000000001"):
+    trade = Trade(table="nonderivative", seq=0, security_title="Common Stock", date=day, code="S", shares=100.0,
+                  price=110.0)
+    return Form4(accession=accession, form=form, period_of_report=day, issuer_cik=issuer,
+                 owners=[Owner(cik=owner, name=f"OWNER {owner}")], trades=[trade])
+
+
+class _Feeds:
+    """A fake Form 4 source: each CIK's feed rows (accession, form, filed, report date), or the error its feed raises,
+    and each accession's parsed filing. Records each filing fetched with the CIK it was fetched under."""
+
+    def __init__(self, feeds, filings):
+        self.feeds, self.filings = feeds, filings
+        self.fetched = []
+
+    def feed_pages(self, cik, since):
+        rows = self.feeds.get(cik, [])
+        if isinstance(rows, Exception):
+            raise rows
+        return iter([_page([row + ("xslF345X05/doc.xml",) for row in rows])])
+
+    def filing(self, cik, ref):
+        self.fetched.append((cik, ref.accession))
+        return self.filings[ref.accession]
+
+
+#: XOM's feed: its own Form 4s from 2026-07-06 and one as another issuer's owner; Exxon Mobil Corp's: its own before
+#: and on the day XOM's start, one as another issuer's owner, and one before the window.
+XOM_FEEDS = {
+    XOM: [("X-3", "4", "2026-08-03", "2026-07-31"), ("X-2", "4", "2026-07-20", "2026-07-17"),
+          ("X-1", "4", "2026-07-06", "2026-07-02")],
+    EXXON: [("P-4", "4", "2026-07-06", "2026-07-02"), ("P-3", "4", "2026-07-01", "2026-06-29"),
+            ("P-2", "4", "2025-05-05", "2025-05-01"), ("P-1", "4", "2024-01-10", "2024-01-08"),
+            ("P-0", "4", "2023-01-10", "2023-01-06")],
+}
+XOM_FILINGS = {
+    "X-3": _form4("X-3", XOM), "X-2": _form4("X-2", "0000000777"), "X-1": _form4("X-1", XOM),
+    "P-4": _form4("P-4", EXXON), "P-3": _form4("P-3", EXXON), "P-2": _form4("P-2", "0000000999"),
+    "P-1": _form4("P-1", EXXON), "P-0": _form4("P-0", EXXON),
+}
+
+
+def test_a_successor_takes_its_predecessors_form_4s_filed_before_its_own_first(tmp_path):
+    db = _db(tmp_path, [("XOM", XOM)])
+    source = _Feeds(XOM_FEEDS, XOM_FILINGS)
+    summary = collect_insiders(db, ["XOM"], 3, source, today="2026-10-22")
+    assert summary["XOM"] == {"listed": 6, "stored": 4, "other_issuer": 2, "from_predecessor": 2, "errors": []}
+    assert source.fetched == [(XOM, "X-3"), (XOM, "X-2"), (XOM, "X-1"), (EXXON, "P-3"), (EXXON, "P-2"),
+                              (EXXON, "P-1")]  # nothing filed from XOM's first Form 4 on
+    assert _rows(db, "SELECT ticker, accession FROM insider_filings ORDER BY accession") == [
+        ("XOM", "P-1"), ("XOM", "P-3"), ("XOM", "X-1"), ("XOM", "X-3")]
+
+
+def test_a_successor_without_a_form_4_of_its_own_takes_all_its_predecessors(tmp_path):
+    db = _db(tmp_path, [("XOM", XOM)])
+    feeds = {XOM: [("X-2", "4", "2026-07-20", "2026-07-17")], EXXON: XOM_FEEDS[EXXON]}
+    summary = collect_insiders(db, ["XOM"], 3, _Feeds(feeds, XOM_FILINGS), today="2026-10-22")
+    assert (summary["XOM"]["stored"], summary["XOM"]["from_predecessor"], summary["XOM"]["other_issuer"]) == (3, 3, 2)
+    assert _rows(db, "SELECT accession FROM insider_filings ORDER BY accession") == [("P-1",), ("P-3",), ("P-4",)]
+
+
+def test_a_predecessors_filing_from_the_successors_first_form_4_on_is_removed(tmp_path):
+    # An earlier run, before XOM's feed listed its first Form 4, took all of Exxon Mobil Corp's; this one, after it,
+    # takes those filed before it.
+    db = _db(tmp_path, [("XOM", XOM)])
+    collect_insiders(db, ["XOM"], 3, _Feeds({XOM: [], EXXON: XOM_FEEDS[EXXON]}, XOM_FILINGS), today="2026-07-06")
+    assert ("P-4",) in _rows(db, "SELECT accession FROM insider_filings")
+    collect_insiders(db, ["XOM"], 3, _Feeds(XOM_FEEDS, XOM_FILINGS), today="2026-10-22")
+    assert _rows(db, "SELECT DISTINCT accession FROM insider_trades ORDER BY accession") == [
+        ("P-1",), ("P-3",), ("X-1",), ("X-3",)]
+
+
+def test_a_failed_predecessor_feed_is_reported_and_the_successors_own_filings_stored(tmp_path):
+    db = _db(tmp_path, [("XOM", XOM)])
+    feeds = {XOM: XOM_FEEDS[XOM], EXXON: OSError("CIK0000034088.json: HTTP 503")}
+    summary = collect_insiders(db, ["XOM"], 3, _Feeds(feeds, XOM_FILINGS), today="2026-10-22")["XOM"]
+    assert (summary["stored"], summary["from_predecessor"]) == (2, 0)
+    assert len(summary["errors"]) == 1 and EXXON in summary["errors"][0] and "HTTP 503" in summary["errors"][0]
+
+
+# ---- one company's failure never ends the run ---------------------------------------------------------------------
+
+def test_a_store_failure_is_reported_for_its_company_and_the_run_goes_on(tmp_path):
+    db = _db(tmp_path, [("AAA", "0000000011"), ("BBB", "0000000022")])
+    feeds = {"0000000011": [("A-1", "4", "2026-08-03", "2026-07-31")],
+             "0000000022": [("B-1", "4", "2026-08-03", "2026-07-31")]}
+    collect_insiders(db, ["AAA"], 3, _Feeds({"0000000011": [("A-0", "4", "2026-08-01", "2026-07-30")]},
+                                            {"A-0": _form4("A-0", "0000000011")}), today="2026-10-22")
+    joint = _form4("A-1", "0000000011")
+    joint.owners.append(Owner(cik="0000000001", name="THE SAME OWNER AGAIN"))  # a duplicate owner CIK
+    summary = collect_insiders(db, ["AAA", "BBB"], 3, _Feeds(feeds, {"A-1": joint, "B-1": _form4("B-1", "0000000022")}),
+                               today="2026-10-22")
+    assert (summary["AAA"]["listed"], summary["AAA"]["stored"], len(summary["AAA"]["errors"])) == (1, 0, 1)
+    assert summary["AAA"]["errors"][0].startswith("store: IntegrityError: UNIQUE constraint failed")
+    assert summary["BBB"] == {"listed": 1, "stored": 1, "other_issuer": 0, "from_predecessor": 0, "errors": []}
+    assert _rows(db, "SELECT ticker, accession FROM insider_filings ORDER BY ticker, accession") == [
+        ("AAA", "A-0"), ("BBB", "B-1")]  # AAA's earlier filing kept, nothing of its failed batch
+
+
+def test_an_unexpected_error_is_reported_for_its_company_and_the_run_goes_on(tmp_path):
+    db = _db(tmp_path, [("AAA", "0000000011"), ("BBB", "0000000022")])
+    feeds = {"0000000011": KeyError("name"), "0000000022": [("B-1", "4", "2026-08-03", "2026-07-31")]}
+    summary = collect_insiders(db, ["AAA", "BBB"], 3, _Feeds(feeds, {"B-1": _form4("B-1", "0000000022")}),
+                               today="2026-10-22")
+    assert summary["AAA"]["stored"] == 0 and summary["AAA"]["errors"] == ["KeyError: 'name'"]
+    assert summary["BBB"]["stored"] == 1
 
 
 def test_a_second_run_adds_nothing_twice(tmp_path):

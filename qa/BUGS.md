@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 105 · NEEDS-USER 15 · Verified: 88
+**Open:** P0 0 · P1 0 · P2 11 · P3 114 · NEEDS-USER 15 · Verified: 91
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1579,6 +1579,85 @@ Found: build iteration 39 (M3-7's docs worker), build M3-7 | Fixed: | Regression
 Repro: `src/ownership/insiders.py` `ceo_or_cfo("CEO, Chairman")` is False. The rule that makes "EVP, Pres. & CEO, BGS" a unit's head (a comma right after the name) catches a real CEO whose title lists the role first.
 Expected: True.   Actual: False; the real titles collected so far all classify correctly.
 Notes: documented as a limitation in the README.
+
+### BUG-208 [P1][OWNERSHIP] A company's own Form 4s as another issuer's owner are stored as its insider trades
+Status: VERIFIED (build iteration 40)
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: (this commit) | Regression test: tests/test_ownership_collect.py (the Cerevel fixture: another issuer's filing left out)
+Repro: `src/ownership/collect.py` keeps every Form 4 its feed lists and never compares the filing's issuer CIK with the company's. PFE's 0000078003-24-000169 is Pfizer as the owner of Cerevel (code U, 27,349,211 shares at $45, $1.23B) and shows on PFE's INS tab and in /form4. Live, Berkshire's Form 4s as a holder of OXY, SIRI, BAC and DaVita, BX's and KKR's portfolio-company filings and INTC's (Mobileye) would enter their net buying, buyers, clusters and the screener.
+Expected: only the filings whose issuer is the company (or its predecessor, BUG-210).   Actual: every filing in the feed.
+Fix (build iteration 40): a Form 4 is kept only when its issuer CIK is the company's (or its predecessor's, BUG-210); another issuer's is not stored and is counted as "other issuer", its XML still cached; a re-run removes this company's earlier rows of such a filing. On PFE's and AAPL's 452 cached filings: PFE keeps 315 of 316 (the Cerevel filing left out), AAPL 136 of 136; no aggregate changes. Also for the live run: a store failure is reported for its company and the run goes on, and the parser strips the XML first.
+Evidence: `qa/evidence/review17-fixes-{red,green,mutants,mutants-rerun,realdata}.txt`, `qa/evidence/review17-report.md`
+
+### BUG-209 [P2][OWNERSHIP] A 4/A hides its whole original, though both real amendments only add a trade
+Status: VERIFIED (build iteration 40)
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: (this commit) | Regression test: tests/test_ownership_insiders.py (the real PFE pair, a restating 4/A, a chain, a corrected date, a code correction), tests/test_web_insiders.py
+Repro: `export_insider_filings` marks the amended filing superseded and every reader drops all its trades. PFE's 4/A 0001225208-25-002701 was filed to add a transaction the Form 4 of 2025-02-25 omitted, and hides that Form 4's 5 trades (M 8,741, F 340, F 7,798, F 662, a derivative row); Damico's pair is the same. The period-of-report condition misses a 4/A that corrects the earliest date (both then count), and a 4/A of a 4/A never supersedes the first.
+Expected: a 4/A supersedes the trades it restates; the others stand.   Actual: the whole original hidden.
+Notes: Only F and M trades today, so no aggregate moves yet; an added P or S would lose real trades.
+Fix (build iteration 40): a 4/A amends the same owner's filing made on the day it names as its original's (a 4 or an earlier 4/A; the period of report only breaks ties) and supersedes only the trades it restates (the same table and security, then: the same trade; the same but its code, a code correction; the same code, shares and price; the same code and date), one for one, stored as `insider_trades.superseded_by`. Every reader moved to the trade's note. Both of PFE's real 4/As restate nothing: their originals' 5 trades stand beside the added F (PFE's INS view: 468 trades in 314 filings, now 477 in 315).
+Evidence: `qa/evidence/review17-fixes-{red,green,mutants,mutants-rerun,realdata}.txt`, `qa/evidence/review17-report.md`
+
+### BUG-210 [P2][OWNERSHIP] Insiders ignore a successor company's predecessor CIK (XOM, BLK)
+Status: VERIFIED (build iteration 40)
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: (this commit) | Regression test: tests/test_ownership_collect.py (a successor and a predecessor feed)
+Repro: `collect_insiders` reads only the company's own feed. XOM (ExxonMobil Holdings, CIK 2115436, about 2026-07) loses about 70% of its 12-month window, which sits under Exxon Mobil Corp (34088); BLK (2012383, since 2024-10) loses everything before, under 1364742. Any SEC row hides Yahoo's, so XOM's INS tab would get worse.
+Expected: the predecessor's Form 4s read too, as the financials do (`PREDECESSOR_CIKS`).   Actual: the successor's only.
+Fix (build iteration 40): a successor company (`PREDECESSOR_CIKS`: XOM, BLK) also reads its predecessor's feed, keeping the predecessor's own Form 4s filed before the successor's first.
+Evidence: `qa/evidence/review17-fixes-{red,green,mutants,mutants-rerun,realdata}.txt`, `qa/evidence/review17-report.md`
+
+### BUG-211 [P3][OWNERSHIP] An incomplete quarter drives a guru's changes and its latest quarter
+Status: OPEN
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Repro: `portfolio.py:257`, the views' latest quarter, `screener.py`: if a guru's latest base failed its checksum, every position reads sold out, the guru drops out of gurus_holding and counts as a seller. None today.
+Expected: no changes when either quarter is incomplete; the views and the screener on the latest complete quarter.   Actual: the incomplete quarter used.
+
+### BUG-212 [P3][OWNERSHIP] OpenFIGI's fallback ticker comes from a foreign listing
+Status: OPEN
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Repro: `openfigi.py:81-82`: about 100 equity CUSIPs have no US composite in the answer and take a foreign listing's ticker: ONEOK "OKEEUR" (with "OKE" in the same answer), AvalonBay "AVBC", the AstraZeneca ADR "AZNN", Webster "WED", Hologic "HO1". No collision with ours today; C, D, O, T and V make one possible.
+Expected: a ticker only from a US listing (or ask with exchCode US).   Actual: a foreign ticker.
+
+### BUG-213 [P3][OWNERSHIP] A split of a security outside our universe reads as a large purchase
+Status: OPEN
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Repro: the changes adjust only our tickers' splits: Akre's ORLY reads "added +989.3%" across its 15:1 split (really -27%), Markel's RLI +100% (2:1), Dodge & Cox's HDB +108% (a 1:1 bonus).
+Expected: the split recognised (an implied-price guard, say).   Actual: an addition of the split's size.
+
+### BUG-214 [P3][UI] A guru's confidential omissions aren't shown
+Status: OPEN
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Repro: Icahn's filings omit holdings every quarter, as do Berkshire's Q1 2025 and Pershing's Q4 2024; an omitted position can read "sold out" with no note on the guru's page.
+Expected: a note where a filing states omitted holdings.   Actual: none.
+
+### BUG-215 [P3][OWNERSHIP] "CEO/CFO buys, 12 months" counts trades on the INS tab and filings in the screener
+Status: OPEN
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Repro: `ins.html:13` counts trade rows, `screener.py` `ins_ceo_cfo_buys_12m` filings.
+Expected: one unit.   Actual: two.
+
+### BUG-216 [P3][UI] The 10b5-1 flag is a filing's but shows on every row of it
+Status: OPEN
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Repro: `workstation.py:911`: "yes" on each row of a filing with the flag, its grants and withholdings included, and the plan share applies it to every sale in the filing.
+Expected: the flag where it applies, or labelled as the filing's.   Actual: on every row.
+
+### BUG-217 [P3][OWNERSHIP] The ownership CLI on a missing database, and its exit code
+Status: OPEN
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Repro: `collect.py` connects to a `--db` that doesn't exist, creating an empty file before a traceback; a run with errors exits 0.
+Expected: a clear error, no file created; a non-zero exit with errors.   Actual: as described.
+
+### BUG-218 [P3][OWNERSHIP] A stale latest quarter counts in the screener's guru fields
+Status: OPEN
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Repro: Scion's last quarter (Q3 2025) counts in gurus_holding and gurus_buying with no age limit; the pages show each guru's quarter, the screener doesn't.
+Expected: an age limit, or the quarter shown.   Actual: counted as current.
+
+### BUG-219 [P3][OWNERSHIP] Two small ownership items
+Status: OPEN
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Repro: the INS tab's 12-month window counts from the local date, the screener's from UTC (a day apart at times); price footnotes keep their ids only, not their text.
+Expected: one clock; the text where it matters.   Actual: as described.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

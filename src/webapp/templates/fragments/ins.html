@@ -35,7 +35,7 @@
           <td class="row-label">{{ t.date }}</td>
           <td>{{ t.insider }}</td>
           <td>{{ t.role }}</td>
-          <td class="{{ t.tint_class }}">{{ t.code }}: {{ t.meaning }}{% if t.derivative %} (derivative){% endif %}{% if t.form == "4/A" %} (amended){% endif %}</td>
+          <td class="{{ t.tint_class }}">{{ t.code }}: {{ t.meaning }}{% if t.derivative %} (derivative){% endif %}{% if t.form == "4/A" %} (4/A){% endif %}</td>
           <td class="num">{{ t.shares }}</td>
           <td class="num">{{ t.price }}</td>
           <td class="num">{{ t.value }}</td>
@@ -47,8 +47,8 @@
     </table>
   </div>
   <p class="text-muted mt-2">{{ sec.count }} trades from the SEC's Form 4 filings, newest first{% if sec.count > 200 %}
-    (the latest 200 shown){% endif %}; an amended filing shows its amendment only. Only open-market purchases (P) and
-    sales (S) count in the figures above.</p>
+    (the latest 200 shown){% endif %}; a 4/A replaces only the trades it restates, and the other trades of the filing
+    it amends stand. Only open-market purchases (P) and sales (S) count in the figures above.</p>
   {% elif rows %}
   <div class="table-wrap">
     <table class="data-table">

@@ -84,6 +84,37 @@ def test_a_document_with_two_reporting_owners_keeps_both():
     assert [(o.cik, o.is_ten_percent) for o in f.owners] == [("0001214686", False), ("0000000002", True)]
 
 
+def test_a_company_reporting_as_another_issuers_owner_names_that_issuer():
+    # Pfizer's own Form 4 as Cerevel's former 10% owner, listed in Pfizer's submissions feed (0000078003-24-000169).
+    f = _parse("pfe_owner_of_cerevel.xml", "0000078003-24-000169")
+    assert (f.issuer_cik, f.issuer_ticker) == ("0001805387", "CERE")
+    (owner,) = f.owners
+    assert (owner.cik, owner.name, owner.is_other, owner.other_text) == (
+        "0000078003", "PFIZER INC", True, "Former 10% Owner")
+    (trade,) = f.trades
+    assert (trade.code, trade.shares, trade.price, trade.owned_after) == ("U", 27349211.0, 45.0, 0.0)
+
+
+def test_an_amendment_filed_to_add_an_omitted_trade():
+    # PFE's 4/A of 2025-03-03 adds a withholding of 2025-02-24 that the Form 4 of 2025-02-25 left out.
+    original = _parse("pfe_sar_earnout.xml", "0001225208-25-002397")
+    assert (original.form, original.period_of_report, original.original_filed) == ("4", "2025-02-22", None)
+    assert [(t.table, t.code, t.date, t.shares, t.price) for t in original.trades] == [
+        ("nonderivative", "M", "2025-02-22", 8741.0, 30.17), ("nonderivative", "F", "2025-02-22", 340.0, 26.3),
+        ("nonderivative", "F", "2025-02-22", 7798.0, 26.08), ("nonderivative", "F", "2025-02-23", 662.0, 26.3),
+        ("derivative", "M", "2025-02-22", 8741.0, 0.0)]
+    amendment = _parse("pfe_amendment_adding_a_trade.xml", "0001225208-25-002701")
+    assert (amendment.form, amendment.period_of_report, amendment.original_filed) == ("4/A", "2025-02-22",
+                                                                                      "2025-02-25")
+    assert [(t.code, t.date, t.shares, t.price) for t in amendment.trades] == [("F", "2025-02-24", 403.0, 26.65)]
+
+
+def test_whitespace_around_the_document_is_ignored():
+    xml = (FIXTURES / "pfe_director_purchase.xml").read_bytes()
+    f = parse_form4(b"\r\n  \n" + xml + b"\n\n", "x")
+    assert (f.issuer_ticker, [t.code for t in f.trades]) == ("PFE", ["P"])
+
+
 def test_a_document_that_isnt_a_readable_form_4_is_refused():
     with pytest.raises(Form4Error):
         parse_form4(b"<html><body>not an ownership document</body></html>", "x")
