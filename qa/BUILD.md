@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 6 · DOING 0 · DONE 38 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 5 · DOING 0 · DONE 39 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -75,7 +75,7 @@
 | ID | Task | Status | Commit | Evidence |
 |---|---|---|---|---|
 | M5-0 | Design M5: `docs/superpowers/specs/2026-10-25-universe-automation-design.md`, then these rows | DONE | this commit | the spec |
-| M5-1 | The universe: `universe/core.txt`, the S&P 500 list (`src/universe/sp500.py`: Wikipedia's table parsed and checked, one request; the dated `universe/sp500-<date>.csv` saved), ticker normalization, `stock-data --tickers-file` and `--skip-existing`; with tests | TODO | | |
+| M5-1 | The universe: `universe/core.txt`, the S&P 500 list (`src/universe/sp500.py`: Wikipedia's table parsed and checked, one request; the dated `universe/sp500-<date>.csv` saved), ticker normalization, `stock-data --tickers-file` and `--skip-existing`; with tests | DONE | this commit | `qa/evidence/universe-m5-1-*`, `universe/` |
 | M5-2 | SIC codes and industries: `companies.sic`/`sic_description` (collected, and filled offline by `python -m src.universe.sic`), industry groups (3-digit SIC, else 2-digit, at least 10 companies), industry ranks in `rank_all`, the DES and STAT tabs, the scores API, the screener's industry filter and fields, the scores oracle's industry gate; with tests | TODO | | |
 | M5-3 | `stock-data refresh`: quotes and bars daily, the SEC's new filings weekly, the full collections they call for, insiders and gurus weekly, the market data daily, the recomputation; `refresh_log`, a lock, a log file, exit codes; a real run on a scratch copy; with tests | TODO | | |
 | M5-4 | The scale pre-flight: a synthetic copy of about 500 companies, the pages' and APIs' timings, the query plans, the indexes they need (every page under 1 s, the screener under 0.5 s); with tests | TODO | | |
@@ -1208,3 +1208,27 @@ Evidence: the spec's "Facts" section
 Gates: ruff ✓ mypy ✓ pytest 1937 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) docs: Milestone 5's design
 Next: M5-1 (the universe files, the S&P 500 list and `--tickers-file`).
+
+### Build iteration 51: 2026-10-25 03:59: M5-1
+Did:
+- An opus worker built the universe test-first (RED: 91 failed, 2 passed against stubs):
+  - `src/universe/tickers.py`: Yahoo's form (BRK.B as BRK-B), `.txt` and `.csv` tickers files;
+  - `src/universe/sp500.py`: Wikipedia's S&P 500 table parsed with `html.parser`, refused when a column is missing,
+    a CIK malformed or the rows outside 480-520; one company a CIK; written without overwriting;
+  - `stock-data --tickers-file` (repeatable) and `--skip-existing`, with clear errors.
+  - 96 tests on a synthetic page shaped like Wikipedia's; no copy of the page is in the repo.
+- The list: one request to Wikipedia (HTTP 200, our User-Agent without an email accepted):
+  - 503 rows read, 500 kept (GOOG, FOX and NWS left out beside GOOGL, FOXA and NWSA);
+  - every CIK equals the SEC's own ticker map's (503 of 503);
+  - saved as `universe/sp500-2026-10-25.csv` with `universe/README.md` (the source, its revision, the CC BY-SA
+    attribution). `universe/core.txt` holds the DB's 127.
+- Of the DB's 127, 125 are members (SCCO and SPCX aren't). `--skip-existing` resolves the other 375, checked with a
+  recording fetcher that collected nothing.
+- Mutants: 91, each killed; I ran them again. My review of the diff: positional tickers are now validated, so `^GSPC`
+  is refused there. That is harmless: the benchmark is fetched once per collection run, never as a company.
+- Logged BUG-231 (P3): `one_per_cik` keeps the first row in the page's order, and `--skip-existing` compares
+  tickers. A page sorted by symbol would keep GOOG and collect a second Alphabet. The saved file is right.
+Evidence: `qa/evidence/universe-m5-1-{red,gates,mutants,mutants-rerun,fetch,check,done}.txt`
+Gates: ruff ✓ mypy ✓ pytest 2033 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) feat(universe): the S&P 500 list, the universe files and stock-data --tickers-file (M5-1)
+Next: M5-2 (SIC codes, industry groups and ranks).

@@ -48,7 +48,7 @@ current with one command:
   of S&P 500 companies" page, its first table (Symbol, Security, GICS Sector, GICS Sub-Industry, Date added, CIK),
   parsed with the standard library's `html.parser`; a neutral User-Agent naming the app without an email; one
   request. It refuses a table under 480 or over 520 rows, a missing column or a malformed CIK, so a page change
-  fails loudly. Tested on a saved trimmed page.
+  fails loudly. Tested on a synthetic page shaped like Wikipedia's (no copy of the page is in the repo).
 - **Tickers**: Yahoo's form, a class share's dot as a dash (`BRK.B` as `BRK-B`, `BF.B` as `BF-B`). A second share
   class of a company already in the list (GOOG beside GOOGL, FOX beside FOXA, NWS beside NWSA) is skipped: one
   company per CIK, as the DB already does (GOOGL only).

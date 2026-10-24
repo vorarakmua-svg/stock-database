@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 119 · NEEDS-USER 17 · Verified: 97
+**Open:** P0 0 · P1 0 · P2 11 · P3 120 · NEEDS-USER 17 · Verified: 97
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1735,6 +1735,12 @@ Status: OPEN
 Found: build iteration 48 (code review 18's fixes) | Fixed: | Regression test:
 Repro: FRED answering `observation_date,GDP` with no rows: `parse_fred_csv` gives [], which parses, so the fetcher caches it over the good copy; the source then fails with "no rows" and its stored series stay. The next day's fetch recovers.
 Expected: like BUG-225's Treasury rule, an answer without rows is a failed fetch that keeps the cached copy.   Actual: the cached copy is lost for a day, and FRED's source fails meanwhile.
+
+### BUG-231 [P3][UNIVERSE] One company a CIK keeps the page's first row, and `--skip-existing` compares tickers
+Status: OPEN
+Found: build iteration 51 (M5-1) | Fixed: | Regression test:
+Repro: `src/universe/sp500.py` `one_per_cik` keeps the first row of each CIK in the page's order. Wikipedia sorts by company name, so "(Class A)" comes first and GOOGL, FOXA and NWSA are kept. A page sorted by symbol would keep GOOG, FOX and NWS, and `stock-data --skip-existing`, which compares tickers, not CIKs, would then collect a second Alphabet beside the DB's GOOGL.
+Expected: the class the DB already holds, or the "(Class A)" row, kept; a company already stored under another ticker left out.   Actual: page order and tickers only. The saved `universe/sp500-2026-10-25.csv` is right (GOOGL, FOXA, NWSA), and none of its 375 new tickers is a stored company under another ticker.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
