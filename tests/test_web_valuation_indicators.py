@@ -16,7 +16,7 @@ from src.valuation.engine import compute_and_store
 from src.valuation.indicators import INDICATORS, IndicatorResult, implied_growth
 from src.valuation.models import dcf_per_share
 from src.webapp import create_app
-from src.webapp.formatting import fmt_pct
+from src.webapp.formatting import fmt_pct, fmt_signed_price
 from src.webapp.repository import Reader
 from src.webapp.valuation_indicators import indicators_view
 from tests.test_valuation_indicators_store import _seed as _seed_financials
@@ -360,6 +360,25 @@ def test_na_rows_show_their_reasons_across_the_values(client, web_db):
     assert reason in html and "not meaningful for banks" in html
     assert "$126.00" not in html and "$36.00" not in html
     assert "NCAV is -$9.17 a share." in html
+
+
+def test_a_per_share_figure_below_zero_has_its_sign_before_the_dollar():
+    # Review 18's m-2: one formatter for the notes and the table's cells.
+    assert [fmt_signed_price(x) for x in (-5.88, -1234.5, 5.88, 0.0, None)] == [
+        "-$5.88", "-$1,234.50", "$5.88", "$0.00", "—"]
+
+
+def test_the_sections_values_below_zero_have_their_sign_before_the_dollar(client, web_db):
+    # Review 18's m-2: an EPV below zero (debt above the earnings power: INTC's -$5.90, -$5.88 and -$5.87) read
+    # "$-5.88" in the table and "-$4.72" in the notes.
+    _seed(web_db, epv=IndicatorResult(indicator="epv", applicable=True, value_bear=-5.90, value_base=-5.88,
+                                      value_bull=-5.87, assumptions=EPV, basis_fiscal_year=2024),
+          ncav=_na("ncav", "net current assets are negative: total liabilities exceed current assets",
+                   {**NCAV, "ncav_per_share": -4.72}))
+    html = client.get("/ui/stocks/AAA/val-indicators").text
+    for value in ("-$5.90", "-$5.88", "-$5.87"):
+        assert f'<td class="num">{value}</td>' in html
+    assert "NCAV is -$4.72 a share." in html and "$-" not in html
 
 
 def test_the_reverse_dcf_row_shows_the_live_reason(client, web_db):

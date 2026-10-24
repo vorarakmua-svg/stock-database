@@ -3,17 +3,19 @@ series with its CAPE, and Treasury.gov's daily yield curve (docs/superpowers/spe
 2026-10-24-valuation-tools-market-design.md, "The market data").
 
 Each source is fetched through ``sources`` (one session, a request a second, each answer cached under
-``<cache-dir>/market/``) and stored by ``SQLiteStore.export_market_series``: its series replaced whole and its
+``<cache-dir>/market/``) and stored by ``SQLiteStore.export_market_series``: its series replaced (FRED's and Shiller's
+whole, the Treasury's from its first year on, so a later --treasury-from keeps the yields stored before it) and its
 ``market_fetches`` row (url, rows, when its answer was fetched) in one transaction. FRED's two series are a source
 each. Each source runs in its own try/except: a failure is reported with its reason, what was stored for it before
 stays, and the others go on. A progress line per source, then a summary: each series' rows and dates, each source's
-latest date.
+latest date, each fallback to a cached copy (the Stale line) and the sources that failed.
 
     python -m src.market.collect [--fred] [--shiller] [--treasury] [--treasury-from YEAR] [--db PATH]
                                  [--cache-dir DIR]
 
 All three sources when none is named. --db must name an existing database (a typo must not create a new one): exit
-2 otherwise. Exit 0 when every source asked for stored rows, 1 otherwise.
+2 otherwise. Exit 0 when every source asked for stored rows (a fallback to a cached copy too: it is on the Stale
+line), 1 otherwise.
 """
 import argparse
 import sys
@@ -71,23 +73,27 @@ def collect_market(db_path: Path, sources: Sequence[str], cache_dir: Path, sessi
         raise ValueError(f"unknown market sources {', '.join(unknown)}: the sources are {', '.join(SOURCES)}")
     year = (date.fromisoformat(today) if today else date.today()).year
     fetcher = MarketFetcher(cache_dir, session=session, log=log)
-    jobs: List[Tuple[str, str, Callable[[], SourceData]]] = []
+    # Each job: its source, its series' prefix, its fetch, and the day its stored rows are replaced from (None: whole).
+    jobs: List[Tuple[str, str, Callable[[], SourceData], Optional[str]]] = []
     if "fred" in sources:
-        jobs += [(f"fred:{series_id}", "fred:", partial(fetch_fred, fetcher, series_id)) for series_id in FRED_SERIES]
+        jobs += [(f"fred:{series_id}", "fred:", partial(fetch_fred, fetcher, series_id), None)
+                 for series_id in FRED_SERIES]
     if "shiller" in sources:
-        jobs.append(("shiller", "shiller:", partial(fetch_shiller, fetcher)))
+        jobs.append(("shiller", "shiller:", partial(fetch_shiller, fetcher), None))
     if "treasury" in sources:
-        jobs.append(("treasury", "ust:", partial(fetch_treasury, fetcher, treasury_from, year, log)))
+        # From its first year on: a later --treasury-from keeps the yields stored before it (BUG-224).
+        jobs.append(("treasury", "ust:", partial(fetch_treasury, fetcher, treasury_from, year, log),
+                     f"{treasury_from}-01-01"))
     store = SQLiteStore(db_path=db_path)
     summary: Dict[str, Dict[str, Any]] = {}
-    for source, prefix, fetch in jobs:
+    for source, prefix, fetch, replace_from in jobs:
         try:
             data = fetch()
             series = {prefix + name: rows for name, rows in data.series.items() if rows}
             if not series:
                 raise ValueError("no rows")
             fetched_at = _iso(data.fetched_at)
-            store.export_market_series(source, series, data.url, fetched_at)
+            store.export_market_series(source, series, data.url, fetched_at, replace_from=replace_from)
             summary[source] = _stored(series, data, fetched_at)
         except Exception as exc:  # anything one source raises is its own: the others go on
             summary[source] = _failed(f"{type(exc).__name__}: {exc}")
@@ -96,14 +102,17 @@ def collect_market(db_path: Path, sources: Sequence[str], cache_dir: Path, sessi
 
 
 def summary_lines(summary: Dict[str, Dict[str, Any]]) -> List[str]:
-    """The run's summary: the sources stored, each stored series' rows and dates, each source's latest date, the
-    sources that failed and why."""
+    """The run's summary: the sources stored, each stored series' rows and dates, each source's latest date, each
+    fallback to a cached copy (Stale: a source that stored its cached copy's rows again, the copy's age in its note;
+    review 18's m-1), the sources that failed and why."""
     stored = [source for source, s in summary.items() if s["ok"]]
     lines = [f"Market data: {len(stored)} of {len(summary)} sources stored"]
     for source in stored:
         lines += [f"  {name}: {span['rows']} rows, {span['first']} to {span['last']}"
                   for name, span in summary[source]["series"].items()]
     lines.append("Latest: " + ("; ".join(f"{source} {summary[source]['latest']}" for source in stored) or "none"))
+    stale = [f"{source} ({note})" for source, s in summary.items() for note in s["notes"]]
+    lines.append("Stale: " + ("; ".join(stale) or "none"))
     failed = [f"{source} ({s['error']})" for source, s in summary.items() if not s["ok"]]
     lines.append("Failed: " + ("; ".join(failed) or "none"))
     return lines

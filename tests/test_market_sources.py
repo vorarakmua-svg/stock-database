@@ -1,9 +1,11 @@
 """The market data's sources, cache, storage and CLI (``src/market/sources.py``, ``src/market/collect.py`` and
 ``SQLiteStore.export_market_series``; docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md, "The market
-data"): FRED's CSV, Shiller's workbook (its Data sheet read by the header labels), Treasury.gov's yearly CSVs; each
-answer cached for a day (a past Treasury year once it has ended), a failed fetch falling back to the cached copy; each
-source's series replaced whole in one transaction, a failing source reported while the others go on. No test touches
-the network: the sessions are fakes, and the Shiller workbooks are written by the tests' own writer.
+data"): FRED's CSV, Shiller's workbook (its Data sheet read by the header labels, its link an https one),
+Treasury.gov's yearly CSVs (a file without its yields a failed answer); each answer cached for a day (a past Treasury
+year once it has ended), a failed fetch falling back to the cached copy, listed as stale; each source's series
+replaced (the Treasury's from its first year on) in one transaction, a failing source reported while the others go
+on; the session's own User-Agent and timeout. No test touches the network: the sessions are fakes, and the Shiller
+workbooks are written by the tests' own writer.
 """
 import os
 import sqlite3
@@ -65,14 +67,16 @@ class _Response:
 
 class _Session:
     """Answers each GET from *answers* (url -> bytes, a response, or an exception to raise); an unknown URL is a 404.
-    Records each URL asked."""
+    Records each URL asked, and the keyword arguments each GET was given."""
 
     def __init__(self, answers=None):
         self.answers = dict(answers or {})
         self.asked = []
+        self.kwargs = []
 
     def get(self, url, **kwargs):
         self.asked.append(url)
+        self.kwargs.append(kwargs)
         answer = self.answers.get(url, _Response(404))
         if isinstance(answer, BaseException):
             raise answer
@@ -140,8 +144,10 @@ def test_treasury_csv_one_series_per_maturity_oldest_first():
 
 
 def test_an_older_years_columns_and_an_unknown_column():
-    text = 'Date,"3 Mo","Extra","10 Yr","30 Yr"\n12/31/1990,6.64,9.99,8.08,8.26\n01/02/1990,7.83,1.0,7.94,8.00\n'
+    text = ('Date,"3 Mo","Extra","2 Yr","10 Yr","30 Yr"\n12/31/1990,6.64,9.99,7.47,8.08,8.26\n'
+            '01/02/1990,7.83,1.0,7.87,7.94,8.00\n')
     assert parse_treasury_csv(text) == {"3m": [("1990-01-02", 7.83), ("1990-12-31", 6.64)],
+                                        "2y": [("1990-01-02", 7.87), ("1990-12-31", 7.47)],
                                         "10y": [("1990-01-02", 7.94), ("1990-12-31", 8.08)],
                                         "30y": [("1990-01-02", 8.00), ("1990-12-31", 8.26)]}
 
@@ -150,9 +156,22 @@ def test_a_year_without_rows_yet_is_empty():
     assert parse_treasury_csv("") == {} == parse_treasury_csv(TREASURY_HEADER + "\n")
 
 
+def test_a_treasury_file_with_rows_but_without_a_key_maturity_raises():
+    # Review 18's I-1: every year's file since 1990 has the 3-month, 2-year and 10-year columns, so rows without one
+    # of them are a renamed header, not a year without yields (which would replace the stored yields with none).
+    renamed = 'Date,"1 Month","3 Month","2 Year","10 Year"\n10/23/2026,4.30,4.25,3.60,4.15\n'
+    with pytest.raises(ValueError, match="'3 Mo', '2 Yr', '10 Yr'"):
+        parse_treasury_csv(renamed)
+    for name in ("3 Mo", "2 Yr", "10 Yr"):
+        with pytest.raises(ValueError, match=f"'{name}'"):
+            parse_treasury_csv(TREASURY_2026.replace(f'"{name}"', f'"{name}."'))
+    # The header alone has no rows: a year without rows yet, whatever its columns.
+    assert parse_treasury_csv('Date,"1 Month","10 Year"\n') == {}
+
+
 def test_a_treasury_answer_that_isnt_its_csv_raises():
-    for text in ("<html><body>Maintenance</body></html>", 'Date,"10 Yr"\n2026-10-23,4.15\n',
-                 'Date,"10 Yr"\n23/10/2026,4.15\n'):
+    for text in ("<html><body>Maintenance</body></html>", 'Date,"3 Mo","2 Yr","10 Yr"\n2026-10-23,4.25,3.60,4.15\n',
+                 'Date,"3 Mo","2 Yr","10 Yr"\n23/10/2026,4.25,3.60,4.15\n'):
         with pytest.raises(ValueError):
             parse_treasury_csv(text)
 
@@ -272,6 +291,18 @@ def test_a_page_without_the_workbooks_link_raises():
             find_xls_link(html)
 
 
+def test_only_an_https_link_to_the_workbook_is_taken():
+    # Review 18's I-2: the link is fetched, stored and shown as the CAPE's source link, so a link of another scheme
+    # is skipped: the page raises without an https one, and an https link after it is the one taken.
+    for href in ("javascript:alert(document.domain)//ie_data.xls", "JavaScript:alert(1)//ie_data.xls",
+                 "javascript&#58;alert(1)//ie_data.xls", " javascript:alert(1)//ie_data.xls",
+                 "data:text/html,hi//ie_data.xls", "http://evil.example/ie_data.xls",
+                 "ftp://img1.wsimg.com/downloads/ie_data.xls"):
+        with pytest.raises(ValueError, match="https"):
+            find_xls_link(f'<a href="{href}">data</a>')
+        assert find_xls_link(f'<a href="{href}">data</a><a href="{LINK}">data</a>') == LINK
+
+
 # ---- the cache ----------------------------------------------------------------------------------------------------
 
 
@@ -337,13 +368,64 @@ def test_a_cached_copy_that_no_longer_parses_is_fetched_again(tmp_path):
     assert session.asked == [fred_url("GDP")]
 
 
+class _Adapter(requests.adapters.BaseAdapter):
+    """A transport mounted on a real ``requests.Session``: records each request it is sent and answers 200 with
+    *content*, so what the default session sends is seen without the network."""
+
+    def __init__(self, content):
+        super().__init__()
+        self.content = content
+        self.sent = []
+
+    def send(self, request, **kwargs):
+        self.sent.append((request, kwargs))
+        response = requests.Response()
+        response.status_code, response._content = 200, self.content
+        response.request, response.url = request, request.url
+        return response
+
+    def close(self):
+        pass
+
+
+def test_the_default_session_sends_requests_own_user_agent_and_the_timeout(tmp_path):
+    # Review 18's m-3: the fetcher's own new session, never the SEC handler's, whose User-Agent may carry the user's
+    # email address; and every request has a timeout (Treasury.gov answers in about 19 s).
+    fetcher = MarketFetcher(tmp_path / "cache", limiter=RateLimiter(min_interval=0),
+                            retry=RetryHandler(max_retries=0, base_delay=0))
+    assert isinstance(fetcher.session, requests.Session)
+    assert fetcher.session is not MarketFetcher(tmp_path / "cache").session
+    adapter = _Adapter(FRED_GDP)
+    fetcher.session.mount("https://", adapter)
+    assert fetch_fred(fetcher, "GDP").series["GDP"][-1] == ("2026-04-01", 32560.0)
+    (request, kwargs), = adapter.sent
+    assert request.url == fred_url("GDP")
+    assert request.headers["User-Agent"] == requests.utils.default_user_agent()
+    assert request.headers["User-Agent"] != src.config.SECConfig().user_agent
+    assert not any("@" in value for value in request.headers.values())
+    assert kwargs["timeout"] == sources.TIMEOUT == 60.0
+
+
+def test_every_request_is_given_the_timeout(tmp_path):
+    # Each source's requests, a retried one's every attempt among them, pass the timeout and nothing else.
+    answers = _answers()
+    answers[fred_url("GDP")] = _Response(503)
+    session = _Session(answers)
+    summary = collect.collect_market(tmp_path / "stock.db", ["fred", "shiller", "treasury"], tmp_path / "cache",
+                                     session=session, log=lambda line: None, treasury_from=2025, today="2026-10-24")
+    assert summary["fred:GDP"]["ok"] is False and session.asked.count(fred_url("GDP")) == sources.MAX_RETRIES + 1
+    assert len(session.kwargs) == len(session.asked) == 6 + sources.MAX_RETRIES
+    assert all(kwargs == {"timeout": sources.TIMEOUT} for kwargs in session.kwargs)
+
+
 def test_new_yorks_year_ends_at_five_utc():
     assert year_end(2025) == _utc(2026, 1, 1, 5)
 
 
 def test_a_past_treasury_year_is_kept_once_cached_after_it_ended_and_fetched_again_if_cached_during_it(tmp_path):
     _cache(tmp_path, "treasury_2024.csv", TREASURY_2025.replace("2025", "2024").encode(), _utc(2025, 1, 1, 5))
-    _cache(tmp_path, "treasury_2025.csv", b"Date,\"10 Yr\"\n06/30/2025,4.20\n", _utc(2026, 1, 1, 4, 59))
+    _cache(tmp_path, "treasury_2025.csv", b'Date,"3 Mo","2 Yr","10 Yr"\n06/30/2025,4.30,3.80,4.20\n',
+           _utc(2026, 1, 1, 4, 59))
     _cache(tmp_path, "treasury_2026.csv", TREASURY_2026.encode(), NOW - 3600)
     fetcher, session, _ = _fetcher(tmp_path, {treasury_url(2025): TREASURY_2025.encode()})
     data = fetch_treasury(fetcher, 2024, 2026)
@@ -354,7 +436,7 @@ def test_a_past_treasury_year_is_kept_once_cached_after_it_ended_and_fetched_aga
 
 
 def test_the_current_treasury_year_is_fetched_again_after_a_day(tmp_path):
-    _cache(tmp_path, "treasury_2026.csv", b"Date,\"10 Yr\"\n01/02/2026,4.19\n", NOW - DAY - 60)
+    _cache(tmp_path, "treasury_2026.csv", b'Date,"3 Mo","2 Yr","10 Yr"\n01/02/2026,4.33,3.70,4.19\n', NOW - DAY - 60)
     fetcher, session, _ = _fetcher(tmp_path, {treasury_url(2026): TREASURY_2026.encode()})
     data = fetch_treasury(fetcher, 2026, 2026)
     assert session.asked == [treasury_url(2026)] and data.series["10y"][-1] == ("2026-10-23", 4.15)
@@ -369,6 +451,74 @@ def test_the_treasury_years_merge_with_the_latest_years_url_and_time(tmp_path):
     assert len(data.series) == 14 and lines  # a progress line for the year fetched
     with pytest.raises(ValueError):
         fetch_treasury(fetcher, 2027, 2026)
+
+
+#: Treasury.gov's answers without rows: an empty 200, and the header alone.
+EMPTY_ANSWERS = (b"", (TREASURY_HEADER + "\n").encode())
+
+
+def test_a_past_year_answered_without_rows_falls_back_to_its_cached_copy(tmp_path):
+    # Review 18's I-1: 2025's copy was cached on 2025-12-31, before the year ended, so it is fetched again. An answer
+    # without rows, for a year that has ended, is a failed answer: the cached copy is used and kept, and that is said.
+    for empty in EMPTY_ANSWERS:
+        path = _cache(tmp_path, "treasury_2025.csv", TREASURY_2025.encode(), _utc(2025, 12, 31, 12))
+        _cache(tmp_path, "treasury_2026.csv", TREASURY_2026.encode(), NOW - 3600)
+        fetcher, session, lines = _fetcher(tmp_path, {treasury_url(2025): empty})
+        data = fetch_treasury(fetcher, 2025, 2026)
+        assert session.asked == [treasury_url(2025)]
+        assert data.series["10y"] == [("2025-12-31", 4.18), ("2026-01-02", 4.19), ("2026-10-23", 4.15)]
+        assert (data.fetched, data.cached) == (0, 2)
+        assert len(data.notes) == 1 and lines == data.notes
+        assert data.notes[0].startswith("treasury_2025.csv: the fetch failed") and "no rows" in data.notes[0]
+        assert path.read_bytes() == TREASURY_2025.encode() and path.stat().st_mtime == _utc(2025, 12, 31, 12)
+
+
+def test_a_past_year_answered_without_rows_and_without_a_cached_copy_fails_the_source(tmp_path):
+    # A first collection: no copy to fall back on, so the source fails and nothing of it is stored.
+    for empty in EMPTY_ANSWERS:
+        fetcher, _, _ = _fetcher(tmp_path, {treasury_url(2025): empty, treasury_url(2026): TREASURY_2026.encode()})
+        with pytest.raises(MarketFetchError, match="no rows"):
+            fetch_treasury(fetcher, 2025, 2026)
+        assert not (tmp_path / "cache" / "market" / "treasury_2025.csv").exists()
+
+
+def test_a_cached_past_year_without_rows_is_fetched_again(tmp_path):
+    # Cached after 2025 ended, but without rows: never kept as the year's whole file.
+    for empty in EMPTY_ANSWERS:
+        _cache(tmp_path, "treasury_2025.csv", empty, _utc(2026, 1, 2))
+        _cache(tmp_path, "treasury_2026.csv", TREASURY_2026.encode(), NOW - 3600)
+        fetcher, session, _ = _fetcher(tmp_path, {treasury_url(2025): TREASURY_2025.encode()})
+        data = fetch_treasury(fetcher, 2025, 2026)
+        assert session.asked == [treasury_url(2025)] and data.series["10y"][0] == ("2025-12-31", 4.18)
+        assert (tmp_path / "cache" / "market" / "treasury_2025.csv").read_bytes() == TREASURY_2025.encode()
+
+
+def test_the_current_year_without_rows_yet_is_no_failure(tmp_path):
+    # The first days of January: the new year's file has no rows yet. Without a cached copy that has rows, that is
+    # the year as it stands, not a failed answer: it is cached, and fetched again a day later.
+    jan1 = _utc(2027, 1, 1, 15)
+    fetcher, session, lines = _fetcher(tmp_path, {treasury_url(2027): EMPTY_ANSWERS[0]}, now=jan1)
+    data = fetch_treasury(fetcher, 2027, 2027)
+    assert (data.series, data.fetched, data.notes, lines) == ({}, 1, [], [])
+    path = tmp_path / "cache" / "market" / "treasury_2027.csv"
+    assert path.read_bytes() == EMPTY_ANSWERS[0] and path.stat().st_mtime == jan1
+    fetcher, session, lines = _fetcher(tmp_path, {treasury_url(2027): EMPTY_ANSWERS[1]}, now=jan1 + DAY + 60)
+    data = fetch_treasury(fetcher, 2027, 2027)
+    assert (data.series, data.fetched, data.notes, session.asked) == ({}, 1, [], [treasury_url(2027)])
+    assert path.read_bytes() == EMPTY_ANSWERS[1]
+
+
+def test_the_current_year_answered_without_rows_falls_back_to_its_cached_copy_with_rows(tmp_path):
+    # Once the current year's cached copy has rows, an answer without any is a failed answer too.
+    for empty in EMPTY_ANSWERS:
+        path = _cache(tmp_path, "treasury_2026.csv", TREASURY_2026.encode(), NOW - 2 * DAY)
+        fetcher, session, lines = _fetcher(tmp_path, {treasury_url(2026): empty})
+        data = fetch_treasury(fetcher, 2026, 2026)
+        assert session.asked == [treasury_url(2026)]
+        assert data.series["10y"] == [("2026-01-02", 4.19), ("2026-10-23", 4.15)]
+        assert (data.fetched, data.cached, data.fetched_at) == (0, 1, NOW - 2 * DAY)
+        assert len(data.notes) == 1 and "no rows" in data.notes[0] and lines == data.notes
+        assert path.read_bytes() == TREASURY_2026.encode()
 
 
 def test_shillers_workbook_is_fetched_from_the_link_on_its_page_then_read_from_the_cache(tmp_path):
@@ -431,6 +581,19 @@ def test_each_named_series_is_replaced_whole_and_its_sources_fetch_row_too(tmp_p
                             "shiller": ("u3", 1, "2026-10-03T00:00:00+00:00")}
 
 
+def test_a_series_replaced_from_a_day_keeps_its_rows_before_it(tmp_path):
+    # BUG-224: with replace_from, each named series loses only its rows dated on or after that day.
+    db = tmp_path / "m.db"
+    store = SQLiteStore(db)
+    store.export_market_series("treasury", {"ust:10y": [("2024-12-31", 4.5), ("2025-01-01", 9.9), ("2025-06-30", 4.4)],
+                                            "ust:2y": [("2024-12-31", 4.0), ("2025-06-30", 3.9)]}, "u1", "t1")
+    store.export_market_series("treasury", {"ust:10y": [("2025-01-02", 4.6), ("2025-06-30", 4.3)]}, "u2", "t2",
+                               replace_from="2025-01-01")
+    assert _rows(db, "ust:10y") == [("2024-12-31", 4.5), ("2025-01-02", 4.6), ("2025-06-30", 4.3)]
+    assert _rows(db, "ust:2y") == [("2024-12-31", 4.0), ("2025-06-30", 3.9)]  # not named: left as it was
+    assert _fetches(db)["treasury"] == ("u2", 2, "t2")
+
+
 def test_a_store_that_fails_changes_nothing(tmp_path):
     db = tmp_path / "m.db"
     store = SQLiteStore(db)
@@ -452,12 +615,25 @@ def _answers():
             treasury_url(2026): TREASURY_2026.encode()}
 
 
-def _collect(tmp_path, answers, wanted=("fred", "shiller", "treasury")):
+def _collect(tmp_path, answers, wanted=("fred", "shiller", "treasury"), treasury_from=2025):
     db = tmp_path / "stock.db"
     lines = []
     summary = collect.collect_market(db, list(wanted), tmp_path / "cache", session=_Session(answers),
-                                     log=lines.append, treasury_from=2025, today="2026-10-24")
+                                     log=lines.append, treasury_from=treasury_from, today="2026-10-24")
     return db, summary, lines
+
+
+def _age(tmp_path, name, seconds):
+    """Make the cached copy of *name* *seconds* older; its path."""
+    path = tmp_path / "cache" / "market" / name
+    when = path.stat().st_mtime - seconds
+    os.utime(path, (when, when))
+    return path
+
+
+def _yields(db):
+    """Every stored Treasury series' rows, by name."""
+    return {name: _rows(db, f"ust:{name}") for name in sources.TREASURY_COLUMNS.values()}
 
 
 def test_collect_market_stores_the_three_sources(tmp_path):
@@ -526,6 +702,84 @@ def test_only_the_named_sources_are_collected(tmp_path):
     assert list(summary) == ["treasury"] and session.asked == [treasury_url(2025), treasury_url(2026)]
     with pytest.raises(ValueError):
         collect.collect_market(tmp_path / "stock.db", ["yahoo"], tmp_path / "cache", session=session)
+
+
+def test_a_past_year_answered_empty_after_a_good_run_keeps_its_stored_yields(tmp_path):
+    # Review 18's I-1, first scenario: 2025's copy was cached before 2025 ended, so a 2026 run fetches it again, and
+    # Treasury.gov answers with an empty 200. The run falls back to the cached copy and says so: the stored yields
+    # and the cached copy stay.
+    answers = _answers()
+    db, _, _ = _collect(tmp_path, answers, wanted=["treasury"])
+    stored = _yields(db)
+    assert stored["10y"] == [("2025-12-31", 4.18), ("2026-01-02", 4.19), ("2026-10-23", 4.15)]
+    path = tmp_path / "cache" / "market" / "treasury_2025.csv"
+    os.utime(path, (year_end(2025) - 3600, year_end(2025) - 3600))
+    answers[treasury_url(2025)] = b""
+    db, summary, lines = _collect(tmp_path, answers, wanted=["treasury"])
+    s = summary["treasury"]
+    assert (s["ok"], s["error"], s["latest"]) == (True, None, "2026-10-23")
+    assert _yields(db) == stored
+    assert path.read_bytes() == TREASURY_2025.encode()
+    assert len(s["notes"]) == 1 and s["notes"][0].startswith("treasury_2025.csv: the fetch failed")
+    assert "using the cached copy" in s["notes"][0] and s["notes"][0] in lines
+
+
+def test_the_current_year_with_its_maturity_headers_renamed_keeps_its_stored_yields(tmp_path):
+    # Review 18's I-1, second scenario: two days later the current year's file has its maturity headers renamed
+    # ("10 Year" for "10 Yr"): rows without the yield columns, a failed answer. The run falls back to the cached copy.
+    answers = _answers()
+    db, _, _ = _collect(tmp_path, answers, wanted=["treasury"])
+    stored = _yields(db)
+    path = _age(tmp_path, "treasury_2026.csv", 2 * DAY)
+    renamed = TREASURY_2026.replace(' Mo"', ' Month"').replace(' Yr"', ' Year"')
+    assert '"10 Year"' in renamed and '"10 Yr"' not in renamed and '"3 Month"' in renamed
+    answers[treasury_url(2026)] = renamed.encode()
+    db, summary, lines = _collect(tmp_path, answers, wanted=["treasury"])
+    s = summary["treasury"]
+    assert (s["ok"], s["error"], s["latest"]) == (True, None, "2026-10-23")
+    assert _yields(db) == stored and stored["10y"][-1] == ("2026-10-23", 4.15)
+    assert path.read_bytes() == TREASURY_2026.encode()
+    assert len(s["notes"]) == 1 and s["notes"][0].startswith("treasury_2026.csv: the fetch failed")
+    assert "'3 Mo', '2 Yr', '10 Yr'" in s["notes"][0] and s["notes"][0] in lines
+
+
+def test_a_page_linking_the_workbook_through_another_scheme_falls_back_to_its_cached_copy(tmp_path):
+    # Review 18's I-2: two days later Shiller's page links the workbook through a javascript: URL. That answer has no
+    # https link, so it doesn't parse: the cached page's link is used, and the URL stored and shown stays https.
+    answers = _answers()
+    _collect(tmp_path, answers, wanted=["shiller"])
+    for name in ("shiller.html", "ie_data.xls"):
+        _age(tmp_path, name, 2 * DAY)
+    answers[SHILLER_PAGE_URL] = b'<a href="javascript:alert(document.domain)//ie_data.xls">U.S. Stock Markets</a>'
+    db, summary, _ = _collect(tmp_path, answers, wanted=["shiller"])
+    s = summary["shiller"]
+    assert (s["ok"], s["url"], s["fetched"]) == (True, LINK + "&x=1", 1)
+    assert _fetches(db)["shiller"][0] == LINK + "&x=1"
+    assert len(s["notes"]) == 1 and s["notes"][0].startswith("shiller.html: the fetch failed")
+
+
+def test_a_later_treasury_from_keeps_the_earlier_yields_and_refreshes_its_own(tmp_path):
+    # BUG-224: after a full run, a run with --treasury-from 2026 refreshes 2026's yields (a new day, a revised one)
+    # and keeps 2025's; FRED's and Shiller's series are still replaced whole.
+    answers = _answers()
+    db, _, _ = _collect(tmp_path, answers)
+    with closing(sqlite3.connect(str(db))) as conn:
+        conn.executemany("INSERT INTO market_series (series, date, value) VALUES (?, ?, ?)",
+                         [("fred:GDP", "2020-01-01", 1.0), ("shiller:cape", "1870-01-01", 2.0)])
+        conn.commit()
+    _age(tmp_path, "treasury_2026.csv", 2 * DAY)
+    answers[treasury_url(2026)] = ("\n".join([
+        TREASURY_HEADER, "10/26/2026,4.31,4.30,4.29,4.26,4.21,4.11,3.96,3.61,3.56,3.71,3.91,4.10,4.61,4.71",
+        "10/23/2026,4.30,4.29,4.28,4.25,4.20,4.10,3.95,3.60,3.55,3.70,3.90,4.16,4.60,4.70",
+        "01/02/2026,4.40,,4.38,4.33,4.30,4.20,4.05,3.70,3.65,3.80,4.00,4.19,4.65,4.75"]) + "\n").encode()
+    db, summary, _ = _collect(tmp_path, answers, treasury_from=2026)
+    assert all(s["ok"] for s in summary.values())
+    assert _rows(db, "ust:10y") == [("2025-12-31", 4.18), ("2026-01-02", 4.19), ("2026-10-23", 4.16),
+                                    ("2026-10-26", 4.10)]
+    assert _rows(db, "ust:6w") == [("2025-12-31", 4.34), ("2026-10-23", 4.29), ("2026-10-26", 4.30)]
+    assert summary["treasury"]["series"]["ust:10y"] == {"rows": 3, "first": "2026-01-02", "last": "2026-10-26"}
+    assert _rows(db, "fred:GDP") == [("2026-01-01", 32000.0), ("2026-04-01", 32560.0)]
+    assert _rows(db, "shiller:cape") == [("1881-01-01", 18.47), ("2026-09-01", 39.5)]
 
 
 def test_a_second_collection_reads_its_fresh_copies_from_the_cache(tmp_path):
@@ -598,6 +852,40 @@ def test_the_cli_exits_1_when_a_source_stored_nothing(tmp_path, monkeypatch, cap
     assert collect.main(["--db", str(db)]) == 1
     out = capsys.readouterr().out
     assert "3 of 4" in out and "fred:GDP" in out and "HTTP 404" in out
+
+
+def test_the_summary_lists_each_fallback_to_a_cached_copy_on_its_stale_line():
+    # Review 18's m-1: a source that fell back to its cached copy stored rows (exit 0), so the summary says which and
+    # how old the copy is: the fetcher's notes.
+    notes = ["shiller.html: the fetch failed (HTTP 503); using the cached copy of 2026-10-22 18:13 UTC",
+             "ie_data.xls: the fetch failed (HTTP 503); using the cached copy of 2026-10-22 18:14 UTC"]
+    treasury = "treasury_2026.csv: the fetch failed (Treasury.gov's file has no rows); using the cached copy of x"
+    summary = {"fred:GDP": _ok(), "shiller": dict(_ok(), notes=notes), "treasury": dict(_ok(), notes=[treasury])}
+    assert collect.summary_lines(summary)[-3:] == [
+        "Latest: fred:GDP 2026-10-23; shiller 2026-10-23; treasury 2026-10-23",
+        f"Stale: shiller ({notes[0]}); shiller ({notes[1]}); treasury ({treasury})", "Failed: none"]
+    failed = dict(_ok(), ok=False, error="HTTP 404")
+    assert collect.summary_lines({"fred:GDP": _ok(), "shiller": failed})[-2:] == [
+        "Stale: none", "Failed: shiller (HTTP 404)"]
+
+
+def test_a_layout_change_after_a_good_run_falls_back_and_says_so_on_the_stale_line(tmp_path, monkeypatch, capsys):
+    # Review 18's m-1: once a cached copy exists, a workbook that lost its CAPE label doesn't fail the source: the run
+    # falls back to the cached copy, stores its rows again and exits 0, and the summary's Stale line says so.
+    answers = _answers()
+    db, _, _ = _collect(tmp_path, answers, wanted=["shiller"])
+    for name in ("shiller.html", "ie_data.xls"):
+        _age(tmp_path, name, 2 * DAY)
+    answers[LINK + "&x=1"] = _shiller_workbook(labels=("Date", "CPI", "P", "Fraction", "E", "D", "Cyclically Adjusted"))
+    monkeypatch.setattr(collect, "collect_market", partial(collect.collect_market, session=_Session(answers),
+                                                           today="2026-10-24"))
+    assert collect.main(["--shiller", "--db", str(db), "--cache-dir", str(tmp_path / "cache")]) == 0
+    out = capsys.readouterr().out
+    stale = [line for line in out.splitlines() if line.startswith("Stale: ")]
+    assert len(stale) == 1 and stale[0].startswith(
+        "Stale: shiller (ie_data.xls: the fetch failed (Shiller's Data sheet has no header 'CAPE'")
+    assert "using the cached copy of" in stale[0] and "Failed: none" in out
+    assert _rows(db, "shiller:cape") == [("1881-01-01", 18.47), ("2026-09-01", 39.5)]
 
 
 def test_the_cli_end_to_end_prints_each_source_and_a_summary(tmp_path, monkeypatch, capsys):

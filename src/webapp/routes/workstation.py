@@ -22,7 +22,7 @@ from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_p
 from ...valuation.history import HISTORICAL_VALUE_CUTOFFS, METRICS, historical_value_label
 from ...valuation.models import ValuationResult, dcf_per_share
 from ..dependencies import get_job_manager, get_reader, get_settings
-from ..formatting import fmt_count, fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
+from ..formatting import fmt_count, fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_signed_price, fmt_value
 from ..gurus import gurus_holding, has_gurus
 from ..insiders import insider_view
 from ..jobs import CollectionJobManager
@@ -1092,9 +1092,10 @@ def val_indicators_fragment(
                        base=fmt_pct(live["growth"]), bull="—",
                        versus=f"the DCF assumes {fmt_pct(dcf_growth)}" if dcf_growth is not None else "—")
         else:
-            row.update(applicable=ind["applicable"], na_reason=ind["na_reason"], bear=fmt_price(ind["value_bear"]),
-                       base=fmt_price(ind["value_base"]), bull=fmt_price(ind["value_bull"]),
-                       versus=fmt_pct(ind["upside_pct"]))
+            # A value below zero (EPV with debt above the earnings power) reads "-$5.88", as in the notes.
+            row.update(applicable=ind["applicable"], na_reason=ind["na_reason"],
+                       bear=fmt_signed_price(ind["value_bear"]), base=fmt_signed_price(ind["value_base"]),
+                       bull=fmt_signed_price(ind["value_bull"]), versus=fmt_pct(ind["upside_pct"]))
         rows.append(row)
     return templates.TemplateResponse(
         request,

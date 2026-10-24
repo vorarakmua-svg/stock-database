@@ -7,7 +7,8 @@ with ``cached_number`` or ``cached``, ``string_record``, ``boolerr``, ``blank``)
 ``sst_string``: a test splits their bytes across the SST record and its CONTINUE records itself) and
 ``biff_stream``, the Workbook stream. The container: ``compound``, the streams under the root storage, the small ones
 in the mini stream; ``pad_sectors`` free sectors first put the rest at high sector numbers, so the FAT outgrows the
-header's 109 sectors and the DIFAT chain lists the others. ``workbook`` is the two together.
+header's 109 sectors and the DIFAT chain lists the others. ``workbook`` is the two together. ``repeated_fat`` is a
+crafted file whose DIFAT lists one FAT sector over and over.
 """
 import struct
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -270,6 +271,28 @@ def compound(streams: Sequence[Tuple[str, bytes]], sector_shift: int = 9, mini_s
     for s, data in content.items():
         body[s * ss:(s + 1) * ss] = data
     return header.ljust(ss, b"\0") + bytes(body)
+
+
+def repeated_fat(sector_shift: int = 12, difat_sectors: int = 2) -> bytes:
+    """A crafted compound file (review 18's I-3) whose header and DIFAT list its one FAT sector over and over: the
+    header counts 109 + *difat_sectors* x (a sector's entries - 1) FAT sectors, and every one listed is sector 0, in a
+    file of *difat_sectors* + 2 sectors (the FAT, the DIFAT sectors, a directory holding the root entry alone). Read
+    as listed, each listing adds a sector of FAT entries: with 4096-byte sectors and 2 DIFAT sectors, 2,155 x 1,024
+    entries from a file of 20 KB."""
+    ss = 1 << sector_shift
+    per_sector = ss // 4
+    n_fat = HEADER_FAT_SECTORS + difat_sectors * (per_sector - 1)
+    header = struct.pack(
+        "<8s16sHHHHH6sIIIIIIIII", SIGNATURE, b"\0" * 16, 0x3E, 3 if ss == 512 else 4, 0xFFFE, sector_shift, 6,
+        b"\0" * 6, 1, n_fat, difat_sectors + 1, 0, 4096, ENDOFCHAIN, 0, 1, difat_sectors)
+    header += struct.pack(f"<{HEADER_FAT_SECTORS}I", *([0] * HEADER_FAT_SECTORS))
+    fat = [FATSECT] + [DIFSECT] * difat_sectors + [ENDOFCHAIN] + [FREESECT] * (per_sector - difat_sectors - 2)
+    sectors = [struct.pack(f"<{per_sector}I", *fat)]
+    for i in range(1, difat_sectors + 1):
+        following = i + 1 if i < difat_sectors else ENDOFCHAIN
+        sectors.append(struct.pack(f"<{per_sector}I", *([0] * (per_sector - 1) + [following])))
+    sectors.append(_entry("Root Entry", 5, ENDOFCHAIN, 0).ljust(ss, b"\0"))
+    return header.ljust(ss, b"\0") + b"".join(sectors)
 
 
 #: The summary stream a workbook file carries beside its Workbook stream: 200 bytes, in the mini stream, before the

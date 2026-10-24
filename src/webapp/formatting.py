@@ -78,6 +78,17 @@ def fmt_price(x: Optional[float]) -> str:
     return f"${x:,.2f}"
 
 
+def fmt_signed_price(x: Optional[float]) -> str:
+    """Format a per-share figure that may be below zero with its sign before the dollar.
+
+    None -> "—"; -9.17 -> "-$9.17" (``fmt_price`` writes "$-9.17"): the VAL tab's other indicators, in the table
+    and in the notes alike.
+    """
+    if x is None:
+        return "—"
+    return f"-{fmt_price(-x)}" if x < 0 else fmt_price(x)
+
+
 def fmt_value(x: Optional[float], kind: str) -> str:
     """Dispatch formatting by kind.
 

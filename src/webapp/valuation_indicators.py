@@ -20,7 +20,7 @@ from ..valuation.indicators import (
     NNWC_RECEIVABLES,
     implied_growth,
 )
-from .formatting import fmt_mult, fmt_pct, fmt_price
+from .formatting import fmt_mult, fmt_pct, fmt_price, fmt_signed_price
 from .repository import Reader
 
 #: Each indicator's name on the page.
@@ -72,11 +72,6 @@ def _number(value: Any) -> Optional[float]:
 def _list(a: Dict[str, Any], key: str) -> List[Any]:
     value = a.get(key)
     return value if isinstance(value, list) else []
-
-
-def _signed_price(x: float) -> str:
-    """A per-share figure with its sign before the dollar: "-$9.17"."""
-    return f"-{fmt_price(-x)}" if x < 0 else fmt_price(x)
 
 
 def _years(years: List[Any]) -> str:
@@ -137,14 +132,14 @@ def _ncav_notes(row: Dict[str, Any], a: Dict[str, Any]) -> List[str]:
     is."""
     if not row.get("applicable"):
         ncav = _number(a.get("ncav_per_share"))
-        return [f"NCAV is {_signed_price(ncav)} a share."] if ncav is not None else []
+        return [f"NCAV is {fmt_signed_price(ncav)} a share."] if ncav is not None else []
     notes: List[str] = []
     buy = _number(a.get("netnet_buy_price"))
     if buy is not None:
         notes.append(f"Graham bought below two thirds of NCAV: {fmt_price(buy)}.")
     nnwc = _number(a.get("nnwc_per_share"))
     if row.get("value_bear") is None and nnwc is not None:
-        notes.append(f"Graham's net-net working capital is {_signed_price(nnwc)} a share: no bear case.")
+        notes.append(f"Graham's net-net working capital is {fmt_signed_price(nnwc)} a share: no bear case.")
     missing = _list(a, "nnwc_missing")
     if missing:
         notes.append(f"No {_names(missing)} figure: counted as 0 in the net-net.")
@@ -174,7 +169,7 @@ def _graham_tangible_notes(row: Dict[str, Any], a: Dict[str, Any]) -> List[str]:
         notes.append(f"No {_names(missing)} figure: counted as 0, so any untagged intangibles stay in tangible book.")
     tangible = _number(a.get("tangible_bvps"))
     if not row.get("applicable") and tangible is not None:
-        notes.append(f"Tangible book is {_signed_price(tangible)} a share.")
+        notes.append(f"Tangible book is {fmt_signed_price(tangible)} a share.")
     return notes
 
 

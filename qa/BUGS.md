@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 118 · NEEDS-USER 16 · Verified: 92
+**Open:** P0 0 · P1 0 · P2 11 · P3 119 · NEEDS-USER 16 · Verified: 97
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1690,11 +1690,51 @@ Expected: an EPS and a count on one basis (class A, as converted).   Actual: Gra
 Notes: reading class A's figures would add models to V's median, a verdict change: a valuation-policy decision, next to Q7 (share classes).
 
 ### BUG-224 [P3][MARKET] `--treasury-from` with a later year deletes the stored yields before it
-Status: OPEN
-Found: build iteration 47 (M4-6's docs) | Fixed: | Regression test:
+Status: VERIFIED (build iteration 48)
+Found: build iteration 47 (M4-6's docs) | Fixed: (code review 18's fixes) | Regression test: tests/test_market_sources.py::test_a_series_replaced_from_a_day_keeps_its_rows_before_it, ::test_a_later_treasury_from_keeps_the_earlier_yields_and_refreshes_its_own
 Repro: after a full collection (yields from 1990), `python -m src.market.collect --treasury --treasury-from 2020`: `export_market_series` replaces each `ust:*` series whole, so `market_series` keeps 2020 onward only, and the spreads' inversion shares and episodes change with it.
 Expected: a narrower fetch refreshes its own years and leaves the earlier stored rows.   Actual: the earlier rows are deleted (the cache still holds their files, so a default run restores them).
 Notes: documented in the README's options table as the current behavior.
+Fix (build iteration 48): `export_market_series(..., replace_from=)` deletes a named series' rows from that day on only; `collect_market` passes the Treasury's first year, while FRED's and Shiller's series are still replaced whole. The README says so.
+
+### BUG-225 [P2][MARKET] A Treasury answer without yields was stored as the year's yields
+Status: VERIFIED (build iteration 48)
+Found: code review 18 (I-1), build M4-7 | Fixed: (this commit) | Regression test: tests/test_market_sources.py (test_a_treasury_file_with_rows_but_without_a_key_maturity_raises, test_a_past_year_answered_without_rows_falls_back_to_its_cached_copy, test_a_cached_past_year_without_rows_is_fetched_again, test_a_past_year_answered_empty_after_a_good_run_keeps_its_stored_yields, test_the_current_year_with_its_maturity_headers_renamed_keeps_its_stored_yields, and 3 more)
+Repro: a past year answered with an empty 200, or the current year's file with its maturity headers renamed: `parse_treasury_csv` gave {}, the fetcher cached it over the good copy, and the `ust:*` series were replaced without that year. For a past year cached after its year end the loss was permanent. The run said "Failed: none".
+Expected: an answer without yields, for a year that must have them, counts as a failed fetch: the cached copy is used and the run says so.   Actual: the year's yields were deleted.
+Fix: `TREASURY_REQUIRED` ("3 Mo", "2 Yr", "10 Yr", in every year since 1990): rows without one raise. A file without rows fails for a past year, and for the current year once its cached copy has rows; a cached past year without rows is fetched again. 8 tests; mutants killed.
+
+### BUG-226 [P2][MARKET] Shiller's workbook link was trusted whatever its scheme or host (stored XSS on /market)
+Status: VERIFIED (build iteration 48)
+Found: code review 18 (I-2), build M4-7 | Fixed: (this commit) | Regression test: tests/test_market_sources.py::test_only_an_https_link_to_the_workbook_is_taken, ::test_a_page_linking_the_workbook_through_another_scheme_falls_back_to_its_cached_copy; tests/test_web_market.py::test_a_source_url_that_isnt_http_is_not_linked
+Repro: shillerdata.com linking `javascript:alert(document.domain)//ie_data.xls`: `find_xls_link` took it, `market_fetches.url` stored it, and /market rendered it as the CAPE's source link.
+Expected: only an https link fetched and stored, and only http(s) URLs linked.   Actual: any scheme or host.
+Fix: `find_xls_link` takes the first https link to the workbook; market.html links a source only for an http(s) URL.
+
+### BUG-227 [P3][MARKET] A crafted workbook's FAT could make the reader allocate gigabytes
+Status: VERIFIED (build iteration 48)
+Found: code review 18 (I-3), build M4-7 | Fixed: (this commit) | Regression test: tests/test_market_xls.py (test_a_sector_size_ms_cfb_doesnt_have_raises, test_the_difat_walk_stops_after_the_headers_count_of_difat_sectors, test_a_fat_counted_beyond_what_the_files_sectors_need_raises, test_a_fat_sector_listed_twice_raises, test_a_fat_listed_over_and_over_raises_at_once_without_a_large_allocation)
+Repro: a 20 KB file whose DIFAT lists one FAT sector over and over allocated about 90 MB; 0.3-1.6 MB files would need 16-22 GB.
+Expected: every allocation bounded by the file's size.   Actual: the FAT's length was the DIFAT's count times the sector size.
+Fix: sector shifts 9 and 12 and a mini shift of 6 only; at most the FAT sectors the file's sectors need; no FAT sector twice; the DIFAT walk stops at the header's count. The real workbook still reads (0.06 s).
+
+### BUG-228 [P3][MARKET] Code review 18's minors: a silent stale fallback, "$-5.88", untested session invariants, a comment
+Status: VERIFIED (build iteration 48)
+Found: code review 18 (m-1, m-2, m-3, m-5), build M4-7 | Fixed: (this commit) | Regression test: tests/test_market_sources.py (test_the_summary_lists_each_fallback_to_a_cached_copy_on_its_stale_line, test_a_layout_change_after_a_good_run_falls_back_and_says_so_on_the_stale_line, test_the_default_session_sends_requests_own_user_agent_and_the_timeout, test_every_request_is_given_the_timeout); tests/test_web_valuation_indicators.py (the two sign tests)
+Repro: m-1, a Shiller layout change after a cached copy existed fell back to it with "Failed: none", while the docs said it "fails loudly". m-2, the VAL tab's EPV cells read "$-5.88" beside notes reading "-$4.72". m-3, nothing tested that the sources send requests' own User-Agent and the timeout. m-5, EPV's count comment said "as the DCF divides by", but the DCF's latest year must also have an FCF.
+Fix: a "Stale:" summary line listing each fallback (the exit code stays 0) and corrected docs; `formatting.fmt_signed_price` shared by the notes and the cells; the two session tests; the comment and docs reworded.
+
+### BUG-229 [P3][MARKET] The market sources' downloads have no size cap
+Status: OPEN
+Found: code review 18 (m-4), build M4-7 | Fixed: | Regression test:
+Repro: `MarketFetcher._download` reads `response.content` whole (src/market/sources.py), so a server decides how much memory a collection takes. Shiller's workbook is 1.6 MB.
+Expected: answers streamed with a cap (e.g. 50 MB), larger ones failing.   Actual: no limit. BUG-226's https-only link narrows who can serve the workbook.
+
+### BUG-230 [P3][MARKET] A FRED answer with only its header replaces the cached copy
+Status: OPEN
+Found: build iteration 48 (code review 18's fixes) | Fixed: | Regression test:
+Repro: FRED answering `observation_date,GDP` with no rows: `parse_fred_csv` gives [], which parses, so the fetcher caches it over the good copy; the source then fails with "no rows" and its stored series stay. The next day's fetch recovers.
+Expected: like BUG-225's Treasury rule, an answer without rows is a failed fetch that keeps the cached copy.   Actual: the cached copy is lost for a day, and FRED's source fails meanwhile.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

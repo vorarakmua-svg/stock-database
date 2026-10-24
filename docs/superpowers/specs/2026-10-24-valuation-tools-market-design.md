@@ -62,7 +62,7 @@ value, a bear and a bull where the method gives them, an N/A reason otherwise, a
   - EPV of the firm = adjusted earnings / WACC (M2's `wacc`); of the equity = that - total debt + cash and
     short-term investments (M2's debt reading: a debt-free filer's debt is 0, an unknown debt makes EPV N/A);
   - per share over today's count (the valuation inputs' `shares_outstanding`, the count the DCF divides by;
-    without one, after a failed quote, the latest fiscal year's count, as the DCF; N/A without either); bear and
+    without one, after a failed quote, like the DCF, the latest fiscal year's count; N/A without either); bear and
     bull at WACC + 1 and - 1 point (no bull at a rate of 0 or less). A value below 0
     (debt above the earnings power: D, INTC) is stored as it is.
   - N/A for banks, insurers and REITs (no operating EBIT), without a WACC, or when adjusted earnings are not
@@ -91,27 +91,37 @@ try/except (a failure never blocks the valuations, the history or the scores); t
 - **The reader** (`xls.py`): the OLE2 compound file's `Workbook` stream (the header, the FAT and its DIFAT chain,
   the directory, the stream's sector chain), then BIFF8 records: `BOUNDSHEET` for the sheets, `SST` with its
   `CONTINUE` records for the shared strings, and in the sheet `NUMBER`, `RK`, `MULRK`, `LABELSST` and `FORMULA`
-  (its cached number). Enough for Shiller's `Data` sheet; anything else is skipped. Tested on workbooks the tests
-  write (every record type above, a string split across CONTINUE records, a workbook in the mini stream), with no
-  copy of Shiller's data in the repo, and against the real file in the real-data check.
+  (its cached number). Enough for Shiller's `Data` sheet; anything else is skipped. Only MS-CFB's sector sizes are
+  read (512 or 4096 bytes, 64-byte mini sectors), the DIFAT walk stops at the header's count of DIFAT sectors, and a
+  FAT counted beyond what the file's sectors need, or listing a sector twice, is refused, so a crafted file can't
+  allocate more than its own size (review 18's I-3). Tested on workbooks the tests write (every record type above, a
+  string split across CONTINUE records, a workbook in the mini stream, crafted containers), with no copy of
+  Shiller's data in the repo, and against the real file in the real-data check.
 - **Sources** (`sources.py`), through one `requests` session with requests' own User-Agent (as the FRED handler's
   Treasury fetch; the SEC one, which may carry an email, is never sent elsewhere), a request a second, retries
   for transient failures, each answer cached under `<cache-dir>/market/` once it parses:
   - FRED: `NCBEILQ027S` and `GDP`, refreshed when the cached copy is over a day old;
-  - Shiller: `ie_data.xls` from the link on shillerdata.com: the `Data` sheet's monthly date, price, dividend,
-    earnings, CPI and CAPE columns, found by their header labels on the row with the most of them (a missing
-    label fails loudly); each series stops at its own last value;
+  - Shiller: `ie_data.xls` from the `https` link on shillerdata.com (a link of another scheme is skipped: the URL is
+    fetched, stored and shown as the source link; review 18's I-2): the `Data` sheet's monthly date, price,
+    dividend, earnings, CPI and CAPE columns, found by their header labels on the row with the most of them (a
+    missing label is an answer that doesn't parse, never a wrong column); each series stops at its own last value;
   - Treasury.gov: the yearly CSVs from 1990: the current year refreshed when over a day old, a past year kept
-    once it was cached after New York's year end. Treasury.gov answers slowly (about 19 s a year), so a first
-    full run takes about 12 minutes; later runs fetch the current year only.
-  - A failed fetch with a cached copy uses the copy and says so; without one, the source fails.
+    once it was cached after New York's year end and has rows. Every year has the 3-month, 2-year and 10-year
+    columns, so a file with rows but without one of them doesn't parse; a file without rows is a failed answer for a
+    past year, and for the current year once its cached copy has rows: only the current year's first days have no
+    rows yet (review 18's I-1). Treasury.gov answers slowly (about 19 s a year), so a first full run takes about 12
+    minutes; later runs fetch the current year only.
+  - A failed fetch, or an answer that doesn't parse, with a cached copy uses the copy and says so, as it happens
+    and on the summary's Stale line; without one, the source fails.
 - **Storage**: `market_series` (series, date, value; PK (series, date)): `fred:NCBEILQ027S`, `fred:GDP`,
   `shiller:price`, `shiller:dividend`, `shiller:earnings`, `shiller:cpi`, `shiller:cape`, `ust:1m` ...
   `ust:30y` (yields in percent, as published); and `market_fetches` (source PK, url, rows, fetched_at: when the
-  answer came from the source). A series is replaced whole when its source is fetched.
+  answer came from the source). A series is replaced when its source is fetched: FRED's and Shiller's whole, the
+  Treasury's from its first year's January 1 on, so a later `--treasury-from` keeps the earlier yields (BUG-224).
 - **CLI**: `python -m src.market.collect [--fred] [--shiller] [--treasury] [--treasury-from YEAR] [--db PATH]
   [--cache-dir DIR]` (all three by default; `--db` must exist, exit 2 otherwise), progress and a summary
-  printed; a failed source is reported and the others go on (exit 1).
+  printed, its Stale line listing each fallback to a cached copy (exit 0: the source stored rows; review 18's
+  m-1); a failed source is reported and the others go on (exit 1).
 
 ## The market views (`src/webapp/market.py`), computed at read time
 
@@ -167,7 +177,8 @@ try/except (a failure never blocks the valuations, the history or the scores); t
 | A loss-making company | EPV N/A (adjusted earnings not positive); the Graham numbers N/A; the reverse DCF N/A if the DCF is |
 | Negative tangible book (acquisitive companies) | The tangible Graham number N/A, saying so |
 | A price no growth in -50% to +100% reaches | Reverse DCF N/A, saying whether the price is above or below that range |
-| Shiller's link or sheet layout changes | The collector fails loudly for that source; the stored series stays |
+| Shiller's link or sheet layout changes | An answer that doesn't parse: with a cached copy, the run falls back to it, stores its rows again and lists it on the summary's Stale line (exit 0); without one, the source fails (exit 1). The stored series stays either way |
+| Treasury.gov answers a year without its yields (an empty file, renamed maturity headers) | A failed answer: the cached copy is used and listed as stale, else the source fails; only the current year's first days may have no rows |
 | Shiller's dates are numbers: 2026.1 is October, 2026.01 January | Month = round(100 x the fraction); a test pins October |
 | The sheet's last months have a price but no earnings or CAPE yet | Each series stops at its own last value |
 | FRED's equities series lags GDP | The ratio's date is the latest quarter both have |

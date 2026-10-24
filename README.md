@@ -697,8 +697,8 @@ The indicators:
   - the firm's EPV = adjusted earnings / the quality scores' WACC; the equity's = that less total debt plus cash and
     short-term investments. Debt is the scores' reading: a debt-free filer's is 0, and a filer that paid interest with no
     debt tagged has unknown debt, which makes EPV N/A;
-  - per share over today's count (the valuation inputs' share count, the one the DCF divides by; the latest fiscal
-    year's after a failed quote, as the DCF takes it). The bear and bull are at the WACC plus and minus 1 point (no bull
+  - per share over today's count (the valuation inputs' share count, the one the DCF divides by; after a failed quote,
+    like the DCF, the latest fiscal year's count). The bear and bull are at the WACC plus and minus 1 point (no bull
     at a rate of 0 or less). A value below 0, debt above the earnings power (D, INTC), is stored as it is;
   - N/A for banks, insurers and REITs (no operating EBIT), without annual financials, a latest revenue, a WACC (no
     market cap) or a share count, with unknown debt, with fewer than 3 years of margins, or when the adjusted earnings
@@ -1075,24 +1075,29 @@ Three sources, each stored whole:
   adjusted annual rate, from 1947-Q1). A missing value is an empty cell in today's files ("." in older ones):
   `NCBEILQ027S` is annual before 1951-Q4, so its 18 quarters from 1946 to 1951 are empty.
 - **Shiller**: `ie_data.xls` from [shillerdata.com](https://shillerdata.com/), which links the workbook on a CDN under a
-  versioned URL, so the link is read from that page each time. The `Data` sheet's monthly date, price (the month's mean
-  of daily closes), dividend, earnings, CPI and CAPE columns are found by their header labels, on the row with the most
-  of them; a missing label fails the source loudly instead of reading a wrong column. A date is a number: 2026.1 is
+  versioned URL, so the link is read from that page each time: an `https` link only, since the link is fetched, stored
+  and shown as the page's source link (one of another scheme, `http:` or `javascript:`, is skipped). The `Data` sheet's
+  monthly date, price (the month's mean of daily closes), dividend, earnings, CPI and CAPE columns are found by their
+  header labels, on the row with the most of them; a missing label makes the answer one that doesn't parse, so a wrong
+  column is never read (see [The cache and the network](#the-cache-and-the-network)). A date is a number: 2026.1 is
   October and 2026.01 January (the month is round(100 × the fraction)). Each series stops at its own last value: on
   2026-10-24 the price and CPI reach 2026-10, the dividend and earnings 2026-06 and the CAPE (from 1881) 2026-10.
 - **Treasury.gov**: the yearly CSVs of the daily par yield curve (the feed the 10-year rate falls back to without a FRED
   API key), from 1990 to the current year: a row per trading day, each maturity's yield in percent as published, a
   blank (a maturity not issued that day) skipped. The newer maturities start when Treasury began publishing them: the
   20-year in 1993, the 1-month in 2001, the 2-month in 2018, the 4-month in 2022 and the 1.5-month in 2025; the 30-year
-  has no rows from 2002 to 2006.
+  has no rows from 2002 to 2006. Every year has the 3-month, 2-year and 10-year columns, so a file with rows but
+  without one of them (a renamed header) doesn't parse, and a file without rows is a failed answer, except the
+  current year's in its first days.
 
 Two tables hold them (columns and queries are in the [USAGE_GUIDE](USAGE_GUIDE.md#market-data)):
 - `market_series`: one row per series and date: `fred:NCBEILQ027S`, `fred:GDP`, `shiller:price`, `shiller:dividend`,
   `shiller:earnings`, `shiller:cpi`, `shiller:cape`, and `ust:1m`, `ust:6w`, `ust:2m`, `ust:3m`, `ust:4m`, `ust:6m`,
   `ust:1y`, `ust:2y`, `ust:3y`, `ust:5y`, `ust:7y`, `ust:10y`, `ust:20y` and `ust:30y` (yields in percent, as
-  published). A date is the first day of the quarter (FRED) or month (Shiller), or the trading day (Treasury). A
-  source's series are replaced whole when it is fetched, in one transaction with its `market_fetches` row, so a store
-  that fails changes nothing.
+  published). A date is the first day of the quarter (FRED) or month (Shiller), or the trading day (Treasury). When a
+  source is fetched its series are replaced, FRED's and Shiller's whole and the Treasury's from its first year's
+  January 1 on (so a run with a later `--treasury-from` keeps the earlier yields), in one transaction with its
+  `market_fetches` row, so a store that fails changes nothing.
 - `market_fetches`: one row per source (`fred:NCBEILQ027S`, `fred:GDP`, `shiller`, `treasury`): the `url` it came from
   (Shiller's workbook link, the Treasury's current-year file), the `rows` stored and `fetched_at`, when the answer came
   from the source: a cached copy's time, so a fall back to an old copy shows its age.
@@ -1104,8 +1109,10 @@ Two tables hold them (columns and queries are in the [USAGE_GUIDE](USAGE_GUIDE.m
 FAT and DIFAT chain, directory and the `Workbook` stream's sector chain (through the mini stream when it is small), then
 the BIFF8 records: `BOUNDSHEET` for the sheets, `SST` with its `CONTINUE` records for the shared strings, and in a sheet
 `NUMBER`, `RK`, `MULRK`, `LABELSST`, `LABEL`, `FORMULA` (its cached result) and `BOOLERR`. That is enough for the `Data`
-sheet; every other record is skipped. A file it can't read (not a compound file, not BIFF8, a sector chain that loops,
-leaves the file or ends short) raises an error, which counts as an answer that doesn't parse (see
+sheet; every other record is skipped. A file it can't read (not a compound file, not BIFF8, a sector size other than
+MS-CFB's 512 and 4096 bytes (and 64 for mini sectors), a FAT counted beyond what the file's sectors need or listing a
+sector twice, a sector chain that loops, leaves the file or ends short) raises an error, before allocating more than
+the file's own size, which counts as an answer that doesn't parse (see
 [The cache and the network](#the-cache-and-the-network)). Installing the `xlrd` package to read the workbook with a standard library instead is an open question for the user
 (Q14 in `qa/BUGS.md`); nothing was installed. The reader is tested on workbooks the tests write (every record type
 above, a string split across `CONTINUE` records, a workbook in the mini stream), with no copy of Shiller's data in the
@@ -1119,10 +1126,14 @@ while it is fresh, else the answer is fetched again:
 - FRED's two files, Shiller's page and workbook, and the Treasury's current year: fresh for a day (fetched a day ago or
   less);
 - a past Treasury year: fresh once it was cached after that year ended in New York (midnight EST, 05:00 UTC on January
-  1), since a copy fetched during the year lacks its last days. Such a year is not fetched again.
+  1), since a copy fetched during the year lacks its last days. Such a year is not fetched again, unless its copy has
+  no rows.
 
 A fetch that fails, or an answer that doesn't parse, falls back to the cached copy and says so ("the fetch failed
-(...); using the cached copy of ..."); without a copy, the source fails. An answer that doesn't parse is never cached.
+(...); using the cached copy of ..."), as it happens and on the summary's `Stale:` line; without a copy, the source
+fails. An answer that doesn't parse is never cached. A Treasury file without rows counts as one that doesn't parse: a
+past year's always, and the current year's once its cached copy has rows, so only the current year's first days,
+before its first trading day, may have none.
 
 The three sites are asked through one `requests` session with requests' own User-Agent (never the SEC's, which may carry
 an email address), a request a second, and up to 3 retries (after 2 seconds, then doubling) of a timeout, a dropped
@@ -1147,12 +1158,13 @@ python -m src.market.collect --db data/output/stock.db --cache-dir data/cache
 | `--fred` | FRED's `NCBEILQ027S` and `GDP` | all three sources when none is named |
 | `--shiller` | Shiller's `ie_data.xls`: the monthly price, dividend, earnings, CPI and CAPE | all three sources when none is named |
 | `--treasury` | Treasury.gov's daily yield curve, a CSV a year | all three sources when none is named |
-| `--treasury-from` | The Treasury's first year. Its series are replaced whole, so a later year drops the earlier rows from `market_series` (the cache keeps them) | `1990` |
+| `--treasury-from` | The Treasury's first year: its stored yields from that year on are refreshed, and the earlier ones stay | `1990` |
 | `--db` | SQLite database path; it must exist, so run a collection first (a typo must not create a new database) | `data/output/stock.db` |
 | `--cache-dir` | The cache directory; the answers go under `market/` | `data/cache` |
 
 A run prints a line per source as it goes (and one per Treasury year fetched), then a summary: how many sources stored,
-each stored series' rows and dates, each source's latest date, and the sources that failed with the reason:
+each stored series' rows and dates, each source's latest date, each fallback to a cached copy (`Stale:`, with the
+copy's age) and the sources that failed with the reason:
 
 ```
 fred:NCBEILQ027S: 305 rows in 1 series, latest 2026-04-01 (1 fetched, 0 from the cache)
@@ -1162,12 +1174,14 @@ Market data: 4 of 4 sources stored
   ...
   ust:30y: 8215 rows, 1990-01-02 to 2026-10-23
 Latest: fred:NCBEILQ027S 2026-04-01; fred:GDP 2026-04-01; shiller 2026-10-01; treasury 2026-10-23
+Stale: none
 Failed: none
 ```
 
 Each source runs in its own try/except: one that fails, or has no rows, is reported with its reason and stores nothing,
-what it stored before stays, and the others go on. The exit code is **0** when every source asked for stored rows,
-**1** when any did not, and **2** when the database doesn't exist (the message goes to stderr and nothing is created).
+what it stored before stays, and the others go on. The exit code is **0** when every source asked for stored rows (one
+that fell back to its cached copy too: it is on the `Stale:` line), **1** when any did not, and **2** when the database
+doesn't exist (the message goes to stderr and nothing is created).
 
 What a run touches and takes (timed on 2026-10-24): FRED, shillerdata.com with its CDN and Treasury.gov, through the
 cache above, and nothing else; no key and no SEC User-Agent. From empty caches the first full run took 725 seconds,
@@ -1252,10 +1266,12 @@ naming what was altered.
   Fitted from 1970 or from 1990 instead, the same quarter reads +1.21 or +1.33; the page does not use those fits.
 - Shiller's latest month is a single day's close with an estimated CPI (on 2026-10-24, 2026-10 is October 2nd's close),
   and his dividends and earnings end months before his price, so the newest CAPE windows average the earnings they have.
-- A spread's inversion share and episodes count the days stored: since 1990 by default, and since `--treasury-from` if
-  that is later.
-- A change to Shiller's page or sheet layout (no link to `ie_data.xls`, a missing header label) fails the Shiller source
-  loudly, and the stored series stays.
+- A spread's inversion share and episodes count the days stored: since 1990 by default, or since the earliest
+  `--treasury-from` collected (a run with a later one keeps the earlier days).
+- A change to Shiller's page or sheet layout (no `https` link to `ie_data.xls`, a missing header label) is an answer
+  that doesn't parse. Once a cached copy exists, the run falls back to it, stores the same rows again and exits 0, so
+  the CAPE stays at the copy's latest month; the summary's `Stale:` line lists the fallback, with the copy's age, on
+  every run until the change is handled. Without a cached copy the Shiller source fails, and the stored series stays.
 
 ## Project Structure
 

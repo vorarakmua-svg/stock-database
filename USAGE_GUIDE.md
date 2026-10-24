@@ -1079,16 +1079,16 @@ python -m src.market.collect --db data/output/stock.db --cache-dir data/cache
 
 The database must already exist (run a collection first: nothing is created, and a missing one exits with 2). No key
 and no SEC User-Agent are needed: the three sites are asked with requests' own User-Agent, a request a second.
-`--treasury-from YEAR` starts the Treasury's files at another year than 1990; its series are replaced whole, so a later
-year removes the earlier rows from `market_series` (the cache keeps them, and a run without the option stores them
-again).
+`--treasury-from YEAR` starts the Treasury's files at another year than 1990: the stored yields from that year on are
+refreshed, and the earlier ones stay.
 
 The first run takes about 12 minutes (725 seconds on 2026-10-24), nearly all of it Treasury.gov, which answers slowly
 (about 19 seconds for each of its 37 yearly files). Every answer is cached under `data/cache/market/`, and a later run
 fetches only what is a day old: FRED's two series, Shiller's page and workbook, and the Treasury's current year. A past
 Treasury year is not fetched again once it was cached after that year ended. A run with everything fresh takes about 3
-seconds and stores the same rows, so a run within a day of the last one adds nothing new. A fetch that fails falls back
-to the cached copy and says so. Each run prints a line per source and a summary; the end of a run looks like:
+seconds and stores the same rows, so a run within a day of the last one adds nothing new. A fetch that fails, or an
+answer that doesn't parse (a Treasury file without its yields, a changed Shiller sheet), falls back to the cached copy
+and says so. Each run prints a line per source and a summary; the end of a run looks like:
 
 ```
 Market data: 4 of 4 sources stored
@@ -1096,20 +1096,24 @@ Market data: 4 of 4 sources stored
   ...
   ust:30y: 8215 rows, 1990-01-02 to 2026-10-23
 Latest: fred:NCBEILQ027S 2026-04-01; fred:GDP 2026-04-01; shiller 2026-10-01; treasury 2026-10-23
+Stale: none
 Failed: none
 ```
 
-A source that fails, or returns no rows, is listed on the `Failed:` line with its reason and stores nothing; what it
-stored before stays, and the others still go on. The exit code is 0 when every source asked for stored rows and 1
-when any did not.
+A source that fell back to a cached copy is listed on the `Stale:` line with the copy's age: it stored the copy's rows
+again, so the exit code stays 0, but its series stop at the copy's latest date until a fetch works again. A source
+that fails, or returns no rows, is listed on the `Failed:` line with its reason and stores nothing; what it stored
+before stays, and the others still go on. The exit code is 0 when every source asked for stored rows and 1 when any
+did not.
 
 ### The market series
 
 Two tables hold them:
 
 - **`market_series`**: one row per (`series`, `date`) with its `value`. `date` is ISO: the first day of the quarter for
-  FRED, of the month for Shiller, and the trading day for the Treasury. A series is replaced whole when its source is
-  fetched. The series:
+  FRED, of the month for Shiller, and the trading day for the Treasury. A series is replaced when its source is
+  fetched: FRED's and Shiller's whole, the Treasury's from the run's first year on (the earlier yields stay). The
+  series:
   - `fred:NCBEILQ027S`: the corporate equities of US nonfinancial corporate business at market value, quarterly, in
     $ millions, from 1945-10-01. It is annual before 1951-Q4, and its empty quarters are not stored;
   - `fred:GDP`: gross domestic product, quarterly, in $ billions at a seasonally adjusted annual rate, from 1947-01-01;

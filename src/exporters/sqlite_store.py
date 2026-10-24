@@ -611,9 +611,9 @@ class SQLiteStore:
         # The market data (Milestone 4; docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md, "The
         # market data"): one row per series and date, the series named by source ("fred:NCBEILQ027S", "fred:GDP",
         # "shiller:price", "shiller:dividend", "shiller:earnings", "shiller:cpi", "shiller:cape", "ust:1m" ...
-        # "ust:30y"), each replaced whole when its source is fetched; and each source's latest fetch ("fred:<ID>",
-        # "shiller", "treasury"): its url (Shiller's workbook link, the Treasury's latest year), the rows it stored
-        # and when its answer was fetched.
+        # "ust:30y"), each replaced when its source is fetched (whole, the Treasury's from the run's first year on);
+        # and each source's latest fetch ("fred:<ID>", "shiller", "treasury"): its url (Shiller's workbook link, the
+        # Treasury's latest year), the rows it stored and when its answer was fetched.
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS market_series (
@@ -1596,15 +1596,19 @@ class SQLiteStore:
             conn.close()
 
     def export_market_series(self, source: str, series: Dict[str, List[Tuple[str, float]]], url: Optional[str],
-                             fetched_at: str) -> None:
-        """Replace each of *series* (its name -> (date, value) rows) whole, and *source*'s ``market_fetches`` row (its
-        url, the rows stored and when its answer was fetched), in one transaction: a store that fails changes
-        nothing. A series not named is left as it is."""
+                             fetched_at: str, replace_from: Optional[str] = None) -> None:
+        """Replace each of *series* (its name -> (date, value) rows) whole, or, with *replace_from* (an ISO date), only
+        its rows dated on or after that day, the earlier ones kept (the Treasury's from its first year, BUG-224); and
+        *source*'s ``market_fetches`` row (its url, the rows stored and when its answer was fetched), in one
+        transaction: a store that fails changes nothing. A series not named is left as it is."""
         conn = self._connect()
         try:
             self._create_schema(conn)
             for name, rows in series.items():
-                conn.execute("DELETE FROM market_series WHERE series = ?", (name,))
+                if replace_from is None:
+                    conn.execute("DELETE FROM market_series WHERE series = ?", (name,))
+                else:
+                    conn.execute("DELETE FROM market_series WHERE series = ? AND date >= ?", (name, replace_from))
                 conn.executemany("INSERT INTO market_series (series, date, value) VALUES (?, ?, ?)",
                                  [(name, day, value) for day, value in rows])
             self._upsert(conn, "market_fetches", ["source"], {

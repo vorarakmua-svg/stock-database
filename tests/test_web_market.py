@@ -746,6 +746,24 @@ def test_the_page_links_each_sections_source_and_publishes_its_method(db):
             "inversion is the latest episode with at least 20 days below 0") in page
 
 
+def test_a_source_url_that_isnt_http_is_not_linked(db):
+    # Review 18's I-2: a stored source URL of another scheme (a javascript: link stored before find_xls_link took only
+    # https ones, a data: URL) is shown as the source's name alone, never as a link; an http(s) URL is linked.
+    _seed_all(db)
+    conn = sqlite3.connect(db)
+    for source, url in (("shiller", "javascript:alert(document.domain)//ie_data.xls"),
+                        ("fred:GDP", " JavaScript:alert(1)//x"), ("fred:NCBEILQ027S", "data:text/html,<b>x</b>"),
+                        ("treasury", "HTTP://example.com/daily-treasury-rates.csv")):
+        conn.execute("UPDATE market_fetches SET url = ? WHERE source = ?", (url, source))
+    conn.commit()
+    conn.close()
+    raw = _page(db)
+    assert "javascript:" not in raw.lower() and "data:text" not in raw
+    assert "Source: Robert Shiller: ie_data.xls (fetched 2026-10-23)" in raw
+    assert "Source: FRED: NCBEILQ027S, corporate equities (fetched 2026-10-24); FRED: GDP (fetched 2026-10-24)" in raw
+    assert '<a href="HTTP://example.com/daily-treasury-rates.csv">Treasury.gov: daily par yield curve rates</a>' in raw
+
+
 def test_the_page_names_the_latest_sustained_inversion(db):
     # 25 days below 0, 25 above, a blip, 14 above: the blip is the last inverted day but not the latest sustained
     # inversion, which is the 25 days'.

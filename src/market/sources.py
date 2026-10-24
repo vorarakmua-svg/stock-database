@@ -5,21 +5,22 @@
   liability level, quarterly, $ millions, from 1945-10), and GDP (quarterly, $ billions SAAR, from 1947-01). A header
   row ("observation_date,<ID>"; older files "DATE,<ID>"), then a row per period, an empty cell where it has no value
   (older files: ".").
-- Shiller's ``ie_data.xls``, which shillerdata.com links on a CDN under a versioned URL, so the link is read from the
-  page each time: the Data sheet's monthly price (P, a mean of daily closes), dividend (D), earnings (E), CPI and CAPE,
-  found by their header labels (a missing one fails loudly). Its dates are numbers: 1871.01 is January, 2026.1
-  October (the month is round(100 x the fraction)). The latest months have a price but no dividend or earnings yet,
-  so each series stops at its own last value.
+- Shiller's ``ie_data.xls``, which shillerdata.com links on a CDN under a versioned URL, so the link (an https one) is
+  read from the page each time: the Data sheet's monthly price (P, a mean of daily closes), dividend (D), earnings (E),
+  CPI and CAPE, found by their header labels (a missing one is an answer that doesn't parse, never a wrong column).
+  Its dates are numbers: 1871.01 is January, 2026.1 October (the month is round(100 x the fraction)). The latest
+  months have a price but no dividend or earnings yet, so each series stops at its own last value.
 - Treasury.gov's yearly CSV of the daily par yield curve (the one ``FREDHandler._fetch_treasury_gov_year`` reads the
   10-year rate from): a row per trading day, newest first, the date MM/DD/YYYY, each maturity's yield in percent, a
-  blank where it wasn't issued; older years have fewer columns.
+  blank where it wasn't issued; older years have fewer columns, but every year since 1990 has the 3-month, 2-year and
+  10-year. A file without rows is a failed answer, except the current year's in its first days.
 
 The fetchers share one ``requests`` session (requests' own User-Agent, never the SEC's, which may carry an email), a
 rate limiter (a request a second) and retries of the transient failures. Each answer is cached under
 ``<cache-dir>/market/`` once it parses, and a cached copy is reused while it is fresh: FRED's series, Shiller's page
 and workbook and the current Treasury year for a day; a past Treasury year once it was cached after that year ended in
-New York (a copy fetched during the year is incomplete). A failed fetch falls back to the cached copy and says so;
-without one, the source fails.
+New York (a copy fetched during the year is incomplete) and has rows. A failed fetch, or an answer that doesn't parse,
+falls back to the cached copy and says so; without one, the source fails.
 """
 import csv
 import html
@@ -32,7 +33,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypeVar
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import requests
 
@@ -60,6 +61,9 @@ SHILLER_HEADER_ROWS = 30
 TREASURY_COLUMNS: Dict[str, str] = {
     "1 Mo": "1m", "1.5 Month": "6w", "2 Mo": "2m", "3 Mo": "3m", "4 Mo": "4m", "6 Mo": "6m", "1 Yr": "1y",
     "2 Yr": "2y", "3 Yr": "3y", "5 Yr": "5y", "7 Yr": "7y", "10 Yr": "10y", "20 Yr": "20y", "30 Yr": "30y"}
+#: The columns every year's file has had since 1990: rows without one of them are a renamed header, not a year
+#: without those yields (review 18's I-1).
+TREASURY_REQUIRED: Tuple[str, ...] = ("3 Mo", "2 Yr", "10 Yr")
 #: A Treasury.gov cell that holds no yield, beside a blank.
 TREASURY_NO_VALUE = "N/A"
 #: The first year of Treasury.gov's daily par yield curve.
@@ -127,15 +131,20 @@ def parse_fred_csv(text: str) -> List[Tuple[str, float]]:
 
 def parse_treasury_csv(text: str) -> Dict[str, List[Tuple[str, float]]]:
     """A Treasury.gov yearly CSV's yields by maturity (TREASURY_COLUMNS' names): (ISO date, percent) rows, oldest
-    first, a blank (a maturity not issued that day) skipped, other columns ignored. A year without rows yet (an empty
-    answer, or the header alone) has none. Raises ValueError for a text that isn't one: no Date column first, a date
-    that isn't MM/DD/YYYY, a yield that isn't a number."""
+    first, a blank (a maturity not issued that day) skipped, other columns ignored. A file without rows (an empty
+    answer, or the header alone) has none: the current year's in its first days, else a failed answer
+    (``fetch_treasury``). Raises ValueError for a text that isn't one: no Date column first, rows without one of
+    TREASURY_REQUIRED's columns, a date that isn't MM/DD/YYYY, a yield that isn't a number."""
     rows = [row for row in csv.reader(io.StringIO(text.lstrip("\ufeff"))) if any(cell.strip() for cell in row)]
     if not rows:
         return {}
     header = [cell.strip() for cell in rows[0]]
     if header[0] != "Date":
         raise ValueError(f"not a Treasury.gov yield curve CSV: it starts {ascii(text[:40])}")
+    missing = [name for name in TREASURY_REQUIRED if name not in header]
+    if missing and len(rows) > 1:
+        raise ValueError(f"Treasury.gov's CSV has rows but no {', '.join(map(repr, missing))} column (its header: "
+                         f"{ascii(','.join(header)[:120])})")
     columns = {i: TREASURY_COLUMNS[name] for i, name in enumerate(header) if name in TREASURY_COLUMNS}
     series: Dict[str, Dict[str, float]] = {}
     for row in rows[1:]:
@@ -214,13 +223,17 @@ def parse_shiller(data: bytes) -> Dict[str, List[Tuple[str, float]]]:
 
 
 def find_xls_link(page: str) -> str:
-    """The URL of the first link to ``ie_data.xls`` on Shiller's page, its entities unescaped and made absolute (a
-    protocol-relative or relative link against the page's URL). Raises ValueError without one."""
+    """The URL of the first ``https`` link to ``ie_data.xls`` on Shiller's page, its entities unescaped and made
+    absolute (a protocol-relative or relative link against the page's URL). The URL is fetched, stored and shown as
+    the CAPE's source link, so a link of another scheme (``http:``, ``javascript:``, ``data:``) is skipped (review
+    18's I-2). Raises ValueError without one."""
     for _, href in _HREF.findall(page):
         link = html.unescape(href.strip())
         if _WORKBOOK_LINK.search(link):
-            return urljoin(SHILLER_PAGE_URL, link)
-    raise ValueError("Shiller's page links no ie_data.xls")
+            url = urljoin(SHILLER_PAGE_URL, link)
+            if urlsplit(url).scheme == "https":
+                return url
+    raise ValueError("Shiller's page has no https link to ie_data.xls")
 
 
 # ---- fetchers -----------------------------------------------------------------------------------------------------
@@ -294,6 +307,16 @@ class MarketFetcher:
             raise OSError(f"HTTP {response.status_code}")
         return bytes(response.content)
 
+    def cached(self, name: str, parse: Callable[[bytes], T]) -> Optional[T]:
+        """*parse* of the cached copy of *name*: None without one, or for one that doesn't parse."""
+        path = self.cache / name
+        if not path.is_file():
+            return None
+        try:
+            return parse(path.read_bytes())
+        except ValueError:
+            return None
+
     def get(self, url: str, name: str, parse: Callable[[bytes], T], not_before: float) -> Tuple[T, Answer]:
         """*parse* of the answer for *url*, cached as *name*: the cached copy when it was fetched at or after
         *not_before* (epoch seconds) and parses, else fetched, and cached once it parses. A failed fetch, or an answer
@@ -356,20 +379,38 @@ def fetch_shiller(fetcher: MarketFetcher) -> SourceData:
     return _source(series, [page, workbook])
 
 
+def _treasury_year(required: bool) -> Callable[[bytes], Dict[str, List[Tuple[str, float]]]]:
+    """``parse_treasury_csv`` of a yearly file's bytes. A file without rows raises ValueError when *required* (a past
+    year's, or the current year's once its cached copy has rows): a failed answer, not a year without rows yet."""
+
+    def parse(content: bytes) -> Dict[str, List[Tuple[str, float]]]:
+        parsed = parse_treasury_csv(content.decode("utf-8-sig"))
+        if required and not parsed:
+            raise ValueError("Treasury.gov's file has no rows")
+        return parsed
+
+    return parse
+
+
 def fetch_treasury(fetcher: MarketFetcher, first_year: int, last_year: int,
                    log: Callable[[str], None] = lambda line: None) -> SourceData:
     """Treasury.gov's yields from *first_year* to *last_year*, the current year, merged by maturity, oldest first:
     the current year's copy refreshed when over a day old; a past year's kept once it was cached after that year
-    ended (``year_end``), else fetched again. A progress line (*log*) for each year fetched; the URL and time are the
-    current year's. Raises ValueError for no years."""
+    ended (``year_end``), else fetched again. A file without rows is a failed answer for a past year (a cached copy
+    without rows is fetched again) and for the current year once its cached copy has rows; the current year's first
+    days, before its first row, have none (``_treasury_year``). A progress line (*log*) for each year fetched; the URL
+    and time are the current year's. Raises ValueError for no years."""
     if first_year > last_year:
         raise ValueError(f"no Treasury years from {first_year} to {last_year}")
     merged: Dict[str, Dict[str, float]] = {}
     answers = []
     for year in range(first_year, last_year + 1):
-        not_before = fetcher.clock() - DAY if year == last_year else year_end(year)
-        parsed, answer = fetcher.get(treasury_url(year), f"treasury_{year}.csv", _text(parse_treasury_csv),
-                                     not_before)
+        cached_as = f"treasury_{year}.csv"
+        if year < last_year:  # a past year: whole once cached after it ended, and never without rows
+            not_before, required = year_end(year), True
+        else:  # the current year: without rows in its first days, unless its cached copy already has some
+            not_before, required = fetcher.clock() - DAY, bool(fetcher.cached(cached_as, _treasury_year(False)))
+        parsed, answer = fetcher.get(treasury_url(year), cached_as, _treasury_year(required), not_before)
         for name, rows in parsed.items():
             merged.setdefault(name, {}).update(rows)
         if answer.fetched:

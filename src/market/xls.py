@@ -2,9 +2,11 @@
 (docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md, "The market data"). No ``.xls`` reader is
 installed and installing ``xlrd`` is the user's open question (Q14), so the milestone carries its own.
 
-The container (MS-CFB): the 512-byte header (its signature; the sector and mini sector sizes from their shifts; the
-first 109 FAT sectors, the DIFAT chain listing the others; the directory's and the mini FAT's first sectors; the mini
-stream cutoff), the FAT, and the directory, where the root storage's children are a tree of left and right siblings.
+The container (MS-CFB): the 512-byte header (its signature; the sector and mini sector sizes from their shifts, 512 or
+4096 bytes and 64; the first 109 FAT sectors, the DIFAT chain listing the others, at most the header's count of DIFAT
+sectors; the directory's and the mini FAT's first sectors; the mini stream cutoff), the FAT, never more FAT sectors
+than the file's sectors need nor one listed twice, and the directory, where the root storage's children are a tree of
+left and right siblings.
 The ``Workbook`` stream (or ``Book``) is read through its sector chain in the FAT, or, smaller than the cutoff,
 through the mini FAT in the mini stream (the root entry's own chain).
 
@@ -15,18 +17,23 @@ UTF-16LE may switch; the rich-text runs and the extended data are skipped by the
 sheet's cells: NUMBER, RK, MULRK, LABELSST, LABEL, FORMULA (its cached result: a number, or, with 0xFFFF in its last
 two bytes, a string in the STRING record after it, a boolean, an error (no value) or an empty string) and BOOLERR (a
 boolean; an error has no value). Every other record, and a chart embedded in the sheet, is skipped. A file that can't
-be read raises XLSError: not a compound file or not BIFF8, a sector chain that loops, leaves the file or ends short, a
-record that runs past its stream.
+be read raises XLSError: not a compound file or not BIFF8, a sector size MS-CFB doesn't have, a FAT counted beyond the
+file's sectors or listing a sector twice, a sector chain that loops, leaves the file or ends short, a record that runs
+past its stream. Every allocation is bounded by the file's size.
 """
 import struct
 from dataclasses import dataclass
-from typing import Dict, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Dict, Iterator, List, Optional, Sequence, Set, Tuple, Union
 
 #: A cell's value.
 Cell = Union[float, str, bool]
 
 #: An OLE2 compound file's first 8 bytes.
 SIGNATURE = bytes.fromhex("D0CF11E0A1B11AE1")
+#: The sector shifts MS-CFB has (512-byte sectors in version 3, 4096-byte ones in version 4) and its mini sector shift
+#: (64 bytes). Any other is refused: a 64 KB sector would multiply what a crafted FAT allocates (review 18's I-3).
+SECTOR_SHIFTS = (9, 12)
+MINI_SECTOR_SHIFT = 6
 #: The FAT's special entries (MS-CFB 2.1): regular sectors are numbered up to MAXREGSECT.
 MAXREGSECT = 0xFFFFFFFA
 ENDOFCHAIN = 0xFFFFFFFE
@@ -73,15 +80,25 @@ class _Compound:
             raise XLSError("not a legacy Excel workbook: no OLE2 compound file signature")
         self.data = data
         order, sector_shift, mini_shift = struct.unpack_from("<HHH", data, 0x1C)
-        if order != 0xFFFE or not 7 <= sector_shift <= 16 or not 1 <= mini_shift < sector_shift:
-            raise XLSError("a malformed compound file header")
+        if order != 0xFFFE or sector_shift not in SECTOR_SHIFTS or mini_shift != MINI_SECTOR_SHIFT:
+            raise XLSError(f"a malformed compound file header: byte order 0x{order:04X}, sector shift {sector_shift}, "
+                           f"mini sector shift {mini_shift} (MS-CFB has 0xFFFE, 9 or 12, and 6)")
         self.sector_size, self.mini_size = 1 << sector_shift, 1 << mini_shift
-        (_, n_fat, first_dir, _, self.cutoff, self.first_minifat, _, first_difat, _) = struct.unpack_from(
+        (_, n_fat, first_dir, _, self.cutoff, self.first_minifat, _, first_difat, n_difat) = struct.unpack_from(
             "<9I", data, 0x28)
         per_sector = self.sector_size // 4
+        # The FAT needs an entry for each of the file's sectors and no more, so a count beyond that (a crafted DIFAT
+        # listing one sector over and over) is refused before any FAT sector is read.
+        n_sectors = -(-len(data) // self.sector_size) - 1
+        most = -(-n_sectors // per_sector)
+        if n_fat > most:
+            raise XLSError(f"the header counts {n_fat} FAT sectors, more than the {most} that a file of {n_sectors} "
+                           "sectors needs: it is truncated or damaged")
         listed = list(struct.unpack_from(f"<{HEADER_FAT_SECTORS}I", data, 0x4C))
-        sector, seen = first_difat, set()
-        while sector not in (ENDOFCHAIN, FREESECT):  # each DIFAT sector: FAT sectors, then the next DIFAT sector
+        sector = first_difat
+        seen: Set[int] = set()
+        # At most the header's count of DIFAT sectors, each listing FAT sectors, then the next DIFAT sector.
+        while sector not in (ENDOFCHAIN, FREESECT) and len(seen) < n_difat:
             if sector in seen:
                 raise XLSError(f"the DIFAT chain loops at sector {sector}")
             seen.add(sector)
@@ -91,7 +108,11 @@ class _Compound:
         if n_fat > len(listed):
             raise XLSError(f"the header counts {n_fat} FAT sectors and the DIFAT lists {len(listed)}")
         self.fat: List[int] = []
+        fat_sectors: Set[int] = set()
         for sector in listed[:n_fat]:
+            if sector in fat_sectors:
+                raise XLSError(f"the DIFAT lists FAT sector {sector} twice: the file is damaged")
+            fat_sectors.add(sector)
             self.fat += struct.unpack(f"<{per_sector}I", self._sector(sector))
         directory = self._join(self._chain(first_dir, self.fat, "the directory"))
         self.entries = []

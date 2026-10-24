@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 2 · DOING 0 · DONE 36 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 1 · DOING 1 · DONE 36 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -68,7 +68,7 @@
 | M4-4 | The market page (`/market`: the Buffett indicator and its zones, Shiller's CAPE, the yield curve) and `GET /api/market`, a nav link, browser-checked; with tests | DONE | this commit | `qa/evidence/market-m4-4-*` |
 | M4-5 | Independent oracle `qa/oracle/indicators_oracle.py` and real-data validation: the indicators on a backfilled copy, the reader against the sheet's own CAPE and the app's `^GSPC`, the Buffett ratio by hand, the valuations untouched | DONE | this commit | `qa/evidence/oracle-m4-5-*` |
 | M4-6 | Docs: README and USAGE_GUIDE | DONE | this commit | README "Other valuation indicators", "Market data"; USAGE_GUIDE "Other valuation indicators", "Market Data"; `qa/evidence/docs-m4-6-*` |
-| M4-7 | Milestone close: code review 18 (opus) with Critical and Important findings fixed; backup, then the offline backfill of the indicators and the market collection into the user's DB | TODO | | |
+| M4-7 | Milestone close: code review 18 (opus) with Critical and Important findings fixed; backup, then the offline backfill of the indicators and the market collection into the user's DB | DOING (review 18 fixed; the live step next) | | |
 
 ## M5: a wider universe and automation
 
@@ -1113,3 +1113,36 @@ Evidence: `qa/evidence/docs-m4-6-{tests,sql,done}.txt`
 Gates: ruff ✓ mypy ✓ pytest 1914 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) docs: the other valuation indicators and the market data in the README and the usage guide (M4-6)
 Next: M4-7 (milestone close: code review 18, then the backup, the backfill and the market collection into the user's DB).
+
+### Build iteration 48: 2026-10-25 02:36: M4-7 (code review 18 and its fixes)
+Did:
+- Code review 18 (opus, read-only) covered Milestone 4 (26d74e4..f7e721a): "ready with fixes", no Critical. It
+  confirmed the formulas, units, zones, oracles and that nothing reaches the valuations. Its findings:
+  - I-1 (BUG-225, P2): a Treasury answer without yields was accepted, cached and stored whole, deleting a year's
+    yields for good. It would have bitten M4-7's own first, cacheless collection;
+  - I-2 (BUG-226, P2): Shiller's workbook link was trusted whatever its scheme or host, then stored and rendered as
+    the CAPE's source link (stored XSS);
+  - I-3 (BUG-227, P3): a crafted workbook's FAT could make the reader allocate gigabytes;
+  - five minors (BUG-228 for four of them; m-4 recorded as BUG-229).
+- The fixes (an opus worker, reviewed), each test-first (RED in `review18-fixes-red.txt`), with 23 new tests:
+  - Treasury files with rows but without the 3-month, 2-year or 10-year column, and past years without rows, are
+    failed answers that fall back to the cached copy;
+  - only an https link to the workbook is taken, and the page links only http(s) URLs;
+  - the reader accepts only MS-CFB's sector sizes and refuses an inflated or repeated FAT before allocating;
+  - a narrower `--treasury-from` keeps the earlier yields (BUG-224);
+  - a "Stale:" summary line lists fallbacks to a cached copy, and the docs no longer say a layout change "fails
+    loudly" once a copy exists;
+  - negative per-share cells read "-$5.88";
+  - tests pin the sources' User-Agent (requests' own) and timeout.
+- Mutants: 43 new, each killed (I ran them again); M4-2's 67, M4-3's 83 and M4-4's 110 re-run, each killed.
+  The review's probes no longer reproduce. A real-data run on a copy left all 109,739 market rows intact, and the
+  market oracle passes 6 of 6.
+- Logged, open (P3): BUG-229, downloads have no size cap; BUG-230, a FRED answer with only its header replaces the
+  cached copy (the stored rows stay, and the next day's fetch recovers).
+- Noted: a `--treasury-from` before 1990 now fails the Treasury source: those years have no rows.
+- An outside process emptied this session's scratchpad overnight. The worker recreated the mutant runner and the
+  probes; I recreated my scripts.
+Evidence: `qa/evidence/review18-report.md`, `review18-fixes-{red,green,gates,gates-rerun,mutants,mutants-rerun,mutants-m42,mutants-m43,mutants-m44,probes,realdata,done}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1937 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(market): Treasury answers without yields, Shiller's link, the reader's FAT and a narrower Treasury run (code review 18)
+Next: M4-7's live step: a dry run on a fresh copy, the backup, then the backfill and the market collection into the user's DB.

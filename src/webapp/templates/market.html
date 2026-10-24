@@ -3,7 +3,8 @@
 
 {% block content %}
 {% macro source_line(s) -%}
-<p class="text-muted mt-2">Source: {% for f in s.fetches %}{% if not loop.first %}; {% endif %}{% if f.url %}<a href="{{ f.url }}">{{ f.name }}</a>{% else %}{{ f.name }}{% endif %}{% if f.fetched %} (fetched {{ f.fetched }}){% endif %}{% endfor %} &middot; {{ s.latest_label }} {{ s.latest }}</p>
+{#- A source is linked only to an http(s) URL: a stored javascript: or data: URL would run in the page (review 18's I-2). -#}
+<p class="text-muted mt-2">Source: {% for f in s.fetches %}{% if not loop.first %}; {% endif %}{% if f.url and f.url.lower().startswith(("https://", "http://")) %}<a href="{{ f.url }}">{{ f.name }}</a>{% else %}{{ f.name }}{% endif %}{% if f.fetched %} (fetched {{ f.fetched }}){% endif %}{% endfor %} &middot; {{ s.latest_label }} {{ s.latest }}</p>
 {%- endmacro %}
 {% macro empty_state(e) -%}
 <div class="empty-state">{{ e.before }}{% if e.command %}<code>{{ e.command }}</code>{% endif %}{{ e.after }}.</div>

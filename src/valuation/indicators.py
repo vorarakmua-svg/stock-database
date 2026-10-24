@@ -253,7 +253,8 @@ def epv(inputs: IndicatorInputs) -> IndicatorResult:
     cash = (cur.figures.get("cash_and_equivalents") or 0.0) + (cur.figures.get("short_term_investments") or 0.0)
     shares, shares_source = inputs.valuation.shares_outstanding, inputs.valuation.shares_source
     if not shares or shares <= 0:
-        # Without today's count (a failed quote), the latest fiscal year's, as the DCF divides by.
+        # Without today's count (a failed quote), like the DCF, the latest fiscal year's count: the latest year that
+        # has one (the DCF's latest year must also have an FCF).
         shares = next((r.shares for r in reversed(inputs.valuation.fy_records) if r.shares and r.shares > 0), None)
         shares_source = "financials_annual"
     assumptions.update({"wacc": rate, "total_debt": debt if debt is not None else 0.0, "debt_missing": debt is None,

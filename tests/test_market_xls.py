@@ -1,11 +1,14 @@
 """The market data's own reader of legacy Excel workbooks (``src/market/xls.py``; docs/superpowers/specs/
 2026-10-24-valuation-tools-market-design.md, "The market data"): the OLE2 compound file's header, FAT and DIFAT chain,
-directory and mini stream, then the BIFF8 records: the sheets (BOUNDSHEET), the shared strings (SST and its CONTINUE
-records) and the cells (NUMBER, RK, MULRK, LABELSST, LABEL, FORMULA with STRING, BOOLERR). Every workbook is written
-by the tests' own writer (``tests/market_xls_writer.py``); the real Shiller workbook is read in the real-data check,
-never committed.
+directory and mini stream, with their bounds (MS-CFB's sector sizes only, the DIFAT walk at the header's count, a FAT
+no larger than the file's sectors need and no FAT sector twice), then the BIFF8 records: the sheets (BOUNDSHEET), the
+shared strings (SST and its CONTINUE records) and the cells (NUMBER, RK, MULRK, LABELSST, LABEL, FORMULA with
+STRING, BOOLERR). Every workbook is written by the tests' own writer (``tests/market_xls_writer.py``); the real
+Shiller workbook is read in the real-data check, never committed.
 """
 import struct
+import time
+import tracemalloc
 
 import pytest
 
@@ -188,9 +191,15 @@ def test_a_small_workbook_stream_is_read_from_the_mini_stream_after_another_stre
     assert len(cells) == 20 and cells[(19, 0)] == 19.0
 
 
-def test_the_mini_sector_size_is_the_headers():
-    data = w.workbook([("Sheet1", _column(20))], mini_shift=7)
-    assert read_sheet(data, "Sheet1")[(19, 0)] == 19.0
+def test_a_sector_size_ms_cfb_doesnt_have_raises():
+    # Review 18's I-3: MS-CFB has 512- and 4096-byte sectors (shifts 9 and 12) and 64-byte mini sectors (shift 6). A
+    # 64 KB sector would multiply what a crafted FAT allocates, so the files below, well formed otherwise, are refused.
+    for container in ({"sector_shift": 10}, {"sector_shift": 11}, {"sector_shift": 16}, {"mini_shift": 5},
+                      {"mini_shift": 7}):
+        with pytest.raises(XLSError, match="sector shift"):
+            read_sheets(w.workbook([("Sheet1", _column(20))], **container))
+    for shift in (9, 12):
+        assert read_sheet(w.workbook([("Sheet1", _column(20))], sector_shift=shift), "Sheet1")[(19, 0)] == 19.0
 
 
 def test_the_workbook_is_found_among_the_root_storages_children_on_either_side():
@@ -229,6 +238,62 @@ def test_the_fat_past_the_headers_109_sectors_is_found_through_the_difat_chain()
     n_difat, = struct.unpack_from("<I", data, 0x48)
     assert n_fat > w.HEADER_FAT_SECTORS + 127 and n_difat == 2
     assert read_sheet(data, "Sheet1")[(299, 0)] == 299.0
+
+
+def test_the_difat_walk_stops_after_the_headers_count_of_difat_sectors():
+    # The second and last DIFAT sector's next pointer points back at the first instead of ending the chain: the
+    # header counts two DIFAT sectors, so the walk stops there and never follows it.
+    data = bytearray(w.workbook([("Sheet1", _column(300))], pad_sectors=30400))
+    first, n_difat = struct.unpack_from("<II", data, 0x44)
+    second = struct.unpack_from("<I", data, (first + 1) * 512 + 508)[0]
+    assert n_difat == 2 and struct.unpack_from("<I", data, (second + 1) * 512 + 508)[0] == w.ENDOFCHAIN
+    struct.pack_into("<I", data, (second + 1) * 512 + 508, first)
+    assert read_sheet(bytes(data), "Sheet1")[(299, 0)] == 299.0
+
+
+def _file_sectors(data, size=512):
+    """The sectors a compound file holds after its header, and the FAT sectors that many need."""
+    sectors = -(-len(data) // size) - 1
+    return sectors, -(-sectors // (size // 4))
+
+
+def test_a_fat_counted_beyond_what_the_files_sectors_need_raises():
+    # The header counts one FAT sector more than the file's sectors need, the extra one listed as a data sector.
+    data = bytearray(w.workbook([("Sheet1", _column(600))]))
+    sectors, needed = _file_sectors(data)
+    assert struct.unpack_from("<I", data, 0x2C)[0] == needed == 1
+    assert read_sheet(bytes(data), "Sheet1")[(599, 0)] == 599.0
+    struct.pack_into("<I", data, 0x2C, needed + 1)
+    struct.pack_into("<I", data, 0x4C + 4 * needed, 1)
+    with pytest.raises(XLSError, match=f"counts 2 FAT sectors, more than the 1 that a file of {sectors} sectors"):
+        read_sheet(bytes(data), "Sheet1")
+
+
+def test_a_fat_sector_listed_twice_raises():
+    # 200 free sectors first: the file needs two FAT sectors, and the header lists the first one twice.
+    data = bytearray(w.workbook([("Sheet1", _column(300))], pad_sectors=200))
+    assert struct.unpack_from("<I", data, 0x2C)[0] == _file_sectors(data)[1] == 2
+    first = struct.unpack_from("<I", data, 0x4C)[0]
+    struct.pack_into("<I", data, 0x50, first)
+    with pytest.raises(XLSError, match=f"lists FAT sector {first} twice"):
+        read_sheet(bytes(data), "Sheet1")
+
+
+def test_a_fat_listed_over_and_over_raises_at_once_without_a_large_allocation():
+    # Review 18's I-3: 20 KB whose header counts 2,155 FAT sectors, every one of them sector 0. Read as listed, that
+    # is 2.2 million FAT entries (about 90 MB); it must be refused before any of them is read.
+    data = w.repeated_fat(sector_shift=12, difat_sectors=2)
+    assert len(data) == 20480 and struct.unpack_from("<I", data, 0x2C)[0] == 109 + 2 * 1023
+    tracemalloc.start()
+    try:
+        started = time.perf_counter()
+        with pytest.raises(XLSError, match="FAT sector"):
+            read_sheets(data)
+        elapsed = time.perf_counter() - started
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 1_000_000 and elapsed < 1.0, (peak, elapsed)
 
 
 def test_no_workbook_stream_raises():
