@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Market — Stock DB{% endblock %}
+
+{% block content %}
+{% macro source_line(s) -%}
+<p class="text-muted mt-2">Source: {% for f in s.fetches %}{% if not loop.first %}; {% endif %}{% if f.url %}<a href="{{ f.url }}">{{ f.name }}</a>{% else %}{{ f.name }}{% endif %}{% if f.fetched %} (fetched {{ f.fetched }}){% endif %}{% endfor %} &middot; {{ s.latest_label }} {{ s.latest }}</p>
+{%- endmacro %}
+{% macro empty_state(e) -%}
+<div class="empty-state">{{ e.before }}{% if e.command %}<code>{{ e.command }}</code>{% endif %}{{ e.after }}.</div>
+{%- endmacro %}
+
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Market</h1>
+    <p class="page-subtitle">The US stock market as a whole, each measure against its own history: the Buffett indicator, Shiller's CAPE and the Treasury yield curve.</p>
+  </div>
+</div>
+
+{% if not available %}
+<div class="alert alert-info">No market data collected yet. Run <code>{{ command }}</code> to collect FRED's,
+  Shiller's and Treasury.gov's series; its first run reads the Treasury's yearly files since 1990, which takes several
+  minutes.</div>
+{% endif %}
+
+<section class="section" id="market-buffett">
+  <h2 class="section-heading">The Buffett indicator</h2>
+  {% if buffett.available %}
+  <div class="chip-row">
+    <span class="pill verdict-{{ buffett.pill }}">{{ buffett.zone }}</span>
+    <span class="text-muted">Corporate equities over GDP in {{ buffett.quarter }}, {{ buffett.z }} from its long-run
+      trend</span>
+  </div>
+  <div class="stat-row">
+    <div class="stat-card"><span class="stat-value">{{ buffett.ratio }}</span><span class="stat-label">Equities / GDP, {{ buffett.quarter }}</span></div>
+    <div class="stat-card"><span class="stat-value">{{ buffett.trend }}</span><span class="stat-label">Trend, {{ buffett.quarter }}</span></div>
+    <div class="stat-card"><span class="stat-value">{{ buffett.z }}</span><span class="stat-label">From the trend</span></div>
+    <div class="stat-card"><span class="stat-value">{{ buffett.percentile }}</span><span class="stat-label">Percentile since {{ buffett.since }}</span></div>
+    <div class="stat-card"><span class="stat-value">{{ buffett.growth }} a year</span><span class="stat-label">Trend growth</span></div>
+  </div>
+  <div id="market-buffett-chart" class="gp-chart"></div>
+  {{ source_line(sources.buffett) }}
+  <p class="text-muted">{{ buffett.method }}</p>
+  {% else %}
+  {{ empty_state(buffett.empty) }}
+  {% endif %}
+</section>
+
+<section class="section" id="market-cape">
+  <h2 class="section-heading">Shiller's CAPE</h2>
+  {% if cape.available %}
+  <div class="stat-row">
+    <div class="stat-card"><span class="stat-value">{{ cape.value }}</span><span class="stat-label">CAPE, {{ cape.month }}</span></div>
+    <div class="stat-card"><span class="stat-value">{{ cape.mean }}</span><span class="stat-label">Mean since {{ cape.since }}</span></div>
+    <div class="stat-card"><span class="stat-value">{{ cape.median }}</span><span class="stat-label">Median</span></div>
+    <div class="stat-card"><span class="stat-value">{{ cape.min }}</span><span class="stat-label">Low, {{ cape.min_month }}</span></div>
+    <div class="stat-card"><span class="stat-value">{{ cape.max }}</span><span class="stat-label">High, {{ cape.max_month }}</span></div>
+    <div class="stat-card"><span class="stat-value">{{ cape.percentile }}</span><span class="stat-label">Percentile</span></div>
+  </div>
+  <div id="market-cape-chart" class="gp-chart"></div>
+  {{ source_line(sources.cape) }}
+  <p class="text-muted">{{ cape.method }}</p>
+  {% else %}
+  {{ empty_state(cape.empty) }}
+  {% endif %}
+</section>
+
+<section class="section" id="market-curve">
+  <h2 class="section-heading">The yield curve</h2>
+  {% if curve.available %}
+  <div class="chip-row">
+    {% for s in curve.spreads %}
+    <span class="text-muted">{{ s.label }} on {{ s.date }}: <span class="num">{{ s.value }}</span></span>
+    {% if s.inverted %}<span class="pill down">Inverted</span>{% elif s.inverted is not none %}<span class="pill verdict-none">Not inverted</span>{% endif %}
+    {% endfor %}
+  </div>
+  <div class="two-col mt-2">
+    <div id="market-curve-chart" class="gp-chart"></div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Maturity</th><th class="num">{{ curve.date }}</th><th class="num">{{ curve.year_ago or "A year earlier" }}</th><th class="num">Change</th></tr></thead>
+        <tbody>
+          {% for row in curve.rows %}
+          <tr><td class="row-label">{{ row.label }}</td><td class="num">{{ row.now }}</td><td class="num">{{ row.then }}</td><td class="num">{{ row.change }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div id="market-spreads-chart" class="gp-chart mt-2"></div>
+  <div class="table-wrap mt-2">
+    <table class="data-table">
+      <thead><tr><th>Spread</th><th class="num">Latest</th><th>Inverted now</th><th class="num">Days inverted</th><th>Latest sustained inversion</th><th>Last inverted day</th></tr></thead>
+      <tbody>
+        {% for s in curve.spreads %}
+        <tr><td class="row-label">{{ s.label }}</td><td class="num">{{ s.value }}</td>
+          <td>{% if s.inverted %}yes{% elif s.inverted is not none %}no{% else %}—{% endif %}</td>
+          <td class="num">{{ s.share }}{% if s.since %} since {{ s.since }}{% endif %}</td><td>{{ s.episode }}</td><td>{{ s.last_inverted }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {{ source_line(sources.yield_curve) }}
+  <p class="text-muted">{{ curve.method }}</p>
+  {% else %}
+  {{ empty_state(curve.empty) }}
+  {% endif %}
+</section>
+
+{% if cfg_json %}
+<script type="application/json" id="market-cfg">{{ cfg_json | safe }}</script>
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    renderMarket(JSON.parse(document.getElementById('market-cfg').textContent));
+  });
+</script>
+{% endif %}
+{% endblock %}

@@ -123,8 +123,11 @@ try/except (a failure never blocks the valuations, the history or the scores); t
 - **Shiller CAPE**: the monthly series from 1881; the latest value, its mean, median, min, max and percentile over
   the history; the latest month's date. Shiller's CAPE is the real price over the mean real earnings of the 120
   months ending the month before; his latest month is a single day's close with an estimated CPI (his footnotes).
-- **Yield curve**: the latest day's curve against the curve a year earlier; the 10-year less 2-year and less
-  3-month spreads since 1990, with the inverted days marked.
+- **Yield curve**: the latest day's curve against the curve of the latest day on or before 365 days earlier; the
+  10-year less 2-year and less 3-month spreads since 1990, with the inverted days marked. For each spread: its
+  latest value, the share of its days inverted, its last inverted day and its latest sustained inversion: its runs
+  below 0 joined across gaps of at most 20 of its days, and of those episodes the latest with at least 20 days below
+  0 (one-day blips don't displace the 2022-2024 inversion).
 - **Page** `/market` (a nav link): three sections with Plotly charts, each with its source, its latest date and its
   method note. **API** `GET /api/market` returns the same. Without the tables, the page says how to collect.
 

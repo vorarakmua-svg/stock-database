@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 5 · DOING 0 · DONE 33 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 4 · DOING 0 · DONE 34 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -65,7 +65,7 @@
 | M4-1 | `src/valuation/indicators.py`: the reverse DCF, EPV, NCAV and the net-net, the median P/S value, the Graham number on tangible book; storage (`valuation_indicators`), the engine hook after the scores, the backfill; a test pinning `MEDIAN_MODELS` and the valuations; with tests | DONE | this commit | `qa/evidence/indicators-m4-1-*` |
 | M4-2 | The VAL tab's "Other indicators" section (the reverse DCF at the live price), `GET /api/stocks/{t}/valuation-indicators`, the screener fields, browser-checked; with tests | DONE | this commit | `qa/evidence/indicators-m4-2-*` |
 | M4-3 | `src/market/`: the `.xls` reader (`xls.py`), the FRED, Shiller and Treasury sources with their cache, storage (`market_series`, `market_fetches`), `python -m src.market.collect`; with tests | DONE | this commit | `qa/evidence/market-m4-3-*` |
-| M4-4 | The market page (`/market`: the Buffett indicator and its zones, Shiller's CAPE, the yield curve) and `GET /api/market`, a nav link, browser-checked; with tests | TODO | | |
+| M4-4 | The market page (`/market`: the Buffett indicator and its zones, Shiller's CAPE, the yield curve) and `GET /api/market`, a nav link, browser-checked; with tests | DONE | this commit | `qa/evidence/market-m4-4-*` |
 | M4-5 | Independent oracle `qa/oracle/indicators_oracle.py` and real-data validation: the indicators on a backfilled copy, the reader against the sheet's own CAPE and the app's `^GSPC`, the Buffett ratio by hand, the valuations untouched | TODO | | |
 | M4-6 | Docs: README and USAGE_GUIDE | TODO | | |
 | M4-7 | Milestone close: code review 18 (opus) with Critical and Important findings fixed; backup, then the offline backfill of the indicators and the market collection into the user's DB | TODO | | |
@@ -1031,3 +1031,30 @@ Evidence: `qa/evidence/market-m4-3-{red,gates,mutants,mutants-rerun,collect,real
 Gates: ruff ✓ mypy ✓ pytest 1858 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) feat(market): a reader for Shiller's workbook, FRED, Shiller and Treasury sources, storage and the CLI (M4-3)
 Next: M4-4 (the market page and its API).
+
+### Build iteration 45: 2026-10-24 23:53: M4-4
+Did:
+- An opus worker built the market page test-first (RED: 46 failed, 1 passed against stubs):
+  - `src/webapp/market.py`, the view shared by `/market` and `GET /api/market`, computed at read time;
+  - the Buffett indicator against the least-squares trend of its log, with z and the five zones;
+  - Shiller's CAPE with its mean, median, extremes and percentile (M1's `window_stats`);
+  - the yield curve against a year earlier, and the 10y-2y and 10y-3m spreads since 1990;
+  - the page's four Plotly charts, the empty states naming `python -m src.market.collect`, and a Market nav link.
+- My review of the first version: "latest inverted run" picked one-day blips, a single day in September 2024
+  for 10y-2y. At my request the worker replaced it test-first with the last inverted day and the latest
+  sustained inversion: runs joined across gaps of at most 20 days, at least 20 inverted days. 10y-2y now reads
+  2022-07-06 to 2024-09-05 (539 days); 10y-3m reads 2025-02-26 to 2025-09-15 (85 days, 2025's re-inversions),
+  the 2022-2024 one before it.
+- Mutants: 110, each killed; I ran them again.
+- Real data (scratch server on a copy of M4-3's DB; the port freed afterwards):
+  - 37 of 37 figures recomputed by hand agree;
+  - the Buffett ratio is 255.05% (by hand 255.046%), its trend 147.6% rising 1.8% a year, z +1.68: "modestly
+    overvalued", though the percentile reads 100%, a record. The whole-history fit's spread puts +2 sd at 283%.
+    That is as designed and published;
+  - CAPE is 40.71 (mean 17.80, median 16.61, percentile 98.9%);
+  - the yield curve's 10-year on 2026-10-20 equals the models' rate;
+  - no console errors; the empty page shows the three commands.
+Evidence: `qa/evidence/market-m4-4-{red,red-episodes,gates,mutants,mutants-rerun,web,done}.txt`, `market-m4-4-api.json`, `market-m4-4-{page,empty}.png`
+Gates: ruff ✓ mypy ✓ pytest 1912 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) feat(web): the market page: the Buffett indicator, Shiller's CAPE and the yield curve (M4-4)
+Next: M4-5 (the indicators' independent oracle and the real-data validation).

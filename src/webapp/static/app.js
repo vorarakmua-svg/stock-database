@@ -530,6 +530,127 @@ function renderQualityRadar(elId, cfg) {
 }
 
 /**
+ * The market page (/market): the Buffett indicator against its trend and the bands at +-1 and +-2 standard
+ * deviations (a log y axis), Shiller's CAPE with its mean and median, the Treasury curve against the curve a year
+ * earlier (the maturities shortest first), and the 10-year spreads with a zero line, the inverted side shaded.
+ * A section without its data (null) has no chart.
+ * @param {{buffett: ?{dates: string[], ratio: number[], trend: number[], lower_2sd: number[], lower_1sd: number[],
+ *   upper_1sd: number[], upper_2sd: number[]}, cape: ?{dates: string[], values: number[], mean: ?number,
+ *   median: ?number}, curve: ?{labels: string[], today: {date: string, labels: string[], values: number[]},
+ *   year_ago: ?{date: string, labels: string[], values: number[]}},
+ *   spreads: ?Array<{label: string, dates: string[], values: number[]}>}} cfg
+ */
+function renderMarket(cfg) {
+  if (typeof Plotly === 'undefined' || !cfg) return;
+  var opts = { displayModeBar: false, responsive: true };
+  var legend = { orientation: 'h', x: 0, y: 1.12, font: { color: SLATE.muted } };
+  function present(id) { return document.getElementById(id) !== null; }
+
+  var b = cfg.buffett;
+  if (b && present('market-buffett-chart')) {
+    // Each band fills down to the edge before it: green from -2 to -1 sd, grey from -1 to +1, red from +1 to +2.
+    var bands = [['-2 sd', b.lower_2sd, null], ['-1 sd', b.lower_1sd, 'rgba(63, 185, 80, 0.12)'],
+                 ['+1 sd', b.upper_1sd, 'rgba(139, 148, 158, 0.12)'], ['+2 sd', b.upper_2sd, 'rgba(248, 81, 73, 0.12)']];
+    var traces = bands.map(function (band) {
+      var edge = { x: b.dates, y: band[1], type: 'scatter', mode: 'lines', name: band[0], showlegend: false,
+                   line: { width: 0.5, color: 'rgba(139, 148, 158, 0.35)' }, hoverinfo: 'skip' };
+      if (band[2]) { edge.fill = 'tonexty'; edge.fillcolor = band[2]; }
+      return edge;
+    });
+    traces.push({ x: b.dates, y: b.trend, type: 'scatter', mode: 'lines', name: 'Trend',
+                  line: { color: SLATE.warn, width: 1.5, dash: 'dash' }, hovertemplate: '%{x|%Y-%m}: %{y:.1f}%' });
+    traces.push({ x: b.dates, y: b.ratio, type: 'scatter', mode: 'lines', name: 'Equities / GDP',
+                  line: { color: SLATE.accent, width: 2 }, hovertemplate: '%{x|%Y-%m}: %{y:.1f}%' });
+    var last = b.dates.length - 1;
+    // Round percentages as the log axis's ticks (its own label the minor ticks with bare digits: "3" for 300%).
+    var floor = Math.min.apply(null, b.lower_2sd.concat(b.ratio));
+    var ceiling = Math.max.apply(null, b.upper_2sd.concat(b.ratio));
+    var ticks = [5, 10, 15, 20, 30, 40, 50, 75, 100, 150, 200, 250, 300, 400, 500, 750, 1000]
+      .filter(function (v) { return v >= floor && v <= ceiling; });
+    Plotly.newPlot('market-buffett-chart', traces, slateLayout({
+      showlegend: true, legend: legend,
+      xaxis: slateAxis({ type: 'date' }),
+      yaxis: slateAxis({ type: 'log', title: 'Equities / GDP', tickvals: ticks,
+                         ticktext: ticks.map(function (v) { return v + '%'; }) }),
+      margin: { t: 32, r: 52, b: 32, l: 64 },
+      // The bands' labels in the right margin, by the latest quarter's band; a log axis places them by log10.
+      annotations: bands.map(function (band) {
+        return { x: b.dates[last], y: Math.log(band[1][last]) / Math.LN10, xanchor: 'left', yanchor: 'middle',
+                 xshift: 4, showarrow: false, text: band[0], font: { color: SLATE.muted, size: 10 } };
+      }),
+    }), opts);
+  }
+
+  var c = cfg.cape;
+  if (c && present('market-cape-chart')) {
+    var lines = [['Mean', c.mean, SLATE.muted, 0, 'left'], ['Median', c.median, SLATE.warn, 1, 'right']]
+      .filter(function (l) { return l[1] !== null && l[1] !== undefined; });
+    Plotly.newPlot('market-cape-chart', [{
+      x: c.dates, y: c.values, type: 'scatter', mode: 'lines', name: 'CAPE',
+      line: { color: SLATE.purple, width: 1.5 }, hovertemplate: '%{x|%Y-%m}: %{y:.1f}<extra></extra>',
+    }], slateLayout({
+      xaxis: slateAxis({ type: 'date' }),
+      yaxis: slateAxis({ title: 'CAPE' }),
+      margin: { t: 16, r: 16, b: 32, l: 56 },
+      shapes: lines.map(function (l) {
+        return { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: l[1], y1: l[1],
+                 line: { color: l[2], width: 1, dash: 'dash' } };
+      }),
+      annotations: lines.map(function (l) {
+        return { xref: 'paper', x: l[3], xanchor: l[4], y: l[1], yanchor: 'bottom', showarrow: false,
+                 text: l[0] + ' ' + l[1].toFixed(1), font: { color: l[2], size: 10 } };
+      }),
+    }), opts);
+  }
+
+  var cv = cfg.curve;
+  if (cv && present('market-curve-chart')) {
+    var curves = [];
+    if (cv.year_ago) {
+      curves.push({ x: cv.year_ago.labels, y: cv.year_ago.values, type: 'scatter', mode: 'lines+markers',
+                    name: cv.year_ago.date, line: { color: SLATE.muted, width: 1.5, dash: 'dot' }, marker: { size: 5 },
+                    hovertemplate: '%{x}: %{y:.2f}%' });
+    }
+    curves.push({ x: cv.today.labels, y: cv.today.values, type: 'scatter', mode: 'lines+markers',
+                  name: cv.today.date, line: { color: SLATE.accent, width: 2 }, marker: { size: 6 },
+                  hovertemplate: '%{x}: %{y:.2f}%' });
+    Plotly.newPlot('market-curve-chart', curves, slateLayout({
+      showlegend: true, legend: legend,
+      xaxis: slateAxis({ type: 'category', categoryorder: 'array', categoryarray: cv.labels }),
+      yaxis: slateAxis({ title: 'Yield', ticksuffix: '%' }),
+      margin: { t: 32, r: 16, b: 40, l: 56 },
+    }), opts);
+  }
+
+  var sp = cfg.spreads;
+  if (sp && present('market-spreads-chart')) {
+    var low = 0, high = 0;
+    sp.forEach(function (s) {
+      s.values.forEach(function (v) { if (v < low) low = v; if (v > high) high = v; });
+    });
+    var pad = (high - low) * 0.05 || 0.1;
+    var colors = [SLATE.accent, SLATE.warn];
+    Plotly.newPlot('market-spreads-chart', sp.map(function (s, i) {
+      return { x: s.dates, y: s.values, type: 'scatter', mode: 'lines', name: s.label,
+               line: { color: colors[i % colors.length], width: 1.25 }, hovertemplate: '%{x}: %{y:+.2f} pp' };
+    }), slateLayout({
+      showlegend: true, legend: legend,
+      xaxis: slateAxis({ type: 'date' }),
+      yaxis: slateAxis({ title: 'Spread (pp)', range: [low - pad, high + pad], zeroline: false }),
+      margin: { t: 32, r: 16, b: 32, l: 56 },
+      shapes: [
+        { type: 'rect', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: low - pad, y1: 0, layer: 'below',
+          fillcolor: 'rgba(248, 81, 73, 0.08)', line: { width: 0 } },
+        { type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 0, y1: 0,
+          line: { color: SLATE.down, width: 1, dash: 'dash' } },
+      ],
+      annotations: [{ xref: 'paper', x: 0, yref: 'y', y: 0, xanchor: 'left', yanchor: 'top', showarrow: false,
+                      text: 'Inverted below 0', font: { color: SLATE.down, size: 10 } }],
+    }), opts);
+  }
+}
+
+/**
  * HTMX tab-active helper.
  * When a tab button triggers an HTMX request, mark it active and remove
  * active from its siblings.

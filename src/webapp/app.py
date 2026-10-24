@@ -17,6 +17,8 @@ from .routes import (
     export_api,
     gurus,
     gurus_api,
+    market,
+    market_api,
     pages,
     quality_api,
     screener_api,
@@ -75,6 +77,8 @@ def create_app(
     app.include_router(workstation.router)
     app.include_router(gurus.router)
     app.include_router(gurus_api.router)
+    app.include_router(market.router)
+    app.include_router(market_api.router)
     app.include_router(asof_api.router)
     app.include_router(stocks_api.router)
     app.include_router(screener_api.router)

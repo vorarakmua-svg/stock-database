@@ -11,7 +11,7 @@ import json
 import sqlite3
 import statistics
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Union
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple, Union
 
 from ..exporters.sqlite_store import _CANONICAL_COLUMNS, _METRIC_COLUMNS, _SNAPSHOT_COLUMNS, read_only_uri
 from .screener import SCREEN_COLUMNS, ScreenSpec, build_count_query, build_screen_query
@@ -456,6 +456,35 @@ class Reader:
         except sqlite3.OperationalError:
             return []
         return [dict(row) for row in cur.fetchall()]
+
+    def market_series(self, names: Sequence[str]) -> Dict[str, List[Tuple[str, float]]]:
+        """Each of the named ``market_series`` series (the market data, Milestone 4: "fred:GDP", "shiller:cape",
+        "ust:10y", ...) as its (date, value) rows, oldest first; a series without rows is absent. {} before the
+        table exists."""
+        if not names:
+            return {}
+        marks = ", ".join("?" * len(names))
+        try:
+            cur = self._conn.execute(
+                f"SELECT series, date, value FROM market_series WHERE series IN ({marks}) ORDER BY series, date",
+                list(names),
+            )
+        except sqlite3.OperationalError:
+            return {}
+        series: Dict[str, List[Tuple[str, float]]] = {}
+        for name, day, value in cur.fetchall():
+            series.setdefault(name, []).append((day, value))
+        return series
+
+    def market_fetches(self) -> Dict[str, Dict[str, Any]]:
+        """Each market source's latest fetch (``market_fetches``: "fred:NCBEILQ027S", "fred:GDP", "shiller",
+        "treasury"), by source: its url, the rows it stored and when its answer was fetched. {} before the table
+        exists."""
+        try:
+            cur = self._conn.execute("SELECT * FROM market_fetches ORDER BY source")
+        except sqlite3.OperationalError:
+            return {}
+        return {row["source"]: dict(row) for row in cur.fetchall()}
 
     def earnings_history(self, ticker: str) -> List[Dict[str, Any]]:
         """All ``earnings_history`` rows ascending by ``quarter``."""
