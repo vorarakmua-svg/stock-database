@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 119 · NEEDS-USER 16 · Verified: 97
+**Open:** P0 0 · P1 0 · P2 11 · P3 119 · NEEDS-USER 17 · Verified: 97
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1845,3 +1845,9 @@ Status: NEEDS-USER
 Found: build iteration 41 (M4's design, `docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md`)
 Default applied: nothing installed. Shiller's `ie_data.xls` is a legacy Excel workbook (BIFF8), which `openpyxl` can't read, so `src/market/xls.py` reads the few record types the sheet uses, checked against the sheet's own CAPE column.
 Decision needed: install the `xlrd` package (and add it to the requirements) to read the workbook with a standard library instead?
+
+### Q15 [OPS] NEEDS-USER: may M5 install a Windows scheduled task to run `stock-data refresh`?
+Status: NEEDS-USER
+Found: build iteration 50 (M5's design, `docs/superpowers/specs/2026-10-25-universe-automation-design.md`)
+Default applied: nothing installed. The README gives the Task Scheduler command (`schtasks /Create /SC DAILY ...`) that runs `stock-data refresh` from the repo folder after the US close; the refresh works the same when run by hand.
+Decision needed: install the task (a persistent system change the build loop doesn't make), and at what time?

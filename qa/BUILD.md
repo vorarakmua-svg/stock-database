@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 1 · DOING 0 · DONE 37 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 6 · DOING 0 · DONE 38 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -74,7 +74,13 @@
 
 | ID | Task | Status | Commit | Evidence |
 |---|---|---|---|---|
-| M5-0 | Design M5: spec, then the task rows | TODO | | |
+| M5-0 | Design M5: `docs/superpowers/specs/2026-10-25-universe-automation-design.md`, then these rows | DONE | this commit | the spec |
+| M5-1 | The universe: `universe/core.txt`, the S&P 500 list (`src/universe/sp500.py`: Wikipedia's table parsed and checked, one request; the dated `universe/sp500-<date>.csv` saved), ticker normalization, `stock-data --tickers-file` and `--skip-existing`; with tests | TODO | | |
+| M5-2 | SIC codes and industries: `companies.sic`/`sic_description` (collected, and filled offline by `python -m src.universe.sic`), industry groups (3-digit SIC, else 2-digit, at least 10 companies), industry ranks in `rank_all`, the DES and STAT tabs, the scores API, the screener's industry filter and fields, the scores oracle's industry gate; with tests | TODO | | |
+| M5-3 | `stock-data refresh`: quotes and bars daily, the SEC's new filings weekly, the full collections they call for, insiders and gurus weekly, the market data daily, the recomputation; `refresh_log`, a lock, a log file, exit codes; a real run on a scratch copy; with tests | TODO | | |
+| M5-4 | The scale pre-flight: a synthetic copy of about 500 companies, the pages' and APIs' timings, the query plans, the indexes they need (every page under 1 s, the screener under 0.5 s); with tests | TODO | | |
+| M5-5 | Docs: README and USAGE_GUIDE (the universe, `--tickers-file`, SIC and industries, the refresh command, Task Scheduler instructions) | TODO | | |
+| M5-6 | Milestone close: code review 19 (opus) with Critical and Important findings fixed; the dry run, the backup, then the live collection of the S&P 500's new members, their SIC and Form 4s, the recomputation and the checks at about 500 companies | TODO | | |
 
 ## NEEDS-USER (each also recorded in `qa/BUGS.md`)
 
@@ -84,6 +90,7 @@
 - Q12 [OPS]: the SEC's bulk insider and 13F data sets. Default: no bulk downloads; one filing at a time.
 - Q13 [OPS]: the guru list. Default: the 34 value investors in `src/ownership/gurus.py`.
 - Q14 [OPS]: installing `xlrd` to read Shiller's `.xls`. Default: nothing installed; M4's own reader.
+- Q15 [OPS]: installing a Windows scheduled task for `stock-data refresh`. Default: not installed; the README gives the command.
 
 ## Log
 
@@ -1175,3 +1182,29 @@ Evidence: `qa/evidence/m4-7-{dryrun,dryrun-check,backup,live,live-market,live-ch
 Gates: ruff ✓ mypy ✓ pytest 1937 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) chore(build): close M4, with the user's DB holding the indicators and the market data
 Next: M5-0 (design Milestone 5: a wider universe and automation).
+
+### Build iteration 50: 2026-10-25 03:03: M5-0 (Milestone 5's design)
+Did:
+- Wrote `docs/superpowers/specs/2026-10-25-universe-automation-design.md` after checking its facts in the code and the data:
+  - `stock-data` takes positional tickers only; its collection ends in `compute_and_store`;
+  - a full collection takes about 6 s a ticker warm and 20 s cold;
+  - the SIC code is fetched (it decides `sector_class`) but not stored, while the JSON exports keep it;
+  - M2's ranks group by sector class;
+  - the web's quote refresh fetches no bars;
+  - the SEC cache lasts 7 days;
+  - the DB is 183 MB and the exports 330 MB for 127 companies.
+- The design:
+  - a universe in the repo: `core.txt` and the S&P 500 list from Wikipedia's page, saved dated, with
+    `--tickers-file` and `--skip-existing`;
+  - SIC codes stored, and industry groups (3-digit, else 2-digit, at least 10 companies) with industry ranks
+    beside M2's;
+  - `stock-data refresh`, with daily quotes and bars, weekly SEC filings, insiders and gurus, daily market data and
+    the recomputation, plus a lock, a log and exit codes;
+  - a scale pre-flight on a synthetic 500-company copy;
+  - the live step: about 380 new companies and their Form 4s, in the background.
+- Replaced the M5-0 row with M5-1 to M5-6. Logged Q15 (installing the scheduled task) as NEEDS-USER, its default
+  installing nothing.
+Evidence: the spec's "Facts" section
+Gates: ruff ✓ mypy ✓ pytest 1937 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) docs: Milestone 5's design
+Next: M5-1 (the universe files, the S&P 500 list and `--tickers-file`).
