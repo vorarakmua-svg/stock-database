@@ -682,7 +682,10 @@ owners has a row for each in `insider_filings` and its trades once in `insider_t
 The aggregates, computed at read time from the trades no amendment restated:
 - **Open-market buying and selling** over 3, 6 and 12 months (91, 182 and 365 days back from today): the
   purchases (code P) and sales (code S) of non-derivative securities, in shares and dollars (`shares × price`;
-  a trade without a price counts in shares only), the net (`bought - sold`, in dollars) and the distinct
+  a trade without a price counts in shares only, as does one whose price is a filer's dropped decimal point:
+  1,000 times, or a thousandth of, a price within 10% of the stock's close that day, kept as filed and flagged
+  `price_suspect`, like the Lilly Endowment's $1,031,414 for $1,031.41; BUG-220), the net (`bought - sold`, in
+  dollars) and the distinct
   buyers and sellers. Grants (A), exercises (M), tax withholding (F), gifts (G) and the other codes are stored
   and shown with their meaning, never summed.
 - **CEO and CFO buys**: a purchase in the last 12 months by an officer whose title names the chief executive

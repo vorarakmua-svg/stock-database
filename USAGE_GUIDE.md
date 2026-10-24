@@ -663,7 +663,11 @@ Two tables hold each company's Form 4 and 4/A filings of the last three years:
     `underlying_shares`;
   - `superseded_by`: the accession of the 4/A that restated this trade, NULL for a trade that stands. A
     restated trade stays in the table, and every aggregate, the INS tab and the screener leave it out, so test
-    `t.superseded_by IS NULL`.
+    `t.superseded_by IS NULL`;
+  - `price_suspect`: 1 when the open-market price is a filer's dropped decimal point (1,000 times, or a
+    thousandth of, a price within 10% of the stock's close that day; the Lilly Endowment filed $1,031,414 for
+    $1,031.41), 0 when checked, NULL when unchecked (no price or no close, or a derivative row). The price stays
+    as filed and every dollar figure treats it as missing, so add `AND t.price_suspect IS NOT 1` to a dollar sum.
 
 A filing with several reporting owners has a row in `insider_filings` for each, so a join on `accession`
 repeats its trades once per owner: add dollars from `insider_trades` alone, as the first query does. The INS
@@ -677,7 +681,7 @@ SELECT t.ticker,
        SUM(CASE WHEN t.code = 'S' THEN t.shares * t.price ELSE 0 END) AS sold,
        SUM(CASE t.code WHEN 'P' THEN t.shares * t.price ELSE -t.shares * t.price END) AS net
 FROM insider_trades t
-WHERE t.kind = 'nonderivative' AND t.code IN ('P', 'S') AND t.price IS NOT NULL
+WHERE t.kind = 'nonderivative' AND t.code IN ('P', 'S') AND t.price IS NOT NULL AND t.price_suspect IS NOT 1
   AND t.date >= date('now', '-365 days') AND t.superseded_by IS NULL
 GROUP BY t.ticker
 ORDER BY net DESC;

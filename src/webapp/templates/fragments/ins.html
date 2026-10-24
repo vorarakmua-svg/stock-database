@@ -37,7 +37,7 @@
           <td>{{ t.role }}</td>
           <td class="{{ t.tint_class }}">{{ t.code }}: {{ t.meaning }}{% if t.derivative %} (derivative){% endif %}{% if t.form == "4/A" %} (4/A){% endif %}</td>
           <td class="num">{{ t.shares }}</td>
-          <td class="num">{{ t.price }}</td>
+          <td class="num">{{ t.price }}{% if t.price_note %}<br><span class="text-muted">({{ t.price_note }})</span>{% endif %}</td>
           <td class="num">{{ t.value }}</td>
           <td class="num">{{ t.after }}</td>
           <td>{{ t.plan }}</td>

@@ -3,14 +3,15 @@ cluster buys and planned sales, from the stored Form 4 trades, and the trades ea
 (docs/superpowers/specs/2026-10-22-sec-ownership-design.md)."""
 import pytest
 
-from src.ownership.insiders import CODE_MEANINGS, ceo_or_cfo, summarize, supersessions
+from src.ownership.insiders import CODE_MEANINGS, ceo_or_cfo, price_suspect, summarize, supersessions
 
 TODAY = "2026-10-22"
 
 
-def _trade(date, code, shares, price, owner="A", title=None, plan=None, kind="nonderivative"):
+def _trade(date, code, shares, price, owner="A", title=None, plan=None, kind="nonderivative", suspect=None):
     return {"date": date, "code": code, "shares": shares, "price": price, "owner_cik": owner, "owner_name": owner,
-            "officer_title": title, "is_ceo_cfo": ceo_or_cfo(title), "aff10b5one": plan, "kind": kind}
+            "officer_title": title, "is_ceo_cfo": ceo_or_cfo(title), "aff10b5one": plan, "kind": kind,
+            "price_suspect": suspect}
 
 
 @pytest.mark.parametrize("title, expected", [
@@ -81,6 +82,36 @@ def test_the_share_of_sales_under_a_plan_counts_flagged_filings_only():
     ], TODAY)
     assert s["planned_sale_share_12m"] == pytest.approx(0.75)  # 300 of the 400 shares whose filings say
     assert summarize([_trade("2026-09-03", "S", 600, 10.0, plan=None)], TODAY)["planned_sale_share_12m"] is None
+
+
+@pytest.mark.parametrize("price, close, suspect", [
+    (1031414.0, 1025.28, True),  # the Lilly Endowment's 0000316011-25-000073, 2025-11-14: $1,031.414 less its point
+    (1032319.0, 1025.28, True),  # the same filing's next sale
+    (878401.0, 881.40, True),  # 0001415889-25-005456, 2025-02-24
+    (1030.312, 1025.28, False),  # the Endowment's same-day sale, its price as it should be
+    (775883.3, 510.08, False),  # BRK-B's 0000919574-25-001778: 2 Class A shares, 1,521 times the B close, a real price
+    (1.031414, 1025.28, True),  # a thousandth of it: the point moved the other way
+    (1125000.0, 1025.28, True),  # 1,000 times $1,125: within 10% of the close
+    (1135000.0, 1025.28, False),  # 1,000 times $1,135: over 10% off
+    (0.0, 1025.28, False),  # a gift's price
+    (None, 1025.28, None),  # no price: nothing to check
+    (1031414.0, None, None),  # no close on or before the trade's date
+])
+def test_a_price_1000_times_or_a_thousandth_of_the_days_close_lost_its_decimal_point(price, close, suspect):
+    assert price_suspect(price, close) is suspect
+
+
+def test_a_suspect_price_counts_in_shares_only():
+    # BUG-220: the Endowment's 55,908 shares sold "at $1,031,414" count as shares, not as $57.7B.
+    s = summarize([
+        _trade("2026-09-01", "S", 55908, 1031414.0, owner="E", suspect=1),
+        _trade("2026-09-01", "S", 949, 1033.155, owner="E", suspect=0),
+        _trade("2026-09-02", "P", 100, 1000.0, owner="F"),  # no close to check it against: as filed
+    ], TODAY)
+    w = s["windows"]["12m"]
+    assert (w["sold_shares"], w["bought_shares"]) == (56857, 100)
+    assert w["sold_value"] == pytest.approx(949 * 1033.155)
+    assert w["net_value"] == pytest.approx(100 * 1000.0 - 949 * 1033.155)
 
 
 def test_every_code_has_a_meaning():

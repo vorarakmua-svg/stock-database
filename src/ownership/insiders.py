@@ -2,7 +2,8 @@
 (docs/superpowers/specs/2026-10-22-sec-ownership-design.md).
 
 Only open-market trades count: purchases (code P) and sales (S) in the non-derivative table, that no amendment
-restated (``supersessions``). Grants, exercises, tax withholding and gifts are shown but never summed.
+restated (``supersessions``). Grants, exercises, tax withholding and gifts are shown but never summed. A price that
+lost its decimal point (``price_suspect``) is kept as filed and counts as missing: its trade counts in shares only.
 """
 from __future__ import annotations
 
@@ -26,6 +27,12 @@ WINDOWS = (("3m", 91), ("6m", 182), ("12m", 365))
 CLUSTER_BUYERS = 3
 CLUSTER_DAYS = 30
 
+#: A price that lost its decimal point (BUG-220: the Lilly Endowment's "$1,031,414" a share for a $1,025.28 close) is
+#: DECIMAL_SHIFT times, or a DECIMAL_SHIFT-th of, a price within PRICE_TOLERANCE of the stock's close that day.
+#: BRK-B's Class A shares, about 1,500 times the B close, stay outside it.
+DECIMAL_SHIFT = 1000.0
+PRICE_TOLERANCE = 0.10
+
 _CHIEF = re.compile(r"\b(CEO|CFO|Chief\s+(Executive|Financial)\s+Officer)\b", re.IGNORECASE)
 #: A unit named right after the title: "CEO, BGS", "CEO of Payments", "CEO - Americas".
 _UNIT_AFTER = re.compile(r"^\s*(,|of\b|-|–)\s*\S", re.IGNORECASE)
@@ -39,9 +46,20 @@ def ceo_or_cfo(title: Optional[str]) -> bool:
     return any(not _UNIT_AFTER.match(title[m.end():]) for m in _CHIEF.finditer(title))
 
 
+def price_suspect(price: Optional[float], close: Optional[float]) -> Optional[bool]:
+    """Whether a trade's *price* lost its decimal point: DECIMAL_SHIFT times, or a DECIMAL_SHIFT-th of, a price
+    within PRICE_TOLERANCE of *close*, the stock's close on the trade's date. None without a price, or a close to
+    check it against."""
+    if price is None or not close:
+        return None
+    return any(abs(shifted - close) <= PRICE_TOLERANCE * close
+               for shifted in (price / DECIMAL_SHIFT, price * DECIMAL_SHIFT))
+
+
 def _value(trades: Sequence[Mapping[str, Any]]) -> float:
+    """The trades' dollars: shares times price, a missing or suspect price aside."""
     return float(sum(t["shares"] * t["price"] for t in trades
-                     if t.get("shares") is not None and t.get("price") is not None))
+                     if t.get("shares") is not None and t.get("price") is not None and not t.get("price_suspect")))
 
 
 def _shares(trades: Sequence[Mapping[str, Any]]) -> float:

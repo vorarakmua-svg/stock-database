@@ -907,6 +907,7 @@ def ins_fragment(
             "trades": [{"date": t["date"], "insider": t["owner_name"], "role": t["role"], "code": t["code"],
                         "meaning": t["meaning"], "derivative": t["kind"] == "derivative",
                         "shares": fmt_count(t["shares"]), "price": fmt_price(t["price"]),
+                        "price_note": t["price_note"],
                         "value": fmt_money(t["value"]), "after": fmt_count(t["owned_after"]),
                         "plan": "yes" if t["plan"] else "", "form": t["form"],
                         "tint_class": "up" if t["code"] == "P" else "down" if t["code"] == "S" else "flat"}

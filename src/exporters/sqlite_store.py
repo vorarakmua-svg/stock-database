@@ -18,6 +18,7 @@ All writes are idempotent upserts on the natural keys.
 import json
 import logging
 import sqlite3
+from bisect import bisect_right
 from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
@@ -441,7 +442,9 @@ class SQLiteStore:
         )
         # Insiders' Form 4 filings (Milestone 3): one row per filing and reporting owner, and the filing's
         # transactions. A filing amended by a 4/A notes its latest amendment (insider_filings.superseded_by), and a
-        # trade a 4/A restates names that amendment (insider_trades.superseded_by): the readers count the others.
+        # trade a 4/A restates names that amendment (insider_trades.superseded_by): the readers count the others. A
+        # price that lost its decimal point is flagged (insider_trades.price_suspect: 1, 0 when checked, NULL without
+        # a close), kept as filed and left out of the dollar figures.
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS insider_filings (
@@ -484,6 +487,7 @@ class SQLiteStore:
                 underlying_title TEXT,
                 underlying_shares REAL,
                 superseded_by TEXT,
+                price_suspect INTEGER,
                 PRIMARY KEY (accession, seq)
             );
             CREATE INDEX IF NOT EXISTS idx_insider_trades_ticker ON insider_trades (ticker, date);
@@ -1342,15 +1346,17 @@ class SQLiteStore:
         fetch stays; the company's rows of the accessions *left_out* (the collector's: another issuer's filings,
         say) are removed. Then the company's amendments are worked out again from all its stored filings
         (``insiders.supersessions``): each filing amended notes its latest 4/A (``insider_filings.superseded_by``),
-        and each trade a 4/A restates names it (``insider_trades.superseded_by``)."""
-        from ..ownership.insiders import ceo_or_cfo, supersessions
+        and each trade a 4/A restates names it (``insider_trades.superseded_by``). And each of its non-derivative
+        trades' prices is checked against the stock's latest close on or before the trade's date
+        (``insiders.price_suspect``: ``insider_trades.price_suspect``), so a close stored since is used too."""
+        from ..ownership.insiders import ceo_or_cfo, price_suspect, supersessions
 
         conn = self._connect()
         try:
             self._create_schema(conn)
             self._ensure_columns(conn, "insider_filings", {"is_ceo_cfo": "INTEGER"})
-            # A table from before a trade had its own amendment note.
-            self._ensure_columns(conn, "insider_trades", {"superseded_by": "TEXT"})
+            # A table from before a trade had its own amendment note, or its price check.
+            self._ensure_columns(conn, "insider_trades", {"superseded_by": "TEXT", "price_suspect": "INTEGER"})
             for accession in left_out:
                 conn.execute("DELETE FROM insider_trades WHERE accession = ? AND ticker = ?", (accession, ticker))
                 conn.execute("DELETE FROM insider_filings WHERE accession = ? AND ticker = ?", (accession, ticker))
@@ -1390,6 +1396,20 @@ class SQLiteStore:
             conn.executemany(
                 "UPDATE insider_trades SET superseded_by = ? WHERE accession = ? AND seq = ? AND ticker = ?",
                 [(amendment, accession, seq, ticker) for (accession, seq), amendment in restated.items()])
+            # Each of the company's trades' prices against the stock's latest close on or before the trade's date
+            # (insiders.price_suspect). A derivative's price is its own, not the stock's: unchecked (NULL).
+            bars = conn.execute("SELECT date, close FROM price_bars WHERE ticker = ? AND close IS NOT NULL "
+                                "ORDER BY date", (ticker,)).fetchall()
+            days = [day for day, _ in bars]
+            flags = []
+            trades = conn.execute("SELECT accession, seq, kind, date, price FROM insider_trades WHERE ticker = ?",
+                                  (ticker,)).fetchall()
+            for accession, seq, kind, day, price in trades:
+                at = bisect_right(days, day) if day else 0  # the latest close on or before the trade's date
+                suspect = price_suspect(price, bars[at - 1][1] if at else None) if kind == "nonderivative" else None
+                flags.append((None if suspect is None else int(suspect), accession, seq, ticker))
+            conn.executemany(
+                "UPDATE insider_trades SET price_suspect = ? WHERE accession = ? AND seq = ? AND ticker = ?", flags)
             conn.commit()
         finally:
             conn.close()

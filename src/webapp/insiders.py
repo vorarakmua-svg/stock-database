@@ -20,14 +20,28 @@ def _role(t: Dict[str, Any]) -> str:
     return ", ".join(parts) or "—"
 
 
-def _trade_out(t: Dict[str, Any]) -> Dict[str, Any]:
+def _price_note(price: Optional[float], close: Optional[float]) -> str:
+    """What a suspect price is: as filed, and a decimal point off the close that day (its direction where the close
+    is known)."""
+    if close is None or price is None:
+        return "as filed, 1,000 times off the close that day"
+    if price > close:
+        return "as filed, about 1,000 times the close that day"
+    return "as filed, about a thousandth of the close that day"
+
+
+def _trade_out(t: Dict[str, Any], close: Optional[float] = None) -> Dict[str, Any]:
+    """A trade for the web; *close* is the stock's close that day, read for a suspect price's note."""
     shares, price = t.get("shares"), t.get("price")
-    plan = t.get("aff10b5one")
+    plan, suspect = t.get("aff10b5one"), t.get("price_suspect")
     return {
         "accession": t["accession"], "form": t.get("form"), "filed_date": t.get("filed_date"), "date": t.get("date"),
         "kind": t.get("kind"), "code": t.get("code"), "meaning": CODE_MEANINGS.get(t.get("code") or "", "—"),
         "security_title": t.get("security_title"), "shares": shares, "price": price,
-        "value": shares * price if shares is not None and price is not None else None,
+        # A price that lost its decimal point is shown as filed and has no value: its trade counts in shares only.
+        "value": shares * price if shares is not None and price is not None and not suspect else None,
+        "price_suspect": None if suspect is None else bool(suspect),
+        "price_note": _price_note(price, close) if suspect else None,
         "acquired_disposed": t.get("acquired_disposed"), "owned_after": t.get("owned_after"),
         "direct_indirect": t.get("direct_indirect"), "owner_cik": t.get("owner_cik"),
         "owner_name": t.get("owner_name"), "officer_title": t.get("officer_title"), "role": _role(t),
@@ -37,11 +51,13 @@ def _trade_out(t: Dict[str, Any]) -> Dict[str, Any]:
 
 def insider_view(r: Reader, ticker: str, today: Optional[str] = None) -> Dict[str, Any]:
     """The ticker's insider trades: ``source`` is "sec" with the aggregates as of *today*, "yahoo" with Yahoo's
-    rows when no Form 4 is stored, or None when there are neither."""
+    rows when no Form 4 is stored, or None when there are neither. A suspect price (``insiders.price_suspect``) is
+    shown as filed with a note, and left out of the dollar figures."""
     trades = r.sec_insider_trades(ticker)
     if trades:
         return {"ticker": ticker, "source": "sec",
                 "summary": summarize(trades, today or date.today().isoformat()),
-                "trades": [_trade_out(t) for t in trades]}
+                "trades": [_trade_out(t, r.close_on_or_before(ticker, t["date"])
+                                      if t.get("price_suspect") and t.get("date") else None) for t in trades]}
     yahoo = r.insider_transactions(ticker)
     return {"ticker": ticker, "source": "yahoo" if yahoo else None, "summary": None, "trades": yahoo}

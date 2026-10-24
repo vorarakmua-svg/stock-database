@@ -104,8 +104,8 @@ QualityColumns = Union[bool, AbstractSet[str]]
 
 # Insiders' open-market trades from the SEC's Form 4 filings (insider_trades, insider_filings), over the last 365
 # days, those no amendment restated (insider_trades.superseded_by): correlated subqueries, NULL when the tables or
-# that column don't exist (docs/superpowers/specs/2026-10-22-sec-ownership-design.md). A joint filing counts each of
-# its owners.
+# their newer columns don't exist (docs/superpowers/specs/2026-10-22-sec-ownership-design.md). A joint filing counts
+# each of its owners. A price that lost its decimal point (insider_trades.price_suspect) adds no dollars.
 _LIVE_TRADES = ("FROM insider_trades {t} JOIN insider_filings {f} ON {f}.accession = {t}.accession "
                 "WHERE {t}.ticker = ma.ticker AND {t}.kind = 'nonderivative' AND {t}.superseded_by IS NULL ")
 INSIDER_EXPRS: Dict[str, str] = {
@@ -114,7 +114,7 @@ INSIDER_EXPRS: Dict[str, str] = {
         "(SELECT SUM(CASE t.code WHEN 'P' THEN t.shares * t.price ELSE -t.shares * t.price END) "
         "FROM insider_trades t WHERE t.ticker = ma.ticker AND t.kind = 'nonderivative' "
         "AND t.code IN ('P', 'S') AND t.price IS NOT NULL AND t.date >= date('now', '-365 days') "
-        "AND t.superseded_by IS NULL)",
+        "AND t.superseded_by IS NULL AND COALESCE(t.price_suspect, 0) = 0)",
     # Distinct insiders buying in the open market.
     "ins_buyers_12m":
         "(SELECT COUNT(DISTINCT f.owner_cik) " + _LIVE_TRADES.format(t="t", f="f")
@@ -391,7 +391,7 @@ def _qualify_column(field_name: str, *, context: str = "filter", history: bool =
     is NULL when *history* is False (no ``valuation_ranges`` table), and a
     ``QUALITY_EXPRS`` field when *quality* is False (no ``quality_scores``) or lacks the column it reads; an
     ``INSIDER_EXPRS`` or ``GURU_EXPRS`` field when *insiders* or *gurus* is False (no tables; for the insiders, or
-    no trade-level amendment note).
+    no trade-level amendment note or price check).
     """
     if field_name in _METRIC_COL_SET:
         return f'ma."{field_name}"'

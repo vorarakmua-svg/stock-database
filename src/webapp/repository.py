@@ -509,6 +509,13 @@ class Reader:
             return []
         return [dict(row) for row in cur.fetchall()]
 
+    def close_on_or_before(self, ticker: str, day: str) -> Optional[float]:
+        """The stock's latest close on or before *day* (``price_bars``), None without one."""
+        row = self._conn.execute(
+            "SELECT close FROM price_bars WHERE ticker = ? AND date <= ? AND close IS NOT NULL "
+            "ORDER BY date DESC LIMIT 1", (ticker, day)).fetchone()
+        return None if row is None else row["close"]
+
     def insider_transactions(self, ticker: str, limit: int = 100) -> List[Dict[str, Any]]:
         """``insider_transactions`` rows for ``ticker``, descending by ``start_date``."""
         cur = self._conn.execute(
@@ -590,8 +597,9 @@ class Reader:
         quality: Union[bool, FrozenSet[str]] = (
             frozenset(row[1] for row in self._conn.execute("PRAGMA table_info(quality_scores)"))
             if "quality_scores" in tables else False)
-        # The insiders' fields read each trade's amendment note, which a trades table from older code lacks.
-        insiders = {"insider_trades", "insider_filings"} <= tables and "superseded_by" in {
+        # The insiders' fields read each trade's amendment note and price check, which a trades table from older code
+        # lacks.
+        insiders = {"insider_trades", "insider_filings"} <= tables and {"superseded_by", "price_suspect"} <= {
             row[1] for row in self._conn.execute("PRAGMA table_info(insider_trades)")}
         gurus = {"guru_quarters", "guru_positions"} <= tables
         sql, params = build_screen_query(spec, history, quality, insiders, gurus)

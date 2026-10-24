@@ -228,6 +228,77 @@ def test_a_4a_of_a_4a_supersedes_the_trade_the_first_one_restated(tmp_path):
         ("F-1", "F-2"), ("F-2", "F-3"), ("F-3", None)]
 
 
+def _priced(accession, filed, rows, owner="0000316011"):
+    """A filing as the collector passes it, its trades given as (kind, code, title, day, shares, price)."""
+    trades = [Trade(table=kind, seq=i, security_title=title, date=day, code=code, shares=shares, price=price)
+              for i, (kind, code, title, day, shares, price) in enumerate(rows)]
+    period = min(row[3] for row in rows)
+    filing = Form4(accession=accession, form="4", period_of_report=period, issuer_cik="0000059478",
+                   owners=[Owner(cik=owner, name=f"OWNER {owner}")], trades=trades)
+    return FilingRef(accession, "4", filed, period, "doc.xml"), filing
+
+
+def _bars(db, rows):
+    """Store price_bars rows, (ticker, date, close) each."""
+    store = SQLiteStore(db_path=db)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.executemany("INSERT INTO price_bars (ticker, date, close) VALUES (?, ?, ?)", rows)
+    conn.commit()
+    conn.close()
+
+
+SOLD = ("nonderivative", "S", "Common Stock")
+
+
+def test_each_trades_price_is_checked_against_the_days_close_when_stored(tmp_path):
+    # BUG-220's rows as filed: the Lilly Endowment's 0000316011-25-000073, two of whose four prices lost their decimal
+    # point, and 0001415889-25-005456; BRK-B's 0000919574-25-001778, 2 Class A shares at their real price.
+    db = tmp_path / "own.db"
+    _bars(db, [("LLY", "2025-02-24", 881.40), ("LLY", "2025-11-13", 1010.00), ("LLY", "2025-11-14", 1025.28),
+               ("BRK-B", "2025-02-28", 505.00), ("BRK-B", "2025-03-03", 510.08),
+               ("ZZZ", "2025-01-02", 50.0), ("ZZZ", "2025-01-03", 100.0)])
+    store = SQLiteStore(db_path=db)
+    store.export_insider_filings("LLY", [
+        _priced("0000316011-25-000073", "2025-11-18", [
+            SOLD + ("2025-11-14", 103871.0, 1030.312), SOLD + ("2025-11-14", 55908.0, 1031414.0),
+            SOLD + ("2025-11-14", 17567.0, 1032319.0), SOLD + ("2025-11-14", 949.0, 1033.155)]),
+        _priced("0001415889-25-005456", "2025-02-26", [
+            SOLD + ("2025-02-24", 6444.0, 877.311), SOLD + ("2025-02-24", 1818.0, 878401.0)]),
+        _priced("L-9", "2025-11-18", [
+            SOLD + ("2025-11-15", 10.0, 1031414.0),  # a Saturday: Friday's close
+            SOLD + ("2020-01-02", 10.0, 1031414.0),  # before the first close: unchecked
+            ("derivative", "P", "Call Option", "2025-11-14", 10.0, 1.031),  # an option's own price: unchecked
+            SOLD + ("2025-11-14", 10.0, None)]),  # no price
+    ], "2026-10-22T00:00:00+00:00")
+    store.export_insider_filings("BRK-B", [_priced("0000919574-25-001778", "2025-03-05", [
+        ("nonderivative", "S", "Class A Common Stock", "2025-03-03", 2.0, 775883.3)], owner="0001067983")],
+        "2026-10-22T00:00:00+00:00")
+    # The trade's own day's close, not the day before's.
+    store.export_insider_filings("ZZZ", [_priced("Z-1", "2025-01-06", [SOLD + ("2025-01-03", 1.0, 100000.0)])],
+                                 "2026-10-22T00:00:00+00:00")
+    assert _rows(db, "SELECT accession, seq, price_suspect FROM insider_trades ORDER BY accession, seq") == [
+        ("0000316011-25-000073", 0, 0), ("0000316011-25-000073", 1, 1), ("0000316011-25-000073", 2, 1),
+        ("0000316011-25-000073", 3, 0),
+        ("0000919574-25-001778", 0, 0),
+        ("0001415889-25-005456", 0, 0), ("0001415889-25-005456", 1, 1),
+        ("L-9", 0, 1), ("L-9", 1, None), ("L-9", 2, None), ("L-9", 3, None),
+        ("Z-1", 0, 1)]
+    assert _rows(db, "SELECT price FROM insider_trades WHERE accession = '0000316011-25-000073' AND seq = 1") == [
+        (1031414.0,)]  # kept as filed
+
+
+def test_a_close_stored_after_a_trade_is_checked_by_the_next_store(tmp_path):
+    db = tmp_path / "own.db"
+    store = SQLiteStore(db_path=db)
+    store.export_insider_filings("LLY", [_priced("0000316011-25-000073", "2025-11-18", [
+        SOLD + ("2025-11-14", 55908.0, 1031414.0)])], "2026-10-22T00:00:00+00:00")
+    assert _rows(db, "SELECT price_suspect FROM insider_trades") == [(None,)]  # no close yet
+    _bars(db, [("LLY", "2025-11-14", 1025.28)])
+    store.export_insider_filings("LLY", [], "2026-10-23T00:00:00+00:00")  # a later run with nothing new
+    assert _rows(db, "SELECT price_suspect FROM insider_trades") == [(1,)]
+
+
 def test_an_insider_trades_table_from_before_the_trades_own_note_gets_its_column(tmp_path):
     db = tmp_path / "own.db"
     conn = sqlite3.connect(db)
@@ -241,8 +312,8 @@ def test_an_insider_trades_table_from_before_the_trades_own_note_gets_its_column
     SQLiteStore(db_path=db).export_insider_filings("PG", [
         _stored("F-1", "2026-08-24"), _stored("F-2", "2026-08-27", form="4/A", original="2026-08-24", shares=90.0),
     ], "2026-10-22T00:00:00+00:00")
-    assert _rows(db, "SELECT accession, superseded_by FROM insider_trades ORDER BY accession") == [
-        ("F-1", "F-2"), ("F-2", None)]
+    assert _rows(db, "SELECT accession, superseded_by, price_suspect FROM insider_trades ORDER BY accession") == [
+        ("F-1", "F-2", None), ("F-2", None, None)]  # both columns added; no close to check the prices against
 
 
 # ---- only the company's own filings, and a successor's predecessor ------------------------------------------------

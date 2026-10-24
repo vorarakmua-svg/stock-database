@@ -116,20 +116,73 @@ def test_an_amendment_adding_a_trade_leaves_its_originals_purchase_counted(clien
     assert (aaa["ins_buyers_12m"], aaa["ins_cluster_buyers_12m"]) == (1, 1)
 
 
-def test_a_database_whose_trades_predate_their_own_amendment_note_still_screens(client, web_db):
-    # insider_trades as code before the trade-level superseded_by created it, with a row: no reader fails on it.
+def test_a_price_off_by_a_dropped_decimal_point_is_shown_as_filed_and_counts_in_shares_only(client, web_db):
+    # BUG-220: a price 1,000 times, or a thousandth of, the close that day lost its decimal point. It shows as filed,
+    # with a note, and every dollar figure leaves it out: its trade counts in shares only.
+    conn = sqlite3.connect(web_db)
+    (close,) = conn.execute("SELECT close FROM price_bars WHERE ticker = 'AAA' ORDER BY date DESC LIMIT 1").fetchone()
+    conn.close()
+    SQLiteStore(db_path=web_db).export_insider_filings("AAA", [
+        _filing("D-1", _ago(18), "11", None, "S", 100.0, close * 1000, _ago(20), director=True),
+        _filing("D-2", _ago(13), "12", None, "S", 5.0, close / 1000, _ago(15), director=True),
+        _filing("D-3", _ago(8), "13", None, "S", 10.0, close, _ago(10), director=True),
+        # A derivative's price is its own: unchecked.
+        _filing("D-4", _ago(8), "13", None, "M", 50.0, close / 1000, _ago(10), kind="derivative", director=True),
+    ], "2026-10-22T00:00:00+00:00")
+    body = client.get("/api/stocks/AAA/form4").json()
+    w = body["summary"]["windows"]["12m"]
+    assert (w["sold_shares"], w["sellers"]) == (115.0, 3)
+    assert w["sold_value"] == pytest.approx(10 * close)
+    rows = {t["accession"]: t for t in body["trades"]}
+    assert (rows["D-1"]["price"], rows["D-1"]["value"], rows["D-1"]["price_suspect"]) == (close * 1000, None, True)
+    assert rows["D-1"]["price_note"] == "as filed, about 1,000 times the close that day"
+    assert rows["D-2"]["price_note"] == "as filed, about a thousandth of the close that day"
+    assert (rows["D-3"]["value"], rows["D-3"]["price_suspect"], rows["D-3"]["price_note"]) == (
+        pytest.approx(10 * close), False, None)
+    assert (rows["D-4"]["value"], rows["D-4"]["price_suspect"], rows["D-4"]["price_note"]) == (
+        pytest.approx(50 * close / 1000), None, None)
+    with Reader(web_db) as r:
+        aaa = {row["ticker"]: row for row in r.screen(ScreenSpec(filters=[]))["items"]}["AAA"]
+    assert aaa["ins_net_buy_12m"] == pytest.approx(-10 * close)
+    html = client.get("/ui/stocks/AAA/ins").text
+    assert "as filed, about 1,000 times the close that day" in html
+    assert "as filed, about a thousandth of the close that day" in html
+
+
+def test_a_suspect_prices_note_without_the_close_names_no_direction(client, web_db):
+    # Flagged when stored; the stock's closes gone since: the note says only that it is a decimal point off.
+    conn = sqlite3.connect(web_db)
+    (close,) = conn.execute("SELECT close FROM price_bars WHERE ticker = 'AAA' ORDER BY date DESC LIMIT 1").fetchone()
+    conn.close()
+    SQLiteStore(db_path=web_db).export_insider_filings("AAA", [
+        _filing("D-1", _ago(18), "11", None, "S", 100.0, close * 1000, _ago(20), director=True)],
+        "2026-10-22T00:00:00+00:00")
+    conn = sqlite3.connect(web_db)
+    conn.execute("DELETE FROM price_bars WHERE ticker = 'AAA'")
+    conn.commit()
+    conn.close()
+    (trade,) = client.get("/api/stocks/AAA/form4").json()["trades"]
+    assert (trade["price_suspect"], trade["value"]) == (True, None)
+    assert trade["price_note"] == "as filed, 1,000 times off the close that day"
+
+
+@pytest.mark.parametrize("missing, source", [
+    (("superseded_by", "price_suspect"), "yahoo"),  # before the trades' amendment note: no SEC trades read
+    (("price_suspect",), "sec"),  # before the price check: the trades read, their prices as filed
+])
+def test_a_database_whose_trades_predate_their_newer_columns_still_screens(client, web_db, missing, source):
+    # insider_trades as older code created it, with rows: no reader fails on it, and the insider fields are NULL.
     _seed(web_db)
     conn = sqlite3.connect(web_db)
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(insider_trades)") if row[1] not in missing]
     conn.executescript(  # without DROP COLUMN, which older SQLite lacks
-        "CREATE TABLE old_trades AS SELECT accession, seq, ticker, kind, security_title, date, code, shares, price, "
-        "price_footnotes, acquired_disposed, owned_after, direct_indirect, nature_of_ownership, exercise_price, "
-        "underlying_title, underlying_shares FROM insider_trades; DROP TABLE insider_trades; "
+        f"CREATE TABLE old_trades AS SELECT {', '.join(columns)} FROM insider_trades; DROP TABLE insider_trades; "
         "ALTER TABLE old_trades RENAME TO insider_trades;")
     conn.close()
     with Reader(web_db) as r:
         items = {row["ticker"]: row for row in r.screen(ScreenSpec(filters=[], sort="ins_net_buy_12m"))["items"]}
     assert all(items[t][f] is None for t in items for f in INSIDER_EXPRS)
-    assert client.get("/api/stocks/AAA/form4").json()["source"] == "yahoo"  # web_db's Yahoo rows
+    assert client.get("/api/stocks/AAA/form4").json()["source"] == source
     assert client.get("/ui/stocks/AAA/ins").status_code == 200
 
 

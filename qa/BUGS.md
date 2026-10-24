@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 114 · NEEDS-USER 15 · Verified: 91
+**Open:** P0 0 · P1 0 · P2 11 · P3 114 · NEEDS-USER 15 · Verified: 92
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1658,6 +1658,15 @@ Status: OPEN
 Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
 Repro: the INS tab's 12-month window counts from the local date, the screener's from UTC (a day apart at times); price footnotes keep their ids only, not their text.
 Expected: one clock; the text where it matters.   Actual: as described.
+
+### BUG-220 [P2][OWNERSHIP] A filer's dropped decimal point makes LLY's insiders sell $78 billion
+Status: VERIFIED (build iteration 40)
+Found: build iteration 40 (M3-8's dry run of the full collection), build M3-8 | Fixed: (this commit) | Regression test: tests/test_ownership_insiders.py (the rule, with the four real rows' shapes), tests/test_ownership_collect.py (the store's flag), tests/test_web_insiders.py
+Repro: the Lilly Endowment's Form 4 0000316011-25-000073 states two sales' prices as 1031414.0 and 1032319.0 (2025-11-14, the day's close $1,025.28), and 0001415889-25-005456 states 878401.0 (2025-02-24, close $881.40). Read as filed, LLY's 12-month net open-market selling is $78.4B, $75.8B of it those two rows.
+Expected: a price that is 1,000 times (or a thousandth of) a price within 10% of the day's close flagged and left out of dollar figures.   Actual: summed as filed.
+Notes: of 39,157 P/S trades with a close that day, only those 3 and one legitimate row are over 100x the close: BRK-B's 0000919574-25-001778, 2 Class A shares at $775,883.30 (the A/B ratio), which the rule must leave alone.
+Fix (build iteration 40): `price_suspect()` in `src/ownership/insiders.py` flags an open-market price that is 1,000 times, or a thousandth of, a price within 10% of the stock's close on the trade date (the latest close on or before it); `insider_trades.price_suspect` stores 1, 0, or NULL when unchecked (no price, no close, or a derivative row, whose price is the option's), recomputed at every store. The price stays as filed; every dollar figure treats it as missing (the trade counts in shares only): `summarize`, the INS view and its note, `/api/stocks/{t}/form4`, the screener's `ins_net_buy_12m`. 17 tests; 22 mutants, each killed (69 with review 17's, re-run by the orchestrator). On a copy of the full dry run: exactly the three LLY rows flagged, BRK-B's Class A row not; LLY's 12-month net selling $2.59B, not $78.39B; 73,170 other open-market trades checked clean.
+Evidence: `qa/evidence/bug220-fix-{red,green,mutants,mutants-rerun,realdata,gates-rerun}.txt`
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
