@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 1 · DOING 1 · DONE 36 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 1 · DOING 0 · DONE 37 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -68,7 +68,7 @@
 | M4-4 | The market page (`/market`: the Buffett indicator and its zones, Shiller's CAPE, the yield curve) and `GET /api/market`, a nav link, browser-checked; with tests | DONE | this commit | `qa/evidence/market-m4-4-*` |
 | M4-5 | Independent oracle `qa/oracle/indicators_oracle.py` and real-data validation: the indicators on a backfilled copy, the reader against the sheet's own CAPE and the app's `^GSPC`, the Buffett ratio by hand, the valuations untouched | DONE | this commit | `qa/evidence/oracle-m4-5-*` |
 | M4-6 | Docs: README and USAGE_GUIDE | DONE | this commit | README "Other valuation indicators", "Market data"; USAGE_GUIDE "Other valuation indicators", "Market Data"; `qa/evidence/docs-m4-6-*` |
-| M4-7 | Milestone close: code review 18 (opus) with Critical and Important findings fixed; backup, then the offline backfill of the indicators and the market collection into the user's DB | DOING (review 18 fixed; the live step next) | | |
+| M4-7 | Milestone close: code review 18 (opus) with Critical and Important findings fixed; backup, then the offline backfill of the indicators and the market collection into the user's DB | DONE | 4d48de6, this commit | `qa/evidence/review18-report.md`, `review18-fixes-*`, `m4-7-*` |
 
 ## M5: a wider universe and automation
 
@@ -1146,3 +1146,32 @@ Evidence: `qa/evidence/review18-report.md`, `review18-fixes-{red,green,gates,gat
 Gates: ruff ✓ mypy ✓ pytest 1937 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(market): Treasury answers without yields, Shiller's link, the reader's FAT and a narrower Treasury run (code review 18)
 Next: M4-7's live step: a dry run on a fresh copy, the backup, then the backfill and the market collection into the user's DB.
+
+### Build iteration 49: 2026-10-25 02:55: M4-7 (Milestone 4 closed)
+Did:
+- The dry run, on two backup-API copies of the user's DB and a copy of M4-3's warm cache (`m4-7-dryrun*.txt`):
+  - the backfill stored 127 tickers in 7 s; the market collection stored 4 of 4 sources, with "Stale: none" and
+    "Failed: none";
+  - all 32 existing tables are identical before and after (timestamps aside);
+  - the indicators oracle passes 12 of 12, and the market oracle, with the API's answer, 6 of 6.
+- Backup: `%LOCALAPPDATA%\stockdb-backups\2026-10-25` (integrity ok, 32 tables' row counts equal, json/ 128 files and
+  csv/ 3 files identical).
+- Live:
+  - `python -m src.valuation.backfill`: 127 tickers, 7 s;
+  - `python -m src.market.collect` (the default DB and cache, a cold first run): 691 s, exit 0, 4 of 4 sources
+    stored. 37 Treasury years were fetched fresh with the review's fixes in place, nothing stale or failed.
+- Checks on a backup-API copy of the live DB (`m4-7-live-check.txt`):
+  - its 32 existing tables are identical to the backup's: the valuations, the history, the scores and the
+    ownership tables are untouched;
+  - the three new tables equal the dry run's: `valuation_indicators` 635 rows, `market_series` 109,739,
+    `market_fetches` 4;
+  - both oracles pass (12 of 12, 6 of 6). The Buffett indicator reads 255.05% for Q2 2026 (z +1.68, modestly
+    overvalued) and CAPE 40.71 for 2026-10; the yield curve runs to 2026-10-23;
+  - the web smoke (the TestClient on the copy): /market, /api/market, each indicators API and VAL fragment
+    tried, the screener's new fields and the CSV all answer 200 in 232 ms or less, and ZZZZ answers 404.
+- Deleted Milestone 4's intermediate scratch copies (m41, m42, m44, m45, review18; about 1.6 GB); m43, m47 and
+  review18-fixes stay.
+Evidence: `qa/evidence/m4-7-{dryrun,dryrun-check,backup,live,live-market,live-check}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1937 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) chore(build): close M4, with the user's DB holding the indicators and the market data
+Next: M5-0 (design Milestone 5: a wider universe and automation).
