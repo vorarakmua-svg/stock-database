@@ -29,6 +29,7 @@ from ..jobs import CollectionJobManager
 from ..quality import GROWTH_SPANS, RANK_LABELS, quality_view
 from ..repository import Reader
 from ..settings import WebSettings
+from ..valuation_indicators import indicators_view
 from .gurus import holder_rows
 from .pages import _STATEMENT_ROWS, _build_statement_display, templates
 from .stocks_api import VALID_RANGES, resolve_range_start
@@ -1061,6 +1062,50 @@ def val_history_fragment(
             "has_chart": bool(rows),
             # The XSS defense of the other inline configs: "</" can't close the <script>.
             "cfg_json": json.dumps(cfg).replace("</", "<\\/"),
+        },
+    )
+
+
+@router.get("/ui/stocks/{ticker}/val-indicators", response_class=HTMLResponse)
+def val_indicators_fragment(
+    ticker: str,
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """The VAL panel's other indicators: the reverse DCF solved at the live price beside the DCF's own growth, EPV,
+    NCAV with Graham's net-net, the median P/S value and the Graham number on tangible book, each with its bear, base
+    and bull, the base's upside from the live price, its method and its notes, or its N/A reason. Display-only: none
+    enters the median, the verdict or the upside
+    (docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md)."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    view = indicators_view(r, ticker)
+    live = view["reverse_dcf_live"]
+    rows: List[Dict[str, Any]] = []
+    for ind in view["indicators"]:
+        row: Dict[str, Any] = {"label": ind["label"], "method": ind["method"], "notes": ind["notes"],
+                               "assumptions": ind["assumptions"], "basis_fy": ind["basis_fiscal_year"]}
+        if ind["indicator"] == "reverse_dcf":
+            # The growth at the live price, not the stored one, beside the DCF's own.
+            dcf_growth = live["dcf_growth_base"]
+            row.update(applicable=live["growth"] is not None, na_reason=live["na_reason"], bear="—",
+                       base=fmt_pct(live["growth"]), bull="—",
+                       versus=f"the DCF assumes {fmt_pct(dcf_growth)}" if dcf_growth is not None else "—")
+        else:
+            row.update(applicable=ind["applicable"], na_reason=ind["na_reason"], bear=fmt_price(ind["value_bear"]),
+                       base=fmt_price(ind["value_base"]), bull=fmt_price(ind["value_bull"]),
+                       versus=fmt_pct(ind["upside_pct"]))
+        rows.append(row)
+    return templates.TemplateResponse(
+        request,
+        "fragments/val_indicators.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "computed": view["computed"],
+            "computed_at": str(view["computed_at"] or "")[:10],
+            "price_fmt": fmt_price(view["price"]),
+            "rows": rows,
         },
     )
 

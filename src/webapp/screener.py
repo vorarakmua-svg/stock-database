@@ -11,15 +11,17 @@ expression mapping for computed valuation fields such as ``val_upside_pct``),
 over fixed-literal joins of ``valuation_ranges``), ``QUALITY_EXPRS`` (the
 quality scores' columns of ``quality_scores``, and price / NCAV), ``INSIDER_EXPRS``
 and ``GURU_EXPRS`` (correlated subqueries over the SEC ownership tables; the guru
-ones carry our universe's share-class tickers, a curated constant, as literals).
-The first two sets are disjoint (enforced by a test), so resolution is
-deterministic; a filter/sort field is looked up in the metric set first, then
-the snapshot set, then the valuation-expression set, and any field in none of
-them raises ``ValueError`` BEFORE any SQL is built. Every user-supplied *value*
-(including the ``verdict`` and ``oe_verdict`` filters, each of which only ever
-selects one of three FIXED SQL clauses after validation against
-``ALLOWED_VERDICTS``) is either a bound ``?`` parameter or a hard-coded clause
-— never a raw string interpolation.
+ones carry our universe's share-class tickers, a curated constant, as literals),
+and ``INDICATOR_EXPRS`` (the other valuation indicators: the reverse DCF's
+growth, three upsides and price / net-net working capital, over fixed-literal
+joins of ``valuation_indicators``). The first two sets are disjoint (enforced
+by a test), so resolution is deterministic; a filter/sort field is looked up in
+the metric set first, then the snapshot set, then the expression sets in the
+order above, and any field in none of them raises ``ValueError`` BEFORE any SQL
+is built. Every user-supplied *value* (including the ``verdict`` and
+``oe_verdict`` filters, each of which only ever selects one of three FIXED SQL
+clauses after validation against ``ALLOWED_VERDICTS``) is either a bound ``?``
+parameter or a hard-coded clause — never a raw string interpolation.
 
 Note: only the latest-fiscal-year-per-ticker semantics are implemented for v1.
 A calendar-year alignment option is explicitly out of scope (log as future work).
@@ -161,6 +163,26 @@ GURU_EXPRS: Dict[str, str] = {
     "gurus_buying": "(SELECT COUNT(DISTINCT gp.guru_cik) " + _GURU_POSITIONS + "AND gp.action IN ('new', 'added'))",
 }
 
+# The other valuation indicators (valuation_indicators, display-only): the reverse DCF's implied growth at the price it
+# was last computed at, the EPV's, median P/S value's and tangible Graham number's upsides from the snapshot price, and
+# the price over Graham's net-net working capital per share (the NCAV row's bear), none when that isn't positive. One
+# LEFT JOIN per indicator read, its alias and literal from this fixed tuple, never from input, applicable rows only;
+# joined only when the table exists, so a database from before the indicators screens on with these fields NULL
+# (docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md).
+INDICATOR_JOINS: Tuple[str, ...] = ("reverse_dcf", "epv", "ncav", "ps_value", "graham_tangible")
+INDICATOR_EXPRS: Dict[str, str] = {
+    "reverse_dcf_growth": 'vi_reverse_dcf."value_base"',
+    "epv_upside_pct": '((vi_epv."value_base" - ms."current_price") / NULLIF(ms."current_price", 0))',
+    "ps_value_upside_pct": '((vi_ps_value."value_base" - ms."current_price") / NULLIF(ms."current_price", 0))',
+    "graham_tangible_upside_pct":
+        '((vi_graham_tangible."value_base" - ms."current_price") / NULLIF(ms."current_price", 0))',
+    "price_to_nnwc": '(CASE WHEN vi_ncav."value_bear" > 0 THEN ms."current_price" / vi_ncav."value_bear" END)',
+}
+_INDICATOR_JOIN: str = "\n".join(
+    f"LEFT JOIN valuation_indicators vi_{i} ON vi_{i}.ticker = ma.ticker "
+    f"AND vi_{i}.indicator = '{i}' AND vi_{i}.applicable = 1" for i in INDICATOR_JOINS
+)
+
 # The spec's preset screens: (key, label, the query string each fills the screener with).
 PRESETS: Tuple[Tuple[str, str, str], ...] = (
     ("buffett_munger", "Buffett-Munger",
@@ -200,6 +222,7 @@ SCREEN_COLUMNS: List[str] = (
     + list(QUALITY_EXPRS)
     + list(INSIDER_EXPRS)
     + list(GURU_EXPRS)
+    + list(INDICATOR_EXPRS)
 )
 
 # Default metrics for the compare view — single source of truth.
@@ -289,6 +312,12 @@ METRIC_KINDS: Dict[str, str] = {
     # gurus (13F), counts of gurus
     "gurus_holding": "count",
     "gurus_buying": "count",
+    # the other valuation indicators — the reverse DCF's growth and the upsides are fractions, price / NNWC a multiple
+    "reverse_dcf_growth": "pct",
+    "epv_upside_pct": "pct",
+    "ps_value_upside_pct": "pct",
+    "graham_tangible_upside_pct": "pct",
+    "price_to_nnwc": "mult",
 }
 
 # SQL fragment for the latest-fiscal-year-per-ticker sub-join (shared between
@@ -376,7 +405,8 @@ def _quality_expr(name: str, quality: QualityColumns) -> str:
 
 
 def _qualify_column(field_name: str, *, context: str = "filter", history: bool = True,
-                    quality: QualityColumns = True, insiders: bool = True, gurus: bool = True) -> str:
+                    quality: QualityColumns = True, insiders: bool = True, gurus: bool = True,
+                    indicators: bool = True) -> str:
     """Resolve *field_name* to a qualified, quoted SQL column reference.
 
     Metric columns (``_METRIC_COL_SET``) resolve to ``ma."col"``; snapshot
@@ -391,7 +421,8 @@ def _qualify_column(field_name: str, *, context: str = "filter", history: bool =
     is NULL when *history* is False (no ``valuation_ranges`` table), and a
     ``QUALITY_EXPRS`` field when *quality* is False (no ``quality_scores``) or lacks the column it reads; an
     ``INSIDER_EXPRS`` or ``GURU_EXPRS`` field when *insiders* or *gurus* is False (no tables; for the insiders, or
-    no trade-level amendment note or price check).
+    no trade-level amendment note or price check); an ``INDICATOR_EXPRS`` field when *indicators* is False (no
+    ``valuation_indicators`` table).
     """
     if field_name in _METRIC_COL_SET:
         return f'ma."{field_name}"'
@@ -407,14 +438,17 @@ def _qualify_column(field_name: str, *, context: str = "filter", history: bool =
         return INSIDER_EXPRS[field_name] if insiders else "NULL"
     if field_name in GURU_EXPRS:
         return GURU_EXPRS[field_name] if gurus else "NULL"
+    if field_name in INDICATOR_EXPRS:
+        return INDICATOR_EXPRS[field_name] if indicators else "NULL"
     raise ValueError(
         f"Invalid {context} field {field_name!r}: not in whitelisted _METRIC_COLUMNS, "
-        "SNAPSHOT_SCREEN_COLUMNS, VALUATION_EXPRS, HISTORY_EXPRS, QUALITY_EXPRS, INSIDER_EXPRS, or GURU_EXPRS."
+        "SNAPSHOT_SCREEN_COLUMNS, VALUATION_EXPRS, HISTORY_EXPRS, QUALITY_EXPRS, INSIDER_EXPRS, GURU_EXPRS, or "
+        "INDICATOR_EXPRS."
     )
 
 
 def _build_where(spec: ScreenSpec, history: bool = True, quality: QualityColumns = True,
-                 insiders: bool = True, gurus: bool = True) -> Tuple[str, List[Any]]:
+                 insiders: bool = True, gurus: bool = True, indicators: bool = True) -> Tuple[str, List[Any]]:
     """Validate filters/sector and build the WHERE clause + ordered params.
 
     Raises ``ValueError`` for any non-whitelisted field or unknown op.
@@ -425,7 +459,7 @@ def _build_where(spec: ScreenSpec, history: bool = True, quality: QualityColumns
 
     for f in spec.filters:
         col = _qualify_column(f.field, context="filter", history=history, quality=quality, insiders=insiders,
-                              gurus=gurus)
+                              gurus=gurus, indicators=indicators)
         if f.op == "between":
             if f.value2 is None:
                 raise ValueError(
@@ -498,7 +532,7 @@ def _build_where(spec: ScreenSpec, history: bool = True, quality: QualityColumns
 
 
 def build_screen_query(spec: ScreenSpec, history: bool = True, quality: QualityColumns = True,
-                       insiders: bool = True, gurus: bool = True) -> Tuple[str, List[Any]]:
+                       insiders: bool = True, gurus: bool = True, indicators: bool = True) -> Tuple[str, List[Any]]:
     """Return ``(sql, params)`` for the full screen query.
 
     Pure function — does NOT touch the database.
@@ -520,10 +554,10 @@ def build_screen_query(spec: ScreenSpec, history: bool = True, quality: QualityC
     sort_col: Optional[str] = None
     if spec.sort is not None:
         sort_col = _qualify_column(spec.sort, context="sort", history=history, quality=quality,
-                                   insiders=insiders, gurus=gurus)
+                                   insiders=insiders, gurus=gurus, indicators=indicators)
 
     # Build WHERE (also validates filters)
-    where_sql, params = _build_where(spec, history, quality, insiders, gurus)
+    where_sql, params = _build_where(spec, history, quality, insiders, gurus, indicators)
 
     # Build ORDER BY with NULLs-last
     if sort_col is not None:
@@ -552,11 +586,14 @@ def build_screen_query(spec: ScreenSpec, history: bool = True, quality: QualityC
     guru_exprs_sql = ", ".join(
         f"{expr if gurus else 'NULL'} AS {name}" for name, expr in GURU_EXPRS.items()
     )
+    indicator_exprs_sql = ", ".join(
+        f"{expr if indicators else 'NULL'} AS {name}" for name, expr in INDICATOR_EXPRS.items()
+    )
     select_sql = (
         f"c.ticker, c.company_name, c.sector_class, ma.fiscal_year, "
         f"{metric_cols_sql}, {snapshot_cols_sql}, "
         f"{valuation_cols_sql}, {oe_cols_sql}, {valuation_exprs_sql}, {history_exprs_sql}, "
-        f"{quality_exprs_sql}, {insider_exprs_sql}, {guru_exprs_sql}"
+        f"{quality_exprs_sql}, {insider_exprs_sql}, {guru_exprs_sql}, {indicator_exprs_sql}"
     )
 
     sql = (
@@ -569,6 +606,7 @@ def build_screen_query(spec: ScreenSpec, history: bool = True, quality: QualityC
         f"{_LYNCH_JOIN}\n"
         f"{_HISTORY_JOIN if history else ''}\n"
         f"{_QUALITY_JOIN if quality else ''}\n"
+        f"{_INDICATOR_JOIN if indicators else ''}\n"
         f"{where_sql}\n"
         f"{order_sql}\n"
         f"LIMIT ? OFFSET ?"
@@ -579,14 +617,14 @@ def build_screen_query(spec: ScreenSpec, history: bool = True, quality: QualityC
 
 
 def build_count_query(spec: ScreenSpec, history: bool = True, quality: QualityColumns = True,
-                      insiders: bool = True, gurus: bool = True) -> Tuple[str, List[Any]]:
+                      insiders: bool = True, gurus: bool = True, indicators: bool = True) -> Tuple[str, List[Any]]:
     """Return ``(sql, params)`` for a ``COUNT(*)`` version of the same query.
 
     Used by ``Reader.screen`` to compute the total without LIMIT/OFFSET.
     Validates filters and sector (same as ``build_screen_query``) but does NOT
     validate sort/sort_dir (not needed for a count).
     """
-    where_sql, params = _build_where(spec, history, quality, insiders, gurus)
+    where_sql, params = _build_where(spec, history, quality, insiders, gurus, indicators)
 
     sql = (
         f"SELECT COUNT(*)\n"
@@ -598,6 +636,7 @@ def build_count_query(spec: ScreenSpec, history: bool = True, quality: QualityCo
         f"{_LYNCH_JOIN}\n"
         f"{_HISTORY_JOIN if history else ''}\n"
         f"{_QUALITY_JOIN if quality else ''}\n"
+        f"{_INDICATOR_JOIN if indicators else ''}\n"
         f"{where_sql}"
     ).strip()
 

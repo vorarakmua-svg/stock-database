@@ -58,6 +58,7 @@ from ..schemas import (
     StockSummaryOut,
 )
 from ..settings import WebSettings
+from ..valuation_indicators import indicators_view
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 
@@ -451,6 +452,19 @@ def valuation_history(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str,
             **{column: [row.get(column) for row in rows] for column in ("close", "fair_value") + METRICS},
         },
     }
+
+
+@router.get("/{ticker}/valuation-indicators")
+def valuation_indicators(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
+    """The other valuation indicators, display-only (never in the median, the verdicts or the upside): the reverse
+    DCF, the earnings power value, NCAV with Graham's net-net, the median P/S value and the Graham number on tangible
+    book, each with its base's upside from the live price and its notes, and the reverse DCF solved again at the live
+    price (``valuation_indicators.indicators_view``;
+    docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md). Not at ``/{ticker}/indicators``: that is the
+    price chart's MA/RSI/MACD bundle."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    return indicators_view(r, ticker)
 
 
 @router.get("/{ticker}/form4")

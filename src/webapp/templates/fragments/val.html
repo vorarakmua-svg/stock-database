@@ -127,6 +127,10 @@
 </section>
 {% endif %}
 
+<div id="val-indicators" hx-get="/ui/stocks/{{ ticker }}/val-indicators" hx-trigger="load" hx-swap="outerHTML">
+  <p class="text-muted">Loading the other indicators…</p>
+</div>
+
 {% if sensitivity %}
 <section class="section">
   <h2 class="section-heading">DCF Sensitivity</h2>

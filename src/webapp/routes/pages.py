@@ -175,6 +175,15 @@ SCREENER_VALUATION_OPTIONS: List[tuple[str, str]] = [
     ("Lynch model upside", "lynch_upside_pct"),
 ]
 
+# The other valuation indicators (screener.INDICATOR_EXPRS): the reverse DCF's growth and the upsides are fractions.
+SCREENER_INDICATOR_OPTIONS: List[tuple[str, str]] = [
+    ("Reverse DCF implied growth", "reverse_dcf_growth"),
+    ("EPV upside", "epv_upside_pct"),
+    ("Median P/S value upside", "ps_value_upside_pct"),
+    ("Tangible Graham upside", "graham_tangible_upside_pct"),
+    ("Price / net-net working capital", "price_to_nnwc"),
+]
+
 # The quality scores' fields (screener.QUALITY_EXPRS): ranks 1-10, the composite 0-100, the rest as stored.
 SCREENER_QUALITY_OPTIONS: List[tuple[str, str]] = [
     ("Piotroski F", "piotroski_f"),
@@ -553,6 +562,10 @@ def screener_page(
         + [
             {"key": key, "label": label, "group": "Valuation models"}
             for label, key in SCREENER_VALUATION_OPTIONS
+        ]
+        + [
+            {"key": key, "label": label, "group": "Other indicators"}
+            for label, key in SCREENER_INDICATOR_OPTIONS
         ]
         + [
             {"key": key, "label": label, "group": "Quality scores"}

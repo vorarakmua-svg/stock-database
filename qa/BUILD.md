@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 7 · DOING 0 · DONE 31 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 6 · DOING 0 · DONE 32 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -63,7 +63,7 @@
 |---|---|---|---|---|
 | M4-0 | Design M4: `docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md`, then these rows | DONE | this commit | the spec |
 | M4-1 | `src/valuation/indicators.py`: the reverse DCF, EPV, NCAV and the net-net, the median P/S value, the Graham number on tangible book; storage (`valuation_indicators`), the engine hook after the scores, the backfill; a test pinning `MEDIAN_MODELS` and the valuations; with tests | DONE | this commit | `qa/evidence/indicators-m4-1-*` |
-| M4-2 | The VAL tab's "Other indicators" section (the reverse DCF at the live price), `GET /api/stocks/{t}/indicators`, the screener fields, browser-checked; with tests | TODO | | |
+| M4-2 | The VAL tab's "Other indicators" section (the reverse DCF at the live price), `GET /api/stocks/{t}/valuation-indicators`, the screener fields, browser-checked; with tests | DONE | this commit | `qa/evidence/indicators-m4-2-*` |
 | M4-3 | `src/market/`: the `.xls` reader (`xls.py`), the FRED, Shiller and Treasury sources with their cache, storage (`market_series`, `market_fetches`), `python -m src.market.collect`; with tests | TODO | | |
 | M4-4 | The market page (`/market`: the Buffett indicator and its zones, Shiller's CAPE, the yield curve) and `GET /api/market`, a nav link, browser-checked; with tests | TODO | | |
 | M4-5 | Independent oracle `qa/oracle/indicators_oracle.py` and real-data validation: the indicators on a backfilled copy, the reader against the sheet's own CAPE and the app's `^GSPC`, the Buffett ratio by hand, the valuations untouched | TODO | | |
@@ -976,3 +976,29 @@ Evidence: `qa/evidence/indicators-m4-1-{red,ebit-red,gates,mutants,realdata,real
 Gates: ruff ✓ mypy ✓ pytest 1738 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) feat(valuation): the reverse DCF, EPV, NCAV, the median P/S value and the tangible Graham number (M4-1)
 Next: M4-2 (the VAL tab's section, the API and the screener fields).
+
+### Build iteration 43: 2026-10-24 20:51: M4-2
+Did:
+- An opus worker built the web side test-first (RED: 44 failed, 4 passed against stubs):
+  - `src/webapp/valuation_indicators.py`, the view shared by the API and the VAL tab: the five rows in order, with
+    their labels, methods and notes, and each base's upside from the live price;
+  - the reverse DCF solved again at the live price from its stored inputs, even on an N/A row;
+  - the VAL tab's "Other indicators" section, loaded lazily after Owner Earnings;
+  - `GET /api/stocks/{t}/valuation-indicators`, and five screener fields over fixed joins, NULL without the table:
+    `reverse_dcf_growth`, `epv_upside_pct`, `ps_value_upside_pct`, `graham_tangible_upside_pct`, `price_to_nnwc`.
+  - 48 tests.
+- The API path differs from the spec's: `/api/stocks/{t}/indicators` is already the price chart's MA/RSI/MACD bundle,
+  and a test pins it. I agreed, and the spec now names the new path.
+- Mutants: 67, each killed; I ran them again.
+- Web check (scratch server on a copy of M4-1's backfilled copy; the port freed afterwards):
+  - all 127 tickers answer 200, and the 309 upsides equal base / price - 1;
+  - the 91 live solves give back the price through an independent DCF;
+  - with a moved quote, AAPL at $300 reads 24.1% live against 26.5% stored;
+  - the screener's fields equal the API's on every row, and the CSV carries them;
+  - the server logged no traceback and no 5xx; headless Chrome logged no console errors.
+- My review of the diff and screenshots: the section sits between Owner Earnings and DCF Sensitivity as designed.
+  The screener's table is now wider than the 1200px page, so its verdict column scrolls out of view: BUG-222 (P3).
+Evidence: `qa/evidence/indicators-m4-2-{red,gates,mutants,mutants-rerun,web,done}.txt`, `indicators-m4-2-val-{AAPL,JPM,O,GEV}.png`, `indicators-m4-2-screener-reverse-dcf.png`
+Gates: ruff ✓ mypy ✓ pytest 1786 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) feat(web): the other indicators on the VAL tab, in the API and the screener (M4-2)
+Next: M4-3 (the market data: the `.xls` reader, FRED, Shiller and Treasury, `market_series`, the CLI).

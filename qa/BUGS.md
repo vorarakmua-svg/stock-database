@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 115 · NEEDS-USER 16 · Verified: 92
+**Open:** P0 0 · P1 0 · P2 11 · P3 116 · NEEDS-USER 16 · Verified: 92
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1674,6 +1674,13 @@ Found: build iteration 42 (M4-1's real-data check) | Fixed: | Regression test:
 Repro: `short_term_investments` maps `ShortTermInvestments`, `MarketableSecuritiesCurrent` and `AvailableForSaleSecuritiesCurrent` only. `unmapped_facts` holds `AvailableForSaleSecuritiesDebtSecuritiesCurrent` for 12 filers (ORCL, PFE, MU, INTC, ANET, AMGN, ADI, CRM, BMY, SYK, NOW, INTU), `MarketableSecurities` for 8 (NVDA's $23.9B at 2024-04-28, KO, MA, INTC, BMY ...), `OtherShortTermInvestments` for 8, `HeldToMaturitySecuritiesCurrent` and `DebtSecuritiesAvailableForSaleExcludingAccruedInterestCurrent` for 2 each. NVDA's FY2026 stores no short-term investments after $34.6B in FY2025; 80 of the 126 latest fiscal years store none.
 Expected: the current securities read (a noncurrent-inclusive `MarketableSecurities` only where no current tag is filed).   Actual: read as missing, so the cash and short-term investments behind net debt, EPV's cash and Graham's net-net are understated. NCAV itself reads current assets and is unaffected.
 Notes: a mapping change reaches the stored figures only at the next collection. Net debt feeds M1's EV/EBITDA history and fair-value line, M2's Magic Formula and the screener, not the six models' median or the verdicts.
+
+### BUG-222 [P3][UI] The screener's results table is wider than the page, so its verdict column scrolls out of view
+Status: OPEN
+Found: build iteration 43 (M4-2's browser check) | Fixed: | Regression test:
+Repro: `/screener`, sorted by any field, in a 1400px-wide window: the results table, with M3's Gurus column and M4-2's Implied growth column, needs about 80px more than the page's 1200px; `.table-responsive` scrolls it sideways and the Valuation pills are cut off at the right edge (`qa/evidence/indicators-m4-2-screener-reverse-dcf.png`).
+Expected: every column visible at a common desktop width, or the verdict column first.   Actual: the last column is reachable only by scrolling the table.
+Notes: a layout choice: a wider page for the screener, narrower headers, or fewer default columns.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

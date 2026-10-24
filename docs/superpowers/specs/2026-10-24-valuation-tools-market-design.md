@@ -123,7 +123,9 @@ try/except (a failure never blocks the valuations, the history or the scores); t
 - **VAL tab**: an "Other indicators" section after the models and owner earnings: per indicator its value (bear,
   base, bull), the price's distance from the base, its method in one line and its N/A reason; the reverse DCF
   recomputed at the live price beside the DCF's growth.
-- **API**: `GET /api/stocks/{t}/indicators`.
+- **API**: `GET /api/stocks/{t}/valuation-indicators`, beside `/valuation` and `/valuation-history`
+  (`/api/stocks/{t}/indicators` is the price chart's MA/RSI/MACD bundle), with the reverse DCF solved again at the
+  live price.
 - **Screener** (NULL without the table): `reverse_dcf_growth`, `epv_upside_pct`, `ps_value_upside_pct`,
   `graham_tangible_upside_pct` (base over the snapshot price - 1) and `price_to_nnwc` (beside M2's
   `price_to_ncav`).

@@ -419,6 +419,17 @@ class Reader:
             return []
         return [dict(row) for row in cur.fetchall()]
 
+    def valuation_indicators(self, ticker: str) -> List[Dict[str, Any]]:
+        """The ``valuation_indicators`` rows for a ticker (the display-only reverse DCF, EPV, NCAV, median
+        P/S value and tangible Graham number), by indicator. [] before the table exists."""
+        try:
+            cur = self._conn.execute(
+                "SELECT * FROM valuation_indicators WHERE ticker = ? ORDER BY indicator", (ticker,)
+            )
+        except sqlite3.OperationalError:
+            return []
+        return [dict(row) for row in cur.fetchall()]
+
     def quality_scores(self, ticker: str) -> Optional[Dict[str, Any]]:
         """The ticker's ``quality_scores`` row, or None before it's computed (or before the table exists)."""
         try:
@@ -585,12 +596,12 @@ class Reader:
         ``spec`` is validated inside ``build_screen_query``; raises
         ``ValueError`` if any field/sort/op is not whitelisted.
         """
-        # The valuation history's, the quality scores', the insiders' and the gurus' fields are NULL in a database
-        # from before their tables.
+        # The valuation history's, the quality scores', the insiders', the gurus' and the other indicators' fields are
+        # NULL in a database from before their tables.
         tables = {row[0] for row in self._conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' "
             "AND name IN ('valuation_ranges', 'quality_scores', 'insider_trades', 'insider_filings', "
-            "'guru_quarters', 'guru_positions')"
+            "'guru_quarters', 'guru_positions', 'valuation_indicators')"
         )}
         history = "valuation_ranges" in tables
         # A scores table from older code may lack a column a field reads (debt_to_ebitda): that field is NULL.
@@ -602,8 +613,9 @@ class Reader:
         insiders = {"insider_trades", "insider_filings"} <= tables and {"superseded_by", "price_suspect"} <= {
             row[1] for row in self._conn.execute("PRAGMA table_info(insider_trades)")}
         gurus = {"guru_quarters", "guru_positions"} <= tables
-        sql, params = build_screen_query(spec, history, quality, insiders, gurus)
-        count_sql, count_params = build_count_query(spec, history, quality, insiders, gurus)
+        indicators = "valuation_indicators" in tables
+        sql, params = build_screen_query(spec, history, quality, insiders, gurus, indicators)
+        count_sql, count_params = build_count_query(spec, history, quality, insiders, gurus, indicators)
 
         cur = self._conn.execute(sql, params)
         items = [dict(row) for row in cur.fetchall()]
