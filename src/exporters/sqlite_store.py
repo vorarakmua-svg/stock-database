@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Un
 if TYPE_CHECKING:  # avoid a runtime exporters -> valuation (or ownership) dependency
     from ..ownership.portfolio import Change, GuruQuarters, Position
     from ..valuation.history import HistoryResult
+    from ..valuation.indicators import IndicatorResult
     from ..valuation.models import ValuationResult
 
 from ..mappings.canonical import CANONICAL_FIELDS
@@ -395,6 +396,22 @@ class SQLiteStore:
                 n_metrics INTEGER,
                 computed_at TEXT NOT NULL,
                 PRIMARY KEY (ticker, metric)
+            );
+
+            -- The other valuation indicators (docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md):
+            -- display-only, like owner earnings, so never in the valuations table, its median or the verdicts.
+            -- unit 'per_share' (per share, on the price's basis) or 'rate' (the reverse DCF's implied growth).
+            CREATE TABLE IF NOT EXISTS valuation_indicators (
+                ticker TEXT NOT NULL,
+                indicator TEXT NOT NULL,
+                applicable INTEGER NOT NULL,
+                na_reason TEXT,
+                value_bear REAL, value_base REAL, value_bull REAL,
+                unit TEXT NOT NULL,
+                assumptions TEXT,
+                basis_fiscal_year INTEGER,
+                computed_at TEXT NOT NULL,
+                PRIMARY KEY (ticker, indicator)
             );
 
             -- Material us-gaap facts under tags not yet in the canonical registry.
@@ -1535,6 +1552,23 @@ class SQLiteStore:
                 [(ticker, r.metric, 1 if r.applicable else 0, r.na_reason, r.as_of, r.window_start, r.n_months,
                   r.current, r.pct_rank, r.min, r.p25, r.median, r.p75, r.max, r.implied_value,
                   1 if r.in_fair_value else 0, r.n_metrics, computed_at) for r in result.ranges])
+            conn.commit()
+        finally:
+            conn.close()
+
+    def export_valuation_indicators(self, ticker: str, results: "List[IndicatorResult]", computed_at: str) -> None:
+        """Replace one ticker's valuation indicators, in one transaction."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            conn.execute("DELETE FROM valuation_indicators WHERE ticker = ?", (ticker,))
+            conn.executemany(
+                "INSERT INTO valuation_indicators (ticker, indicator, applicable, na_reason, value_bear, value_base, "
+                "value_bull, unit, assumptions, basis_fiscal_year, computed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(ticker, r.indicator, 1 if r.applicable else 0, r.na_reason, r.value_bear, r.value_base,
+                  r.value_bull, r.unit, json.dumps(r.assumptions), r.basis_fiscal_year, computed_at)
+                 for r in results])
             conn.commit()
         finally:
             conn.close()

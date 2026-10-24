@@ -49,13 +49,18 @@ value, a bear and a bull where the method gives them, an N/A reason otherwise, a
   latest snapshot's price (for the screener) and recomputed against the live price on the VAL tab. N/A without
   an applicable DCF, without a price, or when no `g` in the range reaches the price.
 - **Earnings power value (EPV)**, Greenwald's no-growth value:
-  - normalized EBIT = the mean operating margin of the last 5 fiscal years (at least 3) x the latest revenue;
+  - normalized EBIT = the mean operating margin of the last 5 fiscal years (at least 3) x the latest revenue; a
+    year without operating income takes pretax income plus interest expense, GuruFocus's EBIT (an untagged
+    interest counts as 0, as `metrics_annual`'s EBITDA takes it), and those years are listed. Thirteen large
+    caps file no operating income in any of their last five years (BMY, COP, CVX, ETN, GE, IBM, JNJ, KLAC, LLY,
+    MRK, PFE, TJX, XOM; BUG-203) but do file pretax income;
   - adjusted earnings = normalized EBIT x (1 - t), t the effective tax rate as M2's WACC takes it (income tax /
     pretax income, clamped to 0-35%, else 21%); maintenance capex is taken as equal to D&A, so neither is added;
   - EPV of the firm = adjusted earnings / WACC (M2's `wacc`); of the equity = that - total debt + cash and
     short-term investments (M2's debt reading: a debt-free filer's debt is 0, an unknown debt makes EPV N/A);
-  - per share over today's count (the valuation inputs' `shares_outstanding`, as the DCF takes it); bear and bull
-    at WACC + 1 and - 1 point.
+  - per share over today's count (the valuation inputs' `shares_outstanding`, the count the DCF divides by; N/A
+    without one); bear and bull at WACC + 1 and - 1 point (no bull at a rate of 0 or less). A value below 0
+    (debt above the earnings power: D, INTC) is stored as it is.
   - N/A for banks, insurers and REITs (no operating EBIT), without a WACC, or when adjusted earnings are not
     positive.
 - **NCAV and the Graham net-net**: NCAV per share (M2's: current assets less total liabilities over the count) as
@@ -69,8 +74,8 @@ value, a bear and a bull where the method gives them, an N/A reason otherwise, a
 - **Graham number on tangible book**: `sqrt(22.5 x EPS x tangible book per share)`, tangible book = total equity -
   goodwill - intangible assets, on the Graham model's EPS and share basis; bear and bull on the lowest and highest
   positive EPS of the last 3 fiscal years, as the Graham model does. N/A when EPS or tangible book isn't positive
-  (common for acquisitive companies: say so). A filer that tags only its finite-lived intangibles keeps its
-  indefinite-lived ones in tangible book (noted).
+  (common for acquisitive companies: say so). A missing goodwill or intangibles figure counts as 0 and is listed:
+  a filer that tags no intangibles (KO's trademarks) or only its finite-lived ones keeps them in tangible book.
 
 Storage: `valuation_indicators` (ticker, indicator, applicable, na_reason, value_bear, value_base, value_bull,
 unit ('per_share' or 'rate'), assumptions (JSON), basis_fiscal_year, computed_at; PK (ticker, indicator)),

@@ -20,6 +20,7 @@ from ..scores import engine as scores_engine
 from ..scores.engine import rank_all
 from .history import compute_history
 from .history_inputs import load_history_inputs
+from .indicators import compute_indicators, load_indicator_inputs
 from .inputs import ValuationInputs, load_inputs
 from .models import (
     ValuationResult,
@@ -188,6 +189,14 @@ def compute_and_store(db_path: Union[str, Path],
                 scores_engine.store_ticker(conn, store, ticker, computed_at)
             except Exception as e:
                 log.warning(f"Quality scores failed for {ticker}: {e}")
+            # The other valuation indicators: display-only like owner earnings (never in MEDIAN_MODELS, the verdicts
+            # or the upside), after the scores whose figures they read; likewise isolated
+            # (docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md).
+            try:
+                store.export_valuation_indicators(ticker, compute_indicators(load_indicator_inputs(conn, ticker)),
+                                                  computed_at)
+            except Exception as e:
+                log.warning(f"Valuation indicators failed for {ticker}: {e}")
         # The ranks are percentiles across every stored company, so any run re-ranks them all.
         try:
             rank_all(db_path, computed_at)

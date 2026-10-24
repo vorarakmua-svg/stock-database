@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 8 · DOING 0 · DONE 30 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 7 · DOING 0 · DONE 31 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -62,7 +62,7 @@
 | ID | Task | Status | Commit | Evidence |
 |---|---|---|---|---|
 | M4-0 | Design M4: `docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md`, then these rows | DONE | this commit | the spec |
-| M4-1 | `src/valuation/indicators.py`: the reverse DCF, EPV, NCAV and the net-net, the median P/S value, the Graham number on tangible book; storage (`valuation_indicators`), the engine hook after the scores, the backfill; a test pinning `MEDIAN_MODELS` and the valuations; with tests | TODO | | |
+| M4-1 | `src/valuation/indicators.py`: the reverse DCF, EPV, NCAV and the net-net, the median P/S value, the Graham number on tangible book; storage (`valuation_indicators`), the engine hook after the scores, the backfill; a test pinning `MEDIAN_MODELS` and the valuations; with tests | DONE | this commit | `qa/evidence/indicators-m4-1-*` |
 | M4-2 | The VAL tab's "Other indicators" section (the reverse DCF at the live price), `GET /api/stocks/{t}/indicators`, the screener fields, browser-checked; with tests | TODO | | |
 | M4-3 | `src/market/`: the `.xls` reader (`xls.py`), the FRED, Shiller and Treasury sources with their cache, storage (`market_series`, `market_fetches`), `python -m src.market.collect`; with tests | TODO | | |
 | M4-4 | The market page (`/market`: the Buffett indicator and its zones, Shiller's CAPE, the yield curve) and `GET /api/market`, a nav link, browser-checked; with tests | TODO | | |
@@ -951,3 +951,28 @@ Evidence: the spec's "Facts" section
 Gates: ruff ✓ mypy ✓ pytest 1687 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) docs: Milestone 4's design
 Next: M4-1 (the indicators).
+
+### Build iteration 42: 2026-10-24 19:52: M4-1
+Did:
+- An opus worker (resumed once after a usage limit) built `src/valuation/indicators.py` test-first:
+  - the reverse DCF: a bisection for the growth at which the DCF's own inputs give the snapshot's price;
+  - EPV, NCAV with Graham's net-net, the median P/S value and the Graham number on tangible book;
+  - `valuation_indicators` with `export_valuation_indicators`, and the engine hook after the scores, isolated.
+  - 49 tests; RED: 48 failed against stubs, on assertions. With my two, 51.
+- My review found the code as designed, with one refinement, made test-first: EPV was N/A for 13 large caps that
+  file no operating income (XOM, CVX, JNJ, LLY, PFE ...). A year without it now takes pretax income plus interest
+  expense, GuruFocus's EBIT, and the years are listed. EPV now applies to 93 companies, not 80.
+- Mutants: 49, each killed (45 the worker's, 4 mine); I ran them all.
+- Real data, on a backup-API copy (the backfill takes 8 s):
+  - the seven existing tables (valuations, the summary, the history and ranges, the scores, per-share rows,
+    signs) are identical before and after;
+  - 635 indicator rows: the reverse DCF applies to 91 companies, EPV 93, NCAV 15 (83 negative), the P/S value 120,
+    the tangible Graham number 81 (33 have a negative tangible book);
+  - the worker's checks: EPV's WACC, NCAV, the P/S base and the reverse DCF's inputs equal the stored figures,
+    and hand recomputations agree.
+- Logged BUG-221 (P3): five current-securities tags aren't read as short-term investments, so NVDA's latest year
+  has none after $34.6B the year before.
+Evidence: `qa/evidence/indicators-m4-1-{red,ebit-red,gates,mutants,realdata,realdata2,same-tables,done}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1738 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) feat(valuation): the reverse DCF, EPV, NCAV, the median P/S value and the tangible Graham number (M4-1)
+Next: M4-2 (the VAL tab's section, the API and the screener fields).

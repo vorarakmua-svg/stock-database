@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 114 · NEEDS-USER 16 · Verified: 92
+**Open:** P0 0 · P1 0 · P2 11 · P3 115 · NEEDS-USER 16 · Verified: 92
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1667,6 +1667,13 @@ Expected: a price that is 1,000 times (or a thousandth of) a price within 10% of
 Notes: of 39,157 P/S trades with a close that day, only those 3 and one legitimate row are over 100x the close: BRK-B's 0000919574-25-001778, 2 Class A shares at $775,883.30 (the A/B ratio), which the rule must leave alone.
 Fix (build iteration 40): `price_suspect()` in `src/ownership/insiders.py` flags an open-market price that is 1,000 times, or a thousandth of, a price within 10% of the stock's close on the trade date (the latest close on or before it); `insider_trades.price_suspect` stores 1, 0, or NULL when unchecked (no price, no close, or a derivative row, whose price is the option's), recomputed at every store. The price stays as filed; every dollar figure treats it as missing (the trade counts in shares only): `summarize`, the INS view and its note, `/api/stocks/{t}/form4`, the screener's `ins_net_buy_12m`. 17 tests; 22 mutants, each killed (69 with review 17's, re-run by the orchestrator). On a copy of the full dry run: exactly the three LLY rows flagged, BRK-B's Class A row not; LLY's 12-month net selling $2.59B, not $78.39B; 73,170 other open-market trades checked clean.
 Evidence: `qa/evidence/bug220-fix-{red,green,mutants,mutants-rerun,realdata,gates-rerun}.txt`
+
+### BUG-221 [P3][DATA] Five current-securities tags aren't read as short-term investments
+Status: OPEN
+Found: build iteration 42 (M4-1's real-data check) | Fixed: | Regression test:
+Repro: `short_term_investments` maps `ShortTermInvestments`, `MarketableSecuritiesCurrent` and `AvailableForSaleSecuritiesCurrent` only. `unmapped_facts` holds `AvailableForSaleSecuritiesDebtSecuritiesCurrent` for 12 filers (ORCL, PFE, MU, INTC, ANET, AMGN, ADI, CRM, BMY, SYK, NOW, INTU), `MarketableSecurities` for 8 (NVDA's $23.9B at 2024-04-28, KO, MA, INTC, BMY ...), `OtherShortTermInvestments` for 8, `HeldToMaturitySecuritiesCurrent` and `DebtSecuritiesAvailableForSaleExcludingAccruedInterestCurrent` for 2 each. NVDA's FY2026 stores no short-term investments after $34.6B in FY2025; 80 of the 126 latest fiscal years store none.
+Expected: the current securities read (a noncurrent-inclusive `MarketableSecurities` only where no current tag is filed).   Actual: read as missing, so the cash and short-term investments behind net debt, EPV's cash and Graham's net-net are understated. NCAV itself reads current assets and is unaffected.
+Notes: a mapping change reaches the stored figures only at the next collection. Net debt feeds M1's EV/EBITDA history and fair-value line, M2's Magic Formula and the screener, not the six models' median or the verdicts.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
