@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 2 · DOING 0 · DONE 29 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 8 · DOING 0 · DONE 30 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -61,7 +61,14 @@
 
 | ID | Task | Status | Commit | Evidence |
 |---|---|---|---|---|
-| M4-0 | Design M4: spec, then the task rows | TODO | | |
+| M4-0 | Design M4: `docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md`, then these rows | DONE | this commit | the spec |
+| M4-1 | `src/valuation/indicators.py`: the reverse DCF, EPV, NCAV and the net-net, the median P/S value, the Graham number on tangible book; storage (`valuation_indicators`), the engine hook after the scores, the backfill; a test pinning `MEDIAN_MODELS` and the valuations; with tests | TODO | | |
+| M4-2 | The VAL tab's "Other indicators" section (the reverse DCF at the live price), `GET /api/stocks/{t}/indicators`, the screener fields, browser-checked; with tests | TODO | | |
+| M4-3 | `src/market/`: the `.xls` reader (`xls.py`), the FRED, Shiller and Treasury sources with their cache, storage (`market_series`, `market_fetches`), `python -m src.market.collect`; with tests | TODO | | |
+| M4-4 | The market page (`/market`: the Buffett indicator and its zones, Shiller's CAPE, the yield curve) and `GET /api/market`, a nav link, browser-checked; with tests | TODO | | |
+| M4-5 | Independent oracle `qa/oracle/indicators_oracle.py` and real-data validation: the indicators on a backfilled copy, the reader against the sheet's own CAPE and the app's `^GSPC`, the Buffett ratio by hand, the valuations untouched | TODO | | |
+| M4-6 | Docs: README and USAGE_GUIDE | TODO | | |
+| M4-7 | Milestone close: code review 18 (opus) with Critical and Important findings fixed; backup, then the offline backfill of the indicators and the market collection into the user's DB | TODO | | |
 
 ## M5: a wider universe and automation
 
@@ -74,6 +81,9 @@
 - Q10 [OPS]: a draft PR so CI runs on the branch. Default: no PR; local gates and ruff's py39 target.
 - BUG-172 [VAL]: the multiples band's basis and outliers (GE's bull case $8,498.58); fixing it moves the median. Default: unchanged.
 - Q11 [VAL]: the quality composite's weights. Default: equal.
+- Q12 [OPS]: the SEC's bulk insider and 13F data sets. Default: no bulk downloads; one filing at a time.
+- Q13 [OPS]: the guru list. Default: the 34 value investors in `src/ownership/gurus.py`.
+- Q14 [OPS]: installing `xlrd` to read Shiller's `.xls`. Default: nothing installed; M4's own reader.
 
 ## Log
 
@@ -921,3 +931,23 @@ Evidence: `qa/evidence/review17-report.md`, `review17-fixes-*`, `bug220-fix-*`,
 Gates: ruff ✓ mypy ✓ pytest 1687 passed, 1 skipped | CI: no PR (Q10)
 Commit: (this commit) chore(build): close M3, with the user's DB holding the insiders' and the gurus' filings
 Next: M4-0 (design Milestone 4: more valuation tools and the market pages).
+
+### Build iteration 41: 2026-10-24 10:55: M4-0 (Milestone 4's design)
+Did:
+- Wrote `docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md` after checking its facts against the code and the sources:
+  - the DCF row's stored assumptions are enough to solve for the growth a price implies;
+  - M1's P/S range already holds the median P/S value; M2's rows hold EPV's and NCAV's inputs and the WACC;
+  - FRED's keyless CSVs give the Buffett indicator's two series; Treasury.gov's yearly CSV, which the app already
+    reads for the 10-year rate, has the whole curve;
+  - Shiller's `ie_data.xls` is a legacy Excel workbook and no reader for it is installed.
+- Indicators, display-only like owner earnings (`MEDIAN_MODELS` and the verdicts untouched, a test pinning both):
+  the reverse DCF, the earnings power value, NCAV with Graham's net-net, the median P/S value and the Graham
+  number on tangible book, each with its formula, bear/base/bull and N/A reasons, in `valuation_indicators`.
+- The market page: the Buffett indicator with its trend zones, Shiller's CAPE, the yield curve and its spreads,
+  from `market_series`, with `python -m src.market.collect`. The workbook is read by a small reader of our own.
+- Replaced the M4-0 row with M4-1 to M4-7. Logged Q14 (`xlrd`) as NEEDS-USER, its default installing nothing,
+  and listed Q12 and Q13 on the board, which iteration 30 recorded only in `qa/BUGS.md`.
+Evidence: the spec's "Facts" section
+Gates: ruff ✓ mypy ✓ pytest 1687 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) docs: Milestone 4's design
+Next: M4-1 (the indicators).
