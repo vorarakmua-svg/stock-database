@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 2 · DOING 1 · DONE 28 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 2 · DOING 0 · DONE 29 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -55,7 +55,7 @@
 | M3-5 | The CUSIP map (curated for our universe, OpenFIGI for the rest) and quarter-over-quarter changes; with tests | DONE | this commit | `qa/evidence/ownership-m3-5-*.txt` |
 | M3-6 | Guru pages (`/gurus`, `/gurus/{cik}`, `/gurus/portfolio`), the HDS tab's Gurus section, the API, browser-checked; with tests | DONE | this commit | `qa/evidence/ownership-m3-6-*.txt` |
 | M3-7 | Docs: README and USAGE_GUIDE | DONE | this commit | `qa/evidence/m3-7-gates.txt` |
-| M3-8 | Milestone close: code review 17 (opus) with Critical and Important findings fixed; backup, then the live ownership collection into the user's DB, checked against Yahoo and the 13F checksums | DOING (review 17 fixed; the live collection next) | | |
+| M3-8 | Milestone close: code review 17 (opus) with Critical and Important findings fixed; backup, then the live ownership collection into the user's DB, checked against Yahoo and the 13F checksums | DONE | ee0d510, 3ed24eb, this commit | `qa/evidence/review17-report.md`, `review17-fixes-*`, `bug220-fix-*`, `m3-8-*` |
 
 ## M4: more valuation tools and market pages
 
@@ -882,3 +882,42 @@ Evidence: `qa/evidence/m3-7-gates.txt`
 Gates: ruff ✓ mypy ✓ pytest 1630 passed, 1 skipped (the docs tests included) | CI: no PR (Q10)
 Commit: (this commit) docs: SEC ownership in the README and the usage guide (M3-7)
 Next: M3-8 (code review 17, then the backup and the live ownership collection into the user's DB).
+
+### Build iteration 40: 2026-10-24 10:46: M3-8 (Milestone 3 closed)
+Did:
+- Code review 17 (opus, read-only) covered Milestone 3 and M2-9's four fixes, and judged it "ready with fixes".
+  - C1 (BUG-208, P1): a company's own Form 4s as another issuer's owner were stored as its insiders' trades
+    (PFE's $1.23B Cerevel filing).
+  - I1 (BUG-209): a 4/A hid its whole original, though both real 4/As only add a trade.
+  - I2 (BUG-210): XOM and BLK ignored their predecessors' Form 4s.
+  - Nine minors, recorded as BUG-211 to BUG-219.
+  - It confirmed the 13F pipeline, the quarters, the screener counts, SQL safety and M2's fixes independently.
+- The fixes (an opus worker, reviewed; resumed twice after usage limits), each test-first:
+  - an issuer filter;
+  - amendments by trade, a code correction included (my refinement);
+  - the predecessors' feeds;
+  - a store failure that stays with its company (ee0d510).
+- The first full dry run was stopped by the system for low memory at 114 of 127 companies. You approved the
+  restart. The second run found BUG-220: a filer's dropped decimal point (the Lilly Endowment's $1,031,414 for
+  $1,031.41) made LLY's insiders sell $78.4B. Prices 1,000 times off the day's close are now flagged and left out of
+  dollars (3ed24eb).
+- Gates: 1,687 passed. Mutants: 69, each killed; I re-ran them.
+- The final dry run (a fresh copy, 1m41s from the cache):
+  - 31,562 Form 4 filings for all 127 companies, 591 of other issuers left out (BAC 179, BRK-B 79, KKR 68, BX
+    62), 0 errors;
+  - XOM 121 filings, from its predecessor's CIK; BLK 95 of its 301 from its predecessor's;
+  - 102,817 trades, 362 restated by a 4/A, 3 prices flagged (LLY's);
+  - 248 13F filings, 0 checksum failures; the CUSIP map 124 / 1,796 / 21; 235 quarters, 16,813 positions;
+  - Yahoo's rows match an SEC trade 68% of the time; the 13F oracle passes all its gates.
+- Backup: `%LOCALAPPDATA%\stockdb-backups\2026-10-24` (integrity ok, row counts equal, json/ and csv/ copied).
+- The live collection (`python -m src.ownership.collect --insiders --gurus --db data/output/stock.db`, 1m56s):
+  - the same counts, 0 errors;
+  - every ownership table identical to the dry run's apart from timestamps; the other tables untouched;
+  - the 13F oracle passes on the live DB.
+- Web on a copy of the live DB (scratch server; port freed): every page and API answers 200 in 0.1 s or less.
+  LLY's 12-month net selling reads $2.59B; BRK-B's insiders tab has no OXY filing.
+Evidence: `qa/evidence/review17-report.md`, `review17-fixes-*`, `bug220-fix-*`,
+`m3-8-{dryrun-check,dryrun3-check,dryrun-13f-oracle,backup,live.log,live-vs-dry,live-13f-oracle}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1687 passed, 1 skipped | CI: no PR (Q10)
+Commit: (this commit) chore(build): close M3, with the user's DB holding the insiders' and the gurus' filings
+Next: M4-0 (design Milestone 4: more valuation tools and the market pages).
