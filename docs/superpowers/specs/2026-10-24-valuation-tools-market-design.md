@@ -28,6 +28,8 @@ indicator, the Shiller P/E, the yield curve). This milestone adds both, with eve
 - FRED serves `https://fred.stlouisfed.org/graph/fredgraph.csv?id=<series>` without a key (6 KB each):
   `NCBEILQ027S` (nonfinancial corporate business, corporate equities, a liability level, quarterly, $ millions,
   from 1945-10) and `GDP` (quarterly, $ billions SAAR, from 1947-01). On Q2 2026 they read $83.05T and $32.56T.
+  A missing value is an empty cell in today's files ("." in older ones): `NCBEILQ027S` is annual before 1951-Q4,
+  so 18 quarters from 1946 to 1951 are empty.
 - Shiller's data: `https://shillerdata.com/` links `ie_data.xls` on a CDN under a versioned URL
   (`img1.wsimg.com/.../ie_data.xls?ver=...`), so the link is read from that page each time. The file is a
   legacy Excel workbook (BIFF8 in an OLE2 container, 1.6 MB, saved 2026-10-05).
@@ -87,20 +89,27 @@ try/except (a failure never blocks the valuations, the history or the scores); t
 - **The reader** (`xls.py`): the OLE2 compound file's `Workbook` stream (the header, the FAT and its DIFAT chain,
   the directory, the stream's sector chain), then BIFF8 records: `BOUNDSHEET` for the sheets, `SST` with its
   `CONTINUE` records for the shared strings, and in the sheet `NUMBER`, `RK`, `MULRK`, `LABELSST` and `FORMULA`
-  (its cached number). Enough for Shiller's `Data` sheet; anything else is skipped. About 200 lines, tested on a
-  trimmed real workbook built from the real file's records, and against the real file in the real-data check.
-- **Sources** (`collect.py`), through one `requests` session with the app's default User-Agent, each answer
-  cached under `data/cache/market/`:
+  (its cached number). Enough for Shiller's `Data` sheet; anything else is skipped. Tested on workbooks the tests
+  write (every record type above, a string split across CONTINUE records, a workbook in the mini stream), with no
+  copy of Shiller's data in the repo, and against the real file in the real-data check.
+- **Sources** (`sources.py`), through one `requests` session with requests' own User-Agent (as the FRED handler's
+  Treasury fetch; the SEC one, which may carry an email, is never sent elsewhere), a request a second, retries
+  for transient failures, each answer cached under `<cache-dir>/market/` once it parses:
   - FRED: `NCBEILQ027S` and `GDP`, refreshed when the cached copy is over a day old;
   - Shiller: `ie_data.xls` from the link on shillerdata.com: the `Data` sheet's monthly date, price, dividend,
-    earnings, CPI and CAPE columns, found by their header labels (a missing header fails loudly);
-  - Treasury.gov: the yearly CSVs from 1990 (the current year refreshed, past years cached once), one request a
-    second.
+    earnings, CPI and CAPE columns, found by their header labels on the row with the most of them (a missing
+    label fails loudly); each series stops at its own last value;
+  - Treasury.gov: the yearly CSVs from 1990: the current year refreshed when over a day old, a past year kept
+    once it was cached after New York's year end. Treasury.gov answers slowly (about 19 s a year), so a first
+    full run takes about 12 minutes; later runs fetch the current year only.
+  - A failed fetch with a cached copy uses the copy and says so; without one, the source fails.
 - **Storage**: `market_series` (series, date, value; PK (series, date)): `fred:NCBEILQ027S`, `fred:GDP`,
-  `shiller:price`, `shiller:earnings`, `shiller:cpi`, `shiller:cape`, `ust:1m` ... `ust:30y`; and `market_fetches`
-  (source, url, rows, fetched_at). A series is replaced whole when its source is fetched.
-- **CLI**: `python -m src.market.collect [--fred] [--shiller] [--treasury] [--db PATH] [--cache-dir DIR]`
-  (all three by default), progress and a summary printed; a failed source is reported and the others go on.
+  `shiller:price`, `shiller:dividend`, `shiller:earnings`, `shiller:cpi`, `shiller:cape`, `ust:1m` ...
+  `ust:30y` (yields in percent, as published); and `market_fetches` (source PK, url, rows, fetched_at: when the
+  answer came from the source). A series is replaced whole when its source is fetched.
+- **CLI**: `python -m src.market.collect [--fred] [--shiller] [--treasury] [--treasury-from YEAR] [--db PATH]
+  [--cache-dir DIR]` (all three by default; `--db` must exist, exit 2 otherwise), progress and a summary
+  printed; a failed source is reported and the others go on (exit 1).
 
 ## The market views (`src/webapp/market.py`), computed at read time
 
@@ -112,7 +121,8 @@ try/except (a failure never blocks the valuations, the history or the scores); t
   - Also the latest ratio, its percentile over the history, and the trend's value today.
   - Its date is the latest quarter both series have (FRED's equities level lags a quarter or two).
 - **Shiller CAPE**: the monthly series from 1881; the latest value, its mean, median, min, max and percentile over
-  the history; the latest month's date.
+  the history; the latest month's date. Shiller's CAPE is the real price over the mean real earnings of the 120
+  months ending the month before; his latest month is a single day's close with an estimated CPI (his footnotes).
 - **Yield curve**: the latest day's curve against the curve a year earlier; the 10-year less 2-year and less
   3-month spreads since 1990, with the inverted days marked.
 - **Page** `/market` (a nav link): three sections with Plotly charts, each with its source, its latest date and its

@@ -608,6 +608,28 @@ class SQLiteStore:
             CREATE INDEX IF NOT EXISTS idx_guru_positions_guru ON guru_positions (guru_cik, period);
             """
         )
+        # The market data (Milestone 4; docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md, "The
+        # market data"): one row per series and date, the series named by source ("fred:NCBEILQ027S", "fred:GDP",
+        # "shiller:price", "shiller:dividend", "shiller:earnings", "shiller:cpi", "shiller:cape", "ust:1m" ...
+        # "ust:30y"), each replaced whole when its source is fetched; and each source's latest fetch ("fred:<ID>",
+        # "shiller", "treasury"): its url (Shiller's workbook link, the Treasury's latest year), the rows it stored
+        # and when its answer was fetched.
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS market_series (
+                series TEXT NOT NULL,
+                date TEXT NOT NULL,
+                value REAL NOT NULL,
+                PRIMARY KEY (series, date)
+            );
+            CREATE TABLE IF NOT EXISTS market_fetches (
+                source TEXT PRIMARY KEY,
+                url TEXT,
+                rows INTEGER,
+                fetched_at TEXT NOT NULL
+            );
+            """
+        )
 
     @staticmethod
     def _ensure_columns(conn: sqlite3.Connection, table: str, columns: Dict[str, str]) -> None:
@@ -1569,6 +1591,25 @@ class SQLiteStore:
                 [(ticker, r.indicator, 1 if r.applicable else 0, r.na_reason, r.value_bear, r.value_base,
                   r.value_bull, r.unit, json.dumps(r.assumptions), r.basis_fiscal_year, computed_at)
                  for r in results])
+            conn.commit()
+        finally:
+            conn.close()
+
+    def export_market_series(self, source: str, series: Dict[str, List[Tuple[str, float]]], url: Optional[str],
+                             fetched_at: str) -> None:
+        """Replace each of *series* (its name -> (date, value) rows) whole, and *source*'s ``market_fetches`` row (its
+        url, the rows stored and when its answer was fetched), in one transaction: a store that fails changes
+        nothing. A series not named is left as it is."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            for name, rows in series.items():
+                conn.execute("DELETE FROM market_series WHERE series = ?", (name,))
+                conn.executemany("INSERT INTO market_series (series, date, value) VALUES (?, ?, ?)",
+                                 [(name, day, value) for day, value in rows])
+            self._upsert(conn, "market_fetches", ["source"], {
+                "source": source, "url": url, "rows": sum(len(rows) for rows in series.values()),
+                "fetched_at": fetched_at})
             conn.commit()
         finally:
             conn.close()

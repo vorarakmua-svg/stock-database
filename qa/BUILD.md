@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 6 · DOING 0 · DONE 32 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 5 · DOING 0 · DONE 33 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -64,7 +64,7 @@
 | M4-0 | Design M4: `docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md`, then these rows | DONE | this commit | the spec |
 | M4-1 | `src/valuation/indicators.py`: the reverse DCF, EPV, NCAV and the net-net, the median P/S value, the Graham number on tangible book; storage (`valuation_indicators`), the engine hook after the scores, the backfill; a test pinning `MEDIAN_MODELS` and the valuations; with tests | DONE | this commit | `qa/evidence/indicators-m4-1-*` |
 | M4-2 | The VAL tab's "Other indicators" section (the reverse DCF at the live price), `GET /api/stocks/{t}/valuation-indicators`, the screener fields, browser-checked; with tests | DONE | this commit | `qa/evidence/indicators-m4-2-*` |
-| M4-3 | `src/market/`: the `.xls` reader (`xls.py`), the FRED, Shiller and Treasury sources with their cache, storage (`market_series`, `market_fetches`), `python -m src.market.collect`; with tests | TODO | | |
+| M4-3 | `src/market/`: the `.xls` reader (`xls.py`), the FRED, Shiller and Treasury sources with their cache, storage (`market_series`, `market_fetches`), `python -m src.market.collect`; with tests | DONE | this commit | `qa/evidence/market-m4-3-*` |
 | M4-4 | The market page (`/market`: the Buffett indicator and its zones, Shiller's CAPE, the yield curve) and `GET /api/market`, a nav link, browser-checked; with tests | TODO | | |
 | M4-5 | Independent oracle `qa/oracle/indicators_oracle.py` and real-data validation: the indicators on a backfilled copy, the reader against the sheet's own CAPE and the app's `^GSPC`, the Buffett ratio by hand, the valuations untouched | TODO | | |
 | M4-6 | Docs: README and USAGE_GUIDE | TODO | | |
@@ -1002,3 +1002,32 @@ Evidence: `qa/evidence/indicators-m4-2-{red,gates,mutants,mutants-rerun,web,done
 Gates: ruff ✓ mypy ✓ pytest 1786 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) feat(web): the other indicators on the VAL tab, in the API and the screener (M4-2)
 Next: M4-3 (the market data: the `.xls` reader, FRED, Shiller and Treasury, `market_series`, the CLI).
+
+### Build iteration 44: 2026-10-24 22:02: M4-3
+Did:
+- An opus worker built `src/market/` test-first (RED: 70 failed, 1 passed against stubs):
+  - `xls.py`, our own reader of Shiller's legacy workbook: the OLE2 container (FAT, DIFAT, directory, mini
+    stream; chains guarded) and the BIFF8 records the `Data` sheet uses (SST across CONTINUE records, NUMBER, RK,
+    MULRK, LABELSST, LABEL, FORMULA, BOOLERR);
+  - `sources.py`: FRED's, Shiller's and Treasury.gov's parsers, and a cached fetcher on one session with requests'
+    own User-Agent (never the SEC one), a request a second and retries;
+  - `market_series` and `market_fetches` with `export_market_series`, and `python -m src.market.collect`.
+  - 72 tests, run on workbooks the tests write; no copy of Shiller's data is in the repo.
+- The real-data run (a scratch copy and cache) found that today's FRED files leave a missing value empty, not ".".
+  `NCBEILQ027S` is annual before 1951-Q4, so that source failed while the others stored, as designed. The worker
+  fixed it test-first, and the next run stored all four.
+- Real data:
+  - the Buffett ratio for 2026-04-01 reads 255.0%;
+  - Shiller's own CAPE column, recomputed from his price, earnings and CPI, matches within 1e-15 in all 1,750
+    months, on the 120 months ending the month before;
+  - his monthly price against the mean of the app's `^GSPC` closes: a median difference of 0.004% over 1,187
+    months, two months off by more than 1%, both explained;
+  - the Treasury's 10-year on 2026-10-20 (5.12%) equals the stored risk-free rate (0.0512);
+  - 99,894 Treasury rows from 1990 over 14 maturities. The first full run takes about 12 minutes, because
+    Treasury.gov answers slowly; a second run serves everything from the cache in 3 s.
+- Mutants: 83, each killed; I ran them again. My review of the diff: the reader's guards, the cache rules, the
+  per-source isolation and the exit codes are as designed. The spec now records the findings.
+Evidence: `qa/evidence/market-m4-3-{red,gates,mutants,mutants-rerun,collect,realdata,done}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1858 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) feat(market): a reader for Shiller's workbook, FRED, Shiller and Treasury sources, storage and the CLI (M4-3)
+Next: M4-4 (the market page and its API).
