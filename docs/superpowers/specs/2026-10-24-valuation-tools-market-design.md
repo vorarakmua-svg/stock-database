@@ -51,7 +51,8 @@ value, a bear and a bull where the method gives them, an N/A reason otherwise, a
   latest snapshot's price (for the screener) and recomputed against the live price on the VAL tab. N/A without
   an applicable DCF, without a price, or when no `g` in the range reaches the price.
 - **Earnings power value (EPV)**, Greenwald's no-growth value:
-  - normalized EBIT = the mean operating margin of the last 5 fiscal years (at least 3) x the latest revenue; a
+  - normalized EBIT = the mean operating margin of the last 5 fiscal years by their labels (at least 3; a missing
+    year narrows the window rather than reaching further back) x the latest revenue; a
     year without operating income takes pretax income plus interest expense, GuruFocus's EBIT (an untagged
     interest counts as 0, as `metrics_annual`'s EBITDA takes it), and those years are listed. Thirteen large
     caps file no operating income in any of their last five years (BMY, COP, CVX, ETN, GE, IBM, JNJ, KLAC, LLY,
@@ -60,8 +61,9 @@ value, a bear and a bull where the method gives them, an N/A reason otherwise, a
     pretax income, clamped to 0-35%, else 21%); maintenance capex is taken as equal to D&A, so neither is added;
   - EPV of the firm = adjusted earnings / WACC (M2's `wacc`); of the equity = that - total debt + cash and
     short-term investments (M2's debt reading: a debt-free filer's debt is 0, an unknown debt makes EPV N/A);
-  - per share over today's count (the valuation inputs' `shares_outstanding`, the count the DCF divides by; N/A
-    without one); bear and bull at WACC + 1 and - 1 point (no bull at a rate of 0 or less). A value below 0
+  - per share over today's count (the valuation inputs' `shares_outstanding`, the count the DCF divides by;
+    without one, after a failed quote, the latest fiscal year's count, as the DCF; N/A without either); bear and
+    bull at WACC + 1 and - 1 point (no bull at a rate of 0 or less). A value below 0
     (debt above the earnings power: D, INTC) is stored as it is.
   - N/A for banks, insurers and REITs (no operating EBIT), without a WACC, or when adjusted earnings are not
     positive.

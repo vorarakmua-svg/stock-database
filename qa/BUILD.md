@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 4 · DOING 0 · DONE 34 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 3 · DOING 0 · DONE 35 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -66,7 +66,7 @@
 | M4-2 | The VAL tab's "Other indicators" section (the reverse DCF at the live price), `GET /api/stocks/{t}/valuation-indicators`, the screener fields, browser-checked; with tests | DONE | this commit | `qa/evidence/indicators-m4-2-*` |
 | M4-3 | `src/market/`: the `.xls` reader (`xls.py`), the FRED, Shiller and Treasury sources with their cache, storage (`market_series`, `market_fetches`), `python -m src.market.collect`; with tests | DONE | this commit | `qa/evidence/market-m4-3-*` |
 | M4-4 | The market page (`/market`: the Buffett indicator and its zones, Shiller's CAPE, the yield curve) and `GET /api/market`, a nav link, browser-checked; with tests | DONE | this commit | `qa/evidence/market-m4-4-*` |
-| M4-5 | Independent oracle `qa/oracle/indicators_oracle.py` and real-data validation: the indicators on a backfilled copy, the reader against the sheet's own CAPE and the app's `^GSPC`, the Buffett ratio by hand, the valuations untouched | TODO | | |
+| M4-5 | Independent oracle `qa/oracle/indicators_oracle.py` and real-data validation: the indicators on a backfilled copy, the reader against the sheet's own CAPE and the app's `^GSPC`, the Buffett ratio by hand, the valuations untouched | DONE | this commit | `qa/evidence/oracle-m4-5-*` |
 | M4-6 | Docs: README and USAGE_GUIDE | TODO | | |
 | M4-7 | Milestone close: code review 18 (opus) with Critical and Important findings fixed; backup, then the offline backfill of the indicators and the market collection into the user's DB | TODO | | |
 
@@ -1058,3 +1058,36 @@ Evidence: `qa/evidence/market-m4-4-{red,red-episodes,gates,mutants,mutants-rerun
 Gates: ruff ✓ mypy ✓ pytest 1912 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) feat(web): the market page: the Buffett indicator, Shiller's CAPE and the yield curve (M4-4)
 Next: M4-5 (the indicators' independent oracle and the real-data validation).
+
+### Build iteration 46: 2026-10-25 00:23: M4-5
+Did:
+- An opus worker wrote two oracles that read SQLite only and never import `src`:
+  - `qa/oracle/indicators_oracle.py` re-derives the five indicators: its own DCF and Brent root finder; EPV's EBIT,
+    tax, WACC (CAPM and M2's debt reading) and per-share values; NCAV and the net-net; the P/S scaling; tangible
+    book. It takes as stored only the inputs earlier oracles validated (the DCF and Graham rows, the P/S range,
+    the per-share rows);
+  - `qa/oracle/market_oracle.py` checks CAPE against Shiller's own price, earnings and CPI, his price against the
+    app's `^GSPC` closes, the 10-year rate, and (with the API's answer) the Buffett figures and the yield curve.
+- On a backup-API copy of M4-3's DB, backfilled with the final code:
+  - the seven existing tables are identical before and after;
+  - the indicators oracle passes 12 of 12 gates: applicability agrees for 127 of 127 companies on each indicator,
+    and 1,048 EPV figures, 241 NCAV, 360 P/S and 357 tangible Graham figures agree, as do the reverse DCF's 91
+    growths (largest gap 4.5e-6 points);
+  - the market oracle passes 6 of 6: CAPE in 1,750 of 1,750 months; the price in 99.83% of 1,187 months, the two
+    misses explained; the Buffett ratio, trend, z and zone; every yield-curve figure.
+  - On a deliberately altered copy both oracles fail, each naming the altered row; a stress copy exercises the
+    reverse DCF's out-of-range branch.
+- Of the worker's notes, two EPV points I fixed test-first (RED: 2 failed):
+  - the 5-year window goes by fiscal-year labels: a missing year narrows it rather than reaching back;
+  - without today's count (after a failed quote), EPV divides by the latest fiscal year's count, as the DCF does,
+    and records the count's source.
+  Mutants for M4-1's spec: 54, each killed. The oracle passes again on the re-backfilled copy, and the spec says
+  both.
+- Logged BUG-223 (P3): V files EPS and share counts only by class, so it has none in any year. That is why its
+  Graham, Lynch, multiples, NCAV, tangible Graham and P/S value are N/A.
+- Noted, not changed: M2's WACC takes the absolute value of a negative interest expense (only DIS, whose Rd is the
+  risk-free rate either way).
+Evidence: `qa/evidence/oracle-m4-5-{untouched,indicators,indicators-rerun,market,broken,stress,epv-red,epv-mutants,done}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1914 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) test(oracle): Milestone 4's independent oracles, and EPV's window and count settled (M4-5)
+Next: M4-6 (docs: README and USAGE_GUIDE).

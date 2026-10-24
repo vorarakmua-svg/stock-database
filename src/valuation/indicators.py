@@ -215,7 +215,8 @@ def epv(inputs: IndicatorInputs) -> IndicatorResult:
     margins: List[Tuple[int, float]] = []
     pretax_years: List[int] = []
     no_interest_years: List[int] = []
-    for row in rows[-EPV_YEARS:]:
+    # The last EPV_YEARS fiscal years by their labels: a missing year narrows the window, it doesn't reach back.
+    for row in (row for row in rows if row.fiscal_year > basis - EPV_YEARS):
         revenue, income = row.figures.get("revenue"), row.figures.get("operating_income")
         pretax, interest = row.figures.get("pretax_income"), row.figures.get("interest_expense")
         from_pretax = False
@@ -250,9 +251,13 @@ def epv(inputs: IndicatorInputs) -> IndicatorResult:
         return _na(name, "no WACC: no market cap", assumptions, basis)
     debt = _total_debt(cur)
     cash = (cur.figures.get("cash_and_equivalents") or 0.0) + (cur.figures.get("short_term_investments") or 0.0)
-    shares = inputs.valuation.shares_outstanding
+    shares, shares_source = inputs.valuation.shares_outstanding, inputs.valuation.shares_source
+    if not shares or shares <= 0:
+        # Without today's count (a failed quote), the latest fiscal year's, as the DCF divides by.
+        shares = next((r.shares for r in reversed(inputs.valuation.fy_records) if r.shares and r.shares > 0), None)
+        shares_source = "financials_annual"
     assumptions.update({"wacc": rate, "total_debt": debt if debt is not None else 0.0, "debt_missing": debt is None,
-                        "cash_and_sti": cash, "shares_outstanding": shares,
+                        "cash_and_sti": cash, "shares_outstanding": shares, "shares_source": shares_source,
                         "maintenance_capex": "taken as equal to D&A"})
     if not shares or shares <= 0:
         return _na(name, "no share count", assumptions, basis)

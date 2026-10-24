@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 116 · NEEDS-USER 16 · Verified: 92
+**Open:** P0 0 · P1 0 · P2 11 · P3 117 · NEEDS-USER 16 · Verified: 92
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1681,6 +1681,13 @@ Found: build iteration 43 (M4-2's browser check) | Fixed: | Regression test:
 Repro: `/screener`, sorted by any field, in a 1400px-wide window: the results table, with M3's Gurus column and M4-2's Implied growth column, needs about 80px more than the page's 1200px; `.table-responsive` scrolls it sideways and the Valuation pills are cut off at the right edge (`qa/evidence/indicators-m4-2-screener-reverse-dcf.png`).
 Expected: every column visible at a common desktop width, or the verdict column first.   Actual: the last column is reachable only by scrolling the table.
 Notes: a layout choice: a wider page for the screener, narrower headers, or fewer default columns.
+
+### BUG-223 [P3][DATA] V files its EPS and share counts only by class, so none is stored
+Status: OPEN
+Found: build iteration 46 (M4-5's oracle) | Fixed: | Regression test:
+Repro: `SELECT fiscal_year, eps_diluted, weighted_avg_shares_diluted, shares_outstanding FROM financials_annual WHERE ticker = 'V'`: every year 2019-2025 has net income but no EPS and no share count; `per_share_annual` is empty for V. Visa reports EPS and shares for its class A, B and C stock separately (dimensioned facts), and the parser reads undimensioned facts only.
+Expected: an EPS and a count on one basis (class A, as converted).   Actual: Graham ("EPS or book value unavailable"), Lynch and the multiples band are N/A, and so are M2's per-share series and M4's NCAV, tangible Graham and P/S value. The DCF, DDM and owner earnings use the snapshot's count.
+Notes: reading class A's figures would add models to V's median, a verdict change: a valuation-policy decision, next to Q7 (share classes).
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

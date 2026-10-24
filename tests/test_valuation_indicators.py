@@ -222,6 +222,26 @@ def test_epv_counts_an_untagged_interest_as_zero():
     assert r.assumptions["mean_operating_margin"] == pytest.approx((0.10 + 0.10 + 0.14 + 0.16 + 0.18) / 5)
 
 
+def test_epv_reads_the_last_five_fiscal_years_by_their_labels():
+    """A missing year narrows the window rather than reaching further back: without 2024, 2021-2023 and 2025 count,
+    not 2020's 90% margin."""
+    rows = [_row(2020, 100.0, 90.0)] + [row for row in _epv_rows() if row.fiscal_year != 2024]
+    r = epv(_inputs(rows=rows, market=MARKET))
+    assert r.assumptions["margin_years"] == [2021, 2022, 2023, 2025]
+    assert r.assumptions["mean_operating_margin"] == pytest.approx((0.10 + 0.12 + 0.14 + 0.18) / 4)
+
+
+def test_epv_without_todays_count_divides_by_the_latest_fiscal_years_as_the_dcf_does():
+    """After a failed quote the valuation inputs can lack today's count: the DCF then divides by the latest fiscal
+    year's count (``models.value_dcf``), and EPV does too, saying so."""
+    records = [_fy(2024, shares=11.0), _fy(2025, shares=12.0)]
+    r = epv(_inputs(_valuation(shares_outstanding=None, fy_records=records), rows=_epv_rows(), market=MARKET))
+    assert r.applicable and r.assumptions["shares_outstanding"] == 12.0
+    assert r.assumptions["shares_source"] == "financials_annual"
+    assert r.value_base == pytest.approx(930.0 / 12.0)
+    assert epv(_inputs(rows=_epv_rows(), market=MARKET)).assumptions["shares_source"] == "market_snapshot"
+
+
 @pytest.mark.parametrize("tax, pretax, rate, source", [
     (50.0, 100.0, 0.35, "effective"),   # 50% is clamped to 35%
     (-10.0, 100.0, 0.0, "effective"),   # a tax benefit counts as no tax
