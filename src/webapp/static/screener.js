@@ -1,8 +1,9 @@
 /**
  * Stock DB — screener.js
  * Chip-based filter builder over the existing GET /ui/screen contract:
- * sector, {field}_{op}=value, sort, sort_dir. State lives in the URL
- * (history.replaceState) and saved screens in localStorage.
+ * sector, industry (a 2- or 3-digit SIC prefix), {field}_{op}=value, sort,
+ * sort_dir. State lives in the URL (history.replaceState) and saved screens
+ * in localStorage.
  */
 (function () {
   'use strict';
@@ -19,6 +20,7 @@
   var SKEY = 'stockdb.screens';
 
   var sectorSel = document.getElementById('sector-select');
+  var industrySel = document.getElementById('industry-select');
   var verdictSel = document.getElementById('verdict-select');
   var oeVerdictSel = document.getElementById('oe-verdict-select');
   var presetSel = document.getElementById('preset-select');
@@ -31,15 +33,16 @@
   var popValue = document.getElementById('popover-value');
   var note = document.getElementById('scr-note');
 
-  var state = { sector: '', verdict: '', oeVerdict: '', filters: [], sort: '', sort_dir: 'desc' };
+  var state = { sector: '', industry: '', verdict: '', oeVerdict: '', filters: [], sort: '', sort_dir: 'desc' };
   var pendingKey = null;
   var debounceTimer = null;
 
   // ---- URL <-> state ----
   function parseQS(qs) {
-    var s = { sector: '', verdict: '', oeVerdict: '', filters: [], sort: '', sort_dir: 'desc' };
+    var s = { sector: '', industry: '', verdict: '', oeVerdict: '', filters: [], sort: '', sort_dir: 'desc' };
     new URLSearchParams(qs).forEach(function (value, key) {
       if (key === 'sector') { s.sector = value; return; }
+      if (key === 'industry') { s.industry = value; return; }
       if (key === 'verdict') { s.verdict = value; return; }
       if (key === 'oe_verdict') { s.oeVerdict = value; return; }
       if (key === 'sort') { s.sort = value; return; }
@@ -58,6 +61,7 @@
   function buildQS() {
     var p = new URLSearchParams();
     if (state.sector) p.set('sector', state.sector);
+    if (state.industry) p.set('industry', state.industry);
     if (state.verdict) p.set('verdict', state.verdict);
     if (state.oeVerdict) p.set('oe_verdict', state.oeVerdict);
     state.filters.forEach(function (f) { p.set(f.field + '_' + f.op, f.value); });
@@ -66,6 +70,14 @@
   }
 
   // ---- Rendering ----
+  // The selects show the state (the URL's, a preset's or a saved screen's).
+  function showSelects() {
+    sectorSel.value = state.sector;
+    if (industrySel) industrySel.value = state.industry;
+    verdictSel.value = state.verdict;
+    oeVerdictSel.value = state.oeVerdict;
+  }
+
   function renderChips() {
     chipsEl.textContent = '';
     state.filters.forEach(function (f, i) {
@@ -106,9 +118,7 @@
       chip.title = 'Load this screen';
       chip.addEventListener('click', function () {
         state = parseQS(sc.qs);
-        sectorSel.value = state.sector;
-        verdictSel.value = state.verdict;
-        oeVerdictSel.value = state.oeVerdict;
+        showSelects();
         sync();
       });
       var x = document.createElement('button');
@@ -203,11 +213,17 @@
     }
   });
 
-  // ---- Sector / verdict / save / copy ----
+  // ---- Sector / industry / verdict / save / copy ----
   sectorSel.addEventListener('change', function () {
     state.sector = sectorSel.value;
     sync();
   });
+  if (industrySel) {
+    industrySel.addEventListener('change', function () {
+      state.industry = industrySel.value;
+      sync();
+    });
+  }
   verdictSel.addEventListener('change', function () {
     state.verdict = verdictSel.value;
     sync();
@@ -221,9 +237,7 @@
     presetSel.addEventListener('change', function () {
       if (!presetSel.value) return;
       state = parseQS(presetSel.value);
-      sectorSel.value = state.sector;
-      verdictSel.value = state.verdict;
-      oeVerdictSel.value = state.oeVerdict;
+      showSelects();
       sync();
     });
   }
@@ -235,7 +249,8 @@
       var m = BY_KEY[f.field];
       return (m ? m.label : f.field) + OPS[f.op] + f.value;
     });
-    var prefix = [state.sector, state.verdict, state.oeVerdict].filter(Boolean).join(' · ');
+    var prefix = [state.sector, state.industry ? 'SIC ' + state.industry : '', state.verdict, state.oeVerdict]
+      .filter(Boolean).join(' · ');
     name = (prefix ? prefix + ' · ' : '') + existing.join(', ');
     var screens;
     try { screens = JSON.parse(localStorage.getItem(SKEY)) || []; } catch (e) { screens = []; }
@@ -255,9 +270,7 @@
 
   // ---- Init from URL ----
   state = parseQS(window.location.search);
-  sectorSel.value = state.sector;
-  verdictSel.value = state.verdict;
-  oeVerdictSel.value = state.oeVerdict;
+  showSelects();
   renderChips();
   renderSaved();
   if (window.location.search) {

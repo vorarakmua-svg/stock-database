@@ -32,6 +32,7 @@ if TYPE_CHECKING:  # avoid a runtime exporters -> valuation (or ownership) depen
 from ..mappings.canonical import CANONICAL_FIELDS
 from ..models.stock_data import StockData
 from ..parsers.calculated_metrics import CalculatedMetrics
+from ..universe.industries import normalize_sic, normalize_sic_description
 from ..valuation.inputs import SPLIT_JUMP_THRESHOLD, _simple_ratio
 
 # Canonical line-item columns shared by the annual/quarterly financial tables.
@@ -132,7 +133,19 @@ def _cols_ddl(columns: Sequence[str], col_type: str = "REAL") -> str:
     return ", ".join(f'"{c}" {col_type}' for c in columns)
 
 
-#: The quality scores' columns (Milestone 2), in table order. Column names in the export come only from here.
+#: The SEC's SIC code and its description in ``companies`` (Milestone 5): every collection writes them from the
+#: submissions feed, and ``python -m src.universe.sic`` fills them for companies collected before.
+COMPANY_SIC_COLUMNS: Dict[str, str] = {"sic": "TEXT", "sic_description": "TEXT"}
+
+#: The industry columns the rank pass writes (Milestone 5; docs/superpowers/specs/2026-10-25-universe-automation-
+#: design.md, "SIC codes and industries"): the company's SIC industry group, the group's label and member count, and
+#: the five ranks and the composite within it, all NULL without a group.
+INDUSTRY_COLUMNS: Tuple[str, ...] = (
+    "industry_group", "industry_label", "industry_size", "ind_rank_strength", "ind_rank_profitability",
+    "ind_rank_growth", "ind_rank_valuation", "ind_rank_momentum", "ind_composite",
+)
+#: The quality scores' columns (Milestone 2, the industry ones since Milestone 5), in table order. Column names in
+#: the export come only from here.
 QUALITY_COLUMNS: Tuple[str, ...] = (
     "ticker", "fiscal_year",
     "rev_ps_cagr_3y", "rev_ps_cagr_5y", "rev_ps_cagr_10y", "eps_cagr_3y", "eps_cagr_5y", "eps_cagr_10y",
@@ -142,17 +155,19 @@ QUALITY_COLUMNS: Tuple[str, ...] = (
     "predictability_r2", "ncav_per_share", "earnings_yield", "return_on_capital", "momentum",
     "rank_strength", "rank_profitability", "rank_growth", "rank_valuation", "rank_momentum", "composite_score",
     "magic_formula_rank", "components", "warning_count", "na_reasons", "computed_at", "ranked_at",
-)
+) + INDUSTRY_COLUMNS
 #: The columns the rank pass writes.
 RANK_COLUMNS: Tuple[str, ...] = ("rank_strength", "rank_profitability", "rank_growth", "rank_valuation",
-                                 "rank_momentum", "composite_score", "magic_formula_rank")
+                                 "rank_momentum", "composite_score", "magic_formula_rank") + INDUSTRY_COLUMNS
 _QUALITY_TYPES: Dict[str, str] = {
     "ticker": "TEXT PRIMARY KEY", "fiscal_year": "INTEGER", "piotroski_f": "INTEGER", "piotroski_tested": "INTEGER",
     "piotroski_tests": "TEXT", "altman_zone": "TEXT", "beneish_variables": "TEXT", "predictability_r2": "TEXT",
     "rank_strength": "INTEGER", "rank_profitability": "INTEGER", "rank_growth": "INTEGER",
     "rank_valuation": "INTEGER", "rank_momentum": "INTEGER", "magic_formula_rank": "INTEGER",
     "components": "TEXT", "warning_count": "INTEGER", "na_reasons": "TEXT", "computed_at": "TEXT NOT NULL",
-    "ranked_at": "TEXT",
+    "ranked_at": "TEXT", "industry_group": "TEXT", "industry_label": "TEXT", "industry_size": "INTEGER",
+    "ind_rank_strength": "INTEGER", "ind_rank_profitability": "INTEGER", "ind_rank_growth": "INTEGER",
+    "ind_rank_valuation": "INTEGER", "ind_rank_momentum": "INTEGER",
 }
 #: The columns of ``guru_positions``, in table order.
 _GURU_POSITION_COLUMNS: Tuple[str, ...] = (
@@ -205,7 +220,9 @@ class SQLiteStore:
                 address TEXT,
                 hq_city TEXT,
                 hq_state TEXT,
-                updated_at TEXT
+                updated_at TEXT,
+                sic TEXT,
+                sic_description TEXT
             );
 
             CREATE TABLE IF NOT EXISTS financials_annual (
@@ -657,6 +674,7 @@ class SQLiteStore:
                 "sector_class": "TEXT", "fiscal_year_end": "TEXT",
                 "description": "TEXT", "address": "TEXT",
                 "hq_city": "TEXT", "hq_state": "TEXT",
+                **COMPANY_SIC_COLUMNS,
             },
             "financials_annual": {"calendar_year": "INTEGER",
                                    **{c: "REAL" for c in _CANONICAL_COLUMNS}},
@@ -792,8 +810,10 @@ class SQLiteStore:
         )
         quality_score = (stock.data_quality or {}).get("score")
         info = stock.company_info or {}
+        submissions = stock.sec_submissions or {}
 
-        # companies
+        # companies: the SEC's SIC code and description from the submissions feed (Milestone 5), NULL where the feed
+        # has none; a run without the feed (a failed request) keeps the stored ones, as every field here.
         self._upsert(conn, "companies", ["ticker"], {
             "ticker": stock.ticker,
             "cik": stock.cik,
@@ -804,12 +824,14 @@ class SQLiteStore:
             "country": info.get("country"),
             "employees": info.get("full_time_employees"),
             "website": info.get("website"),
-            "fiscal_year_end": (stock.sec_submissions or {}).get("fiscal_year_end"),
+            "fiscal_year_end": submissions.get("fiscal_year_end"),
             "description": info.get("description") or info.get("longBusinessSummary"),
             "address": info.get("address") or info.get("address1"),
             "hq_city": info.get("hq_city") or info.get("city"),
             "hq_state": info.get("hq_state") or info.get("state"),
             "updated_at": collected_at,
+            "sic": normalize_sic(submissions.get("sic")),
+            "sic_description": normalize_sic_description(submissions.get("sic_description")),
         }, keep_existing=True)
 
         # A run that parsed the filer's annual record restates every period it gives: a field its
@@ -1541,10 +1563,13 @@ class SQLiteStore:
         return written
 
     def update_quality_ranks(self, ranks: Dict[str, Dict[str, Any]], ranked_at: str) -> None:
-        """Write the rank pass's ranks, composite and Magic Formula rank for every ticker, in one transaction."""
+        """Write the rank pass's ranks, composite and Magic Formula rank, and the industry ones (INDUSTRY_COLUMNS,
+        NULL where a ticker's result has none), for every ticker, in one transaction."""
         conn = self._connect()
         try:
             self._create_schema(conn)
+            # A table from before the industry ranks (Milestone 5).
+            self._ensure_columns(conn, "quality_scores", {c: _QUALITY_TYPES.get(c, "REAL") for c in INDUSTRY_COLUMNS})
             assignments = ", ".join(f"{c} = ?" for c in RANK_COLUMNS)
             conn.executemany(
                 f"UPDATE quality_scores SET {assignments}, ranked_at = ? WHERE ticker = ?",

@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse
 from ...fetchers.stock_data_fetcher import NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS
 from ...ownership.portfolio import share_classes
 from ...scores.ranks import MAGIC_EXCLUDED
+from ...universe.industries import sic_label
 from ...valuation.assumptions import DISCOUNT_SPREAD, GROWTH_CAP
 from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
 from ...valuation.history import HISTORICAL_VALUE_CUTOFFS, METRICS, historical_value_label
@@ -178,7 +179,7 @@ def des_fragment(
     r: Reader = Depends(get_reader),
     settings: WebSettings = Depends(get_settings),
 ) -> Any:
-    """DES panel: quote header, summary grid, description, officers, next earnings."""
+    """DES panel: quote header, summary grid, description with the SEC's SIC industry, officers, next earnings."""
     profile = r.profile(ticker)
     if profile is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
@@ -242,6 +243,8 @@ def des_fragment(
             "marker_pct": marker_pct,
             "summary": summary,
             "description": profile["company"].get("description"),
+            # The SEC's industry (Milestone 5): "SIC 3571 Electronic Computers", None where no code is stored.
+            "sic_label": sic_label(profile["company"].get("sic"), profile["company"].get("sic_description")),
             "earnings_date": analyst.get("earnings_date") if analyst else None,
             "allow_quote_refresh": settings.allow_quote_refresh,
             "val_verdict": val_verdict,
@@ -1122,8 +1125,10 @@ def scores_fragment(
     request: Request,
     r: Reader = Depends(get_reader),
 ) -> Any:
-    """The STAT panel's Quality section: the composite and its radar, the five ranks, the scores with their tests,
-    the growth table and the warning signs (docs/superpowers/specs/2026-10-21-quality-scores-design.md)."""
+    """The STAT panel's Quality section: the composite and its radar, the five ranks with the industry's beside them
+    (or why there are none), the scores with their tests, the growth table and the warning signs
+    (docs/superpowers/specs/2026-10-21-quality-scores-design.md, docs/superpowers/specs/2026-10-25-universe-
+    automation-design.md)."""
     company = r.get_company(ticker)
     if company is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
@@ -1163,6 +1168,14 @@ def scores_fragment(
     growth = [{"label": g["label"], **{span: fmt_pct(g[f"cagr_{span}"]) for span in GROWTH_SPANS}}
               for g in q["growth"]]
     composite = q["composite"]["score"]
+    # The industry ranks beside the universe's (Milestone 5), or why there are none.
+    ind = q["industry"]
+    industry = {
+        "ranked": ind["group"] is not None,
+        "composite": f"{ind['composite']:.1f}" if ind["composite"] is not None else None,
+        "note": (f"Industry ranks among the {ind['size']} companies of {ind['label']}" if ind["group"] is not None
+                 else f"No industry ranks: {ind['na_reason']}"),
+    }
     return templates.TemplateResponse(
         request,
         "fragments/quality.html",
@@ -1173,7 +1186,10 @@ def scores_fragment(
             "fiscal_year": q["fiscal_year"],
             "computed_at": str(q["computed_at"] or "")[:10],
             "composite": f"{composite:.1f}" if composite is not None else None,
-            "ranks": [{"label": RANK_LABELS[k], "value": v if v is not None else "—"} for k, v in ranks.items()],
+            "industry": industry,
+            "ranks": [{"label": RANK_LABELS[k], "value": v if v is not None else "—",
+                       "industry": ind["ranks"][k] if ind["ranks"][k] is not None else "—"}
+                      for k, v in ranks.items()],
             "scores": scores,
             "tests": p["tests"],
             "growth": growth,

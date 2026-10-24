@@ -169,3 +169,131 @@ def test_the_scores_store_their_debt_to_ebitda(tmp_path):
     conn.close()
     compute_and_store(db)
     assert _scores(db)["AAA"].get("debt_to_ebitda") == pytest.approx(5.0)  # debt = revenue, EBITDA 20% of it
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The industry ranks (Milestone 5): docs/superpowers/specs/2026-10-25-universe-automation-design.md, "SIC codes and
+# industries"
+
+INDUSTRY = ("industry_group", "industry_label", "industry_size", "ind_rank_strength", "ind_rank_profitability",
+            "ind_rank_growth", "ind_rank_valuation", "ind_rank_momentum", "ind_composite")
+M2_RANKS = ("rank_strength", "rank_profitability", "rank_growth", "rank_valuation", "rank_momentum",
+            "composite_score", "magic_formula_rank")
+#: Ten computer makers (357), Deere and Caterpillar (35's, through it), two banks without a group (602 and 60 have
+#: two) and a company without a code: (ticker, SIC code, SEC description, revenue growth).
+COMPANIES = (
+    [(f"C{i}", "3571" if i < 4 else "3572" if i < 7 else "3576",
+      "Electronic Computers" if i < 4 else "Computer Storage Devices" if i < 7 else "Computer Communications Equipment",
+      (i + 1) / 100) for i in range(10)]
+    + [("DE", "3523", "Farm Machinery & Equipment", 0.055), ("CAT", "3531", "Construction Machinery & Equip", 0.5),
+       ("JPM", "6021", "National Commercial Banks", 0.2), ("BAC", "6021", "National Commercial Banks", 0.3),
+       ("NOC", None, None, 0.1)])
+LABEL_357 = "Electronic Computers; Computer Communications Equipment; Computer Storage Devices"
+
+
+def _components(growth):
+    return {"strength": {"interest_coverage": 10.0, "altman_z": 4.0},
+            "profitability": {"operating_margin": 0.2, "piotroski_share": 0.7},
+            "growth": {"rev_ps_cagr_3y": growth, "rev_ps_cagr_5y": growth},
+            "valuation": {"price_to_value": 1.0}, "momentum": {"momentum": 0.05}}
+
+
+def _ranked_db(db_path):
+    """What the rank pass reads: quality_scores rows (their components) and companies rows (their SIC codes)."""
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    for ticker, sic, description, growth in COMPANIES:
+        conn.execute("INSERT INTO companies (ticker, sector_class, sic, sic_description) VALUES (?, 'general', ?, ?)",
+                     (ticker, sic, description))
+        conn.execute("INSERT INTO quality_scores (ticker, components, earnings_yield, return_on_capital, computed_at) "
+                     "VALUES (?, ?, 0.05, 0.2, '2026-10-25T00:00:00')", (ticker, json.dumps(_components(growth))))
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def _drop(db_path, table, columns):
+    conn = sqlite3.connect(db_path)
+    present = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+    for column in columns:
+        if column in present:
+            conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+    conn.commit()
+    conn.close()
+
+
+def test_the_rank_pass_stores_the_industry_ranks(tmp_path):
+    db = _ranked_db(tmp_path / "s.db")
+    assert scores_engine.rank_all(db, "2026-10-25T01:00:00") == 15
+    rows = _scores(db)
+    for i in range(10):
+        c = rows[f"C{i}"]
+        assert (c["industry_group"], c["industry_size"], c["industry_label"]) == ("357", 10, f"SIC 357: {LABEL_357}")
+        assert c["ind_rank_growth"] == i + 1  # the slowest of the ten is 1, the fastest 10
+        assert (c["ind_rank_strength"], c["ind_rank_valuation"], c["ind_rank_momentum"]) == (10, 10, 10)
+        assert c["ind_composite"] == pytest.approx(10 * (40 + i + 1) / 5)
+    # 35's twelve: Deere at 0.055 is sixth of twelve, at the middle; Caterpillar the fastest.
+    de, cat = rows["DE"], rows["CAT"]
+    assert (de["industry_group"], de["industry_size"], de["industry_label"]) == ("35", 12, f"SIC 35: {LABEL_357}")
+    assert (de["ind_rank_growth"], cat["ind_rank_growth"]) == (5, 10)
+    assert de["ind_composite"] == pytest.approx(90.0)
+    for ticker in ("JPM", "BAC", "NOC"):
+        assert {c: rows[ticker][c] for c in INDUSTRY} == {c: None for c in INDUSTRY}
+    # The universe's ranks beside them: twelve of the fifteen grow no faster than the fastest of the ten.
+    assert rows["C9"]["rank_growth"] == 8 and rows["C9"]["ranked_at"] == "2026-10-25T01:00:00"
+
+
+def test_a_group_s_label_and_size_are_its_members():
+    # Ten drug makers form 283; the computer makers and the banks, five each and no group, describe more companies.
+    rows = ([{"ticker": f"P{i}", "sic": "2834" if i < 6 else "2836", "components": _components(0.05),
+              "sic_description": "Pharmaceutical Preparations" if i < 6 else "Biological Products"} for i in range(10)]
+            + [{"ticker": f"E{i}", "sic": "3571", "sic_description": "Electronic Computers",
+                "components": _components(0.05)} for i in range(5)]
+            + [{"ticker": f"B{i}", "sic": "6021", "sic_description": "National Commercial Banks",
+                "components": _components(0.05)} for i in range(5)])
+    columns = scores_engine.industry_columns(rows)
+    assert columns["P0"]["industry_label"] == "SIC 283: Pharmaceutical Preparations; Biological Products"
+    assert columns["P0"]["industry_size"] == 10 and columns["P9"]["industry_group"] == "283"
+    assert all(columns[f"{p}{i}"]["industry_label"] is None for p in "EB" for i in range(5))
+
+
+def test_the_industry_ranks_leave_the_universe_s_alone(tmp_path):
+    coded = _ranked_db(tmp_path / "coded.db")
+    uncoded = _ranked_db(tmp_path / "uncoded.db")
+    conn = sqlite3.connect(uncoded)
+    conn.execute("UPDATE companies SET sic = NULL, sic_description = NULL")
+    conn.commit()
+    conn.close()
+    scores_engine.rank_all(coded, "2026-10-25T01:00:00")
+    scores_engine.rank_all(uncoded, "2026-10-25T01:00:00")
+    with_codes, without = _scores(coded), _scores(uncoded)
+    assert {t: [r[c] for c in M2_RANKS] for t, r in with_codes.items()} == {
+        t: [r[c] for c in M2_RANKS] for t, r in without.items()}
+    assert with_codes["C0"]["industry_group"] == "357" and without["C0"]["industry_group"] is None
+
+
+def test_a_scores_table_from_before_the_industries_gains_them(tmp_path):
+    db = _ranked_db(tmp_path / "s.db")
+    _drop(db, "quality_scores", INDUSTRY)
+    scores_engine.rank_all(db, "2026-10-25T01:00:00")
+    rows = _scores(db)
+    assert rows["C3"]["industry_group"] == "357" and rows["C3"]["ind_rank_growth"] == 4
+    assert rows["C3"]["rank_growth"] is not None
+
+
+def test_a_companies_table_from_before_the_codes_ranks_without_industries(tmp_path):
+    db = _ranked_db(tmp_path / "s.db")
+    _drop(db, "companies", ("sic", "sic_description"))
+    assert scores_engine.rank_all(db, "2026-10-25T01:00:00") == 15
+    rows = _scores(db)
+    assert all(rows[t]["rank_growth"] is not None for t in rows)  # the universe's ranks, as before
+    assert all({c: r[c] for c in INDUSTRY} == {c: None for c in INDUSTRY} for r in rows.values())
+
+
+def test_a_full_run_stores_the_industry_columns(tmp_path):
+    db = _seed(tmp_path / "s.db")  # two companies, no codes
+    compute_and_store(db)
+    rows = _scores(db)
+    assert rows["AAA"]["rank_growth"] is not None
+    assert all(rows[t][c] is None for t in ("AAA", "BBB") for c in INDUSTRY)

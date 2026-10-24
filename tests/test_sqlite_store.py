@@ -539,3 +539,58 @@ def test_a_recollection_with_no_annual_record_only_adds(tmp_path):
                                    quarterly={"2025-03-31": {**quarter, "revenue": 83.1e9, "net_income": 7.7e9}})])
     SQLiteStore(db).export([_filer(quarterly={"2025-03-31": {**quarter, "net_income": 7.7e9}})])
     assert _stored(db, "financials_quarterly", "revenue") == [83.1e9]
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The SEC's SIC code (Milestone 5): docs/superpowers/specs/2026-10-25-universe-automation-design.md, "SIC codes and
+# industries"
+
+
+def _coded(ticker, submissions):
+    s = _company(ticker, 1000.0, 0.20)
+    s.sec_submissions = submissions
+    return s
+
+
+def _codes(db):
+    conn = sqlite3.connect(db)
+    try:
+        return {t: (sic, d) for t, sic, d in conn.execute("SELECT ticker, sic, sic_description FROM companies")}
+    finally:
+        conn.close()
+
+
+def test_a_collection_stores_the_sic_code(tmp_path):
+    db = tmp_path / "stock.db"
+    SQLiteStore(db).export([
+        _coded("AAA", {"sic": "3571", "sic_description": "Electronic Computers", "fiscal_year_end": "0926"}),
+        _coded("BBB", {"sic": " 2834 ", "sic_description": " Pharmaceutical Preparations "}),
+        _coded("CCC", {"sic": "", "sic_description": ""}),  # the feed has none
+        _coded("DDD", {}),  # no feed
+        _coded("EEE", {"sic": 6021, "sic_description": "National Commercial Banks"}),
+    ])
+    assert _codes(db) == {"AAA": ("3571", "Electronic Computers"), "BBB": ("2834", "Pharmaceutical Preparations"),
+                          "CCC": (None, None), "DDD": (None, None), "EEE": ("6021", "National Commercial Banks")}
+
+
+def test_a_run_without_the_feed_keeps_the_stored_code(tmp_path):
+    db = tmp_path / "stock.db"
+    store = SQLiteStore(db)
+    store.export([_coded("AAA", {"sic": "3571", "sic_description": "Electronic Computers"})])
+    store.export([_coded("AAA", {})])  # the submissions request failed
+    assert _codes(db)["AAA"] == ("3571", "Electronic Computers")
+    store.export([_coded("AAA", {"sic": "3572", "sic_description": "Computer Storage Devices"})])
+    assert _codes(db)["AAA"] == ("3572", "Computer Storage Devices")  # a new code replaces the old
+
+
+def test_an_old_companies_table_gains_the_sic_columns(tmp_path):
+    db = tmp_path / "stock.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE companies (ticker TEXT PRIMARY KEY, cik TEXT, company_name TEXT, sector_class TEXT, "
+                 "sector TEXT, industry TEXT, country TEXT, employees INTEGER, website TEXT, fiscal_year_end TEXT, "
+                 "description TEXT, address TEXT, hq_city TEXT, hq_state TEXT, updated_at TEXT)")
+    conn.execute("INSERT INTO companies (ticker, cik) VALUES ('OLD', '0000000009')")
+    conn.commit()
+    conn.close()
+    SQLiteStore(db).export([_coded("AAA", {"sic": "3571", "sic_description": "Electronic Computers"})])
+    assert _codes(db) == {"OLD": (None, None), "AAA": ("3571", "Electronic Computers")}

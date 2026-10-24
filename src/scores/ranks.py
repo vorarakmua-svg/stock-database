@@ -4,6 +4,10 @@ Each component becomes a percentile within the company's sector when the sector 
 companies with it, and within the whole universe otherwise. It is oriented so that higher is better. A rank
 is the mean of its components' percentiles as a decile, 1-10. The composite is 10 x the mean rank (equal
 weights by default, Q11). See docs/superpowers/specs/2026-10-21-quality-scores-design.md.
+
+The same ranks within the company's SIC industry group (Milestone 5, ``rank_industries``), where the group has
+MIN_INDUSTRY_PEERS companies with a component, are kept beside them
+(docs/superpowers/specs/2026-10-25-universe-automation-design.md, "SIC codes and industries").
 """
 
 import math
@@ -11,6 +15,7 @@ import statistics
 from datetime import date
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from ..universe.industries import group_members
 from .fundamentals import Fundamentals
 from .scores import Scores
 from .signs import HistoryContext
@@ -20,6 +25,9 @@ RANKS: Tuple[str, ...] = ("strength", "profitability", "growth", "valuation", "m
 REQUIRED: Dict[str, int] = {"strength": 2, "profitability": 2, "growth": 2, "valuation": 1, "momentum": 1}
 LOWER_IS_BETTER = frozenset({"debt_to_revenue", "price_to_value", "pe_pct_rank"})
 MIN_SECTOR_PEERS = 10
+#: The members of an industry group with a component that its industry percentile needs (the spec's 10): fewer, and
+#: the component is left out of the group's industry ranks.
+MIN_INDUSTRY_PEERS = 10
 MIN_RANKS = 4
 MAGIC_EXCLUDED = ("bank", "insurance", "utility", "reit")
 COVERAGE_CAP = 100.0
@@ -158,4 +166,42 @@ def rank_universe(rows: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     magic = {r["ticker"]: i for i, r in enumerate(order, 1)}
     for ticker, result in out.items():
         result["magic_formula_rank"] = magic.get(ticker)
+    return out
+
+
+def rank_industries(rows: Sequence[Dict[str, Any]], groups: Dict[str, Optional[str]]) -> Dict[str, Dict[str, Any]]:
+    """The five ranks and their composite within each row's industry group (*groups*:
+    ``industries.industry_groups``), beside ``rank_universe``'s, which they leave as they are
+    (docs/superpowers/specs/2026-10-25-universe-automation-design.md, "SIC codes and industries"). Each row is a
+    ticker, its SIC code ("sic") and its components (``components``).
+
+    A component's percentile (``percentiles``, LOWER_IS_BETTER's oriented) is the row's among its group's members
+    with that component, every row whose code starts with the group (``industries.group_members``: a 2-digit
+    group's take in its 3-digit groups'), when MIN_INDUSTRY_PEERS of them have it; else the component is left out of
+    the industry rank. A rank is the decile of its components' mean percentile, given REQUIRED of them so ranked;
+    the composite is 10 x the mean of the ranks given, MIN_RANKS of them or more. A row without a group gets none:
+    ``ind_rank_<rank>`` and ``ind_composite`` None."""
+    codes = {row["ticker"]: row.get("sic") for row in rows}
+    members = {group: group_members(codes, group) for group in set(groups.values()) if group is not None}
+    out: Dict[str, Dict[str, Any]] = {row["ticker"]: {} for row in rows}
+    for rank in RANKS:
+        names = sorted({name for row in rows for name in (row["components"].get(rank) or {})})
+        pcts: Dict[str, List[float]] = {row["ticker"]: [] for row in rows}
+        for name in names:
+            values = {row["ticker"]: float(v) for row in rows
+                      if (v := (row["components"].get(rank) or {}).get(name)) is not None}
+            for group, tickers in members.items():
+                peers = {ticker: values[ticker] for ticker in tickers if ticker in values}
+                if len(peers) < MIN_INDUSTRY_PEERS:
+                    continue
+                ranked = percentiles(peers, name in LOWER_IS_BETTER)
+                for ticker in peers:
+                    if groups.get(ticker) == group:
+                        pcts[ticker].append(ranked[ticker])
+        for ticker, given in pcts.items():
+            out[ticker][f"ind_rank_{rank}"] = (max(1, math.ceil(10 * statistics.fmean(given) - 1e-9))
+                                              if len(given) >= REQUIRED[rank] else None)
+    for result in out.values():
+        ranked_ranks = [result[f"ind_rank_{r}"] for r in RANKS if result[f"ind_rank_{r}"] is not None]
+        result["ind_composite"] = 10.0 * statistics.fmean(ranked_ranks) if len(ranked_ranks) >= MIN_RANKS else None
     return out

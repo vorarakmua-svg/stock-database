@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 5 · DOING 0 · DONE 39 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 4 · DOING 0 · DONE 40 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -76,7 +76,7 @@
 |---|---|---|---|---|
 | M5-0 | Design M5: `docs/superpowers/specs/2026-10-25-universe-automation-design.md`, then these rows | DONE | this commit | the spec |
 | M5-1 | The universe: `universe/core.txt`, the S&P 500 list (`src/universe/sp500.py`: Wikipedia's table parsed and checked, one request; the dated `universe/sp500-<date>.csv` saved), ticker normalization, `stock-data --tickers-file` and `--skip-existing`; with tests | DONE | this commit | `qa/evidence/universe-m5-1-*`, `universe/` |
-| M5-2 | SIC codes and industries: `companies.sic`/`sic_description` (collected, and filled offline by `python -m src.universe.sic`), industry groups (3-digit SIC, else 2-digit, at least 10 companies), industry ranks in `rank_all`, the DES and STAT tabs, the scores API, the screener's industry filter and fields, the scores oracle's industry gate; with tests | TODO | | |
+| M5-2 | SIC codes and industries: `companies.sic`/`sic_description` (collected, and filled offline by `python -m src.universe.sic`), industry groups (3-digit SIC, else 2-digit, at least 10 companies), industry ranks in `rank_all`, the DES and STAT tabs, the scores API, the screener's industry filter and fields, the scores oracle's industry gate; with tests | DONE | this commit | `qa/evidence/industries-m5-2-*` |
 | M5-3 | `stock-data refresh`: quotes and bars daily, the SEC's new filings weekly, the full collections they call for, insiders and gurus weekly, the market data daily, the recomputation; `refresh_log`, a lock, a log file, exit codes; a real run on a scratch copy; with tests | TODO | | |
 | M5-4 | The scale pre-flight: a synthetic copy of about 500 companies, the pages' and APIs' timings, the query plans, the indexes they need (every page under 1 s, the screener under 0.5 s); with tests | TODO | | |
 | M5-5 | Docs: README and USAGE_GUIDE (the universe, `--tickers-file`, SIC and industries, the refresh command, Task Scheduler instructions) | TODO | | |
@@ -1232,3 +1232,35 @@ Evidence: `qa/evidence/universe-m5-1-{red,gates,mutants,mutants-rerun,fetch,chec
 Gates: ruff ✓ mypy ✓ pytest 2033 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) feat(universe): the S&P 500 list, the universe files and stock-data --tickers-file (M5-1)
 Next: M5-2 (SIC codes, industry groups and ranks).
+
+### Build iteration 52: 2026-10-25 05:11: M5-2
+Did:
+- An opus worker built the industries test-first (RED: 93 failed against stubs):
+  - `companies.sic` and `sic_description`, written by every collection from the submissions feed, and filled offline
+    by `python -m src.universe.sic` (from the JSON exports, else the SEC cache's file; only those two columns);
+  - `src/universe/industries.py`: a company's group is its 3-digit SIC prefix when 10 companies share it, else its
+    2-digit one, else none; a 2-digit group holds its 3-digit groups' companies (the SIC hierarchy). The labels
+    come from the members' own SEC descriptions;
+  - `rank_industries` beside M2's untouched ranks: each component's percentile within the group, when 10 members
+    have it, and M2's minimums. Nine new `quality_scores` columns;
+  - DES shows the code; STAT and the scores API show the industry ranks or why there are none; the screener gains
+    a validated, bound `industry` filter (GET, POST, the count, the CSV), its options and six `ind_*` fields;
+  - three new gates in `qa/oracle/scores_oracle.py`, computed by its own code.
+  - 107 tests.
+- My review: the labels joined SEC descriptions with ", ", which some descriptions contain ("Biological Products,
+  (No Diagnostic Substances)"). I changed the joiner to "; ", test-first (RED: 5 failed), in the code and in the
+  oracle.
+- Mutants: 81, each killed (the joiner's mutant updated); I ran them again.
+- Real data, on a copy of the user's DB after M4:
+  - all 127 codes filled from the JSON exports, equal to the SEC cache's; each code's sector class equals the stored
+    one (127 of 127);
+  - eight groups form at 127 companies (283 drugs, 357 computers, 367 semiconductors and 737 software, each 10-12,
+    and their 2-digit parents). 54 companies get industry ranks, 41 all five;
+  - M2's ranks and every other table are unchanged;
+  - the scores oracle passes 12 of 12 gates, including the three new ones, and fails on altered copies.
+- Noted: at 10-member groups, one member missing a component drops it for the whole group (357 has no industry
+  composite). It should ease at about 500 companies.
+Evidence: `qa/evidence/industries-m5-2-{red,joiner-red,gates,mutants,mutants-rerun,realdata,oracle,oracle-joiner,oracle-broken,web,done}.txt`
+Gates: ruff ✓ mypy ✓ pytest 2140 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) feat(industries): SIC codes, industry groups and ranks, their web and screener parts (M5-2)
+Next: M5-3 (`stock-data refresh`).

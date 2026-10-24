@@ -136,6 +136,14 @@ class Reader:
         )
         return [dict(row) for row in cur.fetchall()]
 
+    def sic_codes(self) -> List[Dict[str, Any]]:
+        """Every company's SEC SIC code and description (Milestone 5): ``{ticker, sic, sic_description}``, by
+        ticker. [] for a companies table from before the codes."""
+        if not {"sic", "sic_description"} <= {row[1] for row in self._conn.execute("PRAGMA table_info(companies)")}:
+            return []
+        cur = self._conn.execute("SELECT ticker, sic, sic_description FROM companies ORDER BY ticker")
+        return [dict(row) for row in cur.fetchall()]
+
     def distinct_sectors(self) -> List[str]:
         """Distinct non-null ``sector_class`` values, sorted."""
         cur = self._conn.execute(
@@ -643,8 +651,10 @@ class Reader:
             row[1] for row in self._conn.execute("PRAGMA table_info(insider_trades)")}
         gurus = {"guru_quarters", "guru_positions"} <= tables
         indicators = "valuation_indicators" in tables
-        sql, params = build_screen_query(spec, history, quality, insiders, gurus, indicators)
-        count_sql, count_params = build_count_query(spec, history, quality, insiders, gurus, indicators)
+        # A companies table from before the SEC's SIC codes (Milestone 5): no code, and an industry matches nothing.
+        sic = "sic" in {row[1] for row in self._conn.execute("PRAGMA table_info(companies)")}
+        sql, params = build_screen_query(spec, history, quality, insiders, gurus, indicators, sic)
+        count_sql, count_params = build_count_query(spec, history, quality, insiders, gurus, indicators, sic)
 
         cur = self._conn.execute(sql, params)
         items = [dict(row) for row in cur.fetchall()]

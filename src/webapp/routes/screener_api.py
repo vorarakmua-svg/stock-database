@@ -72,6 +72,7 @@ def post_screen(
                 for f in body.filters
             ],
             sector=body.sector,
+            industry=body.industry or None,
             sort=body.sort,
             sort_dir=body.sort_dir,
             limit=body.limit,
@@ -92,8 +93,9 @@ def get_screen(
     """Screen companies via query-string shorthand.
 
     Keys of the form ``<field>_<op>`` (op ∈ gte/lte/gt/lt/eq/ne) become
-    filters.  Reserved keys: ``sector``, ``verdict``, ``sort``, ``sort_dir``,
-    ``limit``, ``offset``.  Returns ``{"columns", "items", "total"}``.
+    filters.  Reserved keys: ``sector``, ``industry`` (a 2- or 3-digit SIC
+    prefix), ``verdict``, ``sort``, ``sort_dir``, ``limit``, ``offset``.
+    Returns ``{"columns", "items", "total"}``.
     """
     try:
         spec = parse_screen_params(dict(request.query_params))

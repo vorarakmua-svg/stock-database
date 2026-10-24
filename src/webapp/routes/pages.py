@@ -17,6 +17,7 @@ from fastapi.templating import Jinja2Templates
 from ...exporters.sqlite_store import _METRIC_COLUMNS
 from ...query.asof import AsOfReader
 from ...query.pit_metrics import PointInTimeMetrics
+from ...universe.industries import industry_options
 from ..dependencies import get_asof_reader, get_pit_metrics, get_reader
 from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
 from ..repository import Reader
@@ -205,6 +206,13 @@ SCREENER_QUALITY_OPTIONS: List[tuple[str, str]] = [
     ("Warning signs", "warning_count"),
     ("Price / NCAV", "price_to_ncav"),
     ("Debt / EBITDA (debt-free filers at 0)", "scores_debt_to_ebitda"),
+    # Within the company's SIC industry group (screener.INDUSTRY_RANK_FIELDS), none without one.
+    ("Financial strength rank (industry)", "ind_rank_strength"),
+    ("Profitability rank (industry)", "ind_rank_profitability"),
+    ("Growth rank (industry)", "ind_rank_growth"),
+    ("Valuation rank (industry)", "ind_rank_valuation"),
+    ("Momentum rank (industry)", "ind_rank_momentum"),
+    ("Composite score (industry)", "ind_composite"),
 ]
 
 # Insiders' open-market trades over the last year, from the SEC's Form 4 filings (screener.INSIDER_EXPRS).
@@ -545,8 +553,10 @@ def screener_page(
     request: Request,
     r: Reader = Depends(get_reader),
 ) -> Any:
-    """Screener page with filter form and HTMX result target."""
+    """Screener page with filter form and HTMX result target. The industry choices are every 2- and 3-digit SIC
+    prefix with a company, with its size and label (``industries.industry_options``)."""
     sectors = r.distinct_sectors()
+    industries = industry_options((c["sic"], c["sic_description"]) for c in r.sic_codes())
     metric_options = SCREENER_METRIC_OPTIONS
     snapshot_options = SCREENER_SNAPSHOT_OPTIONS
     metric_json = json.dumps(
@@ -586,6 +596,7 @@ def screener_page(
         {
             "request": request,
             "sectors": sectors,
+            "industries": industries,
             "metric_options": metric_options,
             "snapshot_options": snapshot_options,
             "metric_json": metric_json,

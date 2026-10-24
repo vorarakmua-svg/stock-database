@@ -26,6 +26,13 @@
       <option value="{{ s }}">{{ s }}</option>
     {% endfor %}
     </select>
+    <select id="industry-select" class="form-control form-control-sm"
+            title="The SEC's SIC industry: a major group (2 digits) or an industry group (3 digits), with its companies">
+      <option value="">All industries</option>
+    {% for g in industries %}
+      <option value="{{ g.prefix }}">{% if g.prefix|length == 3 %}&nbsp;&nbsp;{% endif %}{{ g.label }} ({{ g.size }})</option>
+    {% endfor %}
+    </select>
     <select id="verdict-select" class="form-control form-control-sm">
       <option value="">Any valuation</option>
       <option value="cheap">Looks cheap</option>

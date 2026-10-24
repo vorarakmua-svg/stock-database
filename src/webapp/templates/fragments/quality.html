@@ -9,6 +9,9 @@
     {% else %}
     <span class="pill verdict-none">No composite</span>
     {% endif %}
+    {% if industry.composite %}
+    <span class="pill verdict-none">Industry composite {{ industry.composite }} / 100</span>
+    {% endif %}
     <span class="text-muted">Five ranks of 1-10 against the universe (or the sector, given 10 peers), equal weights
       · fiscal year {{ fiscal_year }} · computed {{ computed_at }}</span>
   </div>
@@ -16,13 +19,14 @@
     <div id="quality-radar" class="gp-chart"></div>
     <div class="table-wrap">
       <table class="data-table">
-        <thead><tr><th>Rank</th><th class="num">1-10</th></tr></thead>
+        <thead><tr><th>Rank</th><th class="num">1-10</th>{% if industry.ranked %}<th class="num" title="Within the company's SIC industry group">Industry</th>{% endif %}</tr></thead>
         <tbody>
           {% for k in ranks %}
-          <tr><td class="row-label">{{ k.label }}</td><td class="num">{{ k.value }}</td></tr>
+          <tr><td class="row-label">{{ k.label }}</td><td class="num">{{ k.value }}</td>{% if industry.ranked %}<td class="num">{{ k.industry }}</td>{% endif %}</tr>
           {% endfor %}
         </tbody>
       </table>
+      <p class="text-muted mt-2">{{ industry.note }}</p>
     </div>
   </div>
   <script>

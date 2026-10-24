@@ -57,6 +57,9 @@
 
 <section class="section">
   <h2 class="section-heading">Description</h2>
+  {% if sic_label %}
+  <p class="text-muted" title="The SEC's Standard Industrial Classification code">Industry (SEC): {{ sic_label }}</p>
+  {% endif %}
   {% if description %}
   <p>{{ description }}</p>
   {% else %}

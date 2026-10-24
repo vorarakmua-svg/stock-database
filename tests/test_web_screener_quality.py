@@ -31,7 +31,8 @@ from tests.test_web_workstation import _seed_val_rows
 FIELDS = ["piotroski_f", "altman_z", "beneish_m", "sloan_ratio", "predictability_stars", "rev_ps_cagr_5y",
           "eps_cagr_5y", "roic_minus_wacc", "rank_strength", "rank_profitability", "rank_growth", "rank_valuation",
           "rank_momentum", "composite_score", "momentum", "magic_formula_rank", "warning_count", "price_to_ncav",
-          "scores_debt_to_ebitda"]
+          "scores_debt_to_ebitda", "ind_rank_strength", "ind_rank_profitability", "ind_rank_growth",
+          "ind_rank_valuation", "ind_rank_momentum", "ind_composite"]
 
 
 def test_the_fields_are_whitelisted_listed_and_typed():

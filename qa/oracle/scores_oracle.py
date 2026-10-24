@@ -17,9 +17,13 @@ Gates (each figure valued on both sides, or N/A on both); any that fails makes t
 - The Sloan ratio within 0.1 percentage points.
 - Predictability stars exactly, and each fitted series' R-squared within 0.01.
 - The five ranks, the composite and the Magic Formula rank, exactly, from the stored components.
+- The industry ranks (Milestone 5; docs/superpowers/specs/2026-10-25-universe-automation-design.md, "SIC codes and
+  industries"), exactly, from companies.sic and the stored components: each company's industry group, its label and
+  size; the five industry ranks and the industry composite; and the same companies without any industry rank.
 
 Reported, not gated: the real-data distributions (the F-score histogram, Altman zones, Beneish flags,
-predictability stars, the composite), and each severe warning sign's figure recomputed from the raw tables.
+predictability stars, the composite), each severe warning sign's figure recomputed from the raw tables, and the
+industry groups formed (each one's size, label and members) with the companies left without one, and why.
 
 Today's split basis, this oracle's own way (the code detects seams in the annual share-count series instead, so
 the two methods check each other): a fiscal year's share count is the diluted weighted count from the latest
@@ -53,6 +57,15 @@ Readings of the spec where it leaves a choice (each also noted where it's used):
 - Magic Formula: rank 1 is the highest earnings yield (return on capital), tied values share the best rank; the
   stored rank is the company's position when ordered by the sum of its two ranks (1 = lowest sum), and any
   order inside an exact tie of the sum is accepted, since the spec names no tie-break.
+- Industries: the groups are formed over the companies with a quality_scores row, a code being four ASCII digits
+  as stored (anything else is no code). A company's group is its 3-digit prefix when 10 or more of them share it,
+  else its 2-digit prefix when 10 or more do; a group's members are every one whose code starts with it, so a
+  2-digit group takes in its 3-digit groups' companies and has 10 members or more. Its label is "SIC <group>: " and
+  the members' three most common descriptions as stored, by count, then in string order, joined with ", " ("SIC
+  <group>" without any); its size, the members. A component counts toward a company's industry rank when 10 or more
+  of its group's members have it (the percentile then among them, as above), and a rank needs two such components
+  (one for valuation and momentum), so a component left out doesn't count toward that minimum; the industry
+  composite is 10 x the mean of four or more industry ranks.
 
 Usage: python qa/oracle/scores_oracle.py --db PATH
 """
@@ -120,6 +133,13 @@ SPEC_COMPONENTS = {
     "valuation": {"price_to_value", "pe_pct_rank"},
     "momentum": {"momentum"},
 }
+#: Milestone 5's industries (docs/superpowers/specs/2026-10-25-universe-automation-design.md, "SIC codes and
+#: industries"): the scored companies a SIC prefix needs to be a group, and the members with a component its industry
+#: percentile needs; the descriptions a group's label names; the stored columns.
+MIN_INDUSTRY = 10
+LABEL_TOP = 3
+INDUSTRY_GROUP_COLUMNS = ("industry_group", "industry_label", "industry_size")
+INDUSTRY_RANK_COLUMNS = tuple(f"ind_rank_{r}" for r in RANKS) + ("ind_composite",)
 SERIES = ("revenue_ps", "eps", "ebitda_ps", "fcf_ps", "book_ps")
 #: The total each per-share series divides by the year's share count (EPS is the filed EPS instead).
 SERIES_TOTAL = {"revenue_ps": ("fa", "revenue"), "ebitda_ps": ("ma", "ebitda"), "fcf_ps": ("ma", "free_cash_flow"),
@@ -204,6 +224,12 @@ class Data:
     def __init__(self, db: sqlite3.Connection) -> None:
         self.sector: Dict[str, str] = {t: s or "general" for t, s in db.execute(
             "SELECT ticker, sector_class FROM companies")}
+        # The SEC's SIC codes and descriptions (Milestone 5); none from a companies table before them.
+        self.sic: Dict[str, Optional[str]] = {}
+        self.sic_description: Dict[str, Optional[str]] = {}
+        if {"sic", "sic_description"} <= {r[1] for r in db.execute("PRAGMA table_info(companies)")}:
+            for t, code, description in db.execute("SELECT ticker, sic, sic_description FROM companies"):
+                self.sic[t], self.sic_description[t] = code, description
         self.fa: Dict[str, Dict[int, Dict[str, Num]]] = {}
         self.period_end: Dict[Tuple[str, int], Optional[str]] = {}
         for r in db.execute(f"SELECT ticker, fiscal_year, substr(period_end, 1, 10), {', '.join(FA)} "
@@ -1054,6 +1080,143 @@ def check_ranks(d: Data, failures: List[str]) -> Dict[str, Dict[str, Any]]:
     return ours
 
 
+def sic4(value: Any) -> Optional[str]:
+    """A stored SIC code as this oracle reads one: four ASCII digits, else none (a code stored otherwise is the
+    store's fault, and shows as a disagreement)."""
+    text = value.strip() if isinstance(value, str) else ""
+    return text if len(text) == 4 and all("0" <= ch <= "9" for ch in text) else None
+
+
+def oracle_industries(d: Data) -> Dict[str, Dict[str, Any]]:
+    """Every scored company's industry group, label and size, and its five ranks and composite within the group, from
+    companies.sic and the stored components: exact fractions, one company at a time."""
+    code = {t: sic4(d.sic.get(t)) for t in d.qs}
+    comps = {t: json.loads(q.get("components") or "{}") for t, q in d.qs.items()}
+
+    def sharing(prefix: str) -> List[str]:
+        return sorted(t for t, c in code.items() if c is not None and c[:len(prefix)] == prefix)
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for t in sorted(d.qs):
+        c = code[t]
+        group = None if c is None else next((p for p in (c[:3], c[:2]) if len(sharing(p)) >= MIN_INDUSTRY), None)
+        if group is None:
+            out[t] = {col: None for col in INDUSTRY_GROUP_COLUMNS + INDUSTRY_RANK_COLUMNS}
+            continue
+        members = sharing(group)
+        counts = Counter(d.sic_description.get(m) for m in members if d.sic_description.get(m))
+        named = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:LABEL_TOP]
+        label = f"SIC {group}: " + "; ".join(text for text, _ in named) if named else f"SIC {group}"
+        mine: Dict[str, Any] = {"industry_group": group, "industry_label": label, "industry_size": len(members),
+                                "detail": {}}
+        given = []
+        for rank in RANKS:
+            ps: List[Tuple[str, float, int, Fraction]] = []
+            for name, value in (comps[t].get(rank) or {}).items():
+                if value is None:
+                    continue
+                peers = [float(comps[m][rank][name]) for m in members
+                         if (comps[m].get(rank) or {}).get(name) is not None]
+                if len(peers) >= MIN_INDUSTRY:
+                    ps.append((name, float(value), len(peers),
+                               percentile(float(value), peers, name in LOWER_IS_BETTER, "top")))
+            need = 1 if rank in ("valuation", "momentum") else 2  # as the universe's ranks
+            mean = sum((p for *_, p in ps), Fraction(0)) / len(ps) if len(ps) >= need else None
+            mine[f"ind_rank_{rank}"] = None if mean is None else max(1, math.ceil(10 * mean))
+            mine["detail"][rank] = (ps, mean)
+            if mean is not None:
+                given.append(mine[f"ind_rank_{rank}"])
+        mine["ind_composite"] = Fraction(10 * sum(given), len(given)) if len(given) >= MIN_RANKS else None
+        out[t] = mine
+    return out
+
+
+def check_industries(d: Data, failures: List[str]) -> None:
+    print("== industry groups and ranks (Milestone 5), from companies.sic and the stored components")
+    print(f"    group = the 3-digit SIC prefix when >= {MIN_INDUSTRY} scored companies share it, else the 2-digit one "
+          f"when >= {MIN_INDUSTRY} do; members = every scored company whose code starts with it; a component's "
+          f"percentile within the members with it, when >= {MIN_INDUSTRY} have it; exact fractions")
+    absent = [c for c in INDUSTRY_GROUP_COLUMNS + INDUSTRY_RANK_COLUMNS if c not in d.qs_columns]
+    if absent:
+        for name in ("industry groups, labels and sizes", "industry ranks and composite",
+                     "the companies without industry ranks"):
+            gate(name, False, f"quality_scores has no {', '.join(absent)}: ranked before Milestone 5", failures)
+        return
+    ours = oracle_industries(d)
+    checked = agreed = 0
+    lines = []
+    for t in sorted(d.qs):
+        q, o = d.qs[t], ours[t]
+        for col in INDUSTRY_GROUP_COLUMNS:
+            checked += 1
+            if o[col] == q.get(col):
+                agreed += 1
+            else:
+                lines.append(f"    {t} (SIC {d.sic.get(t)}) {col}: stored {fmt(q.get(col))} oracle {fmt(o[col])}")
+    gate("industry groups, labels and sizes", checked > 0 and agreed == checked, f"agree {share(agreed, checked)}",
+         failures)
+    for line in lines:
+        print(line)
+    checked = agreed = 0
+    lines = []
+    for t in sorted(d.qs):
+        q, o = d.qs[t], ours[t]
+        for rank in RANKS:
+            col = f"ind_rank_{rank}"
+            checked += 1
+            if o[col] == q.get(col):
+                agreed += 1
+                continue
+            ps, mean = (o.get("detail") or {}).get(rank, ([], None))
+            lines.append(f"    {t} (SIC {d.sic.get(t)}, group {o['industry_group']}) {col}: stored {fmt(q.get(col))} "
+                         f"oracle {fmt(o[col])}" + ("" if mean is None else f" (mean {float(mean):.6f})"))
+            for name, v, n, p in ps:
+                lines.append(f"        {name} {fmt(v)}: n={n} p={p} ({float(p):.4f})")
+        checked += 1
+        mine_c, stored_c = o["ind_composite"], q.get("ind_composite")
+        if (mine_c is None and stored_c is None) or (mine_c is not None and stored_c is not None
+                                                     and abs(float(mine_c) - stored_c) <= COMPOSITE_TOL):
+            agreed += 1
+        else:
+            lines.append(f"    {t} ind_composite: stored {fmt(stored_c)} oracle "
+                         f"{fmt(None if mine_c is None else float(mine_c))}; ranks "
+                         f"{[o[f'ind_rank_{r}'] for r in RANKS]}")
+    gate("industry ranks and composite", checked > 0 and agreed == checked, f"agree {share(agreed, checked)}",
+         failures)
+    for line in lines:
+        print(line)
+    stored_none = {t for t, q in d.qs.items() if all(q.get(f"ind_rank_{r}") is None for r in RANKS)}
+    ours_none = {t for t, o in ours.items() if all(o[f"ind_rank_{r}"] is None for r in RANKS)}
+    gate("the companies without industry ranks", stored_none == ours_none,
+         f"stored {len(stored_none)}, oracle {len(ours_none)}"
+         + (f"; only stored: {', '.join(sorted(stored_none - ours_none)) or '-'}, only oracle: "
+            f"{', '.join(sorted(ours_none - stored_none)) or '-'}" if stored_none != ours_none else ", the same"),
+         failures)
+    # Reported: the groups, and why the others have none.
+    groups: Dict[str, List[str]] = {}
+    for t, o in ours.items():
+        if o["industry_group"] is not None:
+            groups.setdefault(o["industry_group"], []).append(t)
+    for group in sorted(groups):
+        first = ours[groups[group][0]]
+        members = sorted(t for t in d.qs if (sic4(d.sic.get(t)) or "").startswith(group))
+        print(f"    group {group}: {first['industry_size']} members, {len(groups[group])} ranked in it; "
+              f"{first['industry_label']}; members {', '.join(members)}")
+    no_code = sorted(t for t in d.qs if sic4(d.sic.get(t)) is None)
+    small = sorted(t for t in d.qs if t not in no_code and ours[t]["industry_group"] is None)
+    print(f"    without a group: {len(no_code) + len(small)} ({len(no_code)} without a code"
+          + (f": {', '.join(no_code)}" if no_code else "") + f"; {len(small)} in an industry under {MIN_INDUSTRY}"
+          + (f": {', '.join(f'{t} {d.sic.get(t)}' for t in small)}" if small else "") + ")")
+    with_rank = sorted(t for t, o in ours.items() if o["industry_group"] is not None and t not in ours_none)
+    print(f"    with a group: {sum(len(v) for v in groups.values())}; with an industry rank: {len(with_rank)}; with an "
+          f"industry composite: {sum(1 for o in ours.values() if o['ind_composite'] is not None)}")
+    edges = [f"{t} {r}" for t, o in sorted(ours.items()) for r in RANKS
+             if (o.get("detail") or {}).get(r, ([], None))[1] is not None
+             and (10 * o["detail"][r][1]).denominator == 1]
+    print(f"    industry rank means exactly on a decile boundary (where float rounding could tip a rank): "
+          f"{len(edges)}{' (' + ', '.join(edges[:40]) + (' ...' if len(edges) > 40 else '') + ')' if edges else ''}")
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # Reported, not gated
 
@@ -1194,6 +1357,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     check_sloan(d, mine, failures)
     stars_of = check_predictability(d, mine, differ, failures)
     check_ranks(d, failures)
+    check_industries(d, failures)
     distributions(d, mine, stars_of)
     severe_signs(d, mine)
 

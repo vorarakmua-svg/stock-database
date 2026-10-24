@@ -53,6 +53,8 @@ class ScreenRequest(BaseModel):
 
     filters: List[MetricFilterIn] = []
     sector: Optional[str] = None
+    # A 2- or 3-digit SIC prefix (screener.industry_prefix); anything else is a 400.
+    industry: Optional[str] = None
     sort: Optional[str] = None
     sort_dir: str = "desc"
     limit: int = 100

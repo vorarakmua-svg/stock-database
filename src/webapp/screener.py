@@ -21,7 +21,10 @@ order above, and any field in none of them raises ``ValueError`` BEFORE any SQL
 is built. Every user-supplied *value* (including the ``verdict`` and
 ``oe_verdict`` filters, each of which only ever selects one of three FIXED SQL
 clauses after validation against ``ALLOWED_VERDICTS``) is either a bound ``?``
-parameter or a hard-coded clause — never a raw string interpolation.
+parameter or a hard-coded clause — never a raw string interpolation. The
+``industry`` filter's value (a 2- or 3-digit SIC prefix) is checked to be 2 or
+3 ASCII digits (``industry_prefix``), raising ``ValueError`` otherwise, and then
+bound: ``c."sic" LIKE ? || '%'``, its digits holding none of LIKE's wildcards.
 
 Note: only the latest-fiscal-year-per-ticker semantics are implemented for v1.
 A calendar-year alignment option is explicitly out of scope (log as future work).
@@ -89,17 +92,24 @@ QUALITY_FIELDS: Tuple[str, ...] = (
     "roic_minus_wacc", "rank_strength", "rank_profitability", "rank_growth", "rank_valuation", "rank_momentum",
     "composite_score", "momentum", "magic_formula_rank", "warning_count",
 )
+#: The five ranks and the composite within the company's SIC industry group (Milestone 5), NULL without one, and in a
+#: table the scores wrote before them (docs/superpowers/specs/2026-10-25-universe-automation-design.md).
+INDUSTRY_RANK_FIELDS: Tuple[str, ...] = (
+    "ind_rank_strength", "ind_rank_profitability", "ind_rank_growth", "ind_rank_valuation", "ind_rank_momentum",
+    "ind_composite",
+)
 QUALITY_EXPRS: Dict[str, str] = {
     **{f: f'qs."{f}"' for f in QUALITY_FIELDS},
     "price_to_ncav": '(CASE WHEN qs."ncav_per_share" > 0 THEN ms."current_price" / qs."ncav_per_share" END)',
     # The scores' debt / EBITDA: 0 for a filer tagging no debt and paying no interest, which metrics_annual
     # leaves NULL; NULL where interest is paid on debt no mapped tag holds, where it reads 0 (BUG-189, BUG-190).
     "scores_debt_to_ebitda": 'qs."debt_to_ebitda"',
+    **{f: f'qs."{f}"' for f in INDUSTRY_RANK_FIELDS},
 }
 _QUALITY_JOIN: str = "LEFT JOIN quality_scores qs ON qs.ticker = ma.ticker"
 #: The quality_scores column each quality field reads.
 QUALITY_NEEDS: Dict[str, str] = {**{f: f for f in QUALITY_FIELDS}, "price_to_ncav": "ncav_per_share",
-                                 "scores_debt_to_ebitda": "debt_to_ebitda"}
+                                 "scores_debt_to_ebitda": "debt_to_ebitda", **{f: f for f in INDUSTRY_RANK_FIELDS}}
 #: What a query can read of quality_scores: True for every column, False without the table, or the table's
 #: columns, since a table the scores wrote with older code may lack one a field reads (BUG-190).
 QualityColumns = Union[bool, AbstractSet[str]]
@@ -195,6 +205,15 @@ PRESETS: Tuple[Tuple[str, str, str], ...] = (
      "predictability_stars_gte=4&price_to_hist_value_lt=0.9&sort=price_to_hist_value&sort_dir=asc"),
 )
 ALLOWED_VERDICTS = ("cheap", "fair", "expensive")
+#: The industry filter's value: a SIC prefix of 2 or 3 ASCII digits (the major group or the industry group), whole.
+INDUSTRY_PATTERN = re.compile(r"[0-9]{2,3}")
+
+
+def industry_prefix(value: str) -> str:
+    """*value* when it is a 2- or 3-digit SIC prefix (ASCII digits only, nothing around them); else ``ValueError``."""
+    if not isinstance(value, str) or not INDUSTRY_PATTERN.fullmatch(value):
+        raise ValueError(f"Invalid industry {value!r}: must be a SIC prefix of 2 or 3 digits (e.g. 28 or 283).")
+    return value
 
 # Allowed filter operators → SQL operator string
 ALLOWED_OPS: Dict[str, str] = {
@@ -210,9 +229,10 @@ ALLOWED_OPS: Dict[str, str] = {
 # oe_upside_pct so _annotate_verdicts can derive the Buffett verdict.
 OWNER_EARNINGS_SELECT: List[str] = ["oe_base", "oe_assumptions"]
 
-# Full ordered list of columns returned by build_screen_query / Reader.screen.
+# Full ordered list of columns returned by build_screen_query / Reader.screen (``sic``: the SEC's SIC code, NULL for a
+# companies table from before the codes).
 SCREEN_COLUMNS: List[str] = (
-    ["ticker", "company_name", "sector_class", "fiscal_year"]
+    ["ticker", "company_name", "sector_class", "sic", "fiscal_year"]
     + list(_METRIC_COLUMNS)
     + list(SNAPSHOT_SCREEN_COLUMNS)
     + VALUATION_SELECT_COLUMNS
@@ -295,8 +315,8 @@ METRIC_KINDS: Dict[str, str] = {
     # valuation history — percentiles in the 10-year window, and price / value
     **{f"{m}_pct_10y": "pct" for m in HISTORY_METRICS},
     "price_to_hist_value": "mult",
-    # quality scores — the scores and ranks are raw, the ratios and growth percentages
-    **{f: "raw" for f in QUALITY_FIELDS},
+    # quality scores — the scores and ranks are raw (the industry ones too), the ratios and growth percentages
+    **{f: "raw" for f in QUALITY_FIELDS + INDUSTRY_RANK_FIELDS},
     "sloan_ratio": "pct",
     "rev_ps_cagr_5y": "pct",
     "eps_cagr_5y": "pct",
@@ -384,6 +404,8 @@ class ScreenSpec:
 
     filters: List[MetricFilter] = field(default_factory=list)
     sector: Optional[str] = None
+    # A 2- or 3-digit SIC prefix (``industry_prefix``): the companies whose SEC code starts with it.
+    industry: Optional[str] = None
     verdict: Optional[str] = None
     verdict_oe: Optional[str] = None
     sort: Optional[str] = None
@@ -448,11 +470,13 @@ def _qualify_column(field_name: str, *, context: str = "filter", history: bool =
 
 
 def _build_where(spec: ScreenSpec, history: bool = True, quality: QualityColumns = True,
-                 insiders: bool = True, gurus: bool = True, indicators: bool = True) -> Tuple[str, List[Any]]:
-    """Validate filters/sector and build the WHERE clause + ordered params.
+                 insiders: bool = True, gurus: bool = True, indicators: bool = True,
+                 sic: bool = True) -> Tuple[str, List[Any]]:
+    """Validate filters/sector/industry and build the WHERE clause + ordered params.
 
-    Raises ``ValueError`` for any non-whitelisted field or unknown op.
-    Does NOT validate sort/sort_dir (that is done in ``build_screen_query``).
+    Raises ``ValueError`` for any non-whitelisted field, unknown op or an industry that isn't a 2- or 3-digit SIC
+    prefix. Does NOT validate sort/sort_dir (that is done in ``build_screen_query``). Without *sic* (a companies
+    table from before the codes), an industry matches no company.
     """
     params: List[Any] = []
     clauses: List[str] = []
@@ -480,6 +504,15 @@ def _build_where(spec: ScreenSpec, history: bool = True, quality: QualityColumns
     if spec.sector is not None:
         clauses.append("c.sector_class = ?")
         params.append(spec.sector)
+
+    if spec.industry is not None:
+        # Validated first: 2 or 3 ASCII digits, then bound, so LIKE sees no wildcard but the one added here.
+        prefix = industry_prefix(spec.industry)
+        if sic:
+            clauses.append("c.\"sic\" LIKE ? || '%'")
+            params.append(prefix)
+        else:
+            clauses.append("0")
 
     if spec.verdict is not None:
         if spec.verdict not in ALLOWED_VERDICTS:
@@ -532,7 +565,8 @@ def _build_where(spec: ScreenSpec, history: bool = True, quality: QualityColumns
 
 
 def build_screen_query(spec: ScreenSpec, history: bool = True, quality: QualityColumns = True,
-                       insiders: bool = True, gurus: bool = True, indicators: bool = True) -> Tuple[str, List[Any]]:
+                       insiders: bool = True, gurus: bool = True, indicators: bool = True,
+                       sic: bool = True) -> Tuple[str, List[Any]]:
     """Return ``(sql, params)`` for the full screen query.
 
     Pure function — does NOT touch the database.
@@ -543,6 +577,9 @@ def build_screen_query(spec: ScreenSpec, history: bool = True, quality: QualityC
     - a ``sort`` not in ``_METRIC_COLUMNS``
     - a ``sort_dir`` that is not ``'asc'`` or ``'desc'``
     - ``op='between'`` without ``value2``
+    - an ``industry`` that isn't a 2- or 3-digit SIC prefix
+
+    Without *sic* (a companies table from before the SEC codes), ``sic`` is NULL and an industry matches nothing.
     """
     # Validate sort_dir unconditionally (it always has a value)
     if spec.sort_dir not in ("asc", "desc"):
@@ -557,7 +594,7 @@ def build_screen_query(spec: ScreenSpec, history: bool = True, quality: QualityC
                                    insiders=insiders, gurus=gurus, indicators=indicators)
 
     # Build WHERE (also validates filters)
-    where_sql, params = _build_where(spec, history, quality, insiders, gurus, indicators)
+    where_sql, params = _build_where(spec, history, quality, insiders, gurus, indicators, sic)
 
     # Build ORDER BY with NULLs-last
     if sort_col is not None:
@@ -589,8 +626,9 @@ def build_screen_query(spec: ScreenSpec, history: bool = True, quality: QualityC
     indicator_exprs_sql = ", ".join(
         f"{expr if indicators else 'NULL'} AS {name}" for name, expr in INDICATOR_EXPRS.items()
     )
+    sic_sql = 'c."sic"' if sic else "NULL"
     select_sql = (
-        f"c.ticker, c.company_name, c.sector_class, ma.fiscal_year, "
+        f"c.ticker, c.company_name, c.sector_class, {sic_sql} AS sic, ma.fiscal_year, "
         f"{metric_cols_sql}, {snapshot_cols_sql}, "
         f"{valuation_cols_sql}, {oe_cols_sql}, {valuation_exprs_sql}, {history_exprs_sql}, "
         f"{quality_exprs_sql}, {insider_exprs_sql}, {guru_exprs_sql}, {indicator_exprs_sql}"
@@ -617,14 +655,15 @@ def build_screen_query(spec: ScreenSpec, history: bool = True, quality: QualityC
 
 
 def build_count_query(spec: ScreenSpec, history: bool = True, quality: QualityColumns = True,
-                      insiders: bool = True, gurus: bool = True, indicators: bool = True) -> Tuple[str, List[Any]]:
+                      insiders: bool = True, gurus: bool = True, indicators: bool = True,
+                      sic: bool = True) -> Tuple[str, List[Any]]:
     """Return ``(sql, params)`` for a ``COUNT(*)`` version of the same query.
 
     Used by ``Reader.screen`` to compute the total without LIMIT/OFFSET.
-    Validates filters and sector (same as ``build_screen_query``) but does NOT
-    validate sort/sort_dir (not needed for a count).
+    Validates filters, sector and industry (same as ``build_screen_query``) but
+    does NOT validate sort/sort_dir (not needed for a count).
     """
-    where_sql, params = _build_where(spec, history, quality, insiders, gurus, indicators)
+    where_sql, params = _build_where(spec, history, quality, insiders, gurus, indicators, sic)
 
     sql = (
         f"SELECT COUNT(*)\n"
@@ -652,19 +691,23 @@ def parse_screen_params(params: Dict[str, str]) -> ScreenSpec:
     """Parse HTTP query-string key/value pairs into a ``ScreenSpec``.
 
     Keys of the form ``<field>_<op>`` (where op ∈ ALLOWED_OPS) become
-    ``MetricFilter`` entries.  Reserved keys ``sector``, ``verdict``,
-    ``oe_verdict``, ``sort``, ``sort_dir``, ``limit``, ``offset`` are handled
-    separately.  All other keys are silently ignored.
+    ``MetricFilter`` entries.  Reserved keys ``sector``, ``industry``,
+    ``verdict``, ``oe_verdict``, ``sort``, ``sort_dir``, ``limit``, ``offset``
+    are handled separately.  All other keys are silently ignored.
 
-    Raises ``ValueError`` for bad limit/offset, unparseable float values, or an
-    unrecognized ``verdict``/``oe_verdict``.
+    Raises ``ValueError`` for bad limit/offset, unparseable float values, an
+    unrecognized ``verdict``/``oe_verdict``, or an ``industry`` that isn't a 2-
+    or 3-digit SIC prefix.
     The ``ScreenSpec`` itself is NOT validated here — call ``build_screen_query``
     (or ``Reader.screen``) to apply the whitelist checks.
     """
-    RESERVED = {"sector", "verdict", "oe_verdict", "sort", "sort_dir", "limit", "offset"}
+    RESERVED = {"sector", "industry", "verdict", "oe_verdict", "sort", "sort_dir", "limit", "offset"}
     VALID_OPS = set(ALLOWED_OPS.keys())
 
     sector = params.get("sector") or None
+    industry = params.get("industry") or None
+    if industry is not None:
+        industry_prefix(industry)
     verdict = params.get("verdict") or None
     if verdict is not None and verdict not in ALLOWED_VERDICTS:
         raise ValueError(
@@ -712,6 +755,7 @@ def parse_screen_params(params: Dict[str, str]) -> ScreenSpec:
     return ScreenSpec(
         filters=filters,
         sector=sector,
+        industry=industry,
         verdict=verdict,
         verdict_oe=verdict_oe,
         sort=sort,
