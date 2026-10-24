@@ -13,22 +13,27 @@ A comprehensive guide on how to use the output data from the Stock Data Collecti
 5. [Valuation Layer](#valuation-layer) — built-in, stored fair-value models
    - [Valuation history](#valuation-history) — monthly multiples, 10-year ranges, the historical value
    - [Quality scores](#quality-scores) — Piotroski F, Altman Z, Beneish M, ranks, warning signs
+   - [Other valuation indicators](#other-valuation-indicators) — reverse DCF, earnings power value, NCAV and net-net, median P/S value, tangible Graham number
    - [Owner Earnings ("Buffett mode")](#owner-earnings-buffett-mode) — separate lens, excluded from the median
 6. [SEC Ownership](#sec-ownership) — insiders' Form 4 trades and the gurus' 13F holdings
    - [Collecting ownership data](#collecting-ownership-data) — the commands and what each touches
    - [Insiders (Form 4)](#insiders-form-4) — `insider_filings`, `insider_trades` and queries
    - [Gurus (13F)](#gurus-13f) — the six 13F tables, what a position's change means, and queries
    - [Viewing ownership](#viewing-ownership) — the web pages, the API and the screener fields
-7. [Updating Data from the Web](#updating-data-from-the-web) — UPDATE DATA button, fetching new tickers
-8. [Valuation Models](#valuation-models) — DIY formulas over the raw JSON/CSV
+7. [Market Data](#market-data) — FRED's corporate equities and GDP, Shiller's CAPE and the Treasury yield curve
+   - [Collecting market data](#collecting-market-data) — the command, its cache and its exit codes
+   - [The market series](#the-market-series) — `market_series`, `market_fetches` and queries
+   - [Viewing market data](#viewing-market-data) — the Market page, the API and how to read each section
+8. [Updating Data from the Web](#updating-data-from-the-web) — UPDATE DATA button, fetching new tickers
+9. [Valuation Models](#valuation-models) — DIY formulas over the raw JSON/CSV
    - [DCF (Discounted Cash Flow)](#dcf-discounted-cash-flow)
    - [Graham Number](#graham-number)
    - [Peter Lynch Fair Value](#peter-lynch-fair-value)
    - [Buffett-Style Analysis](#buffett-style-analysis)
-9. [Financial Analysis Examples](#financial-analysis-examples)
-10. [Building Dashboards](#building-dashboards)
-11. [Data Quality Checks](#data-quality-checks)
-12. [Common Use Cases](#common-use-cases)
+10. [Financial Analysis Examples](#financial-analysis-examples)
+11. [Building Dashboards](#building-dashboards)
+12. [Data Quality Checks](#data-quality-checks)
+13. [Common Use Cases](#common-use-cases)
 
 ---
 
@@ -500,6 +505,154 @@ It is also shown in three places:
 
 It changes none of the models, their median or the verdict.
 
+### Other valuation indicators
+
+Every company also gets five **other valuation indicators**: a reverse DCF, the earnings power value (EPV), NCAV with
+Graham's net-net, the median P/S value and the Graham number on tangible book. They are computed with the valuations,
+after the quality scores whose figures they read, so the backfill above fills them too, and every collection, in the
+terminal or the web interface, recomputes them. They are display-only, like owner earnings: none enters the five-model
+median, the verdicts or the upside. See the README's
+[Other valuation indicators](README.md#other-valuation-indicators) for the formulas and the N/A rules.
+
+How to read them: each answers a different question about the price.
+
+- **Reverse DCF** (`reverse_dcf`): what growth does the price need? It turns the DCF around. On the DCF's own cash flow
+  basis, share count, discount rate and terminal growth, it finds the growth of years 1-5 at which the DCF gives the
+  price. Read it beside the growth the DCF itself assumes (`dcf_growth_base` in the assumptions). On 2026-10-24 the price
+  implied more growth than the DCF assumes for 72 of the 91 companies it applies to (AAPL: 26.5% a year against the
+  DCF's 7.1%). It is a rate, so it has no bear, bull or upside, and the search covers -50% to +100% a year: a price
+  outside that range is N/A, with the side it is on.
+- **EPV** (`epv`): what is the business worth if it never grows? Its normalized after-tax operating earnings over the
+  WACC, less debt plus cash and short-term investments. A price above the EPV pays for growth; a price below it is less
+  than the business's current earnings are worth with none. On 2026-10-24 only VZ ($44.54) traded under its EPV
+  ($55.69); the median company's EPV was a quarter of its price, and D and INTC read negative, their debt exceeding
+  their earnings power.
+- **NCAV and the net-net** (`ncav`): what are the current assets worth after every liability? NCAV per share is current
+  assets less total liabilities, and Graham bought below two thirds of it (`netnet_buy_price` in the assumptions). The
+  bear, Graham's net-net working capital, is stricter: it counts receivables at 75% and inventory at half their book
+  value. Most large companies are N/A here, their liabilities exceeding their current assets (83 of the 98 with the
+  figures). Of the 15 with a positive NCAV, none was near a net-net on 2026-10-24: the lowest price over NCAV was ISRG's
+  21.9.
+- **Median P/S value** (`ps_value`): what would the price be at the company's own typical sales multiple? The 10-year
+  median P/S times the trailing revenue per share, with the 25th and 75th percentile P/S as the bear and bull. It
+  compares the price with the company's own history, and it needs 36 months of it. On 2026-10-24 the price was under
+  the median P/S value for 45 of the 120 companies it applies to.
+- **Graham number on tangible book** (`graham_tangible`): the Graham model's `sqrt(22.5 × EPS × book value per share)`
+  with goodwill and intangibles taken out of book value, so a company that grew by acquisition reads lower than on the
+  Graham model (the tangible number was the lower for 74 of the 81 companies it applies to). N/A where tangible book is
+  negative (33 of the 127).
+
+One table holds them:
+
+- **`valuation_indicators`**: one row per (ticker, indicator), five per company, replaced together whenever the
+  company's valuations are computed:
+  - `indicator`: `reverse_dcf`, `epv`, `ncav`, `ps_value` or `graham_tangible`;
+  - `applicable` (1 or 0) and `na_reason` (NULL when applicable);
+  - `value_bear`, `value_base` and `value_bull`: per share, on the price's basis, NULL where the method gives no such
+    case or the indicator is N/A. For `reverse_dcf` the base is the growth as a fraction (0.265 is 26.5% a year), and
+    the bear and bull are NULL;
+  - `unit`: `per_share`, or `rate` for `reverse_dcf`;
+  - `assumptions` (JSON): the inputs. An N/A row may carry the ones computed before the method stopped, a negative NCAV
+    per share for instance;
+  - `basis_fiscal_year` (NULL for `ps_value`) and `computed_at`.
+
+The JSON column reads with SQLite's JSON functions, e.g. `json_extract(assumptions, '$.dcf_growth_base')`. What each
+indicator stores in it:
+- `reverse_dcf`: `price` and `price_date` (the snapshot it was solved at), the DCF's inputs (`fcf_basis`,
+  `shares_outstanding`, `discount_base`, `terminal_growth`), `dcf_growth_base` (the DCF's own growth), `dcf_value_base`
+  and the search range (`search_low`, `search_high`);
+- `epv`: `margin_years` and `mean_operating_margin`, `pretax_years` (the years whose EBIT is pretax income plus
+  interest) and `no_interest_years` (those without an interest figure), `latest_revenue`, `normalized_ebit`, `tax_rate`
+  and `tax_source` (`effective` or `default`), `adjusted_earnings`, `wacc`, `total_debt` (and `debt_missing`),
+  `cash_and_sti`, and `shares_outstanding` with `shares_source` (`market_snapshot`, or `financials_annual` after a
+  failed quote);
+- `ncav`: `ncav_per_share`, `nnwc_per_share` (the net-net working capital), `current_assets`, `total_liabilities`,
+  `shares`, the four net-net parts (`cash_and_equivalents`, `short_term_investments`, `accounts_receivable`,
+  `inventory`) with `receivables_weight` and `inventory_weight`, `nnwc_missing` (the parts counted as 0) and, on an
+  applicable row, `netnet_buy_price`;
+- `ps_value`: `median_ps`, `p25_ps`, `p75_ps`, `current_ps`, `as_of` and `n_months`;
+- `graham_tangible`: `eps_base`, `eps_bear`, `eps_bull`, `bvps`, `tangible_bvps`, `total_equity`, `goodwill`,
+  `intangible_assets`, `multiplier` and `missing` (the goodwill or intangibles figures counted as 0).
+
+```sql
+-- AAPL's five indicators: the bear, base and bull per share (a growth rate for the reverse DCF), or why not
+SELECT indicator, applicable, value_bear, value_base, value_bull, unit, na_reason
+FROM valuation_indicators
+WHERE ticker = 'AAPL'
+ORDER BY indicator;
+
+-- Every company's earnings power value against its latest price, the ones furthest under it first
+SELECT i.ticker, i.value_bear, i.value_base, i.value_bull, m.current_price,
+       i.value_base / m.current_price - 1 AS epv_upside
+FROM valuation_indicators i
+JOIN market_snapshots m ON m.ticker = i.ticker
+ AND m.collected_at = (SELECT MAX(collected_at) FROM market_snapshots WHERE ticker = i.ticker)
+WHERE i.indicator = 'epv' AND i.applicable = 1
+ORDER BY epv_upside DESC
+LIMIT 10;
+
+-- The growth each stored price implies, beside the growth the DCF itself assumes, the widest gap first
+SELECT ticker,
+       value_base AS implied_growth,
+       json_extract(assumptions, '$.dcf_growth_base') AS dcf_growth,
+       value_base - json_extract(assumptions, '$.dcf_growth_base') AS gap,
+       json_extract(assumptions, '$.price') AS price,
+       json_extract(assumptions, '$.price_date') AS price_date
+FROM valuation_indicators
+WHERE indicator = 'reverse_dcf' AND applicable = 1
+ORDER BY gap DESC
+LIMIT 10;
+
+-- The companies with a positive NCAV: Graham's buy line, the net-net working capital per share and the price over NCAV
+-- (a net-net trades at or under the buy line: a price over NCAV of two thirds or less)
+SELECT i.ticker, i.value_base AS ncav_per_share, i.value_bear AS netnet_working_capital,
+       json_extract(i.assumptions, '$.netnet_buy_price') AS buy_line,
+       m.current_price, m.current_price / i.value_base AS price_to_ncav
+FROM valuation_indicators i
+JOIN market_snapshots m ON m.ticker = i.ticker
+ AND m.collected_at = (SELECT MAX(collected_at) FROM market_snapshots WHERE ticker = i.ticker)
+WHERE i.indicator = 'ncav' AND i.applicable = 1
+ORDER BY price_to_ncav;
+
+-- The Graham number on tangible book against the Graham model's own, the biggest cuts first
+SELECT t.ticker, g.value_base AS graham, t.value_base AS graham_tangible,
+       t.value_base / g.value_base - 1 AS change
+FROM valuation_indicators t
+JOIN valuations g ON g.ticker = t.ticker AND g.model = 'graham' AND g.applicable = 1
+WHERE t.indicator = 'graham_tangible' AND t.applicable = 1
+ORDER BY change
+LIMIT 10;
+
+-- Why an indicator is N/A, and for how many companies
+SELECT indicator, na_reason, COUNT(*) AS companies
+FROM valuation_indicators
+WHERE applicable = 0
+GROUP BY indicator, na_reason
+ORDER BY indicator, companies DESC;
+```
+
+It is also shown in three places:
+- **Web**: the **VAL** tab's *Other indicators* section, after the models and owner earnings: per indicator its bear,
+  base and bull, *Price vs base* (the base's upside from the live price), its method in one line, notes read from its
+  assumptions and the assumptions themselves, or its N/A reason. The reverse DCF is solved again at the live price,
+  beside the growth the DCF assumes; the stored growth is at the price of the last computation. Before the indicators
+  are computed the section says to run the backfill or click UPDATE DATA.
+- **Screener**: five fields, under *Other indicators* in the field list: `reverse_dcf_growth` (the growth the price
+  implies, a fraction, as stored), `epv_upside_pct`, `ps_value_upside_pct` and `graham_tangible_upside_pct` (the base
+  over the snapshot's price, less 1) and `price_to_nnwc` (the price over Graham's net-net working capital per share,
+  where that is positive; `price_to_ncav` is the same over NCAV). The results show the first as an *Implied growth*
+  column, and the CSV export carries all five. For example `GET /api/screen?epv_upside_pct_gt=0&sort=epv_upside_pct&sort_dir=desc`
+  or `GET /api/screen?reverse_dcf_growth_gt=0.3&sort=reverse_dcf_growth&sort_dir=desc`. A database from before the table
+  screens with all five empty.
+- **API**: `GET /api/stocks/{ticker}/valuation-indicators` (not `/indicators`, the price chart's MA/RSI/MACD bundle)
+  returns `{ticker, price, computed, computed_at, indicators, reverse_dcf_live}`. `computed` is false before the
+  indicators are stored. Each of the five `indicators` has its `indicator`, `label`, `method`, `applicable`,
+  `na_reason`, `unit`, `value_bear`, `value_base`, `value_bull`, `basis_fiscal_year`, `assumptions`, `upside_pct` (the
+  base over the price, less 1; null for the reverse DCF) and `notes`. `reverse_dcf_live` is the reverse DCF solved again
+  at `price`, the latest quote: `{price, growth, na_reason, dcf_growth_base}`. An unknown ticker answers 404.
+
+It changes none of the models, their median or the verdict.
+
 ### Owner Earnings ("Buffett mode")
 
 A sixth model, alongside the five above, computed and stored the same way — but
@@ -898,6 +1051,183 @@ A company with no Form 4 collected reads 0 in `ins_buyers_12m` and `ins_ceo_cfo_
 insiders bought nothing does, and empty in `ins_net_buy_12m` and `ins_cluster_buyers_12m`; a company no guru
 holds reads 0 in `gurus_holding` and `gurus_buying`. A database without the ownership tables screens with all
 six fields empty.
+
+---
+
+## Market Data
+
+`src/market/` stores three market-wide sources that no company's filings give: FRED's corporate equities and GDP, Robert
+Shiller's monthly S&P data with his cyclically adjusted P/E (CAPE), and Treasury.gov's daily yield curve. The **Market**
+page (`/market`) draws the Buffett indicator, the CAPE and the yield curve from them. See the README's
+[Market data](README.md#market-data) for the sources, the cache and the methods. They change nothing collected for the
+companies, and neither `python -m src.main` nor the web interface's update collects them: they have their own command,
+and two tables hold them.
+
+### Collecting market data
+
+```bash
+# All three sources
+python -m src.market.collect
+
+# One or two of them
+python -m src.market.collect --shiller
+python -m src.market.collect --fred --treasury
+
+# Another database or cache
+python -m src.market.collect --db data/output/stock.db --cache-dir data/cache
+```
+
+The database must already exist (run a collection first: nothing is created, and a missing one exits with 2). No key
+and no SEC User-Agent are needed: the three sites are asked with requests' own User-Agent, a request a second.
+`--treasury-from YEAR` starts the Treasury's files at another year than 1990; its series are replaced whole, so a later
+year removes the earlier rows from `market_series` (the cache keeps them, and a run without the option stores them
+again).
+
+The first run takes about 12 minutes (725 seconds on 2026-10-24), nearly all of it Treasury.gov, which answers slowly
+(about 19 seconds for each of its 37 yearly files). Every answer is cached under `data/cache/market/`, and a later run
+fetches only what is a day old: FRED's two series, Shiller's page and workbook, and the Treasury's current year. A past
+Treasury year is not fetched again once it was cached after that year ended. A run with everything fresh takes about 3
+seconds and stores the same rows, so a run within a day of the last one adds nothing new. A fetch that fails falls back
+to the cached copy and says so. Each run prints a line per source and a summary; the end of a run looks like:
+
+```
+Market data: 4 of 4 sources stored
+  fred:NCBEILQ027S: 305 rows, 1945-10-01 to 2026-04-01
+  ...
+  ust:30y: 8215 rows, 1990-01-02 to 2026-10-23
+Latest: fred:NCBEILQ027S 2026-04-01; fred:GDP 2026-04-01; shiller 2026-10-01; treasury 2026-10-23
+Failed: none
+```
+
+A source that fails, or returns no rows, is listed on the `Failed:` line with its reason and stores nothing; what it
+stored before stays, and the others still go on. The exit code is 0 when every source asked for stored rows and 1
+when any did not.
+
+### The market series
+
+Two tables hold them:
+
+- **`market_series`**: one row per (`series`, `date`) with its `value`. `date` is ISO: the first day of the quarter for
+  FRED, of the month for Shiller, and the trading day for the Treasury. A series is replaced whole when its source is
+  fetched. The series:
+  - `fred:NCBEILQ027S`: the corporate equities of US nonfinancial corporate business at market value, quarterly, in
+    $ millions, from 1945-10-01. It is annual before 1951-Q4, and its empty quarters are not stored;
+  - `fred:GDP`: gross domestic product, quarterly, in $ billions at a seasonally adjusted annual rate, from 1947-01-01;
+  - `shiller:price`, `shiller:dividend`, `shiller:earnings`, `shiller:cpi` and `shiller:cape`: Shiller's monthly S&P
+    Composite price (the month's mean of daily closes), dividend and earnings, the CPI and the CAPE, from 1871-01-01 (the
+    CAPE from 1881-01-01). Each stops at its own last month: on 2026-10-24 the price and CPI reach 2026-10 and the
+    dividend and earnings 2026-06;
+  - `ust:1m`, `ust:6w`, `ust:2m`, `ust:3m`, `ust:4m`, `ust:6m`, `ust:1y`, `ust:2y`, `ust:3y`, `ust:5y`, `ust:7y`,
+    `ust:10y`, `ust:20y` and `ust:30y`: the Treasury's daily par yield curve, in percent as published (`4.69` is 4.69%),
+    from 1990. A maturity has rows only from the day Treasury began publishing it (the 20-year 1993-10-01, the 1-month
+    2001-07-31, the 2-month 2018-10-16, the 4-month 2022-10-19, the 1.5-month `6w` 2025-02-18), and the 30-year has none
+    from 2002 to 2006.
+- **`market_fetches`**: one row per source (`fred:NCBEILQ027S`, `fred:GDP`, `shiller`, `treasury`): the `url` it came
+  from (Shiller's workbook link, the Treasury's current-year file), the `rows` stored for it and `fetched_at`, when the
+  answer came from the source. A cached copy keeps its own time, so a fall back to an old copy shows its age.
+
+```sql
+-- Every series: its rows and its first and last date
+SELECT series, COUNT(*) AS n_rows, MIN(date) AS first_date, MAX(date) AS last_date
+FROM market_series
+GROUP BY series
+ORDER BY series;
+
+-- What was collected from each source, and when its answer was fetched
+SELECT source, rows, fetched_at, url
+FROM market_fetches
+ORDER BY source;
+
+-- The Buffett indicator for the latest quarters both FRED series have:
+-- equities ($ millions) over GDP ($ billions), in percent
+SELECT e.date AS quarter, e.value AS equities_musd, g.value AS gdp_busd,
+       e.value / 1000 / g.value * 100 AS equities_to_gdp_pct
+FROM market_series e
+JOIN market_series g ON g.series = 'fred:GDP' AND g.date = e.date
+WHERE e.series = 'fred:NCBEILQ027S'
+ORDER BY e.date DESC
+LIMIT 8;
+
+-- Shiller's CAPE: the latest month against its mean since 1881, its low and high,
+-- and the share of months at or below the latest
+WITH cape AS (SELECT date, value FROM market_series WHERE series = 'shiller:cape'),
+     latest AS (SELECT date, value FROM cape ORDER BY date DESC LIMIT 1)
+SELECT latest.date AS month, latest.value AS latest, AVG(cape.value) AS mean,
+       MIN(cape.value) AS low, MAX(cape.value) AS high, AVG(cape.value <= latest.value) AS percentile
+FROM cape, latest;
+
+-- The 10-year less the 2-year yield on the latest days; below 0 is an inverted curve
+SELECT t.date, t.value AS ten_year, w.value AS two_year, ROUND(t.value - w.value, 2) AS spread
+FROM market_series t
+JOIN market_series w ON w.series = 'ust:2y' AND w.date = t.date
+WHERE t.series = 'ust:10y'
+ORDER BY t.date DESC
+LIMIT 10;
+
+-- Days the 10-year yield was under the 2-year yield, by year
+SELECT substr(t.date, 1, 4) AS year, COUNT(*) AS days, SUM(t.value < w.value) AS inverted_days
+FROM market_series t
+JOIN market_series w ON w.series = 'ust:2y' AND w.date = t.date
+WHERE t.series = 'ust:10y'
+GROUP BY year
+HAVING inverted_days > 0
+ORDER BY year DESC;
+```
+
+### Viewing market data
+
+- **Web**: the **Market** page (`/market`, a link in the nav bar) has three sections, each with its figures, its
+  chart, a source line (the link, the day it was fetched and the latest date) and its method note. A section whose
+  series aren't stored says which command collects them (`--fred`, `--shiller` or `--treasury`).
+- **API**: `GET /api/market` returns `{available, buffett, cape, yield_curve, sources}`, computed at each request from
+  the stored series (about 430 KB, since it carries the charts' series). `available` says whether any section is. Each
+  section has `available`, `date` (its latest), `method` (the published note), `reason` and `collect`. A section whose
+  series aren't stored has none of its figures: its `reason` says why and `collect` is the command that collects them
+  (both null for an available section), so the answer is 200 before anything is collected. `sources` lists, per
+  section, its `latest` date and its `fetches`: `source`, `name`, `url` and `fetched_at` (null if never fetched).
+
+How to read each section:
+
+- **The Buffett indicator** (`buffett`): the corporate equities over GDP, as a percentage. The ratio has a long-run
+  trend, so the section reads it against that trend: `z` is how many standard deviations the latest quarter is from it
+  (`sd` is the standard deviation of the log residuals), and `zone` names where that falls, with the `pill` the page
+  colors it by:
+
+  | z | `zone` | `pill` |
+  |---|---|---|
+  | below -2 | significantly undervalued | cheap |
+  | -2 up to -1 | modestly undervalued | cheap |
+  | -1 to +1 | fairly valued | fair |
+  | above +1 up to +2 | modestly overvalued | expensive |
+  | above +2 | significantly overvalued | expensive |
+
+  The trend is the least-squares line through ln(ratio) against time over every quarter both series have. The section
+  also gives `ratio`, `trend` (its value in the same quarter), `growth` (the trend's growth a year), `percentile` (the
+  share of the quarters at or below the latest, as a fraction; null under 36 quarters), `date` (the latest quarter both
+  series have, the first day of the quarter), `first_date`, `quarters`, `cutoffs`, `zones` and `series` (the chart's
+  `dates`, `ratio`, `trend` and the bands at the trend times e to the ±1 and ±2 standard deviations: `lower_2sd`,
+  `lower_1sd`, `upper_1sd`, `upper_2sd`). On 2026-10-24 the ratio read 255.0% for Q2 2026, the highest of 303 quarters
+  (percentile 1.0), 1.68 standard deviations above its trend of 147.6%: *modestly overvalued*. A record ratio can still
+  read that way: the zone depends on the span of the fit, and over 1947-2026 the spread around the trend is wide (0.325
+  in logs). The same quarter would read +1.21 on a fit from 1970; the page fits the whole history.
+- **Shiller's CAPE** (`cape`): the real price over the mean real earnings of the 120 months ending the month before.
+  The section gives `value` and `date` (the latest month), and over its `months` months from `first_date` the `mean`,
+  `median`, `min` (with `min_date`), `max` (with `max_date`) and `percentile` (a fraction), and `series` (`dates`,
+  `values`). On 2026-10-24: 40.7 for 2026-10 against a mean of 17.8 and a median of 16.6 since 1881, at the 98.9th
+  percentile. It says where the market's price stands against ten years of its earnings and its own history, not what
+  comes next. Shiller's latest month is a single day's close with an estimated CPI.
+- **The yield curve** (`yield_curve`): `curve` is the latest day's yield at each maturity that has one that day
+  (`{maturity, label, value}`, shortest first), and `year_ago` (`{date, curve}`) the curve of the latest day on or before
+  365 days earlier, so the section shows how the whole curve moved over the year. `spreads` has the 10-year less the
+  2-year (`key` `10y_2y`) and the 10-year less the 3-month (`10y_3m`), in percentage points, on each day both have:
+  `dates` and `values`, `days`, `latest_value`, `inverted` (below 0 now), `inverted_share` (a fraction of its days,
+  since `first_date`), `last_inverted_day` and `latest_episode`. An inverted curve has short yields above long ones.
+  `latest_episode` is the latest sustained inversion, `{first, last, days}` or null: the spread's runs of days below 0
+  are joined into episodes across gaps of at most 20 of its days, and the latest episode with at least 20 days below 0
+  counts (`days` is the days below 0, not the span), so a one-day dip after an inversion doesn't replace it. On
+  2026-10-23 the 10-year less 2-year spread was +0.31 (last inverted 2024-09-05; sustained inversion 2022-07-06 to
+  2024-09-05, 539 days) and the 10-year less 3-month +0.78 (last inverted 2025-10-16; sustained 2025-02-26 to 2025-09-15,
+  85 days).
 
 ---
 

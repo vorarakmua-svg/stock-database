@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 3 · DOING 0 · DONE 35 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 2 · DOING 0 · DONE 36 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -67,7 +67,7 @@
 | M4-3 | `src/market/`: the `.xls` reader (`xls.py`), the FRED, Shiller and Treasury sources with their cache, storage (`market_series`, `market_fetches`), `python -m src.market.collect`; with tests | DONE | this commit | `qa/evidence/market-m4-3-*` |
 | M4-4 | The market page (`/market`: the Buffett indicator and its zones, Shiller's CAPE, the yield curve) and `GET /api/market`, a nav link, browser-checked; with tests | DONE | this commit | `qa/evidence/market-m4-4-*` |
 | M4-5 | Independent oracle `qa/oracle/indicators_oracle.py` and real-data validation: the indicators on a backfilled copy, the reader against the sheet's own CAPE and the app's `^GSPC`, the Buffett ratio by hand, the valuations untouched | DONE | this commit | `qa/evidence/oracle-m4-5-*` |
-| M4-6 | Docs: README and USAGE_GUIDE | TODO | | |
+| M4-6 | Docs: README and USAGE_GUIDE | DONE | this commit | README "Other valuation indicators", "Market data"; USAGE_GUIDE "Other valuation indicators", "Market Data"; `qa/evidence/docs-m4-6-*` |
 | M4-7 | Milestone close: code review 18 (opus) with Critical and Important findings fixed; backup, then the offline backfill of the indicators and the market collection into the user's DB | TODO | | |
 
 ## M5: a wider universe and automation
@@ -1091,3 +1091,25 @@ Evidence: `qa/evidence/oracle-m4-5-{untouched,indicators,indicators-rerun,market
 Gates: ruff ✓ mypy ✓ pytest 1914 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) test(oracle): Milestone 4's independent oracles, and EPV's window and count settled (M4-5)
 Next: M4-6 (docs: README and USAGE_GUIDE).
+
+### Build iteration 47: 2026-10-25 00:54: M4-6
+Did:
+- A sonnet worker documented Milestone 4:
+  - README: "Other valuation indicators" under the valuation layer (each formula, its N/A rules, the table, the VAL
+    tab, the API, the screener fields, the oracle's results, the limitations); a new "Market data" section (the
+    sources and storage, our `.xls` reader and Q14, the cache and network rules, the CLI with its options and exit
+    codes, the market page's methods with the 2026-10-24 readings, the oracle, the limitations); the data sources,
+    the web interface's features and endpoints, and the project structure;
+  - USAGE_GUIDE: "Other valuation indicators" and "Market Data" in prose, bash and SQL, and the table of contents.
+- Its checks:
+  - the docs test passes, and every SQL example ran on the M4-5 scratch copy;
+  - every documented endpoint answered through the TestClient;
+  - 253 identifiers checked against the code and the schema.
+- My review of the new sections: accurate, in the earlier milestones' voice.
+- The worker found that `--treasury-from` with a later year deletes the earlier stored yields, since each series is
+  replaced whole (the cache keeps them, and a default run restores them). The docs say so; logged as BUG-224 (P3)
+  for the milestone close.
+Evidence: `qa/evidence/docs-m4-6-{tests,sql,done}.txt`
+Gates: ruff ✓ mypy ✓ pytest 1914 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) docs: the other valuation indicators and the market data in the README and the usage guide (M4-6)
+Next: M4-7 (milestone close: code review 18, then the backup, the backfill and the market collection into the user's DB).

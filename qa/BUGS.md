@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 117 · NEEDS-USER 16 · Verified: 92
+**Open:** P0 0 · P1 0 · P2 11 · P3 118 · NEEDS-USER 16 · Verified: 92
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1688,6 +1688,13 @@ Found: build iteration 46 (M4-5's oracle) | Fixed: | Regression test:
 Repro: `SELECT fiscal_year, eps_diluted, weighted_avg_shares_diluted, shares_outstanding FROM financials_annual WHERE ticker = 'V'`: every year 2019-2025 has net income but no EPS and no share count; `per_share_annual` is empty for V. Visa reports EPS and shares for its class A, B and C stock separately (dimensioned facts), and the parser reads undimensioned facts only.
 Expected: an EPS and a count on one basis (class A, as converted).   Actual: Graham ("EPS or book value unavailable"), Lynch and the multiples band are N/A, and so are M2's per-share series and M4's NCAV, tangible Graham and P/S value. The DCF, DDM and owner earnings use the snapshot's count.
 Notes: reading class A's figures would add models to V's median, a verdict change: a valuation-policy decision, next to Q7 (share classes).
+
+### BUG-224 [P3][MARKET] `--treasury-from` with a later year deletes the stored yields before it
+Status: OPEN
+Found: build iteration 47 (M4-6's docs) | Fixed: | Regression test:
+Repro: after a full collection (yields from 1990), `python -m src.market.collect --treasury --treasury-from 2020`: `export_market_series` replaces each `ust:*` series whole, so `market_series` keeps 2020 onward only, and the spreads' inversion shares and episodes change with it.
+Expected: a narrower fetch refreshes its own years and leaves the earlier stored rows.   Actual: the earlier rows are deleted (the cache still holds their files, so a default run restores them).
+Notes: documented in the README's options table as the current behavior.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
