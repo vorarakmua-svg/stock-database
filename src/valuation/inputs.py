@@ -206,6 +206,30 @@ def _filed_between(split: Tuple[str, float], f_old: Optional[str], f_new: Option
     return f_old[:10] < str(when)[:10] <= f_new[:10]
 
 
+def _restated_between(splits: Sequence[Tuple[str, float]], filed_from: Optional[str],
+                      filed_to: Optional[str]) -> float:
+    """The factor that puts a share count last filed on *filed_from* onto the basis of figures last filed on
+    *filed_to*: the share splits dated between the two filings, divided out when *filed_to* is the earlier. A filing
+    restates its figures for every share split made before it, but a year's cover count is filed once or twice and
+    its EPS three times: GOOGL's FY2020 count of 0.675B was last filed in February 2022, its EPS in February 2023,
+    restated for the 20:1 split between (BUG-173). Only share splits count (simple ratios of 3:2 or more, or 1:2 or
+    less), and unknown dates move nothing."""
+    if not (filed_from and filed_to):
+        return 1.0
+    since, until = str(filed_from)[:10], str(filed_to)[:10]
+    factor = 1.0
+    for when, ratio in splits:
+        day = str(when)[:10]
+        if not (ratio and ratio > 0 and _simple_ratio(ratio)
+                and (ratio >= SPLIT_JUMP_THRESHOLD or ratio <= 1.0 / SPLIT_JUMP_THRESHOLD)):
+            continue
+        if since < day <= until:
+            factor *= ratio
+        elif until < day <= since:
+            factor /= ratio
+    return factor
+
+
 def _normalize_splits(records: List[FYRecord],
                       shares_detect: List[Optional[float]],
                       splits: Sequence[Tuple[str, float]] = (),
@@ -593,6 +617,12 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
                     filed_by_field[(int(v[0]), field_name)] = filed_on
     except sqlite3.OperationalError:  # a database from before the vintages were kept
         pass
+    splits = [
+        (s["date"], s["ratio"])
+        for s in conn.execute(
+            "SELECT date, ratio FROM split_events WHERE ticker = ? ORDER BY date", (ticker,)
+        ).fetchall()
+    ]
     records: List[FYRecord] = []
     shares_detect: List[Optional[float]] = []
     detect_filed: List[Optional[str]] = []
@@ -615,6 +645,12 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
             detect, detect_field = r["net_income"] / r["eps_diluted"], "eps_diluted"
         if detect is None:
             detect, detect_field = r["shares_outstanding"], "shares_outstanding"
+        if detect_field == "eps_diluted" and shares is not None:
+            # The year's count is the cover's, as filed, while the EPS the detection reads may have been restated
+            # since for a split: the count goes onto its EPS's basis, the one the detection folds (BUG-173).
+            fiscal_year = int(r["fiscal_year"])
+            shares *= _restated_between(splits, filed_by_field.get((fiscal_year, "shares_outstanding")),
+                                        filed_by_field.get((fiscal_year, "eps_diluted")))
         shares_detect.append(detect)
         detect_filed.append(filed_by_field.get((int(r["fiscal_year"]), detect_field)))
         records.append(
@@ -631,12 +667,6 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
                 capex=r["capex"],
             )
         )
-    splits = [
-        (s["date"], s["ratio"])
-        for s in conn.execute(
-            "SELECT date, ratio FROM split_events WHERE ticker = ? ORDER BY date", (ticker,)
-        ).fetchall()
-    ]
     filed = fy_rows[-1]["filed_date"] if fy_rows else None
     # A split made after the latest filing restated nothing stored, so it can't
     # explain a seam (an older merger's would take it); _apply_later_splits

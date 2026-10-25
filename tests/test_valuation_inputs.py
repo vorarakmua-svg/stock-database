@@ -1040,6 +1040,98 @@ def test_a_split_between_two_years_filings_still_explains_their_seam(tmp_path):
         (2019, 2.0), (2020, 2.0), (2021, 1.0), (2022, 1.0)]
 
 
+def _cover_count_db(tmp_path, split_date="2022-07-15", weighted_from=2022, sector="general", prices=False):
+    """GOOGL-like (BUG-173): FY2016-2025 with every 10-K's view of each year in the vintages. The 10-K filed on
+    February 20 of year y reports EPS for FY y-3 to y-1, the cover's (period-end) count for FY y-2 and y-1, and a
+    weighted diluted count from FY*weighted_from* on, each restated for a 20:1 split made before it. EPS divides by
+    1.0B shares before the split (20.0B after); the cover's count is 2% under that. With *prices*, a close of 4.0 on
+    today's basis at each year's end: twice the book per share."""
+    db_path = tmp_path / "cover_count.db"
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('CVR', ?)", (sector,))
+    latest = {}
+    for year in range(2017, 2027):
+        filed = f"{year}-02-20"
+        ratio = 20.0 if filed > split_date else 1.0
+        for fy in range(max(year - 3, 2016), year):
+            ni = 1.0e9 * (1 + 0.1 * (fy - 2016))
+            row = {"net_income": ni, "eps_diluted": ni / (1.0e9 * ratio),
+                   "weighted_avg_shares_diluted": 1.0e9 * ratio if fy >= weighted_from else None,
+                   "shares_outstanding": 0.98e9 * ratio if fy >= year - 2 else None}
+            conn.execute("INSERT INTO financials_annual_vintages (ticker, fiscal_year, accn, filed_date, period_end, "
+                         "net_income, eps_diluted, weighted_avg_shares_diluted, shares_outstanding) "
+                         "VALUES ('CVR', ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (fy, f"acc-{year}", filed, f"{fy}-12-31", *row.values()))
+            latest.setdefault(fy, {}).update({k: v for k, v in row.items() if v is not None}, filed_date=filed)
+    for fy, row in sorted(latest.items()):
+        conn.execute("INSERT INTO financials_annual (ticker, fiscal_year, period_end, filed_date, net_income, "
+                     "total_equity, eps_diluted, weighted_avg_shares_diluted, shares_outstanding) "
+                     "VALUES ('CVR', ?, ?, ?, ?, 4.0e10, ?, ?, ?)",
+                     (fy, f"{fy}-12-31", row["filed_date"], row["net_income"], row["eps_diluted"],
+                      row.get("weighted_avg_shares_diluted"), row.get("shares_outstanding")))
+        if prices:
+            conn.execute("INSERT INTO price_bars (ticker, date, close) VALUES ('CVR', ?, 4.0)", (f"{fy}-12-30",))
+    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('CVR', ?, 20.0)", (split_date,))
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_a_cover_count_filed_before_a_split_its_eps_reflects_goes_onto_the_eps_basis(tmp_path):
+    # BUG-173: GOOGL files no weighted diluted count before FY2022, so FY2020's count is the cover's 0.675B, last
+    # filed in February 2022, while its EPS was restated in February 2023 for the 20:1 split of 2022-07-15. The split
+    # detection reads net income / EPS and folds only FY2019 and older, so FY2020 read 20 times short and its book
+    # value per share 20 times high (329.59 against 16.48).
+    conn = _connect(_cover_count_db(tmp_path))
+    by_fy = {r.fiscal_year: r for r in load_inputs(conn, "CVR").fy_records}
+    conn.close()
+    assert [(fy, by_fy[fy].split_factor) for fy in (2019, 2020, 2021)] == [(2019, 20.0), (2020, 1.0), (2021, 1.0)]
+    assert [by_fy[fy].shares for fy in (2019, 2020, 2021)] == pytest.approx([19.6e9, 19.6e9, 19.6e9])
+    assert by_fy[2020].bvps() == pytest.approx(4.0e10 / 19.6e9)
+
+
+def test_a_banks_book_band_reads_every_year_on_its_eps_basis(tmp_path):
+    # BUG-173's face in the models: a bank's or an insurer's multiples band is on book value per share, and the year
+    # whose cover count sat a split behind its EPS read a P/B of 0.098 beside 1.96-2.0, setting the bear case.
+    from src.valuation.models import value_multiples
+    conn = _connect(_cover_count_db(tmp_path, split_date="2024-07-15", weighted_from=2024, sector="bank",
+                                    prices=True))
+    result = value_multiples(load_inputs(conn, "CVR"))
+    conn.close()
+    a = result.assumptions
+    assert (a["multiple_kind"], a["n_years"]) == ("pb", 5)
+    assert (a["band_low"], a["band_high"]) == (pytest.approx(4.0 / (4.0e10 / 19.6e9)), pytest.approx(2.0))
+
+
+def test_a_weighted_count_is_on_its_eps_basis_already(tmp_path):
+    # The weighted diluted count is restated with the EPS beside it: a split between the cover's filing and the EPS's
+    # moves only a year counted by the cover.
+    conn = _connect(_cover_count_db(tmp_path, weighted_from=2016))
+    by_fy = {r.fiscal_year: r for r in load_inputs(conn, "CVR").fy_records}
+    conn.close()
+    assert [by_fy[fy].shares for fy in (2019, 2020, 2021)] == pytest.approx([20.0e9, 20.0e9, 20.0e9])
+
+
+def test_restated_between_takes_the_share_splits_between_two_filings():
+    from src.valuation.inputs import _restated_between
+    googl = [("2014-04-03", 1.998), ("2022-07-18", 20.0)]
+    assert _restated_between(googl, "2022-02-02", "2023-02-03") == 20.0  # the cover's count before, the EPS after
+    assert _restated_between(googl, "2023-02-03", "2022-02-02") == pytest.approx(1 / 20)  # the other way round
+    assert _restated_between(googl, "2023-02-03", "2024-01-31") == 1.0  # both after it
+    assert _restated_between(googl, "2014-02-01", "2015-02-01") == 1.0  # Yahoo's class C factor: no share split
+    assert _restated_between([("2020-04-03", 1.589)], "2020-02-01", "2021-02-01") == 1.0  # a spin-off's factor
+    assert _restated_between([("2021-07-20", 4.0), ("2024-06-10", 10.0)], "2021-02-26", "2025-02-26") == 40.0
+    assert _restated_between([("2021-08-02", 0.125)], "2021-02-12", "2022-02-11") == 0.125  # a reverse split
+    assert _restated_between([("2023-02-03", 2.0)], "2022-02-02", "2023-02-03") == 2.0  # filed on the split's day
+    # Splits under 3:2 restate nothing here, as in every other rule of the module (BUG-130).
+    assert _restated_between([("2022-07-18", 1.25)], "2022-02-02", "2023-02-03") == 1.0
+    # Without the vintages (a database from before them) the filing dates are unknown: nothing moves.
+    later = googl + [("2024-06-10", 10.0)]
+    assert _restated_between(later, None, "2023-02-03") == _restated_between(later, "2022-02-02", None) == 1.0
+
+
 def _restated_after_the_price_db(tmp_path, snapshot_day, price, snapshot_shares):
     """FY2023-25 as the FY2025 10-K, filed 2026-02-20, restates them for a 10:1 split of 2026-02-01, with Yahoo's
     split-adjusted dividends and FY-end bars as a run on 2026-03-01 served them (the day the bars run to), and the

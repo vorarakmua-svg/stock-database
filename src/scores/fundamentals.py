@@ -168,9 +168,11 @@ def _count_on_eps_basis(shares: Optional[float], eps: Optional[float],
     """The year's share count on its EPS's split basis.
 
     ``load_inputs`` folds splits by the count that matches the EPS (the weighted diluted count, else net
-    income / EPS), but its ``shares`` falls back to the cover's shares outstanding, which stays as filed.
-    GOOGL's FY2020 cover reads 0.675B while its EPS was restated for the 2022 20:1 split (BUG-173). So
-    without a weighted count, net income over the (normalized) EPS gives the count on today's basis.
+    income / EPS), and its ``shares`` falls back to the cover's shares outstanding, which it puts onto the
+    EPS's basis by the share splits filed between the two (GOOGL's FY2020 cover reads 0.675B while its EPS
+    was restated for the 2022 20:1 split; BUG-173). Without a weighted count, net income over the
+    (normalized) EPS still gives the count the EPS divides by, where the cover's period-end count differs
+    (AJG's FY2024 after its December equity raise), so the per-share series stay on the EPS's count.
     """
     if figures.get("weighted_avg_shares_diluted") is not None:
         return shares

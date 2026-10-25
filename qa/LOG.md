@@ -2043,3 +2043,19 @@ fixes since code review 20 (BUG-256, -257, -159, -161).
 Gates: ruff ✓ mypy ✓ pytest 2570 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(parsers): cash reads the balance sheet's total before a note's equivalents (BUG-161)
 Next: BUG-173 (measured: GOOGL FY2020's count, no stored value moves), then code review 21.
+
+## Iteration 113: 2026-10-26 05:32: fix (BUG-173)
+Picked: BUG-173, the next open P2 (a year's cover count on another split basis than its EPS).
+Did: an opus investigation (read-only, from a git-archive export; `qa/evidence/bug173-investigation.txt`) found the
+shape at exactly one year of the 502, GOOGL FY2020, read by no model today. It measured four fixes on DB copies. The
+recommended one moves no stored value: all 36 tables are identical after recomputing. I applied its prepared files,
+checking first that the repo's two files were byte-identical to its base:
+- the test file first, RED: 3 failed for the right reason, 1 guard passed;
+- then the code, GREEN: 187 passed;
+- 9 mutants, each killed;
+- a docstring in scores/fundamentals.py brought up to date.
+Evidence: `qa/evidence/bug173-{investigation,red,green,mutants,gates}.txt`
+Result: BUG-173 VERIFIED. Five fixes since code review 20 (BUG-256, -257, -159, -161, -173): code review 21 is due.
+Gates: ruff ✓ mypy ✓ pytest 2574 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(valuation): a year's cover share count goes onto its EPS's split basis (BUG-173)
+Next: code review 21 (b5d0625..HEAD: BUG-159, -161, -173, with BUG-256/257's bf3dfdd).

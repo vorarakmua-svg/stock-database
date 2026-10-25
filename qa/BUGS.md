@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 10 · P3 131 · NEEDS-USER 22 · Verified: 112
+**Open:** P0 0 · P1 0 · P2 9 · P3 131 · NEEDS-USER 22 · Verified: 113
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1307,10 +1307,11 @@ Root cause: `src/valuation/inputs.py` `load_inputs` takes `fy_end_prices` from t
 Notes / decision needed: either fix moves the multiples band, a member of the five-model median, so verdicts can change: a valuation-policy change the protocol leaves to you. Options: (a) take the closes as traded (reuse `price_factor_after`); (b) bound the band by quartiles rather than min/max, as the valuation history's range does; (c) both. Default until you decide: unchanged.
 
 ### BUG-173 [P2][VAL] A fiscal year's share count falls back to the cover's shares outstanding, as filed, while its split is folded by net income / EPS: GOOGL's FY2020 reads 0.675B, 20x short
-Status: OPEN
-Found: build iteration 12 via M2-1 (the quality scores' per-share series on the real data) | Fixed: | Regression test:
+Status: VERIFIED (iteration 113)
+Found: build iteration 12 via M2-1 (the quality scores' per-share series on the real data) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py::test_a_cover_count_filed_before_a_split_its_eps_reflects_goes_onto_the_eps_basis, ::test_a_banks_book_band_reads_every_year_on_its_eps_basis, ::test_restated_between_takes_the_share_splits_between_two_filings; guard ::test_a_weighted_count_is_on_its_eps_basis_already
 Repro: `load_inputs(conn, "GOOGL").fy_records`, FY2020: `shares` 0.675B with `split_factor` 1.0. FY2019 and older read 13.7-13.9B (factor 20). GOOGL files no weighted diluted count before FY2022, so the split detection reads net income / EPS (FY2020: 13.744B, its EPS restated for the 20:1 split of 2022-07-15) and finds the seam between FY2019 and FY2020; `shares` reads the cover's 0.675B, which no filing restates.
 Expected: each year's count on its EPS's basis, the one the split detection folded.   Actual: FY2020's count is 20x short, so its book value per share reads 20x high, as does any per-share figure built on `FYRecord.shares` for such a year.
+Fix (iteration 113, `qa/evidence/bug173-investigation.txt`): `load_inputs` puts a year's cover count onto its EPS's basis by the declared share splits filed between the two filings (`_restated_between`, from the vintages' dates), before the split normalization; a weighted count is untouched. Over the 502 it moves exactly one count, GOOGL FY2020's (0.675B to 13.504B, book value per share 329.59 to 16.48, the valuation oracle's reading to the digit), and no stored value: all 36 tables identical after compute_and_store (no model reads that year today). The broad alternative (net income / EPS for every year without a weighted count) would have moved AJG's and XOM's medians and failed the valuation oracle there. The scores' `_count_on_eps_basis` stays (dropping it moves 55 per-share rows).
 Root cause: `src/valuation/inputs.py` `load_inputs` takes `shares` from weighted diluted else shares outstanding, while the detection takes weighted diluted else net income / EPS else shares outstanding. Where the two differ, their split bases can differ.
 Notes: the valuation models read old years' `shares` only through `bvps()`: the P/B multiples band of banks and insurers whose weighted count is missing in some years (the Graham number uses the latest year). The quality scores take the count on the EPS's basis instead (`scores.fundamentals._count_on_eps_basis`, M2-1), so their series are right; GOOGL's revenue/share 5-year CAGR is 19.9%, not -34.4%. A fix in `load_inputs` may move a band and so the median: to be weighed with BUG-172.
 
