@@ -135,7 +135,10 @@ def test_backfill_cli_empty_db_returns_1(tmp_path):
 
 
 def test_fetch_and_export_triggers_valuations(monkeypatch):
-    """fetch_and_export calls compute_and_store for the collected tickers."""
+    """fetch_and_export calls compute_and_store for the tickers each batch stored."""
+    from pathlib import Path
+
+    from src.exporters.sqlite_store import StoreResult
     from src.fetchers import stock_data_fetcher as sdf
 
     calls = {}
@@ -167,8 +170,9 @@ def test_fetch_and_export_triggers_valuations(monkeypatch):
     fetcher.logger = _logging.getLogger("test")
     fetcher.sqlite_store = _FakeStore()
     fetcher.config = type("C", (), {"output_formats": ["sqlite"]})()
-    monkeypatch.setattr(fetcher, "fetch_multiple", lambda *a, **k: [_FakeStock()])
-    monkeypatch.setattr(fetcher, "export", lambda *a, **k: {"sqlite": ["fake.db"]})
+    monkeypatch.setattr(fetcher, "fetch_ticker", lambda *a, **k: _FakeStock())
+    monkeypatch.setattr(fetcher, "_export", lambda *a, **k: (
+        {"sqlite": ["fake.db"]}, StoreResult(path=Path("fake.db"), stored=["AAA"])))
     monkeypatch.setattr(
         fetcher, "yahoo_handler",
         type("Y", (), {"fetch_benchmark_bars": lambda self: []})(),

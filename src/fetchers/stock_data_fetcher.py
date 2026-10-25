@@ -4,15 +4,16 @@ import json
 import logging
 import os
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime
+from itertools import islice
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from ..config import AppConfig, default_config
+from ..config import DEFAULT_BATCH_SIZE, AppConfig, default_config
 from ..exporters.csv_exporter import CSVExporter
 from ..exporters.json_exporter import JSONExporter
-from ..exporters.sqlite_store import SQLiteStore, read_only_uri
+from ..exporters.sqlite_store import SQLiteStore, StoreResult, read_only_uri
 from ..models.canonical import validate_period
 from ..models.stock_data import StockData
 from ..parsers.calculated_metrics import CalculatedMetrics
@@ -37,6 +38,79 @@ from .yahoo_handler import YahooHandler
 NO_ANNUAL_FINANCIALS = "SEC EDGAR: no annual financials"
 #: How it begins for a record that stops where the filer's IFRS reports begin.
 STALE_ANNUAL_FINANCIALS = "SEC EDGAR: annual financials stop"
+#: The tickers a collection's worker has submitted at most: one fetching and one waiting its turn, so the workers go
+#: on while the calling thread exports a batch, and the finished companies it hasn't taken yet stay few.
+IN_FLIGHT_PER_WORKER = 2
+#: How long a collection waits for a fetch to finish before it waits again: a timed wait, so Ctrl+C is seen within
+#: this even where a thread's untimed wait doesn't wake for it (Windows).
+POLL_SECONDS = 0.5
+
+
+class CollectionInterrupted(KeyboardInterrupt):
+    """Ctrl+C stopped a collection (``StockDataFetcher.fetch_and_export``). *summary* is its summary so far: the
+    batches it exported and stored. The tickers not started were cancelled, and the companies fetched since the last
+    batch, like the few still fetching, weren't exported."""
+
+    def __init__(self, summary: Dict[str, Any]) -> None:
+        super().__init__(f"collection interrupted after storing {summary['stored']} companies")
+        self.summary = summary
+
+
+class _Tally:
+    """A collection's counts as it goes: the companies fetched and how, the batches exported and what the database
+    stored, so nothing of a batch need be kept once it is exported."""
+
+    def __init__(self, requested: int, batch_size: int) -> None:
+        self.requested = requested
+        self.batch_size = batch_size
+        self.fetched = self.successful = self.with_warnings = self.with_errors = 0
+        self.batches = self.exported = self.stored = 0
+        self.not_stored: Dict[str, str] = {}
+        self.sqlite_errors: List[str] = []
+        self.export_paths: Dict[str, List[Path]] = {}
+        self.benchmark_done = False
+        #: The stored companies whose batch's valuations haven't finished.
+        self.unvalued: List[str] = []
+
+    def fetched_one(self, stock: StockData) -> None:
+        self.fetched += 1
+        self.successful += 0 if stock.errors else 1
+        self.with_warnings += 1 if stock.warnings else 0
+        self.with_errors += 1 if stock.errors else 0
+
+    def exported_batch(self, count: int, paths: Dict[str, List[Path]], stored: Optional[StoreResult]) -> None:
+        self.batches += 1
+        self.exported += count
+        for kind, written in paths.items():
+            known = self.export_paths.setdefault(kind, [])
+            known.extend(path for path in written if path not in known)
+        if stored is not None:
+            self.stored += len(stored.stored)
+            self.not_stored.update(stored.failed)
+            if stored.error is not None:
+                self.sqlite_errors.append(f"batch {self.batches}: {stored.error}")
+
+    def summary(self, start: datetime, interrupted: bool) -> Dict[str, Any]:
+        end = datetime.now()
+        return {
+            "tickers_requested": self.requested,
+            "tickers_fetched": self.fetched,
+            "successful": self.successful,
+            "with_warnings": self.with_warnings,
+            "with_errors": self.with_errors,
+            "batch_size": self.batch_size,
+            "batches": self.batches,
+            "exported": self.exported,
+            "stored": self.stored,
+            "not_stored": dict(self.not_stored),
+            "sqlite_errors": list(self.sqlite_errors),
+            "interrupted": interrupted,
+            "unvalued": list(self.unvalued),
+            "export_paths": {kind: list(paths) for kind, paths in self.export_paths.items()},
+            "duration_seconds": (end - start).total_seconds(),
+            "started_at": start.isoformat(),
+            "completed_at": end.isoformat(),
+        }
 
 
 class StockDataFetcher:
@@ -414,39 +488,67 @@ class StockDataFetcher:
             years_back: Years of historical financial data
 
         Returns:
-            List of StockData objects
+            List of StockData objects, in the order of *tickers*
         """
         workers = max(1, getattr(self.config, "max_workers", 1))
         self.logger.info(
             f"Fetching data for {len(tickers)} tickers "
             f"({'sequential' if workers == 1 or len(tickers) <= 1 else f'{workers} workers'})"
         )
-
-        if workers == 1 or len(tickers) <= 1:
-            results = [
-                self._safe_fetch_ticker(t, include_yahoo, include_sec, years_back)
-                for t in tickers
-            ]
-            self.logger.info(f"Completed fetching {len(results)} tickers")
-            return results
-
-        # Parallel fetch. Per-source RateLimiters are thread-safe and serialize each
-        # external API, so we overlap work across tickers without exceeding limits.
         # Results are placed back in input order.
         ordered: List[Optional[StockData]] = [None] * len(tickers)
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_to_idx = {
-                executor.submit(
-                    self._safe_fetch_ticker, ticker, include_yahoo, include_sec, years_back
-                ): idx
-                for idx, ticker in enumerate(tickers)
-            }
-            for future in as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                ordered[idx] = future.result()
-
+        for idx, stock in self._fetch_each(tickers, include_yahoo, include_sec, years_back):
+            ordered[idx] = stock
         self.logger.info(f"Completed fetching {len(ordered)} tickers")
         return [r for r in ordered if r is not None]
+
+    def _fetch_each(
+        self,
+        tickers: List[str],
+        include_yahoo: bool,
+        include_sec: bool,
+        years_back: Optional[int],
+    ) -> Iterator[Tuple[int, StockData]]:
+        """Each ticker's StockData as its fetch finishes, with the ticker's place in *tickers*.
+
+        With one worker (or one ticker), one after another on this thread. Else on ``max_workers`` threads, each
+        with IN_FLIGHT_PER_WORKER tickers submitted at most, the rest waiting here: the workers go on while the caller
+        exports what it took, and the finished ones it hasn't taken yet stay few. Per-source RateLimiters are
+        thread-safe and serialize each external API, so we overlap work across tickers without exceeding limits.
+        Closing the iterator, or Ctrl+C while it waits, cancels the tickers not started; the few running finish in
+        their threads, and nothing reads them.
+        """
+        workers = max(1, getattr(self.config, "max_workers", 1))
+        if workers == 1 or len(tickers) <= 1:
+            for idx, ticker in enumerate(tickers):
+                yield idx, self._safe_fetch_ticker(ticker, include_yahoo, include_sec, years_back)
+            return
+        queue = iter(enumerate(tickers))
+        executor = ThreadPoolExecutor(max_workers=workers)
+        pending: Dict[Future, int] = {}
+        finished = False
+
+        def submit(count: int) -> None:
+            for idx, ticker in islice(queue, count):
+                pending[executor.submit(self._safe_fetch_ticker, ticker, include_yahoo, include_sec, years_back)] = idx
+
+        try:
+            submit(IN_FLIGHT_PER_WORKER * workers)
+            while pending:
+                done = wait(pending, timeout=POLL_SECONDS, return_when=FIRST_COMPLETED).done
+                while done:
+                    future = done.pop()
+                    idx = pending.pop(future)
+                    stock = future.result()
+                    del future  # a finished fetch is the caller's alone
+                    submit(1)
+                    yield idx, stock
+                    del stock
+            finished = True
+        finally:
+            # Done, nothing is left to wait for. Else (Ctrl+C, the caller stopped), the tickers not started are
+            # cancelled, and the running ones aren't waited for.
+            executor.shutdown(wait=finished, cancel_futures=not finished)
 
     def _safe_fetch_ticker(
         self,
@@ -479,14 +581,23 @@ class StockDataFetcher:
 
         Args:
             data: List of StockData objects
-            formats: List of formats to export ('json', 'csv')
+            formats: List of formats to export ('json', 'csv', 'sqlite')
                     Defaults to config setting
 
         Returns:
-            Dictionary mapping format to list of created file paths
+            Dictionary mapping format to list of created file paths: the database's when it stored any of *data*
+            (each stock in its own savepoint; one it didn't take carries the error, "SQLite write failed: ...")
         """
+        return self._export(data, formats)[0]
+
+    def _export(
+        self,
+        data: List[StockData],
+        formats: Optional[List[str]] = None
+    ) -> Tuple[Dict[str, List[Path]], Optional[StoreResult]]:
+        """``export``'s paths, and what the SQLite store did with *data* (None without the sqlite format)."""
         formats = formats or self.config.output_formats
-        results = {}
+        results: Dict[str, List[Path]] = {}
 
         if "json" in formats:
             json_paths = self.json_exporter.export(data)
@@ -505,12 +616,13 @@ class StockDataFetcher:
             if history_path:
                 results.setdefault("csv", []).append(history_path)
 
+        stored: Optional[StoreResult] = None
         if "sqlite" in formats:
-            db_path = self.sqlite_store.export(data)
-            if db_path:
-                results["sqlite"] = [db_path]
+            stored = self.sqlite_store.write_batch(data)
+            if stored.stored:
+                results["sqlite"] = [stored.path]
 
-        return results
+        return results, stored
 
     def fetch_and_export(
         self,
@@ -518,10 +630,23 @@ class StockDataFetcher:
         include_yahoo: bool = True,
         include_sec: bool = True,
         years_back: Optional[int] = None,
-        formats: Optional[List[str]] = None
+        formats: Optional[List[str]] = None,
+        batch_size: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Convenience method to fetch and export in one call.
+        Fetch *tickers* and export them as they arrive, a batch at a time (code review 19, I-1).
+
+        The workers fetch without a pause between batches (``_fetch_each``). Each time *batch_size* companies have
+        arrived, and with the rest at the end, the batch is exported on this thread (JSON, the CSVs merged with the
+        files', SQLite with each stock in its own savepoint), then the companies it stored are valued and every
+        stored one ranked (``valuation_engine.compute_and_store``): a run stopped part way leaves what it stored
+        valued and ranked, and the last batch's pass gives the run's ranks. The benchmark's bars (^GSPC) are fetched
+        once a run, after the first batch is stored. Nothing of a batch is kept once it is exported: at most
+        *batch_size* companies plus IN_FLIGHT_PER_WORKER times the workers' are in memory at once.
+
+        Ctrl+C stops it at once: the tickers not started are cancelled, the companies fetched since the last batch
+        (like the few still fetching) aren't exported, and CollectionInterrupted, a KeyboardInterrupt, carries the
+        summary so far.
 
         Args:
             tickers: List of ticker symbols
@@ -529,70 +654,98 @@ class StockDataFetcher:
             include_sec: Whether to fetch SEC EDGAR data
             years_back: Years of historical financial data
             formats: Export formats
+            batch_size: Companies exported at a time, 1 or more (default: the config's, DEFAULT_BATCH_SIZE)
 
         Returns:
-            Dictionary with results summary
+            Dictionary with results summary: the tickers requested and fetched, those without errors, with warnings
+            and with errors; the batch size, the batches exported and the companies in them; ``stored``, the companies
+            the database took, and ``not_stored``, each one exported that it didn't with why (none without the sqlite
+            format); ``sqlite_errors``, each batch whose whole export failed and why; ``interrupted``; ``unvalued``,
+            the stored companies whose batch's valuations Ctrl+C cut short; the export paths; the duration and times
         """
         start_time = datetime.now()
+        resolved_formats = formats or self.config.output_formats
+        size = batch_size if batch_size is not None else getattr(self.config, "batch_size", DEFAULT_BATCH_SIZE)
+        if size < 1:
+            raise ValueError(f"the batch size must be 1 or more, not {size}")
+        tally = _Tally(len(tickers), size)
+        self.logger.info(f"Collecting {len(tickers)} tickers: exported, stored and valued {size} at a time")
+        fetched = self._fetch_each(tickers, include_yahoo, include_sec, years_back)
+        batch: List[Tuple[int, StockData]] = []
+        try:
+            for item in fetched:
+                tally.fetched_one(item[1])
+                batch.append(item)
+                del item
+                if len(batch) >= size:
+                    self._export_batch(batch, tally, resolved_formats, include_yahoo)
+                    batch = []
+            if batch:
+                self._export_batch(batch, tally, resolved_formats, include_yahoo)
+                batch = []
+        except KeyboardInterrupt:
+            summary = tally.summary(start_time, interrupted=True)
+            self.logger.info(f"Collection stopped by Ctrl+C: {summary['stored']} of {len(tickers)} companies stored; "
+                             f"{summary['tickers_fetched'] - summary['exported']} fetched since the last batch, left "
+                             "out")
+            raise CollectionInterrupted(summary) from None
+        finally:
+            fetched.close()  # the tickers not started are cancelled (nothing to do once every one was taken)
 
-        # Fetch data
-        data = self.fetch_multiple(
-            tickers,
-            include_yahoo=include_yahoo,
-            include_sec=include_sec,
-            years_back=years_back
+        summary = tally.summary(start_time, interrupted=False)
+        self.logger.info(
+            f"Fetch complete: {summary['successful']}/{summary['tickers_requested']} successful "
+            f"in {summary['duration_seconds']:.1f}s"
+            + (f"; {summary['stored']} stored in the database" if "sqlite" in resolved_formats else "")
         )
 
-        # Export
-        export_paths = self.export(data, formats=formats)
+        return summary
+
+    def _export_batch(
+        self,
+        batch: List[Tuple[int, StockData]],
+        tally: _Tally,
+        formats: List[str],
+        include_yahoo: bool,
+    ) -> None:
+        """Export a batch in its tickers' order (``_export``), fetch the benchmark's bars after the run's first, and
+        value the companies it stored. A benchmark or valuation failure never fails the run."""
+        number = tally.batches + 1
+        stocks = [stock for _, stock in sorted(batch, key=lambda item: item[0])]
+        paths, result = self._export(stocks, formats)
+        tally.exported_batch(len(stocks), paths, result)
+        stored = list(result.stored) if result is not None else []
+        tally.unvalued = stored
+        self.logger.info(f"Batch {number}: {len(stocks)} exported"
+                         + (f", {len(stored)} stored" if result is not None else "")
+                         + f" ({tally.exported} of {tally.requested} so far)")
 
         # Benchmark (^GSPC) bars: collected once per run, not once per ticker, so
         # market-relative metrics (beta, relative strength) have a common index.
         # A benchmark failure must never fail the run.
-        resolved_formats = formats or self.config.output_formats
-        if include_yahoo and "sqlite" in resolved_formats:
+        if include_yahoo and "sqlite" in formats and not tally.benchmark_done:
+            tally.benchmark_done = True
             try:
                 benchmark_bars = self.yahoo_handler.fetch_benchmark_bars()
                 self.sqlite_store.export_benchmark_bars("^GSPC", benchmark_bars)
             except Exception as e:
                 self.logger.warning(f"Benchmark bars fetch/export failed: {e}")
 
-        # Valuations: recompute for the just-collected tickers so the stored
-        # fair-value ranges always reflect the newest fundamentals. Import is
-        # local + lazy, and a valuation failure must never fail the run.
-        if "sqlite" in resolved_formats and data:
+        # Valuations: recompute for the companies just stored so the stored
+        # fair-value ranges always reflect the newest fundamentals; each pass
+        # ranks every stored company. Import is local + lazy, and a valuation
+        # failure must never fail the run.
+        if stored:
             try:
                 from ..valuation import engine as valuation_engine
                 valuation_engine.compute_and_store(
                     self.sqlite_store.db_path,
-                    tickers=[s.ticker for s in data],
+                    tickers=list(stored),
                     logger=self.logger,
                 )
             except Exception as e:
-                self.logger.warning(f"Valuation computation failed: {e}")
-
-        end_time = datetime.now()
-        duration = (end_time - start_time).total_seconds()
-
-        # Build summary
-        summary = {
-            "tickers_requested": len(tickers),
-            "tickers_fetched": len(data),
-            "successful": sum(1 for s in data if not s.errors),
-            "with_warnings": sum(1 for s in data if s.warnings),
-            "with_errors": sum(1 for s in data if s.errors),
-            "export_paths": export_paths,
-            "duration_seconds": duration,
-            "started_at": start_time.isoformat(),
-            "completed_at": end_time.isoformat(),
-        }
-
-        self.logger.info(
-            f"Fetch complete: {summary['successful']}/{summary['tickers_requested']} successful "
-            f"in {duration:.1f}s"
-        )
-
-        return summary
+                self.logger.warning(f"Valuation computation failed for batch {number} ({', '.join(stored)}): {e}")
+        tally.unvalued = []
 
     def close(self) -> None:
         """Close handlers and release resources."""

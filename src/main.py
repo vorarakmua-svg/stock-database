@@ -16,6 +16,10 @@ Symbol column; ``src/universe/tickers.py``), in Yahoo's form (BRK.B as BRK-B), e
 <output-dir>/output/stock.db). Exit 1 when no ticker remains to collect
 (docs/superpowers/specs/2026-10-25-universe-automation-design.md, "The universe").
 
+The companies are exported, stored and valued --batch-size at a time as they arrive (code review 19, I-1). Exit 1 when
+the database didn't store every company fetched (each one it didn't is named), 130 on Ctrl+C, which keeps the batches
+stored: run it again for the rest (--skip-existing leaves out the companies already stored).
+
 ``refresh`` as the first argument runs ``stock-data refresh`` (``src/refresh.py``) with the rest: no ticker is called
 REFRESH (the same spec, "stock-data refresh").
 """
@@ -26,11 +30,11 @@ import sqlite3
 import sys
 from contextlib import closing
 from pathlib import Path
-from typing import List, Optional, Sequence, Set
+from typing import Any, Dict, List, Optional, Sequence, Set
 
-from .config import AppConfig, SECConfig, StorageConfig, YahooConfig
+from .config import DEFAULT_BATCH_SIZE, AppConfig, SECConfig, StorageConfig, YahooConfig
 from .exporters.sqlite_store import read_only_uri
-from .fetchers.stock_data_fetcher import StockDataFetcher
+from .fetchers.stock_data_fetcher import CollectionInterrupted, StockDataFetcher
 from .universe.tickers import read_tickers_file, unique_tickers
 
 
@@ -66,6 +70,30 @@ def stored_tickers(db_path: Path) -> Set[str]:
         if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'companies'").fetchone() is None:
             return set()
         return {row[0] for row in conn.execute("SELECT ticker FROM companies")}
+
+
+def _store_failures(summary: Dict[str, Any], logger: logging.Logger) -> bool:
+    """Log what the database didn't take, named: each batch whose whole export failed, then each company fetched but
+    not stored, with why. True when there was any: the run's exit 1."""
+    errors = summary.get("sqlite_errors") or []
+    for error in errors:
+        logger.error(f"The SQLite export failed: {error}")
+    not_stored = summary.get("not_stored") or {}
+    if not_stored:
+        logger.error(f"Not stored in the database ({len(not_stored)} of {summary.get('tickers_fetched')}): "
+                     + "; ".join(f"{ticker} ({why})" for ticker, why in not_stored.items()))
+    return bool(errors or not_stored)
+
+
+def _batch_size(value: str) -> int:
+    """``--batch-size``: a whole number, 1 or more."""
+    try:
+        size = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {value!r}") from None
+    if size < 1:
+        raise argparse.ArgumentTypeError(f"must be 1 or more, not {size}")
+    return size
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -160,6 +188,15 @@ Examples:
     )
 
     parser.add_argument(
+        "--batch-size",
+        type=_batch_size,
+        default=DEFAULT_BATCH_SIZE,
+        metavar="N",
+        help=f"Companies exported, stored and valued at a time as they arrive (default: {DEFAULT_BATCH_SIZE}); a run "
+             "stopped part way keeps the batches it stored"
+    )
+
+    parser.add_argument(
         "--sec-user-agent",
         type=str,
         default="StockDataCollector admin@example.com",
@@ -236,6 +273,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     logger.info(f"Years of data: {args.years or 'all available'}")
     logger.info(f"Yahoo Finance: {'disabled' if args.no_yahoo else 'enabled'}")
     logger.info(f"SEC EDGAR: {'disabled' if args.no_sec else 'enabled'}")
+    logger.info(f"Batch size: {args.batch_size}")
 
     # Build configuration
     config = AppConfig(
@@ -244,6 +282,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         storage=storage,
         output_formats=args.formats,
         max_workers=args.workers,
+        batch_size=args.batch_size,
     )
 
     # Run fetcher
@@ -265,6 +304,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"Successfully fetched: {summary['successful']}")
         print(f"With warnings: {summary['with_warnings']}")
         print(f"With errors: {summary['with_errors']}")
+        if "sqlite" in args.formats and summary.get("stored") is not None:
+            print(f"Stored in the database: {summary['stored']} of {summary.get('tickers_fetched')}")
         print(f"Duration: {summary['duration_seconds']:.1f} seconds")
         print()
         print("Output files:")
@@ -273,8 +314,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 print(f"  [{format_type.upper()}] {path}")
         print("=" * 60)
 
-        return 0
+        return 1 if _store_failures(summary, logger) else 0
 
+    except CollectionInterrupted as interrupted:
+        done = interrupted.summary
+        if "sqlite" in args.formats:
+            logger.warning(f"Interrupted by user: {done['stored']} of {done['tickers_requested']} companies stored in "
+                           f"{config.storage.database_path}; run it again to collect the rest (--skip-existing leaves "
+                           "out the companies already stored)"
+                           + ("; the process ends once the few tickers still being fetched finish"
+                              if args.workers > 1 else ""))
+        else:
+            logger.warning(f"Interrupted by user: {done['exported']} of {done['tickers_requested']} companies "
+                           "exported")
+        if done.get("unvalued"):
+            logger.warning(f"The valuations of {', '.join(done['unvalued'])} were cut short: "
+                           "python -m src.valuation.backfill values them")
+        return 130
     except KeyboardInterrupt:
         logger.warning("Interrupted by user")
         return 130

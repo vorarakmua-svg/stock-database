@@ -22,7 +22,7 @@ hours), unless ``--force`` (every step) or named in ``--steps`` (only those run)
   10-Q, 20-F, 40-F, a transition report (10-KT, 10-QT) or an amendment of one filed on or after the day of the
   company's last collection with the SEC puts it on the list.
 - ``collect`` (whenever the list isn't empty): a full collection of the list as ``stock-data`` runs one (json, csv
-  and sqlite, which values those companies), its SEC payloads read fresh.
+  and sqlite, stored and valued a batch at a time), its SEC payloads read fresh; a company it didn't store fails it.
 - ``insiders`` and ``gurus`` (weekly): M3's collectors, the insiders' last three years for every company with a CIK
   (incremental: each Form 4 is fetched once and cached), then the gurus' 13F filings, their CUSIPs' tickers (OpenFIGI,
   with its cache) and the gurus' positions.
@@ -768,7 +768,9 @@ class _Run:
         return found[0] if found else None
 
     def _collect(self, result: StepResult) -> None:
-        """A full collection of the list; each company's outcome is the collection run it stored, if any."""
+        """A full collection of the list; each company's outcome is the collection run it stored, if any. A company
+        it didn't store fails the step (code review 19, I-1: the store keeps each company to its own savepoint, so a
+        collection can store part of the list)."""
         tickers = list(self.report.queue)
         s = result.summary
         s.update({"tickers": tickers, "why": {t: list(self.report.queue[t]) for t in tickers}, "collected": {},
@@ -785,9 +787,11 @@ class _Run:
                     result.stored = True
                 else:
                     s["not_stored"].append(ticker)
-        result.ok = bool(s["collected"])
+        result.ok = not s["not_stored"]
         if not result.ok:
-            result.reason = "the collection stored none of them"
+            result.reason = ("the collection stored none of them" if not s["collected"] else
+                             f"the collection didn't store {len(s['not_stored'])} of the {len(tickers)}: "
+                             f"{', '.join(s['not_stored'])}")
         clean = sum(1 for c in s["collected"].values() if not c["errors"])
         result.headline = (f"{len(s['collected'])} of {len(tickers)} collected ({clean} without errors, "
                            f"{len(s['collected']) - clean} with errors)"

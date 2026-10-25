@@ -132,6 +132,7 @@ python -m src.main AAPL -v
 | `--formats`, `-f` | Output formats (`json`, `csv`, `sqlite`) | `json csv sqlite` |
 | `--db` | SQLite database path | `<output-dir>/output/stock.db` |
 | `--workers`, `-w` | Tickers fetched concurrently (1 = sequential) | `4` |
+| `--batch-size` | Companies exported, stored and valued at a time as they arrive (1 or more); a run stopped part way keeps the batches it stored (see [Output](#output)) | `25` |
 | `--years` | Limit history to the most recent N years | all available |
 | `--no-yahoo` | Skip Yahoo Finance data | `false` |
 | `--no-sec` | Skip SEC EDGAR data | `false` |
@@ -182,6 +183,15 @@ data/
 └── logs/
     └── refresh-2026-10-25.log   # stock-data refresh's log, a file for each day it ran
 ```
+
+A collection writes its outputs as the companies arrive, 25 at a time (`--batch-size`): each batch's JSON files, its
+rows of the two CSVs (merged with the rows already there) and its companies in the database, each company in its own
+savepoint, then the batch is valued and every stored company ranked. A company whose database write fails is rolled
+back alone, and a run stopped part way keeps the batches it stored. The summary says `Stored in the database: N of M`.
+The exit code is 0 when the database took every company fetched, 1 when it didn't (each one is named in the log with
+why, such as a value SQLite can't write or a locked database), and 130 after Ctrl+C, which cancels the tickers not
+started and leaves out the companies fetched since the last batch. Running the command again collects the rest; with
+`--skip-existing`, only the companies the database doesn't hold yet.
 
 ### JSON Output Structure
 
@@ -1397,10 +1407,14 @@ stock-data NVDA --tickers-file my-watchlist.txt --tickers-file universe/core.txt
   - `Cannot read the companies in PATH: ...`, when SQLite can't read the database.
 - An S&P member that Yahoo or the SEC can't serve is reported in the collection's summary (`With errors`) and the rest go
   on.
+- A list is stored 25 companies at a time as they arrive (`--batch-size`, see [Output](#output)), so stopping a long run
+  (Ctrl+C, exit 130) or one company's failed write keeps what was stored, and the same command with `--skip-existing`
+  collects the rest. The run exits 1 when the database didn't store every company it fetched, naming each in the log;
+  check `Stored in the database: N of M` in its summary.
 
 Adding the S&P 500's members is a long run: earlier collections took about 6 seconds a ticker with a warm SEC cache (127
 in 13 minutes) and about 20 seconds cold, so the 375 new members are an estimated 2 to 3 hours, before step 3's Form 4s.
-Start it in the background. In order:
+Start it in the background; if it stops, run step 2 again as it is. In order:
 
 ```bash
 # 1. SIC codes for the companies collected before Milestone 5 (offline, seconds)
@@ -1415,8 +1429,8 @@ python -m src.ownership.collect --insiders
 python -m src.ownership.collect --positions
 ```
 
-Every collection ends by valuing the companies it stored and ranking all the stored ones, in the universe and within
-industries, so doing step 1 first gives the collection's rank pass every code; if the codes are filled after a
+Every collection values each batch of companies it stores and then ranks all the stored ones, in the universe and within
+industries, so doing step 1 first gives the collection's rank passes every code; if the codes are filled after a
 collection, `python -m src.valuation.backfill` ranks again. Give the SEC a real contact in `--sec-user-agent` (see
 [SEC User-Agent Requirement](#sec-user-agent-requirement)). The insiders and the gurus aren't part of a collection (see
 [SEC ownership](#sec-ownership-insiders-and-gurus)): step 3 fetches the new companies' Form 4s, and `--positions`
@@ -1606,9 +1620,9 @@ companies on the **collection list**, each with its reason: `quotes`, `bars` and
   SEC's, so a report filed that day counts; a company never collected with the SEC counts every report in its feed. A
   company without a CIK is counted and skipped, and a feed that fails is that company's error.
 - **`collect`** (whenever the list isn't empty): a full collection of the list as `stock-data` runs it (Yahoo and the
-  SEC, every year, the JSON, CSV and SQLite outputs, with the valuations after), four companies at a time, its SEC data
-  read fresh like the `sec` step's. The list is built within the run by the three steps above, so naming `collect`
-  alone leaves nothing to collect.
+  SEC, every year, the JSON, CSV and SQLite outputs, stored and valued 25 companies at a time), four fetched at a time,
+  its SEC data read fresh like the `sec` step's. The list is built within the run by the three steps above, so naming
+  `collect` alone leaves nothing to collect.
 - **`insiders`** and **`gurus`** (weekly): the collectors of [SEC ownership](#sec-ownership-insiders-and-gurus), the
   insiders' last three years of Form 4s for every company with a CIK (each filing fetched once and cached), then the
   gurus' last eight quarters of 13F filings, their CUSIPs' tickers (OpenFIGI, cached) and the gurus' positions.
@@ -1706,8 +1720,9 @@ it and exits 3. Only refreshes take the lock: it doesn't stop a `stock-data` col
 | 130 | interrupted with Ctrl+C: the steps that finished are logged |
 
 A step fails when it raises or when every one of its items fails: every quote, every company's bars and the benchmark's,
-every feed, every company's Form 4s, every guru's filings, every market source, a `collect` that stored none of the
-list, a `recompute` that valued no company. Failures of single items are counted and listed in the summary.
+every feed, every company's Form 4s, every guru's filings, every market source, a `recompute` that valued no company.
+Failures of single items are counted and listed in the summary. `collect` is stricter: it fails when the database didn't
+store any one company of the list (the others are kept), naming it.
 
 ### Timings
 

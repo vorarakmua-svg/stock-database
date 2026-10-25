@@ -11,6 +11,11 @@ try:
 except ImportError:
     pass
 
+#: How many fetched companies a collection (``StockDataFetcher.fetch_and_export``) exports, stores and values at a
+#: time: a run stores its companies batch by batch as they arrive, so one stopped part way keeps what it stored, and
+#: only a batch and the workers' companies (about 5.6 MB each) are in memory at once.
+DEFAULT_BATCH_SIZE = 25
+
 
 @dataclass
 class SECConfig:
@@ -116,6 +121,9 @@ class AppConfig:
 
     # Number of tickers to fetch concurrently (1 = sequential)
     max_workers: int = 4
+
+    # Companies a collection exports, stores and values at a time (DEFAULT_BATCH_SIZE)
+    batch_size: int = DEFAULT_BATCH_SIZE
 
     def __post_init__(self):
         """Ensure directories exist after initialization."""

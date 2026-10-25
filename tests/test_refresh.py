@@ -12,7 +12,7 @@ import sqlite3
 import subprocess
 import sys
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -21,6 +21,9 @@ import src.main
 import src.refresh
 from src.exporters.sqlite_store import SQLiteStore
 from src.fetchers.sec_handler import SECHandler
+from src.fetchers.stock_data_fetcher import StockDataFetcher
+from src.fetchers.yahoo_handler import YahooHandler
+from src.models.stock_data import StockData
 from src.refresh import (
     DAILY,
     PERIODS,
@@ -30,6 +33,7 @@ from src.refresh import (
     LockHeld,
     Output,
     RefreshLock,
+    collect_tickers,
     is_report,
     lock_path,
     main,
@@ -524,9 +528,44 @@ def test_a_company_the_collection_didnt_store_is_reported(tmp_path):
     db = rf.make_db(tmp_path / "stock.db")
     svc = _queued_by_every_step(db)
     svc.collect = rf.FakeCollect(db, missing=["AAA"], errors={"BBB": 1})
-    collect = rf.run(db, svc).result("collect")
+    report = rf.run(db, svc)
+    collect = report.result("collect")
     assert collect.summary["not_stored"] == ["AAA"] and collect.summary["collected"]["BBB"]["errors"] == 1
-    assert collect.ok is True
+    # A company not stored fails the step, named (code review 19, I-1); the others count as collected.
+    assert (collect.ok, collect.stored, report.exit_code) == (False, True, 1)
+    assert collect.reason == "the collection didn't store 1 of the 3: AAA"
+
+
+def test_a_company_the_real_collection_couldnt_store_fails_the_step_and_the_others_are_stored(tmp_path, monkeypatch):
+    # Code review 19 (I-1): the store keeps each stock to its own savepoint, so a collection can store part of the
+    # list. The one it couldn't store (a value SQLite can't bind) fails the step, named; the others are collected
+    # and valued.
+    db = rf.make_db(tmp_path / "stock.db")
+    svc = _queued_by_every_step(db)
+
+    def fetch(self, ticker, include_yahoo=True, include_sec=True, years_back=None):
+        stock = StockData(ticker=ticker, cik=rf.cik_of(ticker), company_name=f"{ticker} Corp", sector_class="general",
+                          collected_at=datetime(2026, 10, 25, 12, 0))
+        stock.company_info = {"full_time_employees": {"oops": 1} if ticker == "AAA" else 100}
+        stock.add_source("yahoo_finance")
+        stock.add_source("sec_edgar")
+        return stock
+
+    valued = []
+    monkeypatch.setattr(StockDataFetcher, "fetch_ticker", fetch)
+    monkeypatch.setattr(YahooHandler, "fetch_benchmark_bars", lambda self, symbol="^GSPC": [])
+    monkeypatch.setattr("src.valuation.engine.compute_and_store",
+                        lambda db_path, tickers=None, logger=None: valued.append(sorted(tickers)) or len(tickers))
+    svc.collect = lambda tickers, log: collect_tickers(db, tmp_path / "out", tmp_path / "cache", tickers, log)
+    out = io.StringIO()
+    report = rf.run(db, svc, stream=out)
+    collect = report.result("collect")
+    assert sorted(collect.summary["collected"]) == ["BBB", "CCC"] and collect.summary["not_stored"] == ["AAA"]
+    assert (collect.ok, report.exit_code) == (False, 1)
+    assert collect.reason == "the collection didn't store 1 of the 3: AAA"
+    assert list(collect.summary["fetch"]["not_stored"]) == ["AAA"] and collect.summary["fetch"]["stored"] == 2
+    assert valued == [["BBB", "CCC"]]
+    assert "collect: ERROR: SQLite write failed for AAA: Error binding parameter" in out.getvalue()
 
 
 def test_the_collect_step_fails_when_nothing_was_stored(tmp_path):

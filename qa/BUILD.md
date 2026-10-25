@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 1 · DOING 0 · DONE 43 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 0 · DOING 1 · DONE 43 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -80,7 +80,7 @@
 | M5-3 | `stock-data refresh`: quotes and bars daily, the SEC's new filings weekly, the full collections they call for, insiders and gurus weekly, the market data daily, the recomputation; `refresh_log`, a lock, a log file, exit codes; a real run on a scratch copy; with tests | DONE | this commit | `qa/evidence/refresh-m5-3-*` |
 | M5-4 | The scale pre-flight: a synthetic copy of about 500 companies, the pages' and APIs' timings, the query plans, the indexes they need (every page under 1 s, the screener under 0.5 s); with tests | DONE | this commit | `qa/evidence/scale-m5-4-*` |
 | M5-5 | Docs: README and USAGE_GUIDE (the universe, `--tickers-file`, SIC and industries, the refresh command, Task Scheduler instructions) | DONE | this commit | `qa/evidence/docs-m5-5-*` |
-| M5-6 | Milestone close: code review 19 (opus) with Critical and Important findings fixed; the dry run, the backup, then the live collection of the S&P 500's new members, their SIC and Form 4s, the recomputation and the checks at about 500 companies | TODO | | |
+| M5-6 | Milestone close: code review 19 (opus) with Critical and Important findings fixed; the dry run, the backup, then the live collection of the S&P 500's new members, their SIC and Form 4s, the recomputation and the checks at about 500 companies | DOING | | |
 
 ## NEEDS-USER (each also recorded in `qa/BUGS.md`)
 

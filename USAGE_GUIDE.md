@@ -354,10 +354,10 @@ Results are stored in two tables:
 
 ### Running the backfill
 
-Valuations recompute **automatically** at the end of every collection run — whether a
-`python -m src.main` terminal run or a web-submitted job (see
-[Updating Data from the Web](#updating-data-from-the-web)) — for the tickers just
-collected, so you normally don't need to run anything extra. To
+Valuations recompute **automatically** with every collection run — a `python -m src.main`
+terminal run values each batch of companies as it stores it (25 at a time, `--batch-size`),
+a web-submitted job (see [Updating Data from the Web](#updating-data-from-the-web)) at its
+end — for the tickers just collected, so you normally don't need to run anything extra. To
 (re)compute valuations for tickers already in the database without re-collecting data
 (e.g. after upgrading the valuation models, or to backfill a ticker collected before the
 valuation layer existed):
@@ -1318,10 +1318,13 @@ python -m src.ownership.collect --positions
 
 Start step 2 in the background: earlier collections took about 6 seconds a ticker with a warm SEC cache and about 20
 cold, so the 375 new members are an estimated 2 to 3 hours, and step 3's Form 4s take hours at the SEC's rate. A company
-that Yahoo or the SEC can't serve is counted in the summary's "With errors" and the rest go on. Every collection ends by
-valuing the companies it stored and ranking all the stored ones, in the universe and within industries, so filling the
-codes first (step 1) lets the collection's ranks see every one; if you fill them after collecting,
-`python -m src.valuation.backfill` ranks again. A company that leaves the index stays in the database, and
+that Yahoo or the SEC can't serve is counted in the summary's "With errors" and the rest go on. A collection stores its
+companies 25 at a time as they arrive (`--batch-size`), values each batch and ranks all the stored ones, in the universe
+and within industries, so filling the codes first (step 1) lets the collection's ranks see every one; if you fill them
+after collecting, `python -m src.valuation.backfill` ranks again. Stopping step 2 (Ctrl+C, exit 130) or a company's
+failed write keeps what was stored, and running step 2 again as it is collects the rest. The summary's
+`Stored in the database: N of M` line says whether the database took every company, and the exit code is 1 when it
+didn't, each one named in the log. A company that leaves the index stays in the database, and
 `stock-data refresh` (below) keeps all of them current.
 
 ### Filling SIC codes

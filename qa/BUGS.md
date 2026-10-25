@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 121 · NEEDS-USER 17 · Verified: 97
+**Open:** P0 0 · P1 0 · P2 11 · P3 127 · NEEDS-USER 17 · Verified: 98
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1747,6 +1747,48 @@ Status: OPEN
 Found: build iteration 53 (M5-3) | Fixed: | Regression test:
 Repro: `stock-data` and the web's collect job read the SEC handler's 7-day cache of companyfacts and submissions. A company that files a 10-Q on day 2 after its cache was written on day 0, and is collected by hand on day 3, is stored without the 10-Q; its collection_runs row (day 3) then postdates the filing, so `stock-data refresh`'s SEC step (a report filed on or after the latest collection's day) never queues it for that report.
 Expected: a collection's SEC data at least as new as its time, or the SEC step comparing the filing with the SEC data the stored figures came from.   Actual: the company stays without the report until a later report or a collection after the cache's expiry. The refresh's own collections read the SEC fresh and aren't affected.
+
+### BUG-233 [P1][COLLECT] A collection held every company until one all-or-nothing store, and exited 0 when the store failed
+Status: VERIFIED (build iteration 56)
+Found: code review 19 (I-1), build M5-6 | Fixed: (this commit) | Regression tests: tests/test_store_per_stock.py, tests/test_collection_batches.py (among them ::test_stock_data_exits_1_naming_a_company_the_database_didnt_store, ::test_stock_data_exits_1_when_the_sqlite_export_failed), tests/test_refresh.py::test_a_company_the_real_collection_couldnt_store_fails_the_step_and_the_others_are_stored
+Repro: `stock-data` with many tickers. fetch_and_export fetched every ticker into memory (about 5.6 MB a company: 2.1 GB for the S&P 500's 375 new members), then exported them at once. SQLiteStore.export wrote every stock in one transaction: one value SQLite can't bind, or a locked database, rolled back all of them, was logged, and the run printed "FETCH COMPLETE" and exited 0 (review 19's one_bad_ticker probe: four stocks, none stored, exit 0). Ctrl+C kept fetching every queued ticker, then stored nothing.
+Expected: a long run keeps what it stored, one company's failure stays its own, and the exit code says when the database didn't take a company.   Fix: the companies are exported, stored and valued 25 at a time as they arrive (`--batch-size`, config.DEFAULT_BATCH_SIZE), at most the batch and two tickers a worker in memory; each stock is written in its own SAVEPOINT (SQLiteStore.write_batch, BEGIN IMMEDIATE first); `stock-data` prints "Stored in the database: N of M" and exits 1 naming each company not stored; Ctrl+C cancels the queued tickers within half a second and exits 130, keeping the stored batches; the refresh's collect step fails when it didn't store a company of its list. Offline end to end: 30 companies in 5 batches stored, the CSVs byte-identical to one export; memory +127 MB for 127 companies against +832 MB before.
+
+### BUG-234 [P3][UNIVERSE] A Wikipedia page that isn't UTF-8 ends `python -m src.universe.sp500` in a traceback
+Status: OPEN
+Found: code review 19 (m-1), build M5-6 | Fixed: | Regression test:
+Repro: src/universe/sp500.py decodes the page as UTF-8 (:259, :300); a body that isn't raises UnicodeDecodeError, a ValueError, and main catches only OSError there. The download also has no size cap (BUG-229's kind).
+Expected: "Fetching the S&P 500 list failed: ..." and exit 1.   Actual: a traceback.
+
+### BUG-235 [P3][SEC] The SEC's ticker map is cached with no expiry, so a future index member with a newer ticker is collected without SEC data
+Status: OPEN
+Found: code review 19 (m-2), build M5-6 | Fixed: | Regression test:
+Repro: src/fetchers/sec_handler.py:301 loads data/cache/company_tickers.json whatever its age. A ticker newer than the file is "CIK not found", and the collection stores the company without SEC data. Today's map (2026-10-21) resolves all 500 members of universe/sp500-2026-10-25.csv.
+Expected: the map reloaded once when a ticker misses and the file is over a week old, or universe/README.md's refresh steps saying to refresh it.   Actual: a silent gap for that company.
+
+### BUG-236 [P3][WEB] A company ranked before its SIC code was filled is told its industry "has fewer than 10 companies here"
+Status: OPEN
+Found: code review 19 (m-3), build M5-6 | Fixed: | Regression test:
+Repro: fill the codes (`python -m src.universe.sic`) with no rank pass after it; the STAT tab and /api/stocks/{t}/scores (src/webapp/quality.py:68-75) give "SIC xxxx's industry has fewer than 10 companies here" for a company in a group of 10 or more.
+Expected: "industry ranks not computed yet" until the next rank pass (any collection, backfill or refresh).   Actual: the wrong reason, until then.
+
+### BUG-237 [P3][REFRESH] A quote whose database write failed is counted as stored
+Status: OPEN
+Found: code review 19 (m-4), build M5-6 | Fixed: | Regression test:
+Repro: SQLiteStore.upsert_quote (src/exporters/sqlite_store.py:1346-1347) swallows write errors; quote_refresh.refresh_quote, the refresh's quotes step and the web job then count the quote as stored (a locked database, say).
+Expected: the write's failure reported as that company's error.   Actual: counted as stored.
+
+### BUG-238 [P3][SCORES] A company left over in a 2-digit industry group is ranked mostly against its 3-digit groups' companies
+Status: OPEN
+Found: code review 19 (m-7, a reading of the spec), build M5-6 | Fixed: | Regression test:
+Repro: the spec's rule makes a 2-digit group's members every company whose code starts with it, its 3-digit groups' included. On review 19's 508-company copy group 28 holds 48 members, 40 of them 283's: a chemicals maker in 28 is ranked against drug makers, under a label led by "Pharmaceutical Preparations". At about 500 real companies this is common (28, 35, 36, 73, 49, 63).
+Expected (a choice): either rank a left-over company among its major group's companies outside the formed 3-digit groups when 10 or more remain, or say in the STAT note that "within SIC 28" includes the 283 group. The README states the rule and its limitation. Revisit with the real S&P 500's groups.
+
+### BUG-239 [P3][CODE] Importing src.config creates data/output/json, data/output/csv and data/cache under the current directory
+Status: OPEN
+Found: build M5-6 (the review-19 I-1 worker's end-to-end run) | Fixed: | Regression test:
+Repro: src/config.py's import-time `default_config = AppConfig()` runs StorageConfig.ensure_directories (`__post_init__`), so any process that imports the package from another folder (a script run from a scratch folder) creates an empty data\ tree there. Pre-existing.
+Expected: the folders made when a run writes to them.   Actual: made at import, wherever the process starts.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

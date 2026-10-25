@@ -19,6 +19,7 @@ import json
 import logging
 import sqlite3
 from bisect import bisect_right
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
@@ -185,6 +186,20 @@ def _position_row(guru_cik: str, period: str, held: "Optional[Position]",
               if change is not None else (None, None, None, None, None))
     return ((guru_cik, period, source.security, source.put_call or "", source.ticker, ",".join(source.cusips),
              source.issuer, source.title_of_class, source.share_type) + after + before)
+
+
+@dataclass
+class StoreResult:
+    """What ``SQLiteStore.write_batch`` did with a batch, in the database at *path*: the tickers *stored* (committed)
+    and those *failed*, each with why. A stock whose write failed was rolled back to its own savepoint and the others
+    were committed, unless *error* says why the whole export failed (the schema couldn't be made or migrated, the
+    database stayed locked, the commit failed, SQLite rolled the transaction back): then none was stored, and every
+    ticker is in *failed*."""
+
+    path: Path
+    stored: List[str] = field(default_factory=list)
+    failed: Dict[str, str] = field(default_factory=dict)
+    error: Optional[str] = None
 
 
 class SQLiteStore:
@@ -795,24 +810,89 @@ class SQLiteStore:
     # ---- public API -------------------------------------------------------
 
     def export(self, data: List[StockData]) -> Optional[Path]:
-        """Write a batch of StockData rows; returns the DB path."""
+        """Write a batch of StockData rows (``write_batch``); returns the DB path when it stored any of them, else
+        None."""
+        result = self.write_batch(data)
+        return result.path if result.stored else None
+
+    def write_batch(self, data: List[StockData]) -> StoreResult:
+        """Write *data* in one transaction, each stock in its own savepoint (code review 19, I-1).
+
+        A stock whose write fails is rolled back to its savepoint alone, logged with its ticker and the error, and
+        recorded on its StockData as an error ("SQLite write failed: ..."); the others are committed. The schema, its
+        migration and the write lock (``BEGIN IMMEDIATE``, held for the batch) come first. When one of them fails (a
+        locked database), the commit fails, or SQLite rolls the whole transaction back (a full disk), none of the batch
+        is stored: that is logged as the export's failure and recorded on each stock, and the result's *error* says
+        why. Anything else raised (Ctrl+C) rolls the batch back and propagates.
+        """
+        result = StoreResult(path=self.db_path)
         if not data:
-            return None
+            return result
         try:
             conn = self._connect()
+        except Exception as e:
+            return self._batch_failed(result, data, e)
+        try:
             try:
                 self._create_schema(conn)
                 self._migrate(conn)
-                for stock in data:
+                if conn.in_transaction:
+                    conn.commit()
+                conn.execute("BEGIN IMMEDIATE")
+            except Exception as e:
+                return self._batch_failed(result, data, e)
+            for stock in data:
+                try:
+                    conn.execute("SAVEPOINT stock")
                     self._write_stock(conn, stock)
+                    conn.execute("RELEASE SAVEPOINT stock")
+                except Exception as e:
+                    if not self._rolled_back_to_savepoint(conn):
+                        return self._batch_failed(result, data, e)
+                    result.failed[stock.ticker] = str(e)
+                    stock.add_error(f"SQLite write failed: {e}")
+                    self.logger.error(f"SQLite write failed for {stock.ticker}: {e} (its rows rolled back; the "
+                                      "batch's others go on)")
+                    continue
+                result.stored.append(stock.ticker)
+            try:
                 conn.commit()
-            finally:
-                conn.close()
-            self.logger.info(f"Wrote {len(data)} tickers to {self.db_path}")
-            return self.db_path
-        except Exception as e:
-            self.logger.error(f"Error writing SQLite store: {e}")
-            return None
+            except Exception as e:
+                return self._batch_failed(result, data, e)
+        finally:
+            conn.close()  # uncommitted, the transaction is rolled back
+        self.logger.info(f"Wrote {len(result.stored)} tickers to {self.db_path}"
+                         + (f"; not stored: {', '.join(result.failed)}" if result.failed else ""))
+        return result
+
+    @staticmethod
+    def _rolled_back_to_savepoint(conn: sqlite3.Connection) -> bool:
+        """Undo a failed stock's writes, back to its savepoint, keeping the batch's others. False when SQLite has
+        rolled the whole transaction back already (a full disk, an I/O error), the batch's earlier stocks with it."""
+        if not conn.in_transaction:
+            return False
+        try:
+            conn.execute("ROLLBACK TO SAVEPOINT stock")
+            conn.execute("RELEASE SAVEPOINT stock")
+        except sqlite3.Error:
+            return False
+        return True
+
+    def _batch_failed(self, result: StoreResult, data: List[StockData], error: Exception) -> StoreResult:
+        """The export of *data* failed as a whole with *error*: none of it is stored. Each stock that hadn't failed on
+        its own records the error, and the result says why."""
+        why = str(error)
+        own = result.failed
+        result.error, result.stored, result.failed = why, [], {}
+        for stock in data:
+            if stock.ticker in own:
+                result.failed[stock.ticker] = own[stock.ticker]
+            else:
+                result.failed[stock.ticker] = why
+                stock.add_error(f"SQLite write failed: {why}")
+        self.logger.error(f"Error writing SQLite store: {why}; none of the {len(data)} tickers was stored "
+                          f"({', '.join(result.failed)})")
+        return result
 
     def _write_stock(self, conn: sqlite3.Connection, stock: StockData) -> None:
         collected_at = (
