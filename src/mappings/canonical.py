@@ -237,8 +237,13 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         # A filing's DebtCurrent gives way to its short-term borrowings where it is the debt
         # before a refinancing moved part of it to long-term debt, which then holds that part:
         # the filer tags the part refinanced, and the borrowings are DebtCurrent less it (CVX's;
-        # ``xbrl_parser._current_debt_set_aside``, BUG-142).
-        ("DebtCurrent", "ShortTermBorrowings", "LongTermDebtCurrent"),
+        # ``xbrl_parser._current_debt_set_aside``, BUG-142). A filing's borrowings and current
+        # maturities on separate lines, without a DebtCurrent, are read as one DebtCurrent unless the
+        # borrowings already hold them (IBM's); the maturities a filer tags only as
+        # LongTermDebtAndCapitalLeaseObligationsCurrent last (UNP's, HD's;
+        # ``xbrl_parser._current_debt_combined``, BUG-159).
+        ("DebtCurrent", "ShortTermBorrowings", "LongTermDebtCurrent", "LongTermDebtAndCapitalLeaseObligationsCurrent"),
+        description="Debt due within a year: short-term borrowings and the current maturities of long-term debt.",
     ),
     CanonicalField(
         "commercial_paper", "Commercial Paper", BALANCE, UNIT_USD, INSTANT,

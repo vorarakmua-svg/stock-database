@@ -171,6 +171,19 @@ def test_outlier_excludes_event_driven_lumpy_flows():
     assert "debt_issued" not in fields      # event-driven flow excluded
 
 
+def test_outlier_skips_short_term_debt_whose_maturities_come_and_go():
+    # BUG-159: short-term debt holds the current maturities of long-term debt, due one year and not the next: NKE's
+    # FY2024 $1.006B ($6M of notes payable and $1.0B of notes due within the year) between years of $6M and $5M is
+    # no filing error (VMC's FY2024 likewise).
+    annual = {
+        "2023": {"short_term_debt": 6.0e6},
+        "2024": {"short_term_debt": 1.006e9},
+        "2025": {"short_term_debt": 5.0e6},
+        "2026": {"short_term_debt": 2.0e9},
+    }
+    assert check_field_outliers(annual, {"2023", "2024", "2025", "2026"}) == []
+
+
 def test_cashflow_imbalance_silent_when_residual_immaterial_to_gross():
     # Insurer/discontinued-ops shape: net change != OCF+ICF+FCF, but the residual is
     # tiny vs the GROSS cash activity (huge OCF/ICF that nearly cancel) -> not flagged.

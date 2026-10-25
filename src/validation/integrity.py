@@ -34,10 +34,13 @@ _DISCONTINUED_FIELDS = frozenset({
     "discontinued_investing_cash_flow",
     "discontinued_financing_cash_flow",
 })
-# Volatile net residuals (cash-flow reconciliation inputs) plus the event-driven flows.
+# Volatile net residuals (cash-flow reconciliation inputs) plus the event-driven flows, and
+# short-term debt, which holds the current maturities of long-term debt: due one year and not
+# the next, they spike and revert for real (NKE's FY2024 $1.006B between years of $6M and $5M;
+# BUG-159).
 _OUTLIER_EXCLUDE = (
     _EVENT_DRIVEN_FLOWS | _DISCONTINUED_FIELDS
-    | frozenset({"net_change_in_cash", "fx_effect_on_cash"})
+    | frozenset({"net_change_in_cash", "fx_effect_on_cash", "short_term_debt"})
 )
 
 # USD "level" fields (income/balance/cash-flow amounts); excludes per-share and

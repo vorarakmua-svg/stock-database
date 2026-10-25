@@ -2068,18 +2068,24 @@ numbers SEC filings report:
   figure where the filing's short-term debt holds the current maturities (Boeing's FY2025:
   $45.6B beside $8.5B of current debt, not its $53.8B total, which counted them twice), and
   the filer's total with the maturities where no short-term figure holds them.
-- **Short-term debt and commercial paper.** Short-term debt is the balance sheet's: where a
+- **Short-term debt and commercial paper.** Short-term debt is the balance sheet's debt due
+  within a year. Where a filing shows its short-term borrowings and the current maturities of
+  long-term debt apart, with no total of them, it is the two together (Verizon's FY2023: $13.0B
+  of maturities beside no borrowings, total debt $150.7B, not $137.7B), unless the borrowings
+  already hold the maturities (IBM's short-term debt is its maturities and its loans and paper).
+  Maturities tagged with the finance leases are read too (Union Pacific's, Home Depot's). Where a
   filing's debt due within a year is the figure before a refinancing moved part of it to
   long-term debt, the short-term borrowings its balance sheet shows stand instead (Chevron's
   FY2024: $4.4B, not $12.7B, whose other $8.25B its long-term debt holds). Commercial paper is
   the paper outside the short-term figure (a line of its own, like Apple's) and 0 where the
   short-term figure holds it, so total debt counts it once (P&G's FY2026: $34.1B, not $39.0B);
   it is read only on balance-sheet dates. Each record judges it by the short-term figure that
-  record reads: the annual record by the latest annual report's, a quarter by the latest 10-Q's
-  or 10-K's, and a filing's vintage by its own, as known then (Coca-Cola's FY2019 10-K shows its
-  $10.0B of paper apart from its other debt; only its FY2020 10-K shows it inside its
-  borrowings). A vintage that shows no short-term figure on the date reads its paper beside the
-  one the as-of view carries from an earlier filing.
+  record reads, as filed (the borrowings, not the maturities beside them): the annual record by
+  the latest annual report's, a quarter by the latest 10-Q's or 10-K's, and a filing's vintage
+  by its own, as known then (Coca-Cola's FY2019 10-K shows its $10.0B of paper apart from its
+  other debt; only its FY2020 10-K shows it inside its borrowings). A vintage that shows no
+  short-term figure on the date reads its paper beside the one the as-of view carries from an
+  earlier filing.
 - **Balance-sheet checkpoints** at every quarter-end (instant facts), full history.
 - **`fiscal_quarter`** (1–4, company calendar) and **`calendar_quarter`** (1–4, calendar)
   are both attached; `calendar_quarter` comes from the SEC frame and is the reliable

@@ -2004,3 +2004,24 @@ Result: BUG-160 to NEEDS-USER; BUG-258 (P1, the daily face) opened as NEEDS-USER
 Gates: ruff ✓ mypy ✓ pytest 2542 passed, 1 skipped (iteration 109's run; the code is unchanged) | CI: no PR (Q10)
 Commit: (this commit) chore(qa): BUG-160 measured; its daily face is BUG-258, both for the user
 Next: BUG-159 (its fix built on BUG-256's views).
+
+## Iteration 111: 2026-10-26 03:52: fix (BUG-159)
+Picked: BUG-159, the oldest open P2 (current maturities beside short-term borrowings in no debt field), unmasked
+further by BUG-143's fix.
+Did:
+- an opus investigation (read-only, all 502 companies' cached facts, `qa/evidence/bug159-investigation.txt`)
+  measured a rule and each of its parts against the filers' own totals and their balance sheets' line sums;
+- an opus worker built it on BUG-256's views, test-first (RED: 11 failed);
+- the rule: borrowings plus maturities where a filing shows both apart, unless the borrowings hold them (IBM);
+  maturities tagged with leases read; BUG-141 counting them;
+- short_term_debt left out of the integrity check's outlier test, since real maturities come and go;
+- 18 mutants, and the earlier debt fixes' 13 and 16, each killed (re-run by me).
+Real data: total debt changes in 1,353 annual years at 155 filers; 222 move to the filer's own total (VZ FY2023
+$150.67B) and 13 away, each explained; valuations identical on two DB copies.
+Evidence: `qa/evidence/bug159-{investigation,red,green,mutants,gates,gates-mine,realdata,done}.txt`,
+`bug256-mutants-rerun*.txt`, `bug142-mutants-rerun2*.txt`
+Result: BUG-159 VERIFIED; its residuals are BUG-259 (P3). Three fixes since code review 20 (BUG-256, BUG-257,
+BUG-159).
+Gates: ruff ✓ mypy ✓ pytest 2561 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): short-term debt counts the current maturities beside the borrowings (BUG-159)
+Next: the open P2s oldest first: BUG-161 (cash), BUG-170 (D&A), BUG-171 (quarterly long-term debt).
