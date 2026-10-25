@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 0 · DOING 1 · DONE 43 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 0 · DOING 0 · DONE 44 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -80,7 +80,7 @@
 | M5-3 | `stock-data refresh`: quotes and bars daily, the SEC's new filings weekly, the full collections they call for, insiders and gurus weekly, the market data daily, the recomputation; `refresh_log`, a lock, a log file, exit codes; a real run on a scratch copy; with tests | DONE | this commit | `qa/evidence/refresh-m5-3-*` |
 | M5-4 | The scale pre-flight: a synthetic copy of about 500 companies, the pages' and APIs' timings, the query plans, the indexes they need (every page under 1 s, the screener under 0.5 s); with tests | DONE | this commit | `qa/evidence/scale-m5-4-*` |
 | M5-5 | Docs: README and USAGE_GUIDE (the universe, `--tickers-file`, SIC and industries, the refresh command, Task Scheduler instructions) | DONE | this commit | `qa/evidence/docs-m5-5-*` |
-| M5-6 | Milestone close: code review 19 (opus) with Critical and Important findings fixed; the dry run, the backup, then the live collection of the S&P 500's new members, their SIC and Form 4s, the recomputation and the checks at about 500 companies | DOING | | |
+| M5-6 | Milestone close: code review 19 (opus) with Critical and Important findings fixed; the dry run, the backup, then the live collection of the S&P 500's new members, their SIC and Form 4s, the recomputation and the checks at about 500 companies | DONE | e482bfb, 9e57f52, this commit | `qa/evidence/review19*`, `close-m5-6-*` |
 
 ## NEEDS-USER (each also recorded in `qa/BUGS.md`)
 
@@ -91,6 +91,9 @@
 - Q13 [OPS]: the guru list. Default: the 34 value investors in `src/ownership/gurus.py`.
 - Q14 [OPS]: installing `xlrd` to read Shiller's `.xls`. Default: nothing installed; M4's own reader.
 - Q15 [OPS]: installing a Windows scheduled task for `stock-data refresh`. Default: not installed; the README gives the command.
+- BUG-245 [VAL]: fold the declared splits buybacks or a merger hid from the annual share normalization (ODFL, PCAR, RJF, ROL, WRB, CNC); it moves ODFL's and WRB's medians, no verdict. Default: unchanged.
+- BUG-246 [VAL]: Graham on the latest fiscal year only (ARES, LEN, VTRS); it moves three medians and LEN's verdict. Default: unchanged.
+- Q16 [VAL]: the valuation history's P/E on net income to common. Default: net income, as the spec says.
 
 ## Log
 
@@ -1356,3 +1359,112 @@ Evidence: `qa/evidence/docs-m5-5-{tests,sql,gates,done}.txt`
 Gates: ruff ✓ mypy ✓ pytest 2326 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) docs: Milestone 5 in the README and the usage guide: the universe, industries and stock-data refresh (M5-5)
 Next: M5-6 (milestone close: code review 19, the dry run, the backup and the live collection).
+
+### Build iteration 56: 2026-10-25 19:39: M5-6
+Did:
+- Code review 19 (opus, 40d2304..dcec306; `qa/evidence/review19.txt`): no Critical, three Important, seven Minor.
+  Each Important was fixed test-first:
+  - I-1, BUG-233 (P1), e482bfb: a collection stores batch by batch (25, `--batch-size`), each company in its own
+    savepoint, and exits 1 naming a company it didn't store. It used to hold every company in memory until one
+    all-or-nothing store, and exit 0 when that failed. Ctrl+C now keeps the stored batches. 30 mutants, each killed.
+  - I-2 and I-3, BUG-240 and BUG-241, 9e57f52 (26 mutants, each killed):
+    - an empty bars answer is that company's failure, not a full collection of every company on a bad Yahoo day;
+    - a weekly step whose latest success left something undone runs again, so a failed collection or SEC feed no
+      longer delays a new 10-Q by a week.
+  - The same commit took m-5 (BUG-242: age from the run's start) and m-6 (BUG-243: docs). It also fixed BUG-244,
+    which its worker found: a `--tickers` test run counted for every company's cadence.
+  - The other minors are open: BUG-234 to BUG-238, and BUG-239, the import-time data folders.
+- The dry run, on a backup-API copy with copies of json/ and csv/ (`close-m5-6-dry-*`):
+  - ten new members (BF-B PNC AIG VMRK AEP SOLV EXE APO SW ACN) through the same commands, in batches of 4, every
+    step exiting 0;
+  - the 127's rows identical in every table but their ranks; the CSVs merged (137 rows); the 197 pages within gates;
+  - the oracles: five pass; the valuation oracle's misses all explained before the run (BUG-007) or of BUG-007's kind.
+- The backup: %LOCALAPPDATA%\stockdb-backups\2026-10-25-b. Integrity ok; 35 tables' rows and the json/ and csv/
+  files equal.
+- The live step on the user's DB (`close-m5-6-live-*`), every step exiting 0:
+  - SIC codes for the 127 (4 s);
+  - `stock-data --tickers-file universe/sp500-2026-10-25.csv --skip-existing`: 375 of 375 stored in 15 batches,
+    0 errors, 37 minutes;
+  - the backfill (502 valued, 36 s);
+  - the new members' Form 4s: 72,725 filings in 6.5 hours. MAA's 4 SEC 503s were re-run alone: 154 of 154;
+  - the gurus' positions.
+- The checks on the final DB (`close-m5-6-final-*`, `close-m5-6-live-scope.txt`):
+  - 502 companies, all 375 new with Form 4 filings, integrity ok;
+  - the 127's rows identical in every table but their universe ranks (124 of 127 moved, as the universe grew);
+  - every page and API within its gate (the slowest 225 ms; the screener's 120 ms);
+  - 625 MB of database, 1.25 GB of JSON, 22 industry groups ranking 351 companies.
+  - Oracles: indicators 12/12, market 3/3, 13F all pass. The other three have misses, all among the new members,
+    each explained (`close-m5-6-misses-done.txt`):
+    - scores 9/12: per-share figures across declared splits (C1, BUG-245), a bankruptcy issuance and a reverse
+      merger read as splits (C2, BUG-247), DLR the oracle's reading, EG's tags (BUG-252);
+    - valuation level 1 0/2016, level 2 40/1903 beyond 0.5%: 34 of BUG-007's kind and RTX's, as before; ODFL and WRB
+      (C1), ARES, LEN and VTRS (C6, BUG-246), HLT and HOOD the oracle's reading;
+    - history: WRB's quarterly split (BUG-248), GL's trailing-year gap (BUG-249), and the P/E at 87% within 10%
+      against 88%. The P/E misses: the latest point lagging a weekend collection (BUG-250), companyfacts lacking 58
+      companies' latest report (BUG-251), Yahoo's own figures, and preferred dividends (Q16).
+- The fixes that would move medians are yours (BUG-245, BUG-246, Q16); nothing was applied.
+- Recorded: BUG-245 to BUG-252, Q16, and the S&P 500's real groups on BUG-238.
+Evidence: `qa/evidence/review19*.txt`, `qa/evidence/close-m5-6-*.txt`
+Gates: ruff ✓ mypy ✓ pytest 2393 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: e482bfb fix(collect): ...; 9e57f52 fix(refresh): ...; (this commit) chore(build): close M5, with the user's DB holding the S&P 500
+Next: none; the build's Definition of Done is checked below.
+
+## Final summary (2026-10-25 19:39)
+
+**What was built**, milestones 0-5 of `docs/superpowers/plans/2026-10-21-gurufocus-roadmap.md`, in 65 commits on
+`qa/full-loop` (644b48f to this commit), each through the gates. M1 to M5 each closed with an opus code review (15 to
+19; review 15 also covered M0) whose Critical and Important findings were fixed test-first, then its authorized step
+on the user's DB.
+- **M0**: levered FCF no longer takes interest off twice (66 DCF rows, two verdicts to fair).
+- **M1, valuation history**:
+  - monthly P/E, P/S, P/B, P/FCF, P/FFO, EV/EBITDA and dividend yield with their 10-year ranges;
+  - a transparent historical value against the price;
+  - the VAL tab's section, the API and the screener fields;
+  - checked against Yahoo's figures.
+- **M2, quality scores**:
+  - per-share series and CAGRs, Piotroski F, Altman Z, Beneish M, Sloan, ROIC vs WACC, predictability stars;
+  - 20 warning signs, five ranks and an equal-weight composite (Q11);
+  - the STAT tab's Quality section, screener fields and five preset screens;
+  - an independent oracle.
+- **M3, SEC ownership**:
+  - Form 4 insider trades (three years; open-market buying, CEO/CFO and cluster buys) on the INS tab;
+  - 34 gurus' 13F holdings with their quarter-over-quarter changes, guru pages and their combined portfolio.
+- **M4, more valuation tools and the market page**:
+  - display-only reverse DCF, EPV, NCAV and net-net, median P/S value and tangible Graham;
+  - the Buffett indicator, Shiller's CAPE and the yield curve.
+- **M5, a wider universe and automation**:
+  - the S&P 500 (375 members added);
+  - SIC codes with industry groups and ranks;
+  - `stock-data refresh` with the Task Scheduler commands;
+  - indexes for scale;
+  - collections stored batch by batch.
+
+**The user's DB** (backups before each write under %LOCALAPPDATA%\stockdb-backups\, the latest 2026-10-25-b):
+- 502 companies, 625 MB;
+- every model, history, score, indicator and rank computed;
+- the insiders' Form 4s for all 502, the 34 gurus' positions, and the market data.
+- The 127 earlier companies' valuations and verdicts are unchanged by M5.
+- Gates: ruff ✓ mypy ✓ pytest 2393 passed, 1 skipped, 1 warning; ruff's py39 target stands in for CI's Python 3.9 job (no PR, Q10).
+
+**Your decisions** (`qa/BUGS.md`; each default leaves the data and verdicts as they are):
+- the build's: Q10 (a PR for CI), Q11 (the composite's weights), Q12 (the SEC's bulk data sets), Q13 (the guru
+  list), Q14 (xlrd), Q15 (the scheduled task), Q16 (P/E to common), BUG-172 (the multiples band's basis), BUG-245
+  (the hidden splits' fold), BUG-246 (Graham's fiscal year);
+- the QA loop's, still open: Q1-Q5 and Q7-Q9, BUG-007 (Graham's bear with a loss year) and BUG-049 (DDM's payment
+  history).
+
+**Remaining risks**:
+- **Freshness**: the 127 earlier companies' quotes and bars stop at 2026-10-20, the new members' at 10-23, and 19
+  of the 127 have filed a Q3 10-Q since their collection. `stock-data refresh` (by hand, or scheduled, Q15) brings
+  them current. The build didn't run it on the user's DB: it writes beyond the authorized collection.
+- **Known data gaps**:
+  - nine new members' per-share history or Graham value wait for BUG-245 and BUG-246;
+  - 16 open P2s, among them PCG's and KDP's per-share history (BUG-247), WRB's quarterly split (BUG-248), 1,222
+    missing trailing years (BUG-249) and 58 companies whose latest report the SEC's companyfacts lacks (BUG-251);
+  - 128 open P3s.
+- **Sources**: Yahoo is unofficial (yfinance) and paced at 2.5 s; the SEC's companyfacts can lag its filings
+  (BUG-251); refreshed SEC data outside `stock-data refresh` comes from a 7-day cache (BUG-232).
+- **CI**: no PR, so CI doesn't run on the branch (Q10); Python 3.9 itself isn't installed here.
+- **Industry ranks**: a 2-digit group's left-over companies are ranked against its 3-digit groups' too (BUG-238).
+- **Disk**: the QA and build scratch copies under %LOCALAPPDATA%\stockdb-qa can be deleted; the backups are the
+  user's to keep or delete.

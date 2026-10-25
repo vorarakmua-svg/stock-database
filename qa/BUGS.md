@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 127 · NEEDS-USER 17 · Verified: 103
+**Open:** P0 0 · P1 0 · P2 16 · P3 128 · NEEDS-USER 20 · Verified: 103
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1783,6 +1783,7 @@ Status: OPEN
 Found: code review 19 (m-7, a reading of the spec), build M5-6 | Fixed: | Regression test:
 Repro: the spec's rule makes a 2-digit group's members every company whose code starts with it, its 3-digit groups' included. On review 19's 508-company copy group 28 holds 48 members, 40 of them 283's: a chemicals maker in 28 is ranked against drug makers, under a label led by "Pharmaceutical Preparations". At about 500 real companies this is common (28, 35, 36, 73, 49, 63).
 Expected (a choice): either rank a left-over company among its major group's companies outside the formed 3-digit groups when 10 or more remain, or say in the STAT note that "within SIC 28" includes the 283 group. The README states the rule and its limitation. Revisit with the real S&P 500's groups.
+Notes: the real S&P 500 (build M5-6, 502 companies; `qa/evidence/close-m5-6-live-groups.txt`): 22 groups, 351 companies ranked in one. Left over in a 2-digit group: 28: 17 of 34 (17 in 283), 35: 17 of 33, 36: 11 of 32, 38: 5 of 40 (35 in 382 and 384), 49: 9 of 37, 63: 11 of 23, 73: 7 of 57 (50 in 737 and 738); 20, 37 and 62 have no 3-digit group. Ranking the left-overs among themselves when 10 or more remain would give 28, 35, 36 and 63 a group of their own and leave the left-overs of 38, 49 and 73 without industry ranks.
 
 ### BUG-239 [P3][CODE] Importing src.config creates data/output/json, data/output/csv and data/cache under the current directory
 Status: OPEN
@@ -1819,6 +1820,59 @@ Status: VERIFIED (build iteration 56)
 Found: build M5-6 (the review-19 I-3 worker) | Fixed: (this commit) | Regression tests: tests/test_refresh.py::test_a_tickers_run_of_every_step_leaves_every_step_due_for_the_next_full_run, ::test_a_tickers_run_between_two_full_runs_leaves_the_cadence_to_the_first, ::test_a_tickers_run_before_the_scheduled_run_doesnt_make_it_skip_the_daily_steps, ::test_a_tickers_runs_rows_carry_its_subset_and_a_full_runs_dont
 Repro: the README's own test run, `stock-data refresh --tickers AAPL,MSFT`, logged ok rows, so a scheduled run within 20 hours skipped the quotes, bars and market data of every company, and the weekly steps for up to a week.
 Expected: a test on a few companies leaves the others due.   Fix: a --tickers run's rows carry its `subset` and the cadence passes over them, so the next full run is due as if the test hadn't happened.
+
+### BUG-245 [P1][VAL] Annual share normalization skips a declared split whose seam buybacks pushed under 1.5, or a merger pushed beyond it
+Status: NEEDS-USER (the fix moves ODFL's and WRB's medians; no verdict changes)
+Found: build M5-6 (the scores oracle on the S&P 500) | Fixed: | Regression test:
+Repro: src/valuation/inputs.py `_normalize_splits` (feeds `load_inputs`: the valuations and the scores' per-share series) tests a seam only at a ratio of 1.5 or more (SPLIT_JUMP_THRESHOLD) and lets a declared split explain it only within 1.25x (DECLARED_SPLIT_TOLERANCE). Seams across a declared 3:2 split read 1.45-1.4999 after buybacks (ODFL FY2017-18 1.4930, PCAR FY2019-20 1.4999, RJF FY2018-19 1.4516, ROL FY2015-16 1.4977, WRB FY2019-20 1.4631 and FY2021-22 1.4985), and CNC's FY2015-16 2.6648 is its 2019 2:1 split times the 2016 Health Net stock merger: none folds. 65 seams of the 502 have a declared split filed between their counts; 58 fold, these 7 don't. Their older years' per-share figures are 1.5x to 2.25x off (ODFL FY2015 EPS stored 1.785 = 3.57 / 2; the oracle's 1.19 = 3.57 / 3): 87 of the scores oracle's 128 per-share disagreements, their CAGRs and predictability, ODFL's Lynch and WRB's multiples band. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C1.
+Expected: fold the declared splits dated between the two counts' filings whenever the seam is nearer their product than 1.0.   Measured on a copy: 21 per-share rows to the oracle's values; predictability ODFL 3.5 to 4.5 stars, PCAR 1 to 3, RJF 3.5 to 4.5, WRB 1 to 4; ODFL Lynch 42.38/56.90/71.42 to 58.08/72.60/72.60 and its medians 47.10/56.90/71.42 to 58.08/72.60/72.60; WRB's bear median 37.35 to 42.89; no verdict changes (both are expensive). Decide whether to apply it (recommended: the oracle agrees with every changed value). Until then the stored figures stay.
+
+### BUG-246 [P1][VAL] Graham values an older fiscal year when the latest lacks EPS or a share count (ARES, LEN, VTRS)
+Status: NEEDS-USER (the spec's reading moves three medians and flips LEN's verdict)
+Found: build M5-6 (the valuation oracle on the S&P 500) | Fixed: | Regression test:
+Repro: src/valuation/models.py `value_graham` (282-286) takes the latest year with both EPS and book value per share; the valuation-layer spec says the latest fiscal year's. ARES FY2025 has no EPS or count in the companyfacts (per-class reporting), LEN FY2025 tags only basic EPS and the basic count, VTRS FY2024-25 has EPS (-0.53, -3.00) but no count (only dei's cover count, which the parser doesn't read): Graham silently values FY2024, FY2024 and FY2023. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C6.
+Expected (a choice): Graham N/A when the latest fiscal year lacks EPS or book value per share, or the parser filling diluted from basic (LEN) and reading dei:EntityCommonStockSharesOutstanding (VTRS); either moves these medians. Measured with the latest-FY reading: ARES 32.31/42.56/51.48 to 52.59/65.70/83.14 (expensive either way), LEN 79.28/84.13/100.03 to 71.55/71.55/71.55 and its verdict at $84.92 fair to expensive, VTRS 6.00/6.93/25.54 to 13.43/15.49/21.63 (fair). Until then the stored values stay.
+
+### BUG-247 [P2][VAL] The undeclared split rule folds a bankruptcy issuance and a reverse merger as splits (PCG, KDP)
+Status: OPEN
+Found: build M5-6 (the scores oracle on the S&P 500) | Fixed: | Regression test:
+Repro: `_normalize_splits`' undeclared branch folds a seam on "split marks" (EPS moved against the count, revenue not with it) without checking that net income stayed put. PCG FY2019-20 2.3807 and FY2020-21 1.5792 (the July 2020 Chapter 11 exit issuance: net income -7,656M to -1,318M to -102M) and KDP FY2016-17 4.2363 (the 2018 reverse merger: Dr Pepper Snapple's figures, then Keurig's) fold: 33 of the 128 per-share disagreements; PCG's pre-2020 per-share figures are 3.76x low. Of the 502, the rule folds only these three seams beyond the listing seams the other rule folds too. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C2.
+Expected: fold on marks only when net income kept its sign and moved by less than half the seam's log ratio.   Measured on a copy: 8 per-share rows to the oracle's values; KDP's and PCG's growth and predictability change (PCG's 10-year revenue per share 2.1% to -10.6% a year); only their Lynch assumptions move, no value, median or verdict. KDP stays a splice of two companies either way.
+
+### BUG-248 [P2][VAL] WRB's quarterly history leaves its 2022 3:2 split unfolded: three equal splits, the tie-break takes the wrong one
+Status: OPEN
+Found: build M5-6 (history_vs_yahoo on the S&P 500) | Fixed: | Regression test:
+Repro: src/valuation/history_inputs.py `normalize_share_series` / `_seam_run` match a quarterly seam to the nearest declared run among the splits after it, ties to the earliest (BUG-174's rule, for APH). WRB split 3:2 in 2019, 2022 and 2024: the 2021Q4-2022Q1 seam (1.501, the 2024 split) ties 2022 and 2024 and takes 2022, so the 2019Q4-2020Q1 seam (1.494, the 2022 split) has no candidate and stays unfolded under 1.5. WRB's market cap 2017-05 to 2020-04 is 1/1.5 of true: the seam gate's WRB miss and its "1 move". P/E percentile 0.61 (0.40 folded), historical value $60.11 ($62.63); no valuation, median or verdict. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C3.
+Expected: each seam its own split, by filing date (store each quarter's filing date; financials_quarterly.filed_date is NULL) or an order-preserving match. A quick approximation from the annual vintages fixed WRB but broke CPRT and ROL: it needs design and tests for APH, NFLX, WRB, CPRT and ROL.
+
+### BUG-249 [P2][TTM] An instant-only quarterly row breaks the trailing years around it: 1,222 trailing years missing inside today's 10-year windows
+Status: OPEN
+Found: build M5-6 (history_vs_yahoo on the S&P 500; the general case of BUG-096) | Fixed: | Regression test:
+Repro: src/parsers/ttm.py `compute_ttm` (line 63) forms four-quarter windows over every period end, so a financials_quarterly row holding no flow figure (an adoption-day instant: AES 2018-01-01 retained earnings, ABT 2018-01-05 long-term debt; GL 2011-07-01 shares outstanding) breaks the three windows that cross it. Of the 502: 602 such rows in 306 companies cost 1,802 trailing years, 1,222 of them inside today's 10-year history windows (260 companies, 68 of the 127). GL's history gap is the seam gate's GL miss. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C4.
+Expected: windows over the period ends that carry a flow figure. financials_ttm is stored at collection, so the fix needs a re-parse from the cache or a migration.   Measured on a copy with the years rebuilt: 29,815 valuation_history rows (284 companies), 1,319 ranges, 268 quality_scores rows change; no valuation, median or verdict.
+
+### BUG-250 [P3][VAL] The history's latest point misses a quarter a collection stored after the last bar
+Status: OPEN
+Found: build M5-6 (history_vs_yahoo on the S&P 500) | Fixed: | Regression test:
+Repro: src/valuation/history_inputs.py `known_on` makes Q1-Q3 known at period end + 45 days, capped at the collection day; the latest point is the latest bar, which precedes a weekend collection (the live run: bars to Friday 2026-10-23, collected Sunday 10-25). So 40 companies' latest point still uses June's quarter though September's is stored (GE, RTX, TRV of the 127): 11 of the 58 P/E misses against Yahoo, enough to fail the 88% gate (394/452). It clears at the next bar after the collection day. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C5.
+Expected: a quarter known at the latest bar when its 10-Q was filed by then (the quarters store no filing date; capping at the latest bar would count one filed in between).   Measured: with the cap the P/E gate passes (402/452); no valuation, median or verdict.
+
+### BUG-251 [P2][GATHER] The SEC's companyfacts lacks the latest 10-Q or 10-K of 58 companies, though EDGAR lists it as filed
+Status: OPEN
+Found: build M5-6 (the P/E misses against Yahoo) | Fixed: | Regression test:
+Repro: for 58 of the 502 (11 of the 127: D, ABT, NEE, PLD, WELL, ...), the latest report filed before the collection is in the company's submissions feed but no fact in its companyfacts carries that accession (DLR's 10-Q 0001104659-26-089296, filed 2026-07-31; CLX's FY2026 10-K). Their stored figures stop a quarter (or a year) early: 21 of the 58 P/E misses. The source's gap, but nothing in the app notices it. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), section 4, probe_sec_lag_all.txt.
+Expected: the collection (or the refresh's SEC step) warns when the latest report in the feed has no facts, and the refresh queues it again later.
+
+### BUG-252 [P2][PARSE] EG's FY2016-19: net income from the "available to common" tag about 20% low, and share counts left in thousands
+Status: OPEN
+Found: build M5-6 (the scores oracle on the S&P 500) | Fixed: | Regression test:
+Repro: EG (Everest Group) tags no NetIncomeLoss for FY2016-19, and canonical.py's net_income order (145-152) takes NetIncomeLossAvailableToCommonStockholdersBasic (792.4M, 272.6M, -125.8M, 766.4M) before ProfitLoss (996.3M ... 1,009.5M, consistent with EPS x the count). Its diluted counts for those years are tagged in thousands (41,628 ...); share_scale's net income / EPS check, fed the low figure, doesn't rescale them, so a 989.6x seam makes `_normalize_splits` truncate FY2015-19 (by design): the scores oracle's 5 "row not stored", 2 CAGRs and EG's predictability. The oracle's EG years are wrong the same way, so a parser fix needs its guard changed too. Evidence: `qa/evidence/close-m5-6-misses-done.txt`, C8.
+Expected: EG's net income from the tag consistent with EPS x the count, and its counts rescaled.   Actual: as above.
+
+### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
+Status: NEEDS-USER
+Found: build M5-6 | The valuation history's P/E is market cap / net income (the M1 spec), net income before preferred or participating dividends, while Yahoo's (and most sites') is price / EPS, to common; the history's P/B already subtracts preferred equity. Six of the 58 P/E misses against Yahoo are this (ALB: 224M against 57M to common; MCHP, TDG, VST, PSA, KKR). Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), section 4.
+Default: unchanged (net income, as the spec says). A change moves those companies' P/E history and their historical value, not the five models' medians.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
