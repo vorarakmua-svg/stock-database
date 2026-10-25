@@ -24,16 +24,26 @@ A comprehensive guide on how to use the output data from the Stock Data Collecti
    - [Collecting market data](#collecting-market-data) — the command, its cache and its exit codes
    - [The market series](#the-market-series) — `market_series`, `market_fetches` and queries
    - [Viewing market data](#viewing-market-data) — the Market page, the API and how to read each section
-8. [Updating Data from the Web](#updating-data-from-the-web) — UPDATE DATA button, fetching new tickers
-9. [Valuation Models](#valuation-models) — DIY formulas over the raw JSON/CSV
-   - [DCF (Discounted Cash Flow)](#dcf-discounted-cash-flow)
-   - [Graham Number](#graham-number)
-   - [Peter Lynch Fair Value](#peter-lynch-fair-value)
-   - [Buffett-Style Analysis](#buffett-style-analysis)
-10. [Financial Analysis Examples](#financial-analysis-examples)
-11. [Building Dashboards](#building-dashboards)
-12. [Data Quality Checks](#data-quality-checks)
-13. [Common Use Cases](#common-use-cases)
+8. [The Universe and Industries](#the-universe-and-industries) — lists of tickers, SIC codes, industry groups and the ranks within them
+   - [Collecting a list of tickers](#collecting-a-list-of-tickers) — `--tickers-file` and `--skip-existing`
+   - [Adding the S&P 500](#adding-the-sp-500) — the commands, in order
+   - [Filling SIC codes](#filling-sic-codes) — the offline fill
+   - [Industries in the database](#industries-in-the-database) — the columns and queries
+   - [Reading the industry ranks](#reading-the-industry-ranks) — the web pages, the API and the screener
+9. [Keeping Data Current](#keeping-data-current) — `stock-data refresh`, its log and a Windows scheduled task
+   - [Running a refresh](#running-a-refresh) — the steps, their cadence and the options
+   - [The refresh log](#the-refresh-log) — `refresh_log`, the log file and the lock
+   - [Scheduling it on Windows](#scheduling-it-on-windows) — a Task Scheduler example
+10. [Updating Data from the Web](#updating-data-from-the-web) — UPDATE DATA button, fetching new tickers
+11. [Valuation Models](#valuation-models) — DIY formulas over the raw JSON/CSV
+    - [DCF (Discounted Cash Flow)](#dcf-discounted-cash-flow)
+    - [Graham Number](#graham-number)
+    - [Peter Lynch Fair Value](#peter-lynch-fair-value)
+    - [Buffett-Style Analysis](#buffett-style-analysis)
+12. [Financial Analysis Examples](#financial-analysis-examples)
+13. [Building Dashboards](#building-dashboards)
+14. [Data Quality Checks](#data-quality-checks)
+15. [Common Use Cases](#common-use-cases)
 
 ---
 
@@ -458,7 +468,10 @@ them:
   - `rank_strength`, `rank_profitability`, `rank_growth`, `rank_valuation` and `rank_momentum` (1-10),
     `composite_score` (out of 100) and `magic_formula_rank`;
   - `components` (JSON: the values each rank is built from), `warning_count`, `na_reasons` (JSON: why a score
-    is NULL), `computed_at` and `ranked_at`.
+    is NULL), `computed_at` and `ranked_at`;
+  - the industry group and the same ranks within it (Milestone 5): `industry_group`, `industry_label`,
+    `industry_size`, `ind_rank_strength` ... `ind_rank_momentum` and `ind_composite` (see
+    [The Universe and Industries](#the-universe-and-industries)).
 - **`warning_signs`**: one row per (ticker, code) for each sign that fires: `severity` (`severe` or `medium`),
   `message`, `value` and `threshold`.
 
@@ -750,8 +763,9 @@ this model exists to value properly.
 gurus: each insider's Form 4 trades of the last three years, and each guru's 13F holdings of the last eight
 quarters, mapped to tickers. See the README's
 [SEC ownership: insiders and gurus](README.md#sec-ownership-insiders-and-gurus) for the rules and the limits.
-It changes none of the models, scores or histories, and neither `python -m src.main` nor the web interface's
-update collects it: it has its own command, and eight tables hold it.
+It changes none of the models, scores or histories, and neither a `python -m src.main` collection nor the web
+interface's update collects it: it has its own command (which `stock-data refresh` also runs every week, see
+[Keeping Data Current](#keeping-data-current)), and eight tables hold it.
 
 ### Collecting ownership data
 
@@ -1060,8 +1074,9 @@ six fields empty.
 Shiller's monthly S&P data with his cyclically adjusted P/E (CAPE), and Treasury.gov's daily yield curve. The **Market**
 page (`/market`) draws the Buffett indicator, the CAPE and the yield curve from them. See the README's
 [Market data](README.md#market-data) for the sources, the cache and the methods. They change nothing collected for the
-companies, and neither `python -m src.main` nor the web interface's update collects them: they have their own command,
-and two tables hold them.
+companies, and neither a `python -m src.main` collection nor the web interface's update collects them: they have their
+own command (which `stock-data refresh` also runs every day, see [Keeping Data Current](#keeping-data-current)), and two
+tables hold them.
 
 ### Collecting market data
 
@@ -1232,6 +1247,375 @@ How to read each section:
   2026-10-23 the 10-year less 2-year spread was +0.31 (last inverted 2024-09-05; sustained inversion 2022-07-06 to
   2024-09-05, 539 days) and the 10-year less 3-month +0.78 (last inverted 2025-10-16; sustained 2025-02-26 to 2025-09-15,
   85 days).
+
+---
+
+## The Universe and Industries
+
+`universe/` keeps the lists of tickers the app collects, and `src/universe/` reads them, stores each company's SEC
+industry code and forms the industry groups that the quality scores' five ranks are also computed within. See the
+README's [The universe and industries](README.md#the-universe-and-industries) for the rules and the limits. A list is
+collected with `stock-data`, every collection stores a company's SIC code, and nine more columns of `quality_scores`
+hold the industry group and the ranks within it. Nothing collected before changes: not a model, a valuation or a
+history, and not the quality scores' own ranks and composite.
+
+### Collecting a list of tickers
+
+```bash
+# A file of tickers: the 127 companies the database started with
+stock-data --tickers-file universe/core.txt
+
+# The S&P 500's members the database doesn't hold yet
+stock-data --tickers-file universe/sp500-2026-10-25.csv --skip-existing
+
+# The option repeats, and tickers can be named beside the files
+stock-data NVDA --tickers-file my-watchlist.txt --tickers-file universe/core.txt
+```
+
+A `.txt` file is a ticker a line; `#` starts a comment (a whole line's or the rest of a line) and blank lines are
+ignored:
+
+```
+# my watchlist
+AAPL
+BRK.B      # a class share: collected as BRK-B
+msft
+```
+
+A `.csv` file's tickers are its `ticker` column, else its `Symbol` column (the header read without case or spaces), so
+`universe/sp500-2026-10-25.csv` works as it is. The tickers collected are the positional ones, then each file's in
+order, each once, upper-cased, with a class share's dot as a dash. `--skip-existing` leaves out the tickers already in
+the database's `companies` table (`--db`, else `data/output/stock.db`) and says how many:
+`--skip-existing: 125 of 500 tickers already in data\output\stock.db left out, 375 to collect`.
+
+A ticker is letters and digits with at most one dash or dot between them. A list with anything else, a file that can't
+be read or isn't a `.txt` or `.csv`, no tickers at all, or tickers that are all in the database already under
+`--skip-existing`, ends with an error and exit 1 before anything is collected:
+
+```
+Cannot read the tickers: x.txt, line 3: not a ticker: 'AAPL,MSFT' (letters and digits, with at most one dash or dot between them)
+No tickers given: name some, or a --tickers-file that lists some
+All 127 tickers given are already in the database (data\output\stock.db): nothing to collect (--skip-existing)
+```
+
+### Adding the S&P 500
+
+```bash
+# A newer list, if you want one: one request to Wikipedia, and it never overwrites a file
+python -m src.universe.sp500
+
+# 1. SIC codes for the companies collected before Milestone 5 (offline, seconds)
+python -m src.universe.sic
+
+# 2. The members the database doesn't hold yet, collected in full
+stock-data --tickers-file universe/sp500-2026-10-25.csv --skip-existing --sec-user-agent "YourName you@example.com"
+
+# 3. The insiders (three years of Form 4s: the new members' are fetched, the others come from the cache), then the
+#    gurus' positions
+python -m src.ownership.collect --insiders
+python -m src.ownership.collect --positions
+```
+
+Start step 2 in the background: earlier collections took about 6 seconds a ticker with a warm SEC cache and about 20
+cold, so the 375 new members are an estimated 2 to 3 hours, and step 3's Form 4s take hours at the SEC's rate. A company
+that Yahoo or the SEC can't serve is counted in the summary's "With errors" and the rest go on. Every collection ends by
+valuing the companies it stored and ranking all the stored ones, in the universe and within industries, so filling the
+codes first (step 1) lets the collection's ranks see every one; if you fill them after collecting,
+`python -m src.valuation.backfill` ranks again. A company that leaves the index stays in the database, and
+`stock-data refresh` (below) keeps all of them current.
+
+### Filling SIC codes
+
+Every collection stores the company's SEC SIC code and its description from the submissions feed it fetches. For the
+companies collected before, one command fills them without a request:
+
+```bash
+python -m src.universe.sic
+python -m src.universe.sic --db data/output/stock.db --json-dir data/output/json --cache-dir data/cache
+```
+
+For each company without a code it reads `sec_submissions.sic` and `sec_submissions.sic_description` from its JSON
+export (`<json-dir>/<TICKER>.json`), else from the SEC handler's cached submissions for its CIK
+(`<cache-dir>/submissions_CIK<CIK>.json`, whatever its age), and writes those two columns of `companies`, never
+another. The database must exist and have a `companies` table, else it prints `No database at PATH` or
+`No companies table in PATH` and exits 1. The end of a run:
+
+```
+SIC codes in data\output\stock.db: 127 companies, 127 without a code
+  filled from the JSON exports: 127 (data\output\json)
+  filled from the SEC cache: 0 (data\cache)
+  still missing: 0
+```
+
+It took about 4 seconds for the 127 companies. The industry ranks follow from the next ranking, which
+`python -m src.valuation.backfill` does (about 7 seconds for 127 companies), as does a collection or a refresh.
+
+### Industries in the database
+
+- **`companies`**: `sic` (four digits, as text) and `sic_description` (the SEC's words for it), NULL where the SEC gives
+  none.
+- **`quality_scores`**, beside the universe ranks (which are unchanged), nine columns, all NULL for a company with no
+  industry group:
+  - `industry_group`: its 3-digit SIC prefix when at least 10 of the companies ranked share it, else its 2-digit prefix
+    when at least 10 share that;
+  - `industry_label`: "SIC 283: " and the group's three most common SEC descriptions, joined with "; ";
+  - `industry_size`: the group's members, every company whose code starts with the group. A 2-digit group takes in
+    its 3-digit groups' companies, so it is larger than the number of companies ranked *in* it;
+  - `ind_rank_strength`, `ind_rank_profitability`, `ind_rank_growth`, `ind_rank_valuation` and `ind_rank_momentum`
+    (1-10, 10 best) and `ind_composite` (out of 100), ranked among the group's members. A component counts only when at
+    least 10 members have it, so a rank is NULL where too few components do (two are needed, one for valuation and
+    momentum), and the composite where fewer than four ranks are given.
+
+```sql
+-- A company's SIC code, and the industry group it is ranked in
+SELECT c.ticker, c.sic, c.sic_description, q.industry_group, q.industry_size
+FROM companies c
+LEFT JOIN quality_scores q ON q.ticker = c.ticker
+WHERE c.ticker IN ('AAPL', 'NVDA', 'JPM')
+ORDER BY c.ticker;
+
+-- The industry groups: the members each covers, the companies ranked in it and those with a composite
+SELECT industry_group,
+       industry_size AS members,
+       COUNT(*) AS ranked_in_it,
+       COUNT(ind_composite) AS with_composite,
+       industry_label
+FROM quality_scores
+WHERE industry_group IS NOT NULL
+GROUP BY industry_group, industry_size, industry_label
+ORDER BY industry_group;
+
+-- The companies ranked in SIC 367 (semiconductors), best industry composite first
+SELECT q.ticker, c.company_name, q.ind_composite,
+       q.ind_rank_strength, q.ind_rank_profitability, q.ind_rank_growth, q.ind_rank_valuation, q.ind_rank_momentum
+FROM quality_scores q
+JOIN companies c ON c.ticker = q.ticker
+WHERE q.industry_group = '367'
+ORDER BY q.ind_composite DESC, q.ticker;
+
+-- NVDA's five ranks and composite in the universe and in its industry
+SELECT 'strength' AS rank, rank_strength AS universe, ind_rank_strength AS industry
+FROM quality_scores WHERE ticker = 'NVDA'
+UNION ALL SELECT 'profitability', rank_profitability, ind_rank_profitability FROM quality_scores WHERE ticker = 'NVDA'
+UNION ALL SELECT 'growth', rank_growth, ind_rank_growth FROM quality_scores WHERE ticker = 'NVDA'
+UNION ALL SELECT 'valuation', rank_valuation, ind_rank_valuation FROM quality_scores WHERE ticker = 'NVDA'
+UNION ALL SELECT 'momentum', rank_momentum, ind_rank_momentum FROM quality_scores WHERE ticker = 'NVDA'
+UNION ALL SELECT 'composite', composite_score, ind_composite FROM quality_scores WHERE ticker = 'NVDA';
+
+-- How many companies share each 3-digit SIC prefix: 10 or more forms an industry group
+SELECT substr(sic, 1, 3) AS prefix, COUNT(*) AS companies, group_concat(ticker, ' ') AS tickers
+FROM companies
+WHERE sic IS NOT NULL
+GROUP BY prefix
+HAVING COUNT(*) >= 4
+ORDER BY companies DESC, prefix;
+
+-- The companies with no industry group: no code, or an industry under 10 companies in the database
+SELECT c.ticker, c.sic, c.sic_description
+FROM companies c
+JOIN quality_scores q ON q.ticker = c.ticker
+WHERE q.industry_group IS NULL
+ORDER BY c.sic, c.ticker;
+```
+
+On the 127 companies (2026-10-25) eight groups form: 283 (drugs), 357 (computers), 367 (semiconductors) and 737
+(software) with 10 to 12 members each, and their major groups 28, 35, 36 and 73; 55 companies have a group and 54 of
+them an industry rank.
+
+### Reading the industry ranks
+
+- **Web**: the **DES** tab shows the SEC's industry under the description ("Industry (SEC): SIC 3571 Electronic
+  Computers"). The **STAT** tab's *Quality* section gains an *Industry* column beside the 1-10 ranks, an *Industry
+  composite* pill beside the composite and a line naming the group ("Industry ranks among the 10 companies of SIC 367:
+  ..."); a company without industry ranks says why, for example "No industry ranks: SIC 6021's industry has fewer than
+  10 companies here".
+- **API**: `GET /api/stocks/{ticker}/scores` has an `industry` block with `group`, `label`, `size`, `sic`, `ranks`
+  (the five: `strength`, `profitability`, `growth`, `valuation`, `momentum`), `composite` and `na_reason`. `na_reason`
+  is null with a group, else "no SIC code stored", "industry ranks not computed yet" (ranked before this milestone) or
+  "SIC <code>'s industry has fewer than 10 companies here".
+- **Screener**: an *Industry* drop-down (every 2-digit major group and 3-digit industry group that has a company, with
+  its label and size), the `industry` parameter and the six fields `ind_rank_strength` ... `ind_rank_momentum` and
+  `ind_composite`. `industry` is a 2- or 3-digit SIC prefix, the companies whose code starts with it, whether or not it
+  forms a group; anything else is a 400. The results and the CSV carry a `sic` column. For example
+  `GET /api/screen?industry=367&sort=ind_composite&sort_dir=desc`, or
+  `GET /api/screen?industry=28&ind_rank_growth_gte=8` for the companies of major group 28 with an industry growth rank
+  of 8 or more.
+
+How to read them: an industry rank is the decile of a company among the members of its group that have the
+components, so a 10 is the best of its industry, not of the universe; read it beside the universe's, which it doesn't
+replace (NVDA is 10, 8, 10, 9 and 5 in the universe and 9, 8, 10, 10 and 2 among the semiconductors). A component
+counts only when at least 10 members have it, so with only 10 members one missing figure drops it for the whole group
+(at 127 companies none of the 10 computers in 357 has an industry composite). A company in a 2-digit group is ranked
+against the whole major group, and an option's size in the drop-down counts every company with the code, while a screen
+lists those with annual metrics.
+
+---
+
+## Keeping Data Current
+
+`stock-data refresh` (`src/refresh.py`) keeps the database current with one command: the quotes and the new daily bars,
+the SEC's new filings, the insiders, the gurus and the market data, then the recomputation of the valuations, history,
+scores, indicators and ranks. See the README's
+[Keeping the data current](README.md#keeping-the-data-current-stock-data-refresh) for each step's rules, the timings and
+the limits. It works on the companies already in the database (add new ones with `--tickers-file` and
+`--skip-existing`, above), and `python -m src.main refresh` is the same command.
+
+### Running a refresh
+
+```bash
+# Every step that is due: what a scheduler runs
+stock-data refresh
+
+# Only some steps, whatever their cadence
+stock-data refresh --steps quotes,bars
+
+# Every step, whatever its cadence
+stock-data refresh --force
+
+# Two companies only (for testing)
+stock-data refresh --tickers AAPL,MSFT
+```
+
+The eight steps, in this order, each in its own try/except (a failure is reported and the others go on):
+
+| Step | Runs | What it does |
+|---|---|---|
+| `quotes` | daily | Every company's Yahoo quote, stored as a new snapshot. A company with a split since its last collection goes on the collection list instead |
+| `bars` | daily | Every company's daily bars since its last stored bar, then `^GSPC`'s. A company whose prices no longer match the stored bars' basis goes on the collection list |
+| `sec` | weekly | Every company's submissions feed, read fresh. A 10-K, 10-Q, 20-F, 40-F, 10-KT or 10-QT, or an amendment of one, filed since the company's last collection puts it on the collection list |
+| `collect` | when the list isn't empty | A full collection of the list, as `stock-data` runs one |
+| `insiders` | weekly | The last three years of Form 4s for every company, each fetched once and cached |
+| `gurus` | weekly | The gurus' 13F filings of the last eight quarters, their CUSIPs' tickers and their positions |
+| `market` | daily | FRED, Shiller and Treasury.gov |
+| `recompute` | when a step stored something | Every company's valuations, history, scores and indicators, then the ranks |
+
+A step with a cadence is skipped while it succeeded within its period: a daily step 20 hours, a weekly one 6 days 20
+hours, so a run scheduled daily never skips one because yesterday's finished a few minutes later. `--steps` names the
+steps to run, whatever their cadence (`collect` alone has nothing to collect, as the list is built by `quotes`, `bars`
+and `sec` in the same run), and `--force` ignores the cadence of every step.
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--steps` | Run only these steps, whatever their cadence (comma-separated) | every step that is due |
+| `--force` | Run every step, whatever its cadence | `false` |
+| `--tickers` | Limit the per-company steps to these of the database's companies (comma-separated; for testing) | all companies |
+| `--db` | SQLite database path; it must exist | `<output-dir>/output/stock.db` |
+| `--output-dir` | The base output directory: a collection's exports go under `output/`, the log under `logs/` | `data` |
+| `--cache-dir` | The cache of the SEC's answers, the ownership filings and the market data | `data/cache` |
+
+The SEC's User-Agent is `SEC_USER_AGENT` (in `.env` or the environment, as for the ownership collector): `refresh` has no
+`--sec-user-agent`. A run prints a time-stamped line as each step starts and finishes, one for every 25 companies and a
+collection's line for each company, then a summary. The end of the first real run, on a copy of the 127-company
+database (the path shortened):
+
+```
+06:15:08 Summary of the refresh started 2026-10-25T06:01:39+07:00:
+06:15:08   quotes: ran, ok: 127 of 127 quotes stored, 0 to collect, 0 errors
+...
+06:15:08   sec: ran, ok: 127 feeds read, 19 new reports at 19 companies, 0 without a CIK, 0 errors
+06:15:08   collect: ran, ok: 19 of 19 collected (19 without errors, 0 with errors)
+06:15:08   insiders: skipped (not named in --steps)
+06:15:08   gurus: skipped (not named in --steps)
+06:15:08   market: ran, ok: 4 of 4 sources stored
+06:15:08   recompute: ran, ok: 127 of 127 companies valued, then ranked
+06:15:08 Collection list (19): AXP (sec: 10-Q filed 2026-10-23 (0000004962-26-000409)), DHR (sec: 10-Q filed 2026-10-21 (0000313616-26-000199)), ...
+06:15:08 Exit 0: every step ran or was skipped
+```
+
+That run took 13 minutes 31 seconds on 127 companies, nearly all of it the quotes and the bars (about 5 minutes each,
+Yahoo being asked once a company 2.5 seconds apart). A run without `--steps` right after every step had succeeded
+skipped them all, in about 3 seconds. The exit code is 0 when every step ran or was skipped, 1 when a step failed (the
+others went on) or the companies couldn't be read, 2 when there is no database at `--db` (none is created), `--tickers`
+names a company that isn't in it or an option is wrong, and 3 when another refresh is running (see below); 130 after
+Ctrl+C.
+
+### The refresh log
+
+Two things record a run. The `refresh_log` table has a row for each step of each run, ran or skipped:
+
+- `id`, `step`, `started_at` and `finished_at` (UTC, ISO 8601);
+- `ok`: 1 for a step that ran and succeeded, 0 for one that failed, NULL for one that was skipped. A step's cadence
+  reads its latest `finished_at` with `ok = 1`;
+- `summary`: JSON. `run` is the run's start, the same on every row of a run; then the step's counts (`quotes`:
+  `stored`, `rebased`, `to_collect`, `errors`; `sec`: `feeds`, `new_filings`, `errors`; `collect`: `collected`,
+  `not_stored`; and so on), `skipped` with the reason for a skipped step, or `error` for a failed one.
+
+```sql
+-- The latest run, step by step: whether it ran, and why it was skipped or failed
+SELECT step, ok, finished_at,
+       COALESCE(json_extract(summary, '$.skipped'), json_extract(summary, '$.error')) AS skipped_or_error
+FROM refresh_log
+WHERE json_extract(summary, '$.run') = (SELECT json_extract(summary, '$.run') FROM refresh_log ORDER BY id DESC LIMIT 1)
+ORDER BY id;
+
+-- When each step last succeeded: what decides whether it runs again
+SELECT step, MAX(finished_at) AS last_success
+FROM refresh_log
+WHERE ok = 1
+GROUP BY step
+ORDER BY MIN(id);
+
+-- How long each step took in its latest successful run
+SELECT step, ROUND((julianday(finished_at) - julianday(started_at)) * 86400) AS seconds
+FROM refresh_log
+WHERE ok = 1 AND id IN (SELECT MAX(id) FROM refresh_log WHERE ok = 1 GROUP BY step)
+ORDER BY id;
+
+-- The companies the latest SEC step put on the collection list, with the report that did it
+SELECT j.key AS ticker, json_extract(j.value, '$[0].form') AS form, json_extract(j.value, '$[0].filed') AS filed
+FROM refresh_log r, json_each(r.summary, '$.new_filings') j
+WHERE r.id = (SELECT MAX(id) FROM refresh_log WHERE step = 'sec' AND ok = 1)
+ORDER BY filed DESC, ticker;
+
+-- The failed steps, newest first
+SELECT id, step, started_at, json_extract(summary, '$.error') AS error
+FROM refresh_log
+WHERE ok = 0
+ORDER BY id DESC
+LIMIT 20;
+```
+
+A database from before the refresh has no `refresh_log` until its first run. The other record is the log file,
+`<output-dir>/logs/refresh-<YYYY-MM-DD>.log` (`data/logs/refresh-2026-10-25.log`, appended through the day the run
+started, UTF-8): every line the run printed, and the detail the console leaves out (each quote stored, each company's
+bars, a failed step's traceback).
+
+One refresh runs at a time. `<db>.refresh.lock` (`data\output\stock.db.refresh.lock`) is held with an OS file lock for
+the whole run and released by the OS if the process dies; it holds the running process's PID and start time. A second
+refresh prints `Not started: another refresh holds <path>: PID <n>, started <time>. One refresh runs at a time.` and
+exits 3. The lock stops other refreshes only.
+
+### Scheduling it on Windows
+
+Installing a scheduled task is a persistent change to the machine, so it is the user's decision (Q15 in
+`qa/BUGS.md`): the build did not install one, and nothing in the repository does. This creates a daily task that runs
+the refresh from the repository folder, whose relative paths it needs; change `C:\dev\stock-database` to where the
+repository is, and run it in a Command Prompt or PowerShell:
+
+```bat
+schtasks /Create /SC DAILY /ST 05:00 /TN "stock-database refresh" /TR "cmd /c cd /d C:\dev\stock-database && stock-data refresh"
+```
+
+Pick the time after the US close, 16:00 New York time, at least an hour later in your local time: a run before the close
+stores that day's bar as it stands, and the next run replaces it. New York is on UTC-4 until the first Sunday of
+November and UTC-5 after, so on a machine at UTC+7 the close is 03:00 and then 04:00 the next morning, and 05:00 or
+later is an hour past it all year. Three more commands look at the task, run it once and remove it:
+
+```bat
+schtasks /Query /TN "stock-database refresh" /V /FO LIST
+schtasks /Run /TN "stock-database refresh"
+schtasks /Delete /TN "stock-database refresh" /F
+```
+
+`/Query` shows whether the task exists, its last and next run times and its Last Result, which is the exit code of the
+refresh (0 is a good run, see above); `/Run` starts it now; `/Delete` removes it. The first run finds every step due.
+Its insiders step fetches only the Form 4s not in the cache yet: a minute or two for companies collected before, but
+three years of filings for a company never collected for insiders, hours at the SEC's rate for the S&P 500's new
+members. Run `python -m src.ownership.collect --insiders` by hand first if you would rather the scheduled run didn't.
+If Task Scheduler can't find `stock-data`, give the command's full path (`where stock-data` prints it). Its
+conditions (running on battery, waking the machine) and the account it runs as are Task Scheduler's: open the task
+there, or see `schtasks /Create /?` for `/RU` and `/RP`. A day the machine was off is made up by the next run, which
+fetches the bars since each company's last stored bar and looks for the reports filed since its last collection.
 
 ---
 

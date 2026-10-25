@@ -60,6 +60,17 @@ A professional-grade Python data pipeline for collecting US stock fundamentals f
   long-run trend, the CAPE against its history and the yield curve against a year earlier, with its inversions.
   See [Market data](#market-data).
 
+- **The universe and industries** — the S&P 500's members as a dated file in the repository (`universe/`),
+  `stock-data --tickers-file` and `--skip-existing` to collect a list, each company's SEC SIC code, industry groups
+  from it, and the quality scores' five ranks and composite also within the industry (`src/universe/`). On the DES and
+  STAT tabs, in the screener's industry filter and the API. See
+  [The universe and industries](#the-universe-and-industries).
+
+- **Keeping the data current** — `stock-data refresh` (`src/refresh.py`): quotes and new daily bars every day, the SEC's
+  new filings, the insiders and the gurus every week, the market data, then the recomputation, with a lock, a log and
+  exit codes a scheduler can read. Scheduling it on Windows is the user's decision. See
+  [Keeping the data current](#keeping-the-data-current-stock-data-refresh).
+
 - **Database-Like Behavior**
   - Merge mode preserves historical data across runs
   - Tracks collection history and price snapshots
@@ -114,7 +125,9 @@ python -m src.main AAPL -v
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `tickers` | Stock ticker symbols (required) | - |
+| `tickers` | Stock ticker symbols (required unless `--tickers-file` gives some) | - |
+| `--tickers-file` | A file of tickers to collect, repeatable: a `.txt` (a ticker a line, `#` comments) or a `.csv` (its `ticker` or `Symbol` column); added after the positional tickers, each ticker once (see [Collecting a list](#collecting-a-list)) | - |
+| `--skip-existing` | Leave out the tickers already in the database (`--db`, else `<output-dir>/output/stock.db`) | `false` |
 | `--output-dir`, `-o` | Base output directory | `./data` |
 | `--formats`, `-f` | Output formats (`json`, `csv`, `sqlite`) | `json csv sqlite` |
 | `--db` | SQLite database path | `<output-dir>/output/stock.db` |
@@ -124,6 +137,9 @@ python -m src.main AAPL -v
 | `--no-sec` | Skip SEC EDGAR data | `false` |
 | `--sec-user-agent` | SEC API User-Agent header | `StockDataCollector admin@example.com` |
 | `--verbose`, `-v` | Enable debug logging | `false` |
+
+`refresh` as the first argument is a command of its own, `stock-data refresh`, with its own options: it keeps the
+database current (see [Keeping the data current](#keeping-the-data-current-stock-data-refresh)).
 
 ### Examples
 
@@ -139,6 +155,15 @@ python -m src.main AAPL --no-yahoo
 
 # Custom SEC User-Agent (recommended for production)
 python -m src.main AAPL --sec-user-agent "MyCompany contact@mycompany.com"
+
+# A list of tickers from a file (repeatable, beside positional tickers)
+python -m src.main --tickers-file universe/core.txt
+
+# The S&P 500's members the database doesn't hold yet
+python -m src.main --tickers-file universe/sp500-2026-10-25.csv --skip-existing
+
+# Keep the database current: quotes, bars, new filings, ownership and market data, recomputation
+python -m src.main refresh
 ```
 
 ## Output
@@ -147,13 +172,15 @@ python -m src.main AAPL --sec-user-agent "MyCompany contact@mycompany.com"
 
 ```
 data/
-└── output/
-    ├── json/
-    │   ├── AAPL.json      # Full data per ticker
-    │   ├── MSFT.json
-    │   └── GOOGL.json
-    └── csv/
-        └── summary.csv    # Summary metrics for all tickers
+├── output/
+│   ├── json/
+│   │   ├── AAPL.json      # Full data per ticker
+│   │   ├── MSFT.json
+│   │   └── GOOGL.json
+│   └── csv/
+│       └── summary.csv    # Summary metrics for all tickers
+└── logs/
+    └── refresh-2026-10-25.log   # stock-data refresh's log, a file for each day it ran
 ```
 
 ### JSON Output Structure
@@ -333,6 +360,13 @@ python diagnose.py AAPL MSFT GOOGL
 - Maps the CUSIPs of the gurus' 13F holdings to tickers (`src/ownership/openfigi.py`), asked only by
   `python -m src.ownership.collect --gurus`
 - No API key: 10 codes a request, answers cached on disk
+
+### Wikipedia
+
+- "List of S&P 500 companies" (its first table), for the S&P 500's members (`src/universe/sp500.py`), asked only by
+  `python -m src.universe.sp500`
+- One request with a User-Agent that names the app and carries no email address; no key (see
+  [The universe and industries](#the-universe-and-industries))
 
 ## Valuation Model Support
 
@@ -525,7 +559,8 @@ The scores. Each is N/A, with its reason stored, where its inputs are missing:
   WC = current assets - current liabilities, EBIT = operating income and MVE the latest snapshot's market cap.
   Below 1.81 is the distress zone, 1.81-2.99 grey, above 2.99 safe. N/A for banks, insurers, REITs and
   utilities (a regulated utility's heavy assets read as distress: D, DUK, NEE and SO all score below 1.2).
-  Z'', Altman's variant for non-manufacturers, needs the SIC code, which isn't stored yet, so the original
+  Z'', Altman's variant for non-manufacturers, needs the SIC code. It is stored since Milestone 5 (see
+  [The universe and industries](#the-universe-and-industries)) but this score doesn't read it, so the original
   applies to the rest.
 - **Beneish M**, eight variables, each a figure in t over the same figure in t-1 (GMI and DEPI the other way
   round); above -1.78 flags a likely manipulator:
@@ -595,6 +630,8 @@ any run re-ranks everyone.
 - The **composite**, out of 100, is `10 × the mean of the five ranks`, with at least four available. The
   weights are equal by default: GuruFocus weighs profitability and growth most, with unpublished weights, and
   choosing ours is left to the user (Q11 in `qa/BUGS.md`).
+- Milestone 5 ranks each company again within its SIC industry group, beside these and leaving them as they are (see
+  [Industry ranks](#industry-ranks)).
 - The **Magic Formula rank** (Greenblatt) sums the ranks of the earnings yield (EBIT / EV, EV = market cap +
   net debt) and the return on capital (EBIT / (net working capital + net PP&E), net working capital = current
   assets - cash - (current liabilities - short-term debt), counted as 0 when negative: a business its
@@ -609,7 +646,8 @@ three tables (columns and queries are in the [USAGE_GUIDE](USAGE_GUIDE.md#qualit
 - `per_share_annual`: one row per company and fiscal year, the five per-share series;
 - `quality_scores`: one row per company, with every score and its inputs, the CAGRs, the ranks, the composite,
   the Magic Formula rank, NCAV per share (current assets less total liabilities, over the share count),
-  `na_reasons` and the components behind each rank (JSON);
+  `na_reasons` and the components behind each rank (JSON), and the industry group and ranks of Milestone 5 (see
+  [Industry ranks](#industry-ranks));
 - `warning_signs`: one row per sign that fires.
 
 Where it shows:
@@ -789,8 +827,9 @@ counterparts of GuruFocus's insider trades and guru holdings
 ([design](docs/superpowers/specs/2026-10-22-sec-ownership-design.md)). Both come from the filings themselves
 (the gurus' CUSIPs are mapped to tickers with OpenFIGI), and nothing collected before changes: not a model, a
 score or a history. It has its own command, `python -m src.ownership.collect` (see
-[Collecting ownership data](#collecting-ownership-data)); neither `stock-data` nor the web interface's update
-runs it.
+[Collecting ownership data](#collecting-ownership-data)); a `stock-data` collection and the web interface's update
+don't run it, but `stock-data refresh` does every week (see
+[Keeping the data current](#keeping-the-data-current-stock-data-refresh)).
 
 ### Insiders (Form 4)
 
@@ -1064,7 +1103,9 @@ page: FRED's corporate equities and GDP (for the Buffett indicator), Robert Shil
 cyclically adjusted P/E (CAPE), and Treasury.gov's daily yield curve
 ([design](docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md)). Nothing collected for the companies
 changes: not a model, a score or a history. It has its own command, `python -m src.market.collect` (see
-[Collecting market data](#collecting-market-data)); neither `stock-data` nor the web interface's update runs it.
+[Collecting market data](#collecting-market-data)); a `stock-data` collection and the web interface's update don't run
+it, but `stock-data refresh` does every day (see
+[Keeping the data current](#keeping-the-data-current-stock-data-refresh)).
 
 ### Sources and storage
 
@@ -1273,6 +1314,477 @@ naming what was altered.
   the CAPE stays at the copy's latest month; the summary's `Stale:` line lists the fallback, with the copy's age, on
   every run until the change is handled. Without a cached copy the Shiller source fails, and the stored series stays.
 
+## The universe and industries
+
+The app began with 127 hand-picked large caps. Milestone 5
+([design](docs/superpowers/specs/2026-10-25-universe-automation-design.md)) keeps the tickers it collects in files in
+the repository, adds the S&P 500's list, stores each company's SEC industry code (its SIC code) and ranks the quality
+scores' five ranks within an industry as well as within the universe. Nothing collected before changes: not a model, a
+valuation or a history, and not the quality scores' own ranks and composite. A list is collected with `stock-data` (see
+[Collecting a list](#collecting-a-list)); the SIC code comes with every collection, and one command fills it for the
+companies collected before (see [SIC codes](#sic-codes)).
+
+### The universe files
+
+`universe/` is tracked in the repository (never under `data/`). Its lists are tickers files for
+`stock-data --tickers-file`, with tickers in Yahoo's form: a class share's dot is a dash (`BRK-B`, `BF-B`).
+
+| File | What it is |
+|---|---|
+| `universe/core.txt` | The 127 companies in the database on 2026-10-25, collected by hand before Milestone 5: a ticker a line, sorted, `#` comments. A company that leaves the S&P 500 stays here: the list isn't the index (SCCO and SPCX aren't members). |
+| `universe/sp500-2026-10-25.csv` | The S&P 500's members on 2026-10-25, one company a CIK: `ticker,name,cik,gics_sector,gics_sub_industry,date_added` (the CIK 10 digits, the date added an ISO date). 500 rows: the page's 503 less GOOG, FOX and NWS, the second share classes of Alphabet, Fox and News Corp (GOOGL, FOXA and NWSA are kept). |
+| `universe/README.md` | The list's source and license, and how to refresh it. |
+
+The S&P 500 list comes from Wikipedia's "List of S&P 500 companies" (its first table), read on 2026-10-25 (revision
+1381317423, last edited on 2026-10-21):
+- **Checked when it was saved**: 503 rows read; each CIK equal to the SEC's own ticker map's (`company_tickers.json`) for
+  all 503; every ticker in Yahoo's form; every date added an ISO date. 125 of the database's 127 companies are members.
+- **License**: the list's facts are taken from that page, whose text is available under the
+  [Creative Commons Attribution-ShareAlike 4.0 License](https://creativecommons.org/licenses/by-sa/4.0/). The file is
+  attributed to the page and its contributors and shared under the same license. It isn't S&P Dow Jones Indices'
+  official list of the index's members. [`universe/README.md`](universe/README.md) has the page's address and its
+  history.
+
+To save a newer list (run from the repository folder):
+
+```bash
+# universe/sp500-<today>.csv
+python -m src.universe.sp500
+
+# Another file
+python -m src.universe.sp500 --out universe/sp500-test.csv
+```
+
+It makes one request to Wikipedia, without retries, its User-Agent naming the app and carrying no email address, reads
+the table with the standard library's `html.parser`, and prints the rows read, the ones dropped and the file written.
+One company a CIK: a second share class after the first of its CIK in the page's order (GOOG after GOOGL, FOX after
+FOXA, NWS after NWSA) is dropped, as the database keeps one (GOOGL). It never overwrites a file (an existing one is
+refused before the page is fetched), and a page that changed fails loudly and writes nothing: no table with the
+expected header cells (Symbol, Security, GICS Sector, GICS Sub-Industry, Date added, CIK), a ticker or a CIK that
+doesn't read, a row of another width than the header, or a count of rows outside 480 to 520. Exit 0 when it wrote the
+file, 1 otherwise. Keep the earlier files (each records the index on its day), update `universe/README.md`'s date and
+counts, and collect the new members with `--skip-existing`.
+
+### Collecting a list
+
+```bash
+# The 127 companies the database started with
+stock-data --tickers-file universe/core.txt
+
+# The S&P 500's members the database doesn't hold yet (375 of the 500 on 2026-10-25)
+stock-data --tickers-file universe/sp500-2026-10-25.csv --skip-existing
+
+# The option repeats, and tickers can be named beside the files
+stock-data NVDA --tickers-file my-watchlist.txt --tickers-file universe/core.txt
+```
+
+- **`--tickers-file PATH`** (repeatable): a `.txt` file (a ticker a line; `#` starts a comment, a whole line's or the
+  rest of a line; blank lines are ignored) or a `.csv` file (its `ticker` column, else its `Symbol` column, the header
+  read without case or spaces). The tickers collected are the positional ones, then each file's in order, upper-cased,
+  a dot as a dash (`BRK.B` as `BRK-B`), each once. A file is read as UTF-8. A ticker is letters and digits with at most
+  one dash or dot between them: anything else (a space inside, a caret, two separators) fails the run before anything is
+  collected.
+- **`--skip-existing`**: leaves out the tickers already in the `companies` table of the database the run writes to
+  (`--db`, else `<output-dir>/output/stock.db`; it is read without writing, and a database that doesn't exist yet counts
+  as holding none), to collect the new ones only. It says how many it left out, for example
+  `--skip-existing: 125 of 500 tickers already in data\output\stock.db left out, 375 to collect`.
+- The errors, each logged as an error with exit 1 and nothing collected:
+  - `Cannot read the tickers: ...` for a file that can't be read, one that isn't a `.txt` or a `.csv`, a CSV with no
+    `ticker` or `Symbol` column, or a ticker that isn't one (a file's line is named, as in
+    `x.txt, line 3: not a ticker: 'AAPL,MSFT' (letters and digits, with at most one dash or dot between them)`);
+  - `No tickers given: name some, or a --tickers-file that lists some`;
+  - `All 127 tickers given are already in the database (PATH): nothing to collect (--skip-existing)`;
+  - `Cannot read the companies in PATH: ...`, when SQLite can't read the database.
+- An S&P member that Yahoo or the SEC can't serve is reported in the collection's summary (`With errors`) and the rest go
+  on.
+
+Adding the S&P 500's members is a long run: earlier collections took about 6 seconds a ticker with a warm SEC cache (127
+in 13 minutes) and about 20 seconds cold, so the 375 new members are an estimated 2 to 3 hours, before step 3's Form 4s.
+Start it in the background. In order:
+
+```bash
+# 1. SIC codes for the companies collected before Milestone 5 (offline, seconds)
+python -m src.universe.sic
+
+# 2. The members the database doesn't hold yet, collected in full
+stock-data --tickers-file universe/sp500-2026-10-25.csv --skip-existing --sec-user-agent "YourName you@example.com"
+
+# 3. The insiders (three years of Form 4s: hours at the SEC's rate for the new members, the others from the cache),
+#    then the gurus' positions
+python -m src.ownership.collect --insiders
+python -m src.ownership.collect --positions
+```
+
+Every collection ends by valuing the companies it stored and ranking all the stored ones, in the universe and within
+industries, so doing step 1 first gives the collection's rank pass every code; if the codes are filled after a
+collection, `python -m src.valuation.backfill` ranks again. Give the SEC a real contact in `--sec-user-agent` (see
+[SEC User-Agent Requirement](#sec-user-agent-requirement)). The insiders and the gurus aren't part of a collection (see
+[SEC ownership](#sec-ownership-insiders-and-gurus)): step 3 fetches the new companies' Form 4s, and `--positions`
+rebuilds the gurus' changes, which read `split_events` when they are built, after the new companies' splits arrive.
+About 0.73 GB of database and 1.4 GB of JSON exports are expected for about 507 companies, about four times what the 127
+take.
+
+### SIC codes
+
+The SEC assigns each filer a four-digit Standard Industrial Classification code and describes it ("3571", "Electronic
+Computers"). It is stored in `companies.sic` and `companies.sic_description`, written by every collection from the
+company's submissions feed, which the collection fetched already: the same code decides the company's sector class. A
+collection whose feed failed keeps the stored code.
+
+For the companies collected before Milestone 5, one command fills the codes without a request:
+
+```bash
+python -m src.universe.sic
+python -m src.universe.sic --db data/output/stock.db --json-dir data/output/json --cache-dir data/cache
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--db` | SQLite database path; it must exist and have a `companies` table (nothing is created) | `data/output/stock.db` |
+| `--json-dir` | The JSON exports, `<TICKER>.json` | `data/output/json` |
+| `--cache-dir` | The SEC handler's cache, `submissions_CIK<10-digit CIK>.json` | `data/cache` |
+
+For each company without a code (`sic` empty or not a code) it reads `sec_submissions.sic` and
+`sec_submissions.sic_description` from the company's JSON export, else from the SEC handler's cached submissions for its
+CIK (read whatever its age; the handler isn't used and no request is made). It writes those two columns only, in one
+transaction (adding them to a `companies` table from before them), and prints the companies, how many lacked a code,
+how many it filled from the exports and from the cache (naming the ones from the cache) and each company still
+missing. Exit 0, or 1 when the database or its `companies` table isn't there. On 2026-10-25 it filled all 127 codes
+from the JSON exports in about 4 seconds, each equal to its export's; filling from the cache alone gave the same 127.
+
+### Industry groups
+
+A company's **industry group** is formed from the stored codes of the companies being ranked (those with quality
+scores), each time the ranks are computed:
+- its 3-digit SIC prefix (the SEC's industry group) when at least 10 of them share it;
+- else its 2-digit prefix (the SIC major group) when at least 10 share that;
+- else none, and the company has no industry ranks.
+
+A group's members are every company whose code starts with it, so a 2-digit group takes in its 3-digit groups'
+companies and always has 10 members or more; a company is ranked in one group only, the 3-digit one when it has one.
+A group's label is drawn from the data, so no SIC table is needed: "SIC 283: " and its members' three most common SEC
+descriptions, by count and then alphabetically, joined with "; " (a description can hold a comma). Each company's
+`quality_scores` row stores `industry_group`, `industry_label` and `industry_size` (the members), all empty without a
+group.
+
+At 127 companies (2026-10-25) eight groups form, 55 companies have a group and the other 72 (all with a code) are in
+industries under 10 companies:
+
+| Group | Members | Ranked in it | Industry |
+|---|---|---|---|
+| 283 | 10 | 10 | drugs |
+| 28 | 12 | 2 (LIN, PG) | its major group, with the 10 of 283 |
+| 357 | 10 | 10 | computers |
+| 35 | 14 | 4 (CAT, DE, ETN, LRCX) | its major group, with the 10 of 357 |
+| 367 | 10 | 10 | semiconductors |
+| 36 | 13 | 3 (GE, GEV, QCOM) | its major group, with the 10 of 367 |
+| 737 | 12 | 12 | software |
+| 73 | 16 | 4 (MA, SPGI, UBER, V) | its major group, with the 12 of 737 |
+
+The label of 367 reads "SIC 367: Semiconductors & Related Devices; Electronic Connectors".
+
+### Industry ranks
+
+`rank_industries` (`src/scores/ranks.py`) computes M2's five ranks and the composite again within each company's industry
+group, from the same components `quality_scores` stores (`components`), oriented the same way. It runs in the rank pass,
+so every collection, web update job, `python -m src.valuation.backfill` and `stock-data refresh`'s recompute step
+produces it, and any run ranks everyone again:
+- Each **component** becomes a percentile within the group: the share of the members that have the component whose
+  value is at or below the company's (at or above, where lower is better), when at least 10 members have it. A
+  component fewer than 10 members have is left out of the industry rank, for the whole group.
+- A **rank** is `ceil(10 x mean)` of its components' percentiles, with M2's minimums, counting only the components
+  ranked within the industry: two for financial strength, profitability and growth, one for valuation and momentum.
+- The **industry composite** is `10 x` the mean of the industry ranks given, with at least four of them.
+- A company in a 2-digit group is ranked against all that group's members, its 3-digit groups' companies included.
+- M2's own ranks, composite and Magic Formula rank are unchanged, and the ranks are stored beside them in
+  `quality_scores`: `ind_rank_strength`, `ind_rank_profitability`, `ind_rank_growth`, `ind_rank_valuation`,
+  `ind_rank_momentum` and `ind_composite`, empty without a group or the components (columns and queries are in the
+  [USAGE_GUIDE](USAGE_GUIDE.md#the-universe-and-industries)).
+
+At 127 companies 54 of the 55 have at least one industry rank (SPCX, in 737, has none), 41 have all five and 42 have an
+industry composite. NVDA's ranks within 367 read 9, 8, 10, 10 and 2 with a composite of 78, against 10, 8, 10, 9 and 5
+and 84 in the universe.
+
+Where it shows:
+- **DES tab**: the SEC's industry under the description, "Industry (SEC): SIC 3571 Electronic Computers", once a code is
+  stored.
+- **STAT tab**: the Quality section's rank table gains an *Industry* column beside the 1-10 ranks, an *Industry
+  composite* pill beside the composite, and a line naming the group ("Industry ranks among the 10 companies of SIC 367:
+  ..."); a company with no industry ranks says why ("No industry ranks: SIC 6021's industry has fewer than 10 companies
+  here").
+- **API**: `GET /api/stocks/{ticker}/scores` gains an `industry` block: `group`, `label`, `size`, `sic`, `ranks` (the
+  five), `composite` and `na_reason`, which is null with a group and otherwise "no SIC code stored", "industry ranks not
+  computed yet" (a database ranked before this milestone) or "SIC <code>'s industry has fewer than 10 companies here".
+- **Screener**: an *Industry* drop-down of every 2-digit major group and 3-digit industry group that has a company
+  (the 3-digit ones indented under theirs), each as its label and its size; the `industry` parameter,
+  `GET /api/screen?industry=367` (also `POST /api/screen`'s `industry`, the page's `/screener?industry=367` and the CSV
+  export): a 2- or 3-digit SIC prefix, the companies whose code starts with it, validated as digits (anything else is
+  a 400) and bound as a parameter, for any prefix whether or not it forms a group; and the fields `ind_rank_strength`,
+  `ind_rank_profitability`, `ind_rank_growth`, `ind_rank_valuation`, `ind_rank_momentum` and `ind_composite` to filter
+  and sort by, labelled "(industry)" under the quality scores, for example
+  `GET /api/screen?industry=367&sort=ind_composite&sort_dir=desc`. The results and the CSV carry a `sic` column. An
+  option's size counts every company with that code; a screen lists those that have annual metrics (737 reads 12, and
+  SPCX, which has no annual metrics, is not among its 11 rows).
+
+Checked by `qa/oracle/scores_oracle.py`, which imports nothing from `src`, with three gates added to its nine: all 12
+pass on the 127 companies (`qa/evidence/industries-m5-2-oracle-joiner.txt`).
+- Each company's industry group, label and size recomputed from `companies.sic` (381/381 values).
+- The five industry ranks and the industry composite recomputed from the stored components, with exact fractions
+  (762/762).
+- The same 73 companies without any industry rank (the 72 without a group and SPCX).
+- A copy of the database with an altered rank, label or group makes the gates fail, naming the row
+  (`qa/evidence/industries-m5-2-oracle-broken.txt`). No value of M2's ranks, composites or Magic Formula ranks differs
+  from a copy made before the industry pass, and every other table is identical (timestamps aside).
+
+### Universe limitations
+
+- Groups of 10 are fragile at this size: the group size and a component's minimum are both 10, so one member missing a
+  component drops it for the whole group. At 127 companies IBM lacks the operating margin (and its mean and slope), the
+  median ROIC and Altman Z, and SNDK, a 2025 spin-off, lacks the 5-year growth, most of profitability and price / value,
+  so 357 keeps only financial strength and momentum and none of its 10 companies has an industry composite. In 283 five
+  companies (BMY, JNJ, LLY, MRK, PFE) lack the operating-margin components, the median ROIC and Altman Z, so those
+  components are left out there, and the rest still give the group all five ranks.
+- A 2-digit group's label is dominated by its largest 3-digit group: DE and CAT, in 35, read "SIC 35: Computer Storage
+  Devices; Computer Communications Equipment; Computer Peripheral Equipment, NEC".
+- A company in a 2-digit group is ranked against its whole major group, not against its own trade: MA and V (7389,
+  business services) are ranked in 73 against 16 companies, 12 of them software (737).
+- The SIC code is the SEC's, one code a filer: AMZN's is 5961 (Retail-Catalog & Mail-Order Houses), which no other
+  company in the database shares, so it is in no group.
+- Ranks are percentiles among the companies the database holds, so they move when the universe changes: as companies
+  are added, more prefixes reach 10.
+- BUG-231: "one company a CIK" keeps the first row of each CIK in the page's order. Wikipedia sorts by company name, so
+  "(Class A)" comes first and GOOGL, FOXA and NWSA are kept. A page sorted by symbol would keep GOOG, FOX and NWS, and
+  `--skip-existing`, which compares tickers, not CIKs, would then collect a second Alphabet beside the database's
+  GOOGL. The saved file is right, and none of its 375 new tickers is a stored company under another ticker.
+- A list is a snapshot: a company that leaves the index stays in the database, and `stock-data refresh` works on the
+  companies already there, so new members are added by collecting the list again with `--skip-existing`.
+
+## Keeping the data current: stock-data refresh
+
+`stock-data refresh` keeps the database current with one command a scheduler can run
+([design](docs/superpowers/specs/2026-10-25-universe-automation-design.md)): the quotes and the new daily bars every
+day, the SEC's new filings every week (a company with a new report is collected in full), the insiders, the gurus and
+the market data, then the recomputation of the valuations, history, scores, indicators and ranks. `refresh` is the first
+argument of the same command (`stock-data refresh`, or `python -m src.main refresh`; no ticker is called REFRESH). It
+works on the companies the database already holds, run by hand or scheduled (see
+[Scheduling it on Windows](#scheduling-it-on-windows)), and a day it missed is caught up by the next run: the bars step
+fetches from each company's last stored bar, and the SEC step looks for the reports filed since each company's last
+collection.
+
+### The steps
+
+Eight steps, in this order, each in its own try/except: a failure is reported and the others go on. Three of them put
+companies on the **collection list**, each with its reason: `quotes`, `bars` and `sec`.
+- **`quotes`** (daily): every company's Yahoo quote, through the code of the web interface's on-demand quote refresh
+  (`src/fetchers/quote_refresh.py`): one request a company, stored as a new market snapshot and a new analyst snapshot
+  (a full collection's rows stay). A company with a split since its last collection (a share split, or any price factor
+  of 3:2 or more) isn't saved: only a full collection restates its per-share figures, so it goes on the collection
+  list. A stock dividend's or a smaller spin-off's factor is stored with the price and the company is valued on it
+  right away.
+- **`bars`** (daily): every company's daily bars since its last stored bar, one `history(start=...)` request a company
+  with a collection's parameters (unadjusted closes, as a collection stores them).
+  - Yahoo is asked from the bar before the last stored one, which is final, so its close shows whether Yahoo's prices
+    are still on the stored bars' basis; the bars from the last stored one on (it may have been a part-day bar) are
+    replaced in one transaction.
+  - A company goes on the collection list instead, its bars left as stored, when Yahoo's close for that earlier bar
+    differs from the stored one by more than 0.5% (a stock dividend or a spin-off moves it by about 1% or more, a split
+    by far more), when Yahoo gives no close for that day, when Yahoo lists a split or price factor dated after the last
+    stored bar, or when its stored bars are Yahoo's dividend-adjusted closes (BUG-075), which only a full collection
+    replaces. A company already on the list is left to the collection, and one with no stored bars is skipped, not
+    queued.
+  - Then the benchmark's bars (`^GSPC`, which the GP tab compares a stock against) the same way, whatever `--tickers`
+    names. It is never queued: on another basis its bars stay as stored, and the next collection's benchmark fetch
+    stores its whole history again.
+- **`sec`** (weekly): every company's submissions feed at the SEC, read fresh (never through the SEC handler's 7-day
+  cache, which would show a weekly step a feed up to a week old) and every entry of its `recent` block (the SEC keeps a
+  year's there, or the latest 1,000 when that is more), not the newest 100 the handler keeps for its other callers: a
+  bank files hundreds of prospectus supplements a week, so the newest 100 hide its 10-Q. Read on 2026-10-25, GS's recent
+  block held 16,518 filings (2025-10-24 to 2026-10-23), the newest 100 reached back only to 2026-10-21, and its latest
+  10-Q, filed 2026-08-03, sat behind 3,159 newer ones. A 10-K, 10-Q, 20-F, 40-F, a transition report (10-KT, 10-QT) or
+  an amendment of one ("10-Q/A") filed on or after the day of the company's latest collection with SEC data puts it on
+  the collection list. That day is the collector's own (`collection_runs`), which east of New York runs ahead of the
+  SEC's, so a report filed that day counts; a company never collected with the SEC counts every report in its feed. A
+  company without a CIK is counted and skipped, and a feed that fails is that company's error.
+- **`collect`** (whenever the list isn't empty): a full collection of the list as `stock-data` runs it (Yahoo and the
+  SEC, every year, the JSON, CSV and SQLite outputs, with the valuations after), four companies at a time, its SEC data
+  read fresh like the `sec` step's. The list is built within the run by the three steps above, so naming `collect`
+  alone leaves nothing to collect.
+- **`insiders`** and **`gurus`** (weekly): the collectors of [SEC ownership](#sec-ownership-insiders-and-gurus), the
+  insiders' last three years of Form 4s for every company with a CIK (each filing fetched once and cached), then the
+  gurus' last eight quarters of 13F filings, their CUSIPs' tickers (OpenFIGI, cached) and the gurus' positions.
+- **`market`** (daily): the collector of [Market data](#market-data), its three sources.
+- **`recompute`**: every company's valuations, history, scores and indicators, then the ranks (what
+  `python -m src.valuation.backfill` does), when a step of the run stored something or when it is named or forced.
+
+**Cadence.** A step with a cadence is skipped while it succeeded within its period: 20 hours for a daily step, 6 days
+20 hours for a weekly one, a little under a day and a week so that a run scheduled daily never skips a step because
+yesterday's finished a few minutes later. On a daily schedule `quotes`, `bars` and `market` run every day and `sec`,
+`insiders` and `gurus` every seventh. What counts is the step's latest `refresh_log` row that finished ok; a failed or
+skipped row doesn't. `--steps` names the steps to run, whatever their cadence (and `recompute` runs when named), and
+`--force` ignores the cadence of every step.
+
+### Running it
+
+```bash
+# Every step that is due: what a scheduler runs
+stock-data refresh
+
+# Only some steps, whatever their cadence
+stock-data refresh --steps quotes,bars
+
+# Every step, whatever its cadence
+stock-data refresh --force
+
+# Two companies only (for testing)
+stock-data refresh --tickers AAPL,MSFT
+
+# The defaults spelled out
+stock-data refresh --db data/output/stock.db --output-dir data --cache-dir data/cache
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--steps` | Run only these steps, whatever their cadence (comma-separated: `quotes`, `bars`, `sec`, `collect`, `insiders`, `gurus`, `market`, `recompute`) | every step that is due |
+| `--force` | Run every step, whatever its cadence | `false` |
+| `--tickers` | Limit the per-company steps to these of the database's companies (comma-separated; for testing). Each must be in the database; the benchmark's bars, the gurus and the market data aren't per company | all companies |
+| `--db` | SQLite database path; it must exist (none is created) | `<output-dir>/output/stock.db` |
+| `--output-dir` | The base output directory: a collection's exports go under `output/`, the run's log under `logs/` | `data` |
+| `--cache-dir` | The cache of the SEC's answers, the ownership filings and the market data | `data/cache` |
+
+The SEC's User-Agent is `SEC_USER_AGENT` (in `.env` or the environment, see
+[Environment Variables](#environment-variables)); `refresh` has no `--sec-user-agent`.
+
+### Output and the log
+
+A run prints a time-stamped line as each step starts and finishes, one for every 25 companies a long step has done and
+a collection's line for each company, then a summary: each step ran or was skipped (and why), ok or FAILED (and why),
+with its counts; the collection list, each company with its reasons; and the exit code. Everything printed is appended
+to `<output-dir>/logs/refresh-<YYYY-MM-DD>.log` (`data/logs/refresh-2026-10-25.log`: the day the run started, local
+time, UTF-8), which also holds the detail the console leaves out: each quote stored, each company's bars, a failed
+step's traceback. An excerpt of the first real run's output, on a copy of the 127-company database (the path
+shortened):
+
+```
+06:01:39 Refresh of data\output\stock.db: 127 companies, steps quotes, bars, sec, collect, market, recompute
+06:01:39 quotes: running
+06:06:55 quotes: done in 5m 15s: 127 of 127 quotes stored, 0 to collect, 0 errors
+...
+06:15:08 Summary of the refresh started 2026-10-25T06:01:39+07:00:
+06:15:08   quotes: ran, ok: 127 of 127 quotes stored, 0 to collect, 0 errors
+...
+06:15:08   sec: ran, ok: 127 feeds read, 19 new reports at 19 companies, 0 without a CIK, 0 errors
+06:15:08   collect: ran, ok: 19 of 19 collected (19 without errors, 0 with errors)
+06:15:08   insiders: skipped (not named in --steps)
+06:15:08   gurus: skipped (not named in --steps)
+06:15:08   market: ran, ok: 4 of 4 sources stored
+06:15:08   recompute: ran, ok: 127 of 127 companies valued, then ranked
+06:15:08 Collection list (19): AXP (sec: 10-Q filed 2026-10-23 (0000004962-26-000409)), DHR (sec: 10-Q filed 2026-10-21 (0000313616-26-000199)), ...
+06:15:08 Exit 0: every step ran or was skipped
+```
+
+`refresh_log`, a table of the database, has a row for each step of each run, ran or skipped: `id`, `step`,
+`started_at` and `finished_at` (UTC, ISO 8601), `ok` (1 for a step that ran and succeeded, 0 for one that failed, empty
+for one that was skipped) and `summary` (JSON: `run`, the run's start, which groups a run's rows; then the step's counts,
+or `skipped` with the reason, or `error`). The cadence reads it, and so can you (queries are in the
+[USAGE_GUIDE](USAGE_GUIDE.md#the-refresh-log)). A step whose row can't be written says so and runs again next time.
+
+### One run at a time, and the exit codes
+
+`<db>.refresh.lock` (`data\output\stock.db.refresh.lock`) is held with an OS file lock for the whole run
+(`msvcrt.locking` on Windows, `fcntl.flock` elsewhere), which the OS releases should the process die, so a lock a dead
+run left is simply taken. The file holds the running process's PID and start time and stays after the run. A second
+refresh prints `Not started: another refresh holds <path>: PID <n>, started <time>. One refresh runs at a time.`, logs
+it and exits 3. Only refreshes take the lock: it doesn't stop a `stock-data` collection, a web job or
+`python -m src.ownership.collect` from writing to the same database.
+
+| Exit | Meaning |
+|---|---|
+| 0 | every step ran or was skipped |
+| 1 | a step failed (the summary names it; the others went on), the companies couldn't be read from the database, or the run itself stopped on an error (its traceback is in the log) |
+| 2 | no database at `--db` (none is created), `--tickers` naming a company that isn't in it, or a usage error such as an unknown step |
+| 3 | another refresh holds the lock |
+| 130 | interrupted with Ctrl+C: the steps that finished are logged |
+
+A step fails when it raises or when every one of its items fails: every quote, every company's bars and the benchmark's,
+every feed, every company's Form 4s, every guru's filings, every market source, a `collect` that stored none of the
+list, a `recompute` that valued no company. Failures of single items are counted and listed in the summary.
+
+### Timings
+
+Timed on 2026-10-25 on a copy of the 127-company database: the first real run, with
+`--steps quotes,bars,sec,collect,market,recompute` (the insiders and the gurus left out), took 13 minutes 31 seconds.
+
+| Step | Time | Result |
+|---|---|---|
+| `quotes` | 5 min 15 s | 127 of 127 quotes stored |
+| `bars` | 5 min 17 s | 127 companies' bars updated: 508 bars written in place of 127, 2026-10-20 to 2026-10-23 |
+| `sec` | 35 s | 127 feeds read, 19 new reports (Q3 10-Qs filed 2026-10-21 to 2026-10-23) |
+| `collect` | 2 min 12 s | the 19 companies collected in full, 0 errors |
+| `market` | 0 s | 4 of 4 sources stored, every answer from the cache |
+| `recompute` | 7 s | 127 of 127 companies valued, then ranked |
+
+- The quotes and bars steps ask Yahoo once a company each, 2.5 seconds apart (the app's Yahoo pacing), so each takes
+  about 5 minutes for 127 companies and an estimated 20 minutes for about 500. This run was timed before the bars step
+  also refreshed `^GSPC` (one more request) and before the `sec` step read every entry of the recent block (the same
+  one request a company).
+- No close of a replaced bar changed, no bar before a company's last stored one changed, and all 127 new closes were
+  within 0.01% of the quotes stored the same day. Every table the steps don't write was identical to the copy before
+  the run.
+- The scheduled form (no `--steps`) run next on the same copy ran the weekly insiders and gurus steps, which had not
+  succeeded there, and then `recompute`, and skipped the rest: 1 min 35 s for the insiders (31,526 Form 4 filings
+  re-stored from the cache for 127 companies, nothing new), 14 s for the gurus (248 13F filings) and 8 s to recompute,
+  2 minutes in all. Run once more at once, it skipped every step in 3 seconds. A refresh started while another ran
+  exited 3, naming the first one's PID.
+
+### Scheduling it on Windows
+
+Installing a scheduled task is a persistent change to the machine, so it is the user's decision (Q15 in
+`qa/BUGS.md`): the build did not install one, and nothing in the repository does. The command below creates a daily task
+that runs `stock-data refresh` from the repository folder, because the paths it uses (`data/output/stock.db`,
+`data/cache`, `data/logs`) are relative to it. Change `C:\dev\stock-database` to where the repository is, and run it in
+a Command Prompt or PowerShell:
+
+```bat
+schtasks /Create /SC DAILY /ST 05:00 /TN "stock-database refresh" /TR "cmd /c cd /d C:\dev\stock-database && stock-data refresh"
+```
+
+- **The time**: after the US close, which is 16:00 New York time. A run before it stores that day's bar as it stands (a
+  part-day bar), which the next run replaces. Pick a time at least an hour after the close in your local time. New York
+  is on UTC-4 until the first Sunday of November and UTC-5 after, so on a machine at UTC+7 the close is 03:00 and then
+  04:00 the next morning, and 05:00 or later is an hour past it all year. `/ST` takes `HH:mm`, 24-hour.
+- **The first run** finds every step due. Its insiders step lists each company's Form 4s again and fetches only those
+  not in the cache yet (`data/cache/form4/`, where each filing is kept once it parses): for companies whose Form 4s were
+  collected before, a minute or two (1 minute 35 seconds for 127 companies), but for a company never collected for
+  insiders, three years of filings, which take hours at the SEC's rate for the S&P 500's new members (see
+  [Collecting ownership data](#collecting-ownership-data)). Run `python -m src.ownership.collect --insiders` by hand
+  first if you would rather the scheduled run didn't.
+- **Checking it**: `schtasks /Query /TN "stock-database refresh" /V /FO LIST` shows its status, its last and next run
+  times and its Last Result, which is the exit code of `stock-data refresh` (the table above).
+  `schtasks /Run /TN "stock-database refresh"` starts it now. The day's log is `data/logs/refresh-<date>.log`, and
+  `refresh_log` records every step.
+- **Removing it**: `schtasks /Delete /TN "stock-database refresh" /F`.
+- If Task Scheduler can't find `stock-data`, give the command's full path (`where stock-data` prints it). The task's
+  conditions (running on battery, waking the machine) and the account it runs as are Task Scheduler's: open the task
+  there, or see `schtasks /Create /?` for `/RU` and `/RP`.
+
+### Refresh limitations
+
+- BUG-232: collections outside the refresh (`stock-data`, the web's collect job) read the SEC handler's 7-day cache of
+  companyfacts and submissions. A company that files a 10-Q on day 2 after its cache was written on day 0, and is
+  collected by hand on day 3, is stored without the 10-Q, and its `collection_runs` row (day 3) then postdates the
+  filing, so the SEC step never queues it for that report. It stays without the report until a later report or a
+  collection after the cache's expiry. The refresh's own collections read the SEC fresh and aren't affected.
+- The market step stores the market collector's cached answers again while they are a day old or less (that collector's
+  own freshness rule), so a run a few minutes earlier than the day before can add nothing new, and a series can trail by
+  a day until the next run.
+- The refresh works on the companies already in the database: it never adds index members (collect a list with
+  `--skip-existing` for that) and never removes a company.
+- A report filed on the day of a company's last collection counts, so that company is collected once more.
+- The insiders step lists every Form 4 of the three-year window again each week; the documents come from the cache, but
+  it took 1 minute 35 seconds for 127 companies.
+- New reports are noticed weekly: a company that files a 10-Q the day after the SEC step ran is collected up to a week
+  later.
+
 ## Project Structure
 
 ```
@@ -1280,12 +1792,14 @@ stock-database/
 ├── src/
 │   ├── __init__.py
 │   ├── main.py                    # CLI entry point
+│   ├── refresh.py                 # CLI: stock-data refresh (keeps the database current)
 │   ├── config.py                  # Configuration
 │   ├── fetchers/
 │   │   ├── stock_data_fetcher.py  # Main orchestrator
 │   │   ├── yahoo_handler.py       # Yahoo Finance API
 │   │   ├── sec_handler.py         # SEC EDGAR API
 │   │   ├── fred_handler.py        # FRED API
+│   │   ├── quote_refresh.py       # A quote-only refresh, shared by the web job and the refresh
 │   │   └── rate_limiter.py        # Rate limiting
 │   ├── parsers/
 │   │   ├── xbrl_parser.py         # SEC XBRL parsing
@@ -1308,20 +1822,32 @@ stock-database/
 │   │   ├── xls.py                 # Reader of Shiller's legacy .xls (OLE2 + BIFF8)
 │   │   ├── sources.py             # FRED, Shiller and Treasury.gov: parsers, fetchers, cache
 │   │   └── collect.py             # CLI: python -m src.market.collect
+│   ├── universe/
+│   │   ├── tickers.py             # Tickers in Yahoo's form; the tickers files (--tickers-file)
+│   │   ├── sp500.py               # CLI: python -m src.universe.sp500 (the S&P 500 list from Wikipedia)
+│   │   ├── industries.py          # SIC codes and industry groups
+│   │   └── sic.py                 # CLI: python -m src.universe.sic (fills the SIC codes offline)
 │   └── mappings/
 │       └── xbrl_tags.py           # GAAP tag mappings
+├── universe/
+│   ├── README.md                  # The lists' source, license and how to refresh them
+│   ├── core.txt                   # The 127 companies the database started with
+│   └── sp500-2026-10-25.csv       # The S&P 500's members on that day
 ├── data/
 │   └── output/
 │       ├── json/
 │       └── csv/
 ├── qa/
-│   └── oracle/                    # Independent checks of the stored data (import nothing from src)
-│       ├── valuation_oracle.py    # The valuation models
-│       ├── history_vs_yahoo.py    # The valuation history against Yahoo's figures
-│       ├── scores_oracle.py       # The quality scores
-│       ├── thirteenf_oracle.py    # The gurus' 13F holdings against the filings
-│       ├── indicators_oracle.py   # The other valuation indicators
-│       └── market_oracle.py       # The market series and views
+│   ├── oracle/                    # Independent checks of the stored data (import nothing from src)
+│   │   ├── valuation_oracle.py    # The valuation models
+│   │   ├── history_vs_yahoo.py    # The valuation history against Yahoo's figures
+│   │   ├── scores_oracle.py       # The quality scores and the industry ranks
+│   │   ├── thirteenf_oracle.py    # The gurus' 13F holdings against the filings
+│   │   ├── indicators_oracle.py   # The other valuation indicators
+│   │   └── market_oracle.py       # The market series and views
+│   └── scale/                     # The scale pre-flight (see Development)
+│       ├── synthetic_universe.py  # A copy of a database with each company cloned under made-up tickers
+│       └── page_timings.py        # Times every page and API against its gate
 ├── diagnose.py                    # Diagnostic tool
 ├── requirements.txt
 └── README.md
@@ -1573,7 +2099,9 @@ layer's `valuations`, `valuation_summary`, `valuation_history` and `valuation_ra
 `valuation_indicators` (see [Other valuation indicators](#other-valuation-indicators)); and the SEC ownership tables
 `insider_filings`, `insider_trades`, `guru_filers`, `guru_filings`, `guru_holdings`, `cusip_map`,
 `guru_quarters` and `guru_positions` (see [SEC ownership](#sec-ownership-insiders-and-gurus)); and the market data's
-`market_series` and `market_fetches` (see [Market data](#market-data)):
+`market_series` and `market_fetches` (see [Market data](#market-data)); and `stock-data refresh`'s `refresh_log` (see
+[Keeping the data current](#keeping-the-data-current-stock-data-refresh)). `companies` also holds each company's SEC
+`sic` and `sic_description` (see [SIC codes](#sic-codes)):
 
 ```sql
 -- Cheap against their own history: P/E in the bottom quarter of its last 10 years,
@@ -1675,6 +2203,44 @@ The tests cover the financial-metric calculations, XBRL fiscal-year extraction,
 the data model's serialization round-trips, JSON merge semantics, and the
 rate-limiter/retry logic.
 
+### Scale tools
+
+`qa/scale/` checks the pages at about 500 companies before the S&P 500 is collected, on a synthetic copy of the
+database (it needs the package and the web and dev extras: `pip install -e ".[dev,web]"`):
+
+```bash
+# 127 companies cloned three times under made-up tickers (AAPLQ1, AAPLQ2, AAPLQ3, ...): about 508 companies
+python qa/scale/synthetic_universe.py --source data/output/stock.db --out ../synthetic.db
+
+# Every page and API a user hits, in process, against its gate
+python qa/scale/page_timings.py --db ../synthetic.db
+```
+
+- `synthetic_universe.py [--copies 3]` copies the source with SQLite's backup API from a read-only connection (the source
+  is never written, and `--out` must not exist), then clones every row of every table with a ticker column in one
+  transaction. Each clone's ticker must be one the app accepts as it stands and none of the universe files' or the
+  database's, else the run stops and removes the copy (exit 1). The Form 4 accessions get a `-Q<k>` suffix so keys stay
+  unique, a clone's company name gets `[Q<k>]` appended, and the gurus' positions in our companies are cloned onto the
+  clones; the tables without a ticker column and the `^GSPC` bars are left as they are. It prints each table's rows
+  before and after, an integrity check and the copy's size.
+- `page_timings.py [--runs 5] [--tickers LIST]` runs the app in process through FastAPI's `TestClient` (no server; the
+  database opened read-only; collection and the quote refresh off), requests each path once cold and then `--runs`
+  times, and prints each path's status, size and median, max and cold times (ms), flagging a median over its gate: 500
+  ms for the screener's results (`/ui/screen`, `/api/screen` and the CSV export), 1,000 ms for every other page and API.
+  The paths are the home page, the companies list, the screener (the default, five heavy sorts, the largest 2-digit
+  industry, a preset and the CSV export), every tab of the heaviest stocks, the gurus pages, the Market and quality
+  pages and the as-of pages. Exit 0 when every median is within its gate and no response is a 5xx, 1 otherwise, and 2
+  when the database file changed (its SHA-256 and its WAL's are compared before and after).
+
+On 2026-10-25, at 508 synthetic companies (710 MB), every page and API answered under 1 s and the screener's results
+under 0.5 s. Two indexes cut the heaviest queries: `idx_insider_trades_code` on `insider_trades (ticker, code, date)`
+for the screener's insider fields and `idx_unmapped_tag_cover` on `unmapped_facts (tag, ticker, label)` for the quality
+page's top unmapped tags. The store's schema pass creates them at a database's next write (a collection, a refresh, a
+backfill: 0.25 s and 5.9 MB at 127 companies, 1.16 s and 24.6 MB at 508). With them the screener's results run under 180
+ms and the quality page in about 150 ms (649 ms before), and every row the queries read came out the same
+(`qa/evidence/scale-m5-4-ab.txt`). Run `page_timings.py` on the real database after the S&P 500 collection to check the
+same gates there; `tests/test_scale_preflight.py` and `tests/test_scale_indexes.py` cover the tools and the indexes.
+
 ## Limitations
 
 - **US Stocks Only**: SEC EDGAR only covers US-listed companies
@@ -1720,12 +2286,12 @@ The server binds to `127.0.0.1` by default (localhost only).
 ### Features
 
 - **Terminal command bar** — a Bloomberg-style `TICKER CODE` command line (focus with `` ` `` or `/`) that jumps straight to any workstation tab or global tool. See [Terminal command bar](#terminal-command-bar) below.
-- **Company workstation** — a single per-ticker page (`/stocks/{ticker}`) with 10 tabs: description/overview, price chart with indicators, financial statements, earnings, key stats (with the quality scores), historical prices, dividends, holders (the gurus' 13F positions above Yahoo's holders), insider activity (the SEC's Form 4 trades with their aggregates), and valuation (with the other valuation indicators).
+- **Company workstation** — a single per-ticker page (`/stocks/{ticker}`) with 10 tabs: description/overview (with the SEC's industry), price chart with indicators, financial statements, earnings, key stats (with the quality scores, and their ranks within the industry), historical prices, dividends, holders (the gurus' 13F positions above Yahoo's holders), insider activity (the SEC's Form 4 trades with their aggregates), and valuation (with the other valuation indicators).
 - **Gurus** — `/gurus` lists the 34 gurus at their latest 13F quarter, `/gurus/{cik}` shows a guru's holdings with weights, the changes from the quarter before and its filings, and `/gurus/portfolio` what they hold together. See [SEC ownership](#sec-ownership-insiders-and-gurus).
 - **Market** — `/market` charts the Buffett indicator against its long-run trend, Shiller's CAPE against its history and the Treasury yield curve against a year earlier with its 10-year spreads and their inversions, from the series `python -m src.market.collect` stores. Without them it says how to collect. See [Market data](#market-data).
 - **Dashboard** — data quality score, field coverage bar chart, freshness summary, unmapped-fact tracker.
 - **Companies browser** — filterable list of all tracked companies with sector drill-down.
-- **Cross-company screener** — filter by any fundamental metric (ROIC, net margin, debt/EBITDA, …) *or* market/valuation column (P/E, dividend yield, PEG, short interest, …) *or* the valuation layer's Upside % / verdict *or* the quality scores (Piotroski F, Altman Z, the ranks and composite, …, with five preset screens) *or* the other valuation indicators (the reverse DCF's implied growth, the upsides to the EPV, the median P/S value and the tangible Graham number, price / net-net working capital) *or* the insiders' open-market trades and the gurus' holdings (`ins_*`, `gurus_holding`, `gurus_buying`), sort, paginate, compare selected companies side-by-side, and download results as CSV.
+- **Cross-company screener** — filter by any fundamental metric (ROIC, net margin, debt/EBITDA, …) *or* market/valuation column (P/E, dividend yield, PEG, short interest, …) *or* the valuation layer's Upside % / verdict *or* the quality scores (Piotroski F, Altman Z, the ranks and composite, …, with five preset screens) *or* the other valuation indicators (the reverse DCF's implied growth, the upsides to the EPV, the median P/S value and the tangible Graham number, price / net-net working capital) *or* the insiders' open-market trades and the gurus' holdings (`ins_*`, `gurus_holding`, `gurus_buying`) *or* the SEC's industry (a SIC prefix filter) and the ranks within it (`ind_*`), sort, paginate, compare selected companies side-by-side, and download results as CSV.
 - **Point-in-time (as-of) explorer** — look up what financials and ratios looked like as of any historical date (before later restatements), and browse vintage side-by-side tables.
 - **On-demand quote refresh** — re-fetch a single ticker's live price/market snapshot from the workstation without running a full collection (see `STOCK_WEB_ALLOW_QUOTE_REFRESH` below). After a stock split the stored valuations don't reflect (one dated after the stored price, as after a collection whose Yahoo quote failed, or one not yet stored since the ticker's last collection with Yahoo), the refresh isn't saved, because those valuations are on the pre-split basis; its status asks for a full collection of the ticker instead. A split here is a share split (a simple ratio such as 2:1, 5:4 or 1:10) or any price factor of 3:2 or more. The stock dividends and smaller spin-off factors Yahoo also lists don't stop a refresh: it stores them with the price and values the ticker again, so its DDM and multiples band move onto the new price's basis, as a full collection would put them. A saved refresh recomputes the snapshot's enterprise value, EV/EBITDA, EV/FCF and FCF yield as a full collection does (its new market cap with the latest year's net debt, EBITDA and FCF), so the columns keep one definition; Yahoo's own enterprise value stays in the JSON's `valuation` section.
 - **CSV export** — download annual financials, annual metrics, or screener results as CSV from any company page or screener view.
@@ -1738,11 +2304,11 @@ Per-ticker function codes (`TICKER CODE` → `/stocks/{TICKER}?tab=...`):
 
 | Code | Tab | Shows |
 |---|---|---|
-| `DES` | Description | Company overview, profile, officers (default) |
+| `DES` | Description | Company overview, profile, the SEC's industry (SIC code), officers (default) |
 | `GP` | Graph | Price chart with MA50/MA200/RSI/MACD indicators and `^GSPC` overlay |
 | `FA` | Financial analysis | Annual/quarterly/TTM statements |
 | `ERN` | Earnings | Earnings-surprise history (EPS estimate vs. actual) |
-| `STAT` | Key statistics | Valuation & market snapshot (P/E, market cap, beta, …) and the Quality section (composite, ranks, scores, warning signs) |
+| `STAT` | Key statistics | Valuation & market snapshot (P/E, market cap, beta, …) and the Quality section (composite, ranks with the industry's beside them, scores, warning signs) |
 | `HP` | Historical prices | Daily OHLCV price table |
 | `DVD` | Dividends | Dividend payments and stock splits |
 | `HDS` | Holders | The gurus' 13F positions in the stock (a Gurus section), then Yahoo's institutional and mutual-fund holders |
@@ -1778,14 +2344,14 @@ Key endpoints:
 | `GET /api/stocks/{ticker}/valuation` | Per-model fair-value ranges, assumptions, verdict, upside % |
 | `GET /api/stocks/{ticker}/valuation-history` | Valuation history: the historical value against the price, each multiple's 10-year range, the monthly series |
 | `GET /api/stocks/{ticker}/valuation-indicators` | The other valuation indicators (reverse DCF, EPV, NCAV and net-net, median P/S value, tangible Graham number): bear/base/bull, the base's upside from the live price, notes, N/A reasons, and the reverse DCF solved at the live price (not `/indicators`, the price chart's MA/RSI/MACD bundle) |
-| `GET /api/stocks/{ticker}/scores` | Quality scores: Piotroski with its nine tests, Altman, Beneish, Sloan, ROIC vs WACC, predictability, the five ranks and the composite, the growth table, the warning signs |
+| `GET /api/stocks/{ticker}/scores` | Quality scores: Piotroski with its nine tests, Altman, Beneish, Sloan, ROIC vs WACC, predictability, the five ranks and the composite, the same within the industry group (`industry`), the growth table, the warning signs |
 | `GET /api/stocks/{ticker}/form4` | Insiders' trades from the SEC's Form 4 filings with their aggregates (open-market buying and selling over 3, 6 and 12 months, CEO/CFO buys, cluster buys, sales under a 10b5-1 plan); Yahoo's rows where none is stored |
 | `GET /api/stocks/{ticker}/gurus` | The gurus holding the stock or its other share class in their latest 13F quarter, with the quarter's change, then the ones that sold it out |
 | `GET /api/gurus` | Each guru at its latest quarter: the total value, the positions, the new and sold-out ones |
 | `GET /api/gurus/portfolio` | The gurus' aggregated portfolio: per security the gurus holding it, their summed shares and value, the buyers and sellers (`limit`, default 200) |
 | `GET /api/gurus/{cik}` | One guru's quarter (`period` for an earlier one): holdings with weights and changes, the changes grouped, the filings; 404 if not stored |
 | `GET /api/market` | The market page's data: the Buffett indicator against its long-run trend (ratio, trend, z, zone), Shiller's CAPE against its history, the yield curve against a year earlier with the 10-year spreads and their inversions, and each section's sources; 200 with a section unavailable (and the command that collects it) before the data is collected |
-| `GET /api/screen` | Cross-company screener (supports `verdict=cheap\|fair\|expensive`) |
+| `GET /api/screen` | Cross-company screener (supports `verdict=cheap\|fair\|expensive` and `industry=<2- or 3-digit SIC prefix>`, e.g. `industry=367`) |
 | `GET /api/export/company/{ticker}/annual.csv` | Annual financials as CSV |
 | `GET /api/export/company/{ticker}/metrics.csv` | Annual metrics as CSV |
 | `GET /api/export/screen.csv` | Screener results as CSV |
@@ -1814,7 +2380,9 @@ Supported settings:
 | `STOCK_WEB_PORT` | `8000` | Bind port |
 | `STOCK_WEB_DB_PATH` | default DB path | Path to the SQLite database |
 
-To refresh data without the web UI or to backfill historical valuations, use the `stock-data` CLI as described above.
+To refresh data without the web UI or to backfill historical valuations, use the `stock-data` CLI as described above;
+`stock-data refresh` keeps every company current (see
+[Keeping the data current](#keeping-the-data-current-stock-data-refresh)).
 
 Because the workstation's ERN/HP/DVD/HDS/INS tabs and the `^GSPC` chart overlay
 need price history, analyst estimates, earnings history, dividends/splits, and
@@ -1824,10 +2392,10 @@ calls per ticker (`history()`, `dividends`, `splits`, `institutional_holders`,
 (`^GSPC` price history) made once per collection run, not per ticker.
 
 The INS tab's SEC trades and the HDS tab's Gurus section aren't part of a collection: they read what
-`python -m src.ownership.collect` stores (see [SEC ownership](#sec-ownership-insiders-and-gurus)); without it,
-INS shows Yahoo's rows and HDS no Gurus section. The Market page isn't either: it reads what
-`python -m src.market.collect` stores (see [Market data](#market-data)); without it, each section says which command
-collects its series.
+`python -m src.ownership.collect` (or `stock-data refresh`'s weekly steps) stores (see
+[SEC ownership](#sec-ownership-insiders-and-gurus)); without it, INS shows Yahoo's rows and HDS no Gurus section. The
+Market page isn't either: it reads what `python -m src.market.collect` (or `stock-data refresh`'s daily step) stores
+(see [Market data](#market-data)); without it, each section says which command collects its series.
 
 ## License
 

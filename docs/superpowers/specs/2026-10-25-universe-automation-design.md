@@ -65,8 +65,9 @@ current with one command:
   cached submissions; no network.
 - **Industry groups**: a company's group is its 3-digit SIC prefix when at least 10 companies in the DB share it,
   else its 2-digit major group when at least 10 do, else none. The groups and their sizes are computed at rank time
-  from the stored codes. A group's label is data-driven: "SIC 283" with its members' most common SEC descriptions
-  ("Pharmaceutical Preparations, Biological Products"), so no external SIC table is needed.
+  from the stored codes. A group's label is data-driven: "SIC 283: " and its members' three most common SEC
+  descriptions, joined with "; " since a description can hold a comma ("Pharmaceutical Preparations; Biological
+  Products"), so no external SIC table is needed.
 - **Industry ranks** (`rank_all`): for each of M2's five ranks, each component's percentile within the company's
   industry group among the members with that component, when at least 10 of them have it (else that component is
   left out of the industry rank); the rank is ceil(10 x the mean percentile) with M2's component minimums, and an
@@ -76,17 +77,21 @@ current with one command:
 - **Web**: the DES tab shows the SIC code and description; the STAT tab's Quality section shows the industry ranks
   beside the universe's ("within SIC 283, 24 companies"), or why there are none; `GET /api/stocks/{t}/scores`
   includes them; the screener gains an industry filter (a 2- or 3-digit SIC prefix, validated as digits and bound
-  as a parameter, chosen from a list of the groups in the DB with their sizes) and the `ind_*` fields.
+  as a parameter, chosen from a list of every 2- and 3-digit prefix in the DB with its size, whether or not it forms
+  a group) and the `ind_*` fields.
 
 ## `stock-data refresh` (`src/refresh.py`)
 
-`stock-data refresh [--steps LIST] [--force] [--db PATH] [--output-dir DIR] [--cache-dir DIR]`, dispatched from
+`stock-data refresh [--steps LIST] [--force] [--tickers LIST] [--db PATH] [--output-dir DIR] [--cache-dir DIR]`
+(`--tickers` limits the per-company steps, for testing), dispatched from
 `src/main.py` when the first argument is `refresh` (no reinstall needed; no ticker is called REFRESH).
 
 - **Steps**, each in its own try/except, in this order, each skipped while it succeeded within its period (the
   `refresh_log` table) unless `--force` or named in `--steps`:
   - `quotes` (daily): every company's quote, through the web job's logic, moved into a shared function so both use
-    it; a ticker with a split or spin-off since its last collection goes to the collection list instead;
+    it; a ticker with a split since its last collection that moves per-share figures (a share split, or a price
+    factor of 3:2 or more) goes to the collection list instead, while a stock dividend's or a smaller spin-off's
+    factor is stored with the price, as the web job does (BUG-128);
   - `bars` (daily): every company's daily bars, and the `^GSPC` benchmark's, asked from the bar before its last
     stored one (final) and replaced from the last stored one on (`history(start=...)`, unadjusted closes as the
     collection stores them). A company whose bar-before-last close differs from Yahoo's by more than 0.5%, or with a
@@ -106,7 +111,8 @@ current with one command:
   time. A second run exits 3 while one holds it.
 - **Output**: a progress line a step and ticker batch, and a summary (each step's result, rows stored, the
   collection list, failures), printed and appended to `<output-dir>/logs/refresh-<YYYY-MM-DD>.log`. Exit 0 when
-  every step ran or was skipped, 1 when any failed, 2 for a missing database, 3 for a run already going.
+  every step ran or was skipped, 1 when any failed (or the companies can't be read), 2 for a missing database, a
+  `--tickers` company not in it or a usage error, 3 for a run already going, 130 on Ctrl+C.
 - **Scheduling**: README instructions for Windows Task Scheduler (`schtasks /Create /SC DAILY ...` running
   `stock-data refresh` from the repo folder, after the US close). Installing it is the user's (Q15).
 

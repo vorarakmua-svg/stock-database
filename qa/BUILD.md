@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 2 · DOING 0 · DONE 42 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 1 · DOING 0 · DONE 43 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -79,7 +79,7 @@
 | M5-2 | SIC codes and industries: `companies.sic`/`sic_description` (collected, and filled offline by `python -m src.universe.sic`), industry groups (3-digit SIC, else 2-digit, at least 10 companies), industry ranks in `rank_all`, the DES and STAT tabs, the scores API, the screener's industry filter and fields, the scores oracle's industry gate; with tests | DONE | this commit | `qa/evidence/industries-m5-2-*` |
 | M5-3 | `stock-data refresh`: quotes and bars daily, the SEC's new filings weekly, the full collections they call for, insiders and gurus weekly, the market data daily, the recomputation; `refresh_log`, a lock, a log file, exit codes; a real run on a scratch copy; with tests | DONE | this commit | `qa/evidence/refresh-m5-3-*` |
 | M5-4 | The scale pre-flight: a synthetic copy of about 500 companies, the pages' and APIs' timings, the query plans, the indexes they need (every page under 1 s, the screener under 0.5 s); with tests | DONE | this commit | `qa/evidence/scale-m5-4-*` |
-| M5-5 | Docs: README and USAGE_GUIDE (the universe, `--tickers-file`, SIC and industries, the refresh command, Task Scheduler instructions) | TODO | | |
+| M5-5 | Docs: README and USAGE_GUIDE (the universe, `--tickers-file`, SIC and industries, the refresh command, Task Scheduler instructions) | DONE | this commit | `qa/evidence/docs-m5-5-*` |
 | M5-6 | Milestone close: code review 19 (opus) with Critical and Important findings fixed; the dry run, the backup, then the live collection of the S&P 500's new members, their SIC and Form 4s, the recomputation and the checks at about 500 companies | TODO | | |
 
 ## NEEDS-USER (each also recorded in `qa/BUGS.md`)
@@ -1322,3 +1322,37 @@ Evidence: `qa/evidence/scale-m5-4-{timings-127,timings-508,timings-508-before,ti
 Gates: ruff ✓ mypy ✓ pytest 2326 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) perf(store): two indexes for the screener's insiders and the quality page, and the scale tools (M5-4)
 Next: M5-5 (docs: README and USAGE_GUIDE).
+
+### Build iteration 55: 2026-10-25 10:13: M5-5
+Did:
+- A sonnet worker documented Milestone 5 in README.md and USAGE_GUIDE.md:
+  - README: "The universe and industries" (the universe files, `--tickers-file` and `--skip-existing` with their
+    errors, the S&P 500 commands, SIC codes, industry groups and ranks, where they show, the oracle's gates,
+    limitations);
+  - README: "Keeping the data current: stock-data refresh" (the eight steps, cadence, options, the log and
+    `refresh_log`, the lock and exit codes, the real run's timings, the Task Scheduler commands with Q15 stated,
+    limitations with BUG-232);
+  - the CLI options, the project structure, the web interface, the Development section's scale tools, and the
+    sentences Milestone 5 made stale (the SIC code "not stored yet", "stock-data never runs" the ownership and market
+    collectors);
+  - USAGE_GUIDE: "The Universe and Industries" and "Keeping Data Current", with 11 SQL statements, and the table of
+    contents. No Python block added.
+- Its checks:
+  - the usage guide's test passes;
+  - the 11 SQL statements ran read-only on the M5-2 and M5-3 scratch copies;
+  - 66 greps found every name documented;
+  - the error messages were produced by running the CLI;
+  - 22 web and API checks through the TestClient;
+  - every anchor resolves.
+- My review, against the code:
+  - the scheduler's first-run note said every company's three years of Form 4s would take hours. The ownership
+    collector keeps each filing once it parses (data/cache/form4 holds 32,145), so for the companies collected
+    before the step takes a minute or two; only a company never collected for insiders takes hours. Corrected in
+    both files.
+  - The old ", " label joiner was fixed in the spec and in the scores oracle's docstring.
+  - The spec was brought up to the code where the worker found it behind: `--tickers`, the quotes step's split
+    rule (BUG-128), the exit codes 2 and 130, the screener's list of every prefix.
+Evidence: `qa/evidence/docs-m5-5-{tests,sql,gates,done}.txt`
+Gates: ruff ✓ mypy ✓ pytest 2326 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) docs: Milestone 5 in the README and the usage guide: the universe, industries and stock-data refresh (M5-5)
+Next: M5-6 (milestone close: code review 19, the dry run, the backup and the live collection).

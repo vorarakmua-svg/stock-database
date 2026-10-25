@@ -61,7 +61,7 @@ Readings of the spec where it leaves a choice (each also noted where it's used):
   as stored (anything else is no code). A company's group is its 3-digit prefix when 10 or more of them share it,
   else its 2-digit prefix when 10 or more do; a group's members are every one whose code starts with it, so a
   2-digit group takes in its 3-digit groups' companies and has 10 members or more. Its label is "SIC <group>: " and
-  the members' three most common descriptions as stored, by count, then in string order, joined with ", " ("SIC
+  the members' three most common descriptions as stored, by count, then in string order, joined with "; " ("SIC
   <group>" without any); its size, the members. A component counts toward a company's industry rank when 10 or more
   of its group's members have it (the percentile then among them, as above), and a rank needs two such components
   (one for valuation and momentum), so a component left out doesn't count toward that minimum; the industry
