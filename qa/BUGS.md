@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 127 · NEEDS-USER 17 · Verified: 98
+**Open:** P0 0 · P1 0 · P2 11 · P3 127 · NEEDS-USER 17 · Verified: 103
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1789,6 +1789,36 @@ Status: OPEN
 Found: build M5-6 (the review-19 I-1 worker's end-to-end run) | Fixed: | Regression test:
 Repro: src/config.py's import-time `default_config = AppConfig()` runs StorageConfig.ensure_directories (`__post_init__`), so any process that imports the package from another folder (a script run from a scratch folder) creates an empty data\ tree there. Pre-existing.
 Expected: the folders made when a run writes to them.   Actual: made at import, wherever the process starts.
+
+### BUG-240 [P2][REFRESH] An empty bars answer put the company on the collection list, so a bad Yahoo day re-collected every company
+Status: VERIFIED (build iteration 56)
+Found: code review 19 (I-2), build M5-6 | Fixed: (this commit) | Regression tests: tests/test_refresh_bars.py::test_an_answer_without_any_bars_is_the_companys_failure_and_queues_nothing, ::test_a_bad_yahoo_day_queues_no_company_and_fails_the_step, ::test_a_bar_before_the_last_without_a_close_above_0_is_passed_over_for_the_one_before_it, ::test_a_company_without_a_close_above_0_before_its_last_bar_fails_and_isnt_queued, ::test_the_benchmarks_answer_without_bars_is_its_failure_not_another_basis (and 2 more)
+Repro: yfinance answers a timeout, throttling or "possibly delisted; no timezone found" with an empty frame, which fetch_price_bars_since returns as no bars, not an error. The bars step took the missing close of the bar before the last as a basis mismatch and queued the company (review 19's empty_bars_queue probe: every quote failing, the bars step "ok ... 3 to collect", collect running all 3 in full). A stored close of NULL or 0 there queued the company every day.
+Expected: a company Yahoo didn't answer is that company's failure.   Fix: an answer without bars, and a company with no stored close above 0 among the 10 bars before its last, are that company's failures (its bars stay, nothing queued); the basis is checked on the latest stored bar before the last with a close above 0 (LOOKBACK = 10); the benchmark the same way. A bad Yahoo day now fails the bars step (exit 1) and collects nothing.
+
+### BUG-241 [P2][REFRESH] A failed collection or SEC feed delayed a new report by a week: the weekly SEC step was skipped and its collection list lost
+Status: VERIFIED (build iteration 56)
+Found: code review 19 (I-3), build M5-6 | Fixed: (this commit) | Regression tests: tests/test_refresh.py::test_the_sec_step_runs_again_the_day_after_its_collection_failed, ::test_a_feed_that_fails_makes_the_sec_step_run_again_each_day_naming_it_until_it_is_read, ::test_the_sec_step_runs_again_after_a_run_that_stopped_before_collecting_its_list, ::test_the_sec_step_runs_again_after_a_run_that_left_collect_out, ::test_a_weekly_step_runs_again_the_day_after_an_item_failed (and 5 more)
+Repro: the sec step was logged ok before collect ran, and was ok unless every feed failed. A collect that failed (or a process that died), or a failed feed of the company with the report, then left six daily runs skipping sec by cadence with nothing to collect (review 19's sec_queue_lost probe: collected on day +7).
+Expected: the report collected at the next run.   Fix: a weekly step whose latest success left something undone runs again within its period: sec after a feed error, or when a company it put on the list wasn't collected by that run's own collect step (failed, skipped, or never reached); insiders and gurus after an item error. The SEC check is idempotent, so running it again is safe. The reason is printed, logged ("again") and in the summary. Both probes now collect on day +1.
+
+### BUG-242 [P3][REFRESH] A daily step that finished late in a long run was skipped by the next day's run
+Status: VERIFIED (build iteration 56)
+Found: code review 19 (m-5), build M5-6 | Fixed: (this commit) | Regression tests: tests/test_refresh.py::test_a_daily_step_that_finished_5_hours_into_its_run_is_due_at_the_next_days_run, ::test_a_weekly_step_that_finished_late_in_its_run_is_due_a_week_after_the_run_started, ::test_the_age_a_skipped_step_gives_is_its_runs, ::test_a_row_without_its_run_is_aged_from_its_own_start
+Repro: a step's age was measured from its own finish, so the market step finishing 4+ hours into a run (after an earnings-season collect) was 19.x hours old at the next day's scheduled run and skipped.
+Expected: due at the next day's run.   Fix: a step's age is its run's (the summary's run start; the row's own start for a row without one).
+
+### BUG-243 [P3][DOCS] `stock-data refresh --db COPY` alone writes a collection's exports and the log into data/
+Status: VERIFIED (build iteration 56)
+Found: code review 19 (m-6), build M5-6 | Fixed: (this commit) | Regression test: none (docs)
+Repro: --db moves only the database; a collection's JSON and CSV go under --output-dir (default data/output) and the log under data/logs, a trap when testing on a copy.
+Fix: the README and USAGE_GUIDE say so and show `--db <copy> --output-dir <folder>` for a copy.
+
+### BUG-244 [P2][REFRESH] A --tickers test run counted for every company's cadence
+Status: VERIFIED (build iteration 56)
+Found: build M5-6 (the review-19 I-3 worker) | Fixed: (this commit) | Regression tests: tests/test_refresh.py::test_a_tickers_run_of_every_step_leaves_every_step_due_for_the_next_full_run, ::test_a_tickers_run_between_two_full_runs_leaves_the_cadence_to_the_first, ::test_a_tickers_run_before_the_scheduled_run_doesnt_make_it_skip_the_daily_steps, ::test_a_tickers_runs_rows_carry_its_subset_and_a_full_runs_dont
+Repro: the README's own test run, `stock-data refresh --tickers AAPL,MSFT`, logged ok rows, so a scheduled run within 20 hours skipped the quotes, bars and market data of every company, and the weekly steps for up to a week.
+Expected: a test on a few companies leaves the others due.   Fix: a --tickers run's rows carry its `subset` and the cadence passes over them, so the next full run is due as if the test hadn't happened.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

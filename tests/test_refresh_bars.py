@@ -3,20 +3,25 @@
 ``history(start=...)`` request with a collection's
 parameters and bar shape, and the split factors Yahoo lists in that range), ``SQLiteStore.replace_price_bars_from``
 (a ticker's bars from a day on replaced in one transaction) and the step itself: each company's bars from its last
-stored one on (that bar may have been partial), asked from the bar before it, whose final close must be Yahoo's on
-the stored bars' basis; a company whose basis can't be matched goes on the collection list instead, and one already
-on it is left to the collection."""
+stored one on (that bar may have been partial), asked from the latest bar before it with a close above 0, whose final
+close must be Yahoo's on the stored bars' basis; a company whose basis can't be matched goes on the collection list
+instead, and one already on it is left to the collection. An answer without bars, and a company without such a bar,
+are that company's failure, never queued (code review 19, I-2)."""
 import sqlite3
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pandas as pd
 import pytest
 
+import src.refresh
 from src.exporters.sqlite_store import SQLiteStore
 from src.fetchers import yahoo_handler as yh
 from src.fetchers.yahoo_handler import YahooHandler
 from src.refresh import BASIS_TOLERANCE
 from tests import refresh_fakes as rf
+
+#: Yahoo's answer to a throttled or failed request, or for a ticker it no longer serves: yfinance's empty history.
+EMPTY = {"bars": [], "splits": []}
 
 # ---------------------------------------------------------------------------
 # YahooHandler.fetch_price_bars_since
@@ -312,6 +317,93 @@ def test_the_step_fails_when_every_company_fails(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# An answer without bars, and the bar Yahoo's basis is checked on (code review 19, I-2)
+# ---------------------------------------------------------------------------
+
+
+def test_an_answer_without_any_bars_is_the_companys_failure_and_queues_nothing(tmp_path):
+    # yfinance answers a timeout, throttling or "possibly delisted; no timezone found" with an empty history, not an
+    # error: that is no basis to collect the company in full on.
+    db = rf.make_db(tmp_path / "stock.db")
+    yahoo = rf.FakeYahoo(bars={"AAA": EMPTY})
+    before = _bars(db)
+    report = rf.run(db, rf.services(db, yahoo=yahoo), steps=["bars"])
+    result = _step(report)
+    assert _bars(db) == before and report.queue == {} and result.summary["to_collect"] == {}
+    assert result.summary["errors"]["AAA"].startswith("Yahoo gave no bars from 2026-10-19")
+    assert sorted(result.summary["updated"]) == ["BBB", "CCC"] and result.ok is True
+
+
+def test_a_bad_yahoo_day_queues_no_company_and_fails_the_step(tmp_path):
+    # Code review 19's empty_bars_queue probe: every quote failed and every bars answer was empty, and the run put
+    # every company on the collection list and collected them all in full.
+    db = rf.make_db(tmp_path / "stock.db", benchmark=True)
+    yahoo = rf.FakeYahoo(quotes={t: {"error": "Yahoo returned no price"} for t in rf.TICKERS},
+                         bars={t: EMPTY for t in rf.TICKERS + ("^GSPC",)})
+    collect = rf.FakeCollect(db)
+    report = rf.run(db, rf.services(db, yahoo=yahoo, collect=collect), steps=["quotes", "bars", "collect"])
+    bars = _step(report)
+    assert report.queue == {} and collect.calls == [] and report.result("collect").reason == "nothing to collect"
+    assert sorted(bars.summary["errors"]) == list(rf.TICKERS) and bars.summary["to_collect"] == {}
+    assert bars.summary["benchmark"]["outcome"] == "failed"
+    assert (bars.ok, bars.reason, report.exit_code) == (False, "every company's bars failed, and the benchmark's", 1)
+
+
+def test_an_answer_with_bars_but_no_close_for_that_day_still_cant_be_checked(tmp_path):
+    # Bars, but none of them that day's close: a basis Yahoo can't show, which only a collection matches.
+    db = rf.make_db(tmp_path / "stock.db")
+
+    def answer(start):
+        got = rf.served("AAA", start)
+        got["bars"][0]["close"] = None
+        return got
+
+    report = rf.run(db, rf.services(db, yahoo=rf.FakeYahoo(bars={"AAA": answer})), steps=["bars"])
+    assert list(report.queue) == ["AAA"] and "give no close for that day" in report.queue["AAA"][0]
+
+
+@pytest.mark.parametrize("stored", [None, 0.0, -1.0])
+def test_a_bar_before_the_last_without_a_close_above_0_is_passed_over_for_the_one_before_it(tmp_path, stored):
+    # Such a close queued the company every day: a full collection stores the same bars.
+    db = rf.make_db(tmp_path / "stock.db")
+    rf.set_closes(db, "AAA", {"2026-10-19": stored})
+    yahoo = rf.FakeYahoo()
+    report = rf.run(db, rf.services(db, yahoo=yahoo), steps=["bars"])
+    assert yahoo.bar_calls[0] == ("AAA", "2026-10-16") and report.queue == {}
+    p = rf.close("AAA", "2026-10-16")
+    assert _step(report).summary["updated"]["AAA"]["checked"] == {"day": "2026-10-16", "stored": p, "yahoo": p}
+    stored_bars = _bars(db)
+    assert [d for d, _, _ in stored_bars] == list(rf.STORED_DAYS + rf.NEW_DAYS)
+    assert stored_bars[3] == ("2026-10-19", stored, None)  # only the bars from the last stored one on are replaced
+
+
+def test_a_company_without_a_close_above_0_before_its_last_bar_fails_and_isnt_queued(tmp_path):
+    db = rf.make_db(tmp_path / "stock.db")
+    rf.set_closes(db, "AAA", {day: None for day in rf.STORED_DAYS[:-1]})
+    yahoo = rf.FakeYahoo()
+    before = _bars(db)
+    report = rf.run(db, rf.services(db, yahoo=yahoo), steps=["bars"])
+    assert [t for t, _ in yahoo.bar_calls] == ["BBB", "CCC"] and report.queue == {} and _bars(db) == before
+    assert _step(report).summary["errors"]["AAA"].startswith(
+        "none of its 4 latest stored bars before the last (2026-10-20) has a close above 0")
+
+
+@pytest.mark.parametrize("beyond, found", [(0, True), (1, False)])
+def test_that_bar_is_looked_for_among_the_lookback_bars_before_the_last(tmp_path, beyond, found):
+    back = src.refresh.LOOKBACK + beyond  # how many bars before the last the only close above 0 is
+    days = [(date(2026, 10, 20) - timedelta(days=n)).isoformat() for n in reversed(range(back + 1))]
+    db = rf.make_db(tmp_path / "stock.db", tickers=["AAA"], days=days)
+    rf.set_closes(db, "AAA", {day: None for day in days[1:-1]})
+    yahoo = rf.FakeYahoo(bars={"AAA": lambda start: rf.served("AAA", start, days=days + list(rf.NEW_DAYS))})
+    report = rf.run(db, rf.services(db, yahoo=yahoo), steps=["bars"])
+    assert report.queue == {}
+    if found:
+        assert yahoo.bar_calls == [("AAA", days[0])] and "AAA" in _step(report).summary["updated"]
+    else:
+        assert yahoo.bar_calls == [] and "AAA" in _step(report).summary["errors"]
+
+
+# ---------------------------------------------------------------------------
 # The benchmark (^GSPC), which the GP tab compares a stock against
 # ---------------------------------------------------------------------------
 
@@ -357,6 +449,17 @@ def test_the_benchmark_without_stored_bars_is_skipped_with_the_reason(tmp_path):
         "ticker": "^GSPC", "outcome": "skipped",
         "reason": "no stored bars (a collection's benchmark fetch stores them)"}
     assert "^GSPC skipped" in _step(report).headline
+
+
+def test_the_benchmarks_answer_without_bars_is_its_failure_not_another_basis(tmp_path):
+    db = rf.make_db(tmp_path / "stock.db", benchmark=True)
+    yahoo = rf.FakeYahoo(bars={"^GSPC": EMPTY})
+    before = _bars(db, "^GSPC")
+    report = rf.run(db, rf.services(db, yahoo=yahoo), steps=["bars"])
+    bench = _step(report).summary["benchmark"]
+    assert _bars(db, "^GSPC") == before and bench["outcome"] == "failed"
+    assert bench["reason"].startswith("Yahoo gave no bars from 2026-10-19") and "whole history" not in bench["reason"]
+    assert (_step(report).ok, report.queue) == (True, {})
 
 
 @pytest.mark.parametrize("answer, reason", [({"error": "Too Many Requests"}, "Too Many Requests"),

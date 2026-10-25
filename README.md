@@ -1597,15 +1597,21 @@ companies on the **collection list**, each with its reason: `quotes`, `bars` and
   right away.
 - **`bars`** (daily): every company's daily bars since its last stored bar, one `history(start=...)` request a company
   with a collection's parameters (unadjusted closes, as a collection stores them).
-  - Yahoo is asked from the bar before the last stored one, which is final, so its close shows whether Yahoo's prices
-    are still on the stored bars' basis; the bars from the last stored one on (it may have been a part-day bar) are
-    replaced in one transaction.
+  - Yahoo is asked from the latest stored bar before the last one with a close above 0 (the bar before the last, unless
+    it was stored without a close, or with 0 or less; the 10 before the last are looked through). That bar is final,
+    so its close shows whether Yahoo's prices are still on the stored bars' basis; the bars from the last stored one on
+    (it may have been a part-day bar) are replaced in one transaction.
   - A company goes on the collection list instead, its bars left as stored, when Yahoo's close for that earlier bar
     differs from the stored one by more than 0.5% (a stock dividend or a spin-off moves it by about 1% or more, a split
-    by far more), when Yahoo gives no close for that day, when Yahoo lists a split or price factor dated after the last
-    stored bar, or when its stored bars are Yahoo's dividend-adjusted closes (BUG-075), which only a full collection
-    replaces. A company already on the list is left to the collection, and one with no stored bars is skipped, not
-    queued.
+    by far more), when Yahoo's bars give no close for that day, when Yahoo lists a split or price factor dated after
+    the last stored bar, or when its stored bars are Yahoo's dividend-adjusted closes (BUG-075), which only a full
+    collection replaces. A company already on the list is left to the collection, and one with no stored bars is
+    skipped, not queued.
+  - An answer with no bars at all is that company's error, its bars left as stored and nothing queued: yfinance gives
+    one for a timeout, throttling or a ticker Yahoo no longer serves ("possibly delisted; no timezone found") rather
+    than an error, so on a bad Yahoo day the step fails (every company's bars failed) instead of queuing every company
+    for a full collection. A company with no close above 0 among the (up to) 10 bars before its last is an error too:
+    a full collection would store the same bars.
   - Then the benchmark's bars (`^GSPC`, which the GP tab compares a stock against) the same way, whatever `--tickers`
     names. It is never queued: on another basis its bars stay as stored, and the next collection's benchmark fetch
     stores its whole history again.
@@ -1630,12 +1636,26 @@ companies on the **collection list**, each with its reason: `quotes`, `bars` and
 - **`recompute`**: every company's valuations, history, scores and indicators, then the ranks (what
   `python -m src.valuation.backfill` does), when a step of the run stored something or when it is named or forced.
 
-**Cadence.** A step with a cadence is skipped while it succeeded within its period: 20 hours for a daily step, 6 days
-20 hours for a weekly one, a little under a day and a week so that a run scheduled daily never skips a step because
-yesterday's finished a few minutes later. On a daily schedule `quotes`, `bars` and `market` run every day and `sec`,
-`insiders` and `gurus` every seventh. What counts is the step's latest `refresh_log` row that finished ok; a failed or
-skipped row doesn't. `--steps` names the steps to run, whatever their cadence (and `recompute` runs when named), and
-`--force` ignores the cadence of every step.
+**Cadence.** A step with a cadence is skipped while it succeeded in a run that started within its period: 20 hours for
+a daily step, 6 days 20 hours for a weekly one, a little under a day and a week so that a run scheduled daily never
+skips a step because yesterday's started a few minutes later. A step's age is measured from the start of its run, not
+from when the step finished, so a step that finished hours into a long run (`market` after a collection of 2 or 3
+hours) is still due at the next day's run. On a daily schedule `quotes`, `bars` and `market` run every day and `sec`,
+`insiders` and `gurus` every seventh. What counts is the step's latest `refresh_log` row that finished ok in a run
+without `--tickers`; a failed or skipped row doesn't, and neither does a `--tickers` run's: a test on a few companies
+refreshed no other, so the next full run is due as if it hadn't happened (its rows stay logged, with its `subset`).
+
+A weekly step also runs again, at the next run, while its latest success left something undone:
+- `sec`, when a company's feed failed in it, or when it put a company on the collection list and that run's `collect`
+  step didn't finish ok (it failed, `--steps` left it out, or the run was stopped or died before it ended). The list
+  lives only in the run, so the check is made again: a report filed on or after the day of a company's latest
+  collection with SEC data still counts until that company is collected.
+- `insiders` and `gurus`, when a company's Form 4s or a guru's 13F filings failed in it.
+
+The step then says why it runs again, on its `running` line, in the summary and in `refresh_log`: `sec: running
+again: succeeded in the run started 1d ago, within its weekly period, but that run had feed errors for AAPL`. A
+company whose feed keeps failing makes the step run every day, each day naming it. `--steps` names the steps to run,
+whatever their cadence (and `recompute` runs when named), and `--force` ignores the cadence of every step.
 
 ### Running it
 
@@ -1649,8 +1669,12 @@ stock-data refresh --steps quotes,bars
 # Every step, whatever its cadence
 stock-data refresh --force
 
-# Two companies only (for testing)
+# Two companies only (for testing; it counts for no step's cadence)
 stock-data refresh --tickers AAPL,MSFT
+
+# On a copy of the database: give it an output directory too, or a collection's
+# JSON and CSV go into data/output and the run's log into data/logs
+stock-data refresh --db scratch/stock.db --output-dir scratch
 
 # The defaults spelled out
 stock-data refresh --db data/output/stock.db --output-dir data --cache-dir data/cache
@@ -1660,10 +1684,10 @@ stock-data refresh --db data/output/stock.db --output-dir data --cache-dir data/
 |--------|-------------|---------|
 | `--steps` | Run only these steps, whatever their cadence (comma-separated: `quotes`, `bars`, `sec`, `collect`, `insiders`, `gurus`, `market`, `recompute`) | every step that is due |
 | `--force` | Run every step, whatever its cadence | `false` |
-| `--tickers` | Limit the per-company steps to these of the database's companies (comma-separated; for testing). Each must be in the database; the benchmark's bars, the gurus and the market data aren't per company | all companies |
-| `--db` | SQLite database path; it must exist (none is created) | `<output-dir>/output/stock.db` |
-| `--output-dir` | The base output directory: a collection's exports go under `output/`, the run's log under `logs/` | `data` |
-| `--cache-dir` | The cache of the SEC's answers, the ownership filings and the market data | `data/cache` |
+| `--tickers` | Limit the per-company steps to these of the database's companies (comma-separated; for testing). Each must be in the database; the benchmark's bars, the gurus and the market data aren't per company. Such a run counts for no step's cadence: its `refresh_log` rows carry its `subset`, and the next full run is due as if it hadn't happened | all companies |
+| `--db` | SQLite database path; it must exist (none is created). It doesn't move the outputs: see `--output-dir` | `<output-dir>/output/stock.db` |
+| `--output-dir` | The base output directory: a collection's exports go under `output/`, the run's log under `logs/`. `--db` doesn't change it, so a run on a copy with `--db` alone writes a collection's JSON and CSV into `data/output` and its log into `data/logs`: give both options when testing on a copy | `data` |
+| `--cache-dir` | The cache of the SEC's answers, the ownership filings and the market data (a cache, so a copy's run can share it) | `data/cache` |
 
 The SEC's User-Agent is `SEC_USER_AGENT` (in `.env` or the environment, see
 [Environment Variables](#environment-variables)); `refresh` has no `--sec-user-agent`.
@@ -1671,8 +1695,9 @@ The SEC's User-Agent is `SEC_USER_AGENT` (in `.env` or the environment, see
 ### Output and the log
 
 A run prints a time-stamped line as each step starts and finishes, one for every 25 companies a long step has done and
-a collection's line for each company, then a summary: each step ran or was skipped (and why), ok or FAILED (and why),
-with its counts; the collection list, each company with its reasons; and the exit code. Everything printed is appended
+a collection's line for each company, then a summary: each step ran (`ran again`, and why, for a weekly step run again
+within its period) or was skipped (and why), ok or FAILED (and why), with its counts; the collection list, each company
+with its reasons; and the exit code. Everything printed is appended
 to `<output-dir>/logs/refresh-<YYYY-MM-DD>.log` (`data/logs/refresh-2026-10-25.log`: the day the run started, local
 time, UTF-8), which also holds the detail the console leaves out: each quote stored, each company's bars, a failed
 step's traceback. An excerpt of the first real run's output, on a copy of the 127-company database (the path
@@ -1698,9 +1723,11 @@ shortened):
 
 `refresh_log`, a table of the database, has a row for each step of each run, ran or skipped: `id`, `step`,
 `started_at` and `finished_at` (UTC, ISO 8601), `ok` (1 for a step that ran and succeeded, 0 for one that failed, empty
-for one that was skipped) and `summary` (JSON: `run`, the run's start, which groups a run's rows; then the step's counts,
-or `skipped` with the reason, or `error`). The cadence reads it, and so can you (queries are in the
-[USAGE_GUIDE](USAGE_GUIDE.md#the-refresh-log)). A step whose row can't be written says so and runs again next time.
+for one that was skipped) and `summary` (JSON: `run`, the run's start, which groups a run's rows and from which the
+cadence measures a step's age; `subset`, a `--tickers` run's companies, whose rows the cadence passes over; then the
+step's counts, or `skipped` with the reason, or `error`; and `again`, why a weekly step ran again within its period).
+The cadence reads it, and so can you (queries are in the [USAGE_GUIDE](USAGE_GUIDE.md#the-refresh-log)). A step whose
+row can't be written says so and runs again next time.
 
 ### One run at a time, and the exit codes
 
@@ -1719,10 +1746,12 @@ it and exits 3. Only refreshes take the lock: it doesn't stop a `stock-data` col
 | 3 | another refresh holds the lock |
 | 130 | interrupted with Ctrl+C: the steps that finished are logged |
 
-A step fails when it raises or when every one of its items fails: every quote, every company's bars and the benchmark's,
-every feed, every company's Form 4s, every guru's filings, every market source, a `recompute` that valued no company.
-Failures of single items are counted and listed in the summary. `collect` is stricter: it fails when the database didn't
-store any one company of the list (the others are kept), naming it.
+A step fails when it raises or when every one of its items fails: every quote, every company's bars and the benchmark's
+(an answer with no bars is a failure too, so a day Yahoo answers nothing fails `quotes` and `bars` rather than queuing
+every company), every feed, every company's Form 4s, every guru's filings, every market source, a `recompute` that
+valued no company. Failures of single items are counted and listed in the summary, and a weekly step that had one runs
+again at the next run (see Cadence above). `collect` is stricter: it fails when the database didn't store any one
+company of the list (the others are kept), naming it.
 
 ### Timings
 
@@ -1797,6 +1826,10 @@ schtasks /Create /SC DAILY /ST 05:00 /TN "stock-database refresh" /TR "cmd /c cd
 - A report filed on the day of a company's last collection counts, so that company is collected once more.
 - The insiders step lists every Form 4 of the three-year window again each week; the documents come from the cache, but
   it took 1 minute 35 seconds for 127 companies.
+- A weekly step with an item that keeps failing (a feed the SEC keeps refusing, a Form 4 that never parses) runs at
+  every daily run, naming it, until it is read; and a company of the SEC step's list that a collection can't store is
+  looked for and collected again at every daily run, each run's `collect` step failing and naming it, until it is
+  stored.
 - New reports are noticed weekly: a company that files a 10-Q the day after the SEC step ran is collected up to a week
   later.
 

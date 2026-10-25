@@ -1475,8 +1475,12 @@ stock-data refresh --steps quotes,bars
 # Every step, whatever its cadence
 stock-data refresh --force
 
-# Two companies only (for testing)
+# Two companies only (for testing; it counts for no step's cadence)
 stock-data refresh --tickers AAPL,MSFT
+
+# On a copy of the database: give it an output directory too, or a collection's
+# JSON and CSV go into data/output and the run's log into data/logs
+stock-data refresh --db scratch/stock.db --output-dir scratch
 ```
 
 The eight steps, in this order, each in its own try/except (a failure is reported and the others go on):
@@ -1484,7 +1488,7 @@ The eight steps, in this order, each in its own try/except (a failure is reporte
 | Step | Runs | What it does |
 |---|---|---|
 | `quotes` | daily | Every company's Yahoo quote, stored as a new snapshot. A company with a split since its last collection goes on the collection list instead |
-| `bars` | daily | Every company's daily bars since its last stored bar, then `^GSPC`'s. A company whose prices no longer match the stored bars' basis goes on the collection list |
+| `bars` | daily | Every company's daily bars since its last stored bar, then `^GSPC`'s. A company whose prices no longer match the stored bars' basis goes on the collection list; an answer with no bars (Yahoo's answer to a timeout or throttling) is that company's error, its bars kept and nothing queued |
 | `sec` | weekly | Every company's submissions feed, read fresh. A 10-K, 10-Q, 20-F, 40-F, 10-KT or 10-QT, or an amendment of one, filed since the company's last collection puts it on the collection list |
 | `collect` | when the list isn't empty | A full collection of the list, as `stock-data` runs one |
 | `insiders` | weekly | The last three years of Form 4s for every company, each fetched once and cached |
@@ -1492,18 +1496,24 @@ The eight steps, in this order, each in its own try/except (a failure is reporte
 | `market` | daily | FRED, Shiller and Treasury.gov |
 | `recompute` | when a step stored something | Every company's valuations, history, scores and indicators, then the ranks |
 
-A step with a cadence is skipped while it succeeded within its period: a daily step 20 hours, a weekly one 6 days 20
-hours, so a run scheduled daily never skips one because yesterday's finished a few minutes later. `--steps` names the
-steps to run, whatever their cadence (`collect` alone has nothing to collect, as the list is built by `quotes`, `bars`
-and `sec` in the same run), and `--force` ignores the cadence of every step.
+A step with a cadence is skipped while it succeeded in a run that started within its period: a daily step 20 hours, a
+weekly one 6 days 20 hours, so a run scheduled daily never skips one because yesterday's started a few minutes later.
+The age is measured from the start of the run, so a step that finished hours into a long run is still due the next day.
+A weekly step runs again at the next run while its latest success left something undone, and says why: `sec` after a
+company's feed failed, or when a company it put on the collection list wasn't collected in that run (the collection
+failed, `--steps` left `collect` out, or the run was stopped); `insiders` and `gurus` after a company's or a guru's
+filings failed. A feed that keeps failing makes `sec` run every day, each day naming the company. A `--tickers` run
+counts for no step's cadence (its rows are logged with its `subset`), so the next full run is due as if it hadn't
+happened. `--steps` names the steps to run, whatever their cadence (`collect` alone has nothing to collect, as the list
+is built by `quotes`, `bars` and `sec` in the same run), and `--force` ignores the cadence of every step.
 
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--steps` | Run only these steps, whatever their cadence (comma-separated) | every step that is due |
 | `--force` | Run every step, whatever its cadence | `false` |
-| `--tickers` | Limit the per-company steps to these of the database's companies (comma-separated; for testing) | all companies |
-| `--db` | SQLite database path; it must exist | `<output-dir>/output/stock.db` |
-| `--output-dir` | The base output directory: a collection's exports go under `output/`, the log under `logs/` | `data` |
+| `--tickers` | Limit the per-company steps to these of the database's companies (comma-separated; for testing). Such a run counts for no step's cadence | all companies |
+| `--db` | SQLite database path; it must exist. It doesn't move the outputs: see `--output-dir` | `<output-dir>/output/stock.db` |
+| `--output-dir` | The base output directory: a collection's exports go under `output/`, the log under `logs/`. A run on a copy with `--db` alone writes a collection's JSON and CSV into `data/output` and its log into `data/logs`, so give both options when testing on a copy | `data` |
 | `--cache-dir` | The cache of the SEC's answers, the ownership filings and the market data | `data/cache` |
 
 The SEC's User-Agent is `SEC_USER_AGENT` (in `.env` or the environment, as for the ownership collector): `refresh` has no
@@ -1538,10 +1548,12 @@ Two things record a run. The `refresh_log` table has a row for each step of each
 
 - `id`, `step`, `started_at` and `finished_at` (UTC, ISO 8601);
 - `ok`: 1 for a step that ran and succeeded, 0 for one that failed, NULL for one that was skipped. A step's cadence
-  reads its latest `finished_at` with `ok = 1`;
-- `summary`: JSON. `run` is the run's start, the same on every row of a run; then the step's counts (`quotes`:
-  `stored`, `rebased`, `to_collect`, `errors`; `sec`: `feeds`, `new_filings`, `errors`; `collect`: `collected`,
-  `not_stored`; and so on), `skipped` with the reason for a skipped step, or `error` for a failed one.
+  reads its latest row with `ok = 1` and no `subset`: its run's start (`summary`'s `run`), and for a weekly step whether
+  that run left something undone (its `errors`; for `sec`, its `new_filings` and that run's `collect` row);
+- `summary`: JSON. `run` is the run's start, the same on every row of a run; `subset`, on every row of a `--tickers`
+  run, its companies; then the step's counts (`quotes`: `stored`, `rebased`, `to_collect`, `errors`; `sec`: `feeds`,
+  `new_filings`, `errors`; `collect`: `collected`, `not_stored`; and so on), `skipped` with the reason for a skipped
+  step, or `error` for a failed one; `again`, why a weekly step ran again within its period.
 
 ```sql
 -- The latest run, step by step: whether it ran, and why it was skipped or failed
@@ -1551,12 +1563,21 @@ FROM refresh_log
 WHERE json_extract(summary, '$.run') = (SELECT json_extract(summary, '$.run') FROM refresh_log ORDER BY id DESC LIMIT 1)
 ORDER BY id;
 
--- When each step last succeeded: what decides whether it runs again
-SELECT step, MAX(finished_at) AS last_success
+-- Each step's latest success in a full run (a --tickers run's rows carry its subset), and the start of that run:
+-- what the cadence measures its age from
+SELECT step, json_extract(summary, '$.run') AS run_started, finished_at,
+       json_extract(summary, '$.errors') AS errors
 FROM refresh_log
-WHERE ok = 1
-GROUP BY step
-ORDER BY MIN(id);
+WHERE id IN (SELECT MAX(id) FROM refresh_log
+             WHERE ok = 1 AND json_extract(summary, '$.subset') IS NULL GROUP BY step)
+ORDER BY id;
+
+-- The weekly steps that ran again within their period, and why
+SELECT id, step, started_at, json_extract(summary, '$.again') AS why
+FROM refresh_log
+WHERE json_extract(summary, '$.again') IS NOT NULL
+ORDER BY id DESC
+LIMIT 20;
 
 -- How long each step took in its latest successful run
 SELECT step, ROUND((julianday(finished_at) - julianday(started_at)) * 86400) AS seconds

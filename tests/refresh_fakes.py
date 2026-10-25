@@ -74,6 +74,15 @@ def rows(db: Path, sql: str, *params: Any) -> List[tuple]:
         conn.close()
 
 
+def set_closes(db: Path, ticker: str, closes: Dict[str, Optional[float]]) -> None:
+    """Store *ticker*'s close of each day in *closes* (None for a bar stored without one)."""
+    conn = sqlite3.connect(db)
+    conn.executemany("UPDATE price_bars SET close = ? WHERE ticker = ? AND substr(date, 1, 10) = ?",
+                     [(c, ticker, day) for day, c in closes.items()])
+    conn.commit()
+    conn.close()
+
+
 def quote(ticker: str, price: Optional[float] = None, splits: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
     """Yahoo's quote-only answer (``YahooHandler.fetch_quote``) with its split history."""
     return {"market_data": {"current_price": price if price is not None else close(ticker, NEW_DAYS[-1]),
@@ -156,7 +165,7 @@ class FakeCollect:
     before storing anything, *raise_after* after."""
 
     def __init__(self, db: Path, missing: Sequence[str] = (), errors: Optional[Dict[str, int]] = None,
-                 collected_at: str = "2026-10-25T12:00:00", raises: Optional[Exception] = None,
+                 collected_at: str = "2026-10-25T12:00:00", raises: Optional[BaseException] = None,
                  raise_after: Optional[Exception] = None) -> None:
         self.db = db
         self.missing = set(missing)
@@ -250,7 +259,13 @@ def run(db: Path, svc: Services, steps: Optional[Sequence[str]] = None, force: b
                        force=force, tickers=tickers)
 
 
-def succeeded(db: Path, step: str, ago: timedelta, ok: Optional[bool] = True) -> None:
-    """A refresh_log row: *step* finished *ago* before NOW (ok, failed or, None, skipped)."""
-    finished = (NOW - ago).isoformat()
-    SQLiteStore(db).record_refresh_step(step, finished, finished, ok, {"seeded": True})
+def succeeded(db: Path, step: str, ago: timedelta, ok: Optional[bool] = True, started: Optional[timedelta] = None,
+              run: Optional[timedelta] = None, **summary: Any) -> None:
+    """A refresh_log row: *step* finished *ago* before NOW (ok, failed or, None, skipped), having started *started*
+    before NOW (*ago* when not given), in a run that started *run* before NOW (none given: the row has no ``run``, as
+    one this code didn't write), with *summary*'s counts."""
+    logged: Dict[str, Any] = {"seeded": True, **summary}
+    if run is not None:
+        logged = {"run": (NOW - run).isoformat(), **logged}
+    SQLiteStore(db).record_refresh_step(step, (NOW - (ago if started is None else started)).isoformat(),
+                                        (NOW - ago).isoformat(), ok, logged)

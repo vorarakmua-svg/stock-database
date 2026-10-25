@@ -4,19 +4,24 @@
     stock-data refresh [--steps LIST] [--force] [--tickers LIST] [--db PATH] [--output-dir DIR] [--cache-dir DIR]
 
 The steps, in this order, each in its own try/except (a failure is reported and the others go on). Each step with a
-cadence is skipped while it succeeded within its period (the ``refresh_log`` table: daily 20 hours, weekly 6 days 20
-hours), unless ``--force`` (every step) or named in ``--steps`` (only those run):
+cadence is skipped while it succeeded in a run that started within its period (the ``refresh_log`` table: daily 20
+hours, weekly 6 days 20 hours; a step's age is its run's, so one that finished late in a long run is due at the next
+day's run), unless ``--force`` (every step) or named in ``--steps`` (only those run). A weekly step whose latest
+success left something undone runs again (code review 19, I-3): ``sec`` after a feed failed, or when a company it put
+on the list wasn't collected in that run; ``insiders`` and ``gurus`` after an item failed.
 
 - ``quotes`` (daily): every company's quote through the web's quote refresh (``fetchers.quote_refresh``). A company
   with a split since its last collection goes on the collection list instead; one priced after a stock dividend's or
   a spin-off's factor is stored with it and valued on it, as the web job does (BUG-128).
 - ``bars`` (daily): every company's daily bars from its last stored bar (which may have been partial) to today, one
   ``history(start=...)`` request with a collection's parameters, its bars from that day on replaced. Yahoo is asked
-  from the bar before it, which is final, so its close shows whether Yahoo's prices are on the stored bars' basis. A
-  company whose basis can't be matched (another close there, a split Yahoo lists after its last bar, bars stored
-  dividend-adjusted) goes on the collection list instead, and one already on it is left to the collection. Then the
-  benchmark's (^GSPC, which the GP tab compares against) the same way, whatever --tickers names; never queued, as the
-  next collection's benchmark fetch stores it again.
+  from the latest bar before it with a close above 0 (of the LOOKBACK before it), which is final, so its close shows
+  whether Yahoo's prices are on the stored bars' basis. A company whose basis can't be matched (another close there,
+  a split Yahoo lists after its last bar, bars stored dividend-adjusted) goes on the collection list instead, and one
+  already on it is left to the collection. An answer without bars (yfinance's answer to a timeout or throttling) and
+  a company without such a bar are that company's failures: its bars stay, and it isn't queued. Then the benchmark's
+  (^GSPC, which the GP tab compares against) the same way, whatever --tickers names; never queued, as the next
+  collection's benchmark fetch stores it again.
 - ``sec`` (weekly): every company's submissions feed, read fresh through the SEC handler, every one of its recent
   filings (not the newest 100 the handler keeps for its other callers, which a bank's 424B2s fill in days). A 10-K,
   10-Q, 20-F, 40-F, a transition report (10-KT, 10-QT) or an amendment of one filed on or after the day of the
@@ -30,7 +35,8 @@ hours), unless ``--force`` (every step) or named in ``--steps`` (only those run)
 - ``recompute`` (when a step stored something): every company's valuations, history, scores and indicators, then the
   ranks (``valuation.engine.compute_and_store``).
 
-``--tickers`` limits the per-company steps to some of the database's companies (for testing). One run at a time:
+``--tickers`` limits the per-company steps to some of the database's companies (for testing). Such a run's rows carry
+its ``subset`` and count for no step's cadence: the next full run is due as if it hadn't happened. One run at a time:
 ``<db>.refresh.lock`` is held with an OS file lock for the whole run, released by the OS should the process die, and a
 second run exits 3, naming the first's PID and start time. A line per step and per batch of companies, then a summary
 (each step: ran or skipped and why, ok or failed and why, its counts; the collection list), printed and appended to
@@ -49,7 +55,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, TextIO, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, TextIO, Tuple
 
 from .config import AppConfig, SECConfig, StorageConfig, YahooConfig
 from .exporters.sqlite_store import SQLiteStore, read_only_uri
@@ -99,6 +105,9 @@ BENCHMARK = "^GSPC"
 #: for the two to be on the same basis: that bar is final, and a stock dividend or a spin-off moves it by about 1% or
 #: more (SCCO's 1.01, SCCO's 1.008, HON's 0.9535), a split by far more.
 BASIS_TOLERANCE = 0.005
+#: How many stored bars before a company's last one the bars step looks through for the latest with a close above 0,
+#: the bar Yahoo's basis is checked on: a bar stored without a close, or with 0, can't show it (code review 19, I-2).
+LOOKBACK = 10
 #: The insiders' window in years and the gurus' quarters: M3's CLI defaults (src/ownership/collect.py).
 INSIDER_YEARS = 3.0
 GURU_QUARTERS = 8
@@ -402,11 +411,27 @@ def _utc(text: str) -> datetime:
     return when if when.tzinfo is not None else when.replace(tzinfo=timezone.utc)
 
 
+def _parsed(text: Any) -> Dict[str, Any]:
+    """A ``refresh_log`` summary's JSON, {} for one that isn't an object (a row this code didn't write)."""
+    try:
+        value = json.loads(text)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _named(items: Any, limit: int = 10) -> str:
+    """A summary's tickers (or gurus' CIKs) for a line: the first *limit*, and how many more."""
+    names = [str(item) for item in items]
+    return ", ".join(names[:limit]) + (f" and {len(names) - limit} more" if len(names) > limit else "")
+
+
 @dataclass
 class StepResult:
-    """A step of a run: whether it *ran* (else *reason* says why it was skipped), whether it went *ok* (None when
-    skipped) and why not (*reason*), its *summary* (its counts, stored in ``refresh_log``), whether it *stored*
-    anything (the recompute's trigger) and its *headline*, the summary's line."""
+    """A step of a run: whether it *ran* (else *reason* says why it was skipped) and why it ran *again* though it
+    succeeded within its period (``_Run._undone``), whether it went *ok* (None when skipped) and why not (*reason*),
+    its *summary* (its counts, stored in ``refresh_log``), whether it *stored* anything (the recompute's trigger) and
+    its *headline*, the summary's line."""
 
     step: str
     ran: bool = False
@@ -415,6 +440,7 @@ class StepResult:
     summary: Dict[str, Any] = field(default_factory=dict)
     stored: bool = False
     headline: str = ""
+    again: Optional[str] = None
 
 
 @dataclass
@@ -436,16 +462,17 @@ class RunReport:
 
 
 def summary_lines(report: RunReport) -> List[str]:
-    """The run's summary: each step, ran or skipped and why, ok or failed and why, its counts; the collection list;
-    the exit code."""
+    """The run's summary: each step, ran (again, and why) or skipped and why, ok or failed and why, its counts; the
+    collection list; the exit code."""
     lines = [f"Summary of the refresh started {report.started.astimezone().isoformat(timespec='seconds')}:"]
     for r in report.results:
+        ran = f"ran again ({r.again})" if r.again else "ran"
         if not r.ran:
             lines.append(f"  {r.step}: skipped ({r.reason})")
         elif r.ok:
-            lines.append(f"  {r.step}: ran, ok: {r.headline}")
+            lines.append(f"  {r.step}: {ran}, ok: {r.headline}")
         else:
-            lines.append(f"  {r.step}: ran, FAILED: {r.reason}" + (f" ({r.headline})" if r.headline else ""))
+            lines.append(f"  {r.step}: {ran}, FAILED: {r.reason}" + (f" ({r.headline})" if r.headline else ""))
     if report.queue:
         lines.append(f"Collection list ({len(report.queue)}): " + ", ".join(
             f"{ticker} ({'; '.join(why)})" for ticker, why in report.queue.items()))
@@ -482,14 +509,16 @@ class _Run:
         for step in STEPS:
             started = self.services.clock()
             result = StepResult(step)
-            skip = self._skip(step)
+            skip, again = self._skip(step)
             if skip is not None:
                 result.reason = skip
                 result.summary["skipped"] = skip
                 self.out.say(f"{step}: skipped ({skip})")
             else:
                 result.ran = True
-                self.out.say(f"{step}: running")
+                if again is not None:
+                    result.again = result.summary["again"] = again
+                self.out.say(f"{step}: running" + (f" again: {again}" if again is not None else ""))
                 try:
                     getattr(self, f"_{step}")(result)
                 except Exception as exc:  # anything one step raises is its own: the others go on
@@ -507,31 +536,95 @@ class _Run:
             self.out.say(line)
         return self.report
 
-    def _skip(self, step: str) -> Optional[str]:
-        """Why *step* is skipped, None when it runs."""
+    def _skip(self, step: str) -> Tuple[Optional[str], Optional[str]]:
+        """Why *step* is skipped (None when it runs), and why it runs again though it succeeded within its period
+        (None unless it does: ``_undone``). A step's age is its run's: one that finished late in a long run (the
+        market data after hours of collection) is due at the next day's run (code review 19, m-5)."""
         if self.named is not None and step not in self.named:
-            return "not named in --steps"
+            return "not named in --steps", None
         if step == "collect":
-            return None if self.report.queue else "nothing to collect"
+            return (None if self.report.queue else "nothing to collect"), None
         if step == "recompute":
             stored = any(r.stored for r in self.report.results)
-            return None if self.named is not None or self.force or stored else "no step stored anything"
+            return (None if self.named is not None or self.force or stored else "no step stored anything"), None
         if self.named is not None or self.force:
-            return None
-        last = self.store.last_refresh_success(step)
+            return None, None
+        last = self._last_success(step)
         if last is None:
-            return None
+            return None, None
+        row_id, run, summary = last
         try:
-            age = self.services.clock() - _utc(last)
+            age = self.services.clock() - _utc(run)
         except ValueError:  # a log row this code didn't write: the step runs
-            return None
+            return None, None
         period = PERIODS[step]
-        if age < period:
-            return f"succeeded {_span(age)} ago, within its {_PERIOD_NAMES[period]} period ({_span(period)})"
+        if age >= period:
+            return None, None
+        when = f"succeeded in the run started {_span(age)} ago, within its {_PERIOD_NAMES[period]} period"
+        undone = self._undone(step, row_id, run, summary)
+        if undone is not None:
+            return None, f"{when}, but that run {undone}"
+        return f"{when} ({_span(period)})", None
+
+    def _log_rows(self, sql: str, *params: Any) -> Iterator[Tuple[Any, ...]]:
+        """``refresh_log``'s rows for *sql*, read one at a time, so a caller that stops at the first it wants reads
+        no more; none from a database without the table (one from before the refresh) or one it can't be read from,
+        so that a step whose cadence can't be read runs."""
+        try:
+            with closing(sqlite3.connect(read_only_uri(self.db_path), uri=True)) as conn:
+                yield from conn.execute(sql, params)
+        except sqlite3.Error:
+            return
+
+    def _last_success(self, step: str) -> Optional[Tuple[int, str, Dict[str, Any]]]:
+        """*step*'s latest ``refresh_log`` row that finished ok in a run of every company: its id, when its run
+        started (its summary's ``run``; the row's own start for a row without one) and its summary. None without one.
+        A ``--tickers`` run's rows carry its ``subset`` and are passed over: a test on a few companies refreshed no
+        other, so the next full run is due as if it hadn't happened."""
+        for row_id, started_at, text in self._log_rows(
+                "SELECT id, started_at, summary FROM refresh_log WHERE step = ? AND ok = 1 "
+                "ORDER BY id DESC", step):
+            summary = _parsed(text)
+            if "subset" in summary:  # a --tickers run's
+                continue
+            run = summary.get("run")
+            return row_id, run if isinstance(run, str) else str(started_at), summary
         return None
 
+    def _undone(self, step: str, row_id: int, run: str, summary: Dict[str, Any]) -> Optional[str]:
+        """What a weekly *step*'s latest success (the ``refresh_log`` row *row_id*, of the run started *run*, with
+        its *summary*) left undone, which makes it run again within its period (code review 19, I-3); None when
+        nothing did, and for a daily step, which runs again the next day anyway.
+
+        An item that failed: a company's feed (``sec``), a company's Form 4s (``insiders``), a guru's 13F filings
+        (``gurus``). And for ``sec``, the companies it put on the collection list when that run's ``collect`` step
+        didn't finish ok (it failed or was skipped, or the run stopped before it ended), which lost the list. Running
+        the SEC step again is safe: a report filed on or after the day of a company's latest collection with the SEC
+        is found again until that company is collected."""
+        if PERIODS.get(step) != WEEKLY:
+            return None
+        undone = []
+        errors = summary.get("errors")
+        if isinstance(errors, (dict, list)) and errors:
+            undone.append(f"had {'feed ' if step == 'sec' else ''}errors for {_named(errors)}")
+        listed = summary.get("new_filings") if step == "sec" else None
+        if isinstance(listed, dict) and listed:
+            after = next(self._log_rows("SELECT ok, summary FROM refresh_log WHERE step = 'collect' AND id > ? "
+                                        "ORDER BY id LIMIT 1", row_id), None)
+            if after is None or _parsed(after[1]).get("run") != run:
+                undone.append(f"put {_named(listed)} on the collection list, and stopped before its collect step "
+                              f"finished")
+            elif after[0] != 1:
+                skipped = _parsed(after[1]).get("skipped")
+                state = "failed" if after[0] == 0 else "was skipped" + (f" ({skipped})" if skipped else "")
+                undone.append(f"put {_named(listed)} on the collection list, and its collect step {state}")
+        return "; ".join(undone) or None
+
     def _record(self, result: StepResult, started: datetime, finished: datetime) -> None:
-        summary = {"run": self.report.started.isoformat(), **result.summary}
+        summary: Dict[str, Any] = {"run": self.report.started.isoformat()}
+        if self.subset:  # a --tickers run's rows count for no step's cadence (_last_success)
+            summary["subset"] = [ticker for ticker, _ in self.companies]
+        summary.update(result.summary)
         try:
             self.store.record_refresh_step(result.step, started.isoformat(), finished.isoformat(), result.ok, summary)
         except sqlite3.Error as exc:
@@ -643,9 +736,9 @@ class _Run:
 
     def _benchmark_bars(self) -> Dict[str, Any]:
         """The benchmark's bars (BENCHMARK) since its last stored one, as a company's (``_bars_since``: the same
-        request and the same check of the bar before its last), stored as a collection stores them. It is never
-        queued: the collection list is the companies', and the next collection's benchmark fetch (``fetch_and_export``)
-        stores the index's whole history again."""
+        request, the same check of a bar before its last and the same failures), stored as a collection stores them.
+        It is never queued: the collection list is the companies', and the next collection's benchmark fetch
+        (``fetch_and_export``) stores the index's whole history again."""
         try:
             outcome, detail = self._bars_since(BENCHMARK)
         except Exception as exc:  # the benchmark's bars are their own: the companies' stand
@@ -675,23 +768,36 @@ class _Run:
         close checked), ("basis", why Yahoo's bars can't be matched to the stored ones), ("failed", why) or ("none",
         None) without stored bars.
 
-        Yahoo is asked from the bar before the last stored one (from the last, when it is the only one): that bar is
-        final, so Yahoo's close for it is the stored one, within BASIS_TOLERANCE, on the same basis. A split or a price
-        factor Yahoo lists after the last stored bar puts Yahoo's bars before it on another basis, whatever its size;
-        bars stored dividend-adjusted (BUG-075) can't be matched at all."""
+        Yahoo is asked from the bar the basis is checked on: the latest stored bar before the last with a close above
+        0, of the LOOKBACK before it (from the last, when it is the only one). That bar is final, so Yahoo's close for
+        it is the stored one, within BASIS_TOLERANCE, on the same basis. A split or a price factor Yahoo lists after
+        the last stored bar puts Yahoo's bars before it on another basis, whatever its size; bars stored
+        dividend-adjusted (BUG-075) can't be matched at all.
+
+        Two things fail the company instead, its bars kept and nothing queued (code review 19, I-2): no such bar, as a
+        full collection would store the same bars and the company would be queued again every day; and an answer
+        without a bar, which is how yfinance answers a timeout, throttling or a ticker it no longer serves ("possibly
+        delisted; no timezone found"), not a basis of its own."""
         tail = self._rows("SELECT substr(date, 1, 10), close FROM price_bars WHERE ticker = ? "
-                          "ORDER BY date DESC LIMIT 2", ticker)
+                          "ORDER BY date DESC LIMIT ?", ticker, LOOKBACK + 1)
         if not tail:
             return "none", None
         if self._dividend_adjusted(ticker):
             return "basis", ("its stored bars are Yahoo's dividend-adjusted closes (BUG-075), which only a full "
                              "collection replaces")
-        last_day = tail[0][0]
-        before = tail[1] if len(tail) > 1 else None
-        answer = self.services.yahoo.fetch_price_bars_since(ticker, before[0] if before else last_day)
+        last_day, earlier = tail[0][0], tail[1:]
+        before = next(((day, c) for day, c in earlier if c is not None and c > 0), None)
+        if earlier and before is None:
+            return "failed", (f"none of its {len(earlier)} latest stored bars before the last ({last_day}) has a "
+                              f"close above 0 to check Yahoo's basis on; the stored bars stay")
+        start = before[0] if before is not None else last_day
+        answer = self.services.yahoo.fetch_price_bars_since(ticker, start)
         if "error" in answer:
             return "failed", str(answer["error"])
         bars = [b for b in answer.get("bars") or [] if b.get("date")]
+        if not bars:
+            return "failed", (f"Yahoo gave no bars from {start} (yfinance's answer to a timeout, throttling or a "
+                              f"ticker Yahoo no longer serves); the stored bars stay")
         moved = [x for x in answer.get("splits") or []
                  if str(x.get("date"))[:10] > last_day and x.get("ratio") and float(x["ratio"]) != 1.0]
         if moved:
@@ -700,7 +806,7 @@ class _Run:
         checked = None
         if before is not None:
             theirs = next((b.get("close") for b in bars if str(b["date"])[:10] == before[0]), None)
-            if theirs is None or not before[1]:
+            if theirs is None:
                 return "basis", (f"Yahoo's bars from {before[0]} give no close for that day, so their basis can't be "
                                  f"checked against the stored bars'")
             if abs(theirs / before[1] - 1) > BASIS_TOLERANCE:

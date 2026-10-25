@@ -86,16 +86,23 @@ current with one command:
 (`--tickers` limits the per-company steps, for testing), dispatched from
 `src/main.py` when the first argument is `refresh` (no reinstall needed; no ticker is called REFRESH).
 
-- **Steps**, each in its own try/except, in this order, each skipped while it succeeded within its period (the
-  `refresh_log` table) unless `--force` or named in `--steps`:
+- **Steps**, each in its own try/except, in this order, each skipped while it succeeded in a run that started within
+  its period (the `refresh_log` table; a step's age is its run's, so one that finished late in a long run is due at
+  the next day's run) unless `--force` or named in `--steps`. A weekly step whose latest success left something
+  undone runs again (code review 19, I-3): `sec` after a feed failed, or when a company it put on the list wasn't
+  collected in that run; `insiders` and `gurus` after an item failed. A `--tickers` run's rows carry its `subset` and
+  count for no step's cadence:
   - `quotes` (daily): every company's quote, through the web job's logic, moved into a shared function so both use
     it; a ticker with a split since its last collection that moves per-share figures (a share split, or a price
     factor of 3:2 or more) goes to the collection list instead, while a stock dividend's or a smaller spin-off's
     factor is stored with the price, as the web job does (BUG-128);
-  - `bars` (daily): every company's daily bars, and the `^GSPC` benchmark's, asked from the bar before its last
-    stored one (final) and replaced from the last stored one on (`history(start=...)`, unadjusted closes as the
-    collection stores them). A company whose bar-before-last close differs from Yahoo's by more than 0.5%, or with a
-    split or factor after its last bar, goes on the collection list instead (the benchmark is left as stored);
+  - `bars` (daily): every company's daily bars, and the `^GSPC` benchmark's, asked from the latest stored bar before
+    the last with a close above 0 (of the 10 before it; final) and replaced from the last stored one on
+    (`history(start=...)`, unadjusted closes as the collection stores them). A company whose close for that bar
+    differs from Yahoo's by more than 0.5%, or with a split or factor after its last bar, goes on the collection list
+    instead (the benchmark is left as stored). An answer without bars (yfinance's answer to a timeout or throttling)
+    and a company without such a bar are that company's failures: its bars stay and it isn't queued (code review 19,
+    I-2);
   - `sec` (weekly): every company's submissions feed read fresh (never the handler's 7-day cache, which would hide a
     week's filings), every entry of its "recent" block (a bank files hundreds of prospectus supplements a week, so
     the handler's newest-100 cut would hide its 10-Q); a 10-K, 10-Q, 20-F, 40-F, 10-KT or 10-QT, or an amendment
