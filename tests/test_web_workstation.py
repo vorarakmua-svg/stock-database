@@ -17,6 +17,8 @@ test modules assert exact company counts against it).
 """
 from __future__ import annotations
 
+import html
+import re
 import sqlite3
 from datetime import date, timedelta
 
@@ -431,6 +433,21 @@ def test_hp_fragment_known_ticker_shows_bar_date_and_csv_link(client, monkeypatc
     # row regardless of how much of the 1Y window falls before _AAA_START.
     assert _AAA_LAST.isoformat() in body
     assert "/api/export/stock/AAA/bars.csv" in body
+
+
+@pytest.mark.parametrize("range_key, rows", [("1M", 31), ("1Y", _AAA_BAR_COUNT), ("5Y", _AAA_BAR_COUNT),
+                                             ("MAX", _AAA_BAR_COUNT)])
+def test_hp_fragments_csv_is_the_table_it_sits_under(client, monkeypatch, range_key, rows):
+    # BUG-150: the link took the bars CSV's default interval, which resamples by range (weekly at 5Y, monthly at
+    # MAX), under a table of daily bars; and the CSV is the table's range (1M: the CSV's own default is 1Y).
+    _pin_today(monkeypatch, _AAA_LAST)
+    body = client.get("/ui/stocks/AAA/hp", params={"range": range_key}).text
+    href = html.unescape(re.search(r'href="(/api/export/stock/AAA/bars\.csv[^"]*)"', body).group(1))
+    table_dates = re.findall(r'class="row-label hp-bar-date">([^<]+)<', body)
+    csv_lines = client.get(href).text.strip().splitlines()
+    csv_dates = [line.split(",")[0][:10] for line in csv_lines[1:]]
+    assert len(table_dates) == rows
+    assert sorted(csv_dates) == sorted(d[:10] for d in table_dates)
 
 
 def test_hp_fragment_range_param_changes_row_count(client, monkeypatch):

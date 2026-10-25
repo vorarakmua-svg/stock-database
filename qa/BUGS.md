@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 14 · P3 129 · NEEDS-USER 20 · Verified: 106
+**Open:** P0 0 · P1 0 · P2 13 · P3 129 · NEEDS-USER 20 · Verified: 107
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1150,10 +1150,11 @@ Impact: MAX for every ticker with a shorter history than the index (all 18 golde
 Fix (iteration 105): `compare_bars` rebases every series on the first date they share (the latest of their first dates with a close; a series without bars doesn't move it), each from its first bar on or after it. On the user's 502: AAPL against ^GSPC at MAX from 1980-12-12, ^GSPC +5,799% (it showed +43,069% from 1927-12-30); all 502 at MAX, 13 at 5Y and the 4 listed within the year (FDXF, SPCX, HONA, VYLR) at 1Y are rebased; series that share no date come back empty. Evidence: `qa/evidence/bug149-*.txt`.
 
 ### BUG-150 [P2][UI] HP's Download CSV isn't the table it sits under: AAPL's 5Y table has 1,254 daily rows, the CSV 262 weekly
-Status: OPEN
-Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 106)
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: (this commit) | Regression test: tests/test_web_workstation.py::test_hp_fragments_csv_is_the_table_it_sits_under (1M, 1Y, 5Y, MAX)
 Repro: the HP tab links `/api/export/stock/{T}/bars.csv?range=R` with the default interval, which resamples by range (weekly at 5Y, monthly at MAX) while the tab lists daily bars: golden copy, AAPL: 1Y 251 rows and 251; 5Y 1,254 and 262; MAX 11,555 and 551 (iteration 95's re-run). Every ticker at 5Y and MAX (254 cases on the user's copy), with no hint on the tab.
 Expected: the CSV the table shows (`interval=1d`), or the link saying it is weekly or monthly.   Actual: a different series.
+Fix (iteration 106): the HP fragment's link asks for `interval=1d` (`workstation.py`). On a copy of the user's DB, AAPL's table and CSV: 250 and 250 rows at 1Y, 1,255 and 1,255 at 5Y, 11,559 and 11,559 at MAX, the same dates (`qa/evidence/bug150-realdata.txt`).
 
 ### BUG-151 [P2][UI] On a database not collected in the last month, the short ranges say "No price history collected." beside thousands of stored bars
 Status: OPEN

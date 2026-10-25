@@ -657,7 +657,8 @@ def hp_fragment(
             "range": resolved_range,
             "range_options": _GP_RANGES,
             "rows": rows,
-            "csv_href": f"/api/export/stock/{ticker}/bars.csv?range={resolved_range}",
+            # the daily bars the table lists: the CSV's default interval resamples by range (BUG-150)
+            "csv_href": f"/api/export/stock/{ticker}/bars.csv?range={resolved_range}&interval=1d",
         },
     )
 

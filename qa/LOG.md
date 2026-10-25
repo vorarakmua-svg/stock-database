@@ -1914,3 +1914,17 @@ wrote to it.)
 Gates: ruff ✓ mypy ✓ pytest 2420 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(web): the compare chart rebases every line on the first date they share (BUG-149)
 Next: BUG-150 (the HP tab's CSV link), then BUG-151.
+
+## Iteration 106: 2026-10-25 22:38: fix (BUG-150)
+Picked: the oldest open P2, BUG-150 (HP's Download CSV).
+Did, inline (a one-line fix):
+- a test that the CSV the HP tab links has exactly the table's dates at 1M, 1Y, 5Y and MAX. RED on the old link: 5Y
+  and MAX failed on weekly and monthly dates, 1Y passed.
+- the link asks for `interval=1d`. GREEN.
+- 3 mutants killed. The one that drops `range=` first survived, so the 1M case was added: the CSV's own default is 1Y.
+- On a copy of the user's DB, AAPL's table and CSV agree at every range (11,559 rows at MAX).
+Evidence: `qa/evidence/bug150-{red,green,mutants,realdata,gates}.txt`
+Result: BUG-150 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2424 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(web): the HP tab's Download CSV is the daily table it sits under (BUG-150)
+Next: BUG-151 (short ranges anchored on today, not the last bar).
