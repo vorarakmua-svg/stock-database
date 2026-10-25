@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 4 · DOING 0 · DONE 40 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 3 · DOING 0 · DONE 41 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -77,7 +77,7 @@
 | M5-0 | Design M5: `docs/superpowers/specs/2026-10-25-universe-automation-design.md`, then these rows | DONE | this commit | the spec |
 | M5-1 | The universe: `universe/core.txt`, the S&P 500 list (`src/universe/sp500.py`: Wikipedia's table parsed and checked, one request; the dated `universe/sp500-<date>.csv` saved), ticker normalization, `stock-data --tickers-file` and `--skip-existing`; with tests | DONE | this commit | `qa/evidence/universe-m5-1-*`, `universe/` |
 | M5-2 | SIC codes and industries: `companies.sic`/`sic_description` (collected, and filled offline by `python -m src.universe.sic`), industry groups (3-digit SIC, else 2-digit, at least 10 companies), industry ranks in `rank_all`, the DES and STAT tabs, the scores API, the screener's industry filter and fields, the scores oracle's industry gate; with tests | DONE | this commit | `qa/evidence/industries-m5-2-*` |
-| M5-3 | `stock-data refresh`: quotes and bars daily, the SEC's new filings weekly, the full collections they call for, insiders and gurus weekly, the market data daily, the recomputation; `refresh_log`, a lock, a log file, exit codes; a real run on a scratch copy; with tests | TODO | | |
+| M5-3 | `stock-data refresh`: quotes and bars daily, the SEC's new filings weekly, the full collections they call for, insiders and gurus weekly, the market data daily, the recomputation; `refresh_log`, a lock, a log file, exit codes; a real run on a scratch copy; with tests | DONE | this commit | `qa/evidence/refresh-m5-3-*` |
 | M5-4 | The scale pre-flight: a synthetic copy of about 500 companies, the pages' and APIs' timings, the query plans, the indexes they need (every page under 1 s, the screener under 0.5 s); with tests | TODO | | |
 | M5-5 | Docs: README and USAGE_GUIDE (the universe, `--tickers-file`, SIC and industries, the refresh command, Task Scheduler instructions) | TODO | | |
 | M5-6 | Milestone close: code review 19 (opus) with Critical and Important findings fixed; the dry run, the backup, then the live collection of the S&P 500's new members, their SIC and Form 4s, the recomputation and the checks at about 500 companies | TODO | | |
@@ -1264,3 +1264,37 @@ Evidence: `qa/evidence/industries-m5-2-{red,joiner-red,gates,mutants,mutants-rer
 Gates: ruff ✓ mypy ✓ pytest 2140 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) feat(industries): SIC codes, industry groups and ranks, their web and screener parts (M5-2)
 Next: M5-3 (`stock-data refresh`).
+
+### Build iteration 53: 2026-10-25 08:23: M5-3
+Did:
+- An opus worker built `stock-data refresh` test-first (RED: 139 failed against stubs):
+  - `src/refresh.py`: quotes, bars, sec, collect, insiders, gurus, market and recompute, each isolated and skipped
+    within its period (daily 20 h, weekly 6 d 20 h) per `refresh_log`, `--steps`, `--force`, `--tickers`;
+  - an OS file lock (exit 3 for a second run), a daily log file, exit codes 0/1/2/3;
+  - the web job's quote logic moved into `src/fetchers/quote_refresh.py`, shared by both callers;
+  - Yahoo's `fetch_price_bars_since`, and the store's `replace_price_bars_from` and the refresh log.
+- I accepted its deviations:
+  - the SEC is read fresh (the 7-day cache would have hidden all 19 of this week's 10-Qs);
+  - the bars are checked against the bar before the last (within 0.5%), and a company off-basis is collected
+    instead;
+  - a filing counts by its day.
+- I sent three gaps back, each fixed test-first:
+  - the SEC step reads every filing of a feed's recent block. GS filed 239 documents in 7 days, and its latest 10-Q
+    sat behind 3,159 newer ones, so the newest-100 cut hid it;
+  - 10-KT and 10-QT count as reports;
+  - the bars step refreshes the `^GSPC` benchmark.
+  - 167 tests.
+- Mutants: 103, each killed; I ran them again. The earlier specs' 36 on the shared files were killed too.
+- Real run on a scratch copy (13.5 minutes):
+  - 127 quotes;
+  - 127 companies' bars to 2026-10-23, with no close or older bar changed;
+  - 19 Q3 10-Qs found and those 19 collected in full;
+  - the market data and the recomputation; every other table unchanged.
+  - A second run skipped every step by its cadence in 3 s, and a concurrent run exited 3.
+- Logged BUG-232 (P3): collections outside the refresh (`stock-data`, the web job) still read the SEC's 7-day cache.
+  One made between a filing and the cache's expiry stores the company without it, and the refresh won't queue it
+  again.
+Evidence: `qa/evidence/refresh-m5-3-{red,revision-red,gates,mutants,mutants-rerun,mutants-mine,run1,run2,run3,concurrent,smoke,realdata,gs-feed,benchmark,done}.txt`
+Gates: ruff ✓ mypy ✓ pytest 2307 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) feat(refresh): stock-data refresh: quotes, bars and the SEC's new filings, with a lock and a log (M5-3)
+Next: M5-4 (the scale pre-flight on a synthetic 500-company copy).

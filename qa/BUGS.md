@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 120 · NEEDS-USER 17 · Verified: 97
+**Open:** P0 0 · P1 0 · P2 11 · P3 121 · NEEDS-USER 17 · Verified: 97
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1741,6 +1741,12 @@ Status: OPEN
 Found: build iteration 51 (M5-1) | Fixed: | Regression test:
 Repro: `src/universe/sp500.py` `one_per_cik` keeps the first row of each CIK in the page's order. Wikipedia sorts by company name, so "(Class A)" comes first and GOOGL, FOXA and NWSA are kept. A page sorted by symbol would keep GOOG, FOX and NWS, and `stock-data --skip-existing`, which compares tickers, not CIKs, would then collect a second Alphabet beside the DB's GOOGL.
 Expected: the class the DB already holds, or the "(Class A)" row, kept; a company already stored under another ticker left out.   Actual: page order and tickers only. The saved `universe/sp500-2026-10-25.csv` is right (GOOGL, FOXA, NWSA), and none of its 375 new tickers is a stored company under another ticker.
+
+### BUG-232 [P3][REFRESH] A collection outside the refresh can store a company without a report just filed, and the refresh won't queue it again
+Status: OPEN
+Found: build iteration 53 (M5-3) | Fixed: | Regression test:
+Repro: `stock-data` and the web's collect job read the SEC handler's 7-day cache of companyfacts and submissions. A company that files a 10-Q on day 2 after its cache was written on day 0, and is collected by hand on day 3, is stored without the 10-Q; its collection_runs row (day 3) then postdates the filing, so `stock-data refresh`'s SEC step (a report filed on or after the latest collection's day) never queues it for that report.
+Expected: a collection's SEC data at least as new as its time, or the SEC step comparing the filing with the SEC data the stored figures came from.   Actual: the company stays without the report until a later report or a collection after the cache's expiry. The refresh's own collections read the SEC fresh and aren't affected.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

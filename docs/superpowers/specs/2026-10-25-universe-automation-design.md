@@ -87,17 +87,23 @@ current with one command:
   `refresh_log` table) unless `--force` or named in `--steps`:
   - `quotes` (daily): every company's quote, through the web job's logic, moved into a shared function so both use
     it; a ticker with a split or spin-off since its last collection goes to the collection list instead;
-  - `bars` (daily): every company's daily bars after its last stored bar (`history(start=...)`, unadjusted closes
-    as the collection stores them), unless it is on the collection list;
-  - `sec` (weekly): every company's submissions feed (the handler's 7-day cache); a 10-K, 10-Q, 20-F, 40-F or an
-    amendment of one filed after the company's last collection puts it on the collection list;
-  - `collect` (as needed): a full collection of the list, as `stock-data` does;
+  - `bars` (daily): every company's daily bars, and the `^GSPC` benchmark's, asked from the bar before its last
+    stored one (final) and replaced from the last stored one on (`history(start=...)`, unadjusted closes as the
+    collection stores them). A company whose bar-before-last close differs from Yahoo's by more than 0.5%, or with a
+    split or factor after its last bar, goes on the collection list instead (the benchmark is left as stored);
+  - `sec` (weekly): every company's submissions feed read fresh (never the handler's 7-day cache, which would hide a
+    week's filings), every entry of its "recent" block (a bank files hundreds of prospectus supplements a week, so
+    the handler's newest-100 cut would hide its 10-Q); a 10-K, 10-Q, 20-F, 40-F, 10-KT or 10-QT, or an amendment
+    of one, filed on or after the day of the company's latest collection with SEC data, puts it on the collection
+    list;
+  - `collect` (as needed): a full collection of the list, as `stock-data` does, its SEC data read fresh;
   - `insiders` and `gurus` (weekly): M3's collectors, incremental by accession, then the gurus' positions;
   - `market` (daily): M4's `collect_market`;
   - `recompute` (after any step that stored something): `compute_and_store` for every company, then the ranks.
 - **State**: `refresh_log` (step, started_at, finished_at, ok, summary JSON), one row a run and step.
-- **A lock**: `<db>.refresh.lock` holding the PID and start time; a second run exits 3 while one is alive; a lock
-  whose process is gone is taken over.
+- **A lock**: `<db>.refresh.lock`, held with an OS file lock for the whole run (`msvcrt.locking` on Windows,
+  `fcntl.flock` elsewhere), which the OS releases if the process dies; the file names the holder's PID and start
+  time. A second run exits 3 while one holds it.
 - **Output**: a progress line a step and ticker batch, and a summary (each step's result, rows stored, the
   collection list, failures), printed and appended to `<output-dir>/logs/refresh-<YYYY-MM-DD>.log`. Exit 0 when
   every step ran or was skipped, 1 when any failed, 2 for a missing database, 3 for a run already going.

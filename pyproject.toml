@@ -76,6 +76,8 @@ files = [
     "src/query/asof.py",
     "src/query/pit_metrics.py",
     "src/webapp",
+    "src/refresh.py",
+    "src/fetchers/quote_refresh.py",
 ]
 
 # click 8.x uses `match` (3.10+) which mypy's 3.9 parser rejects with a syntax

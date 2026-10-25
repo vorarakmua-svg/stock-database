@@ -157,6 +157,36 @@ class YahooHandler:
             self.logger.error(f"Error fetching Yahoo quote for {ticker}: {e}")
             return {"error": str(e)}
 
+    def fetch_price_bars_since(self, ticker: str, start: str) -> Dict[str, Any]:
+        """Fetch the daily bars from *start* (an ISO date, inclusive) to now, for ``stock-data refresh``'s bars step
+        (docs/superpowers/specs/2026-10-25-universe-automation-design.md, "stock-data refresh").
+
+        Makes exactly ONE rate-limited ``history(start=...)`` request with a collection's parameters
+        (``_price_bars_and_error``: ``interval="1d"``, ``auto_adjust=False``, the market's prices on today's split
+        basis, BUG-075) and returns its bars in a collection's shape (``_bars_from_history``), with the split
+        factors Yahoo lists in that range (the history's "Stock Splits"; a stock dividend's or a spin-off's factor
+        too): Yahoo's prices before one are on its basis, unlike bars stored before it.
+
+        Returns ``{"bars": [...], "splits": [{date, ratio}, ...]}``, or ``{"error": ...}`` (never raises) on failure,
+        as ``fetch_quote`` does.
+        """
+        self.logger.info(f"Fetching Yahoo daily bars for {ticker} from {start}")
+        try:
+            self.rate_limiter.wait()
+            stock = yf.Ticker(ticker)
+            hist = stock.history(start=start, interval="1d", auto_adjust=False)
+            splits: List[Dict[str, Any]] = []
+            if hist is not None and not hist.empty and "Stock Splits" in hist.columns:
+                for idx, ratio in hist["Stock Splits"].sort_index().items():
+                    value = self._safe_float(ratio)
+                    if value:
+                        date_key = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)
+                        splits.append({"date": date_key, "ratio": value})
+            return {"bars": self._bars_from_history(hist), "splits": splits}
+        except Exception as e:
+            self.logger.error(f"Error fetching Yahoo daily bars for {ticker}: {e}")
+            return {"error": str(e)}
+
     def _get_company_info(self, stock: yf.Ticker) -> Dict[str, Any]:
         """Extract company information from yfinance info dict."""
         try:
@@ -818,25 +848,29 @@ class YahooHandler:
         """``_get_price_bars``' bars, and why the request failed, if it did."""
         try:
             hist = stock.history(period="max", interval="1d", auto_adjust=False)
-            if hist is None or hist.empty:
-                return [], None
-
-            hist = hist.sort_index()
-            bars = []
-            for idx, row in hist.iterrows():
-                date_key = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)
-                bars.append({
-                    "date": date_key,
-                    "open": self._safe_float(row.get("Open")),
-                    "high": self._safe_float(row.get("High")),
-                    "low": self._safe_float(row.get("Low")),
-                    "close": self._safe_float(row.get("Close")),
-                    "volume": self._safe_float(row.get("Volume")),
-                })
-            return bars, None
+            return self._bars_from_history(hist), None
         except Exception as e:
             self.logger.warning(f"Error getting price bars: {e}")
             return [], str(e)
+
+    def _bars_from_history(self, hist: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
+        """A daily history's bars, ascending by ISO date: ``{date, open, high, low, close, volume}`` records, a
+        missing value as None; ``[]`` for no history. The shape a collection stores and the refresh's bars."""
+        if hist is None or hist.empty:
+            return []
+        hist = hist.sort_index()
+        bars = []
+        for idx, row in hist.iterrows():
+            date_key = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)
+            bars.append({
+                "date": date_key,
+                "open": self._safe_float(row.get("Open")),
+                "high": self._safe_float(row.get("High")),
+                "low": self._safe_float(row.get("Low")),
+                "close": self._safe_float(row.get("Close")),
+                "volume": self._safe_float(row.get("Volume")),
+            })
+        return bars
 
     def _get_earnings_history(self, stock: yf.Ticker) -> List[Dict[str, Any]]:
         """

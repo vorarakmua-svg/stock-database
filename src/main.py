@@ -8,12 +8,16 @@ Usage:
     python -m src.main AAPL --years 10 --verbose
     python -m src.main --tickers-file universe/core.txt
     python -m src.main --tickers-file universe/sp500-2026-10-25.csv --skip-existing
+    python -m src.main refresh [--steps LIST] [--force] [--db PATH] [--output-dir DIR] [--cache-dir DIR]
 
 The tickers are the positional ones, then each --tickers-file's (a .txt, a ticker a line, or a .csv's ticker or
 Symbol column; ``src/universe/tickers.py``), in Yahoo's form (BRK.B as BRK-B), each once, in order.
 --skip-existing leaves out the tickers already in the database the run writes to (--db, else
 <output-dir>/output/stock.db). Exit 1 when no ticker remains to collect
 (docs/superpowers/specs/2026-10-25-universe-automation-design.md, "The universe").
+
+``refresh`` as the first argument runs ``stock-data refresh`` (``src/refresh.py``) with the rest: no ticker is called
+REFRESH (the same spec, "stock-data refresh").
 """
 
 import argparse
@@ -184,8 +188,12 @@ Examples:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    """Main entry point."""
-    args = parse_args(argv)
+    """Main entry point: ``refresh`` as the first argument runs ``stock-data refresh`` with the rest."""
+    given = list(sys.argv[1:] if argv is None else argv)
+    if given[:1] == ["refresh"]:
+        from . import refresh
+        return refresh.main(given[1:])
+    args = parse_args(given)
 
     # Setup logging
     logger = setup_logging(args.verbose)

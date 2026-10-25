@@ -647,6 +647,12 @@ class SQLiteStore:
             );
             """
         )
+        # ``stock-data refresh``'s log (Milestone 5; docs/superpowers/specs/2026-10-25-universe-automation-design.md,
+        # "stock-data refresh"): one row per step and run, ok 1 or 0 for a step that ran, NULL for one skipped, its
+        # summary as JSON. A step is skipped while it succeeded within its period.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS refresh_log (id INTEGER PRIMARY KEY, step TEXT NOT NULL, "
+            "started_at TEXT NOT NULL, finished_at TEXT NOT NULL, ok INTEGER, summary TEXT)")
 
     @staticmethod
     def _ensure_columns(conn: sqlite3.Connection, table: str, columns: Dict[str, str]) -> None:
@@ -1143,6 +1149,55 @@ class SQLiteStore:
                 "date": date,
                 "ratio": rec.get("ratio"),
             })
+
+    def replace_price_bars_from(self, ticker: str, start: str, bars: List[Dict[str, Any]]) -> Tuple[int, int]:
+        """Replace *ticker*'s daily bars dated *start* (ISO) or later with *bars*, each dated *start* or later, in
+        one transaction: a failure changes nothing. The bars are market prices as a collection stores them
+        (``_write_price_bars``: ``dividend_adjusted`` NULL). ``stock-data refresh``'s bars step: the last stored bar
+        may have been partial, so it is replaced with the days since. Returns the rows removed and written; raises
+        ValueError for a bar before *start* (none is written) and sqlite3.Error for a failed write."""
+        early = [str(bar.get("date")) for bar in bars if not bar.get("date") or str(bar["date"])[:10] < start[:10]]
+        if early:
+            raise ValueError(f"{ticker}: bars before {start} can't replace the bars from {start} on: "
+                             f"{', '.join(early)}")
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            removed = conn.execute("DELETE FROM price_bars WHERE ticker = ? AND date >= ?", (ticker, start)).rowcount
+            self._write_price_bars(conn, ticker, bars)
+            conn.commit()
+        finally:
+            conn.close()  # uncommitted, the transaction is rolled back
+        return removed, len(bars)
+
+    def record_refresh_step(self, step: str, started_at: str, finished_at: str, ok: Optional[bool],
+                            summary: Dict[str, Any]) -> None:
+        """Append a ``refresh_log`` row: a ``stock-data refresh`` run's *step*, when it started and finished, *ok*
+        (True or False for a step that ran, None for one skipped) and its *summary* as JSON."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            conn.execute("INSERT INTO refresh_log (step, started_at, finished_at, ok, summary) VALUES (?, ?, ?, ?, ?)",
+                         (step, started_at, finished_at, None if ok is None else int(ok),
+                          json.dumps(summary, default=str)))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def last_refresh_success(self, step: str) -> Optional[str]:
+        """When *step* last finished ok (``refresh_log``'s latest ``finished_at`` with ok 1), read through a
+        read-only connection; None without one, or without the table."""
+        try:
+            conn = sqlite3.connect(read_only_uri(self.db_path), uri=True)
+        except sqlite3.Error:
+            return None  # nothing stored yet
+        try:
+            row = conn.execute("SELECT max(finished_at) FROM refresh_log WHERE step = ? AND ok = 1", (step,)).fetchone()
+        except sqlite3.OperationalError:  # a database from before the refresh's log
+            return None
+        finally:
+            conn.close()
+        return row[0] if row else None
 
     def splits_since_collection(self, ticker: str, splits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Of the factors since the last collection (``factors_since_collection``), those
