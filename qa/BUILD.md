@@ -6,7 +6,7 @@
 - A milestone without a design spec starts with its design task. That task writes the spec and
   replaces its own row with the milestone's task rows.
 
-**Counts:** TODO 3 · DOING 0 · DONE 41 · NEEDS-USER 0 · BLOCKED 0
+**Counts:** TODO 2 · DOING 0 · DONE 42 · NEEDS-USER 0 · BLOCKED 0
 
 ## M0: the levered-FCF double count
 
@@ -78,7 +78,7 @@
 | M5-1 | The universe: `universe/core.txt`, the S&P 500 list (`src/universe/sp500.py`: Wikipedia's table parsed and checked, one request; the dated `universe/sp500-<date>.csv` saved), ticker normalization, `stock-data --tickers-file` and `--skip-existing`; with tests | DONE | this commit | `qa/evidence/universe-m5-1-*`, `universe/` |
 | M5-2 | SIC codes and industries: `companies.sic`/`sic_description` (collected, and filled offline by `python -m src.universe.sic`), industry groups (3-digit SIC, else 2-digit, at least 10 companies), industry ranks in `rank_all`, the DES and STAT tabs, the scores API, the screener's industry filter and fields, the scores oracle's industry gate; with tests | DONE | this commit | `qa/evidence/industries-m5-2-*` |
 | M5-3 | `stock-data refresh`: quotes and bars daily, the SEC's new filings weekly, the full collections they call for, insiders and gurus weekly, the market data daily, the recomputation; `refresh_log`, a lock, a log file, exit codes; a real run on a scratch copy; with tests | DONE | this commit | `qa/evidence/refresh-m5-3-*` |
-| M5-4 | The scale pre-flight: a synthetic copy of about 500 companies, the pages' and APIs' timings, the query plans, the indexes they need (every page under 1 s, the screener under 0.5 s); with tests | TODO | | |
+| M5-4 | The scale pre-flight: a synthetic copy of about 500 companies, the pages' and APIs' timings, the query plans, the indexes they need (every page under 1 s, the screener under 0.5 s); with tests | DONE | this commit | `qa/evidence/scale-m5-4-*` |
 | M5-5 | Docs: README and USAGE_GUIDE (the universe, `--tickers-file`, SIC and industries, the refresh command, Task Scheduler instructions) | TODO | | |
 | M5-6 | Milestone close: code review 19 (opus) with Critical and Important findings fixed; the dry run, the backup, then the live collection of the S&P 500's new members, their SIC and Form 4s, the recomputation and the checks at about 500 companies | TODO | | |
 
@@ -1298,3 +1298,27 @@ Evidence: `qa/evidence/refresh-m5-3-{red,revision-red,gates,mutants,mutants-reru
 Gates: ruff ✓ mypy ✓ pytest 2307 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) feat(refresh): stock-data refresh: quotes, bars and the SEC's new filings, with a lock and a log (M5-3)
 Next: M5-4 (the scale pre-flight on a synthetic 500-company copy).
+
+### Build iteration 54: 2026-10-25 09:35: M5-4
+Did:
+- An opus worker built two scale tools (`qa/scale/`, 12 tests, their 23 mutants killed):
+  - `synthetic_universe.py` clones each company three times under made-up tickers (AAPLQ1..3: Yahoo's form, none a
+    real ticker), across every ticker-keyed table, with Form 4 keys kept unique and the gurus' positions cloned;
+  - `page_timings.py` times 197 pages and APIs through the TestClient and checks the DB is unchanged.
+- Measured at 127 and at 508 companies (710 MB, 6.1M rows):
+  - nothing over its gate. The slowest page was the quality page (541 ms) and the slowest screener sort 230 ms
+    (gate 500).
+  - The screener's plans are index searches throughout. The cost is in its insider subqueries, and the quality
+    page's top unmapped tags scan every unmapped fact.
+- The worker found no index required and measured two optional ones. I asked for both, because the real S&P 500
+  brings its own unmapped tags and Form 4s. They were added test-first (RED: 6 failed; 11 mutants killed):
+  - `insider_trades (ticker, code, date)`;
+  - a covering `unmapped_facts (tag, ticker, label)`.
+  - On the 508 copy every row of all 15 affected statements is identical, and only the 9 intended plans changed.
+  - The screener now runs under 180 ms, and the quality page dropped from 649 to 152 ms, for 24.6 MB.
+  - The user's DB gains them at its next write.
+- Projection after M5-6: about 0.73 GB of DB and 1.4 GB of JSON exports for about 507 companies.
+Evidence: `qa/evidence/scale-m5-4-{timings-127,timings-508,timings-508-before,timings-508-after,timings-508-compare,synthetic,plans,plan-diff,ab,path-ab,red,green,mutants,tool-mutants,gates,done}.txt`
+Gates: ruff ✓ mypy ✓ pytest 2326 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) perf(store): two indexes for the screener's insiders and the quality page, and the scale tools (M5-4)
+Next: M5-5 (docs: README and USAGE_GUIDE).

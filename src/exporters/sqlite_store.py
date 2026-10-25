@@ -447,6 +447,9 @@ class SQLiteStore:
             );
 
             CREATE INDEX IF NOT EXISTS idx_unmapped_tag ON unmapped_facts (tag);
+            -- Covers the quality page's top unmapped tags (Reader.unmapped_top: GROUP BY tag, COUNT(DISTINCT ticker),
+            -- MAX(label)), so it reads this index instead of a table row a fact (M5-4, the scale pre-flight).
+            CREATE INDEX IF NOT EXISTS idx_unmapped_tag_cover ON unmapped_facts (tag, ticker, label);
 
             -- The quality scores (docs/superpowers/specs/2026-10-21-quality-scores-design.md):
             -- each fiscal year's per-share series on today's split basis, and the warning signs.
@@ -525,6 +528,9 @@ class SQLiteStore:
                 PRIMARY KEY (accession, seq)
             );
             CREATE INDEX IF NOT EXISTS idx_insider_trades_ticker ON insider_trades (ticker, date);
+            -- The screener's insider fields seek a company's trades of one code in the year (its purchases, and for the
+            -- net buying its sales) instead of reading all its trades of the year (M5-4, the scale pre-flight).
+            CREATE INDEX IF NOT EXISTS idx_insider_trades_code ON insider_trades (ticker, code, date);
             """
         )
         # The gurus' 13F filings (Milestone 3): the curated filers, one row per filing with the cover's totals
