@@ -1872,3 +1872,28 @@ Gates: ruff ✓ mypy ✓ pytest 1357 passed, 1 skipped, 1 warning | CI: no PR (Q
 Commit: (this commit) chore(build): close M1, with the user's DB backed up and backfilled
 Next: the P2s oldest first: BUG-142, BUG-149, BUG-150, BUG-151, BUG-159, BUG-160, BUG-161, BUG-179. Code review 16
 (M2's close) covers the next range.
+
+## Iteration 104: 2026-10-25 21:50: fix (BUG-142, BUG-143), after the build loop
+Picked: after the build loop closed (milestones 0-5, `qa/BUILD.md`), the user asked to clear the scratch folder and
+do what came next. %LOCALAPPDATA%\stockdb-qa (58.9 GB) was deleted. The user's DB was backed up
+(%LOCALAPPDATA%\stockdb-backups\2026-10-25-c) and given its first `stock-data refresh` (`qa/evidence/refresh-live-*`):
+- every step ok, exit 0, in 54 minutes;
+- 502 quotes, every company's bars to 2026-10-23, the 19 companies with a new 10-Q collected in full;
+- 104,255 Form 4 filings and 248 13F filings re-read, the market data, the recomputation.
+Then the oldest open P2s, BUG-142 with its BUG-143.
+Did: an opus investigation (read-only, all 502 companies' cached facts, `qa/evidence/bug142-investigation.txt`):
+- CVX's DebtCurrent is the short-term debt before a refinancing it tags; ShortTermBorrowings is the balance sheet's.
+- The bug's suggested rule would have cut $83.1B of right current debt at 17 other filers.
+- The paper is held by the short-term total the record reads on its date.
+An opus worker built the fix test-first (RED: 11 failed, 8 guards passed; 15 mutants, each killed, re-run by me). On
+two copies of the refreshed DB, re-collected offline from the cache with HEAD's code and with the fix, then
+recomputed:
+- total debt falls in 403 annual years at 84 filers and rises in none;
+- valuations and valuation_summary are identical, as the five models read no debt;
+- debt ratios, scores, ranks, EPV and the history move.
+Evidence: `qa/evidence/bug142-{investigation,red,green,mutants,mutants-mine,gates,gates-mine,realdata,done}.txt`
+Result: BUG-142 and BUG-143 VERIFIED. New: BUG-253 to BUG-255 (P3, residual debt double counts). The user's stored
+figures change at each company's next collection.
+Gates: ruff ✓ mypy ✓ pytest 2412 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): short-term debt before a refinancing, and commercial paper a short-term total holds, counted once (BUG-142, BUG-143)
+Next: BUG-149, BUG-150, BUG-151 (the price chart and history tabs), then BUG-159, oldest first.

@@ -133,8 +133,11 @@ def _net_outflows_as_paid(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
 #: Tags read only on the dates a filing's balance sheet covers, those it tags the balance
 #: sheet's total on (a note's total assets can stand at earlier year ends: PH's 2024 10-K at
 #: 2022's): a cash flow statement reconciles cash with restricted cash (ASU 2016-18), so the
-#: total also stands at each earlier year end the statement covers.
-_BALANCE_SHEET_ONLY = ("CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",)
+#: total also stands at each earlier year end the statement covers; and a note's commercial
+#: paper on another day isn't the year's (MCO's FY2016 10-K tags $566M at 2017-02-22, which
+#: took FY2017 once its year end's paper was set aside; JNJ's 2024-05-15 made a quarter of its
+#: own; BUG-143).
+_BALANCE_SHEET_ONLY = ("CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "CommercialPaper")
 _BALANCE_SHEET_TOTAL = "LiabilitiesAndStockholdersEquity"
 
 
@@ -167,6 +170,12 @@ _DEBT_NONCURRENT = ("LongTermDebtAndCapitalLeaseObligations", "LongTermNotesPaya
                     "ConvertibleLongTermNotesPayable")
 
 
+def _by_filing(us_gaap: Dict[str, Any], tag: str) -> Dict[Tuple[str, str], float]:
+    """A tag's dollar figures at an instant, by filing and date: ``{(accn, end): value}``."""
+    return {(e["accn"], e["end"]): e["val"] for e in us_gaap.get(tag, {}).get("units", {}).get("USD", [])
+            if e.get("accn") and e.get("end") and not e.get("start") and isinstance(e.get("val"), (int, float))}
+
+
 def _debt_totals_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     """*us_gaap* less the LongTermDebt a filing tags beside a noncurrent figure, where its current
     debt holds the current maturities, so the total would count them twice (BA's FY2025 $53.85B
@@ -177,16 +186,11 @@ def _debt_totals_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     them, as ABBV's FY2021 $75.96B does $12.48B due within a year (BUG-141)."""
     if _DEBT_TOTAL not in us_gaap:
         return us_gaap
-
-    def by_filing(tag: str) -> Dict[Tuple[str, str], float]:
-        return {(e["accn"], e["end"]): e["val"] for e in us_gaap.get(tag, {}).get("units", {}).get("USD", [])
-                if e.get("accn") and e.get("end") and not e.get("start") and isinstance(e.get("val"), (int, float))}
-
     noncurrent: Dict[Tuple[str, str], float] = {}
     for tag in reversed(_DEBT_NONCURRENT):
-        noncurrent.update(by_filing(tag))  # the first tag's figure
-    current, borrowings = by_filing("DebtCurrent"), by_filing("ShortTermBorrowings")
-    maturities = by_filing("LongTermDebtCurrent")
+        noncurrent.update(_by_filing(us_gaap, tag))  # the first tag's figure
+    current, borrowings = _by_filing(us_gaap, "DebtCurrent"), _by_filing(us_gaap, "ShortTermBorrowings")
+    maturities = _by_filing(us_gaap, "LongTermDebtCurrent")
 
     def holds_maturities(key: Tuple[str, str]) -> bool:
         if key in current:
@@ -195,7 +199,7 @@ def _debt_totals_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
             return borrowings[key] > 0 and borrowings[key] == maturities.get(key)
         return maturities.get(key, 0) > 0
 
-    aside = {key for key, total in by_filing(_DEBT_TOTAL).items()
+    aside = {key for key, total in _by_filing(us_gaap, _DEBT_TOTAL).items()
              if key in noncurrent and (total < noncurrent[key] or holds_maturities(key))}
     if not aside:
         return us_gaap
@@ -204,12 +208,84 @@ def _debt_totals_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     return {**us_gaap, _DEBT_TOTAL: {**us_gaap[_DEBT_TOTAL], "units": {**units, "USD": kept}}}
 
 
+#: Short-term debt a refinancing reclassified to long-term debt (ASC 470-10-45-14).
+_REFINANCED = "ShortTermDebtRefinancedAmount"
+#: The current maturities of long-term debt: a DebtCurrent below them is a part of the
+#: balance sheet's current debt, not its total (IFF's FY2022, PH's FY2023).
+_MATURITIES = ("LongTermDebtCurrent", "LongTermDebtAndCapitalLeaseObligationsCurrent")
+#: How far a short-term total can fall short of the commercial paper it holds: a note can tag
+#: the paper at its face value, above its carrying amount (FDX's $750M in $745M of borrowings).
+#: The nearest figure below the paper otherwise is 5% short of it (IFF's FY2021, a line of its own).
+_PAPER_ROUNDING = 0.02
+
+
+def _current_debt_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+    """*us_gaap* less a filing's DebtCurrent on a date where it is the short-term debt before a
+    refinancing, and the CommercialPaper on a date whose short-term total holds the paper.
+
+    CVX's DebtCurrent is its note's short-term debt before the part it reclassifies to long-term
+    debt, which its long-term debt then holds: it tags that part ShortTermDebtRefinancedAmount, and
+    its balance sheet's short-term debt, DebtCurrent less it, ShortTermBorrowings (FY2024: $12.656B
+    less $8.25B, $4.406B; BUG-142). DebtCurrent and ShortTermBorrowings hold the paper, which total
+    debt added again (PG's FY2026 $38.98B for $34.14B; BUG-143). The total that holds it is the one
+    the record reads on the paper's date, the latest-filed DebtCurrent there, else ShortTermBorrowings:
+    annual reports' for a 10-K's paper, every report's for a 10-Q's. A later 10-K can show an earlier
+    one's paper inside its borrowings (KO's FY2019 $10.0B), and the annual record never reads a 10-Q's
+    comparative DebtCurrent. A DebtCurrent below its filing's current maturities is a part that holds
+    none (IFF's FY2022); DebtCurrent is read as filed, before a refinancing sets it aside. Paper the
+    total is smaller than (``_PAPER_ROUNDING``) is still added: a line of its own (AAPL's, beside its
+    term debt), above the borrowings (HON's FY2013) or alone (WMB's)."""
+    if _REFINANCED not in us_gaap and "CommercialPaper" not in us_gaap:
+        return us_gaap
+    current, borrowings = _by_filing(us_gaap, "DebtCurrent"), _by_filing(us_gaap, "ShortTermBorrowings")
+    maturities: Dict[Tuple[str, str], float] = {}
+    for tag in _MATURITIES:
+        for key, value in _by_filing(us_gaap, tag).items():
+            maturities[key] = max(maturities.get(key, value), value)
+    # the part refinanced as an instant on the date or a period ending on it (CVX tags the year's)
+    refinanced = {(e["accn"], e["end"]): e["val"] for e in us_gaap.get(_REFINANCED, {}).get("units", {}).get("USD", [])
+                  if e.get("accn") and e.get("end") and isinstance(e.get("val"), (int, float))}
+    before = {key for key, debt in current.items() if refinanced.get(key, 0) > 0 and key in borrowings
+              and _agree(debt - refinanced[key], borrowings[key])}
+    # each filing's form and filing date, to read a date's short-term total as the records resolve it
+    filings = {e["accn"]: (e.get("form") or "", e.get("filed") or "")
+               for tag in ("DebtCurrent", "ShortTermBorrowings", "CommercialPaper")
+               for e in us_gaap.get(tag, {}).get("units", {}).get("USD", []) if e.get("accn")}
+
+    def holder(key: Tuple[str, str]) -> Optional[float]:
+        # DebtCurrent as filed: CVX's holds its paper, which the refinancing moves partly to long-term debt
+        if key in current:
+            return current[key] if current[key] >= maturities.get(key, 0) * (1 - _AGREE) else None
+        return borrowings.get(key)
+
+    def resolved(end: str, annual: bool) -> Optional[float]:
+        # the latest-filed DebtCurrent on *end*, else the latest ShortTermBorrowings; annual reports' if *annual*
+        for figures in (current, borrowings):
+            keys = [key for key in figures if key[1] == end and (not annual or filings[key[0]][0] in _ANNUAL_FORMS)]
+            if keys:
+                return holder(max(keys, key=lambda k: filings[k[0]][1]))
+        return None
+
+    held = {key for key, paper in _by_filing(us_gaap, "CommercialPaper").items() if paper > 0
+            and (resolved(key[1], filings[key[0]][0] in _ANNUAL_FORMS) or 0) >= paper * (1 - _PAPER_ROUNDING)}
+    if not before and not held:
+        return us_gaap
+    kept = dict(us_gaap)
+    for tag, aside in (("DebtCurrent", before), ("CommercialPaper", held)):
+        if aside:
+            units = us_gaap[tag].get("units", {})
+            kept[tag] = {**us_gaap[tag], "units": {**units, "USD": [
+                e for e in units.get("USD", []) if (e.get("accn"), e.get("end")) not in aside]}}
+    return kept
+
+
 def _filer_facts(facts: Dict[str, Any]) -> Dict[str, Any]:
     """A filer's us-gaap facts as the extractions read them: its dollar filings', net outflows as
-    paid, the balance-sheet-only tags on their balance sheets' dates, and LongTermDebt set aside
-    where its noncurrent figure should stand."""
-    return _debt_totals_set_aside(_net_outflows_as_paid(_on_balance_sheet_dates(
-        _dollar_filings(facts.get("facts", {}).get("us-gaap", {})))))
+    paid, the balance-sheet-only tags on their balance sheets' dates, LongTermDebt set aside
+    where its noncurrent figure should stand (judged on DebtCurrent as filed), then DebtCurrent
+    before a refinancing and the CommercialPaper the short-term total on its date holds."""
+    return _current_debt_set_aside(_debt_totals_set_aside(_net_outflows_as_paid(_on_balance_sheet_dates(
+        _dollar_filings(facts.get("facts", {}).get("us-gaap", {}))))))
 
 
 #: A later filing's figure for a year can be a tagging error of the figure the earlier

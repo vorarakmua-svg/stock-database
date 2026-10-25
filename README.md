@@ -2068,6 +2068,12 @@ numbers SEC filings report:
   figure where the filing's short-term debt holds the current maturities (Boeing's FY2025:
   $45.6B beside $8.5B of current debt, not its $53.8B total, which counted them twice), and
   the filer's total with the maturities where no short-term figure holds them.
+- **Short-term debt and commercial paper.** Short-term debt is the balance sheet's: where a
+  filing's debt due within a year is the figure before a refinancing moved part of it to
+  long-term debt, the short-term borrowings its balance sheet shows stand instead (Chevron's
+  FY2024: $4.4B, not $12.7B, whose other $8.25B its long-term debt holds). Commercial paper is
+  stored only where the short-term figure doesn't hold it (a line of its own, like Apple's), so
+  total debt counts it once (P&G's FY2026: $34.1B, not $39.0B), and only on balance-sheet dates.
 - **Balance-sheet checkpoints** at every quarter-end (instant facts), full history.
 - **`fiscal_quarter`** (1–4, company calendar) and **`calendar_quarter`** (1–4, calendar)
   are both attached; `calendar_quarter` comes from the SEC frame and is the reliable
