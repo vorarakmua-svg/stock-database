@@ -217,24 +217,37 @@ _MATURITIES = ("LongTermDebtCurrent", "LongTermDebtAndCapitalLeaseObligationsCur
 #: the paper at its face value, above its carrying amount (FDX's $750M in $745M of borrowings).
 #: The nearest figure below the paper otherwise is 5% short of it (IFF's FY2021, a line of its own).
 _PAPER_ROUNDING = 0.02
+#: The records the extractions build, each reading a commercial paper fact beside the short-term figure it reads
+#: itself on the paper's date (``_current_debt_set_aside``): the annual record, from the annual reports; the
+#: quarterly checkpoints, from the 10-Qs and 10-Ks; and each filing's vintage, from that filing (BUG-256, BUG-257).
+_ANNUAL_VIEW, _QUARTERLY_VIEW, _VINTAGE_VIEW = "annual", "quarterly", "vintage"
 
 
-def _current_debt_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+def _current_debt_set_aside(us_gaap: Dict[str, Any], view: str) -> Dict[str, Any]:
     """*us_gaap* less a filing's DebtCurrent on a date where it is the short-term debt before a
-    refinancing, and the CommercialPaper on a date whose short-term total holds the paper.
+    refinancing, and with 0.0 for the CommercialPaper the short-term total on its date holds, as
+    the record of *view* reads them.
 
     CVX's DebtCurrent is its note's short-term debt before the part it reclassifies to long-term
     debt, which its long-term debt then holds: it tags that part ShortTermDebtRefinancedAmount, and
     its balance sheet's short-term debt, DebtCurrent less it, ShortTermBorrowings (FY2024: $12.656B
     less $8.25B, $4.406B; BUG-142). DebtCurrent and ShortTermBorrowings hold the paper, which total
-    debt added again (PG's FY2026 $38.98B for $34.14B; BUG-143). The total that holds it is the one
-    the record reads on the paper's date, the latest-filed DebtCurrent there, else ShortTermBorrowings:
-    annual reports' for a 10-K's paper, every report's for a 10-Q's. A later 10-K can show an earlier
-    one's paper inside its borrowings (KO's FY2019 $10.0B), and the annual record never reads a 10-Q's
-    comparative DebtCurrent. A DebtCurrent below its filing's current maturities is a part that holds
-    none (IFF's FY2022); DebtCurrent is read as filed, before a refinancing sets it aside. Paper the
-    total is smaller than (``_PAPER_ROUNDING``) is still added: a line of its own (AAPL's, beside its
-    term debt), above the borrowings (HON's FY2013) or alone (WMB's)."""
+    debt added again (PG's FY2026 $38.98B for $34.14B; BUG-143): held, it reads 0.0, no paper
+    outside the short-term figure. The total that holds it is the one the record reads beside it,
+    the latest-filed DebtCurrent on the paper's date, else ShortTermBorrowings: the annual reports'
+    for the annual record (a later 10-K can show an earlier one's paper inside its borrowings: KO's
+    FY2019 $10.0B), the 10-Qs' and 10-Ks' for a quarter (a 10-Q's comparative DebtCurrent can hold a
+    10-K's paper: NEE's 2011-12-31; BUG-257), and a vintage's own filing's, as known then (KO's
+    FY2019 10-K shows its paper apart; BUG-256). The as-of view fills a vintage's gaps from earlier
+    ones (BUG-110), so a vintage that shows no short-term figure on the date reads its paper beside
+    the latest earlier annual report's (QCOM's FY2016 10-K tags as paper the line its FY2015 10-K
+    tags as borrowings), and one that shows a short-term figure but no paper states the latest paper
+    an earlier annual report filed there, against its own figure (HON's FY2015 10-K, whose borrowings
+    hold its FY2014 10-K's paper: 0.0; AEP's FY2021 10-K, which shows only the maturities). A
+    DebtCurrent below its filing's current maturities is a part that holds none (IFF's FY2022);
+    DebtCurrent is read as filed, before a refinancing sets it aside. Paper the total is smaller
+    than (``_PAPER_ROUNDING``) is still added: a line of its own (AAPL's, beside its term debt),
+    above the borrowings (HON's FY2013) or alone (WMB's)."""
     if _REFINANCED not in us_gaap and "CommercialPaper" not in us_gaap:
         return us_gaap
     current, borrowings = _by_filing(us_gaap, "DebtCurrent"), _by_filing(us_gaap, "ShortTermBorrowings")
@@ -248,8 +261,9 @@ def _current_debt_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     before = {key for key, debt in current.items() if refinanced.get(key, 0) > 0 and key in borrowings
               and _agree(debt - refinanced[key], borrowings[key])}
     # each filing's form and filing date, to read a date's short-term total as the records resolve it
+    short_term = _FIELDS["short_term_debt"].tags
     filings = {e["accn"]: (e.get("form") or "", e.get("filed") or "")
-               for tag in ("DebtCurrent", "ShortTermBorrowings", "CommercialPaper")
+               for tag in short_term + ("CommercialPaper",)
                for e in us_gaap.get(tag, {}).get("units", {}).get("USD", []) if e.get("accn")}
 
     def holder(key: Tuple[str, str]) -> Optional[float]:
@@ -258,34 +272,65 @@ def _current_debt_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
             return current[key] if current[key] >= maturities.get(key, 0) * (1 - _AGREE) else None
         return borrowings.get(key)
 
-    def resolved(end: str, annual: bool) -> Optional[float]:
-        # the latest-filed DebtCurrent on *end*, else the latest ShortTermBorrowings; annual reports' if *annual*
+    def holds(key: Optional[Tuple[str, str]], paper: float) -> bool:
+        return key is not None and paper > 0 and (holder(key) or 0) >= paper * (1 - _PAPER_ROUNDING)
+
+    def latest(end: str, forms: Set[str]) -> Optional[Tuple[str, str]]:
+        # the latest-filed DebtCurrent on *end* among *forms*, else their latest ShortTermBorrowings
         for figures in (current, borrowings):
-            keys = [key for key in figures if key[1] == end and (not annual or filings[key[0]][0] in _ANNUAL_FORMS)]
+            keys = [key for key in figures if key[1] == end and filings[key[0]][0] in forms]
             if keys:
-                return holder(max(keys, key=lambda k: filings[k[0]][1]))
+                return max(keys, key=lambda k: filings[k[0]][1])
         return None
 
-    held = {key for key, paper in _by_filing(us_gaap, "CommercialPaper").items() if paper > 0
-            and (resolved(key[1], filings[key[0]][0] in _ANNUAL_FORMS) or 0) >= paper * (1 - _PAPER_ROUNDING)}
-    if not before and not held:
+    papers = _by_filing(us_gaap, "CommercialPaper")
+    held: Set[Tuple[str, str]] = set()
+    stated: List[Dict[str, Any]] = []
+    if view != _VINTAGE_VIEW:
+        forms = _ANNUAL_FORMS if view == _ANNUAL_VIEW else _QUARTERLY_FORMS
+        held = {key for key, paper in papers.items() if holds(latest(key[1], forms), paper)}
+    else:
+        # each annual report in filing order (the as-of view's), on each date it shows a paper or a short-term figure
+        shows = {key for tag in short_term for key in _by_filing(us_gaap, tag)}
+        dates: Dict[str, Set[str]] = defaultdict(set)
+        for accn, end in set(papers) | shows:
+            if filings[accn][0] in _ANNUAL_FORMS:
+                dates[end].add(accn)
+        for end in sorted(dates):
+            paper: Optional[float] = None  # the latest paper filed on the date
+            source: Optional[Tuple[str, str]] = None  # and short-term figure, the as-of view's
+            for accn in sorted(dates[end], key=lambda a: (filings[a][1], a)):
+                key = (accn, end)
+                source = key if key in shows else source
+                if key in papers:
+                    if holds(source, papers[key]):
+                        held.add(key)
+                    paper = papers[key]
+                elif key in shows and paper is not None and paper > 0:
+                    stated.append({"accn": accn, "end": end, "form": filings[accn][0], "filed": filings[accn][1],
+                                   "val": 0.0 if holds(key, paper) else paper})
+    if not before and not held and not stated:
         return us_gaap
     kept = dict(us_gaap)
-    for tag, aside in (("DebtCurrent", before), ("CommercialPaper", held)):
-        if aside:
-            units = us_gaap[tag].get("units", {})
-            kept[tag] = {**us_gaap[tag], "units": {**units, "USD": [
-                e for e in units.get("USD", []) if (e.get("accn"), e.get("end")) not in aside]}}
+    if before:
+        units = us_gaap["DebtCurrent"].get("units", {})
+        kept["DebtCurrent"] = {**us_gaap["DebtCurrent"], "units": {**units, "USD": [
+            e for e in units.get("USD", []) if (e.get("accn"), e.get("end")) not in before]}}
+    if held or stated:  # stated first: a filing's own paper in the same year, read after them, wins
+        units = us_gaap["CommercialPaper"].get("units", {})
+        kept["CommercialPaper"] = {**us_gaap["CommercialPaper"], "units": {**units, "USD": stated + [
+            {**e, "val": 0.0} if (e.get("accn"), e.get("end")) in held else e for e in units.get("USD", [])]}}
     return kept
 
 
-def _filer_facts(facts: Dict[str, Any]) -> Dict[str, Any]:
-    """A filer's us-gaap facts as the extractions read them: its dollar filings', net outflows as
-    paid, the balance-sheet-only tags on their balance sheets' dates, LongTermDebt set aside
-    where its noncurrent figure should stand (judged on DebtCurrent as filed), then DebtCurrent
-    before a refinancing and the CommercialPaper the short-term total on its date holds."""
+def _filer_facts(facts: Dict[str, Any], view: str) -> Dict[str, Any]:
+    """A filer's us-gaap facts as the extractions of *view* read them: its dollar filings', net
+    outflows as paid, the balance-sheet-only tags on their balance sheets' dates, LongTermDebt set
+    aside where its noncurrent figure should stand (judged on DebtCurrent as filed), then DebtCurrent
+    before a refinancing set aside, and 0.0 for the CommercialPaper the short-term total that view's
+    record reads on its date holds."""
     return _current_debt_set_aside(_debt_totals_set_aside(_net_outflows_as_paid(_on_balance_sheet_dates(
-        _dollar_filings(facts.get("facts", {}).get("us-gaap", {}))))))
+        _dollar_filings(facts.get("facts", {}).get("us-gaap", {}))))), view)
 
 
 #: A later filing's figure for a year can be a tagging error of the figure the earlier
@@ -620,7 +665,7 @@ class XBRLParser:
         Returns:
             Dictionary organized by fiscal year (string keys).
         """
-        us_gaap = _filer_facts(facts)
+        us_gaap = _filer_facts(facts, _ANNUAL_VIEW)
         if not us_gaap:
             return {}
 
@@ -646,7 +691,7 @@ class XBRLParser:
         already-fetched ``companyfacts`` (every historical instance carries its own
         ``accn``/``filed``); no extra network. Annual reports (10-K, 20-F, 40-F) only.
         """
-        us_gaap = _filer_facts(facts)
+        us_gaap = _filer_facts(facts, _VINTAGE_VIEW)
         if not us_gaap:
             return {}
 
@@ -718,7 +763,7 @@ class XBRLParser:
         Returns:
             Dictionary organized by period end date.
         """
-        us_gaap = _filer_facts(facts)
+        us_gaap = _filer_facts(facts, _QUARTERLY_VIEW)
         if not us_gaap:
             return {}
 

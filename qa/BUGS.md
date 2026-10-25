@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 13 · P3 130 · NEEDS-USER 20 · Verified: 108
+**Open:** P0 0 · P1 0 · P2 12 · P3 129 · NEEDS-USER 20 · Verified: 110
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1900,17 +1900,19 @@ Repro: CVX's 2018 10-K tags its balance sheet's $28.733B only as LongTermDebtAnd
 Expected: the balance sheet's long-term debt.   Actual: the note's narrower figure.
 
 ### BUG-256 [P2][VALID] BUG-143's fix judges a filing's vintage by later filings: KO's FY2019 vintage loses the paper its own balance sheet shows apart
-Status: OPEN
-Found: code review 20 (I-1), iteration 108; a regression of b49ee34 | Fixed: | Regression test:
+Status: VERIFIED (iteration 109)
+Found: code review 20 (I-1), iteration 108; a regression of b49ee34 | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py::test_the_first_10ks_vintage_keeps_the_paper_its_own_balance_sheet_shows, ::test_a_later_vintage_whose_borrowings_hold_the_paper_reads_none_outside_them, ::test_the_as_of_view_reads_each_10ks_debt_in_its_window (KO, HON, AEP, QCOM), ::test_a_held_paper_reads_zero_in_every_record, ::test_a_vintage_reads_no_10qs_figure_beside_its_paper, and review 20's M-3 guards in ::test_paper_no_short_term_total_holds_is_added (IFF FY2021, PH FY2023)
 Repro: `_current_debt_set_aside` (xbrl_parser.py ~261-270) sets a CommercialPaper fact aside where the latest-filed short-term total on its date, from any annual report, holds it: the annual record's view. `extract_annual_vintages` reads the same facts, and a vintage is one filing's view (the as-of explorer and /api/asof/* serve it, "as known then"). So a 10-K whose balance sheet shows the paper on a line of its own loses it because a 10-K filed a year later shows it inside its borrowings, and a comparative 10-K tagging only the maturities and the paper loses it on an earlier 10-K's evidence (the BUG-110 carry then serves it). Review 20's replay through the real AsOfReader: KO FY2019 as of 2020-06-30 total debt $41.776B to $31.769B (-24%, debt/EBITDA 3.65 to 2.77), QCOM FY2016 -14.9%, HON FY2014 -19.0%; NEE FY2019 and KO FY2022 as of today too. 19 vintages at 12 filers (ADI, BEN, CLX, D, HON, KO, MCO -37%, NEE, QCOM, ROK, SNA, WEC) and 25 as-of windows at 13 filers move away from their filing's own figures (4 of them today's answer: AEP FY2019, CLX FY2013, KO FY2022, NEE FY2019), against 1,512 the fix moved toward them.
 Expected: a vintage judged by its own filing (a paper its own short-term total holds is held; otherwise added), and a held paper kept as an explicit 0.0 rather than dropped, so the BUG-110 carry can't revive an earlier filing's paper beside a later vintage that holds it.   Actual: later filings decide an earlier filing's vintage.
+Fix (iteration 109): each record judges a paper by the short-term figure it reads (`_filer_facts(facts, view)`): the annual record by the latest annual reports' (as b49ee34), a quarterly checkpoint by the 10-Qs' and 10-Ks' (BUG-257), a vintage by its own filing; a held paper reads 0.0. Two vintage rules the as-of carry needs, measured first: a filing that tags the paper but no short-term figure of its own is judged by the figure the as-of view carries beside it (QCOM FY2016), and one showing a short-term figure but no paper states the latest earlier paper (0.0 where its figure holds it: HON FY2015; the amount where not: AEP FY2021). Over the 502: all 1,512 as-of windows b49ee34 improved kept, the 25 it worsened back (KO FY2019 as of 2020-06-30 $41.776B, debt/EBITDA 3.65), no annual total moved (428 cells NULL to 0.0), valuations identical. BEN FY2011, QCOM FY2015 and WEC FY2017's own rows keep 0.0 by design: the as-of view reads them beside the earlier 10-K's line, and the literal rule would double count 17 windows. Evidence: `qa/evidence/bug256-*.txt`.
 Notes: the same fix should add review 20's M-3 guards, boundaries no test pins (their mutants survived): a short-term total 5% below the paper is not holding it (IFF FY2021's shape; _PAPER_ROUNDING 0.02 to 0.06 survived), and a DebtCurrent below LongTermDebtAndCapitalLeaseObligationsCurrent is a part (PH FY2023's $1.8B of paper; _MATURITIES without that tag survived). Test: review 20's head\tests\test_review20_probe.py::test_the_first_10ks_vintage_keeps_the_paper_its_own_balance_sheet_shows (passes on 4abe6d7, fails on ca027c7).
 
 ### BUG-257 [P3][VALID] A year-end quarterly checkpoint adds a 10-K's paper beside a 10-Q comparative's short-term total that holds it
-Status: OPEN
-Found: code review 20 (M-2; the BUG-142 investigation's residual 5g), iteration 108 | Fixed: | Regression test:
+Status: VERIFIED (iteration 109)
+Found: code review 20 (M-2; the BUG-142 investigation's residual 5g), iteration 108 | Fixed: (this commit, with BUG-256) | Regression tests: tests/test_xbrl_parser.py::test_the_year_end_checkpoint_counts_a_10ks_paper_once_beside_a_10qs_debt_current, ::test_a_short_term_total_no_checkpoint_reads_says_nothing_of_a_quarters_paper
 Repro: BUG-143's rule judges a 10-K's paper by annual reports only (right for the annual record), but the quarterly checkpoint on that date (`_collect_instant_checkpoints`) reads 10-Qs too: 11 checkpoints at 5 filers (NEE 2010-13 year ends, D 2011-13, CLX 2019-06-30, CTAS 2017-05-31, ROK 2013-09-30) still count the paper twice; none is a latest quarter, so no TTM or EV effect today. Pre-existing (review 20's probe fails on both 4abe6d7 and ca027c7: 24.316e9 for 22.967e9).
 Expected: each view's paper judged against the total that view reads on the date.   Actual: as above.
+Fix (iteration 109, BUG-256's change): the quarterly checkpoints judge a paper over the 10-Qs and 10-Ks they read; the 11 checkpoints (at 6 filers: GS 2012-12-31 was the eleventh) now count it once, moving 142 valuation_history rows at D, NEE, CLX, ROK and CTAS.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

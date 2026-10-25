@@ -242,12 +242,13 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "commercial_paper", "Commercial Paper", BALANCE, UNIT_USD, INSTANT,
-        # The paper the short-term debt figure doesn't hold, which total debt adds to it: paper
-        # gives way where the short-term total read on its date, DebtCurrent or else
-        # ShortTermBorrowings, holds it (PG's, LIN's, KO's; ``xbrl_parser._current_debt_set_aside``,
-        # BUG-143). Read on balance-sheet dates only (xbrl_parser._BALANCE_SHEET_ONLY).
+        # The paper the short-term debt figure doesn't hold, which total debt adds to it: 0.0 where
+        # the short-term total the record reads on its date, DebtCurrent or else ShortTermBorrowings,
+        # holds it (PG's, LIN's, KO's): the annual reports' for the annual record, the 10-Qs' and
+        # 10-Ks' for a quarter, a vintage's own filing's (``xbrl_parser._current_debt_set_aside``,
+        # BUG-143, BUG-256, BUG-257). Read on balance-sheet dates only (xbrl_parser._BALANCE_SHEET_ONLY).
         ("CommercialPaper",),
-        description="Commercial paper outside the short-term debt figure (a line of its own); empty where "
+        description="Commercial paper outside the short-term debt figure (a line of its own); 0 where "
                     "the short-term debt holds it.",
     ),
     CanonicalField(

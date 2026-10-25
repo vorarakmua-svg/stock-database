@@ -2,8 +2,11 @@
 
 import pytest
 
+from src.exporters.sqlite_store import SQLiteStore
+from src.models.stock_data import StockData
 from src.parsers.calculated_metrics import CalculatedMetrics
 from src.parsers.xbrl_parser import XBRLParser, explain_no_annual_financials, explain_stale_annual_financials
+from src.query.asof import AsOfReader
 from tests.conftest import usd
 
 
@@ -511,6 +514,10 @@ def test_paper_a_short_term_total_holds_is_counted_once(tagged, total):
     (dict(CommercialPaper=0.700e9, LongTermDebtNoncurrent=26.0e9), 26.7e9),  # WMB's: the only short-term figure
     (dict(DebtCurrent=0.410e9, LongTermDebtCurrent=0.597e9, CommercialPaper=0.187e9, LongTermDebtNoncurrent=10.373e9),
      10.970e9),  # IFF's FY2022: a DebtCurrent below the current maturities is a part
+    # Review 20 (M-3): IFF's FY2021, its maturities left out: a total 5% short of the paper doesn't hold it
+    (dict(DebtCurrent=0.308e9, CommercialPaper=0.324e9, LongTermDebtNoncurrent=10.768e9), 11.400e9),
+    (dict(DebtCurrent=1.974e9, LongTermDebtAndCapitalLeaseObligationsCurrent=3.763e9, CommercialPaper=1.800e9,
+          LongTermDebtNoncurrent=8.796e9), 12.570e9),  # PH's FY2023: below the maturities tagged with the leases
 ])
 def test_paper_no_short_term_total_holds_is_added(tagged, total):
     assert _total_debt(_debt_year(_debt_filing(**tagged))) == pytest.approx(total)
@@ -521,6 +528,17 @@ def test_a_quarter_and_a_vintage_count_the_paper_once():
     quarter = XBRLParser().extract_quarterly_financials(facts)["2025-12-31"]
     vintage = XBRLParser().extract_annual_vintages(facts)["2025"]["2026-02-12"]
     assert [_total_debt(p) for p in (quarter, vintage)] == [pytest.approx(34.138e9)] * 2
+
+
+def test_a_held_paper_reads_zero_in_every_record():
+    # BUG-256 (code review 20, I-1): a paper the short-term total holds reads 0.0, no paper outside it, rather than
+    # nothing, which the as-of view's carry fills with an earlier filing's (BUG-110).
+    facts = _debt_filing(DebtCurrent=11.296e9, CommercialPaper=4.837e9, LongTermDebtNoncurrent=22.842e9)
+    parser = XBRLParser()
+    records = (parser.extract_annual_financials(facts)["2025"],
+               parser.extract_quarterly_financials(facts)["2025-12-31"],
+               parser.extract_annual_vintages(facts)["2025"]["2026-02-12"])
+    assert [record.get("commercial_paper") for record in records] == [0.0, 0.0, 0.0]
 
 
 def test_a_notes_paper_on_another_day_is_not_the_years():
@@ -535,28 +553,56 @@ def test_a_notes_paper_on_another_day_is_not_the_years():
     assert "2025-02-22" not in XBRLParser().extract_quarterly_financials(facts)
 
 
+def _with_later_10k(facts, filed, end="2025-12-31", **tagged):
+    """*facts* and a later 10-K, filed on *filed*, whose balance sheet on *end* holds the given tags (tag=value)."""
+    filing = dict(fy=2026, fp="FY", form="10-K", filed=filed)
+    us_gaap = facts["facts"]["us-gaap"]
+    for tag, val in {"LiabilitiesAndStockholdersEquity": 100.0e9, **tagged}.items():
+        us_gaap.setdefault(tag, {"units": {"USD": []}})["units"]["USD"].append(usd(val, None, end, **filing))
+    return facts
+
+
+def _ko_fy2019():
+    """KO's FY2019: its 10-K shows $10.007B of paper apart from the current maturities, and no borrowings; its FY2020
+    10-K shows the same paper inside $10.994B of loans and notes payable."""
+    return _with_later_10k(_debt_filing(CommercialPaper=10.007e9, LongTermDebtCurrent=4.253e9,
+                                        LongTermDebtNoncurrent=27.516e9),
+                           "2027-02-25", CommercialPaper=10.007e9, ShortTermBorrowings=10.994e9)
+
+
+def _hon_fy2014():
+    """HON's FY2014: its 10-K shows $1.647B of paper beside $51M of other short-term borrowings; its FY2015 10-K tags
+    the combined line, $1.698B, as the borrowings, and no paper."""
+    return _with_later_10k(_debt_filing(CommercialPaper=1.647e9, ShortTermBorrowings=0.051e9,
+                                        LongTermDebtNoncurrent=6.046e9), "2027-02-12", ShortTermBorrowings=1.698e9)
+
+
+def _aep_fy2019():
+    """AEP's FY2019: its 10-K's $2.838B of short-term debt holds its $2.110B of paper; a later 10-K tags only the
+    year's $1.599B of current maturities and its long-term debt."""
+    return _with_later_10k(_debt_filing(CommercialPaper=2.110e9, ShortTermBorrowings=2.838e9,
+                                        LongTermDebtCurrent=1.599e9, LongTermDebtNoncurrent=25.127e9),
+                           "2027-02-24", LongTermDebtCurrent=1.599e9, LongTermDebtNoncurrent=25.127e9)
+
+
+def _qcom_fy2015():
+    """QCOM's FY2015: its 10-K tags its $1.0B short-term debt line as borrowings; its FY2016 10-K tags the same line as
+    paper, and no borrowings."""
+    return _with_later_10k(_debt_filing(ShortTermBorrowings=1.0e9, LongTermDebtNoncurrent=9.969e9),
+                           "2027-02-12", CommercialPaper=1.0e9, LongTermDebtNoncurrent=9.969e9)
+
+
 def test_paper_a_later_10k_shows_inside_its_borrowings_is_counted_once():
     # KO's FY2019 10-K tags the year's $10.007B of paper and no borrowings; its FY2020 10-K tags the same paper inside
     # $10.994B of loans and notes payable. Judged filing by filing, the first 10-K's paper outlived the second's
     # (total debt $48.52B). The $4.253B of current maturities beside the borrowings are BUG-159's.
-    k10_next = dict(fy=2026, fp="FY", form="10-K", filed="2027-02-25")
-    facts = _debt_filing(CommercialPaper=10.007e9, LongTermDebtCurrent=4.253e9, LongTermDebtNoncurrent=27.516e9)
-    us_gaap = facts["facts"]["us-gaap"]
-    us_gaap["CommercialPaper"]["units"]["USD"].append(usd(10.007e9, None, "2025-12-31", **k10_next))
-    us_gaap["ShortTermBorrowings"] = {"units": {"USD": [usd(10.994e9, None, "2025-12-31", **k10_next)]}}
-    us_gaap["LiabilitiesAndStockholdersEquity"]["units"]["USD"].append(usd(100.0e9, None, "2025-12-31", **k10_next))
-    assert _total_debt(_debt_year(facts)) == pytest.approx(38.510e9)
+    assert _total_debt(_debt_year(_ko_fy2019())) == pytest.approx(38.510e9)
 
 
 def test_paper_beside_borrowings_a_later_10k_combines_is_counted_once():
     # HON's FY2014 10-K tags $1.647B of paper beside $51M of other short-term borrowings; its FY2015 10-K tags the
     # combined line, $1.698B, as the borrowings, which the year now reads.
-    k10_next = dict(fy=2026, fp="FY", form="10-K", filed="2027-02-12")
-    facts = _debt_filing(CommercialPaper=1.647e9, ShortTermBorrowings=0.051e9, LongTermDebtNoncurrent=6.046e9)
-    us_gaap = facts["facts"]["us-gaap"]
-    us_gaap["ShortTermBorrowings"]["units"]["USD"].append(usd(1.698e9, None, "2025-12-31", **k10_next))
-    us_gaap["LiabilitiesAndStockholdersEquity"]["units"]["USD"].append(usd(100.0e9, None, "2025-12-31", **k10_next))
-    assert _total_debt(_debt_year(facts)) == pytest.approx(7.744e9)
+    assert _total_debt(_debt_year(_hon_fy2014())) == pytest.approx(7.744e9)
 
 
 def test_a_10qs_current_debt_says_nothing_of_a_10ks_paper():
@@ -565,6 +611,83 @@ def test_a_10qs_current_debt_says_nothing_of_a_10ks_paper():
     facts = _debt_filing(ShortTermBorrowings=0.0, CommercialPaper=1.349e9, LongTermDebtNoncurrent=20.81e9)
     facts["facts"]["us-gaap"]["DebtCurrent"] = {"units": {"USD": [usd(2.157e9, None, "2025-12-31", **q1)]}}
     assert _total_debt(_debt_year(facts)) == pytest.approx(22.159e9)
+
+
+def _vintage(facts, filed):
+    return XBRLParser().extract_annual_vintages(facts)["2025"][filed]
+
+
+def test_the_first_10ks_vintage_keeps_the_paper_its_own_balance_sheet_shows():
+    # BUG-256 (code review 20, I-1): a vintage is one filing's view, which the as-of explorer and /api/asof read "as
+    # known then", and BUG-143's rule judged KO's FY2019 10-K's paper by the FY2020 10-K's borrowings, filed a year
+    # later: as of mid-2020 KO's total debt read $31.769B for the $41.776B its balance sheet showed.
+    first = _vintage(_ko_fy2019(), "2026-02-12")
+    assert (first.get("commercial_paper"), _total_debt(first)) == (10.007e9, pytest.approx(41.776e9))
+
+
+def test_a_later_vintage_whose_borrowings_hold_the_paper_reads_none_outside_them():
+    # Held, the paper reads 0.0; and HON's FY2015 10-K, which tags none, states the FY2014 10-K's, which its borrowings
+    # hold: left empty, the as-of view would fill it with the first 10-K's paper (BUG-110's carry).
+    later = [_vintage(_ko_fy2019(), "2027-02-25"), _vintage(_hon_fy2014(), "2027-02-12")]
+    assert [(v.get("short_term_debt"), v.get("commercial_paper")) for v in later] == [(10.994e9, 0.0), (1.698e9, 0.0)]
+
+
+def _debt_as_of(tmp_path, facts, *days):
+    """FY2025's total debt as the as-of view reads it on each of *days*, from the vintages a collection stores."""
+    stock = StockData(ticker="DEBT", cik="1", company_name="Debt Co")
+    stock.financials_annual_vintages = XBRLParser().extract_annual_vintages(facts)
+    db = tmp_path / "stock.db"
+    SQLiteStore(db_path=str(db)).export([stock])
+    with AsOfReader(db) as reader:
+        return [_total_debt(reader.as_of_annual("DEBT", 2025, day)) for day in days]
+
+
+@pytest.mark.parametrize("facts, totals", [
+    # the first 10-K's paper apart from its maturities; then the second's borrowings, which hold it, beside the
+    # long-term debt carried from the first (the maturities beside the borrowings are BUG-159's)
+    (_ko_fy2019, (41.776e9, 38.510e9)),
+    (_hon_fy2014, (7.744e9, 7.744e9)),  # the paper beside the other borrowings, then the combined line: not $9.391B
+    # the paper inside the short-term debt; then the maturities alone, beside which it stands (the borrowings the later
+    # 10-K leaves out aren't carried: BUG-110's carry fills gaps, not narrower figures)
+    (_aep_fy2019, (27.965e9, 28.836e9)),
+    # the line as borrowings; then as paper alone, read beside the borrowings carried from the first: not $11.969B
+    (_qcom_fy2015, (10.969e9, 10.969e9)),
+], ids=["KO", "HON", "AEP", "QCOM"])
+def test_the_as_of_view_reads_each_10ks_debt_in_its_window(tmp_path, facts, totals):
+    # BUG-256: as of a day before the later 10-K, and a day after it.
+    assert _debt_as_of(tmp_path, facts(), "2026-06-30", "2027-06-30") == [pytest.approx(t) for t in totals]
+
+
+def test_a_vintage_reads_no_10qs_figure_beside_its_paper(tmp_path):
+    # The as-of view reads annual reports alone: a 10-Q's comparative borrowings on the date are none of its figures.
+    facts = _debt_filing(CommercialPaper=1.0e9, LongTermDebtNoncurrent=9.969e9)
+    facts["facts"]["us-gaap"]["ShortTermBorrowings"] = {"units": {"USD": [
+        usd(1.0e9, None, "2025-12-31", fy=2026, fp="Q1", form="10-Q", filed="2026-04-28")]}}
+    later = _with_later_10k(facts, "2027-02-12", CommercialPaper=1.0e9)
+    assert _debt_as_of(tmp_path, later, "2027-06-30") == [pytest.approx(10.969e9)]
+
+
+def test_the_year_end_checkpoint_counts_a_10ks_paper_once_beside_a_10qs_debt_current():
+    # BUG-257 (code review 20, M-2): the checkpoint on a year end reads a 10-Q's comparative DebtCurrent, which holds
+    # the 10-K's paper, and BUG-143's rule judged a 10-K's paper by the annual reports alone, the annual record's view:
+    # NEE's 2011-12-31 read $24.316B for $22.967B (and D's, CLX's, CTAS's and ROK's year ends).
+    q1 = dict(fy=2026, fp="Q1", form="10-Q", filed="2026-04-28")
+    facts = _debt_filing(ShortTermBorrowings=0.0, CommercialPaper=1.349e9, LongTermDebtNoncurrent=20.81e9)
+    facts["facts"]["us-gaap"]["DebtCurrent"] = {"units": {"USD": [usd(2.157e9, None, "2025-12-31", **q1)]}}
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2025-12-31"]
+    assert (quarter.get("commercial_paper"), _total_debt(quarter)) == (0.0, pytest.approx(22.967e9))
+
+
+def test_a_short_term_total_no_checkpoint_reads_says_nothing_of_a_quarters_paper():
+    # The checkpoints read 10-Qs and 10-Ks: an 8-K's DebtCurrent on the quarter's end is no total of theirs.
+    q3 = dict(fy=2025, fp="Q3", form="10-Q", filed="2025-10-28")
+    us_gaap = {tag: {"units": {"USD": [usd(val, None, "2025-09-30", **q3)]}} for tag, val in (
+        ("CommercialPaper", 1.0e9), ("ShortTermBorrowings", 0.2e9), ("LongTermDebtNoncurrent", 20.0e9),
+        ("LiabilitiesAndStockholdersEquity", 90.0e9))}
+    us_gaap["DebtCurrent"] = {"units": {"USD": [usd(1.2e9, None, "2025-09-30", fy=2025, fp="Q3", form="8-K",
+                                                    filed="2025-11-05")]}}
+    quarter = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": us_gaap}})["2025-09-30"]
+    assert _total_debt(quarter) == pytest.approx(21.2e9)
 
 
 RESTRICTED = "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"

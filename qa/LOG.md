@@ -1966,3 +1966,25 @@ Result: BUG-256 and BUG-257 opened.
 Gates: ruff ✓ mypy ✓ pytest 2530 passed, 1 skipped (the reviewer's run at ca027c7) | CI: no PR (Q10)
 Commit: (this commit) chore(qa): record code review 20
 Next: BUG-256 (a regression of our own, so before BUG-159), then BUG-159 on top of it.
+
+## Iteration 109: 2026-10-26 02:51: fix (BUG-256, BUG-257)
+Picked: BUG-256, a regression of b49ee34 that review 20 found, before the older P2s; BUG-257 shares its cause.
+Did: an opus worker made each record judge a commercial paper fact by the short-term figure it reads, and keep a held
+paper as 0.0, test-first:
+- the annual record by the annual reports, as b49ee34 did;
+- a quarterly checkpoint by its 10-Qs and 10-Ks;
+- a vintage by its own filing, with two rules the as-of carry needs, measured before building.
+RED: 8 failed, 135 passed. 13 new mutants and BUG-142's 15 (reshaped), each killed, re-run by me.
+Real data:
+- all 502 re-parsed, and review 20's as-of replay re-run: the 1,512 improved windows kept, the 25 worsened back;
+- no annual total moved; the 11 checkpoints count their paper once;
+- valuations identical on two DB copies.
+Three vintage rows (BEN FY2011, QCOM FY2015, WEC FY2017) keep 0.0 by design, since the as-of view reads them right.
+The session scratchpad was emptied around 02:00 by the Temp cleanup, mid-run. The worker rebuilt mutants.py, and the
+tools now live in %LOCALAPPDATA%\stockdb-qa\tools.
+Evidence: `qa/evidence/bug256-{red,green,mutants,mutants-mine,gates,gates-mine,realdata,done}.txt`,
+`bug142-mutants-rerun{,-mine}.txt`
+Result: BUG-256 and BUG-257 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2542 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): each record judges commercial paper by the short-term figure it reads (BUG-256, BUG-257)
+Next: BUG-160 measured (a decision for the user, with a daily face of its own), then BUG-159 on top of this change.

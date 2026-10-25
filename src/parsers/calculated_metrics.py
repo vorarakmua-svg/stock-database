@@ -280,8 +280,8 @@ class CalculatedMetrics:
         """Calculate Total Debt = Long-term Debt + Short-term Debt + Commercial Paper.
 
         ``commercial_paper`` is the paper the short-term debt figure doesn't hold: the parser
-        sets paper aside where the short-term total on its date, DebtCurrent or else
-        ShortTermBorrowings, holds it (``xbrl_parser._current_debt_set_aside``, BUG-143).
+        reads it as 0.0 where the short-term total on its date, DebtCurrent or else
+        ShortTermBorrowings, holds it (``xbrl_parser._current_debt_set_aside``, BUG-143, BUG-256).
         """
         long_term = self._get_value(financials, ["long_term_debt"])
         short_term = self._get_value(financials, ["short_term_debt"])
