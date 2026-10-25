@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 10 · P3 130 · NEEDS-USER 22 · Verified: 111
+**Open:** P0 0 · P1 0 · P2 10 · P3 131 · NEEDS-USER 22 · Verified: 112
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1225,11 +1225,12 @@ Notes: 8a90337's and the README's "as a full collection would" hold only with no
 Investigation (iteration 110, `qa/evidence/bug160-investigation.txt`): DDM's trailing year ends on the latest snapshot's day (inputs.py:709-714, models.py:188-193); only a full collection stores payments (sqlite_store.py:1072-1074); a quote refresh stores a snapshot and no payments (fetch_quote reads no dividends). Since 2024, 21 factor events at companies with a DDM (SCCO 8, each on a cash ex-date): HEAD's DDM low in 14 of the 20 with one (0.44-0.77 of a full collection's); two medians moved (HON 2026-06-30 $59.85 for $68.77; SCCO 2026-08-12 $78.60 for $84.92), no verdict. Options measured against a full collection the same day: A (a factor refresh stores Yahoo's dividends, from the same request as the splits) exact in all 21; A' (every saved refresh stores them) exact in all 21 and fixes BUG-258; B2 (DDM's year ending at the last collection) 8 of 21 within 0.5%; B1 rejected (it moves full collections' DDM). Recommended: A' (yahoo_handler.py:148, quote_refresh.py:88, sqlite_store.py:1349-1350 and after :1417, dated by `_served_day`); tests drafted in the investigation's scratch (5 failing on HEAD, 1 guard); 7 of 8 mutants killed, the 8th equivalent. Full collections are unchanged by it.
 
 ### BUG-161 [P2][VALID] A note's cash equivalents outrank the balance sheet's total with restricted cash: PG's FY2025 cash $8.30B for $9.56B, BRK-B's FY2022 $2.60B for $36.40B
-Status: OPEN
-Found: iteration 98 by code review 14 (I2), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 112)
+Found: iteration 98 by code review 14 (I2), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py::test_a_notes_cash_equivalents_give_way_to_the_balance_sheets_total, ::test_a_later_10ks_note_doesnt_replace_the_years_total, ::test_a_cash_lines_smallest_part_gives_way_to_a_later_10ks_total; guards ::test_equivalents_the_total_adds_restricted_cash_to_are_the_cash_line (ICE x3), ::test_a_total_with_no_equivalents_beside_it_stays_the_cash, ::test_the_balance_sheets_own_cash_line_still_outranks_the_total (BBY, HIG)
 Repro: `cash_and_equivalents` reads CashAndCashEquivalentsAtCarryingValue, Cash, CashEquivalentsAtCarryingValue, then the restricted-cash total BUG-139 added (`canonical.py`); where a balance sheet tags its cash only as the total, a note's CashEquivalentsAtCarryingValue (the equivalents without the cash) wins: PG's FY2020-25 $14.6B, $9.1B, $6.0B, $6.8B, $8.0B, $8.3B against the balance sheet's $16.18B, $10.29B, $7.21B, $8.25B, $9.48B, $9.56B; BRK-B's FY2022-25 $2.6B, $4.8B, $14.4B, $17.6B against $36.40B, $38.64B, $48.38B, $52.57B, beside the FY2018-21 totals BUG-139 fills; AXP's FY2017 $0.07B against $33.26B. The total read before the equivalents (review 14's surviving mutant `m139_total_before_cash_equivalents`) changes exactly those 11 years, 49 quarterly, 49 TTM and 22 vintage cells, and PG's net debt, invested capital and ROIC in 6 years, and the whole suite still passes (1,183 at f2271db).
 Expected: the balance sheet's total before a note's component.   Actual: PG's net debt $1.2-1.6B high in each of FY2020-25 (FY2025 $30.32B for $29.06B, ROIC 19.72% for 20.03%); BRK-B's and AXP's cash shown low (BRK-B has no debt, AXP's net debt is suppressed).
 Notes: AXP's FY2009-16 cash are components too; its balance-sheet tag, CashCashEquivalentsAndFederalFundsSold, isn't mapped.
+Fix (iteration 112, `qa/evidence/bug161-done.txt`): the restricted-cash total now reads before CashEquivalentsAtCarryingValue (canonical.py), except where a filing's total is its equivalents plus restricted cash or asset deposits it tags on that date (`xbrl_parser._cash_totals_set_aside`): ICE's FY2018-22 10-Ks tag their balance sheet's cash line as the equivalents, and their total adds restricted cash and up to $146B of clearing margin deposits, so the plain reorder (the Expected line, review 14's mutant) would have read ICE's FY2021 cash $147.98B for $0.61B. Over the 502 (an asset-side balance-sheet oracle on 61,899 filing-dates): cash changes in 26 annual years at 6 filers (PG FY2025 $9.556B, BRK-B FY2022 $36.399B, AXP FY2017 $33.263B, BIIB, CPRT, MTD), none away from the balance sheet; ICE unchanged; valuations identical; net debt, ROIC, EPV, the EV/EBITDA history and ranks move. Residuals: BUG-260 (Cash a component), BUG-261 (AXP's tag unmapped).
 
 ### BUG-162 [P3][CODE] Three fixes rest on paths no test pins: BUG-128's rebasing under 3:2, BUG-134's refresh sector, the quarterly record's fact filters
 Status: OPEN
@@ -1929,6 +1930,18 @@ Status: OPEN
 Found: iteration 111 (BUG-159's investigation, `qa/evidence/bug159-investigation.txt` section 9) | Fixed: | Regression test:
 Repro: measured over the 502, not fixed by BUG-159's rule: (a) borrowings that hold the maturities with nothing in the filings to say so are counted with them (AMAT FY2024 +$0.70B, YUM FY2018-19, PEP FY2009, probably GEHC FY2025); (b) separate lines left as before (ATO FY2018, the 1% margin's coincidence, -$0.575B; XEL FY2024-25, whose LongTermDebt is its noncurrent line; about 10 years whose borrowings and maturities are in different 10-Ks); (c) paper inside a maturities line now read, which BUG-143's rule doesn't see as a holder (CAH FY2017 +$0.855B); (d) tags unread: KO's NotesAndLoansPayable since FY2023, NotesAndLoansPayableCurrent at 9 filers, OtherLongTermDebtCurrent at 25; (e) GE's stray 2015-10-09 quarter (a 10-Q note's figure); (f) two 10-Ks disagree about the year end (WDC FY2015, DUK FY2010); (g) long-term debt unread at APD FY2023-25, ECHO FY2022/24, GNRC FY2016 (BUG-133's kind).
 Expected: each year's total debt as its balance sheet's.   Actual: as listed.
+
+### BUG-260 [P2][VALID] The Cash tag, a note's component at some filers, still outranks the balance sheet's total: TGT's cash $0.28B for $4.76B
+Status: OPEN
+Found: iteration 112 (BUG-161's census, `qa/evidence/bug161-done.txt` section 6, classify_v2_cash.txt) | Fixed: | Regression test:
+Repro: cash_and_equivalents reads Cash ahead of the restricted-cash total. Cash is the balance sheet's line at ES, HIG, PGR, TGT FY2019 and VRT (their total adds restricted cash), but only a component at CF FY2020-25 ($0.168B for $1.614B in FY2024), TGT FY2020-26 ($0.276B for $4.762B in FY2025, so its net debt is about $4.5B high), and KLAC's FY2019-20 and GEN's FY2025 vintages. Putting the total ahead of Cash moves 55 cells away (ES tags none of the restricted cash its total holds, so BUG-161's guard can't separate them).
+Expected: the balance sheet's cash line.   Actual: a component at CF, TGT, KLAC and GEN.
+
+### BUG-261 [P3][VALID] AXP's and COF's balance-sheet cash tag, CashCashEquivalentsAndFederalFundsSold, isn't mapped
+Status: OPEN
+Found: iteration 112 (BUG-161's investigation, section 6) | Fixed: | Regression test:
+Repro: AXP's FY2009-17 and COF's balance sheets tag their cash line as CashCashEquivalentsAndFederalFundsSold (AXP FY2017 $32.927B = cash and due from banks + interest-bearing deposits + equivalents), which canonical.py doesn't map, so their cash reads a component (AXP FY2009-16) or nothing (10 years). Mapping it changes 32 years, 119 quarters and 97 vintages at AXP and COF; read on every date it adds a quarterly row from a cash flow statement and drops two TTM rows, so it needs the balance-sheet-dates filter (BUG-139). Their net debt is suppressed as banks', so it shows in the cash field only.
+Expected: the balance sheet's cash line.   Actual: a component or nothing.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

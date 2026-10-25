@@ -899,6 +899,97 @@ def test_a_quarter_whose_cash_is_tagged_only_with_restricted_cash_has_it():
     assert XBRLParser().extract_quarterly_financials(facts)["2026-03-31"].get("cash_and_equivalents") == 8.0e9
 
 
+EQUIVALENTS = "CashEquivalentsAtCarryingValue"
+
+
+def _cash(period):
+    """A period's cash as (value, tag)."""
+    return period.get("cash_and_equivalents"), period.get("_source_tags", {}).get("cash_and_equivalents")
+
+
+def _cash_records(facts, filed="2026-02-12"):
+    """FY2025's cash in the annual record, the year end's quarterly checkpoint and the vintage filed on *filed*."""
+    parser = XBRLParser()
+    return [_cash(record) for record in (parser.extract_annual_financials(facts).get("2025", {}),
+                                         parser.extract_quarterly_financials(facts).get("2025-12-31", {}),
+                                         parser.extract_annual_vintages(facts).get("2025", {}).get(filed, {}))]
+
+
+def test_a_notes_cash_equivalents_give_way_to_the_balance_sheets_total():
+    # BUG-161 (code review 14): PG tags its balance sheet's cash line with the total that includes restricted cash
+    # (FY2025: $9.556B; it has none) and its fair-value note's cash equivalents, $8.3B of it, as
+    # CashEquivalentsAtCarryingValue, which ranked first: FY2020-26 read the part (net debt $1.3B high in FY2025).
+    facts = _debt_filing(**{RESTRICTED: 9.556e9, EQUIVALENTS: 8.3e9})
+    assert _cash_records(facts) == [(9.556e9, RESTRICTED)] * 3
+
+
+def test_a_later_10ks_note_doesnt_replace_the_years_total():
+    # BRK-B's balance sheet shows cash by segment only; its one consolidated figure is the total, $36.399B for FY2022
+    # with $0.588B of restricted cash. Its FY2023 10-K adds a note's $2.6B of cash equivalents for FY2022, which the
+    # year read (FY2022-25), beside the FY2018-21 totals BUG-139 fills. Restricted cash the total holds isn't the rest
+    # of it: $33.2B is cash.
+    facts = _debt_filing(**{RESTRICTED: 36.399e9, "RestrictedCashAndCashEquivalents": 0.588e9})
+    facts = _with_later_10k(facts, "2027-02-26", **{RESTRICTED: 36.399e9, EQUIVALENTS: 2.6e9,
+                                                    "RestrictedCashAndCashEquivalents": 0.588e9})
+    parser = XBRLParser()
+    assert [_cash(parser.extract_annual_financials(facts)["2025"]),
+            _cash(parser.extract_annual_vintages(facts)["2025"]["2027-02-26"])] == [(36.399e9, RESTRICTED)] * 2
+
+
+def test_a_cash_lines_smallest_part_gives_way_to_a_later_10ks_total():
+    # AXP's FY2017 10-K tags its balance sheet's cash line, $32.927B, as CashCashEquivalentsAndFederalFundsSold, which
+    # cash doesn't read, over three parts: cash and due from banks, interest-bearing deposits in other banks, and
+    # $0.070B of short-term investment securities it tags CashEquivalentsAtCarryingValue, which the year read; its
+    # FY2018 10-K tags FY2017 with the total, the line and $0.336B of restricted cash.
+    lines = {"CashCashEquivalentsAndFederalFundsSold": 32.927e9, "CashAndDueFromBanks": 5.148e9,
+             "InterestBearingDepositsInBanks": 27.709e9, "RestrictedCashAndCashEquivalents": 0.336e9}
+    facts = _with_later_10k(_debt_filing(**{EQUIVALENTS: 0.070e9, **lines}), "2027-02-12",
+                            **{RESTRICTED: 33.263e9, **lines})
+    assert _cash(_debt_year(facts)) == (33.263e9, RESTRICTED)
+
+
+@pytest.mark.parametrize("tagged, line", [
+    # ICE's FY2020 10-K tags its balance sheet's cash line as CashEquivalentsAtCarryingValue (its 10-Qs, the same
+    # figures as CashAndCashEquivalentsAtCarryingValue), beside short- and long-term restricted cash and their total;
+    # the cash flow statement's total adds them.
+    ({EQUIVALENTS: 0.583e9, "RestrictedCashAndCashEquivalentsAtCarryingValue": 1.000e9,
+      "RestrictedCashAndCashEquivalentsNoncurrent": 0.408e9, "RestrictedCashAndCashEquivalents": 1.408e9,
+      RESTRICTED: 1.991e9}, 0.583e9),
+    # from its FY2021 10-K the total adds the clearing houses' margin deposits too: $147.976B for $0.607B of cash
+    ({EQUIVALENTS: 0.607e9, "RestrictedCashAndCashEquivalentsAtCarryingValue": 1.035e9,
+      "RestrictedCashAndCashEquivalentsNoncurrent": 0.398e9, "RestrictedCashAndCashEquivalents": 1.433e9,
+      "DepositsAssetsCurrent": 145.936e9, RESTRICTED: 147.976e9}, 0.607e9),
+    # figures rounded to the million can miss their total by one
+    ({EQUIVALENTS: 0.841e9, "RestrictedCashAndCashEquivalentsAtCarryingValue": 0.943e9,
+      "RestrictedCashAndCashEquivalentsNoncurrent": 0.404e9, RESTRICTED: 2.189e9}, 0.841e9),
+])
+def test_equivalents_the_total_adds_restricted_cash_to_are_the_cash_line(tagged, line):
+    # Read before the equivalents everywhere, the total made ICE's FY2020-21 cash $83.6B and $148.0B, where its
+    # balance sheets show $0.583B and $0.607B.
+    assert _cash_records(_debt_filing(**tagged)) == [(line, EQUIVALENTS)] * 3
+
+
+def test_a_total_with_no_equivalents_beside_it_stays_the_cash():
+    # CPRT's FY2021 10-K tags its $1.048B cash line as the total and as restricted cash too: with no equivalents
+    # beside them, the total is the only cash figure there is.
+    facts = _debt_filing(**{RESTRICTED: 1.04826e9, "RestrictedCashAndCashEquivalentsAtCarryingValue": 1.04826e9})
+    assert _cash_records(facts) == [(1.04826e9, RESTRICTED)] * 3
+
+
+@pytest.mark.parametrize("tagged, cash", [
+    # BBY's FY2021 10-K: its $2.936B line (its current assets add up with it), a note's $1.584B of cash equivalents,
+    # and a $3.205B total whose $0.269B of restricted cash it tags nowhere.
+    ({"CashAndCashEquivalentsAtCarryingValue": 2.936e9, EQUIVALENTS: 1.584e9, RESTRICTED: 3.205e9},
+     (2.936e9, "CashAndCashEquivalentsAtCarryingValue")),
+    # HIG's FY2024 10-K: its $0.183B of cash, and a total that is it and $0.051B of restricted cash.
+    ({"Cash": 0.183e9, "RestrictedCash": 0.051e9, RESTRICTED: 0.234e9}, (0.183e9, "Cash")),
+])
+def test_the_balance_sheets_own_cash_line_still_outranks_the_total(tagged, cash):
+    # Read before CashAndCashEquivalentsAtCarryingValue, the total would replace 1,986 years' cash line at 287 filers;
+    # before Cash, ES's, HIG's, PGR's, TGT's and VRT's.
+    assert _year_end_cash(**tagged) == cash
+
+
 def test_an_instruments_carrying_amount_is_not_the_years_debt():
     # DebtInstrumentCarryingAmount is often one instrument's, on days with no balance sheet: SLB's $0.5B note at
     # 2020-12-31 beside some $16B of debt, BSX's and HWM's debt-only quarters that cost them seven trailing years.

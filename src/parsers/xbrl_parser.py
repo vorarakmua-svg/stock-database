@@ -7,6 +7,7 @@ import statistics
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from fractions import Fraction
+from itertools import combinations
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, DURATION, INSTANT, SIGN_ABS, SIGN_NET
@@ -161,6 +162,42 @@ def _on_balance_sheet_dates(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
                 unit: [e for e in entries if e.get("end") in dates.get(e.get("accn") or "", ())]
                 for unit, entries in units.items()}}
     return kept
+
+
+#: The total with restricted cash, and the cash equivalents cash reads after it, which most filers tag only in a note,
+#: as a part of their cash line (``canonical.py``, BUG-161).
+_RESTRICTED_CASH = "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
+_CASH_EQUIVALENTS = "CashEquivalentsAtCarryingValue"
+#: What a cash flow statement's total adds to the balance sheet's cash line: restricted cash, and deposits a clearing
+#: house counts with it (ICE's margin deposits); not ``Deposits``, a bank's deposit liabilities.
+_BESIDE_THE_CASH_LINE = ("Restricted", "DepositsAssets")
+
+
+def _cash_totals_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+    """*us_gaap* less the restricted-cash total a filing tags on a date where it is that filing's cash equivalents
+    plus restricted cash (or such deposits) it tags there: the equivalents are then its balance sheet's cash line, and
+    the total the cash flow statement's. ICE's 10-Ks for FY2018-22 tag their cash line as the equivalents, beside short-
+    and long-term restricted cash and, from FY2021, $82-146B of margin deposits the total adds: read first, the total
+    made FY2020-21's cash $83.6B and $148.0B for $0.583B and $0.607B (BUG-161)."""
+    totals, equivalents = _by_filing(us_gaap, _RESTRICTED_CASH), _by_filing(us_gaap, _CASH_EQUIVALENTS)
+    dates = totals.keys() & equivalents.keys()
+    if not dates:
+        return us_gaap
+    beside: Dict[Tuple[str, str], List[float]] = defaultdict(list)
+    for tag in us_gaap:
+        if tag.startswith(_BESIDE_THE_CASH_LINE):
+            for key, value in _by_filing(us_gaap, tag).items():
+                if key in dates:
+                    beside[key].append(value)
+    aside = {key for key in dates if any(_agree(sum(parts), totals[key] - equivalents[key])
+                                         for n in range(1, len(beside[key]) + 1)
+                                         for parts in combinations(beside[key], n))}
+    if not aside:
+        return us_gaap
+    body = us_gaap[_RESTRICTED_CASH]
+    return {**us_gaap, _RESTRICTED_CASH: {**body, "units": {
+        unit: [e for e in entries if (e.get("accn"), e.get("end")) not in aside]
+        for unit, entries in body.get("units", {}).items()}}}
 
 
 #: LongTermDebt, a total with the current maturities, and the noncurrent figures long-term debt
@@ -465,13 +502,14 @@ def _current_debt_combined(us_gaap: Dict[str, Any], as_filed: Dict[str, Any]) ->
 
 def _filer_facts(facts: Dict[str, Any], view: str) -> Dict[str, Any]:
     """A filer's us-gaap facts as the extractions of *view* read them: its dollar filings', net
-    outflows as paid, the balance-sheet-only tags on their balance sheets' dates, LongTermDebt set
+    outflows as paid, the balance-sheet-only tags on their balance sheets' dates, less the total with
+    restricted cash where a filing's cash equivalents and restricted cash make it up, LongTermDebt set
     aside where its noncurrent figure should stand (judged on DebtCurrent as filed), then DebtCurrent
     before a refinancing set aside, and 0.0 for the CommercialPaper the short-term total that view's
     record reads on its date holds, and last the borrowings and the maturities as one DebtCurrent
     where the filing tags no DebtCurrent."""
-    totals = _debt_totals_set_aside(_net_outflows_as_paid(_on_balance_sheet_dates(
-        _dollar_filings(facts.get("facts", {}).get("us-gaap", {})))))
+    totals = _debt_totals_set_aside(_net_outflows_as_paid(_cash_totals_set_aside(_on_balance_sheet_dates(
+        _dollar_filings(facts.get("facts", {}).get("us-gaap", {}))))))
     return _current_debt_combined(_current_debt_set_aside(totals, view), totals)
 
 

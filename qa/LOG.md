@@ -2025,3 +2025,21 @@ BUG-159).
 Gates: ruff ✓ mypy ✓ pytest 2561 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(parsers): short-term debt counts the current maturities beside the borrowings (BUG-159)
 Next: the open P2s oldest first: BUG-161 (cash), BUG-170 (D&A), BUG-171 (quarterly long-term debt).
+
+## Iteration 112: 2026-10-26 05:16: fix (BUG-161)
+Picked: BUG-161, the oldest open P2 (a note's cash equivalents outranking the balance sheet's total).
+Did: an opus worker censused every balance-sheet date of the 502's filings against an asset-side decomposition.
+- The entry's one-line reorder is wrong for ICE, whose 10-Ks tag the cash line as the equivalents beside a total
+  with restricted cash and clearing margin deposits.
+- The rule: the total before the equivalents, except where a filing's total is its equivalents plus restricted cash
+  or deposits it tags.
+- Built test-first (RED: PG, BRK-B, AXP; the reorder alone then fails ICE's guards).
+- 9 mutants, and BUG-159's 18, BUG-256's 13 and BUG-142's 16 (reshaped), each killed (re-run by me).
+- Real data: cash changes in 26 years at 6 filers, none away from the balance sheet; ICE unchanged; valuations
+  identical on two DB copies.
+Evidence: `qa/evidence/bug161-{red,green,mutants,gates,gates-mine,realdata,done}.txt`
+Result: BUG-161 VERIFIED; residuals BUG-260 (P2, Cash a component at CF and TGT) and BUG-261 (P3, AXP's tag). Four
+fixes since code review 20 (BUG-256, -257, -159, -161).
+Gates: ruff ✓ mypy ✓ pytest 2570 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): cash reads the balance sheet's total before a note's equivalents (BUG-161)
+Next: BUG-173 (measured: GOOGL FY2020's count, no stored value moves), then code review 21.
