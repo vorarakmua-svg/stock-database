@@ -1947,3 +1947,22 @@ Result: BUG-151 VERIFIED. Five fixes since code review 19 (BUG-142, BUG-143, BUG
 Gates: ruff ✓ mypy ✓ pytest 2530 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(web): ranges count back from the ticker's last bar, not from today (BUG-151)
 Next: code review 20 (4abe6d7..HEAD), then BUG-159 (its investigation is under way).
+
+## Iteration 108: 2026-10-25 23:50: review (code review 20)
+Picked: code review 20, due after five fixes since review 19 (BUG-142, BUG-143, BUG-149, BUG-150, BUG-151:
+4abe6d7..ca027c7).
+Did: an opus reviewer, read-only, in two passes (`qa/evidence/review20.txt`).
+- Its scope: a re-parse of all 502 cached filers with both commits; the as-of view replayed on every filing day; the
+  five price views on a copy at two clocks; boundary mutants.
+- No Critical. One Important, I-1: BUG-143's set-aside judges per-filing vintages by later filings, a point-in-time
+  regression. KO FY2019 as of 2020-06-30 lost 24% of its total debt; 19 vintages at 12 filers are affected, against
+  1,512 as-of windows the fix moved toward their filings' figures. Recorded as BUG-256 (P2), with M-3's untested
+  boundaries in its fix list.
+- The minors: M-1, BUG-159's unmasking is wider (its note extended); M-2, year-end quarterly checkpoints, BUG-257
+  (P3); M-4, BUG-157's repro stale (to update when it is fixed).
+- The web commits (BUG-149, -150, -151) pass as they stand.
+Evidence: `qa/evidence/review20.txt` (scratch: %LOCALAPPDATA%\stockdb-qa\review20\)
+Result: BUG-256 and BUG-257 opened.
+Gates: ruff ✓ mypy ✓ pytest 2530 passed, 1 skipped (the reviewer's run at ca027c7) | CI: no PR (Q10)
+Commit: (this commit) chore(qa): record code review 20
+Next: BUG-256 (a regression of our own, so before BUG-159), then BUG-159 on top of it.

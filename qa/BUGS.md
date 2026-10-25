@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 12 · P3 129 · NEEDS-USER 20 · Verified: 108
+**Open:** P0 0 · P1 0 · P2 13 · P3 130 · NEEDS-USER 20 · Verified: 108
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1211,6 +1211,7 @@ Found: iteration 98 while fixing BUG-141 (`qa/evidence/iter98-bug141-realdata.tx
 Repro: `short_term_debt` reads its first tag (`canonical.py`: DebtCurrent, ShortTermBorrowings, LongTermDebtCurrent), so a balance sheet with short-term borrowings and the current maturities on separate lines keeps the borrowings only, beside a long-term figure that is the noncurrent one; maturities a filer tags only as LongTermDebtAndCapitalLeaseObligationsCurrent (UNP, HD, CVS, KO, APH) aren't read at all. Iteration 98's rejected prototype that summed each filing's borrowings and maturities raised 230 years at 40 filers (WMT 18, SO 18, PM 18, DUK 16, CVS 16, MO 13, ABT 10): VZ's FY2020-23 then match its own DebtLongtermAndShorttermCombinedAmount within 1% (FY2023 $150.67B, $137.70B stored), ABBV's FY2017 reads $37.37B ($31.35B stored), MSFT's FY2013 $15.60B ($12.60B). But IBM tags its balance sheet's short-term debt, which holds the maturities, as ShortTermBorrowings ($6.787B in FY2021, $6.764B of it the maturities), so the plain sum counts IBM's twice: FY2018 $55.86B against its balance sheet's $10.207B and $35.605B.
 Expected: short-term debt as all current debt (DebtCurrent; else short-term borrowings and the current maturities, once), with a rule for a borrowings line that already holds the maturities (IBM's).   Actual: the maturities left out of total debt.
 Notes (iteration 104): BUG-143's fix unmasks it where the double-counted paper happened to stand in for the missing maturities (APD FY2013, FDX FY2026, LIN, CVS): their totals now fall short by the maturities instead of being right by accident; KO FY2019's $38.51B leaves out its $4.25B of maturities.
+Notes (code review 20, M-1): wider than that. Years whose total was within 1% of long-term + borrowings + the maturities beside them and now fall 1.7-9.2% short: AEP FY2020 and FY2022, APD FY2013, BAX FY2014, ELV FY2013, GPC FY2025 (-0.2% to -7.4%, its latest year), LOW FY2023, NI FY2011-12, PM FY2013, RTX FY2022, SJM FY2017, SO FY2010; latest years further from that sum: AEP FY2025, BF-B FY2026, FDX FY2026, GPC FY2025, MKC FY2025 (-3.9% to -12.7%), OKE FY2025 (`qa/evidence/review20.txt`). The fix's real-data check should verify each.
 Impact: total debt, net debt, EV and debt/EBITDA low by the current maturities for those years (VZ 8.6% in FY2023, ABBV 16% in FY2017, MSFT 19% in FY2013).
 
 ### BUG-160 [P2][WEB] BUG-128 regression: a factor refresh values DDM's trailing year as of the refresh day on the payments the last collection stored: SCCO's DDM $53.63 for $68.16
@@ -1897,6 +1898,19 @@ Status: OPEN
 Found: iteration 104 (a BUG-141 residual, `qa/evidence/bug142-investigation.txt` section 5) | Fixed: | Regression test:
 Repro: CVX's 2018 10-K tags its balance sheet's $28.733B only as LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities (unmapped), so the per-filing set-aside can't see it and long_term_debt reads the note's LongTermDebt $23.730B: FY2018 total debt $29.46B against the balance sheet's $34.46B (-14.5%; +36% before BUG-142's fix).
 Expected: the balance sheet's long-term debt.   Actual: the note's narrower figure.
+
+### BUG-256 [P2][VALID] BUG-143's fix judges a filing's vintage by later filings: KO's FY2019 vintage loses the paper its own balance sheet shows apart
+Status: OPEN
+Found: code review 20 (I-1), iteration 108; a regression of b49ee34 | Fixed: | Regression test:
+Repro: `_current_debt_set_aside` (xbrl_parser.py ~261-270) sets a CommercialPaper fact aside where the latest-filed short-term total on its date, from any annual report, holds it: the annual record's view. `extract_annual_vintages` reads the same facts, and a vintage is one filing's view (the as-of explorer and /api/asof/* serve it, "as known then"). So a 10-K whose balance sheet shows the paper on a line of its own loses it because a 10-K filed a year later shows it inside its borrowings, and a comparative 10-K tagging only the maturities and the paper loses it on an earlier 10-K's evidence (the BUG-110 carry then serves it). Review 20's replay through the real AsOfReader: KO FY2019 as of 2020-06-30 total debt $41.776B to $31.769B (-24%, debt/EBITDA 3.65 to 2.77), QCOM FY2016 -14.9%, HON FY2014 -19.0%; NEE FY2019 and KO FY2022 as of today too. 19 vintages at 12 filers (ADI, BEN, CLX, D, HON, KO, MCO -37%, NEE, QCOM, ROK, SNA, WEC) and 25 as-of windows at 13 filers move away from their filing's own figures (4 of them today's answer: AEP FY2019, CLX FY2013, KO FY2022, NEE FY2019), against 1,512 the fix moved toward them.
+Expected: a vintage judged by its own filing (a paper its own short-term total holds is held; otherwise added), and a held paper kept as an explicit 0.0 rather than dropped, so the BUG-110 carry can't revive an earlier filing's paper beside a later vintage that holds it.   Actual: later filings decide an earlier filing's vintage.
+Notes: the same fix should add review 20's M-3 guards, boundaries no test pins (their mutants survived): a short-term total 5% below the paper is not holding it (IFF FY2021's shape; _PAPER_ROUNDING 0.02 to 0.06 survived), and a DebtCurrent below LongTermDebtAndCapitalLeaseObligationsCurrent is a part (PH FY2023's $1.8B of paper; _MATURITIES without that tag survived). Test: review 20's head\tests\test_review20_probe.py::test_the_first_10ks_vintage_keeps_the_paper_its_own_balance_sheet_shows (passes on 4abe6d7, fails on ca027c7).
+
+### BUG-257 [P3][VALID] A year-end quarterly checkpoint adds a 10-K's paper beside a 10-Q comparative's short-term total that holds it
+Status: OPEN
+Found: code review 20 (M-2; the BUG-142 investigation's residual 5g), iteration 108 | Fixed: | Regression test:
+Repro: BUG-143's rule judges a 10-K's paper by annual reports only (right for the annual record), but the quarterly checkpoint on that date (`_collect_instant_checkpoints`) reads 10-Qs too: 11 checkpoints at 5 filers (NEE 2010-13 year ends, D 2011-13, CLX 2019-06-30, CTAS 2017-05-31, ROK 2013-09-30) still count the paper twice; none is a latest quarter, so no TTM or EV effect today. Pre-existing (review 20's probe fails on both 4abe6d7 and ca027c7: 24.316e9 for 22.967e9).
+Expected: each view's paper judged against the total that view reads on the date.   Actual: as above.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
