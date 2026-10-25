@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 15 · P3 130 · NEEDS-USER 20 · Verified: 105
+**Open:** P0 0 · P1 0 · P2 14 · P3 129 · NEEDS-USER 20 · Verified: 106
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1142,11 +1142,12 @@ Repro: `xbrl_parser.py:100` (`_net_outflows_as_paid`) and BUG-127's Fix paragrap
 Expected: the filings named as they are.   Actual: "2008 10-Qs".
 
 ### BUG-149 [P2][UI] The ^GSPC overlay rebases each line to its own first bar: at MAX, AAPL's +349,443% beside an S&P from 1927 (+5,859% from AAPL's first day, shown +43,509%)
-Status: OPEN
-Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 105)
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_web_compare_rebase.py (8 cases), tests/test_web_api_stocks.py::test_compare_bars_includes_benchmark_and_others
 Repro: GP's compare chart draws `/api/stocks/{T}/compare-bars?others=^GSPC&range=R`, each series normalised against its own first non-null close in the range (`stocks_api.py:312`; `app.js:228-236` plots each on its own dates): on the golden copy AAPL starts 1980-12-12 at 0% and ^GSPC 1927-12-30 at 0%, and at 2026-10-19 they read +349,443% and +43,509%, where rebased on 1980-12-12 ^GSPC is +5,859%. The date pairing itself is right (218,709 points, no one-day shift).
 Expected: both lines rebased on the first date they share.   Actual: each on its own first bar.
 Impact: MAX for every ticker with a shorter history than the index (all 18 golden tickers, the user's 15), and ARM's 5Y (-1.2 points); 1Y and shorter unaffected.
+Fix (iteration 105): `compare_bars` rebases every series on the first date they share (the latest of their first dates with a close; a series without bars doesn't move it), each from its first bar on or after it. On the user's 502: AAPL against ^GSPC at MAX from 1980-12-12, ^GSPC +5,799% (it showed +43,069% from 1927-12-30); all 502 at MAX, 13 at 5Y and the 4 listed within the year (FDXF, SPCX, HONA, VYLR) at 1Y are rebased; series that share no date come back empty. Evidence: `qa/evidence/bug149-*.txt`.
 
 ### BUG-150 [P2][UI] HP's Download CSV isn't the table it sits under: AAPL's 5Y table has 1,254 daily rows, the CSV 262 weekly
 Status: OPEN
@@ -1789,7 +1790,7 @@ Expected (a choice): either rank a left-over company among its major group's com
 Notes: the real S&P 500 (build M5-6, 502 companies; `qa/evidence/close-m5-6-live-groups.txt`): 22 groups, 351 companies ranked in one. Left over in a 2-digit group: 28: 17 of 34 (17 in 283), 35: 17 of 33, 36: 11 of 32, 38: 5 of 40 (35 in 382 and 384), 49: 9 of 37, 63: 11 of 23, 73: 7 of 57 (50 in 737 and 738); 20, 37 and 62 have no 3-digit group. Ranking the left-overs among themselves when 10 or more remain would give 28, 35, 36 and 63 a group of their own and leave the left-overs of 38, 49 and 73 without industry ranks.
 
 ### BUG-239 [P3][CODE] Importing src.config creates data/output/json, data/output/csv and data/cache under the current directory
-Status: OPEN
+Status: WONTFIX (a duplicate of BUG-158, iteration 105)
 Found: build M5-6 (the review-19 I-1 worker's end-to-end run) | Fixed: | Regression test:
 Repro: src/config.py's import-time `default_config = AppConfig()` runs StorageConfig.ensure_directories (`__post_init__`), so any process that imports the package from another folder (a script run from a scratch folder) creates an empty data\ tree there. Pre-existing.
 Expected: the folders made when a run writes to them.   Actual: made at import, wherever the process starts.

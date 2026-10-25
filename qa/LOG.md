@@ -1897,3 +1897,20 @@ figures change at each company's next collection.
 Gates: ruff ✓ mypy ✓ pytest 2412 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(parsers): short-term debt before a refinancing, and commercial paper a short-term total holds, counted once (BUG-142, BUG-143)
 Next: BUG-149, BUG-150, BUG-151 (the price chart and history tabs), then BUG-159, oldest first.
+
+## Iteration 105: 2026-10-25 22:27: fix (BUG-149)
+Picked: the oldest open P2 after BUG-142, BUG-149 (the GP compare chart's ^GSPC overlay).
+Did: an opus worker fixed `compare_bars` test-first.
+- Every series is rebased on the first date they all share, from its first bar on or after it (RED: 8 failed, 1 guard
+  passed).
+- One existing test's expectation changed: its fixture's AAA and ^GSPC share no date, so AAA is now empty.
+- Real data on a copy: every point equals the copy's closes over the shared start's (difference 0.0). AAPL at MAX
+  from 1980-12-12 shows ^GSPC +5,799%, where it read +43,069%.
+- 9 mutants, each killed (re-run by me).
+- BUG-239 closed as BUG-158's duplicate.
+Evidence: `qa/evidence/bug149-{red,green,mutants,mutants-mine,mutants-detail,realdata,gates,gates-mine,done}.txt`
+Result: BUG-149 VERIFIED. (A stock-web server, started by the user at 22:17, read the real DB meanwhile; nothing here
+wrote to it.)
+Gates: ruff ✓ mypy ✓ pytest 2420 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(web): the compare chart rebases every line on the first date they share (BUG-149)
+Next: BUG-150 (the HP tab's CSV link), then BUG-151.

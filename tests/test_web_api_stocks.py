@@ -251,8 +251,10 @@ def test_compare_bars_includes_benchmark_and_others(client):
     assert len(series["^GSPC"]["dates"]) == 30
     assert series["^GSPC"]["pct"][0] == 0.0
 
-    assert len(series["AAA"]["dates"]) == AAA_BAR_COUNT
-    assert series["AAA"]["pct"][0] == 0.0
+    # Every series runs from the first date they share (BUG-149): AAA's bars (2023-01-01..2023-09-17) all end
+    # before ^GSPC's first (2024-01-01), so AAA shares none; BBB has no bars.
+    assert series["AAA"] == {"dates": [], "pct": []}
+    assert series["BBB"] == {"dates": [], "pct": []}
 
 
 def test_compare_bars_unknown_other_contributes_empty_series(client):

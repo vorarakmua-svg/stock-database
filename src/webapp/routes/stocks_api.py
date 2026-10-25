@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
@@ -283,6 +283,15 @@ def indicators(
 # ---------------------------------------------------------------------------
 
 
+def _shared_start(series_bars: Iterable[List[Dict[str, Any]]]) -> Optional[str]:
+    """The latest of the series' first dates with a close: the first date on which every series has begun.
+
+    A series without a close (no bars: an unknown "other") doesn't move it; ``None`` when no series has one.
+    """
+    firsts = [next((b["date"] for b in rows if b["close"] is not None), None) for rows in series_bars]
+    return max((d for d in firsts if d is not None), default=None)
+
+
 @router.get("/{ticker}/compare-bars")
 def compare_bars(
     ticker: str,
@@ -290,7 +299,7 @@ def compare_bars(
     range: str = "1Y",  # noqa: A002
     r: Reader = Depends(get_reader),
 ) -> Dict[str, Any]:
-    """Normalized (percent-change) close series for *ticker* plus ``others``.
+    """Percent-change close series for *ticker* plus ``others``, rebased on the first date they share.
 
     ``others`` is a comma-separated ticker list and may include benchmark
     symbols such as ``^GSPC`` (which has price_bars but no ``companies``
@@ -298,6 +307,13 @@ def compare_bars(
     "others" simply contribute an empty series rather than erroring, since
     ``Reader.price_bars`` returns ``[]`` for a ticker with no bars. 400 on
     an invalid ``range``.
+
+    Every series runs from the shared start (``_shared_start``, within the
+    range), rebased on its first close on or after it (``normalize_pct``): all
+    read 0% there, a series without a close that day (a holiday of its own)
+    from its next close, and a series whose bars all end before it shares no
+    date with the others and is empty. Each series on its own first bar put
+    AAPL's +349,443% at MAX beside an S&P 500 counted from 1927 (BUG-149).
     """
     if r.get_company(ticker) is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
@@ -308,14 +324,13 @@ def compare_bars(
     start_iso = start.isoformat() if start is not None else None
 
     other_tickers = [t.strip() for t in others.split(",") if t.strip()]
-    all_tickers = [ticker] + other_tickers
+    by_ticker = {t: r.price_bars(t, start=start_iso) for t in [ticker] + other_tickers}
+    shared = _shared_start(by_ticker.values())
 
     series: Dict[str, Any] = {}
-    for t in all_tickers:
-        t_bars = r.price_bars(t, start=start_iso)
-        dates = [b["date"] for b in t_bars]
-        closes = [b["close"] for b in t_bars]
-        series[t] = {"dates": dates, "pct": normalize_pct(closes)}
+    for t, t_bars in by_ticker.items():
+        kept = [b for b in t_bars if shared is None or b["date"] >= shared]
+        series[t] = {"dates": [b["date"] for b in kept], "pct": normalize_pct([b["close"] for b in kept])}
     return {"series": series}
 
 
