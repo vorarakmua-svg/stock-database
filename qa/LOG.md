@@ -1988,3 +1988,19 @@ Result: BUG-256 and BUG-257 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2542 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(parsers): each record judges commercial paper by the short-term figure it reads (BUG-256, BUG-257)
 Next: BUG-160 measured (a decision for the user, with a daily face of its own), then BUG-159 on top of this change.
+
+## Iteration 110: 2026-10-26 02:55: investigation (BUG-160)
+Picked: BUG-160, the next open P2 outside the parser (BUG-256's worker was editing it). Its fix moves medians, which
+is the user's call, so the investigation measured it rather than applied it.
+Did: an opus investigation (read-only, from a git-archive export; `qa/evidence/bug160-investigation.txt`).
+- The bug is wider than filed: `stock-data refresh`'s recompute revalues every company on a DDM year missing the
+  payments since its last full collection, factor or not.
+- The 2026-10-25 refresh of the user's DB left CVS's and LOW's DDM low already; their verdicts are unchanged.
+- Daily runs would make it drift: 18 medians and 2 verdicts wrong after 17 days, 117 and 18 after 81.
+- Option A' (every saved refresh stores Yahoo's dividends from the request that serves the splits) matches a full
+  collection in every measured case.
+Evidence: `qa/evidence/bug160-investigation.txt` (scratch: %LOCALAPPDATA%\stockdb-qa\bug160\)
+Result: BUG-160 to NEEDS-USER; BUG-258 (P1, the daily face) opened as NEEDS-USER; A' recommended for both.
+Gates: ruff ✓ mypy ✓ pytest 2542 passed, 1 skipped (iteration 109's run; the code is unchanged) | CI: no PR (Q10)
+Commit: (this commit) chore(qa): BUG-160 measured; its daily face is BUG-258, both for the user
+Next: BUG-159 (its fix built on BUG-256's views).
