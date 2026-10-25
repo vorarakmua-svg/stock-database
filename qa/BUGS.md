@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 13 · P3 129 · NEEDS-USER 20 · Verified: 107
+**Open:** P0 0 · P1 0 · P2 12 · P3 129 · NEEDS-USER 20 · Verified: 108
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1157,10 +1157,11 @@ Expected: the CSV the table shows (`interval=1d`), or the link saying it is week
 Fix (iteration 106): the HP fragment's link asks for `interval=1d` (`workstation.py`). On a copy of the user's DB, AAPL's table and CSV: 250 and 250 rows at 1Y, 1,255 and 1,255 at 5Y, 11,559 and 11,559 at MAX, the same dates (`qa/evidence/bug150-realdata.txt`).
 
 ### BUG-151 [P2][UI] On a database not collected in the last month, the short ranges say "No price history collected." beside thousands of stored bars
-Status: OPEN
-Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 107)
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_web_range_anchor.py (106 cases), tests/test_web_compare_rebase.py::test_a_range_shorter_than_both_histories_is_as_it_was
 Repro: ranges are anchored on today, not on the last bar (`resolve_range_start`): the user's copy, last collected 2026-08-04, gives HP 1M empty for all 127 companies and 3M for 15 on 2026-10-20, reading "No price history collected." beside AAPL's 11,502 bars; the CSV is a 0-byte 200 and the API `[]`.
 Expected: the range ending at the last bar, or a message that says when the last bar is.   Actual: a false "no history".
+Fix (iteration 107): every route that resolves a range (the bars API, the indicators bundle, compare-bars on the primary's bars, the bars CSV and the HP tab) counts back from min(today, the ticker's last bar) (`stocks_api.range_anchor`, `Reader.last_bar_date`); YTD from 1 January of that year, MAX unchanged; a ticker without bars keeps today. On a copy of the user's DB with today set to 2026-12-23, AAPL's 1M is its 23 bars to 2026-10-23 in every view (it was empty for all 502 companies). Evidence: `qa/evidence/bug151-*.txt`.
 
 ### BUG-152 [P3][MATCH] Bars stored before BUG-075's fix count a spin-off twice: DHR's MAX chart jumps +61.2% on 2016-07-05
 Status: OPEN

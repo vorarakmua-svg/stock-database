@@ -4,12 +4,15 @@ that back the terminal workstation UI (Task 7+).
 
 Range/interval semantics
 -------------------------
-``range`` resolves to a start date measured back from "today"
-(``_today()``, real UTC date by default — overridable in tests via
-monkeypatching this module's ``_today``):
+``range`` resolves to a start date measured back from the ticker's last
+stored bar, or from "today" when that is earlier or the ticker has no bars
+(``range_anchor``; ``_today()`` is the real UTC date by default, overridable
+in tests via monkeypatching this module's ``_today``). Counted back from
+today, a database not collected for a month read its short ranges empty
+(BUG-151):
 
-- ``1M``/``3M``/``6M``/``1Y``/``5Y`` -> a fixed day count back from today.
-- ``YTD`` -> January 1st of the current year.
+- ``1M``/``3M``/``6M``/``1Y``/``5Y`` -> a fixed day count back from the anchor.
+- ``YTD`` -> January 1st of the anchor's year.
 - ``MAX`` -> no lower bound (``None``).
 
 ``interval`` controls bar granularity for ``/bars`` (and the bars CSV
@@ -72,7 +75,7 @@ VALID_INTERVALS = frozenset({"auto", "1d", "1wk", "1mo"})
 
 
 def _today() -> date:
-    """The reference "today" used to resolve ``range`` to a start date.
+    """The reference "today" a ``range`` counts back from when the ticker's last bar isn't earlier (``range_anchor``).
 
     A thin, monkeypatchable seam — tests override this function (not
     ``datetime.now`` directly) to pin "today" near fixture data without
@@ -81,8 +84,21 @@ def _today() -> date:
     return datetime.now(timezone.utc).date()
 
 
+def range_anchor(r: Reader, ticker: str) -> date:
+    """The day *ticker*'s ``range`` counts back from: its last stored bar, or today when that is earlier.
+
+    Counted back from today, a database last collected on 2026-08-04 read every 1M range empty on 2026-10-20, "No
+    price history collected." beside AAPL's 11,502 bars (BUG-151). A ticker without bars keeps today (nothing to show
+    either way), and so does a last bar dated today or later.
+    """
+    today = _today()
+    last = r.last_bar_date(ticker)
+    return today if last is None else min(today, last)
+
+
 def resolve_range_start(range_key: str, today: Optional[date] = None) -> Optional[date]:
-    """Resolve a ``range`` key to an inclusive start date, or ``None`` for MAX.
+    """Resolve a ``range`` key to an inclusive start date counted back from *today* (the routes pass the ticker's
+    ``range_anchor``; ``_today()`` when omitted), or ``None`` for MAX.
 
     Raises ``ValueError`` if ``range_key`` is not one of ``VALID_RANGES``.
     """
@@ -243,7 +259,7 @@ def bars(
     400 on an invalid ``range``/``interval`` value.
     """
     try:
-        start = resolve_range_start(range)
+        start = resolve_range_start(range, range_anchor(r, ticker))
         resolved_interval = resolve_interval(interval, range)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -270,7 +286,7 @@ def indicators(
     not restarted from scratch there. 400 on an invalid ``range``.
     """
     try:
-        start = resolve_range_start(range)
+        start = resolve_range_start(range, range_anchor(r, ticker))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     full_bars = r.price_bars(ticker)
@@ -308,6 +324,7 @@ def compare_bars(
     ``Reader.price_bars`` returns ``[]`` for a ticker with no bars. 400 on
     an invalid ``range``.
 
+    The range counts back from the primary *ticker*'s last bar (``range_anchor``).
     Every series runs from the shared start (``_shared_start``, within the
     range), rebased on its first close on or after it (``normalize_pct``): all
     read 0% there, a series without a close that day (a holiday of its own)
@@ -318,7 +335,7 @@ def compare_bars(
     if r.get_company(ticker) is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
     try:
-        start = resolve_range_start(range)
+        start = resolve_range_start(range, range_anchor(r, ticker))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     start_iso = start.isoformat() if start is not None else None

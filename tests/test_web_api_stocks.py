@@ -7,11 +7,12 @@ split history, holders, insider transactions, officers and a description.
 ``^GSPC`` has 30 daily bars (2024-01-01..2024-01-30) but NO ``companies``
 row.
 
-Range resolution is measured from "today" (see ``resolve_range_start`` in
-``src/webapp/routes/stocks_api.py``). Because the fixture's price history
-is fixed in the past, tests that need a *meaningful* (non-empty) 1M/3M/...
-window monkeypatch ``stocks_api._today`` to a fixed reference date near the
-fixture's own dates, rather than depending on the real wall clock.
+Range resolution is measured back from the ticker's last bar, or from
+"today" when that is earlier (see ``range_anchor`` in
+``src/webapp/routes/stocks_api.py``, BUG-151). Tests that slice a 1M/3M/...
+window monkeypatch ``stocks_api._today`` to the fixture's last bar (a
+database collected today, where both anchors agree) rather than depending
+on the real wall clock.
 """
 from __future__ import annotations
 

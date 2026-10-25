@@ -1928,3 +1928,22 @@ Result: BUG-150 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2424 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(web): the HP tab's Download CSV is the daily table it sits under (BUG-150)
 Next: BUG-151 (short ranges anchored on today, not the last bar).
+
+## Iteration 107: 2026-10-25 23:10: fix (BUG-151)
+Picked: the oldest open P2, BUG-151 (short ranges anchored on today).
+Did: an opus worker made every range resolver's caller count back from min(today, the ticker's last bar), test-first.
+- The callers: the bars API, the indicators bundle, compare-bars on the primary's bars, the bars CSV and the HP tab.
+- RED: 43 of 106 new cases failed: empty 1M ranges, short 3M and 6M, next-year YTD, a false "No price history
+  collected.".
+- One BUG-149 guard was re-set so that its last bar is its pinned today, which keeps what it guards.
+- 14 mutants, each killed (re-run by me).
+- On a copy of the user's DB with today two months past the last bar, AAPL's 1M has 23 rows to 2026-10-23 in all
+  five views; it had 0 for every company.
+- BUG-157's repro (an empty compare overlay at 1M) went with it; its own P3 (a message instead of a blank figure)
+  stays open.
+Evidence: `qa/evidence/bug151-{red,green,mutants,mutants-mine,realdata,gates,gates-mine,done}.txt`
+Result: BUG-151 VERIFIED. Five fixes since code review 19 (BUG-142, BUG-143, BUG-149, BUG-150, BUG-151): code review
+20 is due.
+Gates: ruff ✓ mypy ✓ pytest 2530 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(web): ranges count back from the ticker's last bar, not from today (BUG-151)
+Next: code review 20 (4abe6d7..HEAD), then BUG-159 (its investigation is under way).

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import statistics
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple, Union
 
@@ -365,6 +366,13 @@ class Reader:
         sql = "SELECT * FROM price_bars WHERE " + " AND ".join(where) + " ORDER BY date ASC"
         cur = self._conn.execute(sql, params)
         return [dict(row) for row in cur.fetchall()]
+
+    def last_bar_date(self, ticker: str) -> Optional[date]:
+        """The day of *ticker*'s latest ``price_bars`` row (one seek on the table's (ticker, date) key), or None
+        without bars. SQLite's ``date()`` reads the day of a date stored with a time of day, and gives None for one
+        it can't read."""
+        row = self._conn.execute("SELECT date(max(date)) FROM price_bars WHERE ticker = ?", (ticker,)).fetchone()
+        return date.fromisoformat(row[0]) if row[0] else None
 
     def analyst_snapshot(self, ticker: str) -> Optional[Dict[str, Any]]:
         """Newest ``analyst_snapshots`` row by ``collected_at``, or ``None``."""

@@ -65,13 +65,15 @@ def test_a_later_listing_and_the_index_start_together_on_its_first_day(tmp_path)
 
 
 def test_a_range_shorter_than_both_histories_is_as_it_was(tmp_path, monkeypatch):
-    # 1M back from 2024-04-25 starts on 2024-03-26, a day both series have a bar: each is rebased on that bar.
+    # 1M back from 2024-04-25 starts on 2024-03-26, a day both series have a bar: each is rebased on that bar. Both
+    # have a bar on 2024-04-25, today: a range counts back from the last bar when that is earlier (BUG-151).
     monkeypatch.setattr(stocks_api, "_today", lambda: date(2024, 4, 25))
-    series = _compare(_client(tmp_path, {"OLD": OLD, "^GSPC": INDEX}, ["OLD"]), "OLD", "^GSPC", "1M")
+    old, index = OLD + [("2024-04-25", 18.0)], INDEX + [("2024-04-25", 5355.0)]
+    series = _compare(_client(tmp_path, {"OLD": old, "^GSPC": index}, ["OLD"]), "OLD", "^GSPC", "1M")
 
     assert series == {
-        "OLD": {"dates": FROM_26TH, "pct": pytest.approx([0.0, 0.25, -0.25])},
-        "^GSPC": {"dates": FROM_26TH, "pct": pytest.approx([0.0, 0.04, -0.04])},
+        "OLD": {"dates": FROM_26TH + ["2024-04-25"], "pct": pytest.approx([0.0, 0.25, -0.25, 0.125])},
+        "^GSPC": {"dates": FROM_26TH + ["2024-04-25"], "pct": pytest.approx([0.0, 0.04, -0.04, 0.02])},
     }
 
 

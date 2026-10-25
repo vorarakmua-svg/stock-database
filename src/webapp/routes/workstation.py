@@ -33,7 +33,7 @@ from ..settings import WebSettings
 from ..valuation_indicators import indicators_view
 from .gurus import holder_rows
 from .pages import _STATEMENT_ROWS, _build_statement_display, templates
-from .stocks_api import VALID_RANGES, resolve_range_start
+from .stocks_api import VALID_RANGES, range_anchor, resolve_range_start
 
 router = APIRouter()
 
@@ -623,7 +623,8 @@ def hp_fragment(
     """HP panel: OHLCV table newest-first + range buttons + CSV download link.
 
     Reuses ``stocks_api.resolve_range_start`` for range->start-date resolution
-    (no duplicate range math) and validates ``range`` against the same
+    (no duplicate range math), counted back from the ticker's last bar
+    (``range_anchor``, BUG-151), and validates ``range`` against the same
     ``VALID_RANGES`` set the GP route uses — an unknown value silently falls
     back to ``1Y`` rather than being echoed back raw or erroring.
     """
@@ -631,7 +632,7 @@ def hp_fragment(
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
 
     resolved_range = range if range in VALID_RANGES else "1Y"
-    start = resolve_range_start(resolved_range)
+    start = resolve_range_start(resolved_range, range_anchor(r, ticker))
     start_iso = start.isoformat() if start is not None else None
     bars = r.price_bars(ticker, start=start_iso)
 
