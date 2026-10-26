@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 10 · P3 141 · NEEDS-USER 22 · Verified: 114
+**Open:** P0 0 · P1 0 · P2 10 · P3 143 · NEEDS-USER 23 · Verified: 114
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1284,12 +1284,16 @@ Root cause: `src/parsers/calculated_metrics.py` `_calculate_levered_fcf` returne
 Notes: On two backup-API copies of the real DB, backfilled with the code before and after: 66 of 127 DCF rows change. Of the 91 applicable, 28 rise by 10% or more and 11 by 25% or more (DE $245.39 to $542.95, T $29.80 to $50.03, D $61.11 to $98.12, AMGN $159.15 to $241.18); 14 fall a little (WDC 0.82x the most), since the 10-year FCF CAGR is now measured on the right series. The median value moves for 24 tickers (0.95x to 1.52x), and two verdicts change, MCD and PFE from expensive to fair (fair 16 to 18, expensive 108 to 106); the median upside goes from -58.3% to -56.1%. The oracle on the fixed copy: level 1, 522 rows, 0 beyond 0.5%; level 2, 487 rows, 8 beyond, all of them the Graham bear cases (BUG-007). The stored `metrics_annual.levered_fcf` (FA tab, screener) keeps its old value until a ticker is re-collected; the DCF reads `free_cash_flow`, so an offline backfill is right at once. The user's DB gets that backfill at M1-9 (`qa/evidence/levfcf-{red,green,oracle-before,oracle-flags,oracle-after,realdata}.txt`).
 
 ### BUG-170 [P2][VALID] D&A misses the amortization of intangibles a filer tags apart: ABBV's $0.76B of about $7.8B
-Status: OPEN
+Status: NEEDS-USER (the fix moves 7 owner-earnings verdicts and 2 historical-value labels, no median or median verdict; recommended: V3, prepared)
 Found: build iteration 5 via M1-4 (the valuation history's EV/EBITDA against Yahoo's) | Fixed: | Regression test:
 Repro: `financials_annual` / `financials_ttm`, ABBV FY2025: `depreciation_amortization` $0.76B. ABBV files `Depreciation` and, apart, `AmortizationOfIntangibleAssets` (about $7B a year, in `unmapped_facts`); DHR likewise ($0.75B of about $2.4B).
 Expected: D&A = depreciation + amortization of intangibles when the filer tags no combined total (Yahoo's EBITDA for ABBV is $30.76B).   Actual: EBITDA = operating income + depreciation only, $17.65B, so EBITDA, EV/EBITDA and debt/EBITDA read high or low by the missing amortization, and so does owner earnings' D&A.
 Root cause: `src/mappings/canonical.py` `depreciation_amortization` takes the first of DepreciationDepletionAndAmortization, DepreciationAmortizationAndAccretionNet, DepreciationAmortizationAndOther, DepreciationAndAmortization and Depreciation; `Depreciation` alone is a component, and AmortizationOfIntangibleAssets is mapped nowhere.
 Notes: the valuation history's own figures stay consistent: its EV/EBITDA history carries the same understated EBITDA throughout, so the implied price moves little (`qa/evidence/valhist-m1-4-explained.txt`). A fix moves owner earnings (display-only), not the five-model median.
+Measured (iteration 116, `qa/evidence/bug170-investigation.txt`): wider than recorded. D&A resolves one tag per period, so a filing with depreciation and amortization on lines of their own and no total gives D&A its depreciation alone (1,052 years at 119 filers read Depreciation alone, 824 of them beside an amortization tag), in all four records (DHR's FY2022-23 fourth quarters are lumps of $1.6B and $1.7B). A second shape: a "total" that is the depreciation line, no larger than the amortization beside it (83 filer-years: CME, NDAQ, GPN, MSCI, EME, FIX, NDSN, TTWO, MCK, INTC FY2015-19). A naive sum would double count 1,652 years at 188 filers whose total already holds both.
+Fix prepared (V3; %LOCALAPPDATA%\stockdb-qa\bug170\fix, diffs in its out\, re-checked on 7c6cc2a): one step at the end of `xbrl_parser._filer_facts`, on each filing period with an amortization above zero (AdjustmentForAmortization, else AmortizationOfIntangibleAssets): totals no larger than it are set aside, and where no total that can hold it remains, D&A = the depreciation (else the set-aside line) + the amortization. D&A changes in 968 annual years at 115 filers, 4,482 quarters, 3,843 TTM rows, 2,638 vintages; against Yahoo's cash-flow D&A, 150 of the 229 moved annual cells it covers come within 0.5% (HEAD 2), 6 move farther (BX FY2022-25, PGR FY2022-23: Yahoo reads one of their two lines); EV/EBITDA within 10% of Yahoo's 59% to 64%. 21 test cases (13 RED), 17 mutants killed; gates green on the fix tree.
+For the user: valuation_summary and valuation_indicators identical; owner earnings move at 50 tickers (38 in value), and 7 owner_earnings_verdicts change at the stored price: IEX expensive to fair, JKHY expensive to fair, NDSN expensive to fair, PNR fair to cheap, SJM N/A to expensive, TMO expensive to fair, TRMB cheap to fair (its older years gain the amortization its recent totals already held, so its 10-year growth falls 17.2% to 8.2%). Historical-value labels: MCK above to far above, TTWO far above to above, with their price_far_above_value warning signs. The narrower V1 (the no-total rule alone) moves 6 of the 7 verdicts and leaves 192 quarters inconsistent (AON 2017's fourth quarter -$565M): not recommended.
+Also: the Expected line's Yahoo EBITDA for ABBV ($30.76B) is Yahoo's normalized figure; the fix gives ABBV's FY2025 EBITDA $23.21B on Yahoo's own cash-flow D&A ($8.139B). With the fix, GILD's current EV/EBITDA reads 825 (a barely positive trailing EBITDA beside an IPR&D-driven operating loss: right arithmetic), and unmapped_facts still lists the two amortization tags (adding them to the mapped set would drop ~400 filers' rows; left as it is). Residuals: BUG-274 to BUG-276.
 
 ### BUG-171 [P2][VALID] The 10-Q quarters lack the long-term debt the 10-Ks report: TMUS's $81B shows only in Q4
 Status: OPEN
@@ -2025,6 +2029,24 @@ Status: OPEN
 Found: code review 21 (declined as pre-existing data) | Fixed: | Regression test:
 Repro: CHD's FY2023 10-K tags its 2023 LongTermDebtNoncurrent ($2.202B) at 2021-12-31, and FY2021's record reads it (total debt $3.154B at d5e6ec2, $2.455B at 9f536a4, the balance sheet's $2.563B). BUG-159 completed the short-term side only.
 Expected: FY2021's own long-term debt.   Actual: a stray later figure.
+
+### BUG-274 [P2][VALID] D&A reads a "total" that is the filing's depreciation line where it is larger than the amortization beside it: GE FY2022-25 $0.85B for $1.18-1.22B
+Status: OPEN
+Found: iteration 116 (BUG-170's investigation, `qa/evidence/bug170-investigation.txt` R1) | Fixed: | Regression test:
+Repro: BUG-170's V3 sets a "total" aside only where it is no larger than the amortization it can't then hold. A depreciation line tagged as the total and larger than the amortization looks like a total that holds it: it equals the filing's own depreciation in 34 years (MRSH FY2022-23, HUM FY2013-16, EME FY2010-13, AON FY2009/16, FLEX FY2017-19, GE FY2010, TTWO FY2015-17, BBY FY2023-26), where equality decides nothing (MRSH's is the depreciation line, BBY's one line tagged twice); and Yahoo reads total + amortization in 77 of the 379 Yahoo years whose total is larger with no depreciation tagged (GE FY2022-25, WELL, VRSK, SCHW, LVS, UPS, KR, NEE, BKNG, PEP...; HUM FY2022-25's total is even below its Depreciation).
+Expected: D&A as the filing's cash flow statement adds it back.   Actual: the depreciation line alone. The filing alone carries no evidence: a 10-Q-based test (a total below nine months of the 10-Qs' parts) would decide some.
+
+### BUG-275 [P3][TTM] A year's quarters sit on two D&A bases where its 10-Qs tag lines its 10-K doesn't, or the reverse: AVGO's FY2023-24 fourth quarters $3.37B and $9.42B
+Status: OPEN
+Found: iteration 116 (BUG-170's investigation, R2) | Fixed: | Regression test:
+Repro: the fourth quarter is the 10-K's figure less nine months of another basis. 1,140 such lump/hole quarters at HEAD (DHR FY2022-23's among them), 674 with BUG-170's V3 (573 healed, 107 new): AVGO FY2023-24 (its 10-Qs tag no amortization those years; the TTM 2025-02-02 to 2025-08-03 reads $11.9-15.9B for ~$8.6B), GOOGL 2025 (the reverse, +$0.1-0.3B), BR, TTWO, KKR, J, MRSH FY2022-23, EME FY2010-13. The TTM at a fiscal year end equals the annual figure in 6,776 of 6,790 cases.
+Expected: each quarter's D&A on its year's basis.   Actual: a lump or a hole in the fourth quarter and the TTM rows over it.
+
+### BUG-276 [P3][VALID] Some filers carry their D&A on tags BUG-170's rule leaves alone: WDAY, MET and VEEV's OtherDepreciationAndAmortization, TXN's capitalized software
+Status: OPEN
+Found: iteration 116 (BUG-170's investigation, R3) | Fixed: | Regression test:
+Repro: depreciation-alone filers whose D&A sits on tags whose meaning varies by filer: WDAY, MET, VEEV (OtherDepreciationAndAmortization is their whole D&A, the depreciation a part), TXN (capitalized software amortization, a cash flow line of its own), MTD (AmortizationOfDeferredCharges is its amortization line), FLEX (OtherDepreciationAndAmortization is its amortization), ITW, TSLA, AON FY2022-25, CINF, ABNB (no us-gaap tag at all). HEAD and V3 read the depreciation alone there.
+Expected: the filing's D&A add-back.   Actual: the depreciation alone.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

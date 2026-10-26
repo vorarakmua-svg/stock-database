@@ -2104,3 +2104,22 @@ Gates: ruff ✓ mypy ✓ pytest 2574 passed, 1 skipped (the reviewer's run at d5
 3f7abe2 | CI: no PR (Q10)
 Commit: (this commit) chore(qa): record code review 21
 Next: BUG-267, test-first from the five probes, before the other P2s (it is a regression of this loop's own fix).
+
+## Iteration 116: 2026-10-26 08:20: investigation (BUG-170) -> NEEDS-USER
+Picked: BUG-170, the next open P2 (D&A missing the amortization a filer tags apart).
+Did: an opus worker, read-only on the checkout, from a `git archive` export of d5e6ec2 (`qa/evidence/bug170-investigation.txt`).
+- Root cause confirmed, and wider than recorded: D&A resolves one tag per period, so separate lines with no total
+  give it the depreciation alone, in all four records. A second shape: a "total" that is the depreciation line, no
+  larger than the amortization beside it.
+- A census over the 502 against the filers' own totals and Yahoo's cash-flow D&A; four variants measured on DB copies.
+- The recommended V3 fix was prepared test-first in the export (21 cases, 13 RED; 17 mutants killed, run with the
+  runner's --root on the fix tree), re-checked on 7c6cc2a, and not applied.
+- It moves no median or median verdict, but 7 owner-earnings verdicts and 2 historical-value labels (listed in
+  BUG-170's entry), so it goes to the user, as the build's rule says.
+Process: five older scratch copies of the mutant runner that still hard-code the checkout were disabled (renamed
+*.checkout-rooted.disabled); bug247's and bug170's own copies refuse the checkout.
+Evidence: `qa/evidence/bug170-investigation.txt` (scratch: %LOCALAPPDATA%\stockdb-qa\bug170\)
+Result: BUG-170 NEEDS-USER (V3 recommended); residuals BUG-274 (P2), BUG-275 and BUG-276 (P3).
+Gates: unchanged code (ledger only) | CI: no PR (Q10)
+Commit: (this commit) chore(qa): BUG-170 measured; its fix moves owner-earnings verdicts, so it is the user's
+Next: BUG-267 (its worker is editing), then BUG-179 (prepared), then the open P2s.
