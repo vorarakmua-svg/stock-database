@@ -54,6 +54,28 @@ def merge_company_facts(current: Dict[str, Any], earlier: Dict[str, Any]) -> Dic
     return {**current, "facts": facts}
 
 
+def report_without_facts(submissions: Optional[Dict[str, Any]],
+                         facts: Optional[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+    """The latest report *submissions* list (``get_submissions``' filings) when *facts*, the companyfacts read with
+    them (None when that request failed or the SEC has none), carry no fact of it: the SEC's lag, after which a run's
+    figures stop at the report before (BUG-251: on 2026-10-25 DLR's companyfacts had no fact of its 10-Q of
+    2026-07-31, though they had its 424B7 of 2026-08-19). Its form, accession and filing date; None when the facts
+    carry it, or when there is none to look for.
+
+    Only a report the parser reads, as filed (a 10-K, 10-Q, 20-F or 40-F, not an amendment, which often has no
+    financial facts: a 10-K/A of Part III; nor a 10-KT), and filed with XBRL is looked for, as only such a report ever
+    gets facts that change the record. Its facts count under any taxonomy (an IFRS filer's 20-F under ifrs-full)."""
+    reports = [f for f in (submissions or {}).get("filings") or []
+               if f.get("form") in _REPORT_FORMS and f.get("isXBRL") != 0]
+    if not reports:
+        return None
+    latest = max(reports, key=lambda f: (str(f.get("filingDate") or ""), str(f.get("acceptanceDateTime") or "")))
+    accession = latest.get("accessionNumber")
+    if not accession or any(e.get("accn") == accession for e in _entries(facts or {})):
+        return None
+    return {"form": str(latest["form"]), "accession": str(accession), "filed": str(latest.get("filingDate") or "")[:10]}
+
+
 # Default time-to-live for cached SEC payloads (companyfacts/submissions).
 # These update at most quarterly, so a week-long cache is safe and slashes
 # repeated network load when re-running over many tickers.
@@ -201,7 +223,8 @@ class SECHandler:
             ticker: Stock ticker symbol (e.g., 'AAPL')
 
         Returns:
-            Dictionary containing all fetched SEC data
+            Dictionary containing all fetched SEC data, with ``missing_report`` when the companyfacts carry no fact of
+            the latest report the submissions list (``report_without_facts``)
         """
         self.logger.info(f"Fetching SEC EDGAR data for {ticker}")
 
@@ -255,6 +278,13 @@ class SECHandler:
         except Exception as e:
             self.logger.error(f"Error fetching submissions: {e}")
             data["submissions_error"] = str(e)
+
+        # The latest report the submissions list whose facts the companyfacts lack (BUG-251).
+        missing = report_without_facts(data.get("submissions"), data.get("company_facts"))
+        if missing:
+            data["missing_report"] = missing
+            self.logger.warning(f"The SEC's companyfacts of {ticker} carry no fact of its {missing['form']} filed "
+                                f"{missing['filed']} ({missing['accession']})")
 
         if "company_facts_error" in data or "submissions_error" in data:
             self.logger.warning(f"SEC data for {ticker} is incomplete (see the error above)")

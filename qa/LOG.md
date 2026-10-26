@@ -2169,3 +2169,22 @@ refresh's re-collection), all P3.
 Gates: ruff ✓ mypy ✓ pytest 2624 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(store): a run that couldn't read the predecessor only fills (BUG-179)
 Next: the open P2s, oldest first (BUG-171).
+
+## Iteration 119: 2026-10-27 03:10: fix (BUG-251, BUG-279)
+Picked: BUG-251, the next P2 the refresh path holds (the SEC's companyfacts lacking a company's latest report, with
+nothing noticing), and BUG-279 (P3), which the same rule covers.
+Did: an opus worker built the fix test-first in a `git archive` export of ca55c1e and checked it offline on a copy of
+the user's DB. I applied its 14 files after checking they were byte-identical to their base:
+- the tests first, RED: 23 failed (21 by assertion, 2 on the missing field and summary key), 246 passed;
+- then the code and docs, GREEN: 269 passed in the six test files;
+- 40 mutants, each killed, and BUG-179's 14 re-run (both by me, from the checkout).
+- The rule: a collection names the latest report its companyfacts lack, and stores that, or a predecessor read that
+  failed, in `collection_runs.incomplete` (migrated; earlier runs read as complete). The refresh collects such a
+  company again, up to 3 times for one gap.
+- Real data: the check names exactly the entry's 58; every financial and valuation table is identical.
+Evidence: `qa/evidence/bug251-{done,red,green,mutants,verify-mine}.txt`
+Result: BUG-251 and BUG-279 VERIFIED; Q17 for the user (recovering what the SEC lacks); residuals BUG-280 to
+BUG-284 (P3).
+Gates: ruff ✓ mypy ✓ pytest 2658 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(refresh): a collection names a report the SEC's facts lack, and the refresh retries it (BUG-251)
+Next: BUG-171 (its worker is preparing it), then the open P2s.

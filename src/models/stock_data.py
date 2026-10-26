@@ -86,6 +86,13 @@ class StockData:
     # vintages (excluded from to_dict/JSON); the run's warning says so.
     predecessor_error: Optional[str] = None
 
+    # The latest report the SEC's submissions list whose facts the run's companyfacts lacked, the SEC's
+    # lag (sec_handler.report_without_facts: its form, accession and filing date), None when they had
+    # it or there was none to look for: the run's figures stop at the report before (BUG-251).
+    # SQLite-only, like the predecessor's error: collection_runs.incomplete keeps it, so that
+    # `stock-data refresh` collects the company again, and the run's warning names the report.
+    missing_report: Optional[Dict[str, str]] = None
+
     # Insider transactions (from SEC Form 4)
     insider_transactions: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -131,9 +138,11 @@ class StockData:
         # Convert datetime to ISO string
         if isinstance(data["collected_at"], datetime):
             data["collected_at"] = data["collected_at"].isoformat()
-        # Vintages and the predecessor's error are SQLite-only — never written to the per-ticker JSON.
+        # Vintages, the predecessor's error and the report without facts are SQLite-only — never written to
+        # the per-ticker JSON, whose merge would keep an earlier run's report for a run that had none.
         data.pop("financials_annual_vintages", None)
         data.pop("predecessor_error", None)
+        data.pop("missing_report", None)
         return data
 
     def to_json(self, indent: int = 2) -> str:
@@ -363,6 +372,9 @@ class StockData:
         # A successor's facts read without its predecessor's (a 503, a 404: "no XBRL data") lack the
         # predecessor's figures: a warning, as the fetcher words it, and the store only fills (BUG-179).
         self.predecessor_error = sec_data.get("predecessor_error")
+        # The latest report the submissions list whose facts the companyfacts lacked (BUG-251): a
+        # warning, as the fetcher words it, and the store keeps it for the refresh.
+        self.missing_report = sec_data.get("missing_report")
 
         # CIK
         if "cik" in sec_data:

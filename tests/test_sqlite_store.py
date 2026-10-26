@@ -491,6 +491,64 @@ def test_a_collection_run_keeps_its_warnings(tmp_path):
     assert [(count, json.loads(text)) for count, text in rows] == [(2, stock.warnings)]
 
 
+#: DLR's 10-Q of 2026-07-31, which its submissions listed and its companyfacts of 2026-10-25 had no fact of (BUG-251).
+_DLR_10Q = {"form": "10-Q", "accession": "0001104659-26-089296", "filed": "2026-07-31"}
+
+
+def _run_of(ticker, report=None, predecessor=None, at=datetime(2026, 10, 25, 12, 32, 58)):
+    """A collection of *ticker* with the SEC at *at*, its companyfacts lacking *report* (the latest report its
+    submissions list) and its predecessor's filings unread for *predecessor* (None for neither)."""
+    s = StockData(ticker=ticker, cik="0001297996", collected_at=at)
+    s.add_source("sec_edgar")
+    s.missing_report = report
+    s.predecessor_error = predecessor
+    return s
+
+
+def _incomplete(db):
+    """Each stored run's ``incomplete``, parsed, by (ticker, collected_at): None where it has none, as where the table
+    has no such column."""
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        return {(r["ticker"], r["collected_at"]): json.loads(r["incomplete"]) if dict(r).get("incomplete") else None
+                for r in conn.execute("SELECT * FROM collection_runs")}
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("report, predecessor, expected", [
+    (_DLR_10Q, None, {"report": _DLR_10Q}),  # BUG-251: the SEC's companyfacts lacked the latest report
+    (None, "503 Server Error", {"predecessor": "503 Server Error"}),  # BUG-279: the predecessor couldn't be read
+    (_DLR_10Q, "no XBRL data", {"report": _DLR_10Q, "predecessor": "no XBRL data"}),
+    (None, None, None),  # a complete run
+])
+def test_a_collection_run_keeps_why_its_sec_read_was_incomplete(tmp_path, report, predecessor, expected):
+    # The refresh's SEC step reads it to collect the company again (it took such a run for a complete one).
+    SQLiteStore(tmp_path / "s.db").export([_run_of("DLR", report, predecessor)])
+    assert _incomplete(tmp_path / "s.db") == {("DLR", "2026-10-25T12:32:58"): expected}
+
+
+def test_a_runs_table_from_before_the_incomplete_column_gains_it_and_keeps_its_runs(tmp_path):
+    # Every run of the user's database to 2026-10-25 was stored without it: they stay as they are, read as complete.
+    db = tmp_path / "s.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE collection_runs (ticker TEXT NOT NULL, collected_at TEXT NOT NULL, data_sources TEXT, "
+                 "warning_count INTEGER, error_count INTEGER, quality_score INTEGER, warnings TEXT, "
+                 "PRIMARY KEY (ticker, collected_at))")
+    conn.execute("INSERT INTO collection_runs VALUES ('DLR', '2026-10-25T12:32:58.502761', "
+                 "'yahoo_finance, sec_edgar, fred_treasury_gov, calculated_metrics', 7, 0, 85, '[]')")
+    conn.commit()
+    conn.close()
+    SQLiteStore(db).export([_run_of("DLR", _DLR_10Q, at=datetime(2026, 11, 1, 9, 0))])
+    assert _incomplete(db) == {("DLR", "2026-10-25T12:32:58.502761"): None,
+                               ("DLR", "2026-11-01T09:00:00"): {"report": _DLR_10Q}}
+    conn = sqlite3.connect(db)
+    old = conn.execute("SELECT data_sources, warning_count, error_count, quality_score, warnings FROM collection_runs "
+                       "WHERE collected_at = '2026-10-25T12:32:58.502761'").fetchone()
+    conn.close()
+    assert old == ("yahoo_finance, sec_edgar, fred_treasury_gov, calculated_metrics", 7, 0, 85, "[]")
+
 
 def _filer(annual=None, quarterly=None, ttm=None, vintages=None):
     """AAA as a collection's SEC parse gives it: the annual record, quarters, trailing years and vintages."""

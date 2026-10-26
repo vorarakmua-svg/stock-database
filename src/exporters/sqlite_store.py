@@ -10,7 +10,7 @@ Tables:
 - ``financials_quarterly`` canonical quarterly line items, one row per (ticker, period_end)
 - ``metrics_annual``       calculated ratios per (ticker, fy)
 - ``market_snapshots``     point-in-time market/valuation data per (ticker, collected_at)
-- ``collection_runs``      provenance/quality of each collection
+- ``collection_runs``      provenance/quality of each collection, and what its SEC read lacked
 
 All writes are idempotent upserts on the natural keys.
 """
@@ -128,6 +128,19 @@ def _served_day(stock: StockData, collected_at: str) -> str:
     if days:
         return max(days)
     return (date.fromisoformat(collected_at[:10]) - timedelta(days=1)).isoformat()
+
+
+def _incomplete(stock: StockData) -> Optional[str]:
+    """What a run's SEC read lacked, as ``collection_runs.incomplete`` keeps it (JSON): ``report``, the latest report
+    its submissions listed whose facts its companyfacts lacked, the SEC's lag (BUG-251); ``predecessor``, why its
+    predecessor's filings couldn't be read (BUG-279). None for a complete run. ``stock-data refresh``'s SEC step
+    collects a company again whose latest collection with the SEC lacked either."""
+    lacked: Dict[str, Any] = {}
+    if stock.missing_report:
+        lacked["report"] = stock.missing_report
+    if stock.predecessor_error:
+        lacked["predecessor"] = stock.predecessor_error
+    return json.dumps(lacked) if lacked else None
 
 
 def _cols_ddl(columns: Sequence[str], col_type: str = "REAL") -> str:
@@ -372,6 +385,7 @@ class SQLiteStore:
                 error_count INTEGER,
                 quality_score INTEGER,
                 warnings TEXT,
+                incomplete TEXT,
                 PRIMARY KEY (ticker, collected_at)
             );
 
@@ -717,7 +731,9 @@ class SQLiteStore:
             "metrics_annual": {c: "REAL" for c in _METRIC_COLUMNS},
             "market_snapshots": {**{c: "REAL" for c in _SNAPSHOT_COLUMNS},
                                  **{c: "TEXT" for c in _SNAPSHOT_TEXT_COLUMNS}},
-            "collection_runs": {"warnings": "TEXT"},
+            # What a run's SEC read lacked (BUG-251, BUG-279): NULL in every run stored before the column, which
+            # reads as complete, as it did.
+            "collection_runs": {"warnings": "TEXT", "incomplete": "TEXT"},
         }
         for table, columns in expected.items():
             self._ensure_columns(conn, table, columns)
@@ -1069,6 +1085,8 @@ class SQLiteStore:
             "quality_score": quality_score,
             # The text too: the web app shows why a record came back empty.
             "warnings": json.dumps(stock.warnings),
+            # What its SEC read lacked, for the refresh to collect the company again (BUG-251, BUG-279).
+            "incomplete": _incomplete(stock),
         })
 
         # unmapped_facts (tags not yet in the canonical registry; tag is a row value): each tag's

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 8 · P3 146 · NEEDS-USER 23 · Verified: 116
+**Open:** P0 0 · P1 0 · P2 7 · P3 150 · NEEDS-USER 24 · Verified: 118
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1877,10 +1877,11 @@ Repro: src/valuation/history_inputs.py `known_on` makes Q1-Q3 known at period en
 Expected: a quarter known at the latest bar when its 10-Q was filed by then (the quarters store no filing date; capping at the latest bar would count one filed in between).   Measured: with the cap the P/E gate passes (402/452); no valuation, median or verdict.
 
 ### BUG-251 [P2][GATHER] The SEC's companyfacts lacks the latest 10-Q or 10-K of 58 companies, though EDGAR lists it as filed
-Status: OPEN
-Found: build M5-6 (the P/E misses against Yahoo) | Fixed: | Regression test:
+Status: VERIFIED (iteration 119)
+Found: build M5-6 (the P/E misses against Yahoo) | Fixed: (this commit) | Regression tests: tests/test_sec_cache.py::test_the_latest_report_the_companyfacts_lack_is_named, ::test_only_a_report_as_filed_with_xbrl_is_looked_for, ::test_an_ifrs_filers_report_is_found_among_its_ifrs_facts; tests/test_fetcher_concurrency.py::test_a_report_the_companyfacts_lack_is_a_warning_naming_it, ::test_a_collection_whose_companyfacts_lack_the_latest_report_stores_it_as_incomplete; tests/test_refresh.py::test_a_company_whose_companyfacts_lacked_its_latest_report_is_collected_again, ::test_a_report_still_without_facts_is_collected_again_three_times_then_left, ::test_the_real_collection_stores_what_the_companyfacts_lack_and_the_sec_step_collects_it_again; tests/test_sqlite_store.py::test_a_runs_table_from_before_the_incomplete_column_gains_it_and_keeps_its_runs; tests/test_web_api_collection.py::test_a_job_stores_what_its_sec_read_lacked, and 24 more (34 with BUG-279's)
 Repro: for 58 of the 502 (11 of the 127: D, ABT, NEE, PLD, WELL, ...), the latest report filed before the collection is in the company's submissions feed but no fact in its companyfacts carries that accession (DLR's 10-Q 0001104659-26-089296, filed 2026-07-31; CLX's FY2026 10-K). Their stored figures stop a quarter (or a year) early: 21 of the 58 P/E misses. The source's gap, but nothing in the app notices it. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), section 4, probe_sec_lag_all.txt.
 Expected: the collection (or the refresh's SEC step) warns when the latest report in the feed has no facts, and the refresh queues it again later.
+Fix (iteration 119, `qa/evidence/bug251-done.txt`; BUG-279 by the same rule): nothing recorded what a collection's SEC read lacked, and the refresh queued a company only for a report filed since its last collection. Now `sec_handler.report_without_facts` takes the latest report the submissions list (a 10-K, 10-Q, 20-F or 40-F as filed, with XBRL); when no fact under any taxonomy carries its accession, the run warns, naming it ("SEC EDGAR: the companyfacts lack DLR's 10-Q filed 2026-07-31 (...)"; a failed companyfacts request is marked too, its error saying why). The new column `collection_runs.incomplete` keeps that, or a predecessor read that failed (BUG-279), as JSON (migrated; NULL in every earlier run, which reads as complete), and the refresh's SEC step puts such a company on the list again, up to INCOMPLETE_RETRIES = 3 times for one gap (counted over the collections in a row that found it), then lists it under incomplete_left until its next report. Offline over the 502: the check names exactly the entry's 58; collected with the fix, the 58 are marked and queued, HEAD queues none; 35 of 36 tables identical (all the financial and valuation tables), collection_runs alone differing. The stored runs say nothing yet, so the 58 are queued once a collection with this code finds their gap again. Recovering the figures the SEC lacks is Q17. Residuals: BUG-280 to BUG-284.
 
 ### BUG-252 [P2][PARSE] EG's FY2016-19: net income from the "available to common" tag about 20% low, and share counts left in thousands
 Status: OPEN
@@ -2065,10 +2066,40 @@ Repro: since BUG-179 the SQLite store only fills from a run whose predecessor re
 Expected: the exports keep what the run can't speak for, as the store does.   Actual: they take the partial years.
 
 ### BUG-279 [P3][REFRESH] The refresh doesn't re-collect a company whose last collection couldn't read its predecessor
-Status: OPEN
-Found: iteration 118 (BUG-179's worker, residuals) | Fixed: | Regression test:
+Status: VERIFIED (iteration 119, with BUG-251)
+Found: iteration 118 (BUG-179's worker, residuals) | Fixed: (this commit) | Regression tests: tests/test_fetcher_concurrency.py::test_a_collection_whose_predecessor_read_failed_is_stored_as_incomplete; tests/test_refresh.py::test_a_company_whose_predecessor_couldnt_be_read_is_collected_again, ::test_the_real_collection_stores_a_failed_predecessor_read_and_the_sec_step_collects_it_again
 Repro: `stock-data refresh`'s SEC step counts a run whose predecessor read failed as the company's last collection, so the good run that would restate it waits for the company's next report or a manual collection.
 Expected: such a company queued again at the next refresh.   Actual: it waits for its next report.
+
+### BUG-280 [P3][GATHER] Only the latest report is checked for the SEC's lag: NEE's 10-Q of 2026-07-24, also without facts, goes unflagged once a later one has them
+Status: OPEN
+Found: iteration 119 (BUG-251's worker, residuals) | Fixed: | Regression test:
+Repro: `report_without_facts` looks at the latest report the submissions list. NEE's companyfacts lack its 10-Q of 2026-07-24 as well; once its October 10-Q gets facts, nothing names the earlier gap, and its quarter stays missing.
+Expected: every report since the last complete collection checked.   Actual: the latest only.
+
+### BUG-281 [P3][REFRESH] CLI and web collections count toward a gap's three retries though they read the 7-day cache
+Status: OPEN
+Found: iteration 119 (BUG-251's worker, residuals) | Fixed: | Regression test:
+Repro: the retries are counted over the collections in a row that found a gap; a `stock-data` or web collection within the SEC cache's 7 days reads the same cached companyfacts, so it finds the gap again and uses up a try without asking the SEC (the refresh's own collect step reads fresh).
+Expected: only a collection that read the SEC fresh counts.   Actual: every collection does.
+
+### BUG-282 [P3][GATHER] A run whose submissions request failed can't be checked for the SEC's lag, so it reads as complete
+Status: OPEN
+Found: iteration 119 (BUG-251's worker, residuals) | Fixed: | Regression test:
+Repro: `report_without_facts` needs the submissions' list; with that request failed (its error recorded) the run stores no gap, so the refresh doesn't collect it again for that reason.
+Expected: an unchecked run marked so that the refresh tries again.   Actual: complete.
+
+### BUG-283 [P3][WEB] /api/quality/runs returns `incomplete` as raw JSON text, and the FA tab doesn't show the SEC-lag warning
+Status: OPEN
+Found: iteration 119 (BUG-251's worker, residuals) | Fixed: | Regression test:
+Repro: the runs endpoint passes the new collection_runs.incomplete column through as a JSON string; the FA tab's notes don't list the run's "SEC EDGAR: the companyfacts lack ..." warning.
+Expected: an object in the API, and the warning shown beside the figures it explains.   Actual: a string, and no note.
+
+### BUG-284 [P3][OPS] Importing src.config creates data/output and data/cache folders in the working directory
+Status: OPEN
+Found: iteration 119 (BUG-251's worker, an observation) | Fixed: | Regression test:
+Repro: an import with no command run (a test, a script from a scratch tree) makes the default output and cache folders wherever it runs.
+Expected: folders made when something is written there.   Actual: made at import.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
@@ -2185,3 +2216,8 @@ Status: NEEDS-USER
 Found: build iteration 50 (M5's design, `docs/superpowers/specs/2026-10-25-universe-automation-design.md`)
 Default applied: nothing installed. The README gives the Task Scheduler command (`schtasks /Create /SC DAILY ...`) that runs `stock-data refresh` from the repo folder after the US close; the refresh works the same when run by hand.
 Decision needed: install the task (a persistent system change the build loop doesn't make), and at what time?
+
+### Q17 [GATHER] NEEDS-USER: should a collection read a report the SEC's companyfacts lack from the filing's own XBRL?
+Status: NEEDS-USER
+Found: iteration 119 (BUG-251's fix, `qa/evidence/bug251-done.txt` residuals) | Since BUG-251 a collection names the SEC's lag (the latest report its submissions list has no fact in its companyfacts: 58 of the 502 today, most 80-90 days old) and the refresh tries again three times, but nothing recovers the missing figures: those companies' records stop a quarter or a year early (21 of the 58 P/E misses). Reading them would need another source: the filing's own XBRL instance (one more SEC request per gap, a new parser path) or the SEC's frames API.
+Default: unchanged (the gap is warned and retried; the figures wait for the SEC).

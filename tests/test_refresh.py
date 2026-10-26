@@ -41,7 +41,15 @@ from src.refresh import (
     real_services,
 )
 from tests import refresh_fakes as rf
-from tests.test_fetcher_concurrency import BLK_FY2022, serve_blk, stored_blk
+from tests.test_fetcher_concurrency import (
+    BLK_FY2022,
+    DLR_10Q,
+    DLR_LAG,
+    serve_blk,
+    serve_dlr,
+    stored_blk,
+    stored_run,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -761,6 +769,183 @@ def test_a_report_behind_150_newer_filings_still_queues_the_company(tmp_path, mo
     handler.close()
     assert report.queue == {"AAA": ["sec: 10-Q filed 2026-10-21 (0000886982-26-900001)"]}
     assert report.result("sec").summary["feeds"] == 3
+
+
+# ---------------------------------------------------------------------------
+# sec: a company whose latest collection with the SEC was incomplete is collected again (BUG-251, BUG-279)
+# ---------------------------------------------------------------------------
+
+#: AAA's 10-Q of 2026-10-23, which its feed lists, as a run whose companyfacts had no fact of it names it.
+AAA_Q3 = {"form": "10-Q", "accession": "0000000001-26-000003", "filed": "2026-10-23"}
+_AAA_FEED = {rf.cik_of("AAA"): [rf.filing("10-Q", "2026-10-23", "0000000001-26-000003")]}
+_LACKED = "read no facts of its 10-Q filed 2026-10-23 (0000000001-26-000003)"
+
+
+def _collected(db, ticker, at, report=None, predecessor=None):
+    """A collection of *ticker* with Yahoo and the SEC at *at* (naive local, as the collector writes it), stored by the
+    store: its companyfacts lacking *report*, the latest report its submissions listed (BUG-251), its predecessor's
+    filings unread for *predecessor* (BUG-279); a complete one without either."""
+    stock = StockData(ticker=ticker, cik=rf.cik_of(ticker), collected_at=at)
+    stock.add_source("yahoo_finance")
+    stock.add_source("sec_edgar")
+    stock.missing_report = report
+    stock.predecessor_error = predecessor
+    SQLiteStore(db).export([stock])
+
+
+def _redo(day, why, n):
+    """The queue's reason for a company collected again: its latest collection's *day*, what it did (*why*) and the
+    *n*th time it is collected again."""
+    return f"sec: its collection of {day} {why}; collected again ({n} of 3)"
+
+
+def test_a_company_whose_companyfacts_lacked_its_latest_report_is_collected_again(tmp_path):
+    # BUG-251: AAA's collection of 2026-10-24 read a feed listing its 10-Q of 2026-10-23 and companyfacts without a fact
+    # of it, so its record stops a quarter early. The report was filed before the collection's day, so the SEC step
+    # took the run for one that had it, and only AAA's next report would have put it on the list.
+    db = rf.make_db(tmp_path / "stock.db")
+    _collected(db, "AAA", datetime(2026, 10, 24, 9, 0), report=AAA_Q3)
+    report = rf.run(db, rf.services(db, sec=rf.FakeSEC(_AAA_FEED)), steps=["sec"])
+    assert report.queue == {"AAA": [_redo("2026-10-24", _LACKED, 1)]}
+    sec = report.result("sec")
+    assert sec.summary["incomplete"] == {"AAA": {"collected_at": "2026-10-24T09:00:00", "why": _LACKED, "again": 1}}
+    assert (sec.summary["new_filings"], sec.summary["incomplete_left"]) == ({}, {})
+    assert sec.headline == ("3 feeds read, 0 new reports at 0 companies, 1 incomplete collections to redo, 0 without a "
+                            "CIK, 0 errors")
+
+
+@pytest.mark.parametrize("report, predecessor, why", [
+    # BUG-279: the good run that would restate BBB waited for its next report.
+    (None, "503 Server Error", "couldn't read its predecessor's filings (503 Server Error)"),
+    (AAA_Q3, "no XBRL data", f"{_LACKED} and couldn't read its predecessor's filings (no XBRL data)"),
+])
+def test_a_company_whose_predecessor_couldnt_be_read_is_collected_again(tmp_path, report, predecessor, why):
+    db = rf.make_db(tmp_path / "stock.db")
+    _collected(db, "BBB", datetime(2026, 10, 24, 9, 0), report=report, predecessor=predecessor)
+    assert rf.run(db, rf.services(db), steps=["sec"]).queue == {"BBB": [_redo("2026-10-24", why, 1)]}
+
+
+def test_a_complete_collection_since_ends_it(tmp_path):
+    db = rf.make_db(tmp_path / "stock.db")
+    _collected(db, "AAA", datetime(2026, 10, 24, 9, 0), report=AAA_Q3)
+    collect = rf.FakeCollect(db, collected_at="2026-10-25T06:00:00")  # its companyfacts now carry the 10-Q
+    day0 = _day(db, 0, sec=rf.FakeSEC(_AAA_FEED), collect=collect)
+    assert collect.calls == [["AAA"]] and day0.result("collect").ok is True
+    sec = _day(db, 7, sec=rf.FakeSEC(_AAA_FEED)).result("sec")
+    assert sec.ran is True and (sec.summary["incomplete"], sec.summary["incomplete_left"]) == ({}, {})
+
+
+def test_a_report_still_without_facts_is_collected_again_three_times_then_left(tmp_path):
+    # The SEC fills a lag within days. A report three more collections a week apart still find without facts is the
+    # source's gap (DLR's 10-Q of 2026-07-31 still had none 86 days on): AAA then waits for its next report, each run's
+    # warning naming the report.
+    db = rf.make_db(tmp_path / "stock.db")
+    _collected(db, "AAA", datetime(2026, 10, 24, 9, 0), report=AAA_Q3)
+    queued, collected = [], []
+    for week in range(5):
+        at = (rf.NOW + timedelta(days=7 * week, hours=1)).replace(tzinfo=None).isoformat()
+        collect = rf.FakeCollect(db, collected_at=at, incomplete={"AAA": {"report": AAA_Q3}})
+        report = _day(db, 7 * week, sec=rf.FakeSEC(_AAA_FEED), collect=collect)
+        queued.append(report.queue.get("AAA"))
+        collected += collect.calls
+    assert queued == [[_redo("2026-10-24", _LACKED, 1)], [_redo("2026-10-25", _LACKED, 2)],
+                      [_redo("2026-11-01", _LACKED, 3)], None, None]
+    assert collected == [["AAA"]] * 3
+    sec = report.result("sec")
+    assert sec.summary["incomplete"] == {}
+    assert sec.summary["incomplete_left"] == {"AAA": {"collected_at": "2026-11-08T06:00:00", "why": _LACKED,
+                                                      "collections": 4, "since": "2026-10-24"}}
+    assert sec.headline == ("3 feeds read, 0 new reports at 0 companies, 0 incomplete collections to redo (and 1 left "
+                            "after 3 tries), 0 without a CIK, 0 errors")
+
+
+def test_another_report_without_facts_starts_its_own_count(tmp_path):
+    # AAA's 10-Q of 2026-07-31 was left after four collections without its facts; the next one's lag is its own.
+    db = rf.make_db(tmp_path / "stock.db")
+    q2 = {"form": "10-Q", "accession": "0000000001-26-000002", "filed": "2026-07-31"}
+    for at in (datetime(2026, 10, 22, 9, 0), datetime(2026, 10, 22, 12, 0), datetime(2026, 10, 23, 9, 0),
+               datetime(2026, 10, 23, 12, 0)):
+        _collected(db, "AAA", at, report=q2)
+    sec = rf.run(db, rf.services(db), steps=["sec"]).result("sec")
+    assert list(sec.summary["incomplete_left"]) == ["AAA"] and sec.summary["incomplete_left"]["AAA"]["collections"] == 4
+    _collected(db, "AAA", datetime(2026, 10, 24, 9, 0), report=AAA_Q3)
+    report = rf.run(db, rf.services(db, sec=rf.FakeSEC(_AAA_FEED)), steps=["sec"])
+    assert report.queue == {"AAA": [_redo("2026-10-24", _LACKED, 1)]}
+
+
+def test_a_company_with_a_new_report_and_an_incomplete_collection_has_both_reasons(tmp_path):
+    # Its collection of 2026-10-22 lacked its 10-K of 2026-08-14; its 10-Q of 2026-10-23 came since.
+    db = rf.make_db(tmp_path / "stock.db")
+    ten_k = {"form": "10-K", "accession": "0000000001-26-000001", "filed": "2026-08-14"}
+    _collected(db, "AAA", datetime(2026, 10, 22, 9, 0), report=ten_k)
+    report = rf.run(db, rf.services(db, sec=rf.FakeSEC(_AAA_FEED)), steps=["sec"])
+    assert report.queue == {"AAA": ["sec: 10-Q filed 2026-10-23 (0000000001-26-000003)", _redo(
+        "2026-10-22", "read no facts of its 10-K filed 2026-08-14 (0000000001-26-000001)", 1)]}
+
+
+def _without_the_incomplete_column(db):
+    """*db* as a database last written before BUG-251's ``collection_runs.incomplete``: the user's, to 2026-10-25."""
+    conn = sqlite3.connect(db)
+    if "incomplete" in {row[1] for row in conn.execute("PRAGMA table_info(collection_runs)")}:
+        conn.execute("ALTER TABLE collection_runs DROP COLUMN incomplete")
+    conn.commit()
+    conn.close()
+
+
+def test_a_database_whose_runs_dont_say_what_they_lacked_is_listed_by_the_reports_alone(tmp_path):
+    # Its runs read as complete, as they did: a report filed since a company's last collection puts it on the list.
+    db = rf.make_db(tmp_path / "stock.db")
+    _without_the_incomplete_column(db)
+    sec = rf.FakeSEC({**_AAA_FEED, rf.cik_of("BBB"): [rf.filing("10-Q", "2026-10-20", "b-1")]})
+    report = rf.run(db, rf.services(db, sec=sec), steps=["sec"])
+    assert report.queue == {"AAA": ["sec: 10-Q filed 2026-10-23 (0000000001-26-000003)"]}
+    assert report.result("sec").ok is True
+
+
+def test_the_sec_step_runs_again_after_a_run_that_lost_an_incomplete_collection_it_listed(tmp_path):
+    # As for a new report (code review 19, I-3): the list lives in the run, and its collection failed.
+    db = rf.make_db(tmp_path / "stock.db")
+    _collected(db, "AAA", datetime(2026, 10, 24, 9, 0), report=AAA_Q3)
+    day0 = _day(db, 0, sec=rf.FakeSEC(_AAA_FEED), collect=rf.FakeCollect(db, raises=OSError("Yahoo timed out")))
+    assert (day0.result("sec").ok, day0.result("collect").ok) == (True, False)
+    collect = rf.FakeCollect(db, collected_at="2026-10-26T06:00:00")
+    sec = _day(db, 1, sec=rf.FakeSEC(_AAA_FEED), collect=collect).result("sec")
+    assert sec.again == ("succeeded in the run started 1d ago, within its weekly period, but that run put AAA on the "
+                         "collection list, and its collect step failed")
+    assert collect.calls == [["AAA"]]
+
+
+def test_the_real_collection_stores_what_the_companyfacts_lack_and_the_sec_step_collects_it_again(tmp_path,
+                                                                                                 monkeypatch):
+    # The collect step's collection (its SEC read a FreshSECHandler's) stores DLR's run as `stock-data` does; the next
+    # SEC step, whose feed lists no report since, puts DLR on the list again.
+    db = tmp_path / "stock.db"
+    serve_dlr(monkeypatch, lagging=True)
+    assert collect_tickers(db, tmp_path / "out", tmp_path / "cache", ["DLR"], lambda line: None)["stored"] == 1
+    warnings, incomplete = stored_run(db, "DLR")
+    assert incomplete == {"report": DLR_10Q} and DLR_LAG in warnings
+    feed = rf.FakeSEC({"0001297996": [rf.filing("10-Q", "2026-07-31", "0001104659-26-089296")]})
+    queue = rf.run(db, rf.services(db, sec=feed), steps=["sec"]).queue
+    assert list(queue) == ["DLR"] and len(queue["DLR"]) == 1
+    assert queue["DLR"][0].startswith("sec: its collection of ") and queue["DLR"][0].endswith(
+        " read no facts of its 10-Q filed 2026-07-31 (0001104659-26-089296); collected again (1 of 3)")
+
+
+def test_the_real_collection_stores_a_failed_predecessor_read_and_the_sec_step_collects_it_again(tmp_path,
+                                                                                                 monkeypatch):
+    # BUG-279 through the collect step's collection: BLK's run whose read of the old BlackRock failed goes on the list
+    # again at the next SEC step, and once a run reads both filers, BLK is off it.
+    db = tmp_path / "stock.db"
+    quiet = rf.FakeSEC()  # BLK's feed lists no report since
+    serve_blk(monkeypatch, 503)
+    assert collect_tickers(db, tmp_path / "out", tmp_path / "cache", ["BLK"], lambda line: None)["stored"] == 1
+    queue = rf.run(db, rf.services(db, sec=quiet), steps=["sec"]).queue
+    assert list(queue) == ["BLK"] and queue["BLK"][0].startswith("sec: its collection of ")
+    assert queue["BLK"][0].endswith(" couldn't read its predecessor's filings (HTTPError); collected again (1 of 3)")
+    serve_blk(monkeypatch, 200)
+    assert collect_tickers(db, tmp_path / "out", tmp_path / "cache", ["BLK"], lambda line: None)["stored"] == 1
+    assert rf.run(db, rf.services(db, sec=quiet), steps=["sec"]).queue == {}
+    assert quiet.calls == ["0002012383", "0002012383"]
 
 
 # ---------------------------------------------------------------------------

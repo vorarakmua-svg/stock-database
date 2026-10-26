@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.config import AppConfig, StorageConfig
@@ -16,7 +17,15 @@ from src.fetchers.stock_data_fetcher import StockDataFetcher
 from src.models.stock_data import StockData
 from src.webapp import create_app
 from src.webapp.settings import WebSettings
-from tests.test_fetcher_concurrency import BLK_FY2022, serve_blk, stored_blk
+from tests.test_fetcher_concurrency import (
+    BLK_FY2022,
+    DLR_10Q,
+    DLR_LAG,
+    serve_blk,
+    serve_dlr,
+    stored_blk,
+    stored_run,
+)
 
 # ---------------------------------------------------------------------------
 # Fake fetcher
@@ -294,6 +303,28 @@ def test_a_job_keeps_what_a_failed_predecessor_read_cant_give(monkeypatch, web_d
         assert r.status_code == 202
         assert _wait_until_done(client, r.json()["job_id"])["state"] == "done"
         assert stored_blk(web_db)[0] == BLK_FY2022
+
+
+@pytest.mark.parametrize("ticker, serve, incomplete, warning", [
+    ("DLR", lambda monkeypatch: serve_dlr(monkeypatch, lagging=True), {"report": DLR_10Q}, DLR_LAG),  # BUG-251
+    ("BLK", lambda monkeypatch: serve_blk(monkeypatch, 503), {"predecessor": "HTTPError"},  # BUG-279
+     "SEC EDGAR: BLK's predecessor, CIK 0001364742, couldn't be read (HTTPError), so its history is missing from "
+     "this run"),
+])
+def test_a_job_stores_what_its_sec_read_lacked(monkeypatch, web_db: Path, tmp_path: Path, ticker, serve, incomplete,
+                                               warning) -> None:
+    """A web collection stores a run as a terminal one does, with what its SEC read lacked, so the refresh collects
+    the company again: DLR's companyfacts without its latest 10-Q, BLK's predecessor unread."""
+    app = create_app(settings=WebSettings(db_path=web_db, allow_collection=True))
+    app.state.job_manager.fetcher_factory = lambda config: StockDataFetcher(AppConfig(
+        storage=StorageConfig(base_dir=tmp_path, db_path=config.storage.database_path)))
+    client = TestClient(app)
+    serve(monkeypatch)
+    r = client.post("/api/collection/jobs", json={"tickers": [ticker]})
+    assert r.status_code == 202
+    assert _wait_until_done(client, r.json()["job_id"])["state"] == "done"
+    warnings, stored = stored_run(web_db, ticker)
+    assert stored == incomplete and warning in warnings
 
 
 # ---------------------------------------------------------------------------

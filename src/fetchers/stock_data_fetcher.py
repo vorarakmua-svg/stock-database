@@ -38,6 +38,9 @@ from .yahoo_handler import YahooHandler
 NO_ANNUAL_FINANCIALS = "SEC EDGAR: no annual financials"
 #: How it begins for a record that stops where the filer's IFRS reports begin.
 STALE_ANNUAL_FINANCIALS = "SEC EDGAR: annual financials stop"
+#: How it begins for a record that stops before the latest report the SEC's submissions list, which its companyfacts
+#: lack (BUG-251).
+REPORT_WITHOUT_FACTS = "SEC EDGAR: the companyfacts lack"
 #: The tickers a collection's worker has submitted at most: one fetching and one waiting its turn, so the workers go
 #: on while the calling thread exports a batch, and the finished companies it hasn't taken yet stay few.
 IN_FLIGHT_PER_WORKER = 2
@@ -264,6 +267,14 @@ class StockDataFetcher:
                     stock.add_warning(f"SEC EDGAR: {ticker} reads CIK {sec_data['cik']} ({name}) with its "
                                       f"predecessor's filings, CIK {sec_data['predecessor_cik']} "
                                       f"({sec_data.get('predecessor_name') or 'name unknown'})")
+
+                # The latest report the submissions list, which the companyfacts lack: the SEC's lag (BUG-251).
+                # A companyfacts request that failed has its error.
+                missing = sec_data.get("missing_report")
+                if missing and "company_facts_error" not in sec_data:
+                    stock.add_warning(f"{REPORT_WITHOUT_FACTS} {ticker}'s {missing['form']} filed {missing['filed']} "
+                                      f"({missing['accession']}), so this run's figures stop before it; the refresh "
+                                      f"collects {ticker} again")
 
                 # An empty record otherwise reads like a short history: say why.
                 if sec_data.get("cik") and not annual:

@@ -25,7 +25,11 @@ on the list wasn't collected in that run; ``insiders`` and ``gurus`` after an it
 - ``sec`` (weekly): every company's submissions feed, read fresh through the SEC handler, every one of its recent
   filings (not the newest 100 the handler keeps for its other callers, which a bank's 424B2s fill in days). A 10-K,
   10-Q, 20-F, 40-F, a transition report (10-KT, 10-QT) or an amendment of one filed on or after the day of the
-  company's last collection with the SEC puts it on the list.
+  company's last collection with the SEC puts it on the list. So does that collection when its SEC read was
+  incomplete (``collection_runs.incomplete``): it read no facts of the latest report its submissions listed (its
+  companyfacts lacked them, the SEC's lag, BUG-251, or their request failed), or it couldn't read its predecessor's
+  filings (BUG-279). Up to INCOMPLETE_RETRIES times for one gap, counted over the collections in a row that found it;
+  then the company waits for its next report.
 - ``collect`` (whenever the list isn't empty): a full collection of the list as ``stock-data`` runs one (json, csv
   and sqlite, stored and valued a batch at a time), its SEC payloads read fresh; a company it didn't store fails it.
 - ``insiders`` and ``gurus`` (weekly): M3's collectors, the insiders' last three years for every company with a CIK
@@ -96,6 +100,11 @@ PERIODS: Dict[str, timedelta] = {"quotes": DAILY, "bars": DAILY, "sec": WEEKLY, 
 #: The reports whose filing puts a company on the collection list, each with its amendment ("10-K/A"): the transition
 #: reports a change of fiscal year brings (10-KT, 10-QT) too.
 REPORT_FORMS: Tuple[str, ...] = ("10-K", "10-Q", "20-F", "40-F", "10-KT", "10-QT")
+#: How many times the SEC step puts a company on the list again for one gap in its collections' SEC reads (BUG-251,
+#: BUG-279): the same report without facts, or the predecessor unread. The SEC fills a lag in days, so a gap that
+#: three more collections a week apart still find is the source's (DLR's 10-Q of 2026-07-31 had no facts 86 days on):
+#: the company then waits for its next report, each collection's warning still naming the report.
+INCOMPLETE_RETRIES = 3
 #: A long step says how far it is every BATCH companies.
 BATCH = 25
 #: The benchmark index whose bars a collection stores beside the companies' (``fetch_and_export``'s ^GSPC), which the
@@ -426,6 +435,26 @@ def _named(items: Any, limit: int = 10) -> str:
     return ", ".join(names[:limit]) + (f" and {len(names) - limit} more" if len(names) > limit else "")
 
 
+def _gap(lacked: Dict[str, Any]) -> Tuple[Optional[str], bool]:
+    """What a collection's SEC read lacked (``collection_runs.incomplete``, parsed), as two collections incomplete the
+    same way share it: the accession of the report its companyfacts had no fact of, and whether its predecessor's
+    filings went unread. (None, False) for a complete collection."""
+    report = lacked.get("report")
+    return (report.get("accession") if isinstance(report, dict) else None), bool(lacked.get("predecessor"))
+
+
+def _lacking(lacked: Dict[str, Any]) -> str:
+    """What a collection's SEC read lacked, as what it did, for a line: it read no facts of the latest report (its
+    companyfacts lacked them, or their request failed), it couldn't read its predecessor's filings, or both."""
+    report = lacked.get("report")
+    parts: List[str] = []
+    if isinstance(report, dict) and report.get("accession"):
+        parts.append(f"read no facts of its {report.get('form')} filed {report.get('filed')} ({report['accession']})")
+    if lacked.get("predecessor"):
+        parts.append(f"couldn't read its predecessor's filings ({lacked['predecessor']})")
+    return " and ".join(parts)
+
+
 @dataclass
 class StepResult:
     """A step of a run: whether it *ran* (else *reason* says why it was skipped) and why it ran *again* though it
@@ -597,18 +626,22 @@ class _Run:
         nothing did, and for a daily step, which runs again the next day anyway.
 
         An item that failed: a company's feed (``sec``), a company's Form 4s (``insiders``), a guru's 13F filings
-        (``gurus``). And for ``sec``, the companies it put on the collection list when that run's ``collect`` step
-        didn't finish ok (it failed or was skipped, or the run stopped before it ended), which lost the list. Running
-        the SEC step again is safe: a report filed on or after the day of a company's latest collection with the SEC
-        is found again until that company is collected."""
+        (``gurus``). And for ``sec``, the companies it put on the collection list (for a new report, or to redo an
+        incomplete collection) when that run's ``collect`` step didn't finish ok (it failed or was skipped, or the run
+        stopped before it ended), which lost the list. Running the SEC step again is safe: a report filed on or after
+        the day of a company's latest collection with the SEC is found again until that company is collected, and so
+        is an incomplete latest collection."""
         if PERIODS.get(step) != WEEKLY:
             return None
         undone = []
         errors = summary.get("errors")
         if isinstance(errors, (dict, list)) and errors:
             undone.append(f"had {'feed ' if step == 'sec' else ''}errors for {_named(errors)}")
-        listed = summary.get("new_filings") if step == "sec" else None
-        if isinstance(listed, dict) and listed:
+        listed: List[str] = []
+        for key in ("new_filings", "incomplete") if step == "sec" else ():
+            if isinstance(summary.get(key), dict):
+                listed += [ticker for ticker in summary[key] if ticker not in listed]
+        if listed:
             after = next(self._log_rows("SELECT ok, summary FROM refresh_log WHERE step = 'collect' AND id > ? "
                                         "ORDER BY id LIMIT 1", row_id), None)
             if after is None or _parsed(after[1]).get("run") != run:
@@ -825,16 +858,19 @@ class _Run:
     def _sec(self, result: StepResult) -> None:
         """Every company's submissions feed: each report (``is_report``) filed on or after the day of its last
         collection with the SEC puts it on the list. The day is the collector's own (``collection_runs``), which east
-        of New York runs ahead of the SEC's: a report filed on it may have come after the collection, so it counts."""
+        of New York runs ahead of the SEC's: a report filed on it may have come after the collection, so it counts.
+        That collection itself does when its SEC read was incomplete (``_again``)."""
         s = result.summary
-        s.update({"feeds": 0, "new_filings": {}, "no_cik": [], "errors": {}})
+        s.update({"feeds": 0, "new_filings": {}, "incomplete": {}, "incomplete_left": {}, "no_cik": [], "errors": {}})
+        # Whether the runs say what their SEC reads lacked: a database last written before the column says nothing.
+        said = "incomplete" in {row[1] for row in self._rows("PRAGMA table_info(collection_runs)")}
         total = len(self.companies)
         for done, (ticker, cik) in enumerate(self.companies, 1):
             if not cik:
                 s["no_cik"].append(ticker)
             else:
                 try:
-                    self._filings_of(ticker, cik, s)
+                    self._filings_of(ticker, cik, s, said)
                 except Exception as exc:  # one company's feed is its own: the others go on
                     s["errors"][ticker] = f"{type(exc).__name__}: {exc}"
                     self.out.note(f"sec: {ticker} failed: {s['errors'][ticker]}")
@@ -843,28 +879,60 @@ class _Run:
         result.ok = asked == 0 or len(s["errors"]) < asked
         if not result.ok:
             result.reason = "every feed failed"
+        redo = ""
+        if s["incomplete"] or s["incomplete_left"]:
+            redo = f", {len(s['incomplete'])} incomplete collections to redo" + (
+                f" (and {len(s['incomplete_left'])} left after {INCOMPLETE_RETRIES} tries)"
+                if s["incomplete_left"] else "")
         result.headline = (f"{s['feeds']} feeds read, {sum(len(v) for v in s['new_filings'].values())} new reports "
-                           f"at {len(s['new_filings'])} companies, {len(s['no_cik'])} without a CIK, "
+                           f"at {len(s['new_filings'])} companies{redo}, {len(s['no_cik'])} without a CIK, "
                            f"{len(s['errors'])} errors")
 
-    def _filings_of(self, ticker: str, cik: str, s: Dict[str, Any]) -> None:
+    def _filings_of(self, ticker: str, cik: str, s: Dict[str, Any], said: bool) -> None:
         filings = self.services.sec.recent_filings(cik)
         if filings is None:
             raise LookupError(f"the SEC has no submissions feed for CIK {cik}")
         s["feeds"] += 1
-        last = self._rows("SELECT max(collected_at) FROM collection_runs WHERE ticker = ? "
-                          "AND data_sources LIKE '%sec_edgar%'", ticker)
-        since = str(last[0][0])[:10] if last and last[0][0] else None
+        # Its collections with the SEC, newest first, and what each one's SEC read lacked (none where the runs don't
+        # say: they read as complete).
+        runs = self._rows(f"SELECT collected_at, {'incomplete' if said else 'NULL'} FROM collection_runs "
+                          "WHERE ticker = ? AND data_sources LIKE '%sec_edgar%' ORDER BY collected_at DESC", ticker)
+        since = str(runs[0][0])[:10] if runs else None
         new = [f for f in filings
                if is_report(f.get("form")) and (since is None or str(f.get("filingDate") or "")[:10] >= since)]
-        if not new:
+        if new:
+            s["new_filings"][ticker] = [{"form": f.get("form"), "filed": str(f.get("filingDate") or "")[:10],
+                                         "accession": f.get("accessionNumber")} for f in new]
+            for f in s["new_filings"][ticker]:
+                self._queue(ticker, f"sec: {f['form']} filed {f['filed']} ({f['accession']})")
+            self.out.note(f"sec: {ticker} to collect: " + ", ".join(
+                f"{f['form']} filed {f['filed']}" for f in s["new_filings"][ticker]))
+        self._again(ticker, runs, s)
+
+    def _again(self, ticker: str, runs: List[Tuple[Any, ...]], s: Dict[str, Any]) -> None:
+        """Put *ticker* on the list again when its latest collection with the SEC (*runs*, newest first: when each
+        ran and what its SEC read lacked) was incomplete (BUG-251, BUG-279): its companyfacts lacked the latest report
+        its submissions listed (the SEC's lag), or its predecessor's filings couldn't be read. The collections in a row
+        incomplete the same way (``_gap``) count: once INCOMPLETE_RETRIES more have found that gap, it is the source's,
+        and the company is left to its next report (``incomplete_left``)."""
+        lacked = _parsed(runs[0][1]) if runs else {}
+        gap = _gap(lacked)
+        if gap == (None, False):
             return
-        s["new_filings"][ticker] = [{"form": f.get("form"), "filed": str(f.get("filingDate") or "")[:10],
-                                     "accession": f.get("accessionNumber")} for f in new]
-        for f in s["new_filings"][ticker]:
-            self._queue(ticker, f"sec: {f['form']} filed {f['filed']} ({f['accession']})")
-        self.out.note(f"sec: {ticker} to collect: " + ", ".join(
-            f"{f['form']} filed {f['filed']}" for f in s["new_filings"][ticker]))
+        streak = 1
+        while streak < len(runs) and _gap(_parsed(runs[streak][1])) == gap:
+            streak += 1
+        day, why = str(runs[0][0])[:10], _lacking(lacked)
+        if streak > INCOMPLETE_RETRIES:
+            since = str(runs[streak - 1][0])[:10]
+            s["incomplete_left"][ticker] = {"collected_at": runs[0][0], "why": why, "collections": streak,
+                                            "since": since}
+            self.out.note(f"sec: {ticker} not collected again: its {streak} collections since {since} each {why}; it "
+                          f"waits for its next report")
+            return
+        s["incomplete"][ticker] = {"collected_at": runs[0][0], "why": why, "again": streak}
+        self._queue(ticker, f"sec: its collection of {day} {why}; collected again ({streak} of {INCOMPLETE_RETRIES})")
+        self.out.note(f"sec: {ticker} to collect again: its collection of {day} {why}")
 
     # ---- collect ----------------------------------------------------------
 

@@ -3,6 +3,7 @@
 import os
 import time
 
+import pytest
 import requests
 
 from src.fetchers.sec_handler import SECHandler
@@ -218,3 +219,98 @@ def test_a_successors_debt_filing_doesnt_end_its_predecessors_history(tmp_path, 
     handler, _ = _successor_handler(tmp_path, monkeypatch, payloads)
     data = handler.fetch_all("XOM")
     assert data["company_facts"]["facts"]["us-gaap"]["Revenues"]["units"]["USD"] == [_FY2025, q1_2026, _Q2_2026]
+
+
+# ---- BUG-251: the latest report the submissions list, and the companyfacts lack ----
+
+#: DLR's filings as its submissions listed them on 2026-10-25, newest first, each with the fields the SEC serves:
+#: a 424B7 of 2026-08-19, the 10-Q of 2026-07-31 and the 10-Q of 2026-05-01.
+_DLR_424B7 = {"accessionNumber": "0001193125-26-357076", "form": "424B7", "filingDate": "2026-08-19", "reportDate": "",
+              "acceptanceDateTime": "2026-08-19T20:55:58.000Z", "isXBRL": 1, "primaryDocument": "d914399d424b7.htm"}
+_DLR_10Q2 = {"accessionNumber": "0001104659-26-089296", "form": "10-Q", "filingDate": "2026-07-31",
+             "reportDate": "2026-06-30", "acceptanceDateTime": "2026-07-31T21:23:41.000Z", "isXBRL": 1,
+             "primaryDocument": "dlr-20260630x10q.htm"}
+_DLR_10Q1 = {"accessionNumber": "0001104659-26-054255", "form": "10-Q", "filingDate": "2026-05-01",
+             "reportDate": "2026-03-31", "acceptanceDateTime": "2026-05-01T21:22:35.000Z", "isXBRL": 1,
+             "primaryDocument": "dlr-20260331x10q.htm"}
+#: The facts of DLR's companyfacts on 2026-10-25, cut to one each: its first quarter's revenue (the 10-Q of
+#: 2026-05-01) and the 424B7's fee, but nothing of the 10-Q of 2026-07-31.
+_DLR_Q1_REVENUE = {"val": 1635173000, "start": "2026-01-01", "end": "2026-03-31", "fy": 2026, "fp": "Q1",
+                   "form": "10-Q", "filed": "2026-05-01", "frame": "CY2026Q1", "accn": "0001104659-26-054255"}
+_DLR_FEE = {"val": 18777.23, "end": "2026-08-19", "form": "424B7", "filed": "2026-08-19", "frame": "CY2026Q3I",
+            "accn": "0001193125-26-357076"}
+#: The second quarter's revenue as the 10-Q of 2026-07-31 would give it, once the SEC has its facts (a test's figure).
+_DLR_Q2_REVENUE = {"val": 1.71e9, "start": "2026-04-01", "end": "2026-06-30", "fy": 2026, "fp": "Q2", "form": "10-Q",
+                   "filed": "2026-07-31", "frame": "CY2026Q2", "accn": "0001104659-26-089296"}
+
+
+def _dlr(tmp_path, monkeypatch, filings, revenue=(_DLR_Q1_REVENUE,), fail=()):
+    """DLR's handler: its submissions list *filings* (newest first); its companyfacts hold the 424B7's fee and the
+    *revenue* entries (a 503 when "companyfacts" is in *fail*)."""
+    keys = ("accessionNumber", "form", "filingDate", "reportDate", "acceptanceDateTime", "isXBRL", "primaryDocument")
+    handler, _ = _successor_handler(tmp_path, monkeypatch, {
+        "companyfacts/CIK0001297996.json": {"entityName": "DIGITAL REALTY TRUST, INC.", "facts": {
+            "ffd": {"TtlFeeAmt": {"units": {"USD": [_DLR_FEE]}}},
+            "us-gaap": {"Revenues": {"units": {"USD": list(revenue)}}}}},
+        "submissions/CIK0001297996.json": {"name": "DIGITAL REALTY TRUST, INC.", "filings": {"recent": {
+            k: [f[k] for f in filings] for k in keys}}}},
+        fail=tuple(f"{name}/CIK0001297996.json" for name in fail))
+    handler._cik_mapping["DLR"] = "0001297996"
+    return handler
+
+
+def test_the_latest_report_the_companyfacts_lack_is_named(tmp_path, monkeypatch):
+    # DLR's companyfacts of 2026-10-25 had no fact of its 10-Q of 2026-07-31, though they had the 424B7 filed after it:
+    # the run's figures stopped at the March quarter and nothing said so.
+    data = _dlr(tmp_path, monkeypatch, [_DLR_424B7, _DLR_10Q2, _DLR_10Q1]).fetch_all("DLR")
+    assert data.get("missing_report") == {"form": "10-Q", "accession": "0001104659-26-089296", "filed": "2026-07-31"}
+
+
+def test_companyfacts_with_the_latest_reports_facts_name_none(tmp_path, monkeypatch):
+    data = _dlr(tmp_path, monkeypatch, [_DLR_424B7, _DLR_10Q2, _DLR_10Q1],
+                revenue=(_DLR_Q1_REVENUE, _DLR_Q2_REVENUE)).fetch_all("DLR")
+    assert "missing_report" not in data
+
+
+@pytest.mark.parametrize("later", [
+    {"form": "10-K/A", "primaryDocument": "dlr-10ka.htm"},  # a Part III amendment: no financial facts
+    {"form": "10-Q/A", "primaryDocument": "dlr-10qa.htm"},
+    {"form": "10-KT", "primaryDocument": "dlr-10kt.htm"},  # a transition report, which the parser doesn't read
+    {"form": "8-K", "primaryDocument": "d8k.htm"},
+    {"form": "10-Q", "isXBRL": 0, "primaryDocument": "dlr-10q.htm"},  # no XBRL, so never any facts
+])
+def test_only_a_report_as_filed_with_xbrl_is_looked_for(tmp_path, monkeypatch, later):
+    # Filed after the 10-Q of 2026-05-01 and without facts: none of these is a report whose facts the parser would
+    # read once the SEC had them, so the latest one looked for is that 10-Q, which the facts carry.
+    filing = {**_DLR_10Q2, "accessionNumber": "0001104659-26-099999", "filingDate": "2026-09-15", **later}
+    data = _dlr(tmp_path, monkeypatch, [_DLR_424B7, filing, _DLR_10Q1]).fetch_all("DLR")
+    assert "missing_report" not in data
+
+
+def test_an_ifrs_filers_report_is_found_among_its_ifrs_facts(tmp_path, monkeypatch):
+    # A foreign filer's 20-F has its facts under ifrs-full, not us-gaap: they are its report's facts all the same.
+    twenty_f = {"accessionNumber": "0001046179-26-000012", "form": "20-F", "filingDate": "2026-04-16",
+                "reportDate": "2025-12-31", "acceptanceDateTime": "2026-04-16T09:30:00.000Z", "isXBRL": 1,
+                "primaryDocument": "tsm-20251231.htm"}
+    handler, _ = _successor_handler(tmp_path, monkeypatch, {
+        "companyfacts/CIK0001046179.json": {"entityName": "TAIWAN SEMICONDUCTOR MANUFACTURING CO LTD", "facts": {
+            "ifrs-full": {"Revenue": {"units": {"TWD": [{
+                "val": 3.81e12, "start": "2025-01-01", "end": "2025-12-31", "fy": 2025, "fp": "FY", "form": "20-F",
+                "filed": "2026-04-16", "accn": "0001046179-26-000012"}]}}}}},
+        "submissions/CIK0001046179.json": {"name": "TAIWAN SEMICONDUCTOR MANUFACTURING CO LTD", "filings": {
+            "recent": {k: [v] for k, v in twenty_f.items()}}}})
+    handler._cik_mapping["TSM"] = "0001046179"
+    assert "missing_report" not in handler.fetch_all("TSM")
+
+
+def test_a_failed_companyfacts_request_leaves_the_latest_report_unread(tmp_path, monkeypatch):
+    # The run read no facts at all, the latest report's among them.
+    data = _dlr(tmp_path, monkeypatch, [_DLR_424B7, _DLR_10Q2, _DLR_10Q1], fail=("companyfacts",)).fetch_all("DLR")
+    assert "company_facts_error" in data
+    assert data.get("missing_report") == {"form": "10-Q", "accession": "0001104659-26-089296", "filed": "2026-07-31"}
+
+
+def test_a_report_listed_without_its_accession_isnt_looked_for(tmp_path, monkeypatch):
+    # There is nothing to look for among the facts, and nothing to name.
+    data = _dlr(tmp_path, monkeypatch, [_DLR_424B7, {**_DLR_10Q2, "accessionNumber": ""}, _DLR_10Q1]).fetch_all("DLR")
+    assert "missing_report" not in data

@@ -3,6 +3,7 @@
 2026-10-21, each with five daily bars to 2026-10-20 and that collection's snapshot."""
 import copy
 import io
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -161,18 +162,21 @@ class FakeSEC:
 
 class FakeCollect:
     """A full collection: records each call's tickers and stores a collection run for each but *missing* (at
-    *collected_at*, with *errors* per ticker), logging the collector's "Completed" line for each; it raises *raises*
+    *collected_at*, with *errors* per ticker, and for a ticker of *incomplete* why its SEC read was incomplete, as
+    ``collection_runs.incomplete`` keeps it), logging the collector's "Completed" line for each; it raises *raises*
     before storing anything, *raise_after* after."""
 
     def __init__(self, db: Path, missing: Sequence[str] = (), errors: Optional[Dict[str, int]] = None,
                  collected_at: str = "2026-10-25T12:00:00", raises: Optional[BaseException] = None,
-                 raise_after: Optional[Exception] = None) -> None:
+                 raise_after: Optional[Exception] = None,
+                 incomplete: Optional[Dict[str, Dict[str, Any]]] = None) -> None:
         self.db = db
         self.missing = set(missing)
         self.errors = errors or {}
         self.collected_at = collected_at
         self.raises = raises
         self.raise_after = raise_after
+        self.incomplete = incomplete or {}
         self.calls: List[List[str]] = []
 
     def __call__(self, tickers: List[str], log: Callable[[str], None]) -> Dict[str, Any]:
@@ -186,6 +190,9 @@ class FakeCollect:
             conn.execute("INSERT INTO collection_runs (ticker, collected_at, data_sources, warning_count, error_count) "
                          "VALUES (?, ?, ?, ?, ?)", (ticker, self.collected_at, "yahoo_finance, sec_edgar", 2,
                                                     self.errors.get(ticker, 0)))
+            if ticker in self.incomplete:
+                conn.execute("UPDATE collection_runs SET incomplete = ? WHERE ticker = ? AND collected_at = ?",
+                             (json.dumps(self.incomplete[ticker]), ticker, self.collected_at))
             log(f"Completed {ticker}: sources=['yahoo_finance', 'sec_edgar'], warnings=2, "
                 f"errors={self.errors.get(ticker, 0)}")
         conn.commit()

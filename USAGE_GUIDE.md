@@ -1489,7 +1489,7 @@ The eight steps, in this order, each in its own try/except (a failure is reporte
 |---|---|---|
 | `quotes` | daily | Every company's Yahoo quote, stored as a new snapshot. A company with a split since its last collection goes on the collection list instead |
 | `bars` | daily | Every company's daily bars since its last stored bar, then `^GSPC`'s. A company whose prices no longer match the stored bars' basis goes on the collection list; an answer with no bars (Yahoo's answer to a timeout or throttling) is that company's error, its bars kept and nothing queued |
-| `sec` | weekly | Every company's submissions feed, read fresh. A 10-K, 10-Q, 20-F, 40-F, 10-KT or 10-QT, or an amendment of one, filed since the company's last collection puts it on the collection list |
+| `sec` | weekly | Every company's submissions feed, read fresh. A 10-K, 10-Q, 20-F, 40-F, 10-KT or 10-QT, or an amendment of one, filed since the company's last collection puts it on the collection list. So does that collection when its SEC read was incomplete (`collection_runs.incomplete`: its companyfacts had no fact of the latest report its submissions listed, or its predecessor's filings couldn't be read), three times at most for one gap |
 | `collect` | when the list isn't empty | A full collection of the list, as `stock-data` runs one |
 | `insiders` | weekly | The last three years of Form 4s for every company, each fetched once and cached |
 | `gurus` | weekly | The gurus' 13F filings of the last eight quarters, their CUSIPs' tickers and their positions |
@@ -1500,9 +1500,9 @@ A step with a cadence is skipped while it succeeded in a run that started within
 weekly one 6 days 20 hours, so a run scheduled daily never skips one because yesterday's started a few minutes later.
 The age is measured from the start of the run, so a step that finished hours into a long run is still due the next day.
 A weekly step runs again at the next run while its latest success left something undone, and says why: `sec` after a
-company's feed failed, or when a company it put on the collection list wasn't collected in that run (the collection
-failed, `--steps` left `collect` out, or the run was stopped); `insiders` and `gurus` after a company's or a guru's
-filings failed. A feed that keeps failing makes `sec` run every day, each day naming the company. A `--tickers` run
+company's feed failed, or when a company it put on the collection list (for a new report, or to redo an incomplete
+collection) wasn't collected in that run (the collection failed, `--steps` left `collect` out, or the run was stopped);
+`insiders` and `gurus` after a company's or a guru's filings failed. A feed that keeps failing makes `sec` run every day, each day naming the company. A `--tickers` run
 counts for no step's cadence (its rows are logged with its `subset`), so the next full run is due as if it hadn't
 happened. `--steps` names the steps to run, whatever their cadence (`collect` alone has nothing to collect, as the list
 is built by `quotes`, `bars` and `sec` in the same run), and `--force` ignores the cadence of every step.
@@ -1549,10 +1549,13 @@ Two things record a run. The `refresh_log` table has a row for each step of each
 - `id`, `step`, `started_at` and `finished_at` (UTC, ISO 8601);
 - `ok`: 1 for a step that ran and succeeded, 0 for one that failed, NULL for one that was skipped. A step's cadence
   reads its latest row with `ok = 1` and no `subset`: its run's start (`summary`'s `run`), and for a weekly step whether
-  that run left something undone (its `errors`; for `sec`, its `new_filings` and that run's `collect` row);
+  that run left something undone (its `errors`; for `sec`, its `new_filings` and `incomplete` and that run's `collect`
+  row);
 - `summary`: JSON. `run` is the run's start, the same on every row of a run; `subset`, on every row of a `--tickers`
   run, its companies; then the step's counts (`quotes`: `stored`, `rebased`, `to_collect`, `errors`; `sec`: `feeds`,
-  `new_filings`, `errors`; `collect`: `collected`, `not_stored`; and so on), `skipped` with the reason for a skipped
+  `new_filings`, `incomplete` (the companies put on the list again for an incomplete collection, each with
+  `collected_at`, `why` and `again`, the time it is), `incomplete_left` (those left after three, with `collections` in a
+  row and `since`), `errors`; `collect`: `collected`, `not_stored`; and so on), `skipped` with the reason for a skipped
   step, or `error` for a failed one; `again`, why a weekly step ran again within its period.
 
 ```sql
@@ -1597,6 +1600,16 @@ FROM refresh_log
 WHERE ok = 0
 ORDER BY id DESC
 LIMIT 20;
+
+-- The companies whose latest collection with the SEC was incomplete, and what it lacked: what the SEC step reads
+-- (collection_runs.incomplete; empty for every run stored before the column)
+SELECT r.ticker, r.collected_at, json_extract(r.incomplete, '$.report.form') AS form,
+       json_extract(r.incomplete, '$.report.filed') AS filed, json_extract(r.incomplete, '$.predecessor') AS predecessor
+FROM collection_runs r
+WHERE r.incomplete IS NOT NULL
+  AND r.collected_at = (SELECT MAX(collected_at) FROM collection_runs
+                        WHERE ticker = r.ticker AND data_sources LIKE '%sec_edgar%')
+ORDER BY filed, r.ticker;
 ```
 
 A database from before the refresh has no `refresh_log` until its first run. The other record is the log file,
