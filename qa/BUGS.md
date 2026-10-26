@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 8 · P3 136 · NEEDS-USER 22 · Verified: 114
+**Open:** P0 0 · P1 0 · P2 10 · P3 141 · NEEDS-USER 22 · Verified: 114
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1214,6 +1214,7 @@ Expected: short-term debt as all current debt (DebtCurrent; else short-term borr
 Notes (iteration 104): BUG-143's fix unmasks it where the double-counted paper happened to stand in for the missing maturities (APD FY2013, FDX FY2026, LIN, CVS): their totals now fall short by the maturities instead of being right by accident; KO FY2019's $38.51B leaves out its $4.25B of maturities.
 Notes (code review 20, M-1): wider than that. Years whose total was within 1% of long-term + borrowings + the maturities beside them and now fall 1.7-9.2% short: AEP FY2020 and FY2022, APD FY2013, BAX FY2014, ELV FY2013, GPC FY2025 (-0.2% to -7.4%, its latest year), LOW FY2023, NI FY2011-12, PM FY2013, RTX FY2022, SJM FY2017, SO FY2010; latest years further from that sum: AEP FY2025, BF-B FY2026, FDX FY2026, GPC FY2025, MKC FY2025 (-3.9% to -12.7%), OKE FY2025 (`qa/evidence/review20.txt`). The fix's real-data check should verify each.
 Impact: total debt, net debt, EV and debt/EBITDA low by the current maturities for those years (VZ 8.6% in FY2023, ABBV 16% in FY2017, MSFT 19% in FY2013).
+Review 21 (iteration 115): the fix's "13 away, each an own total of another scope" missed ICE FY2018, whose own total sits at an adoption-day period_end (BUG-272); and its combination regressed five shapes the filings decide (ICE, HWM, COO, YUM, PEP, AMD, NEE's checkpoints, XEL's vintage): BUG-267.
 Fix (iteration 111, `qa/evidence/bug159-{investigation,done}.txt`): short_term_debt also reads LongTermDebtAndCapitalLeaseObligationsCurrent; BUG-141's rule counts the maturities a filing shows beside its borrowings or alone (behind a 95% made-up test: EXC FY2023); and `_current_debt_combined` adds a DebtCurrent = the borrowings plus the maturities where a filing shows both and no DebtCurrent, unless the borrowings hold them (the filer's own total; IBM's maturities plus their tagged parts, or within 1%; a quarter by its latest annual report), with DOW's own parts, DUK's DebtAndCapitalLeaseObligations, VZ's maturities that hold the borrowings and EXC's kept total measured one by one. Over the 502: total debt changes in 1,353 annual years at 155 filers (1,273 up, 80 down); 222 years at 42 filers move to their own totals (VZ FY2020-23 $150.67B in FY2023, LIN, CVS, APD FY2013, ABBV FY2024), 13 away, each an own total of another scope; IBM unchanged in every cell; review 20's 18 listed years all check out. short_term_debt joins the integrity check's outlier exclusions (NKE and VMC would have scored 75; IEX, APA, HRL and MDT's false flags go too). No median or verdict moves; debt ratios, scores (24 composites +-2 to 4), EPV at 76 companies, the valuation history and the next refresh's EV family (85 companies, ECHO +17.6%) do. Residuals: BUG-259.
 
 ### BUG-160 [P2][WEB] BUG-128 regression: a factor refresh values DDM's trailing year as of the refresh day on the payments the last collection stored: SCCO's DDM $53.63 for $68.16
@@ -1919,6 +1920,7 @@ Found: code review 20 (M-2; the BUG-142 investigation's residual 5g), iteration 
 Repro: BUG-143's rule judges a 10-K's paper by annual reports only (right for the annual record), but the quarterly checkpoint on that date (`_collect_instant_checkpoints`) reads 10-Qs too: 11 checkpoints at 5 filers (NEE 2010-13 year ends, D 2011-13, CLX 2019-06-30, CTAS 2017-05-31, ROK 2013-09-30) still count the paper twice; none is a latest quarter, so no TTM or EV effect today. Pre-existing (review 20's probe fails on both 4abe6d7 and ca027c7: 24.316e9 for 22.967e9).
 Expected: each view's paper judged against the total that view reads on the date.   Actual: as above.
 Fix (iteration 109, BUG-256's change): the quarterly checkpoints judge a paper over the 10-Qs and 10-Ks they read; the 11 checkpoints (at 6 filers: GS 2012-12-31 was the eleventh) now count it once, moving 142 valuation_history rows at D, NEE, CLX, ROK and CTAS.
+Regressed (code review 21, I-1): BUG-159's combined DebtCurrent (42937f4) undoes this at NEE's 2011-12-31 and 2012-12-31 checkpoints ($21.618B and $26.148B for $22.967B and $27.359B): BUG-267(a).
 
 ### BUG-258 [P1][REFRESH] `stock-data refresh` revalues every company on a DDM year missing each payment since its last full collection
 Status: NEEDS-USER (the fix, BUG-160's option A', moves medians back to a full collection's values; recommended)
@@ -1932,6 +1934,7 @@ Status: OPEN
 Found: iteration 111 (BUG-159's investigation, `qa/evidence/bug159-investigation.txt` section 9) | Fixed: | Regression test:
 Repro: measured over the 502, not fixed by BUG-159's rule: (a) borrowings that hold the maturities with nothing in the filings to say so are counted with them (AMAT FY2024 +$0.70B, YUM FY2018-19, PEP FY2009, probably GEHC FY2025); (b) separate lines left as before (ATO FY2018, the 1% margin's coincidence, -$0.575B; XEL FY2024-25, whose LongTermDebt is its noncurrent line; about 10 years whose borrowings and maturities are in different 10-Ks); (c) paper inside a maturities line now read, which BUG-143's rule doesn't see as a holder (CAH FY2017 +$0.855B); (d) tags unread: KO's NotesAndLoansPayable since FY2023, NotesAndLoansPayableCurrent at 9 filers, OtherLongTermDebtCurrent at 25; (e) GE's stray 2015-10-09 quarter (a 10-Q note's figure); (f) two 10-Ks disagree about the year end (WDC FY2015, DUK FY2010); (g) long-term debt unread at APD FY2023-25, ECHO FY2022/24, GNRC FY2016 (BUG-133's kind).
 Expected: each year's total debt as its balance sheet's.   Actual: as listed.
+Review 21: (a)'s "nothing in the filings to say so" doesn't hold for COO FY2016, HWM FY2019 and PEP's quarters, which their current liabilities decide: BUG-267(c) and (d).
 
 ### BUG-260 [P2][VALID] The Cash tag, a note's component at some filers, still outranks the balance sheet's total: TGT's cash $0.28B for $4.76B
 Status: OPEN
@@ -1974,6 +1977,54 @@ Status: OPEN
 Found: iteration 114 (BUG-247's fix, section 11f) | Fixed: | Regression test:
 Repro: the marks fold DD's 2017 Q1 seam by its own ratio, 0.3624 = 1/3 x 1.087: Dow's count drift rides along with the 1:3, so DD's earlier quarters sit about 8.7% off its basis. Pre-existing, and shared by both paths' undeclared rule.
 Expected: the split's own ratio, the drift left in the counts.   Actual: the seam's whole ratio.
+
+### BUG-267 [P2][VALID] BUG-159's combined current debt regresses short-term debt the filings decide: ICE FY2015 $9.90B for $7.31B, HWM FY2019, PEP's quarters, NEE's checkpoints, XEL's vintage
+Status: OPEN
+Found: code review 21 (opus, 9f536a4..d5e6ec2; `qa/evidence/review21.txt` I-1 to I-5) | Fixed: | Regression test:
+Repro: five probes, `%LOCALAPPDATA%\stockdb-qa\review21\tests_probe\test_review21_probe.py`, pass at bf3dfdd and fail at 42937f4 and since (re-run at 3f7abe2: 21.618e9 for 22.967e9, 9.899e9 for 7.308e9, 6.943e9 for 5.940e9, 28.011e9 for 29.114e9, 0.460e9 for 0.230e9).
+(a) I-1: NEE's 2011-12-31 and 2012-12-31 year-end checkpoints read $21.618B and $26.148B for $22.967B and $27.359B. The paper's verdict goes against DebtCurrent as filed, while the checkpoint reads a later 10-K's combined DebtCurrent (it undoes BUG-257 there).
+(b) I-2: the "own parts are a line of their own" rule (tuned on DOW) double counts one line tagged as borrowings, a part and maturities: ICE FY2015 $9.899B for $7.308B, ICE FY2018 $8.392B for its own total $7.441B, 11 ICE quarters (+13% to +35%), 3 AMD quarters (+$0.23B). Of the 33 cells the rule changes, 19 are wrong.
+(c) I-3: an earlier 10-K's combined DebtCurrent outranks a later 10-K's verdict that the borrowings hold the maturities: HWM FY2019 $6.943B for $5.940B (its current liabilities can't hold both lines), ICE FY2018, YUM FY2016 (+$0.065B); COO FY2016 $1.544B for $1.334B, which its current liabilities decide.
+(d) I-4: a quarter's verdict reaches back to any older year end and counts an undecided year as "separate": PEP's 18 quarters from 2020-06-13 to 2026-06-13 inherit its FY2010 10-K's undecided entry, +$0.75B to +$3.2B each (+1.7% to +6.3% of total debt), though in 17 of them current liabilities = payables and accruals + borrowings exactly.
+(e) I-5: look-ahead in the vintages. The kept-total date rule runs in every view, so a later 10-K changes an earlier filing's vintage: XEL's FY2024 10-K vintage reads $29.114B as known then, $28.011B now (DG and TDY by $0.6M and $2M).
+Expected: each record's short-term debt as its own filings decide it, with no later filing changing a vintage; the five probes pass, with the current-liabilities identity as an extra oracle. The fix also takes review 21's M-1 (tests for the measured boundaries 8 surviving mutants show: _MADE_UP's 5%, the one-sided 1% margin, DebtAndCapitalLeaseObligations not saying "held", the kept-total clauses, year_ends' order) and M-5 (the README's cash bullet and debt note, the docstrings).
+Notes: no valuation, latest year, TTM, score or verdict is among the wrong cells. Not yet in the user's DB: its stored cells for ICE, HWM, COO, YUM, PEP and AMD are pre-42937f4 (read-only check, collected 2026-10-21 and 25), so they would change at those companies' next collection.
+
+### BUG-268 [P3][API] A combined short-term debt figure names DebtCurrent as its source tag, and a stated paper hides its filing from the as-of view's carried_from
+Status: OPEN
+Found: code review 21 (M-3) | Fixed: | Regression test:
+Repro: BUG-159's combination reaches the JSON export and the API with _source_tags "DebtCurrent", though no filing tagged that figure; a paper stated by a later filing (BUG-256 rule b) reads as that filing's own, so /api/asof's carried_from doesn't name the filing it came from. Both were recorded decisions (the BUG-159 investigation 10.1; bug256-done 5.3).
+Expected: provenance that says how a figure was made (a pseudo-tag or a note).   Actual: a tag no filing used.
+
+### BUG-269 [P3][VALID] The integrity outlier check skips short_term_debt entirely since BUG-159, so a real scale error in it passes
+Status: OPEN
+Found: code review 21 (M-4) | Fixed: | Regression test:
+Repro: src/validation/integrity.py's _OUTLIER_EXCLUDE holds short_term_debt (BUG-159, for maturities that come and go), so a genuine 10^3-10^6 unit error in the field is no longer flagged.
+Expected: a higher threshold for the field, or skipping only the spikes the maturities explain.   Actual: no check.
+
+### BUG-270 [P3][VAL] `_restated_between` has no maximum split ratio, and three of BUG-173's boundaries are unpinned
+Status: OPEN
+Found: code review 21 (M-6, M-1) | Fixed: | Regression test:
+Repro: unlike `_normalize_splits` and `_apply_later_splits`, `inputs._restated_between` takes any simple ratio, so a bogus 100:1 in Yahoo's split history would scale a cover count (none in the data). Three of the reviewer's mutants survive: a 3:2 split exactly, a split on the cover count's filing day, and the factor applied when the detection falls back to the cover count.
+Expected: MAX_SPLIT_RATIO's bound, and tests at the three boundaries.   Actual: neither.
+
+### BUG-271 [P2][ASOF] Later 10-Ks' narrow comparatives make the as-of view's debt less than half the annual record's: EXC FY2023 $2.72B for $43.80B
+Status: OPEN
+Found: code review 21 (declined as pre-existing; at 9f536a4 and d5e6ec2 alike) | Fixed: | Regression test:
+Repro: in 23 fiscal years at 9 filers the as-of view's debt as known today is less than half the annual record's: EXC FY2023 reads LongTermNotesPayable $0.198B as its long-term debt ($2.721B against $43.802B), EXC FY2024 $1.880B against $46.527B, FRT FY2011-24. A later 10-K's comparative on the date tags a narrower figure, which the as-of carry takes as the latest.
+Expected: the as-of view's latest figure for a date is the filings' balance-sheet debt.   Actual: a narrow comparative.
+
+### BUG-272 [P3][PARSE] An adoption-day instant becomes a fiscal year's period_end: ICE FY2018 "2019-01-01", FY2019 "2020-01-01"
+Status: OPEN
+Found: code review 21 (declined as pre-existing) | Fixed: | Regression test:
+Repro: ICE's ASC 842 adoption-day balances (the first day of the next year) become its FY2018 and FY2019 records' period_end, which misled BUG-159's own-total oracle (it looked the total up at the record's period_end).
+Expected: the fiscal year's balance-sheet date.   Actual: the adoption day.
+
+### BUG-273 [P3][PARSE] CHD's FY2023 10-K tags its 2023 long-term debt at 2021-12-31, which FY2021's record and as-of windows read
+Status: OPEN
+Found: code review 21 (declined as pre-existing data) | Fixed: | Regression test:
+Repro: CHD's FY2023 10-K tags its 2023 LongTermDebtNoncurrent ($2.202B) at 2021-12-31, and FY2021's record reads it (total debt $3.154B at d5e6ec2, $2.455B at 9f536a4, the balance sheet's $2.563B). BUG-159 completed the short-term side only.
+Expected: FY2021's own long-term debt.   Actual: a stray later figure.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

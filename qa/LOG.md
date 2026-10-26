@@ -2080,3 +2080,27 @@ Result: BUG-247 VERIFIED; residuals BUG-262 to BUG-266 (P3).
 Gates: ruff ✓ mypy ✓ pytest 2588 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(valuation): an undeclared split folds only where net income held (BUG-247)
 Next: code review 21 (resumed after the usage limit), then BUG-170 and BUG-179 as their workers report.
+
+## Iteration 115: 2026-10-26 08:02: review (code review 21)
+Picked: code review 21, due after five fixes since review 20 (BUG-256, -257, -159, -161, -173: 9f536a4..d5e6ec2).
+Did: an opus reviewer, read-only, on `git archive` exports of d5e6ec2, bf3dfdd and 9f536a4 (`qa/evidence/review21.txt`).
+- Its scope: a re-parse of all 504 cached filers; a look-ahead oracle (each filing's vintage from only the facts filed
+  by its day); the as-of carry replayed; 26 boundary mutants.
+- Holds up: BUG-256's vintage rules are look-ahead free (18 cells at base, none of theirs at head); BUG-161 changes
+  exactly the ledger's 26 years; BUG-173 behaves on every edge tried.
+- No Critical. Five Important, all regressions of 42937f4 (BUG-159), on numbers 9f536a4 or bf3dfdd had right: NEE's
+  checkpoints (undoing BUG-257), ICE's and AMD's one line tagged three ways, a later 10-K's verdict outranked (HWM,
+  ICE, YUM, COO), PEP's quarters on a 2010 verdict, XEL's vintage look-ahead. Recorded as BUG-267 (P2), with M-1's
+  boundary tests and M-5's docs in its fix list.
+- I re-ran its five probes at 3f7abe2: all five fail with its numbers. A read-only query shows none of the wrong
+  cells in the user's DB yet (those companies were last collected before 42937f4).
+- The minors: M-2's ledger corrections made (BUG-159, BUG-257, BUG-259); M-3, BUG-268; M-4, BUG-269; M-6 and the
+  unpinned BUG-173 boundaries, BUG-270.
+- Pre-existing findings recorded: BUG-271 (P2, the as-of view's debt under half the annual record's at 9 filers),
+  BUG-272 (adoption-day period_end), BUG-273 (CHD's stray fact).
+Evidence: `qa/evidence/review21.txt` (scratch: %LOCALAPPDATA%\stockdb-qa\review21\)
+Result: BUG-267 to BUG-273 opened.
+Gates: ruff ✓ mypy ✓ pytest 2574 passed, 1 skipped (the reviewer's run at d5e6ec2); 2588 passed, 1 skipped at
+3f7abe2 | CI: no PR (Q10)
+Commit: (this commit) chore(qa): record code review 21
+Next: BUG-267, test-first from the five probes, before the other P2s (it is a regression of this loop's own fix).
