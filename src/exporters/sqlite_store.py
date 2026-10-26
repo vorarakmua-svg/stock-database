@@ -765,17 +765,21 @@ class SQLiteStore:
 
     @staticmethod
     def _upsert(conn: sqlite3.Connection, table: str, keys: Sequence[str],
-                row: Dict[str, Any], keep_existing: bool = False) -> None:
+                row: Dict[str, Any], keep_existing: bool = False, fill_only: bool = False) -> None:
         """Insert or update ``row`` in ``table`` keyed on ``keys``.
 
         With ``keep_existing``, a NULL in ``row`` leaves the stored value as it is: a
-        run that didn't get a field (a failed fetch) mustn't erase it.
+        run that didn't get a field (a failed fetch) mustn't erase it. With ``fill_only``,
+        every stored value stays and ``row`` fills only the NULL ones: a run that can't
+        speak for what's stored (a successor's whose predecessor wasn't read, BUG-179)
+        adds rows and fills gaps.
         """
         columns = list(row.keys())
         placeholders = ", ".join("?" for _ in columns)
         col_list = ", ".join(f'"{c}"' for c in columns)
         updates = ", ".join(
-            f'"{c}"=COALESCE(excluded."{c}", "{c}")' if keep_existing else f'"{c}"=excluded."{c}"'
+            f'"{c}"=COALESCE("{c}", excluded."{c}")' if fill_only
+            else f'"{c}"=COALESCE(excluded."{c}", "{c}")' if keep_existing else f'"{c}"=excluded."{c}"'
             for c in columns if c not in keys
         )
         conflict = ", ".join(f'"{k}"' for k in keys)
@@ -792,6 +796,14 @@ class SQLiteStore:
         if restated:
             return {c: period.get(c) for c in _CANONICAL_COLUMNS}
         return {c: period.get(c) for c in _CANONICAL_COLUMNS if c in period}
+
+    @staticmethod
+    def _stored_year(conn: sqlite3.Connection, ticker: str, fiscal_year: int) -> Dict[str, Any]:
+        """*ticker*'s stored ``financials_annual`` row for *fiscal_year* (one the run has just written), as a
+        dict of its columns."""
+        cur = conn.execute("SELECT * FROM financials_annual WHERE ticker = ? AND fiscal_year = ?",
+                           (ticker, fiscal_year))
+        return dict(zip([d[0] for d in cur.description], cur.fetchone()))
 
     @staticmethod
     def _first(rec: Dict[str, Any], *keys: str) -> Any:
@@ -929,8 +941,15 @@ class SQLiteStore:
         # A run that parsed the filer's annual record restates every period it gives: a field its
         # parse leaves empty is cleared, not kept from an earlier parse (BUG-029). A filer with no
         # 10-K yet (XOM's new holding company, SPCX) gives a few quarters only, which can't speak
-        # for what a predecessor filed, so its run only adds.
+        # for what a predecessor filed, so its run only adds. A successor's run whose predecessor's
+        # filings couldn't be read (a 503, a 404) speaks for nothing they hold: its own reports give
+        # the years before them as their comparatives do (BLK's balance sheets start at 2023-12-31),
+        # some figures from another tag (BLK's and XOM's equity with the noncontrolling interests)
+        # and quarters without their fiscal quarter. So it only fills, in every table its SEC record
+        # writes: a period or a figure not stored yet, never one stored, until a run reads both
+        # filers again (BUG-179).
         restated = bool(stock.financials_annual)
+        fill = bool(stock.predecessor_error)
 
         # financials_annual + metrics_annual
         historical = (stock.calculated_metrics or {}).get("historical", {})
@@ -945,9 +964,17 @@ class SQLiteStore:
                 "quality_score": quality_score,
             }
             row.update(self._canonical_values(period, restated))
-            self._upsert(conn, "financials_annual", ["ticker", "fiscal_year"], row)
+            self._upsert(conn, "financials_annual", ["ticker", "fiscal_year"], row, fill_only=fill)
 
-            year_metrics = historical.get(year) or {}
+            if fill:
+                # A year's metrics are its own figures' (calculate_all reads the one year), so a run
+                # that only fills computes them on the year as stored, the figures it kept beside
+                # those it filled in, not on its own part of the year (BUG-179).
+                year_metrics = CalculatedMetrics(self.logger).calculate_historical(
+                    {year: self._stored_year(conn, stock.ticker, row["fiscal_year"])},
+                    sector=stock.sector_class)[year]
+            else:
+                year_metrics = historical.get(year) or {}
             if year_metrics and "error" not in year_metrics:
                 mrow = {"ticker": stock.ticker,
                         "fiscal_year": row["fiscal_year"]}
@@ -968,7 +995,7 @@ class SQLiteStore:
                 "form": period.get("form"),
             }
             row.update(self._canonical_values(period, restated))
-            self._upsert(conn, "financials_quarterly", ["ticker", "period_end"], row)
+            self._upsert(conn, "financials_quarterly", ["ticker", "period_end"], row, fill_only=fill)
 
         # financials_ttm (trailing-twelve-month series)
         for period_end, period in (stock.financials_ttm or {}).items():
@@ -980,7 +1007,7 @@ class SQLiteStore:
                 "calendar_quarter": period.get("calendar_quarter"),
             }
             row.update(self._canonical_values(period, restated))
-            self._upsert(conn, "financials_ttm", ["ticker", "period_end"], row)
+            self._upsert(conn, "financials_ttm", ["ticker", "period_end"], row, fill_only=fill)
 
         # financials_annual_vintages (point-in-time: one row per filing/accession)
         for fy, by_accn in (stock.financials_annual_vintages or {}).items():
@@ -996,7 +1023,7 @@ class SQLiteStore:
                 }
                 vrow.update(self._canonical_values(period, restated))
                 self._upsert(conn, "financials_annual_vintages",
-                             ["ticker", "fiscal_year", "accn"], vrow)
+                             ["ticker", "fiscal_year", "accn"], vrow, fill_only=fill)
 
         # market_snapshots (point-in-time)
         md = stock.market_data or {}
@@ -1044,7 +1071,9 @@ class SQLiteStore:
             "warnings": json.dumps(stock.warnings),
         })
 
-        # unmapped_facts (tags not yet in the canonical registry; tag is a row value)
+        # unmapped_facts (tags not yet in the canonical registry; tag is a row value): each tag's
+        # latest material fact, which a run without the predecessor's facts can give as an older one
+        # of the successor's, so that run only fills here too (BUG-179)
         for fact in (stock.unmapped_facts or []):
             self._upsert(conn, "unmapped_facts", ["ticker", "tag"], {
                 "ticker": stock.ticker,
@@ -1055,7 +1084,7 @@ class SQLiteStore:
                 "value": fact.get("value"),
                 "form": fact.get("form"),
                 "collected_at": collected_at,
-            })
+            }, fill_only=fill)
 
         # holders (replace-per-run: institutional + mutualfund)
         self._write_holders(conn, stock.ticker, collected_at, shareholders)

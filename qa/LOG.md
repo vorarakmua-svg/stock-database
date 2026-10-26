@@ -2149,3 +2149,23 @@ vintages).
 Gates: ruff ✓ mypy ✓ pytest 2614 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(parsers): short-term debt's combinations are decided on the filings as filed (BUG-267)
 Next: BUG-179 (prepared in scratch), then the open P2s.
+
+## Iteration 118: 2026-10-26 10:31: fix (BUG-179)
+Picked: BUG-179, the next open P2 (a run whose predecessor read failed rewriting the successor's years).
+Did: an opus worker built the fix test-first in a `git archive` export of d5e6ec2 and measured it on DB copies. I
+applied its six files after checking they were byte-identical to their base, and merged its one README passage by
+hand (the README has moved since):
+- the tests first, RED: 8 failed by assertion, with the 2 guards passing;
+- then the code, GREEN: 217 passed in the four test files;
+- 14 mutants, each killed (re-run by me, from the checkout).
+- Root cause wider than recorded: even BUG-029's "only adds" damages the data (lower-ranked tags, metadata,
+  metrics). So a failed-predecessor run now only fills, in every table its SEC record writes, and recomputes each
+  year's metrics on the year as stored.
+- Real data, offline on copies: HEAD's failed run cleared 319 of BLK's cells and moved its valuations; the fix's
+  leaves all 36 tables as stored. Good runs are identical over all 502.
+Evidence: `qa/evidence/bug179-{done,red,green,mutants,verify-mine}.txt`
+Result: BUG-179 VERIFIED; residuals BUG-277 (calendar_year by hash order), BUG-278 (the exports), BUG-279 (the
+refresh's re-collection), all P3.
+Gates: ruff ✓ mypy ✓ pytest 2624 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(store): a run that couldn't read the predecessor only fills (BUG-179)
+Next: the open P2s, oldest first (BUG-171).

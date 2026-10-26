@@ -80,6 +80,12 @@ class StockData:
     # SEC submission data
     sec_submissions: Dict[str, Any] = field(default_factory=dict)
 
+    # Why a successor's predecessor's company facts couldn't be read (sec_handler.PREDECESSOR_CIKS),
+    # None when they were or there is none: the run's record then lacks every figure only the
+    # predecessor filed, so the SQLite store only fills from it (BUG-179). SQLite-only, like the
+    # vintages (excluded from to_dict/JSON); the run's warning says so.
+    predecessor_error: Optional[str] = None
+
     # Insider transactions (from SEC Form 4)
     insider_transactions: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -125,8 +131,9 @@ class StockData:
         # Convert datetime to ISO string
         if isinstance(data["collected_at"], datetime):
             data["collected_at"] = data["collected_at"].isoformat()
-        # Vintages are SQLite-only — never written to the per-ticker JSON.
+        # Vintages and the predecessor's error are SQLite-only — never written to the per-ticker JSON.
         data.pop("financials_annual_vintages", None)
+        data.pop("predecessor_error", None)
         return data
 
     def to_json(self, indent: int = 2) -> str:
@@ -353,6 +360,9 @@ class StockData:
         for key, endpoint in (("company_facts_error", "companyfacts"), ("submissions_error", "submissions")):
             if sec_data.get(key):
                 self.add_error(f"SEC EDGAR {endpoint}: {sec_data[key]}")
+        # A successor's facts read without its predecessor's (a 503, a 404: "no XBRL data") lack the
+        # predecessor's figures: a warning, as the fetcher words it, and the store only fills (BUG-179).
+        self.predecessor_error = sec_data.get("predecessor_error")
 
         # CIK
         if "cik" in sec_data:

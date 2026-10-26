@@ -41,6 +41,7 @@ from src.refresh import (
     real_services,
 )
 from tests import refresh_fakes as rf
+from tests.test_fetcher_concurrency import BLK_FY2022, serve_blk, stored_blk
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -1261,6 +1262,17 @@ def test_the_real_collection_is_stock_datas_with_the_fresh_sec_handler(tmp_path,
     assert seen["original"].session is not seen["handler"].session
     # The collector's progress: each ticker's "Completed" line and its errors, not its every message.
     assert lines == ["Completed AAA: sources=[], warnings=0, errors=0", "ERROR: Failed to fetch BBB: timeout"]
+
+
+def test_the_real_collection_keeps_what_a_failed_predecessor_read_cant_give(tmp_path, monkeypatch):
+    # The collect step's collection (its SEC read a FreshSECHandler's) stores a run as `stock-data` does: after one
+    # that read both of BLK's filers, one whose read of the old BlackRock failed keeps the FY2022 they gave (BUG-179).
+    db = tmp_path / "stock.db"
+    for predecessor in (200, 503):
+        serve_blk(monkeypatch, predecessor)
+        summary = collect_tickers(db, tmp_path / "out", tmp_path / "cache", ["BLK"], lambda line: None)
+        assert summary["stored"] == 1
+        assert stored_blk(db)[0] == BLK_FY2022
 
 
 def test_the_real_services_are_the_apps_collectors(tmp_path, monkeypatch):

@@ -1,13 +1,18 @@
 """Tests that parallel fetch_multiple preserves order and matches sequential."""
 
+import json
 import sqlite3
 import time
 
 import pytest
 
 from src.config import AppConfig, StorageConfig
+from src.fetchers.fred_handler import FREDHandler
+from src.fetchers.sec_handler import SECHandler
 from src.fetchers.stock_data_fetcher import StockDataFetcher
+from src.fetchers.yahoo_handler import YahooHandler
 from src.models.stock_data import StockData
+from tests.test_sec_cache import _FakeResp
 from tests.test_xbrl_parser import _split_restated_facts
 
 
@@ -432,3 +437,82 @@ def test_a_predecessor_that_couldnt_be_read_is_named(tmp_path, monkeypatch):
         "submissions": {"name": "ExxonMobil Holdings Corp", "filings": []}})
     assert ("SEC EDGAR: XOM's predecessor, CIK 0000034088, couldn't be read (503 Server Error), so its history is "
             "missing from this run") in stock.warnings
+
+
+# ---- BUG-179: a successor whose predecessor's filings couldn't be read, through each collection that stores it ----
+
+_SUCCESSOR_10K = {"fy": 2024, "fp": "FY", "form": "10-K", "filed": "2025-02-25", "accn": "0000950170-25-026584"}
+_PREDECESSOR_10K = {"fy": 2022, "fp": "FY", "form": "10-K", "filed": "2023-02-24", "accn": "0000950170-23-004343"}
+_PREDECESSOR_FACTS = "companyfacts/CIK0001364742.json"
+#: BLK's two filers as the SEC serves them, cut to FY2022's revenue, assets and equity: BlackRock, Inc. (CIK 2012383),
+#: whose first report is its 10-Q of 2024-11-06 and whose FY2024 10-K gives FY2022's revenue and its statement of
+#: equity's total, with the noncontrolling interests; the old BlackRock (CIK 1364742), whose FY2022 10-K gives the
+#: year's balance sheet.
+BLK_SEC = {
+    "files/company_tickers.json": {"0": {"ticker": "BLK", "cik_str": 2012383}},
+    "submissions/CIK0002012383.json": {"name": "BlackRock, Inc.", "filings": {"recent": {}}},
+    "companyfacts/CIK0002012383.json": {"entityName": "BlackRock, Inc.", "facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": [
+            {"val": 5.197e9, "start": "2024-07-01", "end": "2024-09-30", "fy": 2024, "fp": "Q3", "form": "10-Q",
+             "filed": "2024-11-06", "accn": "0002012383-24-000005"},
+            {"val": 17.873e9, "start": "2022-01-01", "end": "2022-12-31", **_SUCCESSOR_10K},
+            {"val": 20.407e9, "start": "2024-01-01", "end": "2024-12-31", **_SUCCESSOR_10K}]}},
+        "Assets": {"units": {"USD": [{"val": 138.615e9, "end": "2024-12-31", **_SUCCESSOR_10K}]}},
+        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest": {"units": {"USD": [
+            {"val": 37.876e9, "end": "2022-12-31", **_SUCCESSOR_10K}]}}}}},
+    _PREDECESSOR_FACTS: {"entityName": "BlackRock Finance, Inc.", "facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": [{"val": 17.873e9, "start": "2022-01-01", "end": "2022-12-31",
+                                        **_PREDECESSOR_10K}]}},
+        "Assets": {"units": {"USD": [{"val": 117.628e9, "end": "2022-12-31", **_PREDECESSOR_10K}]}},
+        "StockholdersEquity": {"units": {"USD": [{"val": 37.744e9, "end": "2022-12-31", **_PREDECESSOR_10K}]}}}}},
+}
+#: BLK's FY2022 revenue, assets and equity as a run that read both filers stores them.
+BLK_FY2022 = (17.873e9, 117.628e9, 37.744e9)
+
+
+def serve_blk(monkeypatch, predecessor=200):
+    """Every SEC handler (a refresh's FreshSECHandler too) answers from BLK_SEC, reading nothing from its payload
+    cache, the old BlackRock's companyfacts with *predecessor*: 200, or 503 or 404 for a read that failed. Yahoo has
+    nothing for a collection that asks it, FRED no rate, and the valuations aren't computed."""
+    def request(self, url, timeout=30):
+        for suffix, payload in BLK_SEC.items():
+            if url.endswith(suffix):
+                return _FakeResp(predecessor if suffix == _PREDECESSOR_FACTS else 200, payload)
+        return _FakeResp(404, {})
+
+    monkeypatch.setattr(SECHandler, "_request", request)
+    monkeypatch.setattr(SECHandler, "_read_payload_cache", lambda self, path: None)
+    monkeypatch.setattr(YahooHandler, "fetch_all", lambda self, ticker: {})
+    monkeypatch.setattr(YahooHandler, "fetch_benchmark_bars", lambda self, symbol="^GSPC": [])
+    monkeypatch.setattr(FREDHandler, "get_risk_free_rate_details", lambda self, maturity="10y": None)
+    monkeypatch.setattr(FREDHandler, "get_market_risk_premium", lambda self: {})
+    monkeypatch.setattr("src.valuation.engine.compute_and_store", lambda db_path, tickers=None, logger=None: 0)
+
+
+def stored_blk(db):
+    """BLK's stored FY2022 (revenue, total assets, total equity), and its latest run's warnings."""
+    conn = sqlite3.connect(db)
+    try:
+        year = conn.execute("SELECT revenue, total_assets, total_equity FROM financials_annual "
+                            "WHERE ticker = 'BLK' AND fiscal_year = 2022").fetchone()
+        warnings = conn.execute("SELECT warnings FROM collection_runs WHERE ticker = 'BLK' "
+                                "ORDER BY collected_at DESC LIMIT 1").fetchone()[0]
+        return year, json.loads(warnings)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("answer, why", [(503, "HTTPError"), (404, "no XBRL data")])
+def test_a_collection_whose_predecessor_read_failed_keeps_the_predecessors_figures(tmp_path, monkeypatch, answer,
+                                                                                    why):
+    # `stock-data`'s collection: after a run that read both filers, one whose read of the old BlackRock failed
+    # stored FY2022 as BlackRock, Inc.'s 10-K gives it, without assets and with the other equity (BUG-179).
+    db = tmp_path / "stock.db"
+    config = AppConfig(storage=StorageConfig(base_dir=tmp_path, db_path=db))
+    for predecessor in (200, answer):
+        serve_blk(monkeypatch, predecessor)
+        with StockDataFetcher(config=config) as fetcher:
+            assert fetcher.fetch_and_export(["BLK"], formats=["sqlite"])["stored"] == 1
+        assert stored_blk(db)[0] == BLK_FY2022
+    assert (f"SEC EDGAR: BLK's predecessor, CIK 0001364742, couldn't be read ({why}), so its history is missing "
+            "from this run") in stored_blk(db)[1]

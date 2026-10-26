@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 9 · P3 143 · NEEDS-USER 23 · Verified: 115
+**Open:** P0 0 · P1 0 · P2 8 · P3 146 · NEEDS-USER 23 · Verified: 116
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1380,10 +1380,11 @@ Repro: `history_inputs.load_history_inputs` converts Yahoo's count with `bars_to
 Notes: the real path is the quote refresh's recompute (BUG-128), which stores the factor and a price but no bars, until the next full collection. Fix: convert the count with a split-only factor.
 
 ### BUG-179 [P2][STORE] A run whose predecessor read failed rewrites the successor's years as if complete, clearing what only the predecessor filed
-Status: OPEN
-Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 118)
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: (this commit) | Regression tests: tests/test_sqlite_store.py::test_a_run_that_couldnt_read_the_predecessor_keeps_what_only_the_predecessor_filed, ::test_a_run_that_couldnt_read_the_predecessor_keeps_the_figures_it_reads_otherwise, ::test_a_run_that_couldnt_read_the_predecessor_computes_each_years_metrics_on_the_year_as_stored, ::test_a_run_that_couldnt_read_the_predecessor_or_find_an_annual_record_keeps_the_stored_quarters; tests/test_fetcher_concurrency.py::test_a_collection_whose_predecessor_read_failed_keeps_the_predecessors_figures (503, 404); tests/test_web_api_collection.py::test_a_job_keeps_what_a_failed_predecessor_read_cant_give; tests/test_refresh.py::test_the_real_collection_keeps_what_a_failed_predecessor_read_cant_give; guards ::test_a_run_that_couldnt_read_the_predecessor_still_adds_what_it_has, ::test_a_run_that_reads_the_predecessor_again_restates_as_before
 Repro: `sqlite_store._write_stock` sets `restated = bool(stock.financials_annual)`. BLK's successor (CIK 2012383) has filed 10-Ks since 2025 but carries balance sheets only from 2023-12-31. A run whose predecessor fetch returns a 503 or 404 still has annual records, so it rewrites FY2022 and earlier with NULLs where only the old BlackRock filed (verified by reading the code, the vintages and the cached facts; not run end to end).
 Notes: until the next good run. XOM is exposed the same way after its first 10-K. Fix: a run with `predecessor_error` only adds (BUG-029's guard).
+Fix (iteration 118, `qa/evidence/bug179-done.txt`): wider than recorded, and "only adds" isn't enough. On a real copy, a run whose predecessor read failed (a 503 and a 404 alike) also wrote lower-ranked tags over the predecessor's values (BLK's FY2021 equity with the noncontrolling interests, $37.806B for $37.693B), rewrote periods' metadata (filed dates; quarters' fiscal year and quarter cleared) and replaced metrics and unmapped facts; XOM is exposed today, its no-annual run taking BUG-029's "only adds" path. The store now learns of the failure (`StockData.predecessor_error`, kept out of the JSON), and such a run only fills (`_upsert(fill_only=True)`: COALESCE of the stored value first) in financials_annual, financials_quarterly, financials_ttm, the vintages and unmapped_facts, metadata included, each year's metrics computed on the year as stored. Every write path goes through it: the CLI collection, the refresh's collect step and the web's jobs (a test each). On backup-API copies, offline: at HEAD the failed run cleared 56 annual, 188 quarterly and 75 TTM cells of BLK's and moved its valuations (multiples bull $1,302.98 to $1,136.89), its quality scores and 7 peers' ranks; with the fix all 36 tables stay as stored; good runs identical between HEAD and the fix over all 502; a failed run then a good one equals a good one. Residuals: BUG-277 to BUG-279.
 
 ### BUG-180 [P3][UI] The VAL tab's history pill reads "Price None historical value" when the quote has no price
 Status: OPEN
@@ -2050,6 +2051,24 @@ Status: OPEN
 Found: iteration 116 (BUG-170's investigation, R3) | Fixed: | Regression test:
 Repro: depreciation-alone filers whose D&A sits on tags whose meaning varies by filer: WDAY, MET, VEEV (OtherDepreciationAndAmortization is their whole D&A, the depreciation a part), TXN (capitalized software amortization, a cash flow line of its own), MTD (AmortizationOfDeferredCharges is its amortization line), FLEX (OtherDepreciationAndAmortization is its amortization), ITW, TSLA, AON FY2022-25, CINF, ABNB (no us-gaap tag at all). HEAD and V3 read the depreciation alone there.
 Expected: the filing's D&A add-back.   Actual: the depreciation alone.
+
+### BUG-277 [P3][PARSE] `XBRLParser._calendar_from_frames` takes the first frame from a set, so calendar_year follows Python's string-hash order: GPN FY2016, TEL FY2025, LHX FY2019
+Status: OPEN
+Found: iteration 118 (BUG-179's worker; its out\hash_order_check.txt) | Fixed: | Regression test:
+Repro: two parses of the 502 by the same code, in two processes, disagreed on 3 annual rows' and 8 vintages' calendar_year (GPN FY2016, TEL FY2025, LHX FY2019 flip): a frame is picked out of a set, whose order follows the per-process string hash (PYTHONHASHSEED).
+Expected: the same calendar_year on every run.   Actual: it depends on the hash seed; DB-level comparisons need a fixed seed.
+
+### BUG-278 [P3][STORE] The JSON export and financial_history.csv take a failed-predecessor run's partial years
+Status: OPEN
+Found: iteration 118 (BUG-179's worker, residuals) | Fixed: | Regression test:
+Repro: since BUG-179 the SQLite store only fills from a run whose predecessor read failed, but the per-ticker JSON and the financial_history.csv export are rewritten from that run's record: checked in memory against the user's files, BLK.json would lose 319 cells and the CSV 56, until the next good run.
+Expected: the exports keep what the run can't speak for, as the store does.   Actual: they take the partial years.
+
+### BUG-279 [P3][REFRESH] The refresh doesn't re-collect a company whose last collection couldn't read its predecessor
+Status: OPEN
+Found: iteration 118 (BUG-179's worker, residuals) | Fixed: | Regression test:
+Repro: `stock-data refresh`'s SEC step counts a run whose predecessor read failed as the company's last collection, so the good run that would restate it waits for the company's next report or a manual collection.
+Expected: such a company queued again at the next refresh.   Actual: it waits for its next report.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

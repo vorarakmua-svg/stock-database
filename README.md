@@ -2207,7 +2207,12 @@ filer with no 10-K yet (a new registrant) keep what's stored. A ticker SEC now m
 successor formed to take a registrant's place reads the predecessor's filings too
 (`sec_handler.PREDECESSOR_CIKS`), up to the successor's first report: XOM is ExxonMobil Holdings
 Corp's 10-Qs with Exxon Mobil Corp's history, BLK BlackRock, Inc.'s reports since 2024 with the old
-BlackRock's (now BlackRock Finance, Inc.), and the run notes both. `dividend_events` keeps each payment as Yahoo served it,
+BlackRock's (now BlackRock Finance, Inc.), and the run notes both. A run whose read of the
+predecessor's filings failed (a 503, a 404) says so and only fills: the successor's own reports
+give the years before them as their comparatives do (BLK's balance sheets from 2023-12-31, its
+equity and XOM's with the noncontrolling interests), so it stores the periods and figures not
+stored yet and keeps every stored one, each year's metrics computed on the year as stored, until a
+run reads both filers again. `dividend_events` keeps each payment as Yahoo served it,
 split-adjusted as of `served_on`: the collection's day on Yahoo's calendar, its last
 daily bar or the latest split Yahoo listed, whichever is later (the collector's own date
 can run a day ahead of New York's). The valuation takes each payment to its price's
