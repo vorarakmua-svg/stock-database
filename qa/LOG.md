@@ -2123,3 +2123,29 @@ Result: BUG-170 NEEDS-USER (V3 recommended); residuals BUG-274 (P2), BUG-275 and
 Gates: unchanged code (ledger only) | CI: no PR (Q10)
 Commit: (this commit) chore(qa): BUG-170 measured; its fix moves owner-earnings verdicts, so it is the user's
 Next: BUG-267 (its worker is editing), then BUG-179 (prepared), then the open P2s.
+
+## Iteration 117: 2026-10-26 10:22: fix (BUG-267)
+Picked: BUG-267 before the other P2s: code review 21's five regressions of this loop's own BUG-159 fix.
+Did: an opus worker fixed it test-first in the checkout, starting from the reviewer's five probes.
+- The combinations are now decided first, from the facts as filed, and only applied afterwards. That fixes the
+  paper's verdict at NEE's year ends, ICE's and AMD's one line tagged three ways, the latest filing deciding a date
+  (HWM, ICE, YUM), a quarter taking only its latest annual report's word (PEP), and the vintage view's look-ahead
+  (XEL).
+- New: a current-liabilities bound. It decides COO FY2016, YUM's years and PEP's quarters, and contradicts no oracle.
+- Real data: 184 debt cells at 17 filers change, 157 to what the filings decide and none away. BUG-159's gains are
+  kept, and the look-ahead oracle finds 0 cells.
+- On DB copies the valuations, summaries, indicators and warning signs are identical.
+- My checks:
+  - RED: the new tests against HEAD's code in an export, 12 failed and 184 passed, as the worker had it.
+  - The five probes pass on the fix.
+  - Every mutant spec that quotes the parser re-run, each killed (the runner now reports a mutant whose code moved
+    as STALE and goes on; the stale ones are those the reshaped copies replace).
+  - Code review 21's own 24 mutants: 18 killed, 2 stale (rules replaced), so all 8 that changed real cells are
+    killed or gone. The 6 survivors are the 3 it found equivalent on the data and BUG-173's 3 boundaries (BUG-270).
+  - The gates.
+Evidence: `qa/evidence/bug267-{done,red,realdata,measure,mutants,db,verify-mine}.txt`
+Result: BUG-267 VERIFIED; notes added to BUG-259 (GEHC, BE, YUM 2016-09-03, PEP's FY2010 vintage) and BUG-271 (EXC's
+vintages).
+Gates: ruff ✓ mypy ✓ pytest 2614 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): short-term debt's combinations are decided on the filings as filed (BUG-267)
+Next: BUG-179 (prepared in scratch), then the open P2s.

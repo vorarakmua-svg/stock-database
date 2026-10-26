@@ -754,12 +754,29 @@ def test_paper_and_maturities_beside_the_borrowings_a_later_10k_shows():
     assert _total_debt(_debt_year(facts)) == pytest.approx(42.763e9)
 
 
+def _filings(*filings):
+    """Company facts of the given filings, each ``(form, filed, end, {tag: value})``: that filing's balance sheet on
+    *end*, with its total (a filing's two columns are two entries)."""
+    us_gaap = {}
+    for form, filed, end, tagged in filings:
+        filing = dict(fy=int(filed[:4]), fp="FY" if form.startswith("10-K") else "Q2", form=form, filed=filed)
+        for tag, val in {"LiabilitiesAndStockholdersEquity": 100.0e9, **tagged}.items():
+            us_gaap.setdefault(tag, {"units": {"USD": []}})["units"]["USD"].append(usd(val, None, end, **filing))
+    return {"facts": {"us-gaap": us_gaap}}
+
+
 def test_borrowings_that_are_their_own_parts_are_a_line_of_their_own():
     # DOW's FY2022: notes payable $362M (tagged ShortTermBankLoansAndNotesPayable too) and long-term debt due within
-    # one year $362M, separate lines that happen to agree.
-    year = _debt_year(_debt_filing(ShortTermBorrowings=0.362e9, ShortTermBankLoansAndNotesPayable=0.362e9,
-                                   LongTermDebtAndCapitalLeaseObligationsCurrent=0.362e9,
-                                   LongTermDebtAndCapitalLeaseObligations=14.698e9))
+    # one year $362M, separate lines that happen to agree, as the same 10-K's other column shows: $161M of notes
+    # payable beside $231M due within one year at 2021-12-31 (BUG-267: one figure tagged as the borrowings, their part
+    # and the maturities is one line, ICE's and AMD's, unless the filing shows them apart).
+    year = _debt_year(_filings(
+        ("10-K", "2026-02-12", "2025-12-31", dict(
+            ShortTermBorrowings=0.362e9, ShortTermBankLoansAndNotesPayable=0.362e9,
+            LongTermDebtAndCapitalLeaseObligationsCurrent=0.362e9, LongTermDebtAndCapitalLeaseObligations=14.698e9)),
+        ("10-K", "2026-02-12", "2024-12-31", dict(
+            ShortTermBorrowings=0.161e9, ShortTermBankLoansAndNotesPayable=0.161e9,
+            LongTermDebtAndCapitalLeaseObligationsCurrent=0.231e9, LongTermDebtAndCapitalLeaseObligations=14.280e9))))
     assert year["short_term_debt"] == pytest.approx(0.724e9)
 
 
@@ -837,6 +854,292 @@ def test_a_refinancings_borrowings_hold_the_maturities():
                                    LongTermDebtCurrent=4.012e9, CommercialPaper=5.386e9,
                                    LongTermDebtAndCapitalLeaseObligations=20.135e9))
     assert _total_debt(year) == pytest.approx(24.541e9)
+
+
+# BUG-267 (code review 21): BUG-159's combination, against the filings it regressed.
+
+def test_a_year_end_checkpoint_counts_the_paper_once_beside_a_later_10ks_borrowings_and_maturities():
+    # I-1, NEE's 2011-12-31: its FY2011 10-K shows $1.349B of paper and $0.808B of maturities, its 10-Qs a comparative
+    # DebtCurrent of $2.157B that holds both, its FY2012 10-K the paper, the maturities and $0 of borrowings, which
+    # BUG-159 combines. The paper was judged by the 10-Qs' DebtCurrent as filed while the checkpoint read the later
+    # 10-K's combination: $21.618B for its balance sheet's $22.967B (BUG-257's fix undone there).
+    facts = _debt_filing(CommercialPaper=1.349e9, LongTermDebtCurrent=0.808e9, LongTermDebtNoncurrent=20.81e9)
+    for filed in ("2026-04-28", "2026-07-28", "2026-10-27"):
+        facts = _with_10q(facts, filed, CommercialPaper=1.349e9, DebtCurrent=2.157e9, LongTermDebtCurrent=0.808e9,
+                          LongTermDebtNoncurrent=20.81e9, ShortTermBorrowings=0.0)
+    facts = _with_later_10k(facts, "2027-02-26", CommercialPaper=1.349e9, LongTermDebtCurrent=0.808e9,
+                            LongTermDebtNoncurrent=20.81e9, ShortTermBorrowings=0.0)
+    assert _total_debt(XBRLParser().extract_quarterly_financials(facts)["2025-12-31"]) == pytest.approx(22.967e9)
+
+
+def test_one_line_tagged_as_borrowings_paper_and_maturities_is_counted_once():
+    # I-2, ICE's FY2015 10-K: its $2.591B short-term debt line, its commercial paper, is tagged ShortTermBorrowings,
+    # CommercialPaper and LongTermDebtCurrent, and LongTermDebt is $4.717B + $2.591B. BUG-159's "own parts are a line
+    # of their own" (DOW's) added the line to itself: $9.899B for $7.308B.
+    year = _debt_year(_debt_filing(ShortTermBorrowings=2.591e9, CommercialPaper=2.591e9, LongTermDebtCurrent=2.591e9,
+                                   LongTermDebtNoncurrent=4.717e9, LongTermDebt=7.308e9))
+    assert _total_debt(year) == pytest.approx(7.308e9)
+
+
+def test_a_line_of_credit_tagged_three_ways_is_counted_once_in_a_quarter():
+    # I-2, AMD's Q1 2016 10-Q: its $230M line of credit is tagged ShortTermBorrowings, LinesOfCreditCurrent and
+    # LongTermDebtAndCapitalLeaseObligationsCurrent in both its columns ($0.460B read). Its FY2015 10-K tags the first
+    # and the last, and its FY2016 10-K's LongTermDebt is $2.007B + $0.230B. (Its FY2014 10-K showed a $55M line of
+    # credit apart from $60M of maturities at 2013-12-28: another filing's columns say nothing of this one's lines.)
+    line = dict(ShortTermBorrowings=0.230e9, LinesOfCreditCurrent=0.230e9,
+                LongTermDebtAndCapitalLeaseObligationsCurrent=0.230e9)
+    facts = _filings(("10-K", "2015-02-19", "2013-12-28", dict(
+        ShortTermBorrowings=0.055e9, LinesOfCreditCurrent=0.055e9,
+        LongTermDebtAndCapitalLeaseObligationsCurrent=0.060e9, LongTermDebtNoncurrent=1.986e9)),
+        ("10-Q", "2016-04-28", "2016-03-26", dict(line, LongTermDebtNoncurrent=2.002e9)),
+        ("10-Q", "2016-04-28", "2015-12-26", dict(line, LongTermDebtNoncurrent=2.007e9)))
+    assert XBRLParser().extract_quarterly_financials(facts)["2016-03-26"]["short_term_debt"] == pytest.approx(0.230e9)
+
+
+def _hwm_fy2019():
+    """HWM's FY2019: its FY2019 10-K shows $1.034B of short-term debt beside $1.003B of maturities (LongTermDebt
+    $4.906B + $1.003B), which nothing in it decides; its FY2020 10-K restates the date, the borrowings its maturities
+    ($1.034B each, LongTermDebt $4.906B + $1.034B)."""
+    first = dict(ShortTermBorrowings=1.034e9, LongTermDebtCurrent=1.003e9, LongTermDebtNoncurrent=4.906e9,
+                 LongTermDebt=5.909e9, LongTermDebtAndCapitalLeaseObligations=4.906e9)
+    return _with_later_10k(_debt_filing(**first), "2027-02-16", **{**first, "LongTermDebtCurrent": 1.034e9,
+                                                                   "LongTermDebt": 5.940e9})
+
+
+def test_a_later_10ks_borrowings_that_are_its_maturities_outrank_an_earlier_10ks_combination():
+    # I-3: the first 10-K's combination, a DebtCurrent, outranked the later 10-K's borrowings, so the year and its
+    # year end read $6.943B for $5.940B. The latest filing that shows the borrowings and the maturities decides a date.
+    facts = _hwm_fy2019()
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2025-12-31"]
+    assert [_total_debt(p) for p in (_debt_year(facts), quarter)] == [pytest.approx(5.940e9)] * 2
+
+
+def test_a_later_10ks_verdict_doesnt_reach_an_earlier_10ks_vintage():
+    # A vintage is its own filing's view as known then: the FY2019 10-K's leaves its borrowings and maturities apart.
+    assert _total_debt(_vintage(_hwm_fy2019(), "2026-02-12")) == pytest.approx(6.943e9)
+
+
+def test_a_later_10k_that_shows_the_borrowings_alone_leaves_the_combination():
+    # ABT's FY2021: its FY2021 and FY2022 10-Ks show $0 of borrowings and $0.754B of maturities, its FY2023 10-K the
+    # borrowings alone, which says nothing of the maturities: total debt $18.050B, not the noncurrent $17.296B.
+    facts = _debt_filing(ShortTermBorrowings=0.0, LongTermDebtCurrent=0.754e9, LongTermDebtNoncurrent=17.296e9)
+    facts = _with_later_10k(facts, "2027-02-17", ShortTermBorrowings=0.0, LongTermDebtCurrent=0.754e9,
+                            LongTermDebtNoncurrent=17.296e9)
+    facts = _with_later_10k(facts, "2028-02-16", ShortTermBorrowings=0.0)
+    assert _total_debt(_debt_year(facts)) == pytest.approx(18.050e9)
+
+
+def _coo_fy2016(**changed):
+    """COO's FY2016 as its FY2017 10-K shows it: current liabilities of $543.2M are its payables $107.4M, accrued
+    compensation $77.7M, other $131.8M and $226.3M of short-term debt, exactly; $210.7M of maturities."""
+    return _debt_filing(**{**dict(ShortTermBorrowings=0.2263e9, LinesOfCreditCurrent=0.0171e9,
+                                  LongTermDebtCurrent=0.2107e9, LongTermDebtNoncurrent=1.1074e9,
+                                  LiabilitiesCurrent=0.5432e9, AccountsPayableCurrent=0.1074e9,
+                                  EmployeeRelatedLiabilitiesCurrent=0.0777e9, OtherLiabilitiesCurrent=0.1318e9),
+                           **changed})
+
+
+def test_borrowings_the_current_liabilities_cant_hold_beside_the_maturities_hold_them():
+    # I-3: nothing in BUG-159's rules decided COO's lines, so they were combined: $1.544B for $1.334B. With the
+    # maturities as a line of their own, the borrowings, its payables and its accrued compensation would already exceed
+    # its current liabilities (the current-liabilities bound).
+    assert _total_debt(_debt_year(_coo_fy2016())) == pytest.approx(1.3337e9)
+
+
+def test_payables_tagged_above_the_current_liabilities_are_no_part_of_them():
+    # A tagging error a thousand times too large (BUG-061's kind) is no evidence the borrowings hold the maturities.
+    year = _debt_year(_coo_fy2016(AccountsPayableCurrent=107.4e9))
+    assert year["short_term_debt"] == pytest.approx(0.4370e9)
+
+
+def test_lines_within_rounding_of_the_current_liabilities_dont_decide():
+    # The bound needs the lines to exceed the current liabilities beyond rounding (0.5%).
+    year = _debt_year(_coo_fy2016(LiabilitiesCurrent=0.6200e9))  # the lines make $0.6221B: 0.34% over
+    assert year["short_term_debt"] == pytest.approx(0.4370e9)
+
+
+def test_payables_with_accruals_beside_the_borrowings_and_maturities_tell_the_borrowings_hold_them():
+    # YUM's FY2018 as its FY2019 10-K shows it: current liabilities of $1.301B are its payables and other liabilities
+    # $911M, income taxes $69M and $321M of short-term borrowings, exactly; its note's maturities are $331M
+    # (borrowings net of issuance costs). The note's payables ($202M) and compensation ($206M) are parts of the $911M.
+    year = _debt_year(_debt_filing(ShortTermBorrowings=0.321e9, LongTermDebtCurrent=0.331e9,
+                                   LongTermDebtAndCapitalLeaseObligationsCurrent=0.331e9,
+                                   LongTermDebtAndCapitalLeaseObligations=9.751e9, LiabilitiesCurrent=1.301e9,
+                                   AccountsPayableAndAccruedLiabilitiesCurrent=0.911e9, AccountsPayableCurrent=0.202e9,
+                                   EmployeeRelatedLiabilitiesCurrent=0.206e9, AccruedIncomeTaxesCurrent=0.069e9))
+    assert _total_debt(year) == pytest.approx(10.072e9)  # $10.403B with the maturities again
+
+
+def test_a_notes_parts_of_the_payables_with_accruals_dont_add_to_them():
+    # BAX's FY2009 as its FY2010 10-K shows it: current liabilities of $4.464B are its payables and accrued liabilities
+    # $3.753B, $682M of maturities and $29M of borrowings, exactly; the note's trade payables ($807M), compensation
+    # ($494M) and income taxes ($375M) are parts of the $3.753B, so they can't be added to it: two lines.
+    year = _debt_year(_debt_filing(ShortTermBorrowings=0.029e9, LongTermDebtAndCapitalLeaseObligationsCurrent=0.682e9,
+                                   LongTermDebtAndCapitalLeaseObligations=3.440e9, LiabilitiesCurrent=4.464e9,
+                                   AccountsPayableAndAccruedLiabilitiesCurrent=3.753e9,
+                                   AccountsPayableTradeCurrent=0.807e9, EmployeeRelatedLiabilitiesCurrent=0.494e9,
+                                   AccruedIncomeTaxesCurrent=0.375e9))
+    assert year["short_term_debt"] == pytest.approx(0.711e9)
+
+
+def test_income_taxes_beside_the_payables_with_accruals_count_in_the_bound():
+    # YUM's Q3 2024 10-Q: current liabilities of $1.186B are $1.138B of payables and other liabilities, $24M of income
+    # taxes and $24M of short-term borrowings; the note's maturities are $26M.
+    facts = _with_10q({"facts": {"us-gaap": {}}}, "2024-11-07", "2024-09-30", ShortTermBorrowings=0.024e9,
+                      LongTermDebtCurrent=0.026e9, LongTermDebtAndCapitalLeaseObligations=11.169e9,
+                      LiabilitiesCurrent=1.186e9, AccountsPayableAndAccruedLiabilitiesCurrent=1.138e9,
+                      AccruedIncomeTaxesCurrent=0.024e9)
+    assert XBRLParser().extract_quarterly_financials(facts)["2024-09-30"]["short_term_debt"] == pytest.approx(0.024e9)
+
+
+_PEP_FY2010 = ("10-K", "2011-02-18", "2010-12-25", dict(ShortTermBorrowings=4.898e9, LongTermDebtCurrent=0.113e9,
+                                                        LongTermDebtNoncurrent=19.999e9))
+
+
+def test_a_quarters_current_liabilities_tell_its_borrowings_hold_the_maturities():
+    # I-4, PEP's Q2 2026 10-Q: $10.602B of short-term borrowings beside a note's $1.6B of maturities, and current
+    # liabilities of $35.106B that are its payables and accruals ($24.504B) and the borrowings, exactly. Nothing in its
+    # 10-Ks decided it (they tag the line as DebtCurrent since FY2011), so the quarter took its FY2010 10-K's undecided
+    # entry as "separate", 5,649 days old: $12.202B (18 quarters from 2020, +$0.75B to +$3.2B each).
+    facts = _filings(_PEP_FY2010, ("10-Q", "2026-07-09", "2026-06-13", dict(
+        ShortTermBorrowings=10.602e9, LongTermDebtCurrent=1.6e9, CommercialPaper=6.1e9, LiabilitiesCurrent=35.106e9,
+        AccountsPayableAndAccruedLiabilitiesCurrent=24.504e9)))
+    assert XBRLParser().extract_quarterly_financials(facts)["2026-06-13"]["short_term_debt"] == 10.602e9
+
+
+def test_a_quarter_whose_comparative_borrowings_are_its_annual_reports_debt_current_holds_the_maturities():
+    # I-4: PEP's FY2025 10-K tags its short-term obligations, $6.861B, as DebtCurrent; its 10-Qs tag the same
+    # year-end line as ShortTermBorrowings, so their borrowings are that total, maturities and all.
+    facts = _filings(_PEP_FY2010, ("10-K", "2026-02-03", "2025-12-27", dict(DebtCurrent=6.861e9)),
+                     ("10-Q", "2026-07-09", "2025-12-27", dict(ShortTermBorrowings=6.861e9)),
+                     ("10-Q", "2026-07-09", "2026-06-13", dict(ShortTermBorrowings=10.602e9,
+                                                               LongTermDebtCurrent=1.6e9)))
+    assert XBRLParser().extract_quarterly_financials(facts)["2026-06-13"]["short_term_debt"] == 10.602e9
+
+
+_ATO_FY2018 = ("10-K", "2018-11-13", "2018-09-30", dict(ShortTermBorrowings=0.57578e9, LongTermDebtCurrent=0.575e9,
+                                                        LongTermDebtNoncurrent=2.493665e9))
+
+
+def test_borrowings_below_the_maturities_dont_take_an_annual_reports_word_that_they_hold_them():
+    # I-4, ATO's Q1 FY2019 10-Q: no short-term borrowings beside $575M of maturities; its FY2018 10-K's borrowings are
+    # within 1% of its maturities, which the quarter took as holding them: its maturities were lost.
+    facts = _filings(_ATO_FY2018, ("10-Q", "2019-02-05", "2018-12-31", dict(
+        ShortTermBorrowings=0.0, LongTermDebtCurrent=0.575e9, LongTermDebtNoncurrent=3.084779e9)))
+    assert XBRLParser().extract_quarterly_financials(facts)["2018-12-31"]["short_term_debt"] == 0.575e9
+
+
+def test_a_quarter_takes_only_its_latest_annual_reports_word():
+    # I-4, ATO's Q2 FY2020 10-Q: $199.9M of borrowings beside $0.131M of maturities. Its FY2019 10-K shows no
+    # maturities and so says nothing; the quarter took its FY2018 10-K's word instead.
+    facts = _filings(_ATO_FY2018, ("10-K", "2019-11-12", "2019-09-30", dict(
+        ShortTermBorrowings=0.464915e9, LongTermDebtCurrent=0.0, LongTermDebtNoncurrent=3.529452e9)),
+        ("10-Q", "2020-05-06", "2020-03-31", dict(ShortTermBorrowings=0.199923e9,
+                                                  LongTermDebtAndCapitalLeaseObligationsCurrent=0.000131e9)))
+    assert XBRLParser().extract_quarterly_financials(facts)["2020-03-31"]["short_term_debt"] == 0.200054e9
+
+
+def test_borrowings_a_rounding_below_the_maturities_take_the_annual_reports_word():
+    # BE's Q3 2025 10-Q: $1.4M of short-term borrowings, a tenth of a million, beside $1.424M of maturities; its FY2024
+    # 10-K's $114.4M of borrowings are its maturities ($114.385M).
+    facts = _filings(("10-K", "2025-02-27", "2024-12-31", dict(
+        ShortTermBorrowings=0.1144e9, LongTermDebtCurrent=0.114385e9, LongTermDebtNoncurrent=1.014407e9)),
+        ("10-Q", "2025-10-28", "2025-09-30", dict(
+            ShortTermBorrowings=0.0014e9, LongTermDebtCurrent=0.001424e9, LongTermDebtNoncurrent=1.130892e9)))
+    assert XBRLParser().extract_quarterly_financials(facts)["2025-09-30"]["short_term_debt"] == 0.0014e9
+
+
+def test_a_10qs_year_end_column_takes_the_annual_report_on_that_date():
+    # GEHC's 2025-12-31: its FY2025 10-K shows $508M of borrowings beside $502M of maturities, 1.2% apart, which
+    # nothing decides; its Q1 2026 10-Q's comparative column the same. The checkpoint reads the date as the annual
+    # record does, not by the FY2024 10-K's borrowings, which were within 1% of its maturities.
+    facts = _filings(("10-K", "2025-02-13", "2024-12-31", dict(ShortTermBorrowings=1.502e9, LongTermDebtCurrent=1.500e9,
+                                                               LongTermDebtNoncurrent=7.449e9)),
+                     ("10-K", "2026-02-04", "2025-12-31", dict(ShortTermBorrowings=0.508e9, LongTermDebtCurrent=0.502e9,
+                                                               LongTermDebtNoncurrent=9.495e9)),
+                     ("10-Q", "2026-04-29", "2025-12-31", dict(ShortTermBorrowings=0.508e9, LongTermDebtCurrent=0.502e9,
+                                                               LongTermDebtNoncurrent=9.495e9)))
+    parser = XBRLParser()
+    year = parser.extract_annual_financials(facts)["2025"]
+    quarter = parser.extract_quarterly_financials(facts)["2025-12-31"]
+    assert [p["short_term_debt"] for p in (year, quarter)] == [pytest.approx(1.010e9)] * 2
+
+
+def test_a_later_10k_doesnt_change_an_earlier_10ks_vintage():
+    # I-5, XEL's FY2024 10-K: $0.695B of borrowings and $1.103B of maturities beside $27.316B of noncurrent debt; its
+    # FY2025 10-K tags the same noncurrent line as LongTermDebt, a total BUG-159 keeps, which withheld the first 10-K's
+    # maturities from its own vintage: $29.114B as known on 2025-02-27, $28.011B once the later 10-K was filed.
+    first = ("10-K", "2025-02-27", "2024-12-31", dict(LongTermDebtAndCapitalLeaseObligations=27.316e9,
+                                                      LongTermDebtAndCapitalLeaseObligationsCurrent=1.103e9,
+                                                      ShortTermBorrowings=0.695e9))
+    later = ("10-K", "2026-02-25", "2024-12-31", dict(LongTermDebt=27.316e9,
+                                                      LongTermDebtAndCapitalLeaseObligationsCurrent=1.103e9,
+                                                      ShortTermBorrowings=0.695e9))
+    then, now = (XBRLParser().extract_annual_vintages(_filings(*filings))["2024"]["2025-02-27"]
+                 for filings in ((first,), (first, later)))
+    assert [_total_debt(then), _total_debt(now)] == [pytest.approx(29.114e9)] * 2
+
+
+# BUG-267 (code review 21, M-1): BUG-159's measured boundaries.
+
+def test_a_notes_total_a_little_above_the_balance_sheets_lines_gives_way():
+    # ABBV's FY2019: LongTermDebt $67.233B, 0.75% above the balance sheet's $62.975B noncurrent and $3.753B current
+    # (its own total $66.728B): within _MADE_UP's 5% the total gives way (NRG's notes run 1-3% above its lines).
+    year = _debt_year(_debt_filing(ShortTermBorrowings=0.0, LongTermDebt=67.233e9,
+                                   LongTermDebtAndCapitalLeaseObligations=62.975e9,
+                                   LongTermDebtAndCapitalLeaseObligationsCurrent=3.753e9))
+    assert _total_debt(year) == pytest.approx(66.728e9)
+
+
+def test_a_narrow_noncurrent_figure_doesnt_replace_the_total():
+    # OMC's FY2011: LongTermDebt $3.161B beside its notes without the convertibles, $2.524B (LongTermNotesPayable),
+    # $9.5M of borrowings and $0.7M of maturities: 80% of the total is a note's figure, so the total stands.
+    year = _debt_year(_debt_filing(LongTermDebt=3.1607e9, LongTermNotesPayable=2.5235e9, LongTermDebtCurrent=0.0007e9,
+                                   ShortTermBorrowings=0.0095e9))
+    assert _total_debt(year) == pytest.approx(3.1702e9)
+
+
+def test_borrowings_just_below_the_maturities_are_a_line_of_their_own():
+    # AEE's FY2019: $440M of short-term debt beside $442M of current maturities, two lines; the 1% margin is one-sided.
+    year = _debt_year(_debt_filing(ShortTermBorrowings=0.440e9, LongTermDebtCurrent=0.442e9,
+                                   LongTermDebtNoncurrent=8.915e9))
+    assert year["short_term_debt"] == pytest.approx(0.882e9)
+
+
+def test_debt_and_lease_obligations_that_are_the_noncurrent_figure_say_nothing_of_the_maturities():
+    # CEG's FY2024: DebtAndCapitalLeaseObligations is its noncurrent $7.384B alone, which can't tell that its $0 of
+    # borrowings holds $1.028B of maturities: total debt $8.412B.
+    year = _debt_year(_debt_filing(ShortTermBorrowings=0.0, LongTermDebtCurrent=1.028e9,
+                                   LongTermDebtAndCapitalLeaseObligationsCurrent=1.028e9,
+                                   LongTermDebtNoncurrent=7.384e9, DebtAndCapitalLeaseObligations=7.384e9))
+    assert _total_debt(year) == pytest.approx(8.412e9)
+
+
+def test_a_total_that_is_the_noncurrent_figure_keeps_no_maturities():
+    # ODFL's FY2016: LongTermDebt and LongTermDebtAndCapitalLeaseObligations are both its $105.0M noncurrent line, so
+    # its maturities ($0) are read beside them.
+    year = _debt_year(_debt_filing(LongTermDebt=0.104975e9, LongTermDebtAndCapitalLeaseObligations=0.104975e9,
+                                   LongTermDebtAndCapitalLeaseObligationsCurrent=0.0))
+    assert _short_term_debt(year) == (0.0, "LongTermDebtAndCapitalLeaseObligationsCurrent")
+
+
+def test_a_10qs_total_keeps_no_year_ends_maturities():
+    # ADBE's FY2014: its 10-Ks show $911.1M of noncurrent debt and $603.2M of maturities; a later 10-Q tags the year
+    # end's noncurrent line as LongTermDebt, which no annual record reads: total debt $1.514B, not $0.911B.
+    facts = _with_10q(_debt_filing(LongTermDebtAndCapitalLeaseObligations=0.911086e9,
+                                   LongTermDebtAndCapitalLeaseObligationsCurrent=0.603229e9),
+                      "2026-09-23", LongTermDebt=0.911086e9, LongTermDebtAndCapitalLeaseObligationsCurrent=0.603229e9)
+    assert _total_debt(_debt_year(facts)) == pytest.approx(1.514315e9)
+
+
+def test_a_total_beside_a_later_10ks_noncurrent_figure_keeps_no_year_end():
+    # PNR's FY2010: its FY2010 10-K's LongTermDebt total, $702.5M, beside $4.9M of borrowings; its FY2011 10-K tags
+    # the noncurrent figure, the borrowings and $18K of maturities, and its own total $707.472M.
+    facts = _with_later_10k(_debt_filing(LongTermDebt=0.702521e9, LongTermDebtCurrent=0.000018e9,
+                                         ShortTermBorrowings=0.004933e9),
+                            "2027-02-21", LongTermDebtNoncurrent=0.702521e9, LongTermDebtCurrent=0.000018e9,
+                            ShortTermBorrowings=0.004933e9, DebtLongtermAndShorttermCombinedAmount=0.707472e9)
+    assert _total_debt(_debt_year(facts)) == pytest.approx(0.707472e9)
 
 
 RESTRICTED = "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
