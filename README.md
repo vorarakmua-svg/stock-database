@@ -478,10 +478,12 @@ How it's built:
   halfway (in log terms), and revenue didn't move with it as far. A merger's or an exchange offer's
   jump stays (DUK 2012, Citigroup 2009). The quarter of a listing, whose weighted count blends the
   private one, takes the public count after it. The fiscal years behind the six models and the quality scores
-  follow the same rules, the EPS-implied count (net income / EPS) having to move with the jump too, and a year
-  before the listing takes the public count (BUG-185), though the quality scores leave out the per-share
-  figures of a year that ended before the first bar (BUG-188). A spin-off's price factor never explains a
-  jump.
+  follow the same rules, the EPS-implied count (net income / EPS) having to move with the jump too, and net
+  income to keep its sign and move less than halfway, which PCG's 2020 bankruptcy-exit issuance (a shrinking
+  loss) and KDP's 2018 reverse merger don't (BUG-247; a quarter's net income swings too far for that test).
+  A year before the listing takes the public count (BUG-185), though the quality scores leave out the
+  per-share figures of a year that ended before the first bar (BUG-188). A spin-off's price factor never
+  explains a jump.
 - **Ranges.** Each multiple's min, quartiles, median and max, and the current value's percentile, over
   the trailing 10 years. They need 36 months of values, so GEV and SNDK show their multiples without a
   range.
@@ -539,14 +541,15 @@ Inputs:
   latest restated figures. The latest 11 years are read, so a 10-year CAGR has its start year.
 - **Per-share series** (revenue, EPS, EBITDA, FCF and book value per share) on today's split basis. A
   share-count jump of 1.5× or more folds into it only for a declared share split, on a split's marks (EPS
-  moved against the count, revenue didn't move with it, the count EPS implies moved with it), or when the
-  older year ends before the listing or in its year (a pre-listing count leaves out converted preferred).
-  Otherwise a merger, an exchange offer, a count that swings on its own and a spin-off's price factor fold
-  nothing (BUG-185). A merger around the listing jumps like the converted preferred, though (DELL's EMC in
-  2016), so a year that ended before the first price bar and that only the listing's jump folds has no
-  per-share figures: APP, CRWD, DELL, PLTR and UBER lose their pre-listing years, and their CAGRs start
-  after them. The listing's own year keeps the public count, as the history's listing quarter does
-  (BUG-188).
+  moved against the count, revenue didn't move with it, the count EPS implies moved with it, net income kept
+  its sign and moved less than halfway), or when the older year ends before the listing or in its year (a
+  pre-listing count leaves out converted preferred). Otherwise a merger, an exchange offer, a count that
+  swings on its own, an issuance while a loss shrinks (PCG 2020), a reverse merger (KDP 2018) and a
+  spin-off's price factor fold nothing (BUG-185, BUG-247). A merger around the listing jumps like the
+  converted preferred, though (DELL's EMC in 2016), so a year that ended before the first price bar and that
+  only the listing's jump folds has no per-share figures: APP, CRWD, DELL, PLTR and UBER lose their
+  pre-listing years, and their CAGRs start after them. The listing's own year keeps the public count, as the
+  history's listing quarter does (BUG-188).
 - **Debt.** A year with no debt tagged and no interest expense is debt-free, outside banks and insurers (ISRG,
   ANET, PANW, PLTR and VRTX tag none): total debt 0, net debt less its cash and short-term investments, and
   ROIC on equity less cash, by `metrics_annual`'s formulas (it leaves all three empty for them). A year that

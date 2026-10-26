@@ -38,7 +38,9 @@ DECLARED_SPLIT_TOLERANCE = 1.25
 #: against the count by at least this share of the seam's ratio (in log terms), and revenue didn't move with the
 #: count by as much. A stock-paid merger brings its revenue and earnings with it (DUK's Progress Energy: 1.567x
 #: the shares, revenue 1.88x, EPS 0.99 to 0.86; LIN's Linde AG: 1.88x and revenue 1.89x, though EPS fell), and
-#: an exchange offer's EPS changes sign (Citigroup's 2009, 2.242x): they stay organic (BUG-175, BUG-185).
+#: an exchange offer's EPS changes sign (Citigroup's 2009, 2.242x): they stay organic (BUG-175, BUG-185). A fiscal
+#: year's net income, which a split leaves alone, must also have kept its sign and moved by less than this share of
+#: the seam's ratio: a shrinking loss or another company's earnings move EPS against the count too (BUG-247).
 SPLIT_EVIDENCE_SHARE = 0.5
 
 #: A fiscal year ending less than this many days after the listing (the first price bar) is the listing's year
@@ -195,6 +197,19 @@ def _implied_count_moves(ratio: float, older: "FYRecord", newer: "FYRecord",
     return implied > 0 and abs(math.log(implied / ratio)) <= math.log(DECLARED_SPLIT_TOLERANCE)
 
 
+def _net_income_held(ratio: float, ni_older: Optional[float], ni_newer: Optional[float]) -> bool:
+    """Whether net income, which a split leaves alone, held across a seam of *ratio*: it kept its sign and moved by
+    less than SPLIT_EVIDENCE_SHARE of the seam's ratio, in log terms. EPS moves against the count when earnings move
+    too: PCG's July 2020 Chapter 11 exit issuance took its count 2.38x while its loss shrank from 7,656M to 1,318M
+    (EPS -14.50 to -1.05), and KDP's FY2017 is Keurig's, the accounting acquirer of the 2018 reverse merger, after
+    Dr Pepper Snapple's FY2016 (4.24x the shares, net income 847M to 378M) (BUG-247). Unknown when a year lacks it,
+    and then it doesn't decide, as for the count EPS implies."""
+    if not (ni_older and ni_newer):
+        return True
+    moved = abs(math.log(abs(ni_newer) / abs(ni_older)))
+    return (ni_older > 0) == (ni_newer > 0) and moved < SPLIT_EVIDENCE_SHARE * abs(math.log(ratio))
+
+
 def _filed_between(split: Tuple[str, float], f_old: Optional[str], f_new: Optional[str]) -> bool:
     """Whether *split* can explain the seam between two years whose share figures
     were last filed on *f_old* and *f_new*: a share split restates the filings made
@@ -255,12 +270,14 @@ def _normalize_splits(records: List[FYRecord],
       Either folds by a declared share split (a simple ratio: a spin-off's price
       factor changes no share count), by its own ratio on a split's marks in EPS
       and *revenue* (``_split_marks``) when the count EPS implies moved with it
-      (``_implied_count_moves``), or by its own ratio when the older year ends
-      before the listing (*first_bar*) or in its year (LISTING_YEAR_DAYS).
-      Otherwise it stays: a merger, an exchange offer, a count that swings alone
-      (BUG-185). A year that ended before the first bar and that only a listing's
-      jump folds is marked ``private_count``: a merger around the listing jumps
-      the same way (DELL's EMC, BUG-188).
+      (``_implied_count_moves``) and net income held (``_net_income_held``), or
+      by its own ratio when the older year ends before the listing (*first_bar*)
+      or in its year (LISTING_YEAR_DAYS). Otherwise it stays: a merger, an
+      exchange offer, a count that swings alone (BUG-185), an issuance while a
+      loss shrinks, a reverse merger (BUG-247). A year that ended before the
+      first bar and that only a listing's jump folds is marked
+      ``private_count``: a merger around the listing jumps the same way (DELL's
+      EMC, BUG-188).
     * beyond ``+/- 50x`` -> not a credible corporate action. The source data
       mixes units across fiscal years (thousands vs units), so everything older
       than this seam is on an unknown scale and simply CANNOT be compared to the
@@ -313,7 +330,8 @@ def _normalize_splits(records: List[FYRecord],
                 elif (_split_marks(ratio, reported_eps[i], reported_eps[i + 1],
                                    revenue[i] if revenue else None, revenue[i + 1] if revenue else None)
                       and _implied_count_moves(ratio, records[i], records[i + 1],
-                                               reported_eps[i], reported_eps[i + 1])):
+                                               reported_eps[i], reported_eps[i + 1])
+                      and _net_income_held(ratio, records[i].net_income, records[i + 1].net_income)):
                     factor *= ratio
                 elif listing:
                     factor *= ratio

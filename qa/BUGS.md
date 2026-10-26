@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 9 · P3 131 · NEEDS-USER 22 · Verified: 113
+**Open:** P0 0 · P1 0 · P2 8 · P3 136 · NEEDS-USER 22 · Verified: 114
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1846,10 +1846,11 @@ Repro: src/valuation/models.py `value_graham` (282-286) takes the latest year wi
 Expected (a choice): Graham N/A when the latest fiscal year lacks EPS or book value per share, or the parser filling diluted from basic (LEN) and reading dei:EntityCommonStockSharesOutstanding (VTRS); either moves these medians. Measured with the latest-FY reading: ARES 32.31/42.56/51.48 to 52.59/65.70/83.14 (expensive either way), LEN 79.28/84.13/100.03 to 71.55/71.55/71.55 and its verdict at $84.92 fair to expensive, VTRS 6.00/6.93/25.54 to 13.43/15.49/21.63 (fair). Until then the stored values stay.
 
 ### BUG-247 [P2][VAL] The undeclared split rule folds a bankruptcy issuance and a reverse merger as splits (PCG, KDP)
-Status: OPEN
-Found: build M5-6 (the scores oracle on the S&P 500) | Fixed: | Regression test:
+Status: VERIFIED (iteration 114)
+Found: build M5-6 (the scores oracle on the S&P 500) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py::test_an_issuance_while_a_loss_shrinks_is_not_a_split, ::test_a_reverse_merger_is_not_a_split, ::test_net_income_may_move_less_than_half_the_seams_ratio, ::test_net_income_holds_with_its_sign_and_within_half_the_seams_ratio; guards ::test_an_undeclared_split_whose_net_income_held_still_folds, ::test_a_loss_shrinking_across_the_listings_jump_leaves_the_jump_to_the_listing
 Repro: `_normalize_splits`' undeclared branch folds a seam on "split marks" (EPS moved against the count, revenue not with it) without checking that net income stayed put. PCG FY2019-20 2.3807 and FY2020-21 1.5792 (the July 2020 Chapter 11 exit issuance: net income -7,656M to -1,318M to -102M) and KDP FY2016-17 4.2363 (the 2018 reverse merger: Dr Pepper Snapple's figures, then Keurig's) fold: 33 of the 128 per-share disagreements; PCG's pre-2020 per-share figures are 3.76x low. Of the 502, the rule folds only these three seams beyond the listing seams the other rule folds too. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C2.
 Expected: fold on marks only when net income kept its sign and moved by less than half the seam's log ratio.   Measured on a copy: 8 per-share rows to the oracle's values; KDP's and PCG's growth and predictability change (PCG's 10-year revenue per share 2.1% to -10.6% a year); only their Lynch assumptions move, no value, median or verdict. KDP stays a splice of two companies either way.
+Fix (iteration 114, `qa/evidence/bug247-done.txt`): the undeclared branch of `_normalize_splits` also needs net income to have held (`inputs._net_income_held`: the same sign, and a move of less than half the seam's log ratio, strictly; an unknown net income doesn't decide). Over the 502 the marks now fold only listing seams (BE x2, DASH, MRNA; TWLO and XYZ at 11 years), HOOD's passing to the listing rule with the same factor; PCG's two seams and KDP's stay. On DB copies: valuation_summary identical, no verdict moved; valuations, KDP's and PCG's Lynch assumptions only (hist_cagr, split_adjusted; growth floors at 0, so no value); per_share_annual 8 rows; quality_scores 6 (KDP's predictability 3.5 to 1 star, composite 60 to 58; PCG's 35 to 32.5). The scores oracle's per-share agreement goes from 25,947 to 25,980 of 26,075 (all 33 PCG/KDP disagreements gone). The valuation history's rule is left alone: its quarters fold neither seam, and the test would unfold DD's 2019 1:3 reverse split there (quarterly net income 52M then 888M). Residuals: BUG-262 to BUG-266.
 
 ### BUG-248 [P2][VAL] WRB's quarterly history leaves its 2022 3:2 split unfolded: three equal splits, the tie-break takes the wrong one
 Status: OPEN
@@ -1943,6 +1944,36 @@ Status: OPEN
 Found: iteration 112 (BUG-161's investigation, section 6) | Fixed: | Regression test:
 Repro: AXP's FY2009-17 and COF's balance sheets tag their cash line as CashCashEquivalentsAndFederalFundsSold (AXP FY2017 $32.927B = cash and due from banks + interest-bearing deposits + equivalents), which canonical.py doesn't map, so their cash reads a component (AXP FY2009-16) or nothing (10 years). Mapping it changes 32 years, 119 quarters and 97 vintages at AXP and COF; read on every date it adds a quarterly row from a cash flow statement and drops two TTM rows, so it needs the balance-sheet-dates filter (BUG-139). Their net debt is suppressed as banks', so it shows in the cash field only.
 Expected: the balance sheet's cash line.   Actual: a component or nothing.
+
+### BUG-262 [P3][VAL] The net-income test can keep a real split unfolded when Yahoo doesn't declare it in a year whose earnings swung
+Status: OPEN
+Found: iteration 114 (BUG-247's fix, `qa/evidence/bug247-done.txt` section 11b) | Fixed: | Regression test:
+Repro: since BUG-247 an undeclared seam folds on a split's marks only where net income held (the same sign, a move of less than half the seam's log ratio). A split missing from Yahoo's split_events in a year whose net income moved more than that stays unfolded. 2 of the 42 declared split seams that bear the marks are like that (COO FY2021-22, SRE FY2020-21); they are declared, so nothing moves today.
+Expected: a real split folds whatever the year's earnings did.   Actual: such a year folds only when Yahoo declares the split.
+
+### BUG-263 [P3][VAL] KDP's per-share history splices Dr Pepper Snapple's FY2015-16 onto Keurig's figures, so its 10-year CAGRs compare two companies
+Status: OPEN
+Found: iteration 114 (BUG-247's fix, section 11c) | Fixed: | Regression test:
+Repro: KDP's FY2015-16 are Dr Pepper Snapple's figures on its own shares, FY2017 on are Keurig's, the accounting acquirer of the 2018 reverse merger. Since BUG-247 the seam no longer folds, by a thin margin (net income 2.24x against a 2.06x bound), but the 10-year CAGRs still compare DPS's 2015 with KDP's 2025 (-9.4% a year), and a reverse merger whose two companies earned alike would still fold.
+Expected: the predecessor's years left out of the per-share series, as a private count's are (a design choice).   Actual: a splice.
+
+### BUG-264 [P3][VAL] The valuation history's undeclared split rule has neither the net-income test nor the implied-count test the fiscal years have
+Status: OPEN
+Found: iteration 114 (BUG-247's fix, section 11d) | Fixed: | Regression test:
+Repro: `history_inputs.normalize_share_series` folds an undeclared seam on a split's marks in EPS and revenue alone, so a quarterly issuance in which a loss shrinks without changing sign would fold there (none does in the 502 today: PCG's exit quarter changed EPS's sign). The fiscal years' net-income test can't be copied as it is: a quarter's net income swings too far (it would unfold DD's 2019 1:3 reverse split at 2017 Q1, net income 52M then 888M).
+Expected: a quarterly rule that tells an issuance from a split.   Actual: the marks alone (latent).
+
+### BUG-265 [P3][VAL] CPRT's quarterly history folds two undeclared seams on the marks, 16.06x and 0.2506x, that look like a count glitch
+Status: OPEN
+Found: iteration 114 (BUG-247's fix, section 11e) | Fixed: | Regression test:
+Repro: CPRT's valuation history folds 2020-07-31 to 2020-10-31 by 16.06x (EPS 0.69 to 0.051875) and 2022-04-30 to 2022-10-31 by 0.2506x, netting about 4x. They look like a derived quarter's or a count's glitch rather than splits (M5-6's C3 found CPRT fragile too; see BUG-248).
+Expected: CPRT's quarters on one basis by its declared splits.   Actual: two folds by unexplained ratios.
+
+### BUG-266 [P3][VAL] A seam folded on the marks folds by its own ratio, drift included: DD's quarters before 2017 Q1 sit about 8.7% off the 1:3 basis
+Status: OPEN
+Found: iteration 114 (BUG-247's fix, section 11f) | Fixed: | Regression test:
+Repro: the marks fold DD's 2017 Q1 seam by its own ratio, 0.3624 = 1/3 x 1.087: Dow's count drift rides along with the 1:3, so DD's earlier quarters sit about 8.7% off its basis. Pre-existing, and shared by both paths' undeclared rule.
+Expected: the split's own ratio, the drift left in the counts.   Actual: the seam's whole ratio.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

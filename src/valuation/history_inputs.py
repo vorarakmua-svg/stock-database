@@ -211,7 +211,10 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
       Each declared split explains one seam.
     - An undeclared seam of SPLIT_JUMP_THRESHOLD or more folds by its own ratio after the quarter of the
       listing on *listed* (LISTING_QUARTER_DAYS), or on a split's marks in EPS and *revenue*
-      (SPLIT_EVIDENCE_SHARE). Otherwise it stays organic, as a merger or an exchange offer does.
+      (SPLIT_EVIDENCE_SHARE). Otherwise it stays organic, as a merger or an exchange offer does. The
+      fiscal years also need net income to hold (``inputs._net_income_held``, BUG-247), which a
+      quarter's swings too far for: the marks fold the seam of DD's 2019 1:3 reverse split at 2017 Q1,
+      net income 52M then 888M. PCG's 2020 exit issuance quarter bears no marks (its EPS changed sign).
     - A seam beyond MAX_SPLIT_RATIO is a change of units: the older quarters are dropped.
 
     A gap then carries the count before it. A split after the latest quarter, which no stored quarter

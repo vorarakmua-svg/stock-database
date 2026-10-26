@@ -2059,3 +2059,24 @@ Result: BUG-173 VERIFIED. Five fixes since code review 20 (BUG-256, -257, -159, 
 Gates: ruff ✓ mypy ✓ pytest 2574 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(valuation): a year's cover share count goes onto its EPS's split basis (BUG-173)
 Next: code review 21 (b5d0625..HEAD: BUG-159, -161, -173, with BUG-256/257's bf3dfdd).
+
+## Iteration 114: 2026-10-26 07:44: fix (BUG-247)
+Picked: BUG-247, the next open P2 (the undeclared split rule folding PCG's bankruptcy-exit issuance and KDP's reverse
+merger as splits).
+Did: an opus worker built the fix test-first in a `git archive` export of d5e6ec2, so the checkout stayed untouched
+while code review 21 ran, and measured it on DB copies. I applied its five files after checking they were
+byte-identical to their base:
+- the tests first, RED: 11 failed for the right reason (4 behaviour assertions, 7 imports of the missing helper),
+  with the guards passing;
+- then the code, GREEN: 167 passed;
+- 9 mutants, each killed, and BUG-173's 9 re-run (both by me, from the checkout).
+- Real data: valuation_summary identical and no verdict moved; only KDP's and PCG's Lynch assumptions change, with 8
+  per-share rows and 6 quality-score rows.
+Process: the QA mutant runner hard-coded the checkout as its root, so a worker running it from a scratch tree would
+have patched the checkout. It now takes --root (else the current directory) and prints the tree first. The checkout
+was clean when checked (06:25), and the running workers were told.
+Evidence: `qa/evidence/bug247-{done,red,green,mutants,gates}.txt`, `qa/evidence/bug173-mutants-rerun247.txt`
+Result: BUG-247 VERIFIED; residuals BUG-262 to BUG-266 (P3).
+Gates: ruff ✓ mypy ✓ pytest 2588 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(valuation): an undeclared split folds only where net income held (BUG-247)
+Next: code review 21 (resumed after the usage limit), then BUG-170 and BUG-179 as their workers report.

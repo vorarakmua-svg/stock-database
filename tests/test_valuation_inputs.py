@@ -611,6 +611,79 @@ def test_a_diluted_count_that_swings_alone_is_not_a_split(tmp_path):
     assert set(_factors(db).values()) == {1.0}
 
 
+def test_an_issuance_while_a_loss_shrinks_is_not_a_split(tmp_path):
+    # PCG (BUG-247): its July 2020 Chapter 11 exit issuance took the weighted count 2.38x into FY2020 and 1.58x into
+    # FY2021 while the loss shrank from 7,656M to 1,318M and 102M, so EPS fell against the count as across a split
+    # (-14.50, -1.05, -0.05), revenue near flat. A split leaves net income where it was.
+    db = _seam_db(tmp_path, "pcg.db", [
+        (2018, -6851.0, -13.25, 517.0),
+        (2019, -7656.0, -14.50, 528.0),
+        (2020, -1318.0, -1.05, 1257.0),
+        (2021, -102.0, -0.05, 1985.0),
+        (2022, 1800.0, 0.84, 2132.0),
+    ], revenue={2018: 16759.0, 2019: 17129.0, 2020: 18469.0, 2021: 20642.0, 2022: 21680.0}, first_bar="1972-06-01")
+    conn = _connect(db)
+    by_fy = {r.fiscal_year: r for r in load_inputs(conn, "SPL").fy_records}
+    conn.close()
+    assert [by_fy[fy].split_factor for fy in range(2018, 2023)] == [1.0, 1.0, 1.0, 1.0, 1.0]
+    assert (by_fy[2019].eps_diluted, by_fy[2019].shares) == (pytest.approx(-14.50), pytest.approx(528.0))
+
+
+def test_a_reverse_merger_is_not_a_split(tmp_path):
+    # KDP (BUG-247): Dr Pepper Snapple's own figures through FY2016, then Keurig's, the accounting acquirer of the
+    # 2018 reverse merger: 4.24x the shares, EPS 4.54 to 0.47 and revenue 6.44B to 4.27B, as if split, but net
+    # income fell from 847M to 378M, more than half the seam's ratio (in log terms) away.
+    db = _seam_db(tmp_path, "kdp.db", [
+        (2015, 764.0, 3.97, 192.4),
+        (2016, 847.0, 4.54, 186.6),
+        (2017, 378.0, 0.47, 790.5),
+        (2018, 586.0, 0.53, 1097.6),
+        (2019, 1254.0, 0.88, 1419.1),
+    ], revenue={2015: 6282.0, 2016: 6440.0, 2017: 4269.0, 2018: 7442.0, 2019: 11120.0}, first_bar="2008-05-07")
+    assert set(_factors(db).values()) == {1.0}
+
+
+@pytest.mark.parametrize("rows, factor", [
+    # a 3:1 split in a year net income rose 15%
+    ([(2019, 300.0, 3.00, 100.0), (2020, 330.0, 3.30, 100.0), (2021, 380.0, 1.27, 300.0),
+      (2022, 400.0, 1.33, 300.0), (2023, 420.0, 1.40, 300.0)], 3.0),
+    # a loss-maker's 1:8 reverse split, the loss 10% wider: its per-share loss grew eightfold
+    ([(2019, -800.0, -1.00, 800.0), (2020, -880.0, -1.10, 800.0), (2021, -968.0, -9.68, 100.0),
+      (2022, -900.0, -9.00, 100.0), (2023, -850.0, -8.50, 100.0)], 0.125),
+])
+def test_an_undeclared_split_whose_net_income_held_still_folds(tmp_path, rows, factor):
+    factors = _factors(_seam_db(tmp_path, "held.db", rows))
+    assert [factors[fy] for fy in range(2019, 2024)] == pytest.approx([factor, factor, 1.0, 1.0, 1.0])
+
+
+@pytest.mark.parametrize("net_income, factor", [(501.0, 4.0), (500.0, 1.0)])
+def test_net_income_may_move_less_than_half_the_seams_ratio(tmp_path, net_income, factor):
+    # BUG-247's bound: across an undeclared 4x seam, net income may move by less than half its log ratio (2x). At
+    # 500, half of FY2020's 1,000, EPS fell 8x against the count, and a split explains only 4x of it.
+    db = _seam_db(tmp_path, "edge.db", [
+        (2019, 950.0, 9.50, 100.0),
+        (2020, 1000.0, 10.00, 100.0),
+        (2021, net_income, net_income / 400.0, 400.0),
+        (2022, 1.05 * net_income, 1.05 * net_income / 400.0, 400.0),
+        (2023, 1.10 * net_income, 1.10 * net_income / 400.0, 400.0),
+    ])
+    assert _factors(db)[2020] == pytest.approx(factor)
+
+
+@pytest.mark.parametrize("older, newer, held", [
+    (1000.0, 1100.0, True),     # a split leaves net income where it was, give or take a year's growth
+    (1000.0, 1990.0, True),     # just under half a 4x seam's log ratio
+    (1000.0, 2000.0, False),    # half of it: a 2x move
+    (1000.0, 500.0, False),
+    (-7656.0, -1318.0, False),  # PCG's loss shrinking
+    (-100.0, 100.0, False),     # a sign change, though the size held
+    (None, 100.0, True),        # unknown: it doesn't decide, as for the count EPS implies
+])
+def test_net_income_holds_with_its_sign_and_within_half_the_seams_ratio(older, newer, held):
+    from src.valuation.inputs import _net_income_held
+    assert _net_income_held(4.0, older, newer) is held
+
+
 def test_years_before_the_listing_take_the_public_count(tmp_path):
     # PLTR (BUG-185): listed on 2020-09-30. Its weighted counts before then leave out the preferred stock that
     # converted (544M, 577M, 979M, then 1,924M in the listing year), so every jump into the public count folds,
@@ -652,8 +725,26 @@ def test_years_before_the_listing_that_its_jump_folds_carry_the_private_count(tm
     # BUG-188: a merger around the listing jumps like the converted preferred (DELL's EMC, 1.92x, its first bar
     # after FY2016's end), so a year that ended before the first bar and that only the listing's jump folds is
     # marked: the valuations fold it, the quality scores leave its per-share figures out.
-    # FY2019's jump bears a split's marks (EPS fell with it) and folds as one; FY2018's (EPS rose) is the listing's.
+    # FY2019's jump bears a split's marks (EPS fell with it, net income held) and folds as one; FY2018's (EPS rose)
+    # is the listing's.
     db = _seam_db(tmp_path, "pltr.db", [
+        (2017, -580.0, -1.07, 544.0),
+        (2018, -580.0, -1.01, 577.0),
+        (2019, -1170.0, -1.19, 979.0),
+        (2020, -1100.0, -0.57, 1923.6),
+        (2021, -373.0, -0.19, 1960.0),
+    ], first_bar="2020-09-30")
+    private, factors = _private_counts(db)
+    assert private == {2017: True, 2018: True, 2019: False, 2020: False, 2021: False}
+    assert factors[2018] == pytest.approx(1923.6 / 577.0)  # still folded for the valuations
+
+
+def test_a_loss_shrinking_across_the_listings_jump_leaves_the_jump_to_the_listing(tmp_path):
+    # BUG-247: across the jump into the listing year the loss shrank from 1,170 to 520, so EPS fell against the
+    # count without a split. The jump is the listing's, and FY2019, which ended before the first bar, has the
+    # private count. (HOOD's loss shrank so across its listing year's jump, -3,687M to -1,028M; that year ended
+    # after its first bar.)
+    db = _seam_db(tmp_path, "pltr_loss.db", [
         (2017, -580.0, -1.07, 544.0),
         (2018, -580.0, -1.01, 577.0),
         (2019, -1170.0, -1.19, 979.0),
@@ -661,8 +752,8 @@ def test_years_before_the_listing_that_its_jump_folds_carry_the_private_count(tm
         (2021, -373.0, -0.19, 1960.0),
     ], first_bar="2020-09-30")
     private, factors = _private_counts(db)
-    assert private == {2017: True, 2018: True, 2019: False, 2020: False, 2021: False}
-    assert factors[2018] == pytest.approx(1923.6 / 577.0)  # still folded for the valuations
+    assert private == {2017: True, 2018: True, 2019: True, 2020: False, 2021: False}
+    assert factors[2019] == pytest.approx(1923.6 / 979.0)  # folded all the same, by the listing
 
 
 def test_the_listing_year_keeps_the_public_count_its_jump_gives_it(tmp_path):
