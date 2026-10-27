@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 8 · P3 154 · NEEDS-USER 24 · Verified: 118
+**Open:** P0 0 · P1 0 · P2 8 · P3 158 · NEEDS-USER 25 · Verified: 118
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1296,12 +1296,15 @@ For the user: valuation_summary and valuation_indicators identical; owner earnin
 Also: the Expected line's Yahoo EBITDA for ABBV ($30.76B) is Yahoo's normalized figure; the fix gives ABBV's FY2025 EBITDA $23.21B on Yahoo's own cash-flow D&A ($8.139B). With the fix, GILD's current EV/EBITDA reads 825 (a barely positive trailing EBITDA beside an IPR&D-driven operating loss: right arithmetic), and unmapped_facts still lists the two amortization tags (adding them to the mapped set would drop ~400 filers' rows; left as it is). Residuals: BUG-274 to BUG-276.
 
 ### BUG-171 [P2][VALID] The 10-Q quarters lack the long-term debt the 10-Ks report: TMUS's $81B shows only in Q4
-Status: OPEN
+Status: NEEDS-USER (the fix moves one historical-value label, AXON near to far above, and no median, verdict or model value; recommended: apply, prepared)
 Found: build iteration 5 via M1-4 | Fixed: | Regression test:
 Repro: `financials_quarterly`, TMUS: `long_term_debt` is NULL for 2025-Q1 to Q3 and 2026-Q1 and Q2, and $81.15B at 2025-12-31 (the 10-K). The latest quarter lacks it for CAT, CVX, ORCL and TMUS while their latest year has it ($30.7B, $39.8B, $122.3B, $81.1B).
 Expected: each quarter's long-term debt from its 10-Q.   Actual: NULL, so a quarter's total debt (`CalculatedMetrics._calculate_total_debt`) is short-term debt alone, and TMUS's enterprise value read $174B against Yahoo's $287B.
 Root cause: not yet traced. Likely the 10-Qs tag the long-term debt under concepts the quarterly resolution doesn't take (BUG-141's set-aside, or the noncurrent fallbacks), to be checked against the filings.
 Notes: the valuation history now treats such a quarter's net debt as unknown, so it has no EV and no EV/EBITDA, rather than a wrong one (M1-4). The quarterly ladder and TTM debt figures elsewhere still carry the gap.
+Measured (iteration 121, `qa/evidence/bug171-investigation.txt`): the recorded guess was wrong (no set-aside removed anything: none of the 1,020 NULL quarters has a mapped long-term debt fact in its own filing). Two causes: the 10-Qs tag a concept long_term_debt doesn't map while the 10-Ks tag a mapped one (ORCL's LongTermNotesAndLoans beside LongTermNotesPayable; CVX's LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities, its noncurrent line), or the 10-Q tags the line only under the filer's own concept, which companyfacts don't carry (TMUS since 2024-Q1, CAT): nothing to read there.
+Fix prepared (%LOCALAPPDATA%\stockdb-qa\bug171\, diffs in its out\, applying to 965df0d): quarterly records only. A 10-Q quarter with no long-term debt reads the 10-Q's line under another debt concept only where that 10-Q shows the concept at its year-end column with exactly the figure an annual report filed there under the tag the annual record reads; beside short-term debt only a line that holds no current maturities; nothing where two lines disagree; never the filer's own totals or DebtInstrumentCarryingAmount. 220 quarters and 211 TTM rows filled at 35 filers (the 10-K tags the same concept with the same figure for 185; the decomposition oracle never contradicts); no annual, vintage or metrics_annual cell moves. Simply adding the tags moved 177 annual and 389 vintage cells: rejected. 26 test items (8 RED), 31 mutants killed, 0 look-ahead cells, parse time unchanged.
+For the user: valuation_summary, valuations, verdicts and indicators identical. One historical-value label moves: AXON near to far above (historical value $421.44 to $320.92 at $420.37: its 2015-16 capital-lease quarters become known, five more months in a 40-month EV/EBITDA window), with a price_far_above_value warning sign. Historical values without a label change: CVX $169.71 to $177.05, KMB $124.76 to $122.79, ORCL $162.03 to $161.78, TYL $582.75 to $576.75. Composite scores through rank_valuation: AXON 54 to 48, CVX 64 to 66, DVN 60 to 58, ORLY 50 to 52, QCOM 66 to 68, WST 66 to 68. 11 EV/EBITDA ranges and 1,433 valuation_history rows. TMUS and CAT stay unread. Findings: BUG-290 to BUG-294.
 
 ### BUG-172 [P2][VAL] The multiples band prices spin-adjusted closes over as-reported EPS, and one tiny-earnings year sets its bull case: GE's band reads 12.2x to 1,044x
 Status: NEEDS-USER
@@ -2130,6 +2133,36 @@ Status: OPEN
 Found: code review 22 (M-4) | Fixed: | Regression test:
 Repro: the three retries can be spent a day apart (CLI and web collections count, BUG-281), and `_gap` compares (report, predecessor-failed): a gap whose predecessor read fails and succeeds by turns starts a new count each time, the one path found that could re-collect for ever.
 Expected: retries spread in time and a count that survives a flipping flag.   Actual: as above.
+
+### BUG-290 [P2][PARSE] Corpay's FY2021-23 annual records count the current maturities twice: FY2022 total debt $9.35B for $7.04B
+Status: OPEN
+Found: iteration 121 (BUG-171's investigation) | Fixed: | Regression test:
+Repro: LongTermNotesAndLoans isn't among the noncurrent tags BUG-141/159's rules weigh, so where Corpay tags it as its long-term debt with the current maturities inside it, the maturities are read again as short-term debt. FICO FY2014 has the same shape.
+Expected: each year's total debt as its balance sheet's.   Actual: the maturities twice.
+
+### BUG-291 [P3][PARSE] Kenvue's FY2024-25 annual records have no long-term debt
+Status: OPEN
+Found: iteration 121 (BUG-171's investigation) | Fixed: | Regression test:
+Repro: KVUE's 10-Ks tag their long-term debt under a concept long_term_debt doesn't read (details in `qa/evidence/bug171-investigation.txt`), so total debt is the short-term figure alone.
+Expected: its balance sheet's long-term debt.   Actual: NULL.
+
+### BUG-292 [P3][PARSE] ORCL's quarters don't read their current notes (NotesPayableCurrent)
+Status: OPEN
+Found: iteration 121 (BUG-171's investigation) | Fixed: | Regression test:
+Repro: ORCL's 10-Qs tag the current portion of its notes as NotesPayableCurrent, which short_term_debt doesn't read in the quarters.
+Expected: a quarter's short-term debt as its balance sheet's.   Actual: short by the current notes.
+
+### BUG-293 [P3][VAL] The valuation history names unknown debt "EBITDA is zero or negative", and treats AXON's debt-free 2017-22 quarters as unknown debt
+Status: OPEN
+Found: iteration 121 (BUG-171's investigation) | Fixed: | Regression test:
+Repro: a month whose quarter has no debt figure reads as an EV/EBITDA N/A with the reason "EBITDA is zero or negative" (TMUS); and M1-4's unknown-debt rule leaves AXON's quarters that tag no debt at all (a debt-free filer) without an EV.
+Expected: an N/A reason that names the missing debt, and a debt-free quarter valued with no debt.   Actual: as above.
+
+### BUG-294 [P3][PARSE] Quarters whose long-term debt stays unread after BUG-171's fix, and a few short by the tag order
+Status: OPEN
+Found: iteration 121 (BUG-171's investigation's census) | Fixed: | Regression test:
+Repro: of the 1,020 NULL quarters on a filing's own balance-sheet date: 270 at 80 filers have no us-gaap line at all (TMUS, CAT: the filer's own concept), 476 have several debt lines, a restated year end or near-misses, 39 at 9 filers tag only own totals or instrument amounts, 15 at 6 a line that may hold current maturities; 1,671 more NULL rows sit on stray instants. A few "plainly short" quarters come from the tag order (TWLO, CRM, DPZ, HAL).
+Expected: each quarter's long-term debt as its balance sheet's.   Actual: as listed.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

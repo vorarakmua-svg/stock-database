@@ -2205,3 +2205,19 @@ Result: BUG-285 to BUG-289 opened.
 Gates: ruff ✓ mypy ✓ pytest 2658 passed, 1 skipped (the reviewer's run at 965df0d) | CI: no PR (Q10)
 Commit: (this commit) chore(qa): record code review 22
 Next: BUG-285 (a regression of this loop's own fix), BUG-171 as its worker reports.
+
+## Iteration 121: 2026-10-27 09:09: investigation (BUG-171) -> NEEDS-USER
+Picked: BUG-171, the oldest open P2 (10-Q quarters lacking the long-term debt the 10-Ks report).
+Did: an opus worker, read-only on the checkout, from a `git archive` export of ca55c1e (`qa/evidence/bug171-investigation.txt`).
+- The recorded root cause was wrong. The 10-Qs tag a concept the 10-Ks don't (ORCL, CVX), or only the filer's own
+  concept, which companyfacts lack (TMUS, CAT: unreadable).
+- The fix was prepared test-first and not applied: a quarter reads the 10-Q's other debt line only where the 10-Q's
+  year-end column matches the annual record's figure exactly. 220 quarters at 35 filers are filled, and no annual or
+  vintage cell moves (26 items, 31 mutants, 0 look-ahead).
+- It moves no median, verdict or model value, but one historical-value label (AXON near to far above), so it goes to
+  the user.
+Evidence: `qa/evidence/bug171-investigation.txt` (scratch: %LOCALAPPDATA%\stockdb-qa\bug171\)
+Result: BUG-171 NEEDS-USER (apply recommended); new BUG-290 (P2, Corpay's maturities twice) and BUG-291 to BUG-294 (P3).
+Gates: unchanged code (ledger only) | CI: no PR (Q10)
+Commit: (this commit) chore(qa): BUG-171 measured; its fix moves one historical-value label, so it is the user's
+Next: BUG-285 (its worker is editing), then BUG-290 and the open P2s.
