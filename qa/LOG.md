@@ -2242,8 +2242,8 @@ Next: BUG-290 (its worker is preparing it).
 ## Iteration 123: 2026-10-27: pause (at the user's request)
 State: HEAD c4effe1, everything committed and pushed; ledger P2 8, P3 159, NEEDS-USER 25, Verified 119.
 In progress, not in the checkout: BUG-290 (Corpay's maturities twice), a worker's fix tree in
-%LOCALAPPDATA%\stockdb-qaug290 (no report written yet).
-Prepared and waiting for the user: BUG-170 (%LOCALAPPDATA%\stockdb-qaug170) and BUG-171 (...ug171\out, apply its
+%LOCALAPPDATA%\stockdb-qa\bug290 (no report written yet).
+Prepared and waiting for the user: BUG-170 (%LOCALAPPDATA%\stockdb-qa\bug170) and BUG-171 (...\bug171\out, apply its
 diffs with git apply); BUG-160/258 (option A'; no scheduled task until decided); BUG-245, BUG-246, Q16, Q17.
 Next on resume: the user's decisions, then BUG-290, then the open P2s oldest first.
 
