@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 8 · P3 158 · NEEDS-USER 25 · Verified: 118
+**Open:** P0 0 · P1 0 · P2 8 · P3 159 · NEEDS-USER 25 · Verified: 119
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2105,10 +2105,11 @@ Repro: an import with no command run (a test, a script from a scratch tree) make
 Expected: folders made when something is written there.   Actual: made at import.
 
 ### BUG-285 [P2][GATHER] BUG-251's gap check never sees a report for JPM, BAC, WFC, C, GS, MS, STT or DELL: their newest 100 filings hold no 10-K or 10-Q
-Status: OPEN
-Found: code review 22 (I-1; `qa/evidence/review22.txt`) | Fixed: | Regression test:
+Status: VERIFIED (iteration 122)
+Found: code review 22 (I-1; `qa/evidence/review22.txt`) | Fixed: (this commit) | Regression tests: tests/test_sec_cache.py (9 new: DLR's filings behind 150 424B2s, and a guard for a submissions file cached before the fix)
 Repro: `sec_handler.report_without_facts` reads the submissions the handler keeps, the newest 100 filings. For these eight the newest 100 are 424B2s, 13Gs, Forms 4 and 144 (checked in the cache: JPM, GS and DELL 0 reports of 100, PG 1), so the check finds no report and says "complete" even with empty companyfacts; USB is days from the same state. (The refresh's SEC step already reads every recent filing.)
 Expected: the latest report of each form looked for in the whole recent feed (tested with a feed full of 424B2s).   Actual: no check at the banks.
+Fix (iteration 122, `qa/evidence/bug285-done.txt`): `get_submissions` keeps, beside the newest 100 filings (unchanged for their other readers), `latest_report`: the latest report of the feed's whole "recent" block the handler already fetches (no new request), by BUG-251's rule (`_latest_report`); the check reads both, and a submissions file cached before reads as it did. Offline the flag lists are unchanged (59: BUG-251's 58 and Exxon Mobil Corp's predecessor file); fed their cached filings with the latest report behind them, the banks and DELL are now checked, and Citigroup's companyfacts lack its 2026 10-Qs (BUG-295). P4 notes: the feed's older "files" pages aren't read (a new request, for a filer with no report in a year); the JSON export's sec_submissions now carries latest_report.
 
 ### BUG-286 [P3][PARSE] BUG-267's current-liabilities bound can say "held" falsely where its other lines overlap
 Status: OPEN
@@ -2163,6 +2164,18 @@ Status: OPEN
 Found: iteration 121 (BUG-171's investigation's census) | Fixed: | Regression test:
 Repro: of the 1,020 NULL quarters on a filing's own balance-sheet date: 270 at 80 filers have no us-gaap line at all (TMUS, CAT: the filer's own concept), 476 have several debt lines, a restated year end or near-misses, 39 at 9 filers tag only own totals or instrument amounts, 15 at 6 a line that may hold current maturities; 1,671 more NULL rows sit on stray instants. A few "plainly short" quarters come from the tag order (TWLO, CRM, DPZ, HAL).
 Expected: each quarter's long-term debt as its balance sheet's.   Actual: as listed.
+
+### BUG-295 [P2][GATHER] Citigroup's companyfacts hold no fact of any 2026 10-Q: its stored quarters stop at 2025-12-31
+Status: OPEN
+Found: iteration 122 (BUG-285's worker; `qa/evidence/bug285-realdata.txt`) | Fixed: | Regression test:
+Repro: C's cached companyfacts are fresh (cached 2026-10-21, with 424B2 fees of 2026-10-20) but carry no fact of its 2026 10-Qs, so its record stops at FY2025; the gap BUG-285 hid. The other banks and DELL carry their Q2 reports.
+Expected: the gap named at C's next collection (BUG-251/285's warning; to confirm online) and its figures recovered (Q17).   Actual: stored quarters stop at 2025-12-31.
+
+### BUG-296 [P3][GATHER] Submissions cached before BUG-285 keep the banks' blind spot until the 7-day cache expires
+Status: OPEN
+Found: iteration 122 (BUG-285's worker, residuals) | Fixed: | Regression test:
+Repro: a submissions file cached by an earlier build has no latest_report, so a CLI or web collection within the cache's 7 days still checks the newest 100 alone (the refresh reads fresh).
+Expected: the check as fixed on every collection.   Actual: blind until the cache expires.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER

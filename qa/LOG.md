@@ -2221,3 +2221,20 @@ Result: BUG-171 NEEDS-USER (apply recommended); new BUG-290 (P2, Corpay's maturi
 Gates: unchanged code (ledger only) | CI: no PR (Q10)
 Commit: (this commit) chore(qa): BUG-171 measured; its fix moves one historical-value label, so it is the user's
 Next: BUG-285 (its worker is editing), then BUG-290 and the open P2s.
+
+## Iteration 122: 2026-10-27 09:55: fix (BUG-285)
+Picked: BUG-285, code review 22's Important: BUG-251's gap check blind at eight large filers.
+Did: an opus worker fixed it test-first in the checkout.
+- `get_submissions` keeps the latest report of the feed's whole recent block beside the newest 100, with no new
+  request. The check reads both.
+- My checks:
+  - RED: the new tests against HEAD's code in an export, 7 failed and 23 passed.
+  - 8 mutants killed, BUG-251's 40 re-run (1 reshaped).
+  - The gates.
+- Real data offline: flag lists unchanged; the banks are now checked; Citigroup's companyfacts lack its 2026 10-Qs
+  (BUG-295).
+Evidence: `qa/evidence/bug285-{done,red,green,mutants,realdata,verify-mine}.txt`
+Result: BUG-285 VERIFIED; BUG-295 (P2), BUG-296 (P3).
+Gates: ruff ✓ mypy ✓ pytest 2667 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(sec): the gap check reads the latest report behind a bank's newest 100 filings (BUG-285)
+Next: BUG-290 (its worker is preparing it).

@@ -54,22 +54,34 @@ def merge_company_facts(current: Dict[str, Any], earlier: Dict[str, Any]) -> Dic
     return {**current, "facts": facts}
 
 
-def report_without_facts(submissions: Optional[Dict[str, Any]],
-                         facts: Optional[Dict[str, Any]]) -> Optional[Dict[str, str]]:
-    """The latest report *submissions* list (``get_submissions``' filings) when *facts*, the companyfacts read with
-    them (None when that request failed or the SEC has none), carry no fact of it: the SEC's lag, after which a run's
-    figures stop at the report before (BUG-251: on 2026-10-25 DLR's companyfacts had no fact of its 10-Q of
-    2026-07-31, though they had its 424B7 of 2026-08-19). Its form, accession and filing date; None when the facts
-    carry it, or when there is none to look for.
-
-    Only a report the parser reads, as filed (a 10-K, 10-Q, 20-F or 40-F, not an amendment, which often has no
-    financial facts: a 10-K/A of Part III; nor a 10-KT), and filed with XBRL is looked for, as only such a report ever
-    gets facts that change the record. Its facts count under any taxonomy (an IFRS filer's 20-F under ifrs-full)."""
-    reports = [f for f in (submissions or {}).get("filings") or []
-               if f.get("form") in _REPORT_FORMS and f.get("isXBRL") != 0]
+def _latest_report(filings: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The latest of *filings* (a submissions feed's entries) that ``report_without_facts`` looks for, None when there
+    is none: a report the parser reads, as filed (a 10-K, 10-Q, 20-F or 40-F, not an amendment, which often has no
+    financial facts: a 10-K/A of Part III; nor a 10-KT), and filed with XBRL, as only such a report ever gets facts
+    that change the record."""
+    reports = [f for f in filings if f.get("form") in _REPORT_FORMS and f.get("isXBRL") != 0]
     if not reports:
         return None
-    latest = max(reports, key=lambda f: (str(f.get("filingDate") or ""), str(f.get("acceptanceDateTime") or "")))
+    return max(reports, key=lambda f: (str(f.get("filingDate") or ""), str(f.get("acceptanceDateTime") or "")))
+
+
+def report_without_facts(submissions: Optional[Dict[str, Any]],
+                         facts: Optional[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+    """The latest report *submissions* (``get_submissions``') list when *facts*, the companyfacts read with them (None
+    when that request failed or the SEC has none), carry no fact of it: the SEC's lag, after which a run's figures
+    stop at the report before (BUG-251: on 2026-10-25 DLR's companyfacts had no fact of its 10-Q of 2026-07-31, though
+    they had its 424B7 of 2026-08-19). Its form, accession and filing date; None when the facts carry it, or when there
+    is none to look for.
+
+    The report is the latest of the feed's whole "recent" block (``_latest_report``'s rule: as filed, with XBRL), kept
+    beside the newest 100 filings as ``latest_report``, which a bank's 424B2s fill in days (BUG-285: JPM's held 94
+    424B2s of two days and no report); submissions cached before that was kept give their newest 100 alone. Its facts
+    count under any taxonomy (an IFRS filer's 20-F under ifrs-full)."""
+    listed = submissions or {}
+    # The newest 100 and the latest report behind them: an empty entry where none was kept is no report.
+    latest = _latest_report([*(listed.get("filings") or []), listed.get("latest_report") or {}])
+    if latest is None:
+        return None
     accession = latest.get("accessionNumber")
     if not accession or any(e.get("accn") == accession for e in _entries(facts or {})):
         return None
@@ -418,7 +430,9 @@ class SECHandler:
             cik: 10-digit CIK number
 
         Returns:
-            Dictionary containing submissions data, or None on error
+            Dictionary containing submissions data, or None on error: ``filings``, the newest 100 of the feed's
+            "recent" block, and ``latest_report``, the latest report of that whole block (``_latest_report``; None
+            when it lists none), which the newest 100 of a bank's feed don't reach (BUG-285)
         """
         cik = str(cik).zfill(10)
 
@@ -439,6 +453,9 @@ class SECHandler:
 
         response.raise_for_status()
         data = response.json()
+        # Every entry of the "recent" block (a year's, or the latest 1,000 when that's more), newest first.
+        feed = data.get("filings", {})
+        recent = self._extract_recent_filings(feed, limit=len((feed.get("recent") or {}).get("accessionNumber") or []))
 
         # Extract relevant fields
         result = {
@@ -456,7 +473,8 @@ class SECHandler:
             "state_of_incorporation_description": data.get("stateOfIncorporationDescription"),
             "addresses": data.get("addresses", {}),
             "phone": data.get("phone"),
-            "filings": self._extract_recent_filings(data.get("filings", {})),
+            "filings": recent[:100],
+            "latest_report": _latest_report(recent),
         }
 
         self._write_payload_cache(cache_path, result)

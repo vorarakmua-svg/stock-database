@@ -2235,7 +2235,10 @@ run reads both filers again. A run whose companyfacts carry no fact of the lates
 submissions list (a 10-K, 10-Q, 20-F or 40-F as filed, with XBRL: an amendment or a 10-KT isn't
 looked for) says so, naming it: `SEC EDGAR: the companyfacts lack DLR's 10-Q filed 2026-07-31
 (0001104659-26-089296), so this run's figures stop before it; the refresh collects DLR again`. Its
-figures are stored as they are. `collection_runs.incomplete` keeps what a run's SEC read lacked
+figures are stored as they are. That report is the latest of the feed's whole `recent` block,
+kept beside the newest 100 filings the handler keeps (`latest_report`), which a bank's prospectus
+supplements fill in days (BUG-285: JPM's held 94 424B2s of two days and no report); submissions
+cached before it was kept give their newest 100 alone until the cache's week is out. `collection_runs.incomplete` keeps what a run's SEC read lacked
 (JSON: `report`, that report's `form`, `accession` and `filed`; `predecessor`, why the
 predecessor's filings couldn't be read), empty for a complete run, so that `stock-data refresh`
 collects the company again (see [Keeping the data current](#keeping-the-data-current-stock-data-refresh)).

@@ -1,5 +1,6 @@
 """Tests for SEC payload caching (companyfacts/submissions)."""
 
+import json
 import os
 import time
 
@@ -314,3 +315,59 @@ def test_a_report_listed_without_its_accession_isnt_looked_for(tmp_path, monkeyp
     # There is nothing to look for among the facts, and nothing to name.
     data = _dlr(tmp_path, monkeypatch, [_DLR_424B7, {**_DLR_10Q2, "accessionNumber": ""}, _DLR_10Q1]).fetch_all("DLR")
     assert "missing_report" not in data
+
+
+# ---- BUG-285: the latest report behind the newest 100 filings ----
+
+#: A bank's pricing supplements, newest first: 150 424B2s filed after its reports, as JPM's 94 of 2026-10-22 and 23
+#: filled the newest 100 of its feed (GS's latest 10-Q sat behind 3,159 newer filings on 2026-10-25).
+_424B2S = [{"accessionNumber": f"0001213900-26-{100150 - n:06d}", "form": "424B2", "filingDate": "2026-10-23",
+            "reportDate": "", "acceptanceDateTime": f"2026-10-23T16:{(149 - n) // 60:02d}:{(149 - n) % 60:02d}.000Z",
+            "isXBRL": 0, "primaryDocument": f"ea{100150 - n}-424b2.htm"} for n in range(150)]
+
+
+def test_a_report_behind_the_newest_100_filings_is_looked_for(tmp_path, monkeypatch):
+    # The newest 100 hold 424B2s alone, so the check found no report and said complete, whatever the facts held.
+    data = _dlr(tmp_path, monkeypatch, [*_424B2S, _DLR_10Q2, _DLR_10Q1]).fetch_all("DLR")
+    assert data.get("missing_report") == {"form": "10-Q", "accession": "0001104659-26-089296", "filed": "2026-07-31"}
+
+
+def test_a_report_behind_the_newest_100_filings_whose_facts_the_companyfacts_carry_names_none(tmp_path, monkeypatch):
+    data = _dlr(tmp_path, monkeypatch, [*_424B2S, _DLR_10Q2, _DLR_10Q1],
+                revenue=(_DLR_Q1_REVENUE, _DLR_Q2_REVENUE)).fetch_all("DLR")
+    assert "missing_report" not in data
+
+
+@pytest.mark.parametrize("later", [
+    {"form": "10-K/A", "primaryDocument": "dlr-10ka.htm"},
+    {"form": "10-Q/A", "primaryDocument": "dlr-10qa.htm"},
+    {"form": "10-KT", "primaryDocument": "dlr-10kt.htm"},
+    {"form": "8-K", "primaryDocument": "d8k.htm"},
+    {"form": "10-Q", "isXBRL": 0, "primaryDocument": "dlr-10q.htm"},
+])
+def test_behind_the_newest_100_filings_only_a_report_as_filed_with_xbrl_is_looked_for(tmp_path, monkeypatch, later):
+    # BUG-251's rule over the whole feed: the latest report looked for is the 10-Q of 2026-07-31, not the later
+    # filing, which never gets facts that change the record.
+    filing = {**_DLR_10Q2, "accessionNumber": "0001104659-26-099999", "filingDate": "2026-09-15", **later}
+    data = _dlr(tmp_path, monkeypatch, [*_424B2S, filing, _DLR_10Q2, _DLR_10Q1]).fetch_all("DLR")
+    assert data.get("missing_report") == {"form": "10-Q", "accession": "0001104659-26-089296", "filed": "2026-07-31"}
+
+
+def test_the_submissions_keep_the_newest_100_filings_and_the_latest_report_behind_them(tmp_path, monkeypatch):
+    # The handler's other callers (the insiders' Form 4s, the first filing date of a filer without annual figures) read
+    # the newest 100 as before; the latest report comes beside them.
+    submissions = _dlr(tmp_path, monkeypatch, [*_424B2S, _DLR_10Q2, _DLR_10Q1]).get_submissions("0001297996")
+    assert submissions["filings"] == _424B2S[:100]
+    assert submissions["latest_report"] == _DLR_10Q2
+
+
+def test_submissions_cached_before_the_latest_report_was_kept_are_read_as_before(tmp_path, monkeypatch):
+    # A cached submissions file written without "latest_report" (the handler's until BUG-285): its newest 100 are
+    # looked through, as then.
+    handler = _dlr(tmp_path, monkeypatch, [])
+    path = handler._payload_cache_path("submissions", "0001297996")
+    path.write_text(json.dumps({"name": "DIGITAL REALTY TRUST, INC.", "filings": [_DLR_424B7, _DLR_10Q2, _DLR_10Q1]}),
+                    encoding="utf-8")
+    data = handler.fetch_all("DLR")
+    assert data["submissions"]["filings"] == [_DLR_424B7, _DLR_10Q2, _DLR_10Q1]
+    assert data.get("missing_report") == {"form": "10-Q", "accession": "0001104659-26-089296", "filed": "2026-07-31"}
