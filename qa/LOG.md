@@ -2188,3 +2188,20 @@ BUG-284 (P3).
 Gates: ruff ✓ mypy ✓ pytest 2658 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(refresh): a collection names a report the SEC's facts lack, and the refresh retries it (BUG-251)
 Next: BUG-171 (its worker is preparing it), then the open P2s.
+
+## Iteration 120: 2026-10-27 08:59: review (code review 22)
+Picked: code review 22, due after five fixes since review 21 (BUG-247, -267, -179, -251, -279: d5e6ec2..965df0d).
+Did: an opus reviewer, read-only, on `git archive` exports (`qa/evidence/review22.txt`).
+- Holds up: review 21's five probes pass at head and fail at base; the look-ahead oracle finds 0 cells (base 4); the
+  current-liabilities bound's premise holds on all 120 real dates it fires; BUG-179's fill runs leave BLK's and XOM's
+  tables as stored on a copy of the user's DB; BUG-247 small and pinned. Parse time unchanged.
+- No Critical. One Important, I-1: BUG-251's gap check reads the newest 100 filings, which hold no report at eight
+  large filers (JPM, BAC, WFC, C, GS, MS, STT, DELL). I confirmed it in the cache (JPM, GS, DELL: 0 of 100).
+  Recorded as BUG-285 (P2).
+- The minors: M-1, BUG-286 (the bound's latent overlap); M-2, BUG-287 (a fill run's cell-by-cell mix); M-3 and M-5,
+  BUG-288 (unpinned boundaries, doc points); M-4, BUG-289 (the retry bound).
+Evidence: `qa/evidence/review22.txt` (scratch: %LOCALAPPDATA%\stockdb-qa\review22\)
+Result: BUG-285 to BUG-289 opened.
+Gates: ruff ✓ mypy ✓ pytest 2658 passed, 1 skipped (the reviewer's run at 965df0d) | CI: no PR (Q10)
+Commit: (this commit) chore(qa): record code review 22
+Next: BUG-285 (a regression of this loop's own fix), BUG-171 as its worker reports.

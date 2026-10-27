@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 7 · P3 150 · NEEDS-USER 24 · Verified: 118
+**Open:** P0 0 · P1 0 · P2 8 · P3 154 · NEEDS-USER 24 · Verified: 118
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2100,6 +2100,36 @@ Status: OPEN
 Found: iteration 119 (BUG-251's worker, an observation) | Fixed: | Regression test:
 Repro: an import with no command run (a test, a script from a scratch tree) makes the default output and cache folders wherever it runs.
 Expected: folders made when something is written there.   Actual: made at import.
+
+### BUG-285 [P2][GATHER] BUG-251's gap check never sees a report for JPM, BAC, WFC, C, GS, MS, STT or DELL: their newest 100 filings hold no 10-K or 10-Q
+Status: OPEN
+Found: code review 22 (I-1; `qa/evidence/review22.txt`) | Fixed: | Regression test:
+Repro: `sec_handler.report_without_facts` reads the submissions the handler keeps, the newest 100 filings. For these eight the newest 100 are 424B2s, 13Gs, Forms 4 and 144 (checked in the cache: JPM, GS and DELL 0 reports of 100, PG 1), so the check finds no report and says "complete" even with empty companyfacts; USB is days from the same state. (The refresh's SEC step already reads every recent filing.)
+Expected: the latest report of each form looked for in the whole recent feed (tested with a feed full of 424B2s).   Actual: no check at the banks.
+
+### BUG-286 [P3][PARSE] BUG-267's current-liabilities bound can say "held" falsely where its other lines overlap
+Status: OPEN
+Found: code review 22 (M-1) | Fixed: | Regression test:
+Repro: two made-up balance sheets read $200M of short-term debt for $350M at 8471b61 ($350M before it): a combined payables line tagged AccountsPayableCurrent with a note's compensation and taxes inside it, and taxes inside payables-with-accruals (BUG-267's own residual R8). Neither shape occurs in today's data. Firing the bound only where the borrowings with the other lines fit within the current liabilities changes 0 of the 120 real dates and closes the first.
+Expected: the bound fires only on lines that can't overlap.   Actual: latent false "held".
+
+### BUG-287 [P3][STORE] A fill-only run (BUG-179) mixes an older parse's row with a newer one cell by cell
+Status: OPEN
+Found: code review 22 (M-2) | Fixed: | Regression test:
+Repro: a stored LongTermDebt total that already holds the maturities, beside short-term maturities a later parser fills in, gives total debt $12B where both parses say $10B. Needs BLK or XOM, a failed predecessor read and a parser change in between; on the user's copy BLK's and XOM's fill runs leave every financial table as stored.
+Expected: a row from one parse.   Actual: a cell-by-cell mix, until the next good run.
+
+### BUG-288 [P3][QA] Boundaries of the last five fixes no test pins (code review 22's surviving mutants), and small doc points
+Status: OPEN
+Found: code review 22 (M-3, M-5) | Fixed: | Regression test:
+Repro: 5 of the reviewer's 11 boundary mutants survive: BUG-267's exact `b != m` for one line tagged three ways (NI's 600 against 597.7 has no test), the 2% upper side of the quarter guard, the bound's tolerance (equivalent on today's data); BUG-247's zero net income (the mutant would crash on it); `refresh._gap`'s predecessor part. Also: the quarter rule's docstring says "its latest annual report" where the code takes any annual report's "held"; an adoption-day instant (BUG-272) could become a quarter's year end; the refresh's runs query has no LIMIT.
+Expected: tests at each boundary and true docstrings.   Actual: as listed.
+
+### BUG-289 [P3][REFRESH] BUG-251's retry bound counts collections, not time, and a flipping predecessor flag resets it
+Status: OPEN
+Found: code review 22 (M-4) | Fixed: | Regression test:
+Repro: the three retries can be spent a day apart (CLI and web collections count, BUG-281), and `_gap` compares (report, predecessor-failed): a gap whose predecessor read fails and succeeds by turns starts a new count each time, the one path found that could re-collect for ever.
+Expected: retries spread in time and a count that survives a flipping flag.   Actual: as above.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: NEEDS-USER
