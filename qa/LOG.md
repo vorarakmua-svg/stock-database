@@ -2259,3 +2259,19 @@ Result: BUG-171 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2693 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(parsers): a 10-Q's other debt line stands in where its year end matches the annual record (BUG-171)
 Next: BUG-170 merged onto the new parser, then BUG-290.
+
+## Iteration 125: 2026-11-01 23:41: fix (BUG-170, the user's decision)
+Picked: BUG-170: the user said "apply BUG-170 and BUG-171".
+Did: an opus worker merged V3 onto 4e0f131 in the checkout (BUG-267 and BUG-171 had moved the parser), the rule
+unchanged, and re-measured it on DB copies, since the code had moved since the user saw the list.
+- RED: 13 failed; GREEN: all pass. 105 mutants across the parser specs killed (BUG-170's re-run by me).
+- 0 look-ahead cells, D&A included.
+- The re-measured moves equal the approved list: 7 owner-earnings verdicts, 2 historical-value labels, no median.
+  Not verdicts or labels, but new since iteration 116: ORCL's historical value 161.78 to 158.83 (through BUG-171),
+  and TEL's composite 56 to 54.
+- They reach the user's DB at each company's next collection.
+Evidence: `qa/evidence/bug170-{done,red,green,verify-mine}.txt`; the reshaped specs are `qa/evidence/bug170-rerun-*.json`.
+Result: BUG-170 VERIFIED. Three fixes since code review 22 (BUG-285, -171, -170).
+Gates: ruff ✓ mypy ✓ pytest 2714 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): D&A adds the amortization a filing tags apart from its depreciation (BUG-170)
+Next: BUG-290 (its worker is finishing), checked against the new parser.

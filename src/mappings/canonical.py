@@ -300,8 +300,15 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "depreciation_amortization", "Depreciation & Amortization", CASHFLOW, UNIT_USD, DURATION,
+        # A filing's total, else its depreciation alone. A filing that tags its depreciation and its amortization of
+        # intangibles on lines of their own, with no total that can hold them, has the two read as one
+        # DepreciationAndAmortization (AbbVie's FY2025: $8.139B, not its $0.762B of depreciation), and a "total" no
+        # larger than that amortization is its depreciation line (CME's, EME's) (``xbrl_parser._depreciation_combined``,
+        # BUG-170).
         ("DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet",
          "DepreciationAmortizationAndOther", "DepreciationAndAmortization", "Depreciation"),
+        description="Depreciation and amortization: the filing's total, else its depreciation and its amortization of "
+                    "intangibles where it tags them apart.",
     ),
     CanonicalField(
         "stock_based_comp", "Stock-Based Compensation", CASHFLOW, UNIT_USD, DURATION,

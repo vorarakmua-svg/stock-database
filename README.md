@@ -2129,6 +2129,15 @@ numbers SEC filings report:
   FY2025: $9.56B, not $8.30B). Where a filing's cash equivalents and its restricted cash, or a
   clearing house's margin deposits, make up that total, the equivalents are its cash line
   (Intercontinental Exchange's FY2021: $0.61B, not the $148.0B with its margin deposits).
+- **Depreciation and amortization.** D&A is the filing's total. Where a filing shows its
+  depreciation and its amortization of intangibles on lines of their own, with no total that
+  can hold them, it is the two together (AbbVie's FY2025: $8.1B, not its $0.8B of depreciation;
+  EBITDA $23.2B, not $15.8B); the amortization is the cash flow statement's (Intuit's holds the
+  acquired technology's in cost of revenue too). A "total" no larger than that amortization is
+  the filing's depreciation line under a total's tag (CME's $107.5M beside $223.4M), and the two
+  are added too. Each 10-Q and 10-K is read so, so a year's quarters stay on one basis where its
+  10-Qs tag the lines its 10-K does. No other amortization (capitalized software, finance
+  leases) is added: it lies inside the depreciation at one filer and apart at another.
 - **Balance-sheet checkpoints** at every quarter-end (instant facts), full history.
 - **`fiscal_quarter`** (1–4, company calendar) and **`calendar_quarter`** (1–4, calendar)
   are both attached; `calendar_quarter` comes from the SEC frame and is the reliable

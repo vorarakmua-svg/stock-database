@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 8 · P3 159 · NEEDS-USER 24 · Verified: 120
+**Open:** P0 0 · P1 0 · P2 8 · P3 159 · NEEDS-USER 23 · Verified: 121
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1284,8 +1284,8 @@ Root cause: `src/parsers/calculated_metrics.py` `_calculate_levered_fcf` returne
 Notes: On two backup-API copies of the real DB, backfilled with the code before and after: 66 of 127 DCF rows change. Of the 91 applicable, 28 rise by 10% or more and 11 by 25% or more (DE $245.39 to $542.95, T $29.80 to $50.03, D $61.11 to $98.12, AMGN $159.15 to $241.18); 14 fall a little (WDC 0.82x the most), since the 10-year FCF CAGR is now measured on the right series. The median value moves for 24 tickers (0.95x to 1.52x), and two verdicts change, MCD and PFE from expensive to fair (fair 16 to 18, expensive 108 to 106); the median upside goes from -58.3% to -56.1%. The oracle on the fixed copy: level 1, 522 rows, 0 beyond 0.5%; level 2, 487 rows, 8 beyond, all of them the Graham bear cases (BUG-007). The stored `metrics_annual.levered_fcf` (FA tab, screener) keeps its old value until a ticker is re-collected; the DCF reads `free_cash_flow`, so an offline backfill is right at once. The user's DB gets that backfill at M1-9 (`qa/evidence/levfcf-{red,green,oracle-before,oracle-flags,oracle-after,realdata}.txt`).
 
 ### BUG-170 [P2][VALID] D&A misses the amortization of intangibles a filer tags apart: ABBV's $0.76B of about $7.8B
-Status: NEEDS-USER (the fix moves 7 owner-earnings verdicts and 2 historical-value labels, no median or median verdict; recommended: V3, prepared)
-Found: build iteration 5 via M1-4 (the valuation history's EV/EBITDA against Yahoo's) | Fixed: | Regression test:
+Status: VERIFIED (iteration 125; applied at the user's decision, 2026-11-01)
+Found: build iteration 5 via M1-4 (the valuation history's EV/EBITDA against Yahoo's) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (22 items with the guards; `_depreciation_combined`)
 Repro: `financials_annual` / `financials_ttm`, ABBV FY2025: `depreciation_amortization` $0.76B. ABBV files `Depreciation` and, apart, `AmortizationOfIntangibleAssets` (about $7B a year, in `unmapped_facts`); DHR likewise ($0.75B of about $2.4B).
 Expected: D&A = depreciation + amortization of intangibles when the filer tags no combined total (Yahoo's EBITDA for ABBV is $30.76B).   Actual: EBITDA = operating income + depreciation only, $17.65B, so EBITDA, EV/EBITDA and debt/EBITDA read high or low by the missing amortization, and so does owner earnings' D&A.
 Root cause: `src/mappings/canonical.py` `depreciation_amortization` takes the first of DepreciationDepletionAndAmortization, DepreciationAmortizationAndAccretionNet, DepreciationAmortizationAndOther, DepreciationAndAmortization and Depreciation; `Depreciation` alone is a component, and AmortizationOfIntangibleAssets is mapped nowhere.

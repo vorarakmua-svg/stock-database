@@ -606,6 +606,75 @@ def _current_debt_combined(us_gaap: Dict[str, Any], combined: Dict[Tuple[str, st
     return out
 
 
+#: The depreciation alone, which D&A reads after its totals (``canonical.py``), and those totals in its order.
+_DEPRECIATION = "Depreciation"
+_DA_TOTALS = tuple(tag for tag in _FIELDS["depreciation_amortization"].tags if tag != _DEPRECIATION)
+#: A filing's amortization of intangibles beside its depreciation: the cash flow statement's add-back, which can hold
+#: the amortization in cost of revenue too (INTU's acquired technology), else the intangibles' own figure.
+_AMORTIZATION = ("AdjustmentForAmortization", "AmortizationOfIntangibleAssets")
+#: The tag the two enter as: the last-ranked total, so a filing's own total of another tag outranks it, and of two
+#: filings' DepreciationAndAmortization for a year the later one stands, as for any restated figure.
+_DA_COMBINED = "DepreciationAndAmortization"
+
+
+def _by_period(us_gaap: Dict[str, Any], tag: str) -> Dict[Tuple[str, str, str], Dict[str, Any]]:
+    """A tag's dollar facts over a period, by filing and period: ``{(accn, start, end): fact}``."""
+    out: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for e in us_gaap.get(tag, {}).get("units", {}).get("USD", []):
+        if e.get("accn") and e.get("start") and e.get("end") and isinstance(e.get("val"), (int, float)):
+            out.setdefault((e["accn"], e["start"], e["end"]), e)
+    return out
+
+
+def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+    """*us_gaap* with one DepreciationAndAmortization fact of a filing's depreciation and its amortization of
+    intangibles on each period it tags them on lines of their own, with no total that can hold them.
+
+    D&A reads a period's first total, else Depreciation, and AbbVie's cash flow statement shows its depreciation ($762M
+    for FY2025) and its amortization of intangible assets ($7.377B) apart, with no total: its D&A was the depreciation
+    alone (BUG-170). The amortization is the cash flow statement's (``_AMORTIZATION``); a figure at or below zero is
+    none. A total at least as large as it is the filing's D&A and stays, as most are (DHR's FY2023 $2.166B, its $675M of
+    depreciation and $1.491B of amortization). A total no larger can't hold it: it is the depreciation line under a
+    total's tag (CME's $107.5M beside $223.4M of amortization; EME's, equal to its depreciation), and is set aside, so
+    another total of the filing that can hold it is read (MCK's), and with none the D&A is the depreciation, else that
+    line, plus the amortization. No other amortization joins: capitalized software's is inside the depreciation at one
+    filer (EXPE's) and apart at another. Each filing's periods are judged alone, so the annual record, the quarters
+    (the 10-Qs' figures to date) and each vintage read the same figures."""
+    amortization: Dict[Tuple[str, str, str], float] = {}
+    for tag in _AMORTIZATION:
+        for key, e in _by_period(us_gaap, tag).items():
+            amortization.setdefault(key, e["val"])
+    amortization = {key: value for key, value in amortization.items() if value > 0}
+    if not amortization:
+        return us_gaap
+    depreciation = _by_period(us_gaap, _DEPRECIATION)
+    totals = {tag: _by_period(us_gaap, tag) for tag in _DA_TOTALS}
+    aside: Dict[str, Set[Tuple[str, str, str]]] = defaultdict(set)
+    added: List[Dict[str, Any]] = []
+    for key, part in amortization.items():
+        here = [(tag, by_key[key]) for tag, by_key in totals.items() if key in by_key]
+        low = [(tag, e) for tag, e in here if 0 < e["val"] <= part]
+        for tag, _ in low:
+            aside[tag].add(key)
+        if len(low) < len(here):
+            continue  # a total that can hold the amortization
+        line = depreciation.get(key) or (low[0][1] if low else None)
+        if line is not None:
+            added.append({**line, "val": line["val"] + part})
+    if not aside and not added:
+        return us_gaap
+    out = dict(us_gaap)
+    for tag, keys in aside.items():
+        units = out[tag].get("units", {})
+        out[tag] = {**out[tag], "units": {**units, "USD": [
+            e for e in units.get("USD", []) if (e.get("accn"), e.get("start"), e.get("end")) not in keys]}}
+    if added:
+        body = out.get(_DA_COMBINED, {"units": {}})
+        units = body.get("units", {})
+        out[_DA_COMBINED] = {**body, "units": {**units, "USD": units.get("USD", []) + added}}
+    return out
+
+
 def _filer_facts(facts: Dict[str, Any], view: str) -> Dict[str, Any]:
     """A filer's us-gaap facts as the extractions of *view* read them, in this order: its dollar filings', the
     balance-sheet-only tags on their balance sheets' dates, less the total with restricted cash where a filing's cash
@@ -613,11 +682,13 @@ def _filer_facts(facts: Dict[str, Any], view: str) -> Dict[str, Any]:
     figure should stand (judged on DebtCurrent as filed); then, judged on those facts as filed, the borrowings and the
     maturities that view's records read as one DebtCurrent where a filing tags none (``_current_debt_combinations``),
     DebtCurrent before a refinancing set aside, 0.0 for the CommercialPaper the short-term total that view's record
-    reads on its date holds (those combinations among them), and last the combinations themselves."""
+    reads on its date holds (those combinations among them), the combinations themselves, and last the depreciation
+    and the amortization of intangibles as one D&A figure where the filing tags no total that can hold them."""
     totals = _debt_totals_set_aside(_net_outflows_as_paid(_cash_totals_set_aside(_on_balance_sheet_dates(
         _dollar_filings(facts.get("facts", {}).get("us-gaap", {}))))))
     combined, held_by_totals = _current_debt_combinations(totals, view)
-    return _current_debt_combined(_current_debt_set_aside(totals, view, frozenset(combined)), combined, held_by_totals)
+    return _depreciation_combined(_current_debt_combined(_current_debt_set_aside(totals, view, frozenset(combined)),
+                                                         combined, held_by_totals))
 
 
 #: The quarterly reports, whose balance sheets are a quarter's: a 10-K's year end is the annual record's.

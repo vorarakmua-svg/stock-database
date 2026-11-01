@@ -5,6 +5,7 @@ import pytest
 from src.exporters.sqlite_store import SQLiteStore
 from src.models.stock_data import StockData
 from src.parsers.calculated_metrics import CalculatedMetrics
+from src.parsers.ttm import compute_ttm
 from src.parsers.xbrl_parser import XBRLParser, explain_no_annual_financials, explain_stale_annual_financials
 from src.query.asof import AsOfReader
 from tests.conftest import usd
@@ -1532,6 +1533,175 @@ def test_an_instruments_carrying_amount_is_not_the_years_debt():
     # DebtInstrumentCarryingAmount is often one instrument's, on days with no balance sheet: SLB's $0.5B note at
     # 2020-12-31 beside some $16B of debt, BSX's and HWM's debt-only quarters that cost them seven trailing years.
     assert _year_end_debt(DebtInstrumentCarryingAmount=0.5e9) == (None, None)
+
+
+DEPRECIATION, INTANGIBLES, AMORTIZATION = "Depreciation", "AmortizationOfIntangibleAssets", "AdjustmentForAmortization"
+DDA, DA = "DepreciationDepletionAndAmortization", "DepreciationAndAmortization"
+
+
+def _da_year(filing=_K10, **tagged):
+    """A 10-K's FY2025 cash flow statement holding the given tags (tag=value)."""
+    return {"facts": {"us-gaap": {tag: {"units": {"USD": [usd(val, "2025-01-01", "2025-12-31", **filing)]}}
+                                  for tag, val in tagged.items()}}}
+
+
+def _da(period):
+    """A period's D&A as (value, tag)."""
+    return period.get("depreciation_amortization"), period.get("_source_tags", {}).get("depreciation_amortization")
+
+
+def _da_records(facts, filed="2026-02-12"):
+    """FY2025's D&A in the annual record and in the vintage filed on *filed*."""
+    parser = XBRLParser()
+    return [_da(parser.extract_annual_financials(facts).get("2025", {})),
+            _da(parser.extract_annual_vintages(facts).get("2025", {}).get(filed, {}))]
+
+
+def test_the_depreciation_and_the_amortization_of_intangibles_apart_are_the_years_d_and_a():
+    # BUG-170 (build iteration 5, M1-4): D&A read the first of four totals, else Depreciation, and AbbVie's cash flow
+    # statement shows its depreciation ($762M for FY2025) and its amortization of intangible assets ($7.377B) on lines
+    # of their own, with no total: D&A was the depreciation alone (88 filers at 715 years), and EBITDA $15.84B, not
+    # $23.21B.
+    facts = _da_year(OperatingIncomeLoss=15075e6, **{DEPRECIATION: 762e6, INTANGIBLES: 7377e6})
+    assert _da_records(facts) == [(8139e6, DA)] * 2
+    assert CalculatedMetrics().calculate_all(XBRLParser().extract_annual_financials(facts)["2025"])["ebitda"] == 23214e6
+
+
+@pytest.mark.parametrize("tagged, da", [
+    # INTU's FY2025: the cash flow statement's amortization, $637M, is that of the acquired technology in cost of
+    # revenue too; the other acquired intangibles' alone ($481M) are AmortizationOfIntangibleAssets.
+    ({DEPRECIATION: 172e6, INTANGIBLES: 481e6, AMORTIZATION: 637e6}, 809e6),
+    # BRO's FY2025: the amortization tagged only as the cash flow statement's.
+    ({DEPRECIATION: 55e6, AMORTIZATION: 312e6}, 367e6),
+])
+def test_the_cash_flow_statements_amortization_comes_first(tagged, da):
+    # Where a filing tags both, its own total of other years is the depreciation and the cash flow statement's
+    # figure in 308 filing-years, and the intangibles' in 116.
+    assert _da_records(_da_year(**tagged)) == [(da, DA)] * 2
+
+
+def _da_quarters(*rungs):
+    """Year-to-date rungs, each (start, end, form, filed, {tag: value}), as a filer's 10-Qs and 10-Ks tag them, with
+    a balance sheet on each end; the quarters' and the trailing years' D&A by end."""
+    us_gaap = {"Assets": {"units": {"USD": []}}}
+    for start, end, form, filed, tagged in rungs:
+        filing = dict(fy=int(filed[:4]), fp="FY" if form == "10-K" else "Q", form=form, filed=filed)
+        us_gaap["Assets"]["units"]["USD"].append(usd(1e12, None, end, **filing))
+        for tag, val in tagged.items():
+            us_gaap.setdefault(tag, {"units": {"USD": []}})["units"]["USD"].append(usd(val, start, end, **filing))
+    quarters = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": us_gaap}})
+    ttm = compute_ttm(quarters)
+    return ({end: q.get("depreciation_amortization") for end, q in sorted(quarters.items())},
+            {end: t.get("depreciation_amortization") for end, t in sorted(ttm.items())})
+
+
+def test_a_years_quarters_and_trailing_years_read_the_10qs_parts_together():
+    # AbbVie's 10-Qs tag the depreciation and the amortization year to date too: its quarters were the depreciation
+    # alone, and the trailing year to Q1 2025 $762M of $8.351B.
+    s24, s25 = "2024-01-01", "2025-01-01"
+    quarters, ttm = _da_quarters(
+        (s24, "2024-03-31", "10-Q", "2024-05-03", {DEPRECIATION: 183e6, INTANGIBLES: 1891e6}),
+        (s24, "2024-06-30", "10-Q", "2024-08-02", {DEPRECIATION: 367e6, INTANGIBLES: 3838e6}),
+        (s24, "2024-09-30", "10-Q", "2024-11-01", {DEPRECIATION: 558e6, INTANGIBLES: 5726e6}),
+        (s24, "2024-12-31", "10-K", "2025-02-14", {DEPRECIATION: 764e6, INTANGIBLES: 7622e6}),
+        (s25, "2025-03-31", "10-Q", "2025-05-02", {DEPRECIATION: 181e6, INTANGIBLES: 1858e6}))
+    assert quarters == {"2024-03-31": 2074e6, "2024-06-30": 2131e6, "2024-09-30": 2079e6, "2024-12-31": 2102e6,
+                        "2025-03-31": 2039e6}
+    assert ttm == {"2024-12-31": 8386e6, "2025-03-31": 8351e6}
+
+
+@pytest.mark.parametrize("ends, to_date, year_end, quarters", [
+    # DHR's FY2022: its 10-Qs tag the depreciation and the amortization, its 10-K the total ($2.132B, the two
+    # together): the fourth quarter was the total less nine months of depreciation alone, $1.595B.
+    (("2022-04-01", "2022-07-01", "2022-09-30", "2022-12-31"),
+     ((179e6, 386e6), (358e6, 759e6), (537e6, 1120e6)), {DDA: 2132e6, DEPRECIATION: 698e6, INTANGIBLES: 1434e6},
+     (565e6, 552e6, 540e6, 475e6)),
+    # CME's FY2025: its 10-K tags its depreciation line as the total ($107.5M) beside $223.4M of amortization, so the
+    # fourth quarter would go below zero beside 10-Qs that read both.
+    (("2025-03-31", "2025-06-30", "2025-09-30", "2025-12-31"),
+     ((27e6, 55e6), (55e6, 111e6), (81e6, 168e6)), {DA: 107.5e6, INTANGIBLES: 223.4e6}, (82e6, 84e6, 83e6, 81.9e6)),
+])
+def test_a_fourth_quarter_reads_the_10k_on_the_10qs_basis(ends, to_date, year_end, quarters):
+    start = ends[0][:4] + "-01-01"
+    rungs = [(start, end, "10-Q", f"{end[:4]}-{int(end[5:7]) + 1:02d}-25", {DEPRECIATION: d, INTANGIBLES: a})
+             for end, (d, a) in zip(ends, to_date)]
+    found, _ = _da_quarters(*rungs, (start, ends[3], "10-K", f"{int(ends[3][:4]) + 1}-02-20", year_end))
+    assert found == dict(zip(ends, quarters))
+
+
+@pytest.mark.parametrize("tagged, da", [
+    # CME's FY2025 10-K tags its depreciation line DepreciationAndAmortization ($107.5M) beside $223.4M of
+    # amortization of purchased intangibles, and no Depreciation.
+    ({DA: 107.5e6, INTANGIBLES: 223.4e6}, 330.9e6),
+    # EME's FY2023: its depreciation line tagged as the total and as the depreciation ($51.8M), the amortization of
+    # identifiable intangible assets ($67.1M) apart.
+    ({DDA: 51.8e6, DEPRECIATION: 51.8e6, INTANGIBLES: 67.1e6}, 118.9e6),
+    # GPN's FY2023: a $1,141.9M "total" beside $458.2M of depreciation and $1,318.5M of amortization.
+    ({DDA: 1141.9e6, DEPRECIATION: 458.2e6, INTANGIBLES: 1318.5e6}, 1776.7e6),
+    # NDSN's FY2025: the total tagged with the amortization's figure ($79.3M), beside $71.3M of depreciation.
+    ({DDA: 79.3e6, DEPRECIATION: 71.3e6, INTANGIBLES: 79.3e6}, 150.6e6),
+])
+def test_a_total_no_larger_than_the_amortization_beside_it_is_the_depreciation_line(tagged, da):
+    # A total can't be smaller than a part it holds: such a "total" is the filing's depreciation line under a total's
+    # tag, its amortization on a line of its own (Yahoo's D&A is the two in all 35 such years it covers).
+    assert _da_records(_da_year(**tagged)) == [(da, DA)] * 2
+
+
+def test_of_two_totals_the_one_that_can_hold_the_amortization_is_read():
+    # MCK's FY2025 10-K: DepreciationDepletionAndAmortization is its depreciation line ($272M),
+    # DepreciationAndAmortization the cash flow statement's total ($636M), with $394M of amortization: the
+    # first-ranked tag read $272M.
+    tagged = {DDA: 272e6, DA: 636e6, AMORTIZATION: 394e6, INTANGIBLES: 226e6}
+    assert _da_records(_da_year(**tagged)) == [(636e6, DA)] * 2
+
+
+@pytest.mark.parametrize("tagged, da", [
+    # DHR's FY2023: the total ($2.166B) is its depreciation ($675M) and amortization ($1.491B), each tagged too.
+    ({DDA: 2166e6, DEPRECIATION: 675e6, INTANGIBLES: 1491e6}, (2166e6, DDA)),
+    # BBY's FY2025: its total tagged as the depreciation too ($866M), the $21M of amortization inside it.
+    ({DDA: 866e6, DEPRECIATION: 866e6, INTANGIBLES: 21e6}, (866e6, DDA)),
+    # FDX's FY2025: the total beside the amortization, no depreciation figure.
+    ({DDA: 4264e6, INTANGIBLES: 48e6}, (4264e6, DDA)),
+    # A total tagged DepreciationAndAmortization above the depreciation and amortization beside it ($738M, $508M and
+    # $120M: NOW's FY2025, whose total holds other amortization too).
+    ({DA: 738e6, DEPRECIATION: 508e6, INTANGIBLES: 120e6}, (738e6, DA)),
+])
+def test_a_total_that_can_hold_the_amortization_stays_the_years_d_and_a(tagged, da):
+    # The amortization a filer tags beside its total is mostly a note's figure inside it (4,644 years at 372 filers):
+    # added to the total, it counted twice.
+    assert _da_records(_da_year(**tagged)) == [da] * 2
+
+
+@pytest.mark.parametrize("tagged, da", [
+    # GOOGL's FY2025: its depreciation alone; the finance leases' amortization is a note's.
+    ({DEPRECIATION: 21136e6, "FinanceLeaseRightOfUseAssetAmortization": 553e6}, (21136e6, DEPRECIATION)),
+    # EXPE's FY2017: its depreciation holds the capitalized software's amortization ($398M), the intangibles' apart.
+    ({DEPRECIATION: 614e6, INTANGIBLES: 275e6, "CapitalizedComputerSoftwareAmortization1": 398e6}, (889e6, DA)),
+    # A negative figure under the amortization's tag is no amortization (F's FY2017, -$669M).
+    ({DEPRECIATION: 9241e6, INTANGIBLES: -669e6}, (9241e6, DEPRECIATION)),
+    # The amortization alone is no D&A (27 filers' 173 years: banks', insurers').
+    ({"OperatingIncomeLoss": 900e6, INTANGIBLES: 34.4e6}, (None, None)),
+])
+def test_only_the_amortization_of_intangibles_joins_the_depreciation(tagged, da):
+    # Other amortization is inside the depreciation at one filer and apart at another, so none is added.
+    assert _da_records(_da_year(**tagged)) == [da] * 2
+
+
+@pytest.mark.parametrize("earlier, later, da", [
+    # HUM's FY2018 10-K tags its depreciation also as the total ($444M), beside $90M of amortization; its FY2019 10-K
+    # tags the two apart.
+    ({DA: 444e6, DEPRECIATION: 444e6, INTANGIBLES: 90e6}, {DEPRECIATION: 444e6, INTANGIBLES: 90e6}, 534e6),
+    # and the other way about: a later filing's total restates an earlier filing's two figures
+    ({DEPRECIATION: 410e6, INTANGIBLES: 75e6}, {DA: 480e6, DEPRECIATION: 410e6, INTANGIBLES: 75e6}, 480e6),
+])
+def test_a_later_filings_d_and_a_restates_an_earlier_ones(earlier, later, da):
+    # The sum is the filing's DepreciationAndAmortization, so the latest filing's figure for the year stands, as for any
+    # restated figure: INTC's FY2018-19 read a $200M "total" its later 10-Ks replace with $9.085B and $10.826B.
+    facts = _da_year(**earlier)
+    for tag, val in later.items():
+        facts["facts"]["us-gaap"].setdefault(tag, {"units": {"USD": []}})["units"]["USD"].append(
+            usd(val, "2025-01-01", "2025-12-31", fy=2026, fp="FY", form="10-K", filed="2027-02-18"))
+    assert _da(XBRLParser().extract_annual_financials(facts)["2025"]) == (da, DA)
 
 
 def _outflow_quarters(tag, field, values, start="2008-01-01", ends=("2008-03-31", "2008-06-30", "2008-09-30",
