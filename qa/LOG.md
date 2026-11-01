@@ -2247,3 +2247,15 @@ Prepared and waiting for the user: BUG-170 (%LOCALAPPDATA%\stockdb-qa\bug170) an
 diffs with git apply); BUG-160/258 (option A'; no scheduled task until decided); BUG-245, BUG-246, Q16, Q17.
 Next on resume: the user's decisions, then BUG-290, then the open P2s oldest first.
 
+## Iteration 124: 2026-11-01 23:13: fix (BUG-171, the user's decision)
+Picked: BUG-171: the user said "apply BUG-170 and BUG-171".
+Did: applied the prepared diffs to the checkout, the tests first.
+- RED: 8 failed, 214 passed. GREEN: 222 passed.
+- 31 mutants and the five earlier parser specs re-run by me.
+- As measured in iteration 121: 220 quarters at 35 filers filled, no annual or vintage cell; AXON's label near to far
+  above, at its next collection.
+Evidence: `qa/evidence/bug171-{investigation,red,green,verify-mine}.txt`
+Result: BUG-171 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2693 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): a 10-Q's other debt line stands in where its year end matches the annual record (BUG-171)
+Next: BUG-170 merged onto the new parser, then BUG-290.

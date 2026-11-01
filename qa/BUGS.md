@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 8 · P3 159 · NEEDS-USER 25 · Verified: 119
+**Open:** P0 0 · P1 0 · P2 8 · P3 159 · NEEDS-USER 24 · Verified: 120
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1296,8 +1296,8 @@ For the user: valuation_summary and valuation_indicators identical; owner earnin
 Also: the Expected line's Yahoo EBITDA for ABBV ($30.76B) is Yahoo's normalized figure; the fix gives ABBV's FY2025 EBITDA $23.21B on Yahoo's own cash-flow D&A ($8.139B). With the fix, GILD's current EV/EBITDA reads 825 (a barely positive trailing EBITDA beside an IPR&D-driven operating loss: right arithmetic), and unmapped_facts still lists the two amortization tags (adding them to the mapped set would drop ~400 filers' rows; left as it is). Residuals: BUG-274 to BUG-276.
 
 ### BUG-171 [P2][VALID] The 10-Q quarters lack the long-term debt the 10-Ks report: TMUS's $81B shows only in Q4
-Status: NEEDS-USER (the fix moves one historical-value label, AXON near to far above, and no median, verdict or model value; recommended: apply, prepared)
-Found: build iteration 5 via M1-4 | Fixed: | Regression test:
+Status: VERIFIED (iteration 124; applied at the user's decision, 2026-11-01)
+Found: build iteration 5 via M1-4 | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (26 items: 8 regressions, 18 guards)
 Repro: `financials_quarterly`, TMUS: `long_term_debt` is NULL for 2025-Q1 to Q3 and 2026-Q1 and Q2, and $81.15B at 2025-12-31 (the 10-K). The latest quarter lacks it for CAT, CVX, ORCL and TMUS while their latest year has it ($30.7B, $39.8B, $122.3B, $81.1B).
 Expected: each quarter's long-term debt from its 10-Q.   Actual: NULL, so a quarter's total debt (`CalculatedMetrics._calculate_total_debt`) is short-term debt alone, and TMUS's enterprise value read $174B against Yahoo's $287B.
 Root cause: not yet traced. Likely the 10-Qs tag the long-term debt under concepts the quarterly resolution doesn't take (BUG-141's set-aside, or the noncurrent fallbacks), to be checked against the filings.

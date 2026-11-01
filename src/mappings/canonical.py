@@ -229,7 +229,9 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         # gives way to its noncurrent figure where its current debt holds the current maturities
         # or the total is below it (``xbrl_parser._debt_totals_set_aside``, BUG-141). Not
         # DebtInstrumentCarryingAmount: often one instrument's, on days with no balance sheet
-        # (SLB's $0.5B note at 2020-12-31).
+        # (SLB's $0.5B note at 2020-12-31). A 10-Q that tags none of these reads its line under
+        # another concept where its year-end column shows the annual record's figure (ORCL's
+        # LongTermNotesAndLoans; ``xbrl_parser._long_term_debt_lines``, BUG-171).
         ("LongTermDebtNoncurrent", "LongTermDebt", "LongTermDebtAndCapitalLeaseObligations",
          "LongTermNotesPayable", "UnsecuredLongTermDebt", "ConvertibleLongTermNotesPayable",
          "NotesPayable"),

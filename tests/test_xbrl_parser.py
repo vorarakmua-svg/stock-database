@@ -1142,6 +1142,241 @@ def test_a_total_beside_a_later_10ks_noncurrent_figure_keeps_no_year_end():
     assert _total_debt(_debt_year(facts)) == pytest.approx(0.707472e9)
 
 
+# BUG-171 (build M1-4): a 10-Q's long-term debt under a concept the field doesn't map.
+
+_INCLUDING = "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"
+
+
+def _balance_sheets(*filings):
+    """``_filings`` with total assets on each balance sheet, as every filing tags them, so each date is a checkpoint."""
+    return _filings(*((form, filed, end, {"Assets": 200.0e9, **tagged}) for form, filed, end, tagged in filings))
+
+
+def _quarter_debt(facts, end):
+    """The quarterly checkpoint's long-term debt on *end* as (value, tag)."""
+    quarter = XBRLParser().extract_quarterly_financials(facts)[end]
+    return quarter.get("long_term_debt"), quarter["_source_tags"].get("long_term_debt")
+
+
+def test_a_10qs_long_term_debt_under_another_concept_is_its_quarters():
+    # ORCL's 10-Qs tag their noncurrent notes as LongTermNotesAndLoans, its 10-Ks as LongTermNotesPayable, so every
+    # quarter had no long-term debt: $117.712B at 2026-08-31. The 10-Q's year-end column shows the 10-K's figure under
+    # that concept, which makes it the 10-Q's long-term debt line.
+    facts = _balance_sheets(
+        ("10-K", "2026-06-22", "2026-05-31", dict(LongTermNotesPayable=122.342e9, DebtCurrent=7.199e9)),
+        ("10-Q", "2026-09-11", "2026-05-31", dict(LongTermNotesAndLoans=122.342e9, NotesPayableCurrent=7.199e9)),
+        ("10-Q", "2026-09-11", "2026-08-31", dict(LongTermNotesAndLoans=117.712e9, NotesPayableCurrent=7.625e9)))
+    assert _quarter_debt(facts, "2026-08-31") == (117.712e9, "LongTermNotesAndLoans")
+
+
+def test_a_10q_concept_whose_year_end_figure_isnt_the_10ks_is_no_line():
+    # TMUS's 10-Qs tag their long-term debt only under their own concept, which the SEC's company facts don't carry:
+    # their finance leases are no stand-in for the $81.147B the year end shows.
+    facts = _balance_sheets(
+        ("10-K", "2026-02-11", "2025-12-31", dict(LongTermDebtNoncurrent=81.147e9, ShortTermBorrowings=5.135e9)),
+        ("10-Q", "2026-04-28", "2025-12-31", dict(FinanceLeaseLiabilityNoncurrent=1.107e9,
+                                                  ShortTermBorrowings=5.135e9)),
+        ("10-Q", "2026-04-28", "2026-03-31", dict(FinanceLeaseLiabilityNoncurrent=1.024e9,
+                                                  ShortTermBorrowings=2.238e9)))
+    assert _quarter_debt(facts, "2026-03-31") == (None, None)
+
+
+@pytest.mark.parametrize("noncurrent", ["LongTermDebtAndCapitalLeaseObligations", "LongTermDebtNoncurrent"])
+def test_a_10q_line_the_10k_shows_without_its_current_maturities_is_read_beside_short_term_debt(noncurrent):
+    # CVX's 10-Qs tag the balance sheet's long-term debt as LongTermDebtAndCapitalLeaseObligationsIncludingCurrent-
+    # Maturities; its FY2024 10-K tags the same $20.135B as LongTermDebtAndCapitalLeaseObligations (any noncurrent
+    # concept alike) beside $4.012B of current maturities its short-term debt holds, so the line holds none. Q1 2025's
+    # total debt read $4.076B, its short-term debt alone, where its balance sheet has $29.681B.
+    facts = _balance_sheets(
+        ("10-K", "2025-02-21", "2024-12-31", {noncurrent: 20.135e9, _INCLUDING: 20.135e9,
+                                              "DebtCurrent": 4.406e9, "LongTermDebtCurrent": 4.012e9}),
+        ("10-Q", "2025-05-08", "2024-12-31", {_INCLUDING: 20.135e9, "ShortTermBorrowings": 4.406e9}),
+        ("10-Q", "2025-05-08", "2025-03-31", {_INCLUDING: 25.605e9, "ShortTermBorrowings": 4.076e9}))
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2025-03-31"]
+    assert (quarter.get("long_term_debt"), _total_debt(quarter)) == (25.605e9, pytest.approx(29.681e9))
+
+
+def test_a_10q_line_that_can_hold_the_current_maturities_isnt_read_beside_short_term_debt():
+    # Kenvue's 10-Qs tag the same concept as a total: its 2024-09-29 figure, $7.803B, holds $750M of maturities its
+    # $1.648B of DebtCurrent holds too (its own total $8.701B). Its year end showed no maturities, and its 10-K's figure
+    # there is a total (LongTermDebt), so nothing tells the line apart from a total: unknown rather than $0.75B high.
+    facts = _balance_sheets(
+        ("10-K", "2024-03-01", "2023-12-31", dict(LongTermDebt=7.687e9, DebtCurrent=0.599e9, LongTermDebtCurrent=0.0,
+                                                  CommercialPaper=0.600e9)),
+        ("10-Q", "2024-11-07", "2023-12-31", {_INCLUDING: 7.687e9, "DebtCurrent": 0.599e9, "LongTermDebtCurrent": 0.0}),
+        ("10-Q", "2024-11-07", "2024-09-29", {_INCLUDING: 7.803e9, "DebtCurrent": 1.648e9,
+                                              "LongTermDebtCurrent": 0.750e9}))
+    assert _quarter_debt(facts, "2024-09-29") == (None, None)
+
+
+def test_a_10q_line_beside_a_10k_total_isnt_read_beside_short_term_debt():
+    # FICO's FY2014 10-K tags its senior notes, $447M with $71M due within the year, as LongTermDebt beside the
+    # maturities; its 10-Qs tag the same $447M as SeniorNotes. Beside the Q1 FY2015 10-Q's $231M of DebtCurrent, which
+    # holds the $71M, the line would count them twice.
+    facts = _balance_sheets(
+        ("10-K", "2014-11-10", "2014-09-30", dict(LongTermDebt=0.447e9, DebtCurrent=0.170e9,
+                                                  LongTermDebtCurrent=0.071e9)),
+        ("10-Q", "2015-01-29", "2014-09-30", dict(SeniorNotes=0.447e9, DebtCurrent=0.170e9)),
+        ("10-Q", "2015-01-29", "2014-12-31", dict(SeniorNotes=0.447e9, DebtCurrent=0.231e9)))
+    assert _quarter_debt(facts, "2014-12-31") == (None, None)
+
+
+def test_notes_that_came_due_within_the_year_arent_read_beside_short_term_debt():
+    # SWKS's 10-Q of 2011-07-01: its convertible notes ($25M, noncurrent at the year end, where no maturities show: 0
+    # here) are now its DebtCurrent; the 10-Q tags them as ConvertibleNotesPayable in both columns.
+    facts = _balance_sheets(
+        ("10-K", "2010-11-24", "2010-10-01", dict(ConvertibleLongTermNotesPayable=0.025e9, DebtCurrent=0.050e9,
+                                                  LongTermDebtCurrent=0.0)),
+        ("10-Q", "2011-08-09", "2010-10-01", dict(ConvertibleNotesPayable=0.025e9, DebtCurrent=0.050e9)),
+        ("10-Q", "2011-08-09", "2011-07-01", dict(ConvertibleNotesPayable=0.026e9, DebtCurrent=0.026e9)))
+    assert _quarter_debt(facts, "2011-07-01") == (None, None)
+
+
+def test_a_10q_line_a_noncurrent_concept_is_read_beside_short_term_debt():
+    # ORCL's Q2 FY2017 10-Q: LongTermNotesAndLoans, a noncurrent concept, beside $3.838B of DebtCurrent; its FY2016 10-K
+    # shows no maturities apart (its notes due within the year are its DebtCurrent).
+    facts = _balance_sheets(
+        ("10-K", "2016-06-22", "2016-05-31", dict(LongTermNotesPayable=40.105e9, DebtCurrent=3.750e9)),
+        ("10-Q", "2016-12-19", "2016-05-31", dict(LongTermNotesAndLoans=40.105e9, DebtCurrent=3.750e9)),
+        ("10-Q", "2016-12-19", "2016-11-30", dict(LongTermNotesAndLoans=50.489e9, DebtCurrent=3.838e9)))
+    assert _quarter_debt(facts, "2016-11-30") == (50.489e9, "LongTermNotesAndLoans")
+
+
+def test_a_10q_line_named_noncurrent_is_read_beside_short_term_debt():
+    # Block's Q2 2022 10-Q: OtherLongTermDebtNoncurrent beside $460M of current maturities (its FY2021 10-K's $455K of
+    # maturities, left out here, also show the line holds none).
+    facts = _balance_sheets(
+        ("10-K", "2022-02-24", "2021-12-31", dict(LongTermDebtNoncurrent=4.559208e9)),
+        ("10-Q", "2022-08-04", "2021-12-31", dict(OtherLongTermDebtNoncurrent=4.559208e9)),
+        ("10-Q", "2022-08-04", "2022-06-30", dict(OtherLongTermDebtNoncurrent=4.104664e9,
+                                                  LongTermDebtCurrent=0.459984e9)))
+    assert _quarter_debt(facts, "2022-06-30") == (4.104664e9, "OtherLongTermDebtNoncurrent")
+
+
+def test_a_10q_line_beside_no_short_term_debt_is_read():
+    # TYL's FY2025 10-K: its $599.7M of convertible notes, due in 2026, as LongTermDebt; its Q2 2026 10-Q tags them as
+    # ConvertibleDebt at the year end, and its new $1.409B notes so on 2026-06-30, beside short-term debt of 0 (none
+    # tagged, in the filing).
+    facts = _balance_sheets(
+        ("10-K", "2026-02-18", "2025-12-31", dict(LongTermDebt=0.599663e9, LoansPayableCurrent=0.599663e9)),
+        ("10-Q", "2026-07-29", "2025-12-31", dict(ConvertibleDebt=0.599663e9, DebtCurrent=0.599663e9)),
+        ("10-Q", "2026-07-29", "2026-06-30", dict(ConvertibleDebt=1.408691e9, DebtCurrent=0.0)))
+    assert _quarter_debt(facts, "2026-06-30") == (1.408691e9, "ConvertibleDebt")
+
+
+def test_a_10q_line_matches_the_figure_an_annual_report_filed():
+    # IDXX's 10-Qs of 2016 show the year end's $597.085M as SecuredLongTermDebt, as its FY2015 10-K did (LongTermDebt);
+    # its FY2016 10-K restated the year end as $597.1M, the figure the annual record reads.
+    facts = _balance_sheets(
+        ("10-K", "2016-02-17", "2015-12-31", dict(LongTermDebt=0.597085e9)),
+        ("10-K", "2017-02-17", "2015-12-31", dict(LongTermDebt=0.5971e9)),
+        ("10-Q", "2016-04-29", "2015-12-31", dict(SecuredLongTermDebt=0.597085e9)),
+        ("10-Q", "2016-04-29", "2016-03-31", dict(SecuredLongTermDebt=0.600021e9)))
+    assert _quarter_debt(facts, "2016-03-31") == (0.600021e9, "SecuredLongTermDebt")
+
+
+def test_a_year_end_without_long_term_debt_carries_no_line():
+    # NVDA's FY2016 10-K tagged its $1.413B of convertible notes, all due within the year, as LongTermDebt; its FY2017
+    # 10-K restated the year end's long-term debt as 0, which the annual record reads. A 10-Q line that is the first
+    # figure continues no long-term debt of the record's.
+    facts = _balance_sheets(
+        ("10-K", "2016-03-17", "2016-01-31", dict(LongTermDebt=1.413e9)),
+        ("10-K", "2017-03-01", "2016-01-31", dict(LongTermDebt=0.0)),
+        ("10-Q", "2016-05-25", "2016-01-31", dict(ConvertibleDebt=1.413e9)),
+        ("10-Q", "2016-05-25", "2016-05-01", dict(ConvertibleDebt=1.421e9)))
+    assert _quarter_debt(facts, "2016-05-01") == (None, None)
+
+
+def test_a_10qs_comparative_isnt_the_annual_reports_figure():
+    # The line carries the figure a 10-K filed: a 10-Q that restates the year end (its LongTermDebtNoncurrent there,
+    # $650M for the 10-K's $600M) and tags the same $650M as SeniorNotes leaves the quarter to its own concepts.
+    facts = _balance_sheets(
+        ("10-K", "2026-02-12", "2025-12-31", dict(LongTermDebtNoncurrent=0.600e9)),
+        ("10-Q", "2026-04-28", "2025-12-31", dict(LongTermDebtNoncurrent=0.650e9, SeniorNotes=0.650e9)),
+        ("10-Q", "2026-04-28", "2026-03-31", dict(SeniorNotes=0.700e9)))
+    assert _quarter_debt(facts, "2026-03-31") == (None, None)
+
+
+def test_a_zero_an_annual_report_filed_is_no_figure_to_match():
+    # A 10-K's zero for the year end (restated by the next 10-K to $1.0B) isn't a long-term debt figure: a concept the
+    # 10-Q shows at 0 there carries no line.
+    facts = _balance_sheets(
+        ("10-K", "2026-02-12", "2025-12-31", dict(LongTermDebt=0.0)),
+        ("10-K", "2027-02-11", "2025-12-31", dict(LongTermDebt=1.0e9)),
+        ("10-Q", "2026-04-28", "2025-12-31", dict(ConvertibleDebtNoncurrent=0.0)),
+        ("10-Q", "2026-04-28", "2026-03-31", dict(ConvertibleDebtNoncurrent=1.2e9)))
+    assert _quarter_debt(facts, "2026-03-31") == (None, None)
+
+
+def test_a_figure_near_the_year_ends_isnt_its_line():
+    # The 10-Q's year-end figure must be the annual report's: $601.0M beside $600.0M (0.17% apart) is another figure.
+    facts = _balance_sheets(
+        ("10-K", "2026-02-12", "2025-12-31", dict(LongTermDebtNoncurrent=0.600e9)),
+        ("10-Q", "2026-04-28", "2025-12-31", dict(SeniorNotes=0.601e9)),
+        ("10-Q", "2026-04-28", "2026-03-31", dict(SeniorNotes=0.601e9)))
+    assert _quarter_debt(facts, "2026-03-31") == (None, None)
+
+
+@pytest.mark.parametrize("tag", [
+    "SeniorNotesCurrent",  # GPC's 10-Qs: the notes due within the year, as large as the noncurrent ones
+    "ShortTermBankLoansAndNotesPayable",  # short-term debt's own
+    "DebtLongtermAndShorttermCombinedAmount",  # VTR's 10-Qs: its own total, beside its commercial paper
+    "DebtAndCapitalLeaseObligations",  # the filer's debt and leases
+    "DebtInstrumentCarryingAmount",  # often one instrument's (BUG-125)
+    "LongTermDebtFairValue",  # a note's fair value, at par at the year end
+    "Goodwill",  # no debt at all
+])
+def test_a_figure_that_isnt_a_long_term_debt_line_isnt_read(tag):
+    facts = _balance_sheets(
+        ("10-K", "2026-02-12", "2025-12-31", dict(LongTermDebtNoncurrent=0.250e9)),
+        ("10-Q", "2026-04-28", "2025-12-31", {tag: 0.250e9}),
+        ("10-Q", "2026-04-28", "2026-03-31", {tag: 0.300e9}))
+    assert _quarter_debt(facts, "2026-03-31") == (None, None)
+
+
+def test_lines_that_disagree_on_the_quarter_are_no_line():
+    # Two concepts carry the year end's figure but part on the quarter's: which is the line, the filing doesn't say.
+    facts = _balance_sheets(
+        ("10-K", "2026-02-12", "2025-12-31", dict(LongTermDebtNoncurrent=0.600e9)),
+        ("10-Q", "2026-04-28", "2025-12-31", dict(SeniorNotes=0.600e9, OtherLongTermDebt=0.600e9)),
+        ("10-Q", "2026-04-28", "2026-03-31", dict(SeniorNotes=0.600e9, OtherLongTermDebt=0.900e9)))
+    assert _quarter_debt(facts, "2026-03-31") == (None, None)
+
+
+def test_the_latest_10q_showing_the_quarter_decides_it():
+    # TGT's 10-Qs show the year-earlier quarter too: its Q1 FY2016 10-Q restates 2015-05-02's line, which reads as the
+    # checkpoints read every figure, the latest filing's.
+    facts = _balance_sheets(
+        ("10-K", "2015-03-13", "2015-01-31", dict(LongTermDebtNoncurrent=12.705e9)),
+        ("10-K", "2016-03-11", "2016-01-30", dict(LongTermDebtNoncurrent=11.945e9)),
+        ("10-Q", "2015-06-05", "2015-01-31", dict(OtherLongTermDebtNoncurrent=12.705e9)),
+        ("10-Q", "2015-06-05", "2015-05-02", dict(OtherLongTermDebtNoncurrent=12.585e9)),
+        ("10-Q", "2016-06-08", "2016-01-30", dict(OtherLongTermDebtNoncurrent=11.945e9)),
+        ("10-Q", "2016-06-08", "2015-05-02", dict(OtherLongTermDebtNoncurrent=12.600e9)))
+    assert _quarter_debt(facts, "2015-05-02") == (12.600e9, "OtherLongTermDebtNoncurrent")
+
+
+def test_a_quarters_own_long_term_debt_concept_outranks_a_line():
+    # The checkpoints' own reading stands: the 10-Q's LongTermDebt, though its year-end figure isn't the 10-K's and
+    # another concept's is.
+    facts = _balance_sheets(
+        ("10-K", "2026-02-12", "2025-12-31", dict(LongTermDebtNoncurrent=0.600e9)),
+        ("10-Q", "2026-04-28", "2025-12-31", dict(LongTermDebt=0.650e9, SeniorNotes=0.600e9)),
+        ("10-Q", "2026-04-28", "2026-03-31", dict(LongTermDebt=0.700e9, SeniorNotes=0.640e9)))
+    assert _quarter_debt(facts, "2026-03-31") == (0.700e9, "LongTermDebt")
+
+
+def test_a_10ks_year_end_reads_no_line():
+    # A 10-K that tags its debt only under another concept (AIG's FY2010 10-K, OtherLongTermDebt at both year ends)
+    # leaves its year without long-term debt, and the year end's checkpoint stays the annual record's.
+    facts = _balance_sheets(
+        ("10-K", "2010-02-26", "2009-12-31", dict(LongTermDebt=113.298e9)),
+        ("10-K", "2011-02-24", "2009-12-31", dict(OtherLongTermDebt=113.298e9)),
+        ("10-K", "2011-02-24", "2010-12-31", dict(OtherLongTermDebt=85.476e9)))
+    assert XBRLParser().extract_annual_financials(facts)["2010"].get("long_term_debt") is None
+    assert _quarter_debt(facts, "2010-12-31") == (None, None)
+
+
 RESTRICTED = "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
 
 

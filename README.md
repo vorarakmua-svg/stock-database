@@ -526,7 +526,8 @@ Limitations:
 - It isn't available for share classes that the filings and the quote count differently (BRK-B, V, BX;
   Q7), without trailing years (SPCX), or without a quote with a price to check our share count against.
 - Yahoo normalizes EBITDA, so our EV/EBITDA can read apart from Yahoo's (MRK, PFE). A quarter whose 10-Q
-  lacks the long-term debt its 10-Ks report has no EV (BUG-171).
+  long-term debt can't be read has no EV: TMUS's and CAT's 10-Qs tag it only under their own concepts, which
+  the SEC's company facts don't carry (BUG-171).
 
 ### Quality scores
 
@@ -2090,6 +2091,15 @@ numbers SEC filings report:
   figure where the filing's short-term debt holds the current maturities (Boeing's FY2025:
   $45.6B beside $8.5B of current debt, not its $53.8B total, which counted them twice), and
   the filer's total with the maturities where no short-term figure holds them.
+- **Long-term debt in the 10-Qs.** A 10-Q that tags its long-term debt under a concept the field
+  doesn't map is read where its year-end column shows the figure an annual report filed for that
+  year end: Oracle's 10-Qs tag their notes as LongTermNotesAndLoans, its 10-Ks as
+  LongTermNotesPayable ($117.7B at 2026-08-31, where the quarter had none). Beside the quarter's
+  short-term debt only a line that holds no current maturities is read: a noncurrent concept, or one
+  the 10-K shows without them (Chevron's: $25.6B at 2025-03-31, so total debt $29.7B, not its
+  $4.1B of short-term debt alone). A line that may hold them stays unread (Kenvue's 2024 quarters),
+  and so does one under the filer's own concept, which the SEC's company facts don't carry
+  (T-Mobile's since 2024, Caterpillar's): such a quarter has no long-term debt.
 - **Short-term debt and commercial paper.** Short-term debt is the balance sheet's debt due
   within a year. Where a filing shows its short-term borrowings and the current maturities of
   long-term debt apart, with no total of them, it is the two together (Verizon's FY2023: $13.0B
