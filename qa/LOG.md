@@ -2275,3 +2275,16 @@ Result: BUG-170 VERIFIED. Three fixes since code review 22 (BUG-285, -171, -170)
 Gates: ruff ✓ mypy ✓ pytest 2714 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(parsers): D&A adds the amortization a filing tags apart from its depreciation (BUG-170)
 Next: BUG-290 (its worker is finishing), checked against the new parser.
+
+## Iteration 126: 2026-11-02 08:04: BUG-290 measured; it moves a label, so it is the user's
+Picked: BUG-290, resumed once memory allowed (the run stopped on low RAM on 2026-11-01).
+Did: confirmed head4 equals 6334d2a and fix4 differs from it only in the fix's four files, then re-collected the six
+changed tickers offline on two DB copies, ran the engine over all 502 and diffed every table.
+- An all-filer cell scan finds the same six filers; 105 records change, no field outside debt.
+- CPAY's label moves below to near, the only label; no median, verdict or model row. Same outcome as on 4e0f131.
+- 0 look-ahead cells. Mutants: 17 of 17 new, and the older specs killed. The 4 stale in
+  `bug267-bug159` and `bug267-bug161-bug142` are stale on head4 as well; their `bug170-rerun-*` versions, 8 of 8, die.
+Evidence: `qa/evidence/bug290-investigation.txt`; the final outputs are %LOCALAPPDATA%\stockdb-qa\bug290\out\h4_*.
+Result: BUG-290 NEEDS-USER. Nothing applied; the fix stays in scratch.
+Gates: ruff ✓ mypy ✓ pytest 2728 passed, 1 skipped (6334d2a plus the fix) | CI: no PR (Q10)
+Next: the user's decision on BUG-290; meanwhile BUG-248.

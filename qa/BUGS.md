@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 8 · P3 159 · NEEDS-USER 23 · Verified: 121
+**Open:** P0 0 · P1 0 · P2 7 · P3 159 · NEEDS-USER 24 · Verified: 121
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2136,10 +2136,14 @@ Repro: the three retries can be spent a day apart (CLI and web collections count
 Expected: retries spread in time and a count that survives a flipping flag.   Actual: as above.
 
 ### BUG-290 [P2][PARSE] Corpay's FY2021-23 annual records count the current maturities twice: FY2022 total debt $9.35B for $7.04B
-Status: OPEN
+Status: NEEDS-USER (the fix moves 1 historical-value label, no median or verdict; recommended: apply, prepared)
 Found: iteration 121 (BUG-171's investigation) | Fixed: | Regression test:
 Repro: LongTermNotesAndLoans isn't among the noncurrent tags BUG-141/159's rules weigh, so where Corpay tags it as its long-term debt with the current maturities inside it, the maturities are read again as short-term debt. FICO FY2014 has the same shape.
 Expected: each year's total debt as its balance sheet's.   Actual: the maturities twice.
+Measured (iteration 126, on 6334d2a; `qa/evidence/bug290-investigation.txt`): wider than recorded. BUG-141 weighs a LongTermDebt total only against the noncurrent concepts long-term debt reads, so a line under any other concept leaves the total standing beside the maturities. Six filers: Corpay FY2021-25 and its 2025-26 quarters, KMB FY2009-11, FICO FY2013-14, ADP's 2010-12 quarters, JKHY FY2011, a PEG FY2015 vintage.
+Fix prepared (%LOCALAPPDATA%\stockdb-qa\bug290\out, `fix_src.diff`, `fix_tests.diff`, `fix_readme.diff`): four unread concepts (`_DEBT_LINES`) stand in for the total, read as the date's LongTermDebtNoncurrent, only where the line makes up the total with a current figure within 0.5% and BUG-141's holds test passes. 105 records change (11 annual, 40 quarterly, 37 TTM, 17 vintage); no other field, and 0 look-ahead cells. Gates on 6334d2a plus the fix: 2728 passed, 1 skipped. 17 of 17 new mutants killed.
+For the user: valuation_summary, valuations and warning_signs identical. One historical-value label moves: CPAY below to near (historical value $483.87 to $450.00 at $408.46, ratio 0.908 against the 0.90 line). Also CPAY's EPV base $126.14 to $163.98, debt/EBITDA 5.591 to 4.189 and ind_composite 66 to 64; RTX composite 60 to 58 and SPGI ind_composite 50 to 52 through the ranks; magic_formula_rank at 25 tickers; 181 valuation_history rows.
+Left over: FICO FY2012 still double counts ($0.553B for $0.504B), and Corpay FY2018-20 read no long-term debt.
 
 ### BUG-291 [P3][PARSE] Kenvue's FY2024-25 annual records have no long-term debt
 Status: OPEN
