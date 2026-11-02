@@ -84,7 +84,8 @@ def level1_candidates(model: str, a: Dict) -> Dict[str, Triple]:
             out["scenario discount re-clamped" if reclamp else "scenario discount unclamped"] = tuple(vals)
     elif model == "graham":
         m, b = a["multiplier"], a["bvps"]
-        out["spec"] = tuple(math.sqrt(m * a[k] * b) if a[k] > 0 and b > 0 else None
+        # A stored bear EPS of None is a loss year in the window (BUG-007): no Graham number for it.
+        out["spec"] = tuple(math.sqrt(m * a[k] * b) if a[k] is not None and a[k] > 0 and b > 0 else None
                             for k in ("eps_bear", "eps_base", "eps_bull"))
     elif model == "lynch":
         g, cap, lo, hi, eps = a["growth_base"], a["growth_cap"], a["fair_pe_floor"], a["fair_pe_cap"], a["eps_base"]
@@ -144,6 +145,15 @@ def simple_ratio(ratio: float) -> bool:
     """A share split's ratio is a simple fraction (2:1, 3:2, 9:4, 1:8, 10:1); Yahoo's spin-off and merger price
     factors aren't. On the real-data copy all 430 simple factors of 3:2 or more are splits."""
     return any(abs(r * d - round(r * d)) < 1e-9 * max(1.0, r * d) for r in (ratio, 1 / ratio) for d in (1, 2, 3, 4))
+
+
+def quartile(xs: List[float], p: float) -> float:
+    """The inclusive p-quantile: linear between the sorted values, at position (n - 1) x p."""
+    s = sorted(xs)
+    pos = (len(s) - 1) * p
+    lo = int(math.floor(pos))
+    hi = min(lo + 1, len(s) - 1)
+    return s[lo] + (s[hi] - s[lo]) * (pos - lo)
 
 
 def median(xs: List[float]) -> float:
@@ -362,6 +372,13 @@ class Inputs:
         close = row[1]
         if not flagged or row[2]:
             close /= math.prod(f for ex, f in self.yahoo_dividend_factors() if ex > row[0][:10])
+        # BUG-172 (decided 2026-11-02): the close as traded. Yahoo divides every close before a factor that isn't a
+        # share split (a spin-off's, a stock dividend's) by it, up to the last bar it served.
+        served = self.db.execute("select max(date) from price_bars where ticker=?", (self.t,)).fetchone()[0]
+        for day, ratio in self.splits:
+            if ratio and ratio > 0 and abs(ratio - 1) > 1e-9 and not simple_ratio(ratio) \
+                    and row[0][:10] < day[:10] <= str(served)[:10]:
+                close *= ratio
         return close * self.bars_to_price_basis()
 
     def bars_to_price_basis(self) -> float:
@@ -570,7 +587,8 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         latest = basis_by_fy.get(x.annual[-1][0]) if x.annual else None
         if len(mults) < 3 or not latest or latest <= 0:
             return None
-        band = (min(mults), median(mults), max(mults))
+        # BUG-172 (decided 2026-11-02): the band is the multiples' inclusive quartiles (p25, median, p75).
+        band = (quartile(mults, 0.25), median(mults), quartile(mults, 0.75))
         return {"inputs": {"band_low": band[0], "band_median": band[1], "band_high": band[2], "latest_basis": latest,
                            "n_years": len(mults)}, "values": [m * latest for m in band]}
     return None
