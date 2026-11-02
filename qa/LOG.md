@@ -2369,7 +2369,7 @@ Next: BUG-245 (P1, oldest), then BUG-246 and BUG-258 with BUG-160.
 ## Iteration 132: 2026-11-02 20:06: ops
 Picked: Q10's decision (a draft PR, so CI runs), then BUG-245 (P1, oldest).
 Did: opened draft PR #29 against main. Dispatched BUG-245 to an opus worker under the standard brief
-(%LOCALAPPDATA%\stockdb-qa	ools\WORKER_BRIEF.md); BUG-252's worker is still running.
+(%LOCALAPPDATA%\stockdb-qa\tools\WORKER_BRIEF.md); BUG-252's worker is still running.
 Result: CI runs on this branch from this push.
 Gates: no code change | CI: PR #29, first run on this push
 Commit: (this commit) chore(qa): draft PR #29 opened
