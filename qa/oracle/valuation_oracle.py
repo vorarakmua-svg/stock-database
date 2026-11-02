@@ -379,25 +379,26 @@ class Inputs:
             if ratio and ratio > 0 and abs(ratio - 1) > 1e-9 and not simple_ratio(ratio) \
                     and row[0][:10] < day[:10] <= str(served)[:10]:
                 close *= ratio
-        return close * self.bars_to_price_basis()
+        return close * self.bars_to_price_basis(shares_only=True)
 
-    def bars_to_price_basis(self) -> float:
+    def bars_to_price_basis(self, shares_only: bool = False) -> float:
         """The factor that puts the stored bars on the latest price's split basis (VAL-09's per-share consistency).
         Yahoo served the bars on the basis of every split up to their last day, which their history reaches: a split
         between that day and the price's is in one of them only. A later run whose price-history request failed left
-        bars older than a split it stored, beside a price from before it or after it (BUG-094)."""
-        if getattr(self, "_bars_factor", None) is None:
-            served = self.db.execute("select max(date) from price_bars where ticker=?", (self.t,)).fetchone()[0]
-            factor = 1.0
-            if self.priced_on and served:
-                last = str(served)[:10]
-                for date, ratio in self.splits:
-                    if ratio and self.priced_on < date[:10] <= last:
-                        factor *= ratio
-                    elif ratio and last < date[:10] <= self.priced_on:
-                        factor /= ratio
-            self._bars_factor = factor
-        return self._bars_factor
+        bars older than a split it stored, beside a price from before it or after it (BUG-094). With *shares_only*,
+        share splits alone: a close already put back as traded differs from the price by no spin-off (BUG-303)."""
+        served = self.db.execute("select max(date) from price_bars where ticker=?", (self.t,)).fetchone()[0]
+        factor = 1.0
+        if self.priced_on and served:
+            last = str(served)[:10]
+            for date, ratio in self.splits:
+                if not ratio or (shares_only and not simple_ratio(ratio)):
+                    continue
+                if self.priced_on < date[:10] <= last:
+                    factor *= ratio
+                elif last < date[:10] <= self.priced_on:
+                    factor /= ratio
+        return factor
 
     def dividend_onto(self, onto: Optional[str], served: Optional[str]) -> float:
         """The factor that puts a dividend Yahoo served on *served* onto the split basis of the day *onto* (the
