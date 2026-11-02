@@ -1080,10 +1080,12 @@ def test_a_dividend_without_a_served_day_beside_bars_a_split_behind_is_on_every_
     assert [(day, round(amount, 6)) for day, amount in inputs.dividends] == [("2025-05-15", 1.9)]
 
 
-def _restating_filings_db(tmp_path, split_date, shares_by_fy, eps_by_fy):
+def _restating_filings_db(tmp_path, split_date, shares_by_fy, eps_by_fy, splits=None):
     """FY2016-2025 with every 10-K's view of each year in the vintages: the 10-K for FY f, filed the February after,
     reports FY f-2 to f, restated for a split made before it. *shares_by_fy* and *eps_by_fy* are on the post-split
-    basis; a filing made before the split reports half the shares and twice the EPS (a 2:1 split)."""
+    basis; a filing made before the split reports half the shares and twice the EPS (a 2:1 split). *splits*, as
+    (date, ratio), replaces that one split: a filing then reports each year divided by the splits made after it."""
+    splits = splits or [(split_date, 2.0)]
     db_path = tmp_path / "restating_filings.db"
     store = SQLiteStore(db_path=db_path)
     conn = store._connect()
@@ -1093,15 +1095,16 @@ def _restating_filings_db(tmp_path, split_date, shares_by_fy, eps_by_fy):
         reports = [f"{f + 1}-02-20" for f in range(fy, min(fy + 2, 2025) + 1)]
         for filed in reports:
             shares, eps = shares_by_fy[fy], eps_by_fy[fy]
-            if filed < split_date:
-                shares, eps = shares / 2, eps * 2
+            for when, ratio in splits:
+                if filed < when:
+                    shares, eps = shares / ratio, eps * ratio
             conn.execute("INSERT INTO financials_annual_vintages (ticker, fiscal_year, accn, filed_date, period_end, "
                          "net_income, eps_diluted, weighted_avg_shares_diluted) VALUES ('RST', ?, ?, ?, ?, ?, ?, ?)",
                          (fy, f"acc-{filed[:4]}", filed, f"{fy}-12-31", eps * shares, eps, shares))
         conn.execute("INSERT INTO financials_annual (ticker, fiscal_year, period_end, filed_date, net_income, "
                      "total_equity, eps_diluted, weighted_avg_shares_diluted) VALUES ('RST', ?, ?, ?, ?, 1.0e9, ?, ?)",
                      (fy, f"{fy}-12-31", reports[-1], eps * shares, eps, shares))
-    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('RST', ?, 2.0)", (split_date,))
+    conn.executemany("INSERT INTO split_events (ticker, date, ratio) VALUES ('RST', ?, ?)", splits)
     conn.commit()
     conn.close()
     return db_path
@@ -1129,6 +1132,82 @@ def test_a_split_between_two_years_filings_still_explains_their_seam(tmp_path):
     conn.close()
     assert [(r.fiscal_year, r.split_factor) for r in records[3:7]] == [
         (2019, 2.0), (2020, 2.0), (2021, 1.0), (2022, 1.0)]
+
+
+def test_equal_splits_under_the_jump_threshold_each_fold_the_seam_between_their_filings(tmp_path):
+    # BUG-245, WRB-like: 3:2 splits in 2019, 2022 and 2024, and buybacks of 1.5% a year, so each seam reads
+    # 1.5 x 0.985 = 1.4775, under the 1.5 a seam had to reach. Each split lies between the filings of one seam's
+    # two years, and folds that seam: none had, and FY2016-21 read 1.5x to 3.375x off.
+    shares = {fy: 4.0e8 * 0.985 ** (fy - 2016) for fy in range(2016, 2026)}
+    eps = {fy: 2.5e9 / shares[fy] for fy in range(2016, 2026)}
+    splits = [("2019-04-03", 1.5), ("2022-03-24", 1.5), ("2024-07-11", 1.5)]
+    conn = _connect(_restating_filings_db(tmp_path, None, shares, eps, splits))
+    records = load_inputs(conn, "RST").fy_records
+    conn.close()
+    assert [(r.fiscal_year, r.split_factor) for r in records] == [
+        (2016, 3.375), (2017, 2.25), (2018, 2.25), (2019, 2.25), (2020, 1.5), (2021, 1.5),
+        (2022, 1.0), (2023, 1.0), (2024, 1.0), (2025, 1.0)]
+    assert [r.eps_diluted for r in records] == pytest.approx([eps[fy] for fy in range(2016, 2026)])
+    assert [r.shares for r in records] == pytest.approx([shares[fy] for fy in range(2016, 2026)])
+
+
+def _seam_years(newer_count, eps=(4.0, 4.0), net_income=(4.0e8, 4.0e8)):
+    """FY2015 (1.0e8 shares) and FY2016 (*newer_count*), as reported."""
+    return [FYRecord(fiscal_year=2015 + k, period_end=f"{2015 + k}-12-31", net_income=net_income[k],
+                     total_equity=1.0e9, eps_diluted=eps[k], shares=(1.0e8, newer_count)[k], fcf=None,
+                     ffo_per_share=None) for k in range(2)]
+
+
+#: FY2015's count last filed in its FY2017 10-K, FY2016's in its FY2018 10-K.
+_FILED = ["2018-02-20", "2019-02-20"]
+
+
+@pytest.mark.parametrize("seam, splits, factor", [
+    (1.493, [("2018-06-01", 1.5)], 1.5),           # ODFL's FY2017-18: a 3:2 seam buybacks pushed under 1.5
+    (1.4516, [("2018-06-01", 1.5)], 1.5),          # RJF's FY2018-19
+    (0.7, [("2018-06-01", 0.5)], 0.5),             # a 1:2 reverse split issuance pushed under the threshold
+    (3.9, [("2018-06-01", 2.0), ("2018-11-01", 2.0)], 4.0),  # CPRT-like: two splits between, their product
+])
+def test_the_declared_splits_between_two_years_filings_fold_a_seam_nearer_their_product(seam, splits, factor):
+    from src.valuation.inputs import _normalize_splits
+    records, _ = _normalize_splits(_seam_years(seam * 1.0e8), [1.0e8, seam * 1.0e8], splits, _FILED)
+    assert [r.split_factor for r in records] == [factor, 1.0]
+    assert records[0].eps_diluted == pytest.approx(4.0 / factor)
+
+
+def test_a_merger_beside_a_declared_split_folds_the_split_alone():
+    # BUG-245, CNC's FY2015-16: 2.6648x the count, its 2019 2:1 split (restated into FY2016's last filing, not
+    # FY2015's) times the Health Net stock merger of 2016. Revenue came with the merger, so the seam bears no
+    # split's marks, and it is 1.33x from the split: it folded nothing, leaving FY2015 twice its basis.
+    from src.valuation.inputs import _normalize_splits
+    records, _ = _normalize_splits(_seam_years(2.6648e8, eps=(4.30, 1.70), net_income=(3.6e8, 5.6e8)),
+                                   [1.0e8, 2.6648e8], [("2019-02-07", 2.0)], ["2018-02-20", "2019-02-20"],
+                                   [22.76e9, 40.61e9])
+    assert [r.split_factor for r in records] == [2.0, 1.0]
+
+
+def test_a_split_folded_between_two_years_filings_explains_no_older_seam():
+    # FY2015-16 reads 1.47 across the 3:2 split filed between them. FY2014's filing date is unknown and its seam into
+    # FY2015 is a stock-paid merger (1.52x the count, EPS up): the split, used, can't fold it too.
+    from src.valuation.inputs import _normalize_splits
+    records = [FYRecord(fiscal_year=2014, period_end="2014-12-31", net_income=2.6e8, total_equity=1.0e9,
+                        eps_diluted=3.9, shares=0.66e8, fcf=None, ffo_per_share=None)] + _seam_years(1.47e8)
+    records, _ = _normalize_splits(records, [0.66e8, 1.0e8, 1.47e8], [("2018-06-01", 1.5)], [None] + _FILED)
+    assert [r.split_factor for r in records] == [1.5, 1.5, 1.0]
+
+
+@pytest.mark.parametrize("seam, splits, filed", [
+    (1.1, [("2018-06-01", 2.0)], _FILED),           # nearer 1.0 than the split: the count is already restated
+    (1.47, [("2017-06-01", 1.5)], _FILED),          # a split both filings reflect made no seam
+    (1.47, [("2019-06-01", 1.5)], _FILED),          # nor one neither does
+    (1.47, [("2018-06-01", 1.5)], [None, "2019-02-20"]),  # an unknown filing date can't place it: as before
+    (1.47, [("2018-06-01", 1.5)], None),            # nor can a database from before the vintages
+    (1.47, [("2018-06-01", 1.0842)], _FILED),       # a spin-off's price factor is no share split
+])
+def test_a_seam_under_the_jump_threshold_folds_no_split_that_cant_explain_it(seam, splits, filed):
+    from src.valuation.inputs import _normalize_splits
+    records, _ = _normalize_splits(_seam_years(seam * 1.0e8), [1.0e8, seam * 1.0e8], splits, filed)
+    assert [r.split_factor for r in records] == [1.0, 1.0]
 
 
 def _cover_count_db(tmp_path, split_date="2022-07-15", weighted_from=2022, sector="general", prices=False):

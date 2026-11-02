@@ -18,7 +18,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 _MAX_FY_HISTORY = 10
 
 #: A year-over-year rise in the share count of at least this factor is read as a
-#: stock split, not as ordinary issuance.
+#: stock split, not as ordinary issuance. A declared split dated between the two
+#: years' filings needs no threshold (``_normalize_splits``, BUG-245).
 SPLIT_JUMP_THRESHOLD = 1.5
 
 #: The largest ratio still credible as a real split. No listed company has ever
@@ -31,7 +32,8 @@ MAX_SPLIT_RATIO = 50.0
 #: when it is within this factor of it. The jump also carries a year of buybacks
 #: or issuance (AAPL's 2020 4:1 shows up as 20.0B / 5.252B = 3.81), so the
 #: declared ratio is the exact one; a jump nowhere near any declared ratio keeps
-#: the detected value (the only evidence there is).
+#: the detected value (the only evidence there is). A split dated between the
+#: two years' filings needs only to be nearer the jump than 1.0 (BUG-245).
 DECLARED_SPLIT_TOLERANCE = 1.25
 
 #: An undeclared seam folds by its own ratio only on a split's marks: EPS of the same sign on both sides moved
@@ -221,6 +223,17 @@ def _filed_between(split: Tuple[str, float], f_old: Optional[str], f_new: Option
     return f_old[:10] < str(when)[:10] <= f_new[:10]
 
 
+def _splits_filed_between(splits: Sequence[Tuple[str, float]], f_old: Optional[str],
+                          f_new: Optional[str]) -> List[Tuple[str, float]]:
+    """The declared share splits (simple ratios) dated between two years' filings, *f_old* < date <= *f_new*: the
+    newer year's figures are restated for them and the older year's aren't, so the seam between the two is their
+    product times a year of buybacks, issuance or a stock-paid merger. None when either date is unknown."""
+    if not (f_old and f_new):
+        return []
+    return [(when, ratio) for when, ratio in splits
+            if ratio and ratio > 0 and _simple_ratio(ratio) and f_old[:10] < str(when)[:10] <= f_new[:10]]
+
+
 def _restated_between(splits: Sequence[Tuple[str, float]], filed_from: Optional[str],
                       filed_to: Optional[str]) -> float:
     """The factor that puts a share count last filed on *filed_from* onto the basis of figures last filed on
@@ -268,7 +281,8 @@ def _normalize_splits(records: List[FYRecord],
       which scales the older years' per-share values UP and their share counts
       DOWN — exactly the correction a reverse split needs.
       Either folds by a declared share split (a simple ratio: a spin-off's price
-      factor changes no share count), by its own ratio on a split's marks in EPS
+      factor changes no share count; those filed between the two years first,
+      at any ratio, below), by its own ratio on a split's marks in EPS
       and *revenue* (``_split_marks``) when the count EPS implies moved with it
       (``_implied_count_moves``) and net income held (``_net_income_held``), or
       by its own ratio when the older year ends before the listing (*first_bar*)
@@ -289,7 +303,13 @@ def _normalize_splits(records: List[FYRecord],
     when *detect_filed* says when each year's share figure was last filed (the
     vintages), a share split explains a seam only if it lies between the two
     years' filings: one that every stored year already reflects can't have made
-    a seam, though a stock-paid merger's may sit near its ratio.
+    a seam, though a stock-paid merger's may sit near its ratio. And the splits
+    that lie between them made it: with both dates known, they fold whenever
+    the seam is nearer their product than 1.0, whatever the threshold and the
+    tolerance above, as buybacks take a 3:2 seam under 1.5 (ODFL's FY2017-18,
+    1.493) and a stock-paid merger in the same years takes it beyond 1.25x
+    (CNC's FY2015-16, 2.66 for its 2:1; BUG-245). Equal splits are told apart
+    by their dates, so each takes its own seam (WRB's three 3:2s).
 
     Mutates the surviving *records* in place and returns
     ``(surviving_records, history_truncated)``. Per-share values are DIVIDED by
@@ -317,8 +337,14 @@ def _normalize_splits(records: List[FYRecord],
             if ratio > MAX_SPLIT_RATIO or ratio < 1.0 / MAX_SPLIT_RATIO:
                 # Unit discontinuity: the pre-seam years are uncomparable.
                 return records[i + 1:], True
-            if forward or reverse:
-                f_old, f_new = (detect_filed[i], detect_filed[i + 1]) if detect_filed else (None, None)
+            f_old, f_new = (detect_filed[i], detect_filed[i + 1]) if detect_filed else (None, None)
+            between = _splits_filed_between(unused, f_old, f_new)
+            between_ratio = math.prod(split_ratio for _, split_ratio in between)
+            # The splits filed between the two years made this seam, whatever buybacks or a merger did beside them.
+            if between and abs(math.log(ratio / between_ratio)) < abs(math.log(ratio)):
+                unused = [split for split in unused if split not in between]
+                factor *= between_ratio
+            elif forward or reverse:
                 candidates = [split for split in unused
                               if _simple_ratio(split[1]) and _filed_between(split, f_old, f_new)]
                 run = _declared_run(ratio, records[i].period_end, candidates)

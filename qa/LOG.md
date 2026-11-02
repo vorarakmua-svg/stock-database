@@ -2427,3 +2427,22 @@ Result: BUG-172 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2741 passed, 1 skipped, 1 warning | CI: PR #29
 Commit: (this commit) fix(valuation): the multiples band prices closes as traded and spans its quartiles (BUG-172)
 Next: apply BUG-245 (worker done), then BUG-252 (worker done), then BUG-258/160.
+
+## Iteration 136: 2026-11-02 20:58: fix (BUG-245, decided)
+Picked: BUG-245 (P1), prepared by an opus worker.
+Did: with both years' filing dates known, the declared share splits dated between them fold the seam whenever it is
+nearer their product than 1.0, whatever the 1.5 threshold and the 1.25x tolerance (`inputs._splits_filed_between`);
+otherwise the old path. Equal splits take their own seams by date (WRB), as BUG-248 does for quarters. README's two
+passages say so. I reviewed the diff, proved RED on an export of HEAD and applied it (`tools/apply_fix.sh`).
+- RED: 6 failed of the new tests; GREEN. Mutants, by me on the checkout: 9 of 9; BUG-173's 9, BUG-247's 9 and
+  BUG-172's 4 still killed.
+- Re-measured on today's code (BUG-172 had moved the band since the worker's run): engine over all 502 on two copies.
+  One median: ODFL bear 47.10 to 58.08, base 56.90 to 72.60, bull 71.42 to 72.60 (expensive either way). Model rows:
+  ODFL and PCAR Lynch, WRB multiples. WRB's bear median no longer moves: BUG-172's quartile band absorbs it. No
+  verdict, owner-earnings verdict or label. The valuation oracle: level 2 4 to 3 beyond 0.5% (ODFL's Lynch agrees).
+  The worker's scores oracle: 87 per-share disagreements at the six companies gone (`qa/evidence/bug245-investigation.txt`).
+Evidence: `qa/evidence/bug245-verify-mine.txt`, %LOCALAPPDATA%\stockdb-qa\bug245m\out, `qa/evidence/bug245-mutants.json`.
+Result: BUG-245 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2754 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(valuation): the splits filed between two years fold their seam at any ratio (BUG-245)
+Next: apply BUG-252, then BUG-258 with BUG-160 (both prepared). Code review 24 after 2 more fixes.

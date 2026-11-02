@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 2 · P2 18 · P3 165 · NEEDS-USER 0 · Decided: 7 · Verified: 126
+**Open:** P0 0 · P1 1 · P2 18 · P3 165 · NEEDS-USER 0 · Decided: 7 · Verified: 127
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1847,9 +1847,9 @@ Repro: the README's own test run, `stock-data refresh --tickers AAPL,MSFT`, logg
 Expected: a test on a few companies leaves the others due.   Fix: a --tickers run's rows carry its `subset` and the cadence passes over them, so the next full run is due as if the test hadn't happened.
 
 ### BUG-245 [P1][VAL] Annual share normalization skips a declared split whose seam buybacks pushed under 1.5, or a merger pushed beyond it
-Status: OPEN
+Status: VERIFIED (iteration 136)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): apply the measured fix (the oracle agrees with every changed value).
-Found: build M5-6 (the scores oracle on the S&P 500) | Fixed: | Regression test:
+Found: build M5-6 (the scores oracle on the S&P 500) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py (6 items with the guards; `_splits_filed_between`)
 Repro: src/valuation/inputs.py `_normalize_splits` (feeds `load_inputs`: the valuations and the scores' per-share series) tests a seam only at a ratio of 1.5 or more (SPLIT_JUMP_THRESHOLD) and lets a declared split explain it only within 1.25x (DECLARED_SPLIT_TOLERANCE). Seams across a declared 3:2 split read 1.45-1.4999 after buybacks (ODFL FY2017-18 1.4930, PCAR FY2019-20 1.4999, RJF FY2018-19 1.4516, ROL FY2015-16 1.4977, WRB FY2019-20 1.4631 and FY2021-22 1.4985), and CNC's FY2015-16 2.6648 is its 2019 2:1 split times the 2016 Health Net stock merger: none folds. 65 seams of the 502 have a declared split filed between their counts; 58 fold, these 7 don't. Their older years' per-share figures are 1.5x to 2.25x off (ODFL FY2015 EPS stored 1.785 = 3.57 / 2; the oracle's 1.19 = 3.57 / 3): 87 of the scores oracle's 128 per-share disagreements, their CAGRs and predictability, ODFL's Lynch and WRB's multiples band. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C1.
 Expected: fold the declared splits dated between the two counts' filings whenever the seam is nearer their product than 1.0.   Measured on a copy: 21 per-share rows to the oracle's values; predictability ODFL 3.5 to 4.5 stars, PCAR 1 to 3, RJF 3.5 to 4.5, WRB 1 to 4; ODFL Lynch 42.38/56.90/71.42 to 58.08/72.60/72.60 and its medians 47.10/56.90/71.42 to 58.08/72.60/72.60; WRB's bear median 37.35 to 42.89; no verdict changes (both are expensive). Decide whether to apply it (recommended: the oracle agrees with every changed value). Until then the stored figures stay.
 

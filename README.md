@@ -481,6 +481,9 @@ How it's built:
   follow the same rules, the EPS-implied count (net income / EPS) having to move with the jump too, and net
   income to keep its sign and move less than halfway, which PCG's 2020 bankruptcy-exit issuance (a shrinking
   loss) and KDP's 2018 reverse merger don't (BUG-247; a quarter's net income swings too far for that test).
+  A fiscal year also knows when its count was last filed, so the declared splits dated between two years'
+  filings fold their seam whenever it is nearer their product than 1.0, at any ratio: buybacks take a 3:2
+  seam under 1.5 (ODFL, PCAR, RJF, ROL, WRB) and a stock-paid merger takes CNC's 2:1 beyond 1.25× (BUG-245).
   A year before the listing takes the public count (BUG-185), though the quality scores leave out the
   per-share figures of a year that ended before the first bar (BUG-188). A spin-off's price factor never
   explains a jump.
@@ -544,7 +547,8 @@ Inputs:
   share-count jump of 1.5× or more folds into it only for a declared share split, on a split's marks (EPS
   moved against the count, revenue didn't move with it, the count EPS implies moved with it, net income kept
   its sign and moved less than halfway), or when the older year ends before the listing or in its year (a
-  pre-listing count leaves out converted preferred). Otherwise a merger, an exchange offer, a count that
+  pre-listing count leaves out converted preferred). A declared split dated between two years' filings folds
+  their seam at any ratio nearer it than 1.0 (BUG-245). Otherwise a merger, an exchange offer, a count that
   swings on its own, an issuance while a loss shrinks (PCG 2020), a reverse merger (KDP 2018) and a
   spin-off's price factor fold nothing (BUG-185, BUG-247). A merger around the listing jumps like the
   converted preferred, though (DELL's EMC in 2016), so a year that ended before the first price bar and that
