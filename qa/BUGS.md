@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 12 · P3 168 · NEEDS-USER 0 · Decided: 7 · Verified: 137
+**Open:** P0 0 · P1 0 · P2 11 · P3 168 · NEEDS-USER 0 · Decided: 7 · Verified: 138
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2312,7 +2312,7 @@ Context: `_total_shares` takes market cap ÷ price (every class and unit, the wa
 Options: (a) always count every class and unit (market cap ÷ price whenever it is larger); (b) count only the listed class (Yahoo's count, or the FY diluted count); (c) keep the gap rule and make its tiebreaker fresher (BUG-051). Recommendation: (a) for classes, which share the same earnings; units are your call (they are exchangeable into shares, so (a) is the conservative choice).
 
 ### Q8 [VAL] NEEDS-USER: should a company be valued on a basis year that is years old?
-Status: OPEN
+Status: VERIFIED (iteration 145; regression tests tests/test_valuation_engine.py::test_a_per_share_model_on_a_basis_more_than_two_fiscal_years_old_is_na and 2 more)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: option (a), per-share models N/A with a reason when the basis is more than two fiscal years old.
 Context: when a company's usable annual reports stop (it moved to IFRS, BUG-066, or stopped filing), its models keep valuing it on the last fiscal year it has, beside today's price: in code review 6's example Graham on FY2017 and the multiples band on FY2019, computed in 2026. Nothing in the valuation checks how old the basis is; the "Basis FY" column shows it.
 Options: (a) mark the per-share models N/A past a cutoff (say a basis more than two fiscal years old), with the reason; (b) keep the values and add a staleness flag to the verdict; (c) keep things as they are, with BUG-066's note explaining the gap. Recommendation: (a) at two years.

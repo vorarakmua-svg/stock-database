@@ -152,3 +152,27 @@ def test_owner_earnings_verdict_margin_of_safety():
     assert owner_earnings_verdict(None, 60.0) is None
     na = ValuationResult(model="owner_earnings", applicable=False, na_reason="x")
     assert owner_earnings_verdict(na, 60.0) is None
+
+
+def _graham_years(*years):
+    from src.valuation.inputs import FYRecord
+    return [FYRecord(fiscal_year=y, period_end=f"{y}-12-31", net_income=None, total_equity=2000.0, eps_diluted=2.0,
+                     shares=100.0, fcf=None, ffo_per_share=None) for y in years]
+
+
+def test_a_per_share_model_on_a_basis_more_than_two_fiscal_years_old_is_na():
+    # Q8 (decided): a company whose usable annual reports stopped (IFRS, BUG-066; or no longer filing) was valued on
+    # its last fiscal year beside today's price (Graham on FY2017 in 2026). More than two fiscal years old: N/A.
+    from datetime import date
+    res = {r.model: r for r in run_valuations(_inputs(fy_records=_graham_years(2021, 2022, 2023),
+                                                      as_of=date(2026, 11, 3)))}
+    assert res["graham"].applicable is False
+    assert res["graham"].na_reason == "basis FY2023 is more than 2 fiscal years old"
+    assert res["graham"].basis_fiscal_year == 2023
+
+
+def test_a_basis_two_fiscal_years_old_still_values():
+    from datetime import date
+    res = {r.model: r for r in run_valuations(_inputs(fy_records=_graham_years(2022, 2023, 2024),
+                                                      as_of=date(2026, 11, 3)))}
+    assert res["graham"].applicable is True

@@ -459,6 +459,14 @@ def test_graham_tangible_has_no_bear_where_the_graham_number_has_none():
     assert r.assumptions["eps_bear"] is None
 
 
+def test_graham_tangible_is_na_on_a_basis_more_than_two_fiscal_years_old():
+    # Q8 (decided): as the Graham model is in the engine, the tangible number on the same basis is.
+    from datetime import date
+    r = graham_tangible(_inputs(_graham(as_of=date(2028, 6, 30)), book=BOOK))
+    assert (r.applicable, r.na_reason, r.basis_fiscal_year) == (
+        False, "basis FY2025 is more than 2 fiscal years old", 2025)
+
+
 def test_graham_tangible_is_na_where_the_graham_number_is():
     r = graham_tangible(_inputs(_graham(eps=(3.0, 5.0, -1.0)), book=BOOK))
     assert (r.applicable, r.na_reason, r.basis_fiscal_year) == (False, "EPS is not positive", 2025)

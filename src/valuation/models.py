@@ -76,6 +76,19 @@ def _rate_provenance(inputs: ValuationInputs) -> Dict[str, Any]:
     return meta
 
 
+#: Q8 (decided): a per-share value on a fiscal year more than this many years before the valuation's day is N/A: a
+#: company whose usable annual reports stopped (IFRS, BUG-066; no longer filing) was valued on FY2017 in 2026.
+MAX_BASIS_AGE_FYS = 2
+
+
+def stale_basis_reason(inputs: ValuationInputs, basis_fy: Optional[int]) -> Optional[str]:
+    """The N/A reason when *basis_fy* is more than MAX_BASIS_AGE_FYS fiscal years before *inputs*' day, else None.
+    No day (``as_of`` unset) or no basis year: None."""
+    if inputs.as_of is None or basis_fy is None or inputs.as_of.year - basis_fy <= MAX_BASIS_AGE_FYS:
+        return None
+    return f"basis FY{basis_fy} is more than {MAX_BASIS_AGE_FYS} fiscal years old"
+
+
 def _na(model: str, reason: str,
         basis_fy: Optional[int] = None) -> ValuationResult:
     return ValuationResult(model=model, applicable=False, na_reason=reason,

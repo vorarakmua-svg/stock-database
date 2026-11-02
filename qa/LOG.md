@@ -2581,3 +2581,19 @@ Result: Q2 and Q5 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2783 passed, 1 skipped, 1 warning | CI: PR #29
 Commit: (this commit) fix(valuation): growth is the historical CAGR, from the first profitable year if need be (Q2, Q5)
 Next: BUG-049 and BUG-260 as their workers report; inline Q8 or Q9.
+
+## Iteration 145: 2026-11-03 00:18: fix (Q8, decided)
+Picked: Q8 (implemented as a P2), inline.
+Did: `models.stale_basis_reason`: a model's basis fiscal year more than 2 years before the valuation's day
+(`as_of.year - basis_fy > 2`) makes it N/A, "basis FY2023 is more than 2 fiscal years old"; `run_valuations` applies it
+to every model but DDM (its basis is Yahoo's current trailing year), and the tangible Graham number follows the Graham
+model. README says so.
+- RED: 2 failed (Graham valued FY2023 in 2026; the tangible number likewise), 1 guard passed; GREEN. 4 of 4 mutants.
+- Measured on two DB copies, engine over all 502: nothing moves (no company's basis is that old today); the oracle the
+  same on both (level 2: 4).
+Evidence: %LOCALAPPDATA%\stockdb-qa\q8\out; `qa/evidence/q8-mutants.json`.
+Result: Q8 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2786 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): no per-share value on a basis more than two fiscal years old (Q8)
+Next: BUG-049 and BUG-260 as their workers report; inline Q9.
+

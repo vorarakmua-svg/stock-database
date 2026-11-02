@@ -24,6 +24,7 @@ from .indicators import compute_indicators, load_indicator_inputs
 from .inputs import ValuationInputs, load_inputs
 from .models import (
     ValuationResult,
+    stale_basis_reason,
     value_dcf,
     value_ddm,
     value_graham,
@@ -77,6 +78,13 @@ def run_valuations(inputs: ValuationInputs,
             continue
         try:
             results.append(fn(inputs))
+            stale = stale_basis_reason(inputs, results[-1].basis_fiscal_year) if name != "ddm" else None
+            if stale and results[-1].applicable:
+                # A basis more than two fiscal years old beside today's price values nothing (Q8). DDM's basis is
+                # the trailing year of Yahoo's payments, which is current.
+                results[-1] = ValuationResult(model=name, applicable=False, na_reason=stale,
+                                              basis_fiscal_year=results[-1].basis_fiscal_year)
+                continue
             if inputs.ads_ratio != 1.0 and results[-1].applicable:
                 # Per-share values are per ADS, as the price is (BUG-065).
                 results[-1].assumptions["ads_ratio"] = inputs.ads_ratio

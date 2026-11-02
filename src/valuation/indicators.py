@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from ..scores.fundamentals import AnnualRow, Fundamentals, load_fundamentals
 from ..scores.scores import DEBT_UNKNOWN, DEFAULT_TAX, TAX_CAP, Market, _total_debt, wacc
 from .inputs import ValuationInputs, load_inputs
-from .models import dcf_per_share, value_dcf, value_graham
+from .models import dcf_per_share, stale_basis_reason, value_dcf, value_graham
 
 #: The indicators, in their stored and displayed order.
 INDICATORS: Tuple[str, ...] = ("reverse_dcf", "epv", "ncav", "ps_value", "graham_tangible")
@@ -359,6 +359,9 @@ def graham_tangible(inputs: IndicatorInputs) -> IndicatorResult:
     basis = graham.basis_fiscal_year
     if not graham.applicable:
         return _na(name, graham.na_reason or "no Graham number", basis_fy=basis)
+    stale = stale_basis_reason(inputs.valuation, basis)
+    if stale:  # as the Graham model is in the engine (Q8)
+        return _na(name, stale, basis_fy=basis)
     figures = (inputs.book.get(basis) if basis is not None else None) or {}
     equity = figures.get("total_equity")
     if equity is None or equity <= 0:
