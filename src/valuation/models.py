@@ -32,15 +32,43 @@ DCF_SECTORS = ("general", "utility", "energy")
 #: missed annual payment plus a grace quarter) is treated as having stopped.
 DIVIDEND_STALE_DAYS = 456
 
-#: Dividend growth uses at most this many complete calendar years (the spec's
-#: "hist dividend CAGR (<= 10 yrs)", the same window as the FY-based models):
-#: decades-old growth says little about the next five years.
+#: Dividend growth uses at most this many years (the spec's "hist dividend CAGR
+#: (<= 10 yrs)", the same window as the FY-based models): the fiscal years the
+#: valuation reads, or, for a company without them, the complete calendar years
+#: before the anchor's. Decades-old growth says little about the next five years.
 DIVIDEND_CAGR_YEARS = 10
 
-#: Payments within this factor of a neighbouring year's typical payment are
-#: regular ones. A special is larger, and a different schedule pays a
-#: different amount each time (a semiannual payment is twice a quarterly one).
-REGULAR_PAYMENT_RANGE = 1.5
+#: SEC's dividends per share for a fiscal year of two or more payments that is
+#: within this share of one of them is that payment, not the year's: a filer
+#: that tags each quarter's rate in a full-year context (V, CEG, BKNG, AMAT,
+#: IBKR; BUG-020). One below every payment can't be their total either (PLD's
+#: stray 0.01 beside 3.84 paid).
+ONE_PAYMENT_TOLERANCE = 0.02
+
+
+def _one_payment(sec: float, payments: List[float]) -> bool:
+    """Whether SEC's figure for a year holds at most one of its *payments* (ONE_PAYMENT_TOLERANCE)."""
+    return len(payments) >= 2 and (sec < min(payments) or any(
+        abs(sec - paid) <= ONE_PAYMENT_TOLERANCE * paid for paid in payments))
+
+
+@dataclass
+class DividendYear:
+    """One year of the history DDM measures dividend growth over (``dividend_history``).
+
+    ``amount`` is the year's dividends per share on today's basis; ``source`` says where
+    it came from ("sec": the 10-K's dividends per share; "yahoo": the payments with
+    ex-dates in the year); ``payments`` are those payments, whichever was used.
+    ``restart`` marks a year whose dividend started or restarted during it: it has no
+    payment, or its first one follows none, or follows the one before by more than
+    DIVIDEND_STALE_DAYS (the dividend had stopped).
+    """
+
+    year: int
+    amount: Optional[float]
+    source: Optional[str]
+    payments: List[float] = field(default_factory=list)
+    restart: bool = False
 
 
 @dataclass
@@ -186,6 +214,75 @@ def _annual_dividend_totals(dividends: List[Tuple[str, float]]) -> List[Tuple[in
     return sorted(totals.items())
 
 
+def _paid_between(dividends: List[Tuple[str, float]], start: str, end: str) -> List[float]:
+    """The payments with ex-dates in (*start*, *end*]."""
+    return [amount for day, amount in dividends if start < day[:10] <= end]
+
+
+def dividend_history(inputs: ValuationInputs, anchor: date) -> List[DividendYear]:
+    """Each year's dividends per share, oldest first, for DDM's growth (BUG-049).
+
+    The years are the fiscal years the valuation reads (``fy_records``, up to
+    DIVIDEND_CAGR_YEARS), each from the day after the year before ended (else a
+    year before its end) to its end. A year's amount is SEC's dividends per share
+    (``FYRecord.dividends_per_share``: declared, else cash paid, on the basis of
+    Yahoo's payments). Counting Yahoo's ex-dates can't tell a payment that slipped
+    across a year end from an extra or special one, or a slip from a change of
+    schedule, and each count-based rule misread a new shape (BUG-017, BUG-049).
+    Where SEC has no usable figure, Yahoo's payments with ex-dates in the year are
+    summed: a filer that tags only point-in-time payments leaves the year empty
+    (BUG-013), and one that tags a single payment as the year is no better
+    (``_one_payment``). A company without fiscal years (no SEC annual record) uses
+    the complete calendar years before the anchor's, on Yahoo's payments alone. A
+    year with neither source paid nothing (amount None).
+    """
+    dividends = inputs.dividends
+    spans: List[Tuple[int, str, str, Optional[float]]] = []
+    records = [rec for rec in inputs.fy_records if rec.period_end][-DIVIDEND_CAGR_YEARS:]
+    if records:
+        previous: Optional[FYRecord] = None
+        for rec in records:
+            end = str(rec.period_end)[:10]
+            start = (str(previous.period_end)[:10] if previous is not None
+                     and previous.fiscal_year == rec.fiscal_year - 1
+                     else (date.fromisoformat(end) - timedelta(days=365)).isoformat())
+            spans.append((rec.fiscal_year, start, end, rec.dividends_per_share))
+            previous = rec
+    else:
+        spans = [(year, f"{year - 1}-12-31", f"{year}-12-31", None)
+                 for year in range(anchor.year - DIVIDEND_CAGR_YEARS, anchor.year)]
+    history = []
+    for year, start, end, sec in spans:
+        paid = [(day[:10], amount) for day, amount in dividends if start < day[:10] <= end]
+        payments = [amount for _, amount in paid]
+        before = [day[:10] for day, _ in dividends if day[:10] <= start]
+        restart = not paid or not before or (
+            date.fromisoformat(paid[0][0]) - date.fromisoformat(before[-1])).days > DIVIDEND_STALE_DAYS
+        if sec is not None and sec > 0 and not _one_payment(sec, payments):
+            history.append(DividendYear(year, sec, "sec", payments, restart))
+        elif payments:
+            history.append(DividendYear(year, sum(payments), "yahoo", payments, restart))
+        else:
+            history.append(DividendYear(year, None, None, payments, restart))
+    return history
+
+
+def _growth_years(history: List[DividendYear]) -> List[DividendYear]:
+    """The years DDM's CAGR spans: the paying years of *history* (``dividend_history``)
+    from the first one whose dividend didn't start or restart during it. Such a year is
+    partial (TMUS's 2023), so growth measured from it counts payments, not raises.
+    Payments, not SEC's figure, mark the start: a first dividend declared at a year's end
+    is in that year's figure though paid in the next, which declares one fewer (MU: 0.10
+    declared in FY2021, which paid nothing; 0.315 declared in FY2022, which paid 0.415),
+    so both years go. None when fewer than 4 remain (the spec's historical CAGR "requires
+    >= 4 FYs"). A short last year stays: it can be a real cut."""
+    start = 0
+    while start < len(history) and (history[start].amount is None or history[start].restart):
+        start += 1
+    years = [entry for entry in history[start:] if entry.amount is not None]
+    return years if len(years) >= 4 else []
+
+
 def value_ddm(inputs: ValuationInputs) -> ValuationResult:
     """Multi-stage dividend discount model — any steady payer, and the primary
     model for banks/insurers where FCF is meaningless."""
@@ -207,61 +304,12 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
     if ttm <= 0:
         return _na("ddm", "no dividends in trailing 12 months")
 
-    # CAGR over the last DIVIDEND_CAGR_YEARS complete calendar years only (the
-    # anchor year is likely partial).
-    complete_years = [(year, total) for year, total in annual
-                      if anchor.year - DIVIDEND_CAGR_YEARS <= year < anchor.year]
-    # Growth compares full years, judging each end of the window by the cadence
-    # of the (up to 3) years next to it, since a payer can change how often it
-    # pays (PGR and TSM paid yearly until 2018, then quarterly). A first year
-    # with fewer payments than those is partial: a dividend started, paused or
-    # restarted mid-year (MU: 2 payments in 2021, then 4 a year), or an ex-date
-    # slipped into the year before (BMY). Growth measured from one counts
-    # payments, not raises (MU read 23%/yr on a flat dividend), so it is
-    # skipped, unless it carries on a lower-frequency schedule: the year before
-    # paid as often, and each payment is larger than the later years' typical
-    # one (a dividend restarted after a suspension pays the same size). An end
-    # year with exactly one payment more than its neighbours, next to a year
-    # still on that schedule and all of regular size, holds one that slipped
-    # across the year boundary (O's 2025-12-31 ex-date for January), so it
-    # counts at their cadence; a neighbour that already pays more often means
-    # the schedule changed. A special is larger and counts in full (whether it
-    # should is the user's call), and a short last year stays as it is, since
-    # it can be a real cut.
-    paid: Dict[int, List[float]] = {}
-    for day, amount in inputs.dividends:
-        paid.setdefault(int(day[:4]), []).append(amount)
-
-    def cadence(years: List[Tuple[int, float]]) -> float:
-        return statistics.median(len(paid[year]) for year, _ in years)
-
-    def lower_frequency(year: int, later: List[Tuple[int, float]]) -> bool:
-        typical = statistics.median(a for later_year, _ in later for a in paid[later_year])
-        return (len(paid.get(year - 1, [])) == len(paid[year])
-                and all(a >= typical * REGULAR_PAYMENT_RANGE for a in paid[year]))
-
-    while (len(complete_years) >= 2
-           and len(paid[complete_years[0][0]]) < cadence(complete_years[1:4])
-           and not lower_frequency(complete_years[0][0], complete_years[1:4])):
-        complete_years = complete_years[1:]
-    for end, adjacent, near in ((0, 1, complete_years[1:4]), (-1, -2, complete_years[-4:-1])):
-        if len(complete_years) < 2:
-            break
-        year, total = complete_years[end]
-        usual, regular = cadence(near), statistics.median(paid[complete_years[adjacent][0]])
-        if (len(paid[year]) == usual + 1 and len(paid[complete_years[adjacent][0]]) <= usual
-                and all(regular / REGULAR_PAYMENT_RANGE < a < regular * REGULAR_PAYMENT_RANGE
-                        for a in paid[year])):
-            complete_years[end] = (year, total * usual / len(paid[year]))
-    # The spec's historical CAGR "requires >= 4 FYs" (DCF and Lynch are N/A
-    # below that). DDM stays applicable from 3 calendar years, so with fewer
-    # full years no CAGR is measured (TMUS's 2 full years read 29%/yr from a
-    # single year's change).
-    if len(complete_years) < 4:
-        complete_years = []
-    complete = [total for _, total in complete_years]
-    growth, gmeta = derive_growth(complete, cap=DDM_GROWTH_CAP,
-                                  periods=[year for year, _ in complete_years])
+    # Growth from the yearly dividends per share (SEC's, else Yahoo's payments in
+    # the year; ``dividend_history``), over the years ``_growth_years`` keeps. The
+    # TTM basis stays Yahoo's payments.
+    years = _growth_years(dividend_history(inputs, anchor))
+    growth, gmeta = derive_growth([entry.amount for entry in years], cap=DDM_GROWTH_CAP,
+                                  periods=[entry.year for entry in years])
     discount, dmeta = derive_discount(inputs.risk_free_rate, inputs.beta)
     g_bear, g_base, g_bull = growth_scenarios(growth, cap=DDM_GROWTH_CAP)
     assumptions: Dict[str, Any] = {}
@@ -272,6 +320,7 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
         "ttm_dps": ttm,
         "ttm_anchor": anchor.isoformat(),
         "dividend_years": len(annual),
+        "dividend_growth_years": [[entry.year, entry.amount, entry.source] for entry in years],
         "history_truncated": inputs.history_truncated,
         "terminal_growth": TERMINAL_GROWTH,
     })

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 9 · P3 168 · NEEDS-USER 0 · Decided: 7 · Verified: 140
+**Open:** P0 0 · P1 0 · P2 8 · P3 168 · NEEDS-USER 0 · Decided: 7 · Verified: 141
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -423,7 +423,7 @@ Notes: the oracle applies simple ratios unconditionally too, so its rule changes
 Fix: values stay on the basis of the price they are compared with. `load_inputs` takes the latest priced snapshot's day; `_apply_later_splits` applies a post-filing split only up to that day, and Yahoo's dividends and FY-end price bars, adjusted for every split it knew when fetched, are multiplied back by any split dated after both the latest filing and that day. The oracle took the rule first (30b3c5a): on the scenario valued by the unfixed code it flagged all five applicable models (10x), and its verdicts on the real and golden copies didn't change. The whole scenario (`iter43_stale_db.py`: 10 FYs, dividends, bars) valued by the fix: median $277.31 beside the $1,000 price (was $27.73), and the oracle agrees at both levels (`qa/evidence/iter43-bug048-{oracle,e2e}.txt`). Impact: 0 of 762 real and 0 of 114 golden valuation rows change. Three mutants each fail a test.
 Notes: a split between the price's day and the latest filing, which the filing restated, is a different case: BUG-060.
 ### BUG-049 [P2][VAL] BUG-017's third fix reads a special dividend next to a window end as a schedule change
-Status: OPEN
+Status: VERIFIED (iteration 148; regression tests tests/test_valuation_models.py, tests/test_valuation_inputs.py: the DDM history items)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): option (a): DDM's growth history from SEC's annual dividends per share, Yahoo's payments for the latest rate, with a fallback where a filer tags only point-in-time payments.
 Found: iteration 39 by code review 5 (I3), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
 Repro: a quarterly dividend growing 5% a year, with 2026's March payment ex-dated 2025-12-31 (`t_bug017/s3_min.py`), reads 5.12% (DDM base $125.23). Add a 3× special in 2024 and HEAD reads 7.75% ($139.97), against 5.12% at 61f8a56: the adjacent-year condition (e84da96) counts the special as a payment, so 2025's slip is no longer scaled. Shapes misread at both revisions, true growth 5% (`ddm_shapes.py`): semiannual to quarterly with a slip, 7.75%; quarterly to monthly with a slip, 5.98%; annual to semiannual from November 2025 with the transition year last, 9.84% (DDM $150.78 against $125); semiannual 40/60 with a slip, 4.36%. The oracle mirrors the rule and gives the same numbers, so it can't see any of them.

@@ -2639,3 +2639,27 @@ Gates: ruff ✓ mypy ✓ pytest 2797 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(parsers): Cash a balance sheet's total shows to be a part gives way (BUG-260)
 Next: BUG-049 when its worker reports; inline BUG-271 or Q16.
 
+## Iteration 148: 2026-11-03 00:46: fix (BUG-049, decided: option a)
+Picked: BUG-049 (P2), prepared by an opus worker (rebased twice as HEAD moved).
+Did: DDM's growth history is SEC's dividends_per_share over the valuation's fiscal years, with the EPS's split
+normalisation and divided by the non-split factors after each year end (as Yahoo's payments are); a year SEC lacks, or
+whose figure holds at most one of the year's two or more payments, takes Yahoo's payments summed. Leading years where
+the dividend started or restarted are skipped; fewer than 4 years, no CAGR. The TTM stays Yahoo's. New assumption
+`dividend_growth_years`. README's DDM row and the spec say so. The oracle follows in its own commit first (e210394),
+saying it encodes the fix's two thresholds.
+- Spin-offs: SEC's figures are put on the basis of Yahoo's payments, which keeps today's spin-off treatment (the
+  decision changed the history's source, not the spin-off policy; as declared, every spin-off would read as a cut).
+- RED: 23 failed; GREEN. Mutants, by me on the checkout: BUG-049's 11, and Q8's, BUG-007's, BUG-172's, BUG-245's,
+  BUG-246's, BUG-303's and Q2/Q5's specs: all killed.
+- Measured by the worker on DB copies (at 4492f06; identical on 6027364): 95 DDM rows and 54 medians move; no verdict,
+  owner-earnings verdict or label. Up: CRH, CBOE, GEN, EG, CB... (Yahoo missing payments at CBOE, ALLE, TEL, STE, A, HUM);
+  down: COST, CEG, FERG, APO, ACN... The new oracle: 78 level-2 rows on head's copy, 5 with the fix (EG's truncated
+  history, and the 4 known).
+- Residuals: COST and FERG (a special at a CAGR endpoint: Q3), ACN (Yahoo lacks 2 payments in a year SEC has no figure
+  for: Q4), CEG (its opening year is partial: 3 years, no CAGR), a schedule-change year, slip noise in fallback years.
+Evidence: `qa/evidence/bug049-{investigation,verify-mine}.txt`; %LOCALAPPDATA%\stockdb-qa\bug049\out.
+Result: BUG-049 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2808 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): DDM's growth history comes from SEC's dividends per share (BUG-049)
+Next: Q3 and Q4 (DDM's specials and incomplete histories, now on this history); code review 25 after 1 more fix.
+

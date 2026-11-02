@@ -1631,3 +1631,59 @@ def test_an_ads_ratio_is_a_whole_number_or_unreadable(filed_to_market, ratio):
 
     assert _ads_ratio(filed_to_market) == ratio
 
+
+def _dps_db(tmp_path, spin_off=None):
+    """FY2019-2023 with SEC's dividends per share and a 4:1 split on 2022-02-01. FY2019-2020 are as last filed
+    in early 2022, before the split; FY2021's EPS and count were restated in the FY2022 10-K, but its dividends per
+    share were last filed in its own 10-K, before the split. *spin_off* adds a (date, factor) Yahoo lists."""
+    db_path = tmp_path / "dps.db"
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('DPS', 'general')")
+    rows = [  # fiscal year, EPS, diluted count, dividends per share, EPS/count filed, dividends filed
+        (2019, 4.00, 100.0, 2.00, "2021-01-20", "2021-01-20"),
+        (2020, 4.40, 100.0, 2.20, "2022-01-20", "2022-01-20"),
+        (2021, 1.21, 400.0, 2.42, "2023-01-20", "2022-01-20"),
+        (2022, 1.331, 400.0, 0.6655, "2023-01-20", "2023-01-20"),
+        (2023, 1.4641, 400.0, 0.73205, "2024-01-20", "2024-01-20"),
+    ]
+    for fy, eps, shares, dps, filed, dps_filed in rows:
+        conn.execute("INSERT INTO financials_annual (ticker, fiscal_year, period_end, filed_date, net_income, "
+                     "total_equity, eps_diluted, weighted_avg_shares_diluted, dividends_per_share) "
+                     "VALUES ('DPS', ?, ?, ?, ?, 800.0, ?, ?, ?)",
+                     (fy, f"{fy}-12-31", filed, eps * shares, eps, shares, dps))
+        for accn, when, kept in (("a", filed, None), ("b", dps_filed, dps)):
+            conn.execute("INSERT OR IGNORE INTO financials_annual_vintages (ticker, fiscal_year, accn, filed_date, "
+                         "period_end, eps_diluted, weighted_avg_shares_diluted, dividends_per_share) "
+                         "VALUES ('DPS', ?, ?, ?, ?, ?, ?, ?)",
+                         (fy, f"{accn}-{fy}", when, f"{fy}-12-31", eps if accn == "a" else None,
+                          shares if accn == "a" else None, kept))
+        conn.execute("INSERT INTO price_bars (ticker, date, close) VALUES ('DPS', ?, 20.0)", (f"{fy}-12-30",))
+    conn.execute("INSERT INTO price_bars (ticker, date, close) VALUES ('DPS', '2024-02-01', 20.0)")
+    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('DPS', '2022-02-01', 4.0)")
+    if spin_off:
+        conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('DPS', ?, ?)", spin_off)
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_secs_dividends_per_share_come_onto_todays_split_basis(tmp_path):
+    # BUG-049: DDM's growth reads SEC's dividends per share, which a filing restates for the splits made before it
+    # only. FY2021's figure was last filed before the 4:1 split that its restated EPS reflects.
+    conn = _connect(_dps_db(tmp_path))
+    by_fy = {r.fiscal_year: r for r in load_inputs(conn, "DPS").fy_records}
+    conn.close()
+    assert [by_fy[fy].dividends_per_share for fy in range(2019, 2024)] == pytest.approx(
+        [0.5, 0.55, 0.605, 0.6655, 0.73205])
+
+
+def test_secs_dividends_per_share_go_onto_the_basis_of_yahoos_payments_across_a_spin_off(tmp_path):
+    # Yahoo divides the payments before a spin-off by its price factor (FTV's 0.08 a quarter in 2024 reads 0.0603
+    # after Ralliant's 1.327), so the years before one compare with the TTM; SEC's figures as declared don't.
+    conn = _connect(_dps_db(tmp_path, spin_off=("2023-06-01", 1.319)))
+    by_fy = {r.fiscal_year: r for r in load_inputs(conn, "DPS").fy_records}
+    conn.close()
+    assert [by_fy[fy].dividends_per_share for fy in range(2019, 2024)] == pytest.approx(
+        [0.5 / 1.319, 0.55 / 1.319, 0.605 / 1.319, 0.6655 / 1.319, 0.73205])

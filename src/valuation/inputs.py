@@ -105,6 +105,13 @@ class FYRecord:
 
     ``depreciation_amortization`` and ``capex`` are absolute dollar figures, not
     per-share, so they are never split-adjusted.
+
+    ``dividends_per_share`` is SEC's dividends per share for the fiscal year (the
+    10-K's declared series, else its cash-paid one) on the basis of Yahoo's dividends:
+    today's split basis like the EPS (divided by ``split_factor``, after any split
+    between its own filing and the EPS's), then divided by the spin-off and
+    stock-dividend factors after the year, as Yahoo divides its payments
+    (``load_inputs``).
     """
 
     fiscal_year: int
@@ -119,6 +126,7 @@ class FYRecord:
     capex: Optional[float] = None
     split_factor: float = 1.0
     private_count: bool = False
+    dividends_per_share: Optional[float] = None
 
     def eps(self) -> Optional[float]:
         """Diluted EPS as reported, else net income / shares."""
@@ -656,7 +664,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
     fy_rows = conn.execute(
         "SELECT fa.fiscal_year, fa.period_end, fa.filed_date, fa.form, fa.net_income, fa.total_equity, fa.revenue, "
         "fa.eps_diluted, fa.weighted_avg_shares_diluted, fa.shares_outstanding, "
-        "fa.depreciation_amortization, fa.capex, "
+        "fa.depreciation_amortization, fa.capex, fa.dividends_per_share, "
         "ma.free_cash_flow, ma.ffo_per_share "
         "FROM financials_annual fa "
         "LEFT JOIN metrics_annual ma "
@@ -673,12 +681,13 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
             "SELECT fiscal_year, "
             "MAX(CASE WHEN weighted_avg_shares_diluted IS NOT NULL THEN filed_date END), "
             "MAX(CASE WHEN eps_diluted IS NOT NULL THEN filed_date END), "
-            "MAX(CASE WHEN shares_outstanding IS NOT NULL THEN filed_date END) "
+            "MAX(CASE WHEN shares_outstanding IS NOT NULL THEN filed_date END), "
+            "MAX(CASE WHEN dividends_per_share IS NOT NULL THEN filed_date END) "
             "FROM financials_annual_vintages WHERE ticker = ? GROUP BY fiscal_year",
             (ticker,),
         ).fetchall():
-            for field_name, filed_on in zip(("weighted_avg_shares_diluted", "eps_diluted", "shares_outstanding"),
-                                            (v[1], v[2], v[3])):
+            for field_name, filed_on in zip(("weighted_avg_shares_diluted", "eps_diluted", "shares_outstanding",
+                                             "dividends_per_share"), (v[1], v[2], v[3], v[4])):
                 if filed_on:
                     filed_by_field[(int(v[0]), field_name)] = filed_on
     except sqlite3.OperationalError:  # a database from before the vintages were kept
@@ -692,6 +701,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
     records: List[FYRecord] = []
     shares_detect: List[Optional[float]] = []
     detect_filed: List[Optional[str]] = []
+    dps_onto_detect: Dict[int, float] = {}
     # The valuations read the latest _MAX_FY_HISTORY years; the quality scores ask for one more (a 10-year
     # CAGR). Splits fold newest first, so an older year never moves a newer one.
     for r in fy_rows[-max_years:]:
@@ -719,6 +729,13 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
                                         filed_by_field.get((fiscal_year, "eps_diluted")))
         shares_detect.append(detect)
         detect_filed.append(filed_by_field.get((int(r["fiscal_year"]), detect_field)))
+        if r["dividends_per_share"] is not None:
+            # The year's dividends per share go onto the basis of the share figure the split detection reads, which
+            # a later filing may have restated for a split (the count's rule above, BUG-173); split_factor then
+            # takes them to today's, as it takes the EPS.
+            fiscal_year = int(r["fiscal_year"])
+            dps_onto_detect[fiscal_year] = r["dividends_per_share"] / _restated_between(
+                splits, filed_by_field.get((fiscal_year, "dividends_per_share")), detect_filed[-1])
         records.append(
             FYRecord(
                 fiscal_year=int(r["fiscal_year"]),
@@ -795,6 +812,15 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
             if rec.shares is not None:
                 rec.shares /= ads
     served = conn.execute("SELECT max(date) FROM price_bars WHERE ticker = ?", (ticker,)).fetchone()[0]
+    # Every step above divided the EPS by the factor it multiplied split_factor by. Yahoo also divides each payment
+    # by the spin-off and stock-dividend factors after it, up to the day it served it, as it does the closes (FTV's
+    # $0.08 a quarter in 2024 reads 0.0603 after Ralliant's 1.327 of 2025), so a year's payments compare with the
+    # TTM's across a spin-off. SEC's figure takes the factors after the year, up to the last bar, onto that basis.
+    for rec in records:
+        if rec.fiscal_year in dps_onto_detect:
+            rec.dividends_per_share = dps_onto_detect[rec.fiscal_year] / rec.split_factor / (
+                price_factor_after(str(rec.period_end)[:10], splits, str(served)[:10])
+                if served and rec.period_end else 1.0)
     # The band's closes, once as traded, differ from the price only by the share splits between them (BUG-303).
     bars_to_split_basis = bars_to_price_factor([s for s in splits if is_share_split(s[1])], priced_on,
                                                str(served)[:10] if served else None)
