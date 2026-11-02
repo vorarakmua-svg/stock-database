@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 15 · P3 167 · NEEDS-USER 0 · Decided: 7 · Verified: 134
+**Open:** P0 0 · P1 0 · P2 14 · P3 167 · NEEDS-USER 0 · Decided: 7 · Verified: 135
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2268,7 +2268,7 @@ Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `e
 Proposal: use a forward growth estimate if one is available, or drop the analyst term and rely on the clamped historical CAGR. This is a policy change, so it's the user's call.
 
 ### Q1 [UX] NEEDS-USER: show all companies on /screener before a filter is chosen
-Status: OPEN
+Status: VERIFIED (iteration 143; regression test tests/test_web_screener.py::test_a_bare_screener_page_runs_the_default_screen_on_load)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: run the default, unfiltered screen when /screener loads.
 Context: `src/webapp/static/screener.js` auto-runs only when the URL has a query string, so a bare `/screener` shows filters and no rows, which looks broken.
 Proposal: run the default (unfiltered) screen on load. Small effort, low risk. Awaiting the user's decision.

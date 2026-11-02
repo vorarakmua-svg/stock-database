@@ -273,9 +273,8 @@
   showSelects();
   renderChips();
   renderSaved();
-  if (window.location.search) {
-    // This script executes at parse time, but htmx is loaded with `defer`
-    // (runs before DOMContentLoaded) — delay the auto-run until it exists.
-    document.addEventListener('DOMContentLoaded', function () { run(); });
-  }
+  // A bare /screener runs the default, unfiltered screen too, so the page never
+  // opens empty (Q1). This script executes at parse time, but htmx is loaded with
+  // `defer` (runs before DOMContentLoaded) — delay the auto-run until it exists.
+  document.addEventListener('DOMContentLoaded', function () { run(); });
 })();

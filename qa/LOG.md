@@ -2549,3 +2549,15 @@ Gates: ruff ✓ mypy ✓ pytest 2779 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(valuation): a price above every bull is expensive without a bear median (BUG-304)
 Next: restart BUG-049 and BUG-260's workers; then BUG-271, -274, -295 and the decided questions.
 
+## Iteration 143: 2026-11-02 23:44: fix (Q1, decided)
+Picked: Q1 (implemented as a P2), inline; first restarted the loop (cancelled at the usage limit) and BUG-049's and
+BUG-260's workers, which had made nothing before they were stopped.
+Did: `screener.js` runs the default, unfiltered screen on load, not only when the URL has a query string.
+- RED: the new test failed (the location.search guard); GREEN. 1 of 1 mutant killed.
+- Not checked in a browser this iteration: the change is the init's one guard, and /ui/screen with no parameters is
+  the unfiltered screen the existing tests cover. The convergence sweep's UI pass will see it.
+Evidence: `qa/evidence/q1-mutants.json`.
+Result: Q1 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2780 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(web): a bare /screener runs the default screen (Q1)
+Next: BUG-049 and BUG-260 as their workers report; inline Q2 with Q5 (growth without the analyst figure).

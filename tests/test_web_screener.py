@@ -940,3 +940,16 @@ def test_oe_verdict_expensive_requires_buy_below(client, web_db):  # type: ignor
     resp = client.get("/api/screen", params={"oe_verdict": "expensive", "limit": 10})
     assert resp.status_code == 200
     assert "AAA" not in [i["ticker"] for i in resp.json()["items"]]
+
+
+def test_a_bare_screener_page_runs_the_default_screen_on_load() -> None:
+    # Q1 (decided): /screener with no query string showed the filters and no rows, which looked broken. The page's
+    # script now runs the default, unfiltered screen on load as it does a linked one: its init calls run() on
+    # DOMContentLoaded with no location.search guard.
+    from pathlib import Path
+
+    js = (Path(__file__).resolve().parent.parent / "src" / "webapp" / "static" / "screener.js").read_text(
+        encoding="utf-8")
+    init = js[js.index("// ---- Init from URL ----"):]
+    assert "document.addEventListener('DOMContentLoaded', function () { run(); });" in init
+    assert "if (window.location.search)" not in init
