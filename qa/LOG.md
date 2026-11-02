@@ -2509,3 +2509,17 @@ Result: BUG-249 VERIFIED; BUG-297 VERIFIED with it.
 Gates: ruff ✓ mypy ✓ pytest 2775 passed, 1 skipped, 1 warning | CI: PR #29
 Commit: (this commit) fix(parsers): trailing years step over an end inside a quarter (BUG-249)
 Next: record code review 24 (1 Important: the band's spin-off factor counted twice in two paths) and fix it.
+
+## Iteration 140: 2026-11-02 21:19: code review 24
+Picked: code review 24, due after five fixes since review 23 (BUG-246, -007, -172, -245, -258/160).
+Did: an opus reviewer read `git diff 100facf..a873067` read-only, ran the suite on an export (exit 0) and probed a DB
+copy and unit tests.
+- Critical: none. Important 1 (proven by unit tests, no case on today's data): BUG-303, the band's spin-off factor.
+- Minor 1 (proven on real data): BUG-304, SNDK's lost verdict; decided by the loop's recommendation.
+- Minor 2-4: BUG-305 (Graham's window), BUG-306 (docs), BUG-307 (a refresh's served day; unproven).
+- Checked clean: BUG-246's guard; every consumer of an N/A bear (32 rows, no crash over 502); the quartiles match the
+  oracle's; BUG-245 moves only ODFL, PCAR, RJF and WRB; BUG-258's failure paths write nothing; no 3.10+ syntax.
+Evidence: `qa/evidence/review24.txt`; %LOCALAPPDATA%\stockdb-qa\review24.
+Result: review 24 open on BUG-303 (Important) until it is fixed.
+Gates: no code change | CI: PR #29
+Next: BUG-303, then BUG-304.

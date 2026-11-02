@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 15 · P3 164 · NEEDS-USER 0 · Decided: 7 · Verified: 132
+**Open:** P0 0 · P1 0 · P2 17 · P3 167 · NEEDS-USER 0 · Decided: 7 · Verified: 132
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1938,6 +1938,37 @@ Status: OPEN
 Found: iteration 135 (BUG-172's oracle run) | Fixed: | Regression test:
 Repro: `qa/oracle/valuation_oracle.py --db <copy>` level 2: HOOD multiples band_median stored 2.1397, oracle 1.6950, on head and with BUG-172 alike (the only multiples mismatch left after it). Not diagnosed: likely the book value per share's count or basis.
 Expected: the oracle's within 0.5%.   Actual: 29% apart on the base.
+
+### BUG-303 [P2][VAL] The band's FY-end close counts a spin-off factor twice where the price and the bars sit on either side of it (since BUG-172)
+Status: OPEN
+Found: code review 24 (`qa/evidence/review24.txt`, Important 1) | Fixed: | Regression test:
+Repro: inputs.py ~850-854 multiplies the close by `price_factor_after(bar, splits, served)` and then by `bars_to_price`, which holds every factor between the price's day and the last bar, spin-offs included. (A) a price dated before a spin-off with bars served after it (BUG-094's path): the close reads as traded x f (GE-like 1.281: 89.67 for 70); before 4ab45e4 it was right. (B) a spin-off after the last bar with the price after it (BUG-128's rebased refresh): as traded / f (54.64 for 60.94), and README's "as a full collection would put them" is false. The oracle's `bars_to_price_basis` has the same flaw. No case on today's data (every price after its last bar, no factor between). Tests in %LOCALAPPDATA%\stockdb-qa\review24\src\tests\test_review24.py.
+Expected: the close as traded, on the price's share-split basis only.   Actual: as above.
+
+### BUG-304 [P2][VAL] With no bear median a verdict is never given, even for a price above every bull case: SNDK expensive to "Not valued" (since BUG-007)
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): a price above the bull median reads expensive with or without a bear median; below it, with no bear, there is no verdict (cheap and fair can't be told apart).
+Found: code review 24 (Minor 1) | Fixed: | Regression test:
+Repro: SNDK is valued by Graham alone, whose bear is N/A (a loss year in its window): base = bull 410.47 at 1,238.03 reads no verdict (engine.verdict needs both medians); the screener's verdict filters drop it.
+Expected: expensive.   Actual: none.
+
+### BUG-305 [P3][VAL] Graham's bear window is the last three years with EPS and book value, so a loss year without equity drops out
+Status: OPEN
+Found: code review 24 (Minor 2) | Fixed: | Regression test:
+Repro: models.py ~285-310: FY2022 EPS 2, FY2023 EPS -1 with no equity, FY2024 2, FY2025 3: the bear reads 21.21, not N/A. No case on today's data.
+Expected: the window from the last 3 fiscal years on EPS alone.   Actual: it reaches back past the loss.
+
+### BUG-306 [P3][DOCS] The tangible Graham docstring, USAGE_GUIDE's Graham and band lines and renderVAL's JSDoc predate BUG-246, BUG-007 and BUG-172
+Status: OPEN
+Found: code review 24 (Minor 3) | Fixed: | Regression test:
+Repro: indicators.py ~353 "lowest and highest positive EPS"; USAGE_GUIDE.md ~335-337 (no latest-FY rule, N/A bear or quartiles); app.js ~372 types bear as a number.
+Expected: they describe the code.   Actual: as above.
+
+### BUG-307 [P3][STORE] A refresh dates its payments by Yahoo's latest listed split, which can predate a stored split
+Status: OPEN
+Found: code review 24 (Minor 4; unproven: needs Yahoo's list) | Fixed: | Regression test:
+Repro: sqlite_store.py ~1476-1478 serves a refresh's payments on `_served_day` with no bars, the latest split Yahoo lists; a stored split dated after it would divide every payment by its ratio (`_dividend_onto`).
+Expected: served on the refresh's own day, as a collection's last bar would be (max(latest listed split, collected_at - 1 day)).   Actual: possibly years earlier.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: OPEN
