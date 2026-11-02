@@ -2490,3 +2490,22 @@ Result: BUG-252 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2771 passed, 1 skipped, 1 warning | CI: PR #29
 Commit: (this commit) fix(parsers): a to-common figure its own EPS contradicts gives way (BUG-252)
 Next: BUG-249 (decided: apply, after history_vs_yahoo and look-ahead); code review 24 is running.
+
+## Iteration 139: 2026-11-02 21:18: fix (BUG-249, decided)
+Picked: BUG-249 (P2), prepared and measured in iteration 130; the checks skipped then for low RAM run now.
+Did: the trailing-year windows step over a period end that holds no dollar flow and lies between two dollar-flow
+quarter ends one quarter apart (`ttm._inside_a_quarter`); financials_quarterly is untouched.
+- RED: 2 of 4 new tests failed (2 guards); GREEN. 8 of 8 mutants killed, by me on the checkout.
+- history_vs_yahoo on the worker's two copies (head and fix code, all 502 re-collected offline): the seam gate
+  120/121 to 121/121 (GL's 2012 seam, BUG-297, now folds); every other gate the same or better; P/E against Yahoo fails
+  on both (88% gate, 86% and 85%), as before. valuations and valuation_summary identical against the reference.
+- Look-ahead: not applicable. lookahead.py checks the annual vintages' debt and cash fields; compute_ttm writes only
+  financials_ttm, and the worker's diff shows financials_annual and its vintages unchanged.
+- Moves, measured at 7b6931c (iteration 130): no median, verdict or owner-earnings verdict; 19 historical-value labels
+  (listed under BUG-249), as decided. Later fixes (BUG-245/246/007/172/252/258) don't touch the history's inputs.
+- It reaches the user's DB at each company's next collection (financials_ttm is stored at collection).
+Evidence: `qa/evidence/bug249-{investigation,verify-mine}.txt`; %LOCALAPPDATA%\stockdb-qa\bug249\out (hvy_*.txt).
+Result: BUG-249 VERIFIED; BUG-297 VERIFIED with it.
+Gates: ruff ✓ mypy ✓ pytest 2775 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(parsers): trailing years step over an end inside a quarter (BUG-249)
+Next: record code review 24 (1 Important: the band's spin-off factor counted twice in two paths) and fix it.

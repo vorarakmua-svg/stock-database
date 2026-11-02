@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 16 · P3 165 · NEEDS-USER 0 · Decided: 7 · Verified: 130
+**Open:** P0 0 · P1 0 · P2 15 · P3 164 · NEEDS-USER 0 · Decided: 7 · Verified: 132
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1874,9 +1874,9 @@ Repro: src/valuation/history_inputs.py `normalize_share_series` / `_seam_run` ma
 Expected: each seam its own split, by filing date (store each quarter's filing date; financials_quarterly.filed_date is NULL) or an order-preserving match. A quick approximation from the annual vintages fixed WRB but broke CPRT and ROL: it needs design and tests for APH, NFLX, WRB, CPRT and ROL.
 
 ### BUG-249 [P2][TTM] An instant-only quarterly row breaks the trailing years around it: 1,222 trailing years missing inside today's 10-year windows
-Status: OPEN
+Status: VERIFIED (iteration 139)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): apply the prepared fix, after running history_vs_yahoo on its copies and lookahead.py.
-Found: build M5-6 (history_vs_yahoo on the S&P 500; the general case of BUG-096) | Fixed: | Regression test:
+Found: build M5-6 (history_vs_yahoo on the S&P 500; the general case of BUG-096) | Fixed: (this commit) | Regression tests: tests/test_ttm.py (4 items with the guards; `_inside_a_quarter`)
 Repro: src/parsers/ttm.py `compute_ttm` (line 63) forms four-quarter windows over every period end, so a financials_quarterly row holding no flow figure (an adoption-day instant: AES 2018-01-01 retained earnings, ABT 2018-01-05 long-term debt; GL 2011-07-01 shares outstanding) breaks the three windows that cross it. Of the 502: 602 such rows in 306 companies cost 1,802 trailing years, 1,222 of them inside today's 10-year history windows (260 companies, 68 of the 127). GL's history gap is the seam gate's GL miss. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C4.
 Expected: windows over the period ends that carry a flow figure. financials_ttm is stored at collection, so the fix needs a re-parse from the cache or a migration.   Measured on a copy with the years rebuilt: 29,815 valuation_history rows (284 companies), 1,319 ranges, 268 quality_scores rows change; no valuation, median or verdict.
 Measured (iteration 130, on 7b6931c; `qa/evidence/bug249-investigation.txt`): a period end with no dollar flow (share counts and per-share figures don't count) lying strictly between two dollar-flow quarter ends one quarter apart is stepped over (`ttm._inside_a_quarter`); any other end keeps today's behaviour. No schema change; financials_quarterly untouched. BUG-096's ADI years return at its expected 888.4M and 908.9M.
@@ -1904,8 +1904,8 @@ Repro: EG (Everest Group) tags no NetIncomeLoss for FY2016-19, and canonical.py'
 Expected: EG's net income from the tag consistent with EPS x the count, and its counts rescaled.   Actual: as above.
 
 ### BUG-297 [P3][VAL] GL's 2012 seam stays unfolded: x0.901 at its 3:2 of 2014
-Status: OPEN
-Found: iteration 127 (BUG-248's measurement, `qa/evidence/bug248-investigation.txt`) | Fixed: | Regression test:
+Status: VERIFIED (iteration 139, by BUG-249's fix: GL's 2011-07-01 count broke the trailing years around its seam; history_vs_yahoo's seam gate 120/121 to 121/121)
+Found: iteration 127 (BUG-248's measurement, `qa/evidence/bug248-investigation.txt`) | Fixed: (this commit) | Regression test: tests/test_ttm.py::test_a_share_count_beside_a_quarter_breaks_no_trailing_year
 Repro: `qa/oracle/history_vs_yahoo.py` on the 502: market cap at the 2014-07-02 x1.5 split's seam, between 2011-12-31 and 2012-03-31, moves x0.901. The last of 121 seams (120 continuous). Not diagnosed.
 Expected: continuous within 10%.   Actual: x0.901.
 
