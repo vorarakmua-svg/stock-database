@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 3 · P2 20 · P3 163 · NEEDS-USER 0 · Decided: 7 · Verified: 123
+**Open:** P0 0 · P1 2 · P2 20 · P3 163 · NEEDS-USER 0 · Decided: 7 · Verified: 124
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1854,9 +1854,9 @@ Repro: src/valuation/inputs.py `_normalize_splits` (feeds `load_inputs`: the val
 Expected: fold the declared splits dated between the two counts' filings whenever the seam is nearer their product than 1.0.   Measured on a copy: 21 per-share rows to the oracle's values; predictability ODFL 3.5 to 4.5 stars, PCAR 1 to 3, RJF 3.5 to 4.5, WRB 1 to 4; ODFL Lynch 42.38/56.90/71.42 to 58.08/72.60/72.60 and its medians 47.10/56.90/71.42 to 58.08/72.60/72.60; WRB's bear median 37.35 to 42.89; no verdict changes (both are expensive). Decide whether to apply it (recommended: the oracle agrees with every changed value). Until then the stored figures stay.
 
 ### BUG-246 [P1][VAL] Graham values an older fiscal year when the latest lacks EPS or a share count (ARES, LEN, VTRS)
-Status: OPEN
+Status: VERIFIED (iteration 133)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): the spec's reading: Graham values the latest fiscal year only, N/A with a reason when it lacks EPS or book value per share.
-Found: build M5-6 (the valuation oracle on the S&P 500) | Fixed: | Regression test:
+Found: build M5-6 (the valuation oracle on the S&P 500) | Fixed: (this commit) | Regression tests: tests/test_valuation_models.py::test_value_graham_is_na_when_the_latest_year_lacks_eps, ::test_value_graham_is_na_when_the_latest_year_lacks_book_value_per_share
 Repro: src/valuation/models.py `value_graham` (282-286) takes the latest year with both EPS and book value per share; the valuation-layer spec says the latest fiscal year's. ARES FY2025 has no EPS or count in the companyfacts (per-class reporting), LEN FY2025 tags only basic EPS and the basic count, VTRS FY2024-25 has EPS (-0.53, -3.00) but no count (only dei's cover count, which the parser doesn't read): Graham silently values FY2024, FY2024 and FY2023. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C6.
 Expected (a choice): Graham N/A when the latest fiscal year lacks EPS or book value per share, or the parser filling diluted from basic (LEN) and reading dei:EntityCommonStockSharesOutstanding (VTRS); either moves these medians. Measured with the latest-FY reading: ARES 32.31/42.56/51.48 to 52.59/65.70/83.14 (expensive either way), LEN 79.28/84.13/100.03 to 71.55/71.55/71.55 and its verdict at $84.92 fair to expensive, VTRS 6.00/6.93/25.54 to 13.43/15.49/21.63 (fair). Until then the stored values stay.
 

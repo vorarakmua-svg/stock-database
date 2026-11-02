@@ -278,11 +278,22 @@ LYNCH_PE_CAP = 25.0
 
 
 def value_graham(inputs: ValuationInputs) -> ValuationResult:
-    """Graham Number: sqrt(22.5 * EPS * BVPS). Bear/bull vary EPS over 3 FYs."""
+    """Graham Number: sqrt(22.5 * EPS * BVPS) on the latest fiscal year. Bear/bull vary EPS over 3 FYs.
+
+    The latest fiscal year must carry EPS and book value per share; an older year never stands in for it
+    (BUG-246: ARES, LEN and VTRS were valued on FY2023-24 beside today's price)."""
     recs = [r for r in inputs.fy_records
             if r.eps() is not None and r.bvps() is not None]
     if not recs:
         return _na("graham", "EPS or book value unavailable")
+    newest = inputs.fy_records[-1]
+    if newest.eps() is None:
+        return _na("graham", f"EPS unavailable for the latest fiscal year (FY{newest.fiscal_year})",
+                   basis_fy=newest.fiscal_year)
+    if newest.bvps() is None:
+        return _na("graham",
+                   f"book value per share unavailable for the latest fiscal year (FY{newest.fiscal_year})",
+                   basis_fy=newest.fiscal_year)
     latest = recs[-1]
     eps = latest.eps()
     bvps = latest.bvps()

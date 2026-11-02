@@ -398,7 +398,7 @@ five sector-aware models per ticker, each producing a bear/base/bull per-share r
 |---|---|---|
 | **DCF** (two-stage FCF) | general, utility, energy | Median 3-year FCF, growth = min(historical CAGR, analyst estimate), CAPM discount rate |
 | **DDM** (multi-stage Gordon) | any steady dividend payer | Trailing-12-month dividend, dividend CAGR |
-| **Graham Number** | any company with positive EPS + book value | `sqrt(22.5 × EPS × BVPS)` |
+| **Graham Number** | any company with positive EPS + book value in its latest fiscal year (N/A if that year lacks either) | `sqrt(22.5 × EPS × BVPS)` |
 | **Peter Lynch fair value** | general, utility, energy | Growth-rate-as-fair-P/E × EPS |
 | **Historical multiples band** | all sectors (sector-appropriate multiple: P/E, P/B for banks/insurers, P/FFO for REITs) | Company's own 5-year multiple range |
 

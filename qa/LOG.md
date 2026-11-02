@@ -2375,3 +2375,17 @@ Gates: no code change | CI: PR #29, first run on this push
 Commit: (this commit) chore(qa): draft PR #29 opened
 Next: review BUG-252 and BUG-245 when their workers report.
 
+## Iteration 133: 2026-11-02 20:16: fix (BUG-246, decided)
+Picked: BUG-246 (P1), done inline while BUG-245's and BUG-252's workers run.
+Did: `value_graham` values the latest fiscal year only: N/A, with the year named, when it lacks EPS or book value per
+share; an older year no longer stands in. The tangible-book indicator follows it. README's model table says so.
+- RED: 2 new tests failed (Graham valued FY2022); GREEN. 3 of 3 mutants killed.
+- Measured on two DB copies, engine over all 502 (head vs fix): Graham N/A at ARES, LEN, VTRS; SKYD's reason only.
+  Medians: ARES base 42.56 to 65.70, LEN 84.13 to 71.55, VTRS 6.93 to 15.49. LEN's verdict fair to expensive, as
+  measured before the decision. No owner-earnings verdict or label moves; graham_tangible N/A at ARES and LEN.
+- It reaches the user's DB at each company's next valuation run.
+Evidence: %LOCALAPPDATA%\stockdb-qa\bug246\out (verdicts.txt, diff.txt, graham.txt); `qa/evidence/bug246-mutants.json`.
+Result: BUG-246 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2734 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(valuation): Graham values the latest fiscal year or none (BUG-246)
+Next: BUG-245 and BUG-252 when their workers report; BUG-258 with BUG-160.

@@ -378,6 +378,26 @@ def test_value_graham_na_no_data():
     assert res.na_reason == "EPS or book value unavailable"
 
 
+def test_value_graham_is_na_when_the_latest_year_lacks_eps():
+    # BUG-246 (ARES, LEN): the spec values the latest fiscal year; an older year with EPS stays unused.
+    recs = [_fy(2022, net_income=None, equity=2000.0, eps=2.0, shares=100.0),
+            _fy(2023, net_income=None, equity=2000.0, eps=None, shares=100.0)]
+    res = value_graham(_inputs(fy_records=recs))
+    assert res.applicable is False
+    assert res.na_reason == "EPS unavailable for the latest fiscal year (FY2023)"
+    assert res.basis_fiscal_year == 2023
+
+
+def test_value_graham_is_na_when_the_latest_year_lacks_book_value_per_share():
+    # BUG-246 (VTRS): EPS but no share count, so no book value per share.
+    recs = [_fy(2022, net_income=None, equity=2000.0, eps=2.0, shares=100.0),
+            _fy(2023, net_income=None, equity=2000.0, eps=1.5, shares=None)]
+    res = value_graham(_inputs(fy_records=recs))
+    assert res.applicable is False
+    assert res.na_reason == "book value per share unavailable for the latest fiscal year (FY2023)"
+    assert res.basis_fiscal_year == 2023
+
+
 # ---- Peter Lynch ----
 def test_value_lynch_hand_computed():
     # EPS CAGR 10%/yr; analyst 12% -> min is hist 10%.
