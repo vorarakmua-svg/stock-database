@@ -2342,3 +2342,15 @@ Evidence: `qa/evidence/review23.txt`; scripts in %LOCALAPPDATA%\stockdb-qa\revie
 Result: review 23 closed with no Critical or Important finding. New: BUG-299, BUG-300.
 Gates: no code change | CI: no PR (Q10)
 Next: BUG-249 (its worker is preparing it).
+
+## Iteration 130: 2026-11-02 19:26: BUG-249 measured; it moves 19 labels, so it is the user's
+Picked: BUG-249, the oldest open P2.
+Did: an opus worker found the cause and prepared the fix in an export, and measured it on two DB copies over all 502;
+I read the diff and the label list against its output files.
+- The rule: windows step over a period end with no dollar flow inside a quarter (`ttm._inside_a_quarter`).
+- No median, verdict or owner-earnings verdict moves; 19 historical-value labels do (listed under BUG-249).
+- Not run, for low RAM: history_vs_yahoo on the copies and lookahead.py. To run before applying.
+Evidence: `qa/evidence/bug249-investigation.txt`; outputs in %LOCALAPPDATA%\stockdb-qa\bug249\out.
+Result: BUG-249 NEEDS-USER. Nothing applied.
+Gates: 2736 passed, 1 skipped (the worker's, on its export) | CI: no PR (Q10)
+Next: BUG-252, when memory allows.

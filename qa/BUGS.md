@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 6 · P3 163 · NEEDS-USER 23 · Verified: 123
+**Open:** P0 0 · P1 0 · P2 5 · P3 163 · NEEDS-USER 24 · Verified: 123
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1868,10 +1868,14 @@ Repro: src/valuation/history_inputs.py `normalize_share_series` / `_seam_run` ma
 Expected: each seam its own split, by filing date (store each quarter's filing date; financials_quarterly.filed_date is NULL) or an order-preserving match. A quick approximation from the annual vintages fixed WRB but broke CPRT and ROL: it needs design and tests for APH, NFLX, WRB, CPRT and ROL.
 
 ### BUG-249 [P2][TTM] An instant-only quarterly row breaks the trailing years around it: 1,222 trailing years missing inside today's 10-year windows
-Status: OPEN
+Status: NEEDS-USER (the fix moves 19 historical-value labels, no median or verdict; recommended: apply, prepared)
 Found: build M5-6 (history_vs_yahoo on the S&P 500; the general case of BUG-096) | Fixed: | Regression test:
 Repro: src/parsers/ttm.py `compute_ttm` (line 63) forms four-quarter windows over every period end, so a financials_quarterly row holding no flow figure (an adoption-day instant: AES 2018-01-01 retained earnings, ABT 2018-01-05 long-term debt; GL 2011-07-01 shares outstanding) breaks the three windows that cross it. Of the 502: 602 such rows in 306 companies cost 1,802 trailing years, 1,222 of them inside today's 10-year history windows (260 companies, 68 of the 127). GL's history gap is the seam gate's GL miss. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C4.
 Expected: windows over the period ends that carry a flow figure. financials_ttm is stored at collection, so the fix needs a re-parse from the cache or a migration.   Measured on a copy with the years rebuilt: 29,815 valuation_history rows (284 companies), 1,319 ranges, 268 quality_scores rows change; no valuation, median or verdict.
+Measured (iteration 130, on 7b6931c; `qa/evidence/bug249-investigation.txt`): a period end with no dollar flow (share counts and per-share figures don't count) lying strictly between two dollar-flow quarter ends one quarter apart is stepped over (`ttm._inside_a_quarter`); any other end keeps today's behaviour. No schema change; financials_quarterly untouched. BUG-096's ADI years return at its expected 888.4M and 908.9M.
+Fix prepared (%LOCALAPPDATA%\stockdb-qa\bug249\out, `fix_src.diff`, `fix_tests.diff`): RED 2 of 4 new tests; gates 2736 passed, 1 skipped; 8 of 8 mutants. On DB copies over all 502: financials_ttm 1,259 rows added, 355 filled, 0 existing values changed; 29,628 valuation_history rows, 1,354 ranges, 244 indicators, 258 quality_scores rows; warnings AXON, KMI, NRG price_far_above_value go, BA and WAT's come, DE P/E at high.
+For the user: medians 0, verdicts 0, owner_earnings_verdicts 0. Historical values move at 233 companies and 19 labels change at the stored price: AES below to far below, AJG near to above, AMD above to near, APO below to far below, ARES far below to below, AXON far above to above, BA above to far above, BEN above to near, KMI far above to above, KVUE none to near, LLY near to above, MU near to above, NRG far above to above (38.24 to 72.69), OTIS none to below, PNC none to near, SLB near to above, TPR near to above, UPS far below to below, WAT none to far above.
+Not run (low RAM): history_vs_yahoo on the copies, lookahead.py. Residuals: 32 balance-sheet-only trailing rows today's code writes are no longer produced (stay in an existing DB); windows still break at 133 pairs of ends (71 near-duplicate ends with flows: ACN, CAH, BBY's 2011).
 
 ### BUG-250 [P3][VAL] The history's latest point misses a quarter a collection stored after the last bar
 Status: OPEN
