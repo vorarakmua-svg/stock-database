@@ -30,10 +30,12 @@ the two methods check each other): a fiscal year's share count is the diluted we
 filing that gives one; without any, net income / diluted EPS (when |EPS| >= 0.10) from the latest filing that
 gives both; then the shares outstanding from the latest filing that gives them; times every declared share split
 dated after that filing. A diluted count more than 100x away from the same filing's net income / diluted EPS is a
-units error, and that quotient is used instead. A count its filing can't check that way is checked against the
-same fiscal year's count in financials_annual (the latest parse of the filings), else against the neighbouring
-years' counts, and replaced by that reference when more than 100x away; every replacement is printed. The year's
-EPS is the latest filing's diluted EPS over the splits dated after that filing.
+units error, and the count goes onto the power of 1000 nearest that quotient (the quotient only sizes it: its net
+income is the code's parse, which can be another figure than the one EPS divides, BUG-252). A count its filing
+can't check that way is checked against the same fiscal year's count in financials_annual (the latest parse of the
+filings), else against the neighbouring years' counts, and replaced by that reference when more than 100x away;
+every replacement is printed. The year's EPS is the latest filing's diluted EPS over the splits dated after that
+filing.
 
 Pre-listing years: a fiscal year ending before the company's first price bar + 1 year (before the listing, or
 the listing year) isn't compared in the per-share and CAGR gates. The code keeps the listing seam folded there
@@ -311,8 +313,9 @@ def eps_count(v: Tuple) -> Num:
 def year_count(vintages: List[Tuple]) -> Optional[Tuple[float, str, Num, Tuple]]:
     """The year's share count: (count, where it came from, that filing's NI / diluted EPS, the filing).
 
-    The diluted weighted count from the latest filing that gives one, unless it is more than UNITS_GAP times away
-    from the same filing's net income / diluted EPS (a units error), which is used instead; without any, net
+    The diluted weighted count from the latest filing that gives one, on the power of 1000 nearest the same
+    filing's net income / diluted EPS where it is more than UNITS_GAP times away from it (a units error: the filed
+    figure, in units, since that net income is the code's parse and can be another figure, BUG-252); without any, net
     income / diluted EPS from the latest filing that gives both; then the latest filing's shares outstanding.
     The preference runs across the filings (later filings often repeat an old year's balance-sheet share figure
     alone), while a quotient and its guard stay within one filing, on its split basis."""
@@ -320,7 +323,10 @@ def year_count(vintages: List[Tuple]) -> Optional[Tuple[float, str, Num, Tuple]]
         if v[V_DILUTED] is not None and v[V_DILUTED] > 0:
             ref = eps_count(v)
             if ref is not None and abs(math.log(v[V_DILUTED] / ref)) > math.log(UNITS_GAP):
-                return ref, f"NI / diluted EPS (the diluted count {fmt(float(v[V_DILUTED]))} is in other units)", ref, v
+                scale = 1000.0 ** round(math.log(ref / v[V_DILUTED], 1000.0))
+                filed = fmt(float(v[V_DILUTED]))
+                return (v[V_DILUTED] * scale, f"diluted weighted x{scale:g} (the filed {filed} is in other units "
+                        f"than NI / diluted EPS, {fmt(ref)})", ref, v)
             return float(v[V_DILUTED]), "diluted weighted", ref, v
     for v in reversed(vintages):
         ref = eps_count(v)
@@ -539,10 +545,10 @@ class Oracle:
         for y in self.years:
             if y in unchecked:
                 self._check_with_neighbours(y)
-            if "in other units" in str(self.basis[y]["source"]) and str(self.basis[y]["source"]).startswith("NI"):
+            if "in other units" in str(self.basis[y]["source"]) and str(self.basis[y]["source"]).startswith("diluted"):
                 b = self.basis[y]
-                self.units.append(f"{t} FY{y}: {b['source']}, filed {b['filed']}: used that filing's NI / diluted "
-                                  f"EPS, {fmt(b['count'])}")
+                self.units.append(f"{t} FY{y}: {b['source']}, filed {b['filed']}: used the filed count on that "
+                                  f"filing's NI / diluted EPS's power of 1000, {fmt(b['count'])}")
         self.ps: Dict[int, Dict[str, Num]] = {}
         for y in self.years:
             b = self.basis[y]
