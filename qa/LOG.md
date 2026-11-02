@@ -2354,3 +2354,14 @@ Evidence: `qa/evidence/bug249-investigation.txt`; outputs in %LOCALAPPDATA%\stoc
 Result: BUG-249 NEEDS-USER. Nothing applied.
 Gates: 2736 passed, 1 skipped (the worker's, on its export) | CI: no PR (Q10)
 Next: BUG-252, when memory allows.
+
+## Iteration 131: 2026-11-02 20:04: decisions
+Picked: the 24 NEEDS-USER items: the user said "loop all fix bugs, use your recommendation for questions, loop
+until all bug fixed".
+Did: each item's recorded recommendation (or, where none was recorded, the loop's) is its decision, written beside
+its status. 17 become OPEN work (the 10 questions to implement count as P2); 7 are DECIDED with no code change.
+Where the action would leave the repo (bulk downloads Q12, an install Q14, a scheduled task Q15), the decision is
+the default that doesn't. Writes to the user's DB stay out of the loop: fixes reach it at each next collection.
+Result: NEEDS-USER 0. The loop restarts under `qa/LOOP_ADDENDUM.md`.
+Gates: no code change | CI: no PR yet (Q10 decided: open one)
+Next: BUG-245 (P1, oldest), then BUG-246 and BUG-258 with BUG-160.

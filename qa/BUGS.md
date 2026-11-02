@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 5 · P3 163 · NEEDS-USER 24 · Verified: 123
+**Open:** P0 0 · P1 3 · P2 20 · P3 163 · NEEDS-USER 0 · Decided: 7 · Verified: 123
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -64,7 +64,8 @@ Root cause: `_normalize_splits` (`src/valuation/inputs.py`) multiplied in the ob
 Notes: it did: four of the eight L6 multiples mismatches were this bug. Mixed bases within one year (AAPL FY2018: weighted shares restated, shares_outstanding not) remain a VALID-04 topic. Code review 1 (iteration 10): splits dated after the latest fiscal year are never applied at all (KLAC, BKNG): BUG-014. RTX's "resolved" Lynch is agreement on a shared reading (its 1.589 is a spin-off price factor; see L12), not proof.
 
 ### BUG-007 [P2][VAL] Graham bear case ignores loss years
-Status: NEEDS-USER (decide the intended bear case; parked in iteration 8 so the priority rule stops picking it)
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): the bear case is N/A, excluded from the bear median, when a loss year is in its window (the spec's min(EPS) makes the square root undefined).
 Found: iteration 4 via VAL-03 | Fixed: — | Regression test: —
 Repro: BA EPS FY2023 −3.67, FY2024 −18.36, FY2025 +2.48 → stored eps_bear = eps_base = eps_bull = 2.48.
 Expected: spec "bear = min(EPS over last 3 FYs)" = −18.36, so Graham's bear value is undefined (√ of a negative).
@@ -422,7 +423,8 @@ Notes: the oracle applies simple ratios unconditionally too, so its rule changes
 Fix: values stay on the basis of the price they are compared with. `load_inputs` takes the latest priced snapshot's day; `_apply_later_splits` applies a post-filing split only up to that day, and Yahoo's dividends and FY-end price bars, adjusted for every split it knew when fetched, are multiplied back by any split dated after both the latest filing and that day. The oracle took the rule first (30b3c5a): on the scenario valued by the unfixed code it flagged all five applicable models (10x), and its verdicts on the real and golden copies didn't change. The whole scenario (`iter43_stale_db.py`: 10 FYs, dividends, bars) valued by the fix: median $277.31 beside the $1,000 price (was $27.73), and the oracle agrees at both levels (`qa/evidence/iter43-bug048-{oracle,e2e}.txt`). Impact: 0 of 762 real and 0 of 114 golden valuation rows change. Three mutants each fail a test.
 Notes: a split between the price's day and the latest filing, which the filing restated, is a different case: BUG-060.
 ### BUG-049 [P2][VAL] BUG-017's third fix reads a special dividend next to a window end as a schedule change
-Status: NEEDS-USER (§10: BUG-017 has had three fixes; how DDM reads the payment history is your decision)
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): option (a): DDM's growth history from SEC's annual dividends per share, Yahoo's payments for the latest rate, with a fallback where a filer tags only point-in-time payments.
 Found: iteration 39 by code review 5 (I3), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
 Repro: a quarterly dividend growing 5% a year, with 2026's March payment ex-dated 2025-12-31 (`t_bug017/s3_min.py`), reads 5.12% (DDM base $125.23). Add a 3× special in 2024 and HEAD reads 7.75% ($139.97), against 5.12% at 61f8a56: the adjacent-year condition (e84da96) counts the special as a payment, so 2025's slip is no longer scaled. Shapes misread at both revisions, true growth 5% (`ddm_shapes.py`): semiannual to quarterly with a slip, 7.75%; quarterly to monthly with a slip, 5.98%; annual to semiannual from November 2025 with the transition year last, 9.84% (DDM $150.78 against $125); semiannual 40/60 with a slip, 4.36%. The oracle mirrors the rule and gives the same numbers, so it can't see any of them.
 Impact today: none (every DDM value is the same at 61f8a56 and 98013f4: 99 real and 14 golden payers).
@@ -1218,7 +1220,8 @@ Review 21 (iteration 115): the fix's "13 away, each an own total of another scop
 Fix (iteration 111, `qa/evidence/bug159-{investigation,done}.txt`): short_term_debt also reads LongTermDebtAndCapitalLeaseObligationsCurrent; BUG-141's rule counts the maturities a filing shows beside its borrowings or alone (behind a 95% made-up test: EXC FY2023); and `_current_debt_combined` adds a DebtCurrent = the borrowings plus the maturities where a filing shows both and no DebtCurrent, unless the borrowings hold them (the filer's own total; IBM's maturities plus their tagged parts, or within 1%; a quarter by its latest annual report), with DOW's own parts, DUK's DebtAndCapitalLeaseObligations, VZ's maturities that hold the borrowings and EXC's kept total measured one by one. Over the 502: total debt changes in 1,353 annual years at 155 filers (1,273 up, 80 down); 222 years at 42 filers move to their own totals (VZ FY2020-23 $150.67B in FY2023, LIN, CVS, APD FY2013, ABBV FY2024), 13 away, each an own total of another scope; IBM unchanged in every cell; review 20's 18 listed years all check out. short_term_debt joins the integrity check's outlier exclusions (NKE and VMC would have scored 75; IEX, APA, HRL and MDT's false flags go too). No median or verdict moves; debt ratios, scores (24 composites +-2 to 4), EPV at 76 companies, the valuation history and the next refresh's EV family (85 companies, ECHO +17.6%) do. Residuals: BUG-259.
 
 ### BUG-160 [P2][WEB] BUG-128 regression: a factor refresh values DDM's trailing year as of the refresh day on the payments the last collection stored: SCCO's DDM $53.63 for $68.16
-Status: NEEDS-USER (the fix moves medians back to a full collection's values; recommended: option A' with BUG-258)
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): option A' with BUG-258: a saved refresh stores Yahoo's dividends from the request that already serves the splits.
 Found: iteration 98 by code review 14 (I1), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: — | Regression test: —
 Repro: since 8a90337 the quote job revalues a ticker whose refresh stored a new factor (`src/webapp/jobs.py`), and `load_inputs` takes `as_of` from the latest snapshot's day, now the refresh's (`src/valuation/inputs.py`), where DDM anchors its trailing twelve months (`src/valuation/models.py`); `upsert_quote` stores the splits but no dividends, so every payment since the collection is missing from that year. Review 14's fake market with the refresh and a full collection on 2026-08-20, after a 2026-08-17 payment: GE-like 1.253, DDM 252.46 against the full collection's 337.97; SCCO-like 1.01, DDM 313.20 against 419.29 and upside -51.54% against -47.94% (the code before 8a90337, which didn't revalue, read -47.99%). On a copy of the user's data (collected 2026-08-04, its valuations recomputed with f2271db's engine), a 2026-10-20 refresh with a factor after the last bar: SCCO's DDM $53.63 against the stored $68.16 on the new basis (three of the trailing year's four payments), KO's $29.91 against $39.63, GE's $11.40 against $14.55, HON's $57.57 against $74.75, and HON's median (its DDM) $59.85 against $74.75.
 Expected: a refresh valued on the payments a full collection would have: store Yahoo's dividends with the splits (the same `history` call serves both), on the refresh's served day; or DDM's trailing year anchored on the stored payments' latest served day.   Actual: DDM low by the payments since the collection, until the next full collection; SCCO's stock dividends fall on its cash ex-dates, so every SCCO factor refresh comes after one.
@@ -1307,7 +1310,8 @@ Fix prepared (%LOCALAPPDATA%\stockdb-qa\bug171\, diffs in its out\, applying to 
 For the user: valuation_summary, valuations, verdicts and indicators identical. One historical-value label moves: AXON near to far above (historical value $421.44 to $320.92 at $420.37: its 2015-16 capital-lease quarters become known, five more months in a 40-month EV/EBITDA window), with a price_far_above_value warning sign. Historical values without a label change: CVX $169.71 to $177.05, KMB $124.76 to $122.79, ORCL $162.03 to $161.78, TYL $582.75 to $576.75. Composite scores through rank_valuation: AXON 54 to 48, CVX 64 to 66, DVN 60 to 58, ORLY 50 to 52, QCOM 66 to 68, WST 66 to 68. 11 EV/EBITDA ranges and 1,433 valuation_history rows. TMUS and CAT stay unread. Findings: BUG-290 to BUG-294.
 
 ### BUG-172 [P2][VAL] The multiples band prices spin-adjusted closes over as-reported EPS, and one tiny-earnings year sets its bull case: GE's band reads 12.2x to 1,044x
-Status: NEEDS-USER
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): option (c): closes as traded (`price_factor_after`) and a band bounded by quartiles.
 Found: the build's design pass for Milestone 1 (2026-10-21), confirmed in build iteration 9 | Fixed: | Regression test:
 Repro: GE's `multiples` row in `valuations`: P/E band low 12.18x, median 32.84x, high 1,044.05x over 4 years, on the latest EPS of $8.14, so a bull value of $8,498.58 (the VAL tab shows it). The FY2022 close in `price_bars` is $52.20: Yahoo's close divided by the later spin-off factors (1.281 for GE HealthCare, 1.253 for GE Vernova), about $83.78 as traded. FY2022's diluted EPS is $0.05.
 Expected: each fiscal year's multiple taken on the price as traded then (the close times the spin-off factors after it), as the valuation history does (`history_inputs.price_factor_after`); and a band that one tiny-earnings year can't stretch to 1,044x.   Actual: closes before a spin-off sit 1.6x low against that year's EPS, so the band mixes bases (here it understates FY2022's P/E: 1,676x as traded). The band's max then multiplies the latest EPS.
@@ -1843,13 +1847,15 @@ Repro: the README's own test run, `stock-data refresh --tickers AAPL,MSFT`, logg
 Expected: a test on a few companies leaves the others due.   Fix: a --tickers run's rows carry its `subset` and the cadence passes over them, so the next full run is due as if the test hadn't happened.
 
 ### BUG-245 [P1][VAL] Annual share normalization skips a declared split whose seam buybacks pushed under 1.5, or a merger pushed beyond it
-Status: NEEDS-USER (the fix moves ODFL's and WRB's medians; no verdict changes)
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): apply the measured fix (the oracle agrees with every changed value).
 Found: build M5-6 (the scores oracle on the S&P 500) | Fixed: | Regression test:
 Repro: src/valuation/inputs.py `_normalize_splits` (feeds `load_inputs`: the valuations and the scores' per-share series) tests a seam only at a ratio of 1.5 or more (SPLIT_JUMP_THRESHOLD) and lets a declared split explain it only within 1.25x (DECLARED_SPLIT_TOLERANCE). Seams across a declared 3:2 split read 1.45-1.4999 after buybacks (ODFL FY2017-18 1.4930, PCAR FY2019-20 1.4999, RJF FY2018-19 1.4516, ROL FY2015-16 1.4977, WRB FY2019-20 1.4631 and FY2021-22 1.4985), and CNC's FY2015-16 2.6648 is its 2019 2:1 split times the 2016 Health Net stock merger: none folds. 65 seams of the 502 have a declared split filed between their counts; 58 fold, these 7 don't. Their older years' per-share figures are 1.5x to 2.25x off (ODFL FY2015 EPS stored 1.785 = 3.57 / 2; the oracle's 1.19 = 3.57 / 3): 87 of the scores oracle's 128 per-share disagreements, their CAGRs and predictability, ODFL's Lynch and WRB's multiples band. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C1.
 Expected: fold the declared splits dated between the two counts' filings whenever the seam is nearer their product than 1.0.   Measured on a copy: 21 per-share rows to the oracle's values; predictability ODFL 3.5 to 4.5 stars, PCAR 1 to 3, RJF 3.5 to 4.5, WRB 1 to 4; ODFL Lynch 42.38/56.90/71.42 to 58.08/72.60/72.60 and its medians 47.10/56.90/71.42 to 58.08/72.60/72.60; WRB's bear median 37.35 to 42.89; no verdict changes (both are expensive). Decide whether to apply it (recommended: the oracle agrees with every changed value). Until then the stored figures stay.
 
 ### BUG-246 [P1][VAL] Graham values an older fiscal year when the latest lacks EPS or a share count (ARES, LEN, VTRS)
-Status: NEEDS-USER (the spec's reading moves three medians and flips LEN's verdict)
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): the spec's reading: Graham values the latest fiscal year only, N/A with a reason when it lacks EPS or book value per share.
 Found: build M5-6 (the valuation oracle on the S&P 500) | Fixed: | Regression test:
 Repro: src/valuation/models.py `value_graham` (282-286) takes the latest year with both EPS and book value per share; the valuation-layer spec says the latest fiscal year's. ARES FY2025 has no EPS or count in the companyfacts (per-class reporting), LEN FY2025 tags only basic EPS and the basic count, VTRS FY2024-25 has EPS (-0.53, -3.00) but no count (only dei's cover count, which the parser doesn't read): Graham silently values FY2024, FY2024 and FY2023. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C6.
 Expected (a choice): Graham N/A when the latest fiscal year lacks EPS or book value per share, or the parser filling diluted from basic (LEN) and reading dei:EntityCommonStockSharesOutstanding (VTRS); either moves these medians. Measured with the latest-FY reading: ARES 32.31/42.56/51.48 to 52.59/65.70/83.14 (expensive either way), LEN 79.28/84.13/100.03 to 71.55/71.55/71.55 and its verdict at $84.92 fair to expensive, VTRS 6.00/6.93/25.54 to 13.43/15.49/21.63 (fair). Until then the stored values stay.
@@ -1868,7 +1874,8 @@ Repro: src/valuation/history_inputs.py `normalize_share_series` / `_seam_run` ma
 Expected: each seam its own split, by filing date (store each quarter's filing date; financials_quarterly.filed_date is NULL) or an order-preserving match. A quick approximation from the annual vintages fixed WRB but broke CPRT and ROL: it needs design and tests for APH, NFLX, WRB, CPRT and ROL.
 
 ### BUG-249 [P2][TTM] An instant-only quarterly row breaks the trailing years around it: 1,222 trailing years missing inside today's 10-year windows
-Status: NEEDS-USER (the fix moves 19 historical-value labels, no median or verdict; recommended: apply, prepared)
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): apply the prepared fix, after running history_vs_yahoo on its copies and lookahead.py.
 Found: build M5-6 (history_vs_yahoo on the S&P 500; the general case of BUG-096) | Fixed: | Regression test:
 Repro: src/parsers/ttm.py `compute_ttm` (line 63) forms four-quarter windows over every period end, so a financials_quarterly row holding no flow figure (an adoption-day instant: AES 2018-01-01 retained earnings, ABT 2018-01-05 long-term debt; GL 2011-07-01 shares outstanding) breaks the three windows that cross it. Of the 502: 602 such rows in 306 companies cost 1,802 trailing years, 1,222 of them inside today's 10-year history windows (260 companies, 68 of the 127). GL's history gap is the seam gate's GL miss. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C4.
 Expected: windows over the period ends that carry a flow figure. financials_ttm is stored at collection, so the fix needs a re-parse from the cache or a migration.   Measured on a copy with the years rebuilt: 29,815 valuation_history rows (284 companies), 1,319 ranges, 268 quality_scores rows change; no valuation, median or verdict.
@@ -1921,7 +1928,8 @@ Repro: xbrl_parser.py ~316 `depreciation.get(key) or low[0]`; the docstring stat
 Expected: the README and the code agree, on the cash flow statement's figure.   Actual: as above.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
-Status: NEEDS-USER
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: the history's P/E on net income to common, as its P/B already is.
 Found: build M5-6 | The valuation history's P/E is market cap / net income (the M1 spec), net income before preferred or participating dividends, while Yahoo's (and most sites') is price / EPS, to common; the history's P/B already subtracts preferred equity. Six of the 58 P/E misses against Yahoo are this (ALB: 224M against 57M to common; MCHP, TDG, VST, PSA, KKR). Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), section 4.
 Default: unchanged (net income, as the spec says). A change moves those companies' P/E history and their historical value, not the five models' medians.
 
@@ -1960,7 +1968,8 @@ Fix (iteration 109, BUG-256's change): the quarterly checkpoints judge a paper o
 Regressed (code review 21, I-1): BUG-159's combined DebtCurrent (42937f4) undoes this at NEE's 2011-12-31 and 2012-12-31 checkpoints ($21.618B and $26.148B for $22.967B and $27.359B): BUG-267(a).
 
 ### BUG-258 [P1][REFRESH] `stock-data refresh` revalues every company on a DDM year missing each payment since its last full collection
-Status: NEEDS-USER (the fix, BUG-160's option A', moves medians back to a full collection's values; recommended)
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): option A' (BUG-160's), applied with it.
 Found: iteration 110 (BUG-160's investigation, `qa/evidence/bug160-investigation.txt`) | Fixed: | Regression test:
 Repro: the refresh's recompute step (src/refresh.py ~547-549, ~968-977) revalues all 502 companies after the quotes step, with or without a price factor; DDM's trailing twelve months end on the latest snapshot's day, which the quotes step just moved to the refresh's, and no refresh stores payments, so every ex-date since a company's last full collection drops a payment from that year (about a quarter of a quarterly payer's DDM each). Already in the user's DB after the 2026-10-25 refresh: CVS's DDM $41.65 for a full collection's $55.53 (median $41.65 for $43.02), LOW's $51.06 for $68.54 (median $121.89 for $126.53), both still expensive. End to end against a full collection the same day: after a 17-day gap 49 DDMs, 18 medians and 2 verdicts wrong (KMI and OKE expensive for fair); after 81 days 344, 117 and 18; over a simulated year of daily runs, on an average day 238 of 397 payers low, 79 medians and 12 verdicts off. The refresh collects a company in full only on a new report or a split or factor after its last bar, so a payer can stay low for a quarter.
 Expected: a refresh valued on the payments a full collection would have.   Actual: DDM drifts low between full collections.
@@ -2210,27 +2219,32 @@ Repro: a submissions file cached by an earlier build has no latest_report, so a 
 Expected: the check as fixed on every collection.   Actual: blind until the cache expires.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
-Status: NEEDS-USER
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2 with Q5: drop Yahoo's quarterly earningsGrowth as the "analyst" term; growth is the clamped historical CAGR. Label it for what it is wherever it is shown.
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
 Proposal: use a forward growth estimate if one is available, or drop the analyst term and rely on the clamped historical CAGR. This is a policy change, so it's the user's call.
 
 ### Q1 [UX] NEEDS-USER: show all companies on /screener before a filter is chosen
-Status: NEEDS-USER
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: run the default, unfiltered screen when /screener loads.
 Context: `src/webapp/static/screener.js` auto-runs only when the URL has a query string, so a bare `/screener` shows filters and no rows, which looks broken.
 Proposal: run the default (unfiltered) screen on load. Small effort, low risk. Awaiting the user's decision.
 
 ### Q3 [VAL] NEEDS-USER: how should DDM treat special and variable dividends?
-Status: NEEDS-USER
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: option (c), one-off outliers (over 3x the surrounding regular payments) leave the TTM and the CAGR endpoints; recurring variable dividends such as PGR's stay.
 Context: `value_ddm` counts every payment in the TTM basis and the yearly totals. Today: PGR's TTM is $13.90, of which $13.60 is one January 2026 payment (its annual variable dividend; the regular one is $0.10 a quarter), and DDM is the primary model for insurers. NVDA's latest payment is $0.25 after years of $0.01 (a raise or a special?). COST ($7, $10, $15), PSA ($13.15) and COP specials sit mid-window, so they affect neither the CAGR nor the TTM today, but would at a window edge. (DHR's spin-off is a data bug: BUG-011.)
 Options: (a) keep every payment (today); (b) exclude one-off outliers (e.g. > 3× the surrounding regular payments) from the TTM and the CAGR endpoints; (c) like (b), but keep recurring variable dividends such as PGR's. This is policy, so it's the user's call.
 
 ### Q4 [VAL] NEEDS-USER: what should DDM do when Yahoo's dividend history is missing payments?
-Status: NEEDS-USER
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: option (c), DDM N/A ("dividend history incomplete") where the completeness check fires.
 Context: the dividend completeness check (BUG-012) flags CB FY2025: Yahoo lacks its Sep and Dec 2025 payments, so the DDM's TTM dividend is $1.99 instead of ≈ $3.93 and CB's DDM is about half. The spec bases the DDM on TTM dividends from `dividend_events` (Yahoo).
 Options: (a) keep the Yahoo TTM and rely on the data-quality warning (today); (b) when the check fires, use SEC's declared dividends per share for the trailing four quarters (needs BUG-013 fixed first); (c) make DDM N/A ("dividend history incomplete") for flagged companies. (b) and (c) change the spec's DDM basis or N/A rules, so it's the user's call.
 
 ### Q5 [VAL] NEEDS-USER: when a model's historical growth can't be measured, what growth should it use?
-Status: NEEDS-USER
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: option (c), measure from the first profitable year when at least 4 FYs remain; otherwise flat 0% with Lynch N/A (option (b)). No analyst fallback (Q2).
 Context: the CAGR is undefined when the 10-FY window starts on a loss or negative FCF (DELL, CVX, MU, PLTR, AMD and others). The plan uses yfinance's one-quarter "analyst" figure alone, clamped to the cap (seen from −85% to +1,369%). Iteration 6 switched to flat 0%, with Lynch N/A; BUG-016 restores the plan until you decide. The switch moved 31 valuations (CVX DCF $293 → $124). It also governs 7 DDM rows with fewer than 4 full years of dividends (BUG-010): BKNG, CRM, DELL, GEV, GOOGL, META, TMUS; under (a) CRM's DDM takes its 52.2% one-quarter figure capped at 10% ($32.25, against $25.16 from its measured 4.0%). Once you decide, a DDM test with an analyst figure will pin the choice.
 Options: (a) the plan's analyst-only fallback; (b) flat 0% (iteration 6); (c) measure from the first profitable year when at least 4 FYs remain (DELL 6.3%; CVX's FCF would hit the 15% cap again). Related: Q2 (what the "analyst" figure is).
 
@@ -2243,17 +2257,20 @@ Iteration 100 (BUG-029's fix): a re-collection now clears what its parse leaves 
 Decision (2026-10-21, the user: "XOM keep Exxon Mobil Corp history"): option (a). `sec_handler.PREDECESSOR_CIKS` maps ExxonMobil Holdings Corp (2115436) to Exxon Mobil Corp (34088); `fetch_all` reads both filers' company facts, merged tag by tag (`merge_company_facts`; their accession numbers never coincide), so the parse resolves each period across both filers' filings as it does across one filer's, and the run says so ("SEC EDGAR: XOM reads CIK 0002115436 (ExxonMobil Holdings Corp) with its predecessor's filings, CIK 0000034088 (Exxon Mobil Corporation)"); a predecessor that can't be read leaves the successor's facts and says that instead. Four tests RED, one guard (a filer without a predecessor reads its own filings only); six mutants, each failing a test (`qa/evidence/q6-{red,green,mutants}.txt`). On the real filings, the merged record's 20 fiscal years (2006-2025) equal Exxon Mobil Corp's own parse in every cell, and its 77 quarters run to 2026-06-30 with all 143 figures the holding company's quarters lack (`q6-realdata.txt`; Q2 2026's $116.017B of revenue is the holding company's own, beside Q1's $85.138B in its $201.155B half year). XOM re-collected live (0 errors): the note recorded and no "no annual financials"; 20 years and 77 quarters, the overlapping ones whole, and 65 trailing years (2026-06-30 now computable); its rows re-parsed with the current rules for the first time since 2026-08-04 (long-term debt now read in 12 years, BUG-125; 46 quarters' basic share counts changed, the 2018 and 2021 ones sampled from 0 to about 4.27B); the valuation's median unchanged ($96.73, 5 models) (`q6-live.txt`). BLK, whose registrant before its 2024 reorganization isn't in the cache, would need its own entry: not added (the decision was XOM's).
 Iteration 102 (the user: "yes add BLK too"): BLK's predecessor is CIK 1364742, the old BlackRock, now BlackRock Finance, Inc., whose facts stop at its 10-Q of 2024-08-06, before BlackRock, Inc.'s first report (2024-11-06); `PREDECESSOR_CIKS` maps 2012383 to it. And a predecessor's facts now count only as filed before the successor's first annual or quarterly report: SEC's submissions list a 10-Q of Exxon Mobil Corp's on 2026-08-03, the holding company's first, so the old company files on as a subsidiary, whose later figures aren't the parent's (its company facts hold none yet; a debt registration such as the holding company's POSASR of 2026-07-01 doesn't count as a report). Two tests RED and two more pinning the cutoff's edges; four mutants, each failing a test (`qa/evidence/blk-{red,green,mutants}.txt`). On the real filings, BLK's merged record has 20 years (2006-2025) where BlackRock, Inc.'s alone has 5: the 15 added equal BlackRock Finance's own in all 1,170 cells, FY2023-25 equal BlackRock, Inc.'s, and FY2021-22's equity is the old company's StockholdersEquity, the parent's equity the field reads (`blk-realdata.txt`); XOM's merge is unchanged. BLK and XOM re-collected live (0 errors): BLK's years 5 to 20, quarters 15 to 75, trailing years 10 to 70, vintages 8 to 69, the note recorded, its median value unchanged ($525.37; the multiples band $1,075.29 to $1,080.24); XOM unchanged in every stored cell (`blk-live.txt`).
 ### Q7 [VAL] NEEDS-USER: should per-share values count every share class and partnership unit?
-Status: NEEDS-USER
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: option (a), count every class and unit (market cap / price whenever larger).
 Context: `_total_shares` takes market cap ÷ price (every class and unit, the way Yahoo values the company) when it is more than 5% above Yahoo's count, and settles a 2–5% gap by whichever figure is nearer the latest FY count (BUG-035). That decides the question company by company, and between 2% and 5% the answer flips with count drift (BUG-051): PLD takes market cap ÷ price on the real copy (954.8M) but Yahoo's count on the golden one (950.3M); KKR, BLK and PLTR sit in the same band. Above 5%: SPG's partnership units (17%), BX's (65%), and the second classes of APP, V, META, GOOGL and BRK-B. Raised by code review 5.
 Options: (a) always count every class and unit (market cap ÷ price whenever it is larger); (b) count only the listed class (Yahoo's count, or the FY diluted count); (c) keep the gap rule and make its tiebreaker fresher (BUG-051). Recommendation: (a) for classes, which share the same earnings; units are your call (they are exchangeable into shares, so (a) is the conservative choice).
 
 ### Q8 [VAL] NEEDS-USER: should a company be valued on a basis year that is years old?
-Status: NEEDS-USER
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: option (a), per-share models N/A with a reason when the basis is more than two fiscal years old.
 Context: when a company's usable annual reports stop (it moved to IFRS, BUG-066, or stopped filing), its models keep valuing it on the last fiscal year it has, beside today's price: in code review 6's example Graham on FY2017 and the multiples band on FY2019, computed in 2026. Nothing in the valuation checks how old the basis is; the "Basis FY" column shows it.
 Options: (a) mark the per-share models N/A past a cutoff (say a basis more than two fiscal years old), with the reason; (b) keep the values and add a staleness flag to the verdict; (c) keep things as they are, with BUG-066's note explaining the gap. Recommendation: (a) at two years.
 
 ### Q9 [VAL] NEEDS-USER: should asset managers and a health insurer be valued as banks and insurers?
-Status: NEEDS-USER
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: option (a), a bank also needs deposits, else general; SIC 6324 is general.
 Context: `classify_sic` makes SIC 6020-6299 a bank ("depository institutions, holding companies, broker-dealers, finance") and 6300-6411 an insurer, so BLK (6211), BX and KKR (6282, investment advice) are banks and UNH (6324, hospital and medical service plans) an insurer. Their DCF, Lynch and owner-earnings models are "not applicable to sector 'bank'" (or 'insurance'), leaving DDM, Graham and the P/B band (KKR's DDM base 7.2 at a price of 107.78; BLK's 345.6 at 1132.74), and the bank ratios are empty for all three asset managers, which report no deposits or net interest income. The other ten banks (AXP, BAC, C, COF, GS, JPM, MS, SCHW, USB, WFC) report both.
 Options: (a) a bank also needs deposits on its balance sheet, otherwise it is valued as a general company, and SIC 6324 is general (managed care is valued on its earnings); (b) (a) for the asset managers only, with UNH kept an insurer; (c) keep the SIC routing and say on the VAL tab why the cash-flow models don't apply. Recommendation: (a).
 
@@ -2290,42 +2307,49 @@ Options: (a) a bank also needs deposits on its balance sheet, otherwise it is va
 - L28 [MATCH] Yahoo's own fields disagree with one another, and the app shows them as they are: its dividend yield is 5-17% above its rate over the price for 17 of 91 payers (GLW, MRVL, DELL: a lagging price), its trailing P/E 17% above the price over its trailing EPS for SYK, its EV negative for BRK-B and C and in another currency for TSM, and PM's FY2025 statement gives 12.46B diluted shares beside its 1.56B outstanding. Decide whether the app should derive these itself or flag them (MATCH-03). (iter 83)
 
 ### Q10 [OPS] NEEDS-USER: should `qa/full-loop` get a draft PR so CI runs on its pushes?
-Status: NEEDS-USER
+Status: DECIDED
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): open a draft PR against main so CI runs on each push (protocol section 4.5).
 Found: build iteration 1. PR #28 (the QA loop's) was merged on 2026-10-19, and CI runs only on pull requests and on pushes to `main`, so the branch's pushes since then have run no CI (Python 3.9-3.12).
 Default applied: no PR; the local gates (Python 3.13) and ruff's py39 target stand in for CI. Opening a PR publishes the branch on GitHub, so it waits for you.
 Decision needed: open a draft PR "Build loop: GuruFocus roadmap" against `main`, so CI runs on every push?
 
 ### Q11 [VAL] NEEDS-USER: how should the quality composite (our GF Score) weigh its five ranks?
-Status: NEEDS-USER
+Status: DECIDED
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): keep equal weights, published with the score; no fitted weights.
 Found: build iteration 11 (M2's design, `docs/superpowers/specs/2026-10-21-quality-scores-design.md`)
 Default applied: equal weights. The composite is 10 x the mean of the financial strength, profitability, growth, valuation and momentum ranks (1-10 each), with at least four available.
 Decision needed: keep equal weights, or weigh them like GuruFocus? GuruFocus gives profitability and growth the most weight and the other three less, fitted on a 2006-2021 backtest, without publishing the numbers. Our weights, whatever they are, are published with the score.
 
 ### Q12 [OPS] NEEDS-USER: may M3 download the SEC's bulk insider and 13F data sets?
-Status: NEEDS-USER
+Status: DECIDED
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): no bulk downloads; the per-filing fetches stay.
 Found: build iteration 30 (M3's design, `docs/superpowers/specs/2026-10-22-sec-ownership-design.md`)
 Default applied: no bulk downloads. M3 fetches each Form 4 (three years) and each guru's 13F-HR (eight quarters) one filing at a time, rate-limited and cached.
 Decision needed: download the SEC's Insider Transactions Data Sets (quarterly ZIPs from 2006) and Form 13F Data Sets (from 2013), hundreds of MB, for a longer history? The plan leaves bulk downloads to you.
 
 ### Q13 [OPS] NEEDS-USER: which investors make the guru list?
-Status: NEEDS-USER
+Status: DECIDED
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): keep the current list.
 Found: build iteration 30 (M3's design)
 Default applied: about 30 well-known value investors (Berkshire Hathaway, Baupost, Pershing Square, Greenlight, Oaktree, Markel, Akre, Gardner Russo, Ruane Cunniff, Southeastern, Tweedy Browne, Yacktman, Weitz, First Eagle, Dodge & Cox, Davis, Pzena, Himalaya, Trian, ValueAct, Third Point, Appaloosa, Icahn, Scion, Duquesne and others), each checked against the SEC before it's added, kept in `src/ownership/gurus.py`.
 Decision needed: keep that list, or add and drop names?
 
 ### Q14 [OPS] NEEDS-USER: may M4 install `xlrd` to read Shiller's `.xls`?
-Status: NEEDS-USER
+Status: DECIDED
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): no install: `src/market/xls.py` reads the sheet, checked against its own CAPE column (the protocol adds no runtime dependency).
 Found: build iteration 41 (M4's design, `docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md`)
 Default applied: nothing installed. Shiller's `ie_data.xls` is a legacy Excel workbook (BIFF8), which `openpyxl` can't read, so `src/market/xls.py` reads the few record types the sheet uses, checked against the sheet's own CAPE column.
 Decision needed: install the `xlrd` package (and add it to the requirements) to read the workbook with a standard library instead?
 
 ### Q15 [OPS] NEEDS-USER: may M5 install a Windows scheduled task to run `stock-data refresh`?
-Status: NEEDS-USER
+Status: DECIDED
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): the loop installs nothing on the user's machine: a scheduled task is the user's to create with the README's command, after BUG-160/258.
 Found: build iteration 50 (M5's design, `docs/superpowers/specs/2026-10-25-universe-automation-design.md`)
 Default applied: nothing installed. The README gives the Task Scheduler command (`schtasks /Create /SC DAILY ...`) that runs `stock-data refresh` from the repo folder after the US close; the refresh works the same when run by hand.
 Decision needed: install the task (a persistent system change the build loop doesn't make), and at what time?
 
 ### Q17 [GATHER] NEEDS-USER: should a collection read a report the SEC's companyfacts lack from the filing's own XBRL?
-Status: NEEDS-USER
+Status: OPEN
+Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2 (unblocks BUG-295): read a gap's report from the filing's own XBRL instance, one more rate-limited SEC request per gap.
 Found: iteration 119 (BUG-251's fix, `qa/evidence/bug251-done.txt` residuals) | Since BUG-251 a collection names the SEC's lag (the latest report its submissions list has no fact in its companyfacts: 58 of the 502 today, most 80-90 days old) and the refresh tries again three times, but nothing recovers the missing figures: those companies' records stop a quarter or a year early (21 of the 58 P/E misses). Reading them would need another source: the filing's own XBRL instance (one more SEC request per gap, a new parser path) or the SEC's frames API.
 Default: unchanged (the gap is warned and retried; the figures wait for the SEC).
