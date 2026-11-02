@@ -109,9 +109,14 @@ def intrinsic_summary(results: List[ValuationResult]) -> Dict[str, Any]:
 
 def verdict(median_bear: Optional[float], median_bull: Optional[float],
             price: Optional[float]) -> Optional[str]:
-    """Where the live price sits vs the median fair-value range."""
-    if median_bear is None or median_bull is None or price is None or price <= 0:
+    """Where the live price sits vs the median fair-value range.
+
+    Without a bear median (Graham alone with its bear N/A, BUG-007) a price above the bull median is still expensive;
+    below it, cheap and fair can't be told apart (BUG-304). The screener's SQL filters read it the same way."""
+    if median_bull is None or price is None or price <= 0:
         return None
+    if median_bear is None:
+        return "expensive" if price > median_bull else None
     if price < median_bear:
         return "cheap"
     if price > median_bull:

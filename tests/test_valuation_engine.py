@@ -86,6 +86,16 @@ def test_verdict_rules():
     assert verdict(70.0, 120.0, 0.0) is None
 
 
+def test_a_price_above_every_bull_is_expensive_without_a_bear_median():
+    # BUG-304 (decided): SNDK, valued by Graham alone with its bear N/A, at 1,238.03 over a bull of 410.47. Above
+    # the bull median is expensive whatever the bear; below it, cheap and fair can't be told apart: no verdict. The
+    # screener's SQL filters already read it so ("expensive" needs only median_bull).
+    assert verdict(None, 410.47, 1238.03) == "expensive"
+    assert verdict(None, 410.47, 300.0) is None
+    assert verdict(None, 410.47, 410.47) is None
+    assert verdict(None, None, 1238.03) is None
+
+
 def test_upside_pct():
     assert upside_pct(120.0, 100.0) == pytest.approx(0.20)
     assert upside_pct(None, 100.0) is None

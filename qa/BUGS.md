@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 16 · P3 167 · NEEDS-USER 0 · Decided: 7 · Verified: 133
+**Open:** P0 0 · P1 0 · P2 15 · P3 167 · NEEDS-USER 0 · Decided: 7 · Verified: 134
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1946,9 +1946,9 @@ Repro: inputs.py ~850-854 multiplies the close by `price_factor_after(bar, split
 Expected: the close as traded, on the price's share-split basis only.   Actual: as above.
 
 ### BUG-304 [P2][VAL] With no bear median a verdict is never given, even for a price above every bull case: SNDK expensive to "Not valued" (since BUG-007)
-Status: OPEN
+Status: VERIFIED (iteration 142)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): a price above the bull median reads expensive with or without a bear median; below it, with no bear, there is no verdict (cheap and fair can't be told apart).
-Found: code review 24 (Minor 1) | Fixed: | Regression test:
+Found: code review 24 (Minor 1) | Fixed: (this commit) | Regression test: tests/test_valuation_engine.py::test_a_price_above_every_bull_is_expensive_without_a_bear_median
 Repro: SNDK is valued by Graham alone, whose bear is N/A (a loss year in its window): base = bull 410.47 at 1,238.03 reads no verdict (engine.verdict needs both medians); the screener's verdict filters drop it.
 Expected: expensive.   Actual: none.
 

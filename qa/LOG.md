@@ -2537,3 +2537,15 @@ Result: BUG-303 VERIFIED; code review 24 closed with no open Critical or Importa
 Gates: ruff ✓ mypy ✓ pytest 2778 passed, 1 skipped, 1 warning | CI: PR #29
 Commit: (this commit) fix(valuation): the band's closes reach the price's basis by share splits alone (BUG-303)
 Next: BUG-304 (decided), then the P2s: BUG-260, -271, -274, -295, and the decided questions.
+
+## Iteration 142: 2026-11-02 21:37: fix (BUG-304, decided)
+Picked: BUG-304 (P2), inline; dispatched BUG-049 and BUG-260 to workers, then stopped both when the usage limit
+neared (their scratch folders hold partial work only; restart them).
+Did: `engine.verdict` reads a price above the bull median as expensive without a bear median; below it, no verdict.
+The screener's SQL filters already did. SNDK reads expensive again.
+- RED: the new test failed (None for expensive); GREEN.
+Result: BUG-304 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2779 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): a price above every bull is expensive without a bear median (BUG-304)
+Next: restart BUG-049 and BUG-260's workers; then BUG-271, -274, -295 and the decided questions.
+
