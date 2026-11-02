@@ -2446,3 +2446,24 @@ Result: BUG-245 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2754 passed, 1 skipped, 1 warning | CI: PR #29
 Commit: (this commit) fix(valuation): the splits filed between two years fold their seam at any ratio (BUG-245)
 Next: apply BUG-252, then BUG-258 with BUG-160 (both prepared). Code review 24 after 2 more fixes.
+
+## Iteration 137: 2026-11-02 21:03: fix (BUG-258 with BUG-160, decided: option A')
+Picked: BUG-258 (P1) with BUG-160, prepared by an opus worker from iteration 110's A' prototype, ported onto HEAD.
+Did: `fetch_quote` carries Yahoo's payments from the chart request the splits already use; `refresh_quote` passes them,
+and `upsert_quote` stores them in the snapshot's transaction, served on the collection's rule for a run without bars.
+So DDM's trailing year, which ends on the refresh's day, holds every payment since the last collection, after a price
+factor (BUG-160) and in `stock-data refresh`'s recompute (BUG-258). Docstrings, README, GATHER-13 in
+`qa/LOOP_PROMPT.md` and `qa/MATRIX.md` restated ("writes only the snapshot" is no longer true).
+- RED: 5 of 6 new tests failed (the 6th is a guard); GREEN. Mutants, by me on the checkout: bug258's 7 and refresh
+  m5-3's 5 killed. The prototype's `"error" not in dividends` check is left out: an equivalent mutant.
+- Measured by the worker at ca854ed, end to end against an oracle collecting every company in full: refreshes
+  07-26 to 08-12 49 DDMs and 19 medians move to the full collection's, KMI and OKE expensive to fair; 05-31 to 08-20
+  342 DDMs, 118 medians, 18 verdicts expensive to fair (AMT, BMY, CCI, CLX, DOC, DTE, FIS, HAS, HST, INVH, KMB, KMI,
+  MCD, OKE, UDR, VMRK, VZ, WEC). With the fix the refresh equals the oracle except DD and KLAC (share-split refreshes,
+  refused by design). No owner-earnings verdict or label. Full collections are unchanged.
+- The user's DB moves at its next refresh.
+Evidence: `qa/evidence/bug258-{investigation,verify-mine}.txt`; %LOCALAPPDATA%\stockdb-qa\bug258\out.
+Result: BUG-258 and BUG-160 VERIFIED. Q15's scheduled task is no longer blocked by them (still the user's to install).
+Gates: ruff ✓ mypy ✓ pytest 2760 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(refresh): a saved quote refresh stores Yahoo's payments (BUG-258, BUG-160)
+Next: code review 24 is due (5 fixes since review 23: BUG-246, -007, -172, -245, -258/160); BUG-252 meanwhile.

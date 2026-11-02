@@ -1,12 +1,14 @@
 """A quote-only refresh of one ticker, shared by the web's quote job (``webapp.jobs``, Task 10) and ``stock-data
 refresh``'s quotes step (docs/superpowers/specs/2026-10-25-universe-automation-design.md, "stock-data refresh").
 
-Yahoo's quote (``YahooHandler.fetch_quote``, one request, with Yahoo's split history) is checked against what is
-stored: after a split the stored valuations don't reflect, the price would sit beside them on another basis, which
-only a full collection brings over, so the quote isn't saved (BUG-093, BUG-102); any other factor since (a stock
+Yahoo's quote (``YahooHandler.fetch_quote``, one request, with Yahoo's split history and payments) is checked against
+what is stored: after a split the stored valuations don't reflect, the price would sit beside them on another basis,
+which only a full collection brings over, so the quote isn't saved (BUG-093, BUG-102); any other factor since (a stock
 dividend, a spin-off) is stored with the price (``SQLiteStore.upsert_quote``), and the caller values the ticker on
-it (BUG-128). The function returns what happened and never raises for Yahoo's failures, which ``fetch_quote``
-reports as an ``"error"`` key.
+it (BUG-128). Every saved quote stores Yahoo's payments with it, as a collection does: DDM's trailing year ends on the
+latest snapshot's day, the refresh's, so whatever values the ticker after it (the caller after a factor, ``stock-data
+refresh``'s recompute step) reads the payments a full collection that day would (BUG-160, BUG-258). The function
+returns what happened and never raises for Yahoo's failures, which ``fetch_quote`` reports as an ``"error"`` key.
 """
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -76,7 +78,8 @@ def refresh_quote(handler: Any, store: SQLiteStore, ticker: str, collected_at: O
     A split the stored valuations don't reflect (``SQLiteStore.splits_since_collection``) leaves everything as it is:
     the price would sit beside them on another basis, which only a full collection brings over (BUG-093, BUG-102).
     Any other factor since (``factors_since_collection``: a stock dividend, a spin-off) is stored with the price, the
-    split history with it, and the outcome is "rebased": the caller values the ticker on it (BUG-128)."""
+    split history with it, and the outcome is "rebased": the caller values the ticker on it (BUG-128). A saved quote
+    stores Yahoo's payments with it, a factor or not (BUG-160, BUG-258)."""
     quote = handler.fetch_quote(ticker)
     if "error" in quote:
         return QuoteRefresh(ticker, "error", str(quote["error"]))
@@ -85,6 +88,7 @@ def refresh_quote(handler: Any, store: SQLiteStore, ticker: str, collected_at: O
     new_splits = store.splits_since_collection(ticker, splits) if factors else []
     if new_splits:
         return QuoteRefresh(ticker, "split", split_refusal(ticker, new_splits), new_splits)
-    store.upsert_quote(ticker, quote, collected_at or collected_at_now(), splits=splits if factors else None)
+    store.upsert_quote(ticker, quote, collected_at or collected_at_now(), splits=splits if factors else None,
+                       dividends=quote.get("dividend_history"))
     return QuoteRefresh(ticker, "rebased" if factors else "stored", splits=factors,
                         price=(quote.get("market_data") or {}).get("current_price"))

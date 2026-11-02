@@ -119,10 +119,14 @@ class YahooHandler:
         Makes exactly ONE rate-limited ``yf.Ticker(ticker)`` call and reuses
         the same private extractors ``fetch_all`` uses for market data,
         valuation, and analyst estimates, plus the SCALAR shareholder stats
-        only (no holder-list DataFrame calls, no bars), and the split history
+        only (no holder-list DataFrame calls, no bars), the split history
         (``_get_splits``, Yahoo's chart request), so the quote job can tell a
         split since the last full collection, which would put this price on
-        another basis than everything stored (BUG-093).
+        another basis than everything stored (BUG-093), and the dividend
+        payments (``_get_dividend_history``, from the same cached chart
+        request), which a saved refresh stores as a collection does, so DDM's
+        trailing year, which ends on the refresh's day, holds every payment
+        since the last collection (BUG-160, BUG-258).
 
         Deliberately makes no ``stock.history()`` call of its own, so the
         returned ``market_data`` never includes ``ma_50``/``ma_200`` here (those
@@ -131,7 +135,7 @@ class YahooHandler:
         snapshot's values for those forward instead of leaving them ``None``.
 
         Returns ``{"market_data": ..., "valuation": ..., "shareholders": ...,
-        "analyst_estimates": ..., "splits": ...}`` on success, or ``{"error": ...}`` (never
+        "analyst_estimates": ..., "splits": ..., "dividend_history": ...}`` on success, or ``{"error": ...}`` (never
         raises) on failure — mirroring ``fetch_all``'s contract so callers
         (e.g. ``CollectionJobManager``'s quote-job worker) can check for the
         ``"error"`` key rather than needing a try/except per ticker.
@@ -146,6 +150,9 @@ class YahooHandler:
                 "shareholders": self._get_shareholder_stats(stock),
                 "analyst_estimates": self._get_analyst_estimates(stock),
                 "splits": self._get_splits(stock),
+                # The same chart request as the splits (yfinance caches history(period="max")): a saved refresh
+                # stores them, as a collection does (BUG-160, BUG-258).
+                "dividend_history": self._get_dividend_history(stock),
             }
             # The extractors swallow Yahoo's errors (a rate limit leaves each one empty),
             # so a quote without a price is a failed fetch, not a refresh.

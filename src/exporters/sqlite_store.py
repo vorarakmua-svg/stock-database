@@ -1394,13 +1394,21 @@ class SQLiteStore:
                 or (str(s["date"])[:10] not in known and str(s["date"])[:10] >= min(starts))]
 
     def upsert_quote(self, ticker: str, quote: Dict[str, Any], collected_at: str,
-                     splits: Optional[List[Dict[str, Any]]] = None) -> None:
+                     splits: Optional[List[Dict[str, Any]]] = None,
+                     dividends: Optional[Dict[str, Any]] = None) -> None:
         """Write ONE ``market_snapshots`` row + ONE ``analyst_snapshots`` row from
         a quote-only fetch (``YahooHandler.fetch_quote``) — nothing else, but for
         *splits*: Yahoo's split history, stored with the price as a collection
         stores it, which the quote job passes when it holds a stock dividend or a
         spin-off factor the stored valuations aren't on (the price is on its basis)
-        and then values the ticker on it (BUG-128).
+        and then values the ticker on it (BUG-128); and *dividends*: Yahoo's
+        payments (``fetch_quote``'s ``dividend_history``), which every saved
+        refresh passes and which are upserted into ``dividend_events`` as a
+        collection's are, served on the collection's rule for a run without bars
+        (``_served_day`` on the quote's split history). DDM's trailing year ends on
+        the latest snapshot's day, this one's, so without them it would miss every
+        payment since the last collection (BUG-160, BUG-258). A failed dividend
+        request carries no payments and writes none.
 
         ``market_snapshots``' primary key is ``(ticker, collected_at)``, so
         this INSERTS a new row rather than overwriting the snapshot from the
@@ -1462,6 +1470,12 @@ class SQLiteStore:
                                 snapshot[col] = prev.get(col)
                     self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)
                     self._write_split_events(conn, ticker, splits or [])
+                    # Yahoo's payments, from the same chart request, served on the refresh's day by the
+                    # collection's rule (_served_day: the latest split Yahoo lists, else the day before its own)
+                    # (BUG-160, BUG-258).
+                    if dividends:
+                        self._write_dividend_events(conn, ticker, dividends, _served_day(
+                            StockData(ticker=ticker, splits=list(quote.get("splits") or [])), collected_at))
 
                 self._write_analyst_snapshot(
                     conn, ticker, collected_at, quote.get("analyst_estimates") or {}
