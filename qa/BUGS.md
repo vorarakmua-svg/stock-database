@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 11 · P3 168 · NEEDS-USER 0 · Decided: 7 · Verified: 138
+**Open:** P0 0 · P1 0 · P2 10 · P3 168 · NEEDS-USER 0 · Decided: 7 · Verified: 139
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2318,7 +2318,7 @@ Context: when a company's usable annual reports stop (it moved to IFRS, BUG-066,
 Options: (a) mark the per-share models N/A past a cutoff (say a basis more than two fiscal years old), with the reason; (b) keep the values and add a staleness flag to the verdict; (c) keep things as they are, with BUG-066's note explaining the gap. Recommendation: (a) at two years.
 
 ### Q9 [VAL] NEEDS-USER: should asset managers and a health insurer be valued as banks and insurers?
-Status: OPEN
+Status: VERIFIED (iteration 146; regression tests tests/test_sectors.py, 3 new)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: option (a), a bank also needs deposits, else general; SIC 6324 is general.
 Context: `classify_sic` makes SIC 6020-6299 a bank ("depository institutions, holding companies, broker-dealers, finance") and 6300-6411 an insurer, so BLK (6211), BX and KKR (6282, investment advice) are banks and UNH (6324, hospital and medical service plans) an insurer. Their DCF, Lynch and owner-earnings models are "not applicable to sector 'bank'" (or 'insurance'), leaving DDM, Graham and the P/B band (KKR's DDM base 7.2 at a price of 107.78; BLK's 345.6 at 1132.74), and the bank ratios are empty for all three asset managers, which report no deposits or net interest income. The other ten banks (AXP, BAC, C, COF, GS, JPM, MS, SCHW, USB, WFC) report both.
 Options: (a) a bank also needs deposits on its balance sheet, otherwise it is valued as a general company, and SIC 6324 is general (managed care is valued on its earnings); (b) (a) for the asset managers only, with UNH kept an insurer; (c) keep the SIC routing and say on the VAL tab why the cash-flow models don't apply. Recommendation: (a).

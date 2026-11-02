@@ -386,9 +386,10 @@ class StockData:
             # Update company name from SEC if not set
             if not self.company_name and sec_data["submissions"]:
                 self.company_name = sec_data["submissions"].get("name")
-            # Classify sector from SIC for sector-aware standardization
+            # Classify sector from SIC for sector-aware standardization; a finance SIC without deposits in the
+            # companyfacts is a general company (Q9).
             from ..mappings.sectors import classify_submissions
-            self.sector_class = classify_submissions(sec_data["submissions"])
+            self.sector_class = classify_submissions(sec_data["submissions"], sec_data.get("company_facts") or None)
 
     def merge_parsed_financials(
         self,

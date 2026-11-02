@@ -2597,3 +2597,22 @@ Gates: ruff ✓ mypy ✓ pytest 2786 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(valuation): no per-share value on a basis more than two fiscal years old (Q8)
 Next: BUG-049 and BUG-260 as their workers report; inline Q9.
 
+## Iteration 146: 2026-11-03 00:30: fix (Q9, decided)
+Picked: Q9 (implemented as a P2), inline.
+Did: `classify_submissions` takes the companyfacts: a finance SIC (6020-6299) whose facts tag no deposits (Deposits,
+InterestBearingDepositLiabilities, DepositsTotal) is a general company; SIC 6324 (managed care) leaves the insurers.
+Without the facts the SIC decides, as before. README's sector passage says so.
+- RED: 3 new tests failed; GREEN. 4 of 4 mutants killed.
+- Measured: the 68 bank and insurer tickers re-collected offline with head's code and with the fix on two DB copies,
+  engine over all 502. 19 become general: APO, ARES, BLK, BX, CBOE, CME, COIN, HOOD, IBKR, ICE, IVZ, KKR, NDAQ, TROW
+  (bank) and CI, CNC, ELV, HUM, UNH (insurance). 19 medians, 18 verdicts (most of them first verdicts; CI expensive to
+  fair, CNC fair to cheap, COIN fair to expensive, IVZ expensive to fair), 14 owner-earnings verdicts and 5 labels
+  (CBOE far above to near, CME above to near, HUM above to far above, IVZ far above to above, UNH below to near). The
+  oracle on the fix's copy: level 1 0 of 2,041, level 2 3 (as before).
+- It reaches the user's DB at each company's next collection (the sector is stored then).
+Evidence: %LOCALAPPDATA%\stockdb-qa\q9\out; `qa/evidence/q9-mutants.json`.
+Result: Q9 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2789 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(mappings): a finance SIC without deposits, and managed care, are general companies (Q9)
+Next: apply BUG-260 (its worker is done), BUG-049 when its worker reports.
+

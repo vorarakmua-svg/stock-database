@@ -1975,8 +1975,11 @@ COGS), sign conventions, and year-over-year continuity. The result is stored und
 
 Banks, insurers, and REITs report fundamentally different statements, so the pipeline
 classifies each company by SIC (`src/mappings/sectors.py`) and adds dedicated line
-items per sector — banks (`net_interest_income`, `provision_for_credit_losses`,
-`total_deposits`), insurers (`premiums_earned`, `claims_reserve`), REITs
+items per sector. A finance SIC (6020-6299) is a bank only if its companyfacts tag
+deposits: asset managers, exchanges and brokers without them (BLK, BX, KKR, CME, ICE,
+IBKR...) are general companies, valued on their earnings and cash flows, as is managed
+care (SIC 6324: UNH, ELV, CI, HUM, CNC). The dedicated items: banks (`net_interest_income`,
+`provision_for_credit_losses`, `total_deposits`), insurers (`premiums_earned`, `claims_reserve`), REITs
 (`real_estate_net`) — on top of the universal core. Fields that aren't directly tagged
 are filled by accounting identities (`src/parsers/derived_fields.py`): e.g.
 `total_liabilities = total_assets − total_equity`, and bank revenue from net interest +
