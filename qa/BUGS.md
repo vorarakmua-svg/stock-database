@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 6 · P3 161 · NEEDS-USER 23 · Verified: 123
+**Open:** P0 0 · P1 0 · P2 6 · P3 163 · NEEDS-USER 23 · Verified: 123
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1903,6 +1903,18 @@ Status: OPEN
 Found: iteration 127 (BUG-248's measurement) | Fixed: | Regression test:
 Repro: a derived fourth quarter of 435M splits the 2015 3:2 seam across two jumps (2.978, then 0.504), so the split stays unused. The quarters before 2013 read about 0.66x a filing-based count, and 2013-12 1.985x.
 Expected: the filing-based count.   Actual: as above.
+
+### BUG-299 [P3][VALID] D&A sets a total aside against AdjustmentForAmortization where that is broader than the amortization of intangibles: ALL's FY2021 vintage $1.69B for $1.09B
+Status: OPEN
+Found: code review 23 (`qa/evidence/review23.txt`, Minor 1) | Fixed: | Regression test:
+Repro: `_AMORTIZATION` takes the first tag found (xbrl_parser.py ~269, 298-302) and a total at or below it is set aside (311-318). Allstate's 10-K 0000899051-22-000015 FY2021: total $1,086M, Depreciation $411M, AmortizationOfIntangibleAssets $376M, AdjustmentForAmortization $1,281M, so D&A reads 411 + 1,281. The annual record keeps $1,086M (a later 10-K's figure stands); only that vintage moves. The only such period in the cache. A 4-fact test, %LOCALAPPDATA%\stockdb-qa\review23\test_review23_da.py, fails at HEAD.
+Expected: the total kept where it holds the intangibles' amortization.   Actual: $1,692M.
+
+### BUG-300 [P3][DOC] D&A's set-aside adds the amortization to the Depreciation fact, the README says to the line set aside: they differ in 40 annual periods at 8 filers
+Status: OPEN
+Found: code review 23 (Minor 2) | Fixed: | Regression test:
+Repro: xbrl_parser.py ~316 `depreciation.get(key) or low[0]`; the docstring states that order, the README reads as "that line plus the amortization". TTWO FY2023 $1,597.0M by the code, $1,629.0M by the README; BMY 2013 453+858 against 763+858; GPN FY2023-24 in its FY2025 10-K; CSGP, FIX, MSCI, NDSN, ALL. Which is the cash flow statement's add-back was not decided offline.
+Expected: the README and the code agree, on the cash flow statement's figure.   Actual: as above.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: NEEDS-USER

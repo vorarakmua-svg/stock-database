@@ -2315,7 +2315,7 @@ Next: BUG-249, or BUG-290 if the user decides first.
 Picked: BUG-290: the user said "apply BUG-290".
 Did: applied the fix measured in iteration 126 to 91a0633 (BUG-248 touched only the history, not the parser), after
 proving RED on an export of HEAD plus the new tests.
-- Mutants (re-run by me on the checkout): 122 of 122 killed across the 9 parser specs (BUG-290's 17).
+- Mutants (re-run by me on the checkout): 122 of 122 killed across the 8 parser specs (BUG-290's 17).
 - The moves are iteration 126's: CPAY's historical-value label below to near, no median, verdict or model row.
 - They reach the user's DB at each company's next collection.
 Evidence: `qa/evidence/bug290-{investigation,verify-mine}.txt`, `qa/evidence/bug290-mutants.json`.
@@ -2324,3 +2324,21 @@ Gates: ruff ✓ mypy ✓ pytest 2732 passed, 1 skipped, 1 warning | CI: no PR (Q
 Commit: (this commit) fix(parsers): an unread debt line stands in for a long-term debt total that holds the
 current maturities (BUG-290)
 Next: code review 23.
+
+## Iteration 129: 2026-11-02 19:01: code review 23
+Picked: code review 23, due after five fixes since review 22 (BUG-285, -171, -170, -248, -290).
+Did: an opus reviewer read `git diff 6c29e5d..7b6931c` read-only, ran the suites on an export, and checked real data
+on its own DB copies and the SEC cache, offline.
+- Critical: none. Important: none.
+- Minor 1, proven (real data and a failing test): BUG-299.
+- Minor 2, not proven which figure is right: BUG-300.
+- Checked clean: BUG-285's cache fallback; BUG-290 and BUG-171 read only their own filings, and BUG-171 runs after
+  BUG-290's step; D&A runs last in `_filer_facts`; the earlier debt suites pass; BUG-248 keeps BUG-174's APH case.
+- Notes, not defects: a placed line's source tag reads LongTermDebtNoncurrent, a concept the filer didn't use;
+  `_noncurrent_concept` treats every LongTerm* concept as noncurrent, with no double count found in real data.
+- Python 3.9: the changed files parse under the 3.9 grammar; no 3.9 interpreter here to run them.
+Also: iteration 128's mutant line said 9 specs; 8 ran.
+Evidence: `qa/evidence/review23.txt`; scripts in %LOCALAPPDATA%\stockdb-qa\review23.
+Result: review 23 closed with no Critical or Important finding. New: BUG-299, BUG-300.
+Gates: no code change | CI: no PR (Q10)
+Next: BUG-249 (its worker is preparing it).
