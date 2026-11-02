@@ -396,7 +396,7 @@ five sector-aware models per ticker, each producing a bear/base/bull per-share r
 
 | Model | Applies to | Basis |
 |---|---|---|
-| **DCF** (two-stage FCF) | general, utility, energy | Median 3-year FCF, growth = min(historical CAGR, analyst estimate), CAPM discount rate |
+| **DCF** (two-stage FCF) | general, utility, energy | Median 3-year FCF, growth = the historical CAGR clamped to 0-15% (from the first positive year when the window starts on a loss and at least 4 years remain from it, else 0%; Yahoo's quarterly "earnings growth" is no forecast and takes no part), CAPM discount rate |
 | **DDM** (multi-stage Gordon) | any steady dividend payer | Trailing-12-month dividend, dividend CAGR |
 | **Graham Number** | any company with positive EPS + book value in its latest fiscal year (N/A if that year lacks either); the bear, on the lowest EPS of 3 FYs, is N/A with a loss year among them | `sqrt(22.5 × EPS × BVPS)` |
 | **Peter Lynch fair value** | general, utility, energy | Growth-rate-as-fair-P/E × EPS |

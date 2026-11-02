@@ -68,7 +68,7 @@ class ValuationResult:
 
 ### Shared conservative assumptions (`assumptions.py`)
 
-- **Growth (base)** = `min(historical CAGR, analyst growth)`, clamped to **[0%, 15%]**.
+- **Growth (base)** = the historical CAGR, clamped to **[0%, 15%]** (amended 2026-11-02, Q2: the analyst term was Yahoo's one-quarter earnings growth, no forecast; Q5: a window starting on a loss is measured from its first positive year when at least 4 FYs remain, else 0%, Lynch N/A).
   Historical CAGR uses up to 10 FYs of the model's basis metric (FCF for DCF, dividends
   for DDM, EPS for Lynch); requires ≥ 4 FYs. Analyst growth = `analyst_snapshots.earnings_growth`
   (latest row); if absent, historical CAGR alone.
@@ -96,7 +96,7 @@ class ValuationResult:
 ### Dividend Discount (multi-stage Gordon) — sectors: bank, insurance; also any company with ≥ 3 years of dividends
 
 - Basis = trailing 12-month dividends per share from `dividend_events`.
-- Dividend growth = `min(hist dividend CAGR (≤10 yrs), analyst growth)`, clamped **[0%, 10%]**.
+- Dividend growth = the hist dividend CAGR (≤10 yrs), clamped **[0%, 10%]** (amended 2026-11-02, Q2/Q5).
 - Stage 1: 5 years at that growth; terminal Gordon at 2.5%. Same CAPM discount.
 - **N/A when:** < 3 calendar years of dividend history, or TTM dividends = 0.
 

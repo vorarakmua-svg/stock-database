@@ -441,11 +441,22 @@ def test_value_lynch_fair_pe_floor_applies():
     assert res.value_base == pytest.approx(5.0 * 2.0)  # P/E floor 5
 
 
-def test_value_lynch_na_when_no_growth_is_derivable():
-    # 5 FYs of EPS but the first is negative -> no CAGR; no analyst estimate
-    # -> growth_source "none". Publishing floor-P/E x EPS here would be a
-    # fabricated number.
+def test_value_lynch_takes_growth_from_the_first_profitable_year():
+    # Q5 (decided): 5 FYs of EPS whose first is a loss; 4 remain from the first profitable year, so the CAGR is
+    # measured from it (4 / 1 over 3 years, capped at 15%).
     eps_hist = [-1.0, 1.0, 2.0, 3.0, 4.0]
+    recs = [_fy(2019 + i, eps=e, shares=100.0) for i, e in enumerate(eps_hist)]
+    res = value_lynch(_inputs(fy_records=recs, analyst_growth=0.50))
+    assert res.applicable is True
+    assert res.assumptions["growth_source"] == "hist_from_first_positive"
+    assert res.assumptions["growth_base"] == pytest.approx(0.15)
+
+
+def test_value_lynch_na_when_no_growth_is_derivable():
+    # 5 FYs of EPS, the first two losses: 3 remain from the first profitable year, too few (Q5), and Yahoo's
+    # quarterly figure is no growth rate (Q2) -> growth_source "none". Publishing floor-P/E x EPS here would be a
+    # fabricated number.
+    eps_hist = [-1.0, -2.0, 1.0, 2.0, 3.0]
     recs = [_fy(2019 + i, eps=e, shares=100.0) for i, e in enumerate(eps_hist)]
     res = value_lynch(_inputs(fy_records=recs, analyst_growth=None))
     assert res.applicable is False

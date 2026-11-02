@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 14 · P3 167 · NEEDS-USER 0 · Decided: 7 · Verified: 135
+**Open:** P0 0 · P1 0 · P2 12 · P3 168 · NEEDS-USER 0 · Decided: 7 · Verified: 137
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1970,6 +1970,12 @@ Found: code review 24 (Minor 4; unproven: needs Yahoo's list) | Fixed: | Regress
 Repro: sqlite_store.py ~1476-1478 serves a refresh's payments on `_served_day` with no bars, the latest split Yahoo lists; a stored split dated after it would divide every payment by its ratio (`_dividend_onto`).
 Expected: served on the refresh's own day, as a collection's last bar would be (max(latest listed split, collected_at - 1 day)).   Actual: possibly years earlier.
 
+### BUG-308 [P3][QA] The valuation oracle reads the whole FCF history where the code's is truncated at a share seam: EXE's DCF growth 18.4% against 0.9%
+Status: OPEN
+Found: iteration 144 (Q2/Q5's oracle run) | Fixed: | Regression test:
+Repro: `qa/oracle/valuation_oracle.py` level 2, EXE dcf: the oracle's window is metrics_annual's last 10 FYs (FY2016's loss first, so from FY2017: 475M to 1,839M), the code's starts at FY2018 (`history_truncated`, a share-count seam). Exposed by Q2: EXE's growth came from the analyst figure before, which the oracle skipped.
+Expected: the oracle models the truncation (or flags it as such).   Actual: a 124% mismatch on the base.
+
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: OPEN
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: the history's P/E on net income to common, as its P/B already is.
@@ -2262,7 +2268,7 @@ Repro: a submissions file cached by an earlier build has no latest_report, so a 
 Expected: the check as fixed on every collection.   Actual: blind until the cache expires.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
-Status: OPEN
+Status: VERIFIED (iteration 144; regression tests tests/test_valuation_assumptions.py::test_derive_growth_*)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2 with Q5: drop Yahoo's quarterly earningsGrowth as the "analyst" term; growth is the clamped historical CAGR. Label it for what it is wherever it is shown.
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
 Proposal: use a forward growth estimate if one is available, or drop the analyst term and rely on the clamped historical CAGR. This is a policy change, so it's the user's call.
@@ -2286,7 +2292,7 @@ Context: the dividend completeness check (BUG-012) flags CB FY2025: Yahoo lacks 
 Options: (a) keep the Yahoo TTM and rely on the data-quality warning (today); (b) when the check fires, use SEC's declared dividends per share for the trailing four quarters (needs BUG-013 fixed first); (c) make DDM N/A ("dividend history incomplete") for flagged companies. (b) and (c) change the spec's DDM basis or N/A rules, so it's the user's call.
 
 ### Q5 [VAL] NEEDS-USER: when a model's historical growth can't be measured, what growth should it use?
-Status: OPEN
+Status: VERIFIED (iteration 144; regression tests tests/test_valuation_assumptions.py::test_derive_growth_*)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: option (c), measure from the first profitable year when at least 4 FYs remain; otherwise flat 0% with Lynch N/A (option (b)). No analyst fallback (Q2).
 Context: the CAGR is undefined when the 10-FY window starts on a loss or negative FCF (DELL, CVX, MU, PLTR, AMD and others). The plan uses yfinance's one-quarter "analyst" figure alone, clamped to the cap (seen from −85% to +1,369%). Iteration 6 switched to flat 0%, with Lynch N/A; BUG-016 restores the plan until you decide. The switch moved 31 valuations (CVX DCF $293 → $124). It also governs 7 DDM rows with fewer than 4 full years of dividends (BUG-010): BKNG, CRM, DELL, GEV, GOOGL, META, TMUS; under (a) CRM's DDM takes its 52.2% one-quarter figure capped at 10% ($32.25, against $25.16 from its measured 4.0%). Once you decide, a DDM test with an analyst figure will pin the choice.
 Options: (a) the plan's analyst-only fallback; (b) flat 0% (iteration 6); (c) measure from the first profitable year when at least 4 FYs remain (DELL 6.3%; CVX's FCF would hit the 15% cap again). Related: Q2 (what the "analyst" figure is).

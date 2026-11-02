@@ -2561,3 +2561,23 @@ Result: Q1 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2780 passed, 1 skipped, 1 warning | CI: PR #29
 Commit: (this commit) fix(web): a bare /screener runs the default screen (Q1)
 Next: BUG-049 and BUG-260 as their workers report; inline Q2 with Q5 (growth without the analyst figure).
+
+## Iteration 144: 2026-11-03 00:06: fix (Q2 with Q5, decided)
+Picked: Q2 and Q5 (implemented as P2s), inline.
+Did: `derive_growth` is the historical CAGR alone, clamped (Q2: Yahoo's earningsGrowth, one quarter's year-over-year
+change, takes no part and isn't recorded as a growth input). Where the CAGR can't be measured, it is measured from the
+first positive year when at least 4 fiscal years remain (Q5 option c, `hist_from_first_positive`), else a flat 0%
+(`none`; Lynch N/A). All four callers (DCF, DDM, Lynch, owner earnings). README's DCF row and the valuation spec are
+amended. The oracle follows in its own commit, first.
+- Tests: the growth tests rewritten to the decided rule, 4 new; 3 of 3 mutants killed.
+- Measured on two DB copies, engine over all 502: 166 medians, 74 verdicts (expensive to fair 29, fair to cheap 22,
+  expensive to cheap 16, fair to expensive 4, cheap to fair 2, cheap to expensive 1) and 58 owner-earnings verdicts
+  move; no historical-value label. The oracle: on head's copy 384 level-2 mismatches, with the fix 4 (HLT, RTX, HOOD as
+  before; EXE, now compared, is BUG-308).
+- DDM's growth goes the same way (no analyst term); BUG-049's worker rebuilds DDM's history on top of it.
+New: BUG-308.
+Evidence: %LOCALAPPDATA%\stockdb-qa\q2q5\out (verdicts.txt, diff.txt, oracle_*.txt); `qa/evidence/q2q5-mutants.json`.
+Result: Q2 and Q5 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2783 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(valuation): growth is the historical CAGR, from the first profitable year if need be (Q2, Q5)
+Next: BUG-049 and BUG-260 as their workers report; inline Q8 or Q9.
