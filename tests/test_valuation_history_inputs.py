@@ -345,6 +345,50 @@ def test_an_earlier_split_takes_its_seam_and_leaves_the_later_one():
     assert out[0] == pytest.approx(2400e6) and out[-1] == pytest.approx(2400e6)
 
 
+def test_equal_splits_take_their_seams_in_order():
+    # WRB-like (BUG-248): 3:2 splits of 2019, 2022 and 2024 whose seams sit at 2017, 2020 and 2022. The 2022 seam
+    # is the 2024 split's: taking the 2022 split there leaves the 2020 seam, under the threshold, nothing.
+    ends = _quarter_ends(2015, "2026-06-30")
+    counts = [122e6 if e <= "2016-12-31" else 183e6 if e <= "2019-12-31" else 274.5e6 if e <= "2021-12-31"
+              else 412e6 for e in ends]
+    splits = [("2019-04-03", 1.5), ("2022-03-24", 1.5), ("2024-07-11", 1.5)]
+    out, applied = normalize_share_series(ends, counts, [None] * len(ends), splits, yahoo_count=412e6)
+    assert applied == splits
+    assert out[0] == pytest.approx(411.75e6) and out[len(out) // 2] == pytest.approx(411.75e6)
+    assert out[-1] == pytest.approx(412e6)
+
+
+def test_equal_splits_after_the_stored_quarters_wait_for_yahoo():
+    # The tie goes to the latest split a stored quarter can reflect, however near the seam a later one is.
+    ends = _quarter_ends(2023, "2026-06-30")
+    counts = [600e6 if e <= "2023-12-31" else 1200e6 for e in ends]
+    splits = [("2024-06-12", 2.0), ("2026-09-03", 2.0)]
+    out, applied = normalize_share_series(ends, counts, [None] * len(ends), splits, yahoo_count=2400e6)
+    assert applied == splits
+    assert out == pytest.approx([2400e6] * len(ends))
+
+
+def test_a_split_in_the_latest_quarter_counts_as_stored():
+    # Dated within the latest quarter, the 2026 split is one the stored quarters can reflect: it takes the newest
+    # seam, and the 2025 split the one before.
+    ends = _quarter_ends(2021, "2026-06-30")
+    counts = [300e6 if e <= "2021-12-31" else 600e6 if e <= "2023-12-31" else 1200e6 for e in ends]
+    splits = [("2025-01-15", 2.0), ("2026-05-10", 2.0)]
+    out, applied = normalize_share_series(ends, counts, [None] * len(ends), splits, yahoo_count=1200e6)
+    assert applied == splits
+    assert out == pytest.approx([1200e6] * len(ends))
+
+
+def test_a_split_after_the_latest_quarter_can_still_make_a_seam():
+    # A 10-Q filed after the split restates its quarters though the quarter ended before it: with no other
+    # candidate, the seam takes it, and Yahoo's count then has nothing left to confirm.
+    ends = _quarter_ends(2024, "2026-06-30")
+    counts = [600e6 if e <= "2024-12-31" else 1200e6 for e in ends]
+    out, applied = normalize_share_series(ends, counts, [None] * len(ends), [("2026-07-20", 2.0)], yahoo_count=1200e6)
+    assert applied == [("2026-07-20", 2.0)]
+    assert out == pytest.approx([1200e6] * len(ends))
+
+
 def test_market_cap_stays_continuous_across_a_restated_seam(tmp_path):
     # End to end: a 4:1 split of 2020-08-31 whose seam sits at 2017-12-31 (AAPL-like), EPS rising across it.
     store = SQLiteStore(db_path=tmp_path / "seam.db")

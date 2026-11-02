@@ -54,7 +54,9 @@ YAHOO_SHARE_GAP = 1.25
 #: split for up to three years, so a split's seam can sit up to three years and a filing's lag before it
 #: (AAPL's 4:1 of 2020-08-31 shows at 2017-12-30, NFLX's 10:1 of 2025-11-17 at 2023-03-31): a seam matches
 #: a declared split dated after its older quarter and no more than this many days after its newer one.
-#: Unbounded, an older seam would take a split after the latest quarter (APH's 2026-09-03; BUG-174).
+#: Unbounded, an older seam would take a split after the latest quarter (APH's 2026-09-03; BUG-174). Splits of
+#: one ratio within that reach tie, and the walk runs newest first, so the latest goes to the newest seam: WRB's
+#: 3:2s of 2019, 2022 and 2024 made seams in 2017, 2020 and 2022 (BUG-248).
 SEAM_RESTATEMENT_DAYS = 3 * 365 + 120
 #: The listing's quarter, the first one ending on or after the first bar and within this many days of it (a
 #: 14-week quarter), averages the private company's count with the public one: preferred stock converting,
@@ -208,7 +210,8 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
       dropped.
     - A seam within DECLARED_SPLIT_TOLERANCE of a declared split, or run of splits, dated after the
       older quarter (and filed by the newer one), and nearer that run than 1.0, folds the run in.
-      Each declared split explains one seam.
+      Each declared split explains one seam, and of equal runs the latest a stored quarter can reflect: one
+      dated after the latest quarter only if no other fits, as its 10-Q may have been filed after it.
     - An undeclared seam of SPLIT_JUMP_THRESHOLD or more folds by its own ratio after the quarter of the
       listing on *listed* (LISTING_QUARTER_DAYS), or on a split's marks in EPS and *revenue*
       (SPLIT_EVIDENCE_SHARE). Otherwise it stays organic, as a merger or an exchange offer does. The
@@ -237,6 +240,7 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
     newest = raw[valid[-1]]
     out[valid[-1]] = newest
     first = 0
+    latest_end = str(ends[-1])[:10]
     for k in range(len(valid) - 2, -1, -1):
         i, j = valid[k], valid[k + 1]
         older, newer = raw[i], raw[j]
@@ -246,7 +250,9 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
             first = j  # a change of units: nothing older compares
             break
         horizon = (date.fromisoformat(str(ends[j])[:10]) + timedelta(days=SEAM_RESTATEMENT_DAYS)).isoformat()
-        run = _seam_run(ratio, ends[i], [s for s in unused if s[0] <= horizon])
+        reachable = [s for s in unused if s[0] <= horizon]
+        run = (_seam_run(ratio, ends[i], [s for s in reachable if s[0] <= latest_end])
+               or _seam_run(ratio, ends[i], reachable))
         run_ratio = math.prod(r for _, r in run) if run else 1.0
         if run and abs(math.log(ratio / run_ratio)) < abs(math.log(ratio)):
             unused = [s for s in unused if s not in run]
@@ -265,7 +271,7 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
             out[i] = carried
         else:
             carried = out[i]
-    later = [s for s in unused if s[0] > str(ends[-1])[:10]]
+    later = [s for s in unused if s[0] > latest_end]
     latest = next((c for c in reversed(out) if c), None)
     if later and latest and yahoo_count:
         moved = math.prod(r for _, r in later)
@@ -277,9 +283,9 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
 
 def _seam_run(observed: float, after: str, splits: Sequence[Tuple[str, float]]) -> List[Tuple[str, float]]:
     """The run of consecutive declared splits dated after *after* whose ratio is nearest the seam's, within
-    DECLARED_SPLIT_TOLERANCE, the earliest winning a tie: ``inputs._declared_run`` with ties going to the split
-    nearest the seam, so a later split of the same ratio stays for the seam it made (or for after the latest
-    quarter)."""
+    DECLARED_SPLIT_TOLERANCE, the latest winning a tie: the walk meets the newest seam first, and a split's seam
+    is older than any later split's, so equal splits take their seams in order (``inputs._declared_run``, BUG-248).
+    """
     later = sorted((when, ratio) for when, ratio in splits if ratio and ratio > 0 and when > after[:10])
     best: List[Tuple[str, float]] = []
     best_gap = math.log(DECLARED_SPLIT_TOLERANCE)
@@ -288,7 +294,7 @@ def _seam_run(observed: float, after: str, splits: Sequence[Tuple[str, float]]) 
         for end in range(start, len(later)):
             run *= later[end][1]
             gap = abs(math.log(observed / run))
-            if gap < best_gap or (gap == best_gap and not best):
+            if gap <= best_gap:
                 best, best_gap = later[start:end + 1], gap
     return best
 

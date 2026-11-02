@@ -2288,3 +2288,25 @@ Evidence: `qa/evidence/bug290-investigation.txt`; the final outputs are %LOCALAP
 Result: BUG-290 NEEDS-USER. Nothing applied; the fix stays in scratch.
 Gates: ruff ✓ mypy ✓ pytest 2728 passed, 1 skipped (6334d2a plus the fix) | CI: no PR (Q10)
 Next: the user's decision on BUG-290; meanwhile BUG-248.
+
+## Iteration 127: 2026-11-02 08:28: fix (BUG-248)
+Picked: BUG-248, the oldest open P2 that needs no decision.
+Did: an opus worker found the cause and prepared the fix in an export; I reviewed the diff, proved RED on an export
+of HEAD, applied it and re-ran the mutants and gates.
+- Root cause: `_seam_run` gave equal-gap ties to the earliest split and the walk runs newest first, so WRB's 2022
+  seam took the 2022 split and its 2020 seam, at 1.494 under the threshold, had none. Quarters of 2010-19 sat 1.5x low.
+- Fix: ties go to the latest split, as `inputs._declared_run` does; a split after the latest quarter is tried only
+  if none before it fits, so APH's 2026 split still waits for Yahoo's count. No schema change.
+- RED: 2 failed of 4 new tests (the other 2 guard the new tier). 5 of 5 mutants killed, by me.
+- Measured on DB copies, 502 tickers: no median, verdict, owner_earnings_verdict or label moves. WRB's historical value
+  60.11 to 62.63 at 73.33, above stays above; TPL 367.17 to 367.26. 363 valuation_history rows (WRB, ROL, TPL), 10
+  ranges, 2 indicators; no score column.
+- `history_vs_yahoo`: unfolded seams 1 to 0, seam continuity 119/121 to 120/121. Still exits 1 on P/E against Yahoo and
+  the seam gate, as it does without the fix. APH, NFLX and CPRT are unchanged.
+- Not run: lookahead.py, which tests the parser's vintages; this fix touches neither. No web check; no README change.
+- It reaches the user's DB at each company's next computation.
+Evidence: `qa/evidence/bug248-investigation.txt`, `qa/evidence/bug248-mutants.json`.
+Result: BUG-248 VERIFIED. New: BUG-297, BUG-298. Four fixes since code review 22 (BUG-285, -171, -170, -248).
+Gates: ruff ✓ mypy ✓ pytest 2718 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(valuation): equal splits take their seams in order (BUG-248)
+Next: BUG-249, or BUG-290 if the user decides first.

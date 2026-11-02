@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 7 · P3 159 · NEEDS-USER 24 · Verified: 121
+**Open:** P0 0 · P1 0 · P2 6 · P3 161 · NEEDS-USER 24 · Verified: 122
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1862,8 +1862,8 @@ Expected: fold on marks only when net income kept its sign and moved by less tha
 Fix (iteration 114, `qa/evidence/bug247-done.txt`): the undeclared branch of `_normalize_splits` also needs net income to have held (`inputs._net_income_held`: the same sign, and a move of less than half the seam's log ratio, strictly; an unknown net income doesn't decide). Over the 502 the marks now fold only listing seams (BE x2, DASH, MRNA; TWLO and XYZ at 11 years), HOOD's passing to the listing rule with the same factor; PCG's two seams and KDP's stay. On DB copies: valuation_summary identical, no verdict moved; valuations, KDP's and PCG's Lynch assumptions only (hist_cagr, split_adjusted; growth floors at 0, so no value); per_share_annual 8 rows; quality_scores 6 (KDP's predictability 3.5 to 1 star, composite 60 to 58; PCG's 35 to 32.5). The scores oracle's per-share agreement goes from 25,947 to 25,980 of 26,075 (all 33 PCG/KDP disagreements gone). The valuation history's rule is left alone: its quarters fold neither seam, and the test would unfold DD's 2019 1:3 reverse split there (quarterly net income 52M then 888M). Residuals: BUG-262 to BUG-266.
 
 ### BUG-248 [P2][VAL] WRB's quarterly history leaves its 2022 3:2 split unfolded: three equal splits, the tie-break takes the wrong one
-Status: OPEN
-Found: build M5-6 (history_vs_yahoo on the S&P 500) | Fixed: | Regression test:
+Status: VERIFIED (iteration 127)
+Found: build M5-6 (history_vs_yahoo on the S&P 500) | Fixed: (this commit) | Regression tests: tests/test_valuation_history_inputs.py (4 items; `_seam_run`, `normalize_share_series`)
 Repro: src/valuation/history_inputs.py `normalize_share_series` / `_seam_run` match a quarterly seam to the nearest declared run among the splits after it, ties to the earliest (BUG-174's rule, for APH). WRB split 3:2 in 2019, 2022 and 2024: the 2021Q4-2022Q1 seam (1.501, the 2024 split) ties 2022 and 2024 and takes 2022, so the 2019Q4-2020Q1 seam (1.494, the 2022 split) has no candidate and stays unfolded under 1.5. WRB's market cap 2017-05 to 2020-04 is 1/1.5 of true: the seam gate's WRB miss and its "1 move". P/E percentile 0.61 (0.40 folded), historical value $60.11 ($62.63); no valuation, median or verdict. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C3.
 Expected: each seam its own split, by filing date (store each quarter's filing date; financials_quarterly.filed_date is NULL) or an order-preserving match. A quick approximation from the annual vintages fixed WRB but broke CPRT and ROL: it needs design and tests for APH, NFLX, WRB, CPRT and ROL.
 
@@ -1891,6 +1891,18 @@ Status: OPEN
 Found: build M5-6 (the scores oracle on the S&P 500) | Fixed: | Regression test:
 Repro: EG (Everest Group) tags no NetIncomeLoss for FY2016-19, and canonical.py's net_income order (145-152) takes NetIncomeLossAvailableToCommonStockholdersBasic (792.4M, 272.6M, -125.8M, 766.4M) before ProfitLoss (996.3M ... 1,009.5M, consistent with EPS x the count). Its diluted counts for those years are tagged in thousands (41,628 ...); share_scale's net income / EPS check, fed the low figure, doesn't rescale them, so a 989.6x seam makes `_normalize_splits` truncate FY2015-19 (by design): the scores oracle's 5 "row not stored", 2 CAGRs and EG's predictability. The oracle's EG years are wrong the same way, so a parser fix needs its guard changed too. Evidence: `qa/evidence/close-m5-6-misses-done.txt`, C8.
 Expected: EG's net income from the tag consistent with EPS x the count, and its counts rescaled.   Actual: as above.
+
+### BUG-297 [P3][VAL] GL's 2012 seam stays unfolded: x0.901 at its 3:2 of 2014
+Status: OPEN
+Found: iteration 127 (BUG-248's measurement, `qa/evidence/bug248-investigation.txt`) | Fixed: | Regression test:
+Repro: `qa/oracle/history_vs_yahoo.py` on the 502: market cap at the 2014-07-02 x1.5 split's seam, between 2011-12-31 and 2012-03-31, moves x0.901. The last of 121 seams (120 continuous). Not diagnosed.
+Expected: continuous within 10%.   Actual: x0.901.
+
+### BUG-298 [P3][VAL] ROL's quarters before 2013 sit about 0.66x their true count: a derived fourth quarter hides its 2015 seam
+Status: OPEN
+Found: iteration 127 (BUG-248's measurement) | Fixed: | Regression test:
+Repro: a derived fourth quarter of 435M splits the 2015 3:2 seam across two jumps (2.978, then 0.504), so the split stays unused. The quarters before 2013 read about 0.66x a filing-based count, and 2013-12 1.985x.
+Expected: the filing-based count.   Actual: as above.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: NEEDS-USER
