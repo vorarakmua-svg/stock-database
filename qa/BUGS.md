@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 17 · P3 165 · NEEDS-USER 0 · Decided: 7 · Verified: 129
+**Open:** P0 0 · P1 0 · P2 16 · P3 165 · NEEDS-USER 0 · Decided: 7 · Verified: 130
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1898,8 +1898,8 @@ Expected: the collection (or the refresh's SEC step) warns when the latest repor
 Fix (iteration 119, `qa/evidence/bug251-done.txt`; BUG-279 by the same rule): nothing recorded what a collection's SEC read lacked, and the refresh queued a company only for a report filed since its last collection. Now `sec_handler.report_without_facts` takes the latest report the submissions list (a 10-K, 10-Q, 20-F or 40-F as filed, with XBRL); when no fact under any taxonomy carries its accession, the run warns, naming it ("SEC EDGAR: the companyfacts lack DLR's 10-Q filed 2026-07-31 (...)"; a failed companyfacts request is marked too, its error saying why). The new column `collection_runs.incomplete` keeps that, or a predecessor read that failed (BUG-279), as JSON (migrated; NULL in every earlier run, which reads as complete), and the refresh's SEC step puts such a company on the list again, up to INCOMPLETE_RETRIES = 3 times for one gap (counted over the collections in a row that found it), then lists it under incomplete_left until its next report. Offline over the 502: the check names exactly the entry's 58; collected with the fix, the 58 are marked and queued, HEAD queues none; 35 of 36 tables identical (all the financial and valuation tables), collection_runs alone differing. The stored runs say nothing yet, so the 58 are queued once a collection with this code finds their gap again. Recovering the figures the SEC lacks is Q17. Residuals: BUG-280 to BUG-284.
 
 ### BUG-252 [P2][PARSE] EG's FY2016-19: net income from the "available to common" tag about 20% low, and share counts left in thousands
-Status: OPEN
-Found: build M5-6 (the scores oracle on the S&P 500) | Fixed: | Regression test:
+Status: VERIFIED (iteration 138)
+Found: build M5-6 (the scores oracle on the S&P 500) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (11 items with the guards; `_to_common_set_aside`)
 Repro: EG (Everest Group) tags no NetIncomeLoss for FY2016-19, and canonical.py's net_income order (145-152) takes NetIncomeLossAvailableToCommonStockholdersBasic (792.4M, 272.6M, -125.8M, 766.4M) before ProfitLoss (996.3M ... 1,009.5M, consistent with EPS x the count). Its diluted counts for those years are tagged in thousands (41,628 ...); share_scale's net income / EPS check, fed the low figure, doesn't rescale them, so a 989.6x seam makes `_normalize_splits` truncate FY2015-19 (by design): the scores oracle's 5 "row not stored", 2 CAGRs and EG's predictability. The oracle's EG years are wrong the same way, so a parser fix needs its guard changed too. Evidence: `qa/evidence/close-m5-6-misses-done.txt`, C8.
 Expected: EG's net income from the tag consistent with EPS x the count, and its counts rescaled.   Actual: as above.
 

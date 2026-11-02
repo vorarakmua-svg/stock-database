@@ -5,6 +5,7 @@ import pytest
 from src.exporters.sqlite_store import SQLiteStore
 from src.models.stock_data import StockData
 from src.parsers.calculated_metrics import CalculatedMetrics
+from src.parsers.share_scale import normalize_share_scale
 from src.parsers.ttm import compute_ttm
 from src.parsers.xbrl_parser import XBRLParser, explain_no_annual_financials, explain_stale_annual_financials
 from src.query.asof import AsOfReader
@@ -2630,3 +2631,139 @@ def test_net_revenue_is_no_noninterest_income():
     annual = _annual(*_one_year(2025, "2026-02-06", InterestIncomeExpenseNet=17.364e9,
                                 RevenuesNetOfInterestExpense=72.229e9))
     assert "noninterest_income" not in annual["2025"]
+
+
+_TO_COMMON = "NetIncomeLossAvailableToCommonStockholdersBasic"
+_UNIT_OF = {"EarningsPerShareBasic": "USD/shares", "EarningsPerShareDiluted": "USD/shares",
+            "WeightedAverageNumberOfSharesOutstandingBasic": "shares",
+            "WeightedAverageNumberOfDilutedSharesOutstanding": "shares"}
+
+
+def _income_facts(*filings):
+    """Facts of filings, each (filed, start, end, form, {tag: value}), one accession per filing date."""
+    us_gaap = {}
+    for filed, start, end, form, tagged in filings:
+        for tag, value in tagged.items():
+            unit = _UNIT_OF.get(tag, "USD")
+            us_gaap.setdefault(tag, {"units": {unit: []}})["units"][unit].append(
+                usd(value, start, end, fy=int(filed[:4]), fp="FY" if form == "10-K" else "Q", form=form, filed=filed))
+    return {"facts": {"us-gaap": us_gaap}}
+
+
+def _eg_fy2016(**changed):
+    """EG's FY2016 in its 10-K of 2017-03-01: no NetIncomeLoss; its to-common figure, $792.4M, beside ProfitLoss,
+    $996.3M, which its EPS x its counts (in thousands) make."""
+    tagged = {_TO_COMMON: 792.415e6, "ProfitLoss": 996.344e6, "EarningsPerShareBasic": 23.85,
+              "WeightedAverageNumberOfSharesOutstandingBasic": 41329.0, "EarningsPerShareDiluted": 23.68,
+              "WeightedAverageNumberOfDilutedSharesOutstanding": 41628.0}
+    tagged.update(changed)
+    return _income_facts(("2017-03-01", "2016-01-01", "2016-12-31", "10-K", tagged))
+
+
+def test_a_to_common_figure_its_own_eps_contradicts_gives_way_to_the_one_it_makes():
+    # BUG-252: EG tags no NetIncomeLoss for FY2016-20, and its to-common figure is about 20% below the net income its
+    # EPS x count makes (23.85 x 41.329M = $985.7M), which is its ProfitLoss: net income read $792.4M.
+    year = XBRLParser().extract_annual_financials(_eg_fy2016())["2016"]
+    assert (year["net_income"], year["_source_tags"]["net_income"]) == (996.344e6, "ProfitLoss")
+
+
+def test_the_counts_in_thousands_are_rescaled_once_net_income_is_the_eps_figure():
+    # BUG-252: fed $792.4M, share_scale's net income / EPS check (33.5M) left the diluted 41,628 in thousands, a 989.6x
+    # seam against FY2020's units that truncated FY2015-19.
+    years = XBRLParser().extract_annual_financials(_eg_fy2016())
+    normalize_share_scale(years)
+    assert years["2016"]["weighted_avg_shares_diluted"] == 41.628e6
+    assert years["2016"]["weighted_avg_shares_basic"] == 41.329e6
+
+
+def test_a_loss_to_common_beside_a_profit_its_eps_makes_gives_way():
+    # EG's FY2018: -$125.8M to common, its EPS +2.17 beside a ProfitLoss of $89.0M (2.17 x 40.586M = $88.1M).
+    year = XBRLParser().extract_annual_financials(_eg_fy2016(**{
+        _TO_COMMON: -125.848e6, "ProfitLoss": 89.041e6, "EarningsPerShareBasic": 2.18,
+        "WeightedAverageNumberOfSharesOutstandingBasic": 40388.0, "EarningsPerShareDiluted": 2.17,
+        "WeightedAverageNumberOfDilutedSharesOutstanding": 40586.0}))["2016"]
+    assert year["net_income"] == 89.041e6
+
+
+def test_a_to_common_figure_of_the_other_sign_from_its_eps_gives_way():
+    # The size its EPS x count makes, with the sign flipped, is no figure that EPS divides.
+    year = XBRLParser().extract_annual_financials(_eg_fy2016(**{_TO_COMMON: -996.344e6}))["2016"]
+    assert year["net_income"] == 996.344e6
+
+
+def test_a_to_common_figure_is_checked_with_basic_eps_before_diluted():
+    # It is basic EPS's figure: a diluted EPS adds back what converts (a convertible's interest), so its diluted
+    # EPS x count, $1.15B here, can be another filing figure's while the basic pair makes the figure for common.
+    year = XBRLParser().extract_annual_financials(_eg_fy2016(**{
+        _TO_COMMON: 1000.0e6, "ProfitLoss": 1150.0e6, "EarningsPerShareBasic": 2.00,
+        "WeightedAverageNumberOfSharesOutstandingBasic": 500.0e6, "EarningsPerShareDiluted": 2.00,
+        "WeightedAverageNumberOfDilutedSharesOutstanding": 575.0e6}))["2016"]
+    assert year["net_income"] == 1000.0e6
+
+
+def test_a_to_common_figure_after_preferred_dividends_stays():
+    # A filer with preferred dividends and a large noncontrolling interest: its EPS x count is its to-common figure, and
+    # ProfitLoss, 15% above it, is not the EPS's figure (FCX, SPG and PNC's other years have this shape).
+    year = XBRLParser().extract_annual_financials(_eg_fy2016(**{
+        _TO_COMMON: 1000.0e6, "ProfitLoss": 1150.0e6, "EarningsPerShareBasic": 2.00,
+        "WeightedAverageNumberOfSharesOutstandingBasic": 500.0e6, "EarningsPerShareDiluted": 1.99,
+        "WeightedAverageNumberOfDilutedSharesOutstanding": 502.5e6}))["2016"]
+    assert (year["net_income"], year["_source_tags"]["net_income"]) == (1000.0e6, _TO_COMMON)
+
+
+def test_a_to_common_figure_its_eps_makes_stays_beside_a_profit_it_makes_too():
+    # Both within share_scale's 10%: the tag order settles it (AEP, CAT: a small noncontrolling interest).
+    year = XBRLParser().extract_annual_financials(_eg_fy2016(**{
+        _TO_COMMON: 1000.0e6, "ProfitLoss": 1050.0e6, "EarningsPerShareBasic": 2.00,
+        "WeightedAverageNumberOfSharesOutstandingBasic": 500.0e6, "EarningsPerShareDiluted": 1.99,
+        "WeightedAverageNumberOfDilutedSharesOutstanding": 502.5e6}))["2016"]
+    assert year["net_income"] == 1000.0e6
+
+
+def test_a_to_common_figure_stays_where_its_eps_makes_no_other_either():
+    # Ford's FY2019: $47M to common, ProfitLoss $84M, EPS 0.01 x 4,004M = $40M: an EPS rounded to the cent checks
+    # neither, so the tag order stands.
+    year = XBRLParser().extract_annual_financials(_eg_fy2016(**{
+        _TO_COMMON: 47.0e6, "ProfitLoss": 84.0e6, "EarningsPerShareBasic": 0.01,
+        "WeightedAverageNumberOfSharesOutstandingBasic": 3972.0e6, "EarningsPerShareDiluted": 0.01,
+        "WeightedAverageNumberOfDilutedSharesOutstanding": 4004.0e6}))["2016"]
+    assert year["net_income"] == 47.0e6
+
+
+def test_the_diluted_eps_checks_a_to_common_figure_without_a_basic_one():
+    facts = _eg_fy2016()
+    for tag in ("EarningsPerShareBasic", "WeightedAverageNumberOfSharesOutstandingBasic"):
+        del facts["facts"]["us-gaap"][tag]
+    assert XBRLParser().extract_annual_financials(facts)["2016"]["net_income"] == 996.344e6
+
+
+def test_a_vintage_judges_its_to_common_figure_by_its_own_filing():
+    # PNC's FY2019 in its 10-K of 2021: $4.284B to common, ProfitLoss $5.418B, EPS 11.39 x 448M = $5.103B. An earlier
+    # filing whose to-common figure its EPS makes keeps it.
+    first, later = "2020-02-28", "2021-03-01"
+    facts = _income_facts(
+        (first, "2019-01-01", "2019-12-31", "10-K", {_TO_COMMON: 5.103e9, "ProfitLoss": 5.418e9,
+                                                       "EarningsPerShareDiluted": 11.39,
+                                                       "WeightedAverageNumberOfDilutedSharesOutstanding": 448.0e6}),
+        (later, "2019-01-01", "2019-12-31", "10-K", {_TO_COMMON: 4.284e9, "ProfitLoss": 5.418e9,
+                                                       "EarningsPerShareDiluted": 11.39,
+                                                       "WeightedAverageNumberOfDilutedSharesOutstanding": 448.0e6}))
+    vintages = XBRLParser().extract_annual_vintages(facts)["2019"]
+    assert (vintages[first]["net_income"], vintages[later]["net_income"]) == (5.103e9, 5.418e9)
+
+
+def test_a_quarterly_ladder_reads_the_figure_each_filings_eps_makes():
+    # EG's 2017: its 10-Qs' to-common figures are as far from their EPS x count as its 10-K's, and the fourth quarter,
+    # the year less nine months, is the 10-K's own fourth-quarter ProfitLoss, $571.0M.
+    start = "2017-01-01"
+    facts = _income_facts(*[
+        (filed, start, end, form, {_TO_COMMON: tc, "ProfitLoss": pl, "EarningsPerShareDiluted": eps,
+                                   "WeightedAverageNumberOfDilutedSharesOutstanding": count})
+        for filed, end, form, tc, pl, eps, count in (
+            ("2017-05-05", "2017-03-31", "10-Q", 237.754e6, 291.643e6, 7.07, 40.796e6),
+            ("2017-08-04", "2017-06-30", "10-Q", 430.035e6, 537.317e6, 13.02, 40.836e6),
+            ("2017-11-03", "2017-09-30", "10-Q", -255.944e6, -102.057e6, -2.51, 40.852e6),
+            ("2018-03-01", "2017-12-31", "10-K", 258.952e6, 468.968e6, 11.36, 40843.0))])
+    quarters = XBRLParser().extract_quarterly_financials(facts)
+    assert [quarters[end]["net_income"] for end in ("2017-03-31", "2017-06-30", "2017-09-30", "2017-12-31")] == [
+        pytest.approx(v) for v in (291.643e6, 245.674e6, -639.374e6, 571.025e6)]

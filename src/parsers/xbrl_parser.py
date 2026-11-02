@@ -11,8 +11,8 @@ from itertools import combinations
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, DURATION, INSTANT, SIGN_ABS, SIGN_NET
+from .share_scale import _SCALES, _best_scale
 from .share_scale import _TOLERANCE as _SCALE_TOLERANCE
-from .share_scale import _best_scale
 
 # Duration bounds (in days) used to distinguish annual vs quarterly periods.
 # A "full year" span is ~365 days; a quarter is ~91 days. Bounds are generous
@@ -35,6 +35,73 @@ _FRAME_QUARTER_RE = re.compile(r"^CY(\d{4})Q(\d)")
 #: Fields reported in dollars: a filer reporting in another currency resolves none.
 _DOLLAR_FIELDS = frozenset(f.key for f in CANONICAL_FIELDS if f.xbrl_unit.startswith("USD"))
 _FIELDS = {f.key: f for f in CANONICAL_FIELDS}
+
+
+#: Net income's tag for the figure basic EPS divides: after preferred dividends and participating securities.
+_TO_COMMON = "NetIncomeLossAvailableToCommonStockholdersBasic"
+#: The (EPS, weighted count) pairs a filing's figure for common is checked with, basic first (its own).
+_EPS_PAIRS = (("eps_basic", "weighted_avg_shares_basic"), ("eps_diluted", "weighted_avg_shares_diluted"))
+
+
+def _fact_key(entry: Dict[str, Any]) -> Tuple[Any, Any, Any]:
+    """A fact's filing and span: what one filing says for one period."""
+    return entry.get("accn"), entry.get("start"), entry.get("end")
+
+
+def _eps_gap(figure: float, eps: float, count: float) -> float:
+    """How far *count*, on the power of 1000 nearest (share_scale's), is from *figure* / *eps*: inf where they
+    differ in sign or there's nothing to divide."""
+    if not eps or count <= 0 or figure / eps <= 0:
+        return math.inf
+    implied = figure / eps
+    return min(abs(count * scale / implied - 1.0) for scale in _SCALES)
+
+
+def _to_common_set_aside(us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
+    """The to-common figures, as ``("net_income", tag, (accn, start, end))``, that aren't the figure their own
+    filing's EPS divides (BUG-252).
+
+    Net income takes that figure where a period has no ``NetIncomeLoss``: by definition basic EPS x the basic
+    count, the year's net income less preferred dividends and what participating securities take. One gives way
+    where its filing's EPS x count for the period (its basic pair, else its diluted; a count in thousands or
+    millions on its power of 1000) is more than share_scale's 10% from it, and within 10% of the same filing's
+    figure under a later tag: EG's FY2016-20 10-Ks tag $792.4M ... $262M to common beside ProfitLoss of $996.3M ...
+    $514M, which their EPS make (and their 10-Qs likewise); PNC's 10-K of 2021 tags FY2018-20 figures 16-62% below
+    its EPS's, L3Harris' of 2019 FY2017's 16% above. A figure after preferred dividends stays (EPS x count makes
+    it), and so does one that an EPS rounded near zero checks no figure with (Ford's FY2019 at $0.01).
+    """
+    field = _FIELDS["net_income"]
+    later = field.tags[field.tags.index(_TO_COMMON) + 1:]
+
+    def by_fact(key: str, tags: Iterable[str]) -> Dict[Tuple[Any, Any, Any], float]:
+        """Each filing's figure for each period under *key*'s first tag that has one."""
+        values: Dict[Tuple[Any, Any, Any], float] = {}
+        for tag in tags:
+            for entry in us_gaap.get(tag, {}).get("units", {}).get(_FIELDS[key].xbrl_unit, []):
+                if isinstance(entry.get("val"), (int, float)) and entry.get("start"):
+                    values.setdefault(_fact_key(entry), float(entry["val"]))
+        return values
+
+    figures = by_fact("net_income", (_TO_COMMON,))
+    if not figures:
+        return frozenset()
+    others = [by_fact("net_income", (tag,)) for tag in later]
+    pairs = [(by_fact(eps, _FIELDS[eps].tags), by_fact(count, _FIELDS[count].tags)) for eps, count in _EPS_PAIRS]
+    aside: Set[Tuple[str, str, Any]] = set()
+    for key, figure in figures.items():
+        pair = next(((eps[key], counts[key]) for eps, counts in pairs if key in eps and key in counts), None)
+        if pair is None or _eps_gap(figure, *pair) <= _SCALE_TOLERANCE:
+            continue
+        if any(key in other and _eps_gap(other[key], *pair) <= _SCALE_TOLERANCE for other in others):
+            aside.add(("net_income", _TO_COMMON, key))
+    return frozenset(aside)
+
+
+def _ranks_last(set_aside: FrozenSet[Tuple[str, str, Any]], field: Any, tag: str, period: Any,
+                entry: Dict[str, Any]) -> bool:
+    """Whether *entry*, a fact under *tag* for *period*, ranks after every other tag of *field*: its period's
+    figure is set aside (``_revenue_set_aside``) or the fact itself is (``_to_common_set_aside``)."""
+    return (field.key, tag, period) in set_aside or (field.key, tag, _fact_key(entry)) in set_aside
 
 
 def _in_dollars(periods: Iterable[Dict[str, Any]]) -> bool:
@@ -1178,7 +1245,7 @@ class XBRLParser:
         data: Dict[Any, Dict[str, Any]] = {}
         best: Dict[Any, Tuple[int, str]] = {}
         period_frames: Dict[Any, set] = {}
-        set_aside = self._revenue_set_aside(us_gaap)
+        set_aside = self._set_aside(us_gaap)
 
         for field in CANONICAL_FIELDS:
             for priority, tag in enumerate(field.tags):
@@ -1203,7 +1270,7 @@ class XBRLParser:
                         "filed_date": entry.get("filed"), "period_end": entry.get("end"),
                         "form": entry.get("form"),
                     }
-                    rank = priority + len(field.tags) if (field.key, tag, fy) in set_aside else priority
+                    rank = priority + len(field.tags) if _ranks_last(set_aside, field, tag, fy, entry) else priority
                     self._assign_if_better(data, best, period, seed, field,
                                            rank, tag, entry)
 
@@ -1267,7 +1334,7 @@ class XBRLParser:
         for end, (value, tag) in _long_term_debt_lines(us_gaap, annual, periods).items():
             periods[end]["long_term_debt"] = value
             periods[end]["_source_tags"]["long_term_debt"] = tag
-        self._collect_discrete_flows(us_gaap, periods, frames, restored, level, self._revenue_set_aside(us_gaap))
+        self._collect_discrete_flows(us_gaap, periods, frames, restored, level, self._set_aside(us_gaap))
         if level is not None:
             self._instants_on_year_basis(periods, instants_filed, level)
         self._apply_quarter_calendar(periods, frames)
@@ -1445,6 +1512,8 @@ class XBRLParser:
                     rank = priority
                     if span >= _FULL_YEAR_MIN_DAYS and (field.key, tag, self._annual_fy(entry)) in set_aside:
                         rank += len(field.tags)  # a revenue figure that isn't the year's (never a count)
+                    elif (field.key, tag, _fact_key(entry)) in set_aside:
+                        rank += len(field.tags)  # a to-common figure its filing's EPS doesn't divide
                     filed = entry.get("filed") or ""
                     key = (start, end)
                     if entry.get("form", "").startswith("10-K"):
@@ -1714,7 +1783,7 @@ class XBRLParser:
                         period_frames.setdefault(period, set()).add(frame)
 
                     seed = self._init_period_meta(period, quarterly)
-                    rank = priority + len(field.tags) if (field.key, tag, period) in set_aside else priority
+                    rank = priority + len(field.tags) if _ranks_last(set_aside, field, tag, period, entry) else priority
                     if not self._assign_if_better(
                         data, best, period, seed, field, rank, tag, entry
                     ):
@@ -1748,7 +1817,7 @@ class XBRLParser:
             valid_fn=self._is_full_year,
             period_key_fn=self._annual_fy,
             quarterly=False,
-            set_aside=self._revenue_set_aside(us_gaap),
+            set_aside=self._set_aside(us_gaap),
         )
         self._restore_agreed_figures(us_gaap, data, self._annual_fy)
         return data
@@ -1772,6 +1841,11 @@ class XBRLParser:
         for values in filings.values():
             values.sort(key=lambda filing: filing[0])
         return filings
+
+    def _set_aside(self, us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
+        """The figures that rank after every other tag of their field: ``_revenue_set_aside``'s and
+        ``_to_common_set_aside``'s."""
+        return self._revenue_set_aside(us_gaap) | _to_common_set_aside(us_gaap)
 
     def _revenue_set_aside(self, us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
         """The revenue figures, as ``("revenue", tag, fiscal year)``, that aren't the year's

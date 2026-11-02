@@ -2467,3 +2467,26 @@ Result: BUG-258 and BUG-160 VERIFIED. Q15's scheduled task is no longer blocked 
 Gates: ruff ✓ mypy ✓ pytest 2760 passed, 1 skipped, 1 warning | CI: PR #29
 Commit: (this commit) fix(refresh): a saved quote refresh stores Yahoo's payments (BUG-258, BUG-160)
 Next: code review 24 is due (5 fixes since review 23: BUG-246, -007, -172, -245, -258/160); BUG-252 meanwhile.
+
+## Iteration 138: 2026-11-02 21:10: fix (BUG-252)
+Picked: BUG-252 (P2, oldest open that needs no decision), prepared by an opus worker.
+Did: a NetIncomeLossAvailableToCommonStockholdersBasic fact ranks after every other net-income tag where its own
+filing's EPS x weighted count for the period (basic pair first, else diluted; the count on its nearest power of 1000)
+is more than 10% from it, or of the other sign, and within 10% of the same filing's figure under a later tag
+(`xbrl_parser._to_common_set_aside`, through the existing set-aside ranking in the annual record, each vintage and the
+quarterly rungs). EG's FY2016-20 read ProfitLoss and its FY2016-19 counts are rescaled from thousands. The scores
+oracle's units guard no longer uses the code's own net income (its own commit, first, b70773f).
+- RED: 7 of 11 new tests failed (4 guards); GREEN. Mutants, by me on the checkout: 11 of 11; BUG-290's 17, BUG-171's
+  31 and BUG-170's 17 still killed. The worker's look-ahead: 0 cells.
+- The worker's all-filer census: 3 filers change, 143 cells (EG; PNC FY2018-20; an LHX FY2017 vintage). On DB copies
+  (measured at 14b79a4, before BUG-172 and BUG-245, which touch neither net income nor these companies' bases): no
+  median, verdict, owner-earnings verdict or label; EG's scores gain their 10-year CAGRs, predictability (2 stars) and
+  composite (75.0); 146 valuation_history rows. Scores oracle: EG agrees fully.
+- Residual: PNC FY2018-19 read the earlier 10-Ks' to-common figures (EPS-confirmed), not net income to the parent,
+  because the tag order puts to-common first: Q16's territory.
+- It reaches the user's DB at each company's next collection.
+Evidence: `qa/evidence/bug252-{investigation,verify-mine}.txt`, `qa/evidence/bug252-mutants.json`.
+Result: BUG-252 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2771 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(parsers): a to-common figure its own EPS contradicts gives way (BUG-252)
+Next: BUG-249 (decided: apply, after history_vs_yahoo and look-ahead); code review 24 is running.
