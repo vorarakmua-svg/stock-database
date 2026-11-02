@@ -223,9 +223,11 @@ class Inputs:
             for fy, *dates in db.execute(
                     "select fiscal_year, max(case when weighted_avg_shares_diluted is not null then filed_date end), "
                     "max(case when eps_diluted is not null then filed_date end), "
-                    "max(case when shares_outstanding is not null then filed_date end) "
+                    "max(case when shares_outstanding is not null then filed_date end), "
+                    "max(case when dividends_per_share is not null then filed_date end) "
                     "from financials_annual_vintages where ticker=? group by fiscal_year", (ticker,)):
-                for field, filed in zip(("weighted_avg_shares_diluted", "eps_diluted", "shares_outstanding"), dates):
+                for field, filed in zip(("weighted_avg_shares_diluted", "eps_diluted", "shares_outstanding",
+                                         "dividends_per_share"), dates):
                     if filed:
                         self.filed_by_field[(fy, field)] = filed
         except sqlite3.OperationalError:  # a database from before vintages were kept
@@ -508,41 +510,58 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         events = [(d, a * x.dividend_to_price_basis(served_on[d])) for d, a in events if not spun_off(d, a)]
         ttm_start = (datetime.date.fromisoformat(anchor[:10]) - datetime.timedelta(days=365)).isoformat()
         ttm = sum(a for d, a in events if ttm_start < d <= anchor[:10])
-        by_year: Dict[int, List[float]] = {}
-        for d, a in events:
-            if d[:4] < anchor[:4]:
-                by_year.setdefault(int(d[:4]), []).append(a)
-        # The spec's "<= 10 yrs" is a calendar window (complete years before the anchor year), and the
-        # exponent is the calendar span, so a payment gap can't stretch or shrink the growth rate.
-        window = [(y, sum(v), len(v)) for y, v in sorted(by_year.items()) if y >= int(anchor[:4]) - 10]
-        # Growth compares full years (BUG-009, BUG-017). Each end is judged by the cadence of the (up to 3) years
-        # next to it, since a payer can change frequency (PGR and TSM: annual, then quarterly from 2019). A first
-        # year with fewer payments than those is partial (a dividend started, paused or restarted, or an ex-date
-        # slipped a year back), unless it continues a lower-frequency schedule: the year before paid as often,
-        # and each payment is larger than the later years' typical one (an annual payment is several quarterly
-        # ones; a suspension restarted with the same count pays the same size, BUG-017's third fix). An end year
-        # with exactly one payment more, next to a year still on the usual schedule and each within 1.5x of that
-        # year's typical payment, holds one that slipped across the year boundary (O 2025's Dec 31 ex-date), so
-        # it counts at the usual number. A neighbour that already pays more often means the schedule changed (KO
-        # semiannual from 2024); a special is larger and counts in full (Q3); a higher frequency pays less each.
-        def cadence(years: List[Tuple[int, float, int]]) -> float:
-            return median([float(n) for _, _, n in years])
-
-        def lower_frequency(first: Tuple[int, float, int], later: List[Tuple[int, float, int]]) -> bool:
-            typical = median([a for y, _, _ in later for a in by_year[y]])
-            return (len(by_year.get(first[0] - 1, [])) == first[2]
-                    and all(a >= 1.5 * typical for a in by_year[first[0]]))
-
-        while (len(window) >= 2 and window[0][2] < cadence(window[1:4])
-               and not lower_frequency(window[0], window[1:4])):
-            window = window[1:]
-        for end, adjacent, near in ((0, 1, window[1:4]), (-1, -2, window[-4:-1])):
-            if len(window) >= 2:
-                year, total, n = window[end]
-                usual, typical = cadence(near), median(by_year[window[adjacent][0]])
-                if (n == usual + 1 and window[adjacent][2] <= usual
-                        and all(typical / 1.5 < a < typical * 1.5 for a in by_year[year])):
-                    window[end] = (year, total * usual / n, n)
+        # BUG-049 (decided 2026-11-02, option a): the growth history is SEC's dividends per share for the last 10
+        # fiscal years (the 10-K's declared, else cash-paid, series), with Yahoo's payments for the TTM. A year's
+        # figure goes onto the basis of Yahoo's payments: today's split basis, as the EPS (VAL-09's per-share
+        # consistency: the declared splits the figure's own filing hadn't restated yet), then divided by the
+        # spin-off and stock-dividend factors after the year, as Yahoo divides its payments (VAL-02: comparable
+        # years). Where SEC has no figure (a filer that tags only point-in-time payments, BUG-013), or one that
+        # holds at most one of the year's two or more payments (below all of them, or within 2% of one: a quarter's
+        # rate tagged as the year, BUG-020), the year's payments stand in, ex-dates in (the previous FY end, this
+        # FY end]. A company without fiscal years uses calendar years of payments. These two thresholds are the
+        # fix's own heuristics (loop section 7), not the spec's.
+        served_day = x.db.execute("select max(date) from price_bars where ticker=?", (ticker,)).fetchone()[0]
+        sec = {fy: v for fy, v in db.execute("select fiscal_year, dividends_per_share from financials_annual where "
+                                             "ticker=?", (ticker,))}
+        spans: List[Tuple[int, str, str, Optional[float]]] = []
+        fys = [row for row in x.annual if row[1]][-10:]
+        for i, (fy, pe, ni, _eq, so, wd, eps) in enumerate(fys):
+            end = pe[:10]
+            prev = fys[i - 1] if i else None
+            start = (prev[1][:10] if prev and prev[0] == fy - 1 else
+                     (datetime.date.fromisoformat(end) - datetime.timedelta(days=365)).isoformat())
+            dps = sec.get(fy)
+            if dps is not None:
+                basis = wd or (ni / eps if ni and eps else None) or so
+                # Share splits alone (simple ratios), as a filing restates its per-share figures; the factors
+                # that aren't (spin-offs, stock dividends, RTX's 1.589) come next, once.
+                all_splits, x.splits = x.splits, [sp for sp in x.splits if sp[1] and simple_ratio(sp[1])]
+                today = x.to_current_basis(basis, pe, x.filed_of(fy, "dividends_per_share")) if basis else None
+                x.splits = all_splits
+                dps = dps * basis / today if basis and today else dps
+                for day, ratio in x.splits:
+                    if (ratio and ratio > 0 and abs(ratio - 1) > 1e-9 and not simple_ratio(ratio) and served_day
+                            and end < day[:10] <= str(served_day)[:10]):
+                        dps /= ratio
+            spans.append((fy, start, end, dps))
+        if not fys:
+            spans = [(y, f"{y - 1}-12-31", f"{y}-12-31", None) for y in range(int(anchor[:4]) - 10, int(anchor[:4]))]
+        years: List[Tuple[int, Optional[float], bool]] = []
+        for fy, start, end, dps in spans:
+            paid = [(d, a) for d, a in events if start < d <= end]
+            amounts = [a for _, a in paid]
+            before = [d for d, _ in events if d <= start]
+            # A year whose dividend started or restarted in it is partial (VAL-02's "comparable full years"): no
+            # payment, none before it, or the first more than 456 days (15 months) after the last one before it.
+            restart = not paid or not before or (datetime.date.fromisoformat(paid[0][0])
+                                                 - datetime.date.fromisoformat(before[-1])).days > 456
+            one = len(amounts) >= 2 and dps is not None and (
+                dps < min(amounts) or any(abs(dps - a) <= 0.02 * a for a in amounts))
+            value = dps if dps is not None and dps > 0 and not one else (sum(amounts) if amounts else None)
+            years.append((fy, value, restart))
+        while years and (years[0][1] is None or years[0][2]):
+            years = years[1:]
+        window = [(fy, v) for fy, v, _ in years if v is not None]
         # The spec's historical CAGR "requires >= 4 FYs" (BUG-010): fewer full years measure nothing.
         span = window[-1][0] - window[0][0] if len(window) >= 4 else None
         hist = (window[-1][1] / window[0][1]) ** (1 / span) - 1 if span and window[0][1] > 0 else None
