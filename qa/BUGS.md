@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 10 · P3 168 · NEEDS-USER 0 · Decided: 7 · Verified: 139
+**Open:** P0 0 · P1 0 · P2 9 · P3 168 · NEEDS-USER 0 · Decided: 7 · Verified: 140
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2033,8 +2033,8 @@ Review 21: (a)'s "nothing in the filings to say so" doesn't hold for COO FY2016,
 BUG-267 (iteration 117): YUM FY2018-19 and COO FY2016 are now decided by the current-liabilities bound. Still undecided: GEHC FY2025 and BE FY2025 (borrowings 1.2% above the maturities; GEHC's LongTermDebt is exactly its noncurrent figure plus the borrowings, a possible signal), YUM 2016-09-03 (+$55M), PEP's FY2010 10-K vintage (+$0.113B: its lines exceed the current liabilities by 0.26%, inside the bound's 0.5%).
 
 ### BUG-260 [P2][VALID] The Cash tag, a note's component at some filers, still outranks the balance sheet's total: TGT's cash $0.28B for $4.76B
-Status: OPEN
-Found: iteration 112 (BUG-161's census, `qa/evidence/bug161-done.txt` section 6, classify_v2_cash.txt) | Fixed: | Regression test:
+Status: VERIFIED (iteration 147)
+Found: iteration 112 (BUG-161's census, `qa/evidence/bug161-done.txt` section 6, classify_v2_cash.txt) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (10 items with the guards; `_cash_parts_set_aside`)
 Repro: cash_and_equivalents reads Cash ahead of the restricted-cash total. Cash is the balance sheet's line at ES, HIG, PGR, TGT FY2019 and VRT (their total adds restricted cash), but only a component at CF FY2020-25 ($0.168B for $1.614B in FY2024), TGT FY2020-26 ($0.276B for $4.762B in FY2025, so its net debt is about $4.5B high), and KLAC's FY2019-20 and GEN's FY2025 vintages. Putting the total ahead of Cash moves 55 cells away (ES tags none of the restricted cash its total holds, so BUG-161's guard can't separate them).
 Expected: the balance sheet's cash line.   Actual: a component at CF, TGT, KLAC and GEN.
 

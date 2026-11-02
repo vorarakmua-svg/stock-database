@@ -2143,7 +2143,10 @@ numbers SEC filings report:
   balance-sheet dates only, and before a note's cash equivalents, a part of the cash line (P&G's
   FY2025: $9.56B, not $8.30B). Where a filing's cash equivalents and its restricted cash, or a
   clearing house's margin deposits, make up that total, the equivalents are its cash line
-  (Intercontinental Exchange's FY2021: $0.61B, not the $148.0B with its margin deposits).
+  (Intercontinental Exchange's FY2021: $0.61B, not the $148.0B with its margin deposits). A
+  filing's Cash gives way to that total too where the filing, or an earlier one, shows the total
+  to hold no restricted cash: it agrees with a figure for cash and cash equivalents above Cash on
+  one of the filing's dates (Target's FY2025: $4.76B, not a note's $0.28B).
 - **Depreciation and amortization.** D&A is the filing's total. Where a filing shows its
   depreciation and its amortization of intangibles on lines of their own, with no total that
   can hold them, it is the two together (AbbVie's FY2025: $8.1B, not its $0.8B of depreciation;

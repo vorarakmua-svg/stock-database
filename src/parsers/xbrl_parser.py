@@ -267,6 +267,45 @@ def _cash_totals_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
         for unit, entries in body.get("units", {}).items()}}}
 
 
+#: Cash, which cash reads before the total with restricted cash, and the figures for cash and its equivalents without
+#: restricted cash that show a date's cash line apart from it (``_cash_parts_set_aside``).
+_CASH = "Cash"
+_CASH_LINES = ("CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsAndShortTermInvestments",
+               "CashAndCashEquivalentsFairValueDisclosure")
+
+
+def _cash_parts_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+    """*us_gaap* less the Cash a filing tags beside the restricted-cash total where Cash is a part of that total: where
+    on one of the filing's dates the total agrees with a figure for cash and its equivalents above Cash (a
+    ``_CASH_LINES`` figure, or Cash and the cash equivalents together) that this filing or an earlier one tags there,
+    the total holds no restricted cash and is the balance sheet's cash line, and the filing's Cash is set aside on each
+    of its dates (one balance sheet tags a line alike in each column). CF's 10-Ks tag the line, $1.614B for FY2024, as
+    the total and in the fair-value note, its 10-Qs only as the total, beside a note's $0.168B of Cash; TGT's tag it as
+    the total and with its short-term investments, $4.762B for FY2025, beside $0.276B; KLAC's FY2020 10-K tags the total
+    its earlier filings tag as CashAndCashEquivalentsAtCarryingValue. Where Cash is the line (ES's, HIG's, PGR's), the
+    total adds restricted cash, and no such figure agrees with it (BUG-260)."""
+    totals, cash = _by_filing(us_gaap, _RESTRICTED_CASH), _by_filing(us_gaap, _CASH)
+    if not totals.keys() & cash.keys():
+        return us_gaap
+    filed = {e["accn"]: e.get("filed") or "" for tag in (_RESTRICTED_CASH, _CASH)
+             for e in us_gaap[tag].get("units", {}).get("USD", []) if e.get("accn")}
+    lines = [_by_filing(us_gaap, tag) for tag in _CASH_LINES]
+    equivalents = _by_filing(us_gaap, _CASH_EQUIVALENTS)
+    shown: Dict[str, List[Tuple[str, float]]] = defaultdict(list)  # each date's lines above Cash, by filing day
+    for (accn, end), value in cash.items():
+        figures = [line[(accn, end)] for line in lines if (accn, end) in line]
+        if equivalents.get((accn, end)):
+            figures.append(value + equivalents[(accn, end)])
+        shown[end].extend((filed[accn], figure) for figure in figures if figure > value and not _agree(figure, value))
+    parts = {accn for (accn, end), total in totals.items()
+             if any(day <= filed[accn] and _agree(figure, total) for day, figure in shown.get(end, ()))}
+    if not parts:
+        return us_gaap
+    body = us_gaap[_CASH]
+    return {**us_gaap, _CASH: {**body, "units": {
+        unit: [e for e in entries if e.get("accn") not in parts] for unit, entries in body.get("units", {}).items()}}}
+
+
 #: LongTermDebt, a total with the current maturities, and the noncurrent figures long-term debt
 #: reads after it (``canonical.py``).
 _DEBT_TOTAL = "LongTermDebt"
@@ -785,14 +824,15 @@ def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
 def _filer_facts(facts: Dict[str, Any], view: str) -> Dict[str, Any]:
     """A filer's us-gaap facts as the extractions of *view* read them, in this order: its dollar filings', the
     balance-sheet-only tags on their balance sheets' dates, less the total with restricted cash where a filing's cash
-    equivalents and restricted cash make it up, net outflows as paid, LongTermDebt set aside where its noncurrent
+    equivalents and restricted cash make it up, less Cash where it is a part of a total without restricted cash, net
+    outflows as paid, LongTermDebt set aside where its noncurrent
     figure should stand (judged on DebtCurrent as filed); then, judged on those facts as filed, the borrowings and the
     maturities that view's records read as one DebtCurrent where a filing tags none (``_current_debt_combinations``),
     DebtCurrent before a refinancing set aside, 0.0 for the CommercialPaper the short-term total that view's record
     reads on its date holds (those combinations among them), the combinations themselves, and last the depreciation
     and the amortization of intangibles as one D&A figure where the filing tags no total that can hold them."""
-    totals = _debt_totals_set_aside(_net_outflows_as_paid(_cash_totals_set_aside(_on_balance_sheet_dates(
-        _dollar_filings(facts.get("facts", {}).get("us-gaap", {}))))))
+    totals = _debt_totals_set_aside(_net_outflows_as_paid(_cash_parts_set_aside(_cash_totals_set_aside(
+        _on_balance_sheet_dates(_dollar_filings(facts.get("facts", {}).get("us-gaap", {})))))))
     combined, held_by_totals = _current_debt_combinations(totals, view)
     return _depreciation_combined(_current_debt_combined(_current_debt_set_aside(totals, view, frozenset(combined)),
                                                          combined, held_by_totals))

@@ -1606,8 +1606,84 @@ def test_a_total_with_no_equivalents_beside_it_stays_the_cash():
 ])
 def test_the_balance_sheets_own_cash_line_still_outranks_the_total(tagged, cash):
     # Read before CashAndCashEquivalentsAtCarryingValue, the total would replace 1,986 years' cash line at 287 filers;
-    # before Cash, ES's, HIG's, PGR's, TGT's and VRT's.
+    # before Cash, ES's, HIG's, PGR's and VRT's.
     assert _year_end_cash(**tagged) == cash
+
+
+@pytest.mark.parametrize("tagged", [
+    # BUG-260: TGT's 10-Ks tag their balance sheet's cash line ($4.762B for FY2025) as the total and as cash with its
+    # short-term investments, and a note's $0.276B of Cash, a part of it, which ranked first: net debt $4.5B high.
+    {"Cash": 0.276e9, "ShortTermInvestments": 3.893e9, "CashCashEquivalentsAndShortTermInvestments": 4.762e9,
+     RESTRICTED: 4.762e9},
+    # CF's 10-Ks tag the line ($1.614B for FY2024) as the total and in the fair-value note, beside $0.168B of Cash.
+    {"Cash": 0.168e9, "CashAndCashEquivalentsFairValueDisclosure": 1.614e9, RESTRICTED: 1.614e9},
+    # GEN's FY2025 10-Qs: $0.462B of Cash and $0.544B of cash equivalents, the $1.006B the total is.
+    {"Cash": 0.462e9, EQUIVALENTS: 0.544e9, RESTRICTED: 1.006e9},
+])
+def test_cash_a_total_without_restricted_cash_holds_gives_way_to_it(tagged):
+    assert _cash_records(_debt_filing(**tagged)) == [(tagged[RESTRICTED], RESTRICTED)] * 3
+
+
+def _cf_fy2024():
+    """CF's FY2023 10-K (the line tagged as the total and in the fair-value note) and a 10-Q whose two columns tag only
+    Cash and the total, as CF's have since 2021."""
+    return _balance_sheets(
+        ("10-K", "2024-02-22", "2023-12-31", {"Cash": 0.208e9, "CashAndCashEquivalentsFairValueDisclosure": 2.032e9,
+                                              RESTRICTED: 2.032e9}),
+        ("10-Q", "2024-11-01", "2023-12-31", {"Cash": 0.208e9, RESTRICTED: 2.032e9}),
+        ("10-Q", "2024-11-01", "2024-09-30", {"Cash": 0.331e9, RESTRICTED: 1.877e9}))
+
+
+def test_a_10qs_cash_an_earlier_filing_shows_a_part_gives_way_to_the_total():
+    # CF's 10-Qs tag no figure that tells the total from restricted cash; the year-end column's figures are the 10-K's,
+    # whose total held none: Cash is a part in both columns of the 10-Q's balance sheet. Q3 2024 read $0.331B of
+    # $1.877B.
+    assert _cash(XBRLParser().extract_quarterly_financials(_cf_fy2024())["2024-09-30"]) == (1.877e9, RESTRICTED)
+
+
+def test_an_earlier_filings_line_shows_a_10ks_cash_to_be_a_part():
+    # KLAC's FY2020 10-K tags Cash ($0.480B and $0.461B) and the total ($1.016B and $1.234B) only; its FY2019 10-K
+    # tagged FY2019's $1.016B as CashAndCashEquivalentsAtCarryingValue beside the same Cash.
+    facts = _balance_sheets(
+        ("10-K", "2019-08-02", "2019-06-30", {"CashAndCashEquivalentsAtCarryingValue": 1.016e9, "Cash": 0.480e9}),
+        ("10-K", "2020-08-07", "2019-06-30", {"Cash": 0.480e9, RESTRICTED: 1.016e9}),
+        ("10-K", "2020-08-07", "2020-06-30", {"Cash": 0.461e9, RESTRICTED: 1.234e9}))
+    assert _cash(XBRLParser().extract_annual_vintages(facts)["2020"]["2020-08-07"]) == (1.234e9, RESTRICTED)
+
+
+def test_a_later_filings_line_doesnt_reach_an_earlier_vintage():
+    # As of its filing day the FY2020 10-K's Cash is all there is to tell (review 21's look-ahead rule); the year itself
+    # reads the later 10-K's line.
+    facts = _balance_sheets(
+        ("10-K", "2020-08-07", "2019-06-30", {"Cash": 0.480e9, RESTRICTED: 1.016e9}),
+        ("10-K", "2020-08-07", "2020-06-30", {"Cash": 0.461e9, RESTRICTED: 1.234e9}),
+        ("10-K", "2021-08-06", "2020-06-30", {"CashAndCashEquivalentsAtCarryingValue": 1.234e9, "Cash": 0.461e9}))
+    parser = XBRLParser()
+    assert _cash(parser.extract_annual_vintages(facts)["2020"]["2020-08-07"]) == (0.461e9, "Cash")
+    assert _cash(parser.extract_annual_financials(facts)["2020"]) == (1.234e9, "CashAndCashEquivalentsAtCarryingValue")
+
+
+def test_cash_beside_a_total_with_restricted_cash_stays_the_line():
+    # ES's balance sheets show Cash ($0.107B for FY2020) and hold restricted cash in other lines it tags nowhere; the
+    # total ($0.265B) adds it. From its 2022 10-Qs ES tags CashAndCashEquivalentsAtCarryingValue too, Cash and the
+    # equivalents ($0.375B for FY2022), which the total ($0.522B) is not.
+    facts = _balance_sheets(
+        ("10-K", "2023-02-15", "2022-12-31", {"CashAndCashEquivalentsAtCarryingValue": 0.3746e9, "Cash": 0.0476e9,
+                                              EQUIVALENTS: 0.3270e9, RESTRICTED: 0.5218e9}),
+        ("10-Q", "2023-05-05", "2022-12-31", {"Cash": 0.0476e9, RESTRICTED: 0.5218e9}),
+        ("10-Q", "2023-05-05", "2023-03-31", {"Cash": 0.0360e9, RESTRICTED: 0.1628e9}))
+    assert _cash(XBRLParser().extract_quarterly_financials(facts)["2023-03-31"]) == (0.0360e9, "Cash")
+    assert _year_end_cash(Cash=0.1066e9, **{RESTRICTED: 0.2650e9}) == (0.1066e9, "Cash")
+
+
+def test_cash_that_is_its_line_stays_the_line():
+    # EG's FY2018 10-K tags its cash line ($0.656B) as Cash and as CashAndCashEquivalentsAtCarryingValue, its 10-Qs as
+    # Cash and the total: Cash isn't a part of a line it agrees with.
+    facts = _balance_sheets(
+        ("10-K", "2019-03-01", "2018-12-31", {"CashAndCashEquivalentsAtCarryingValue": 0.6561e9, "Cash": 0.6561e9}),
+        ("10-Q", "2019-05-10", "2018-12-31", {"Cash": 0.6561e9, RESTRICTED: 0.6561e9}),
+        ("10-Q", "2019-05-10", "2019-03-31", {"Cash": 0.5840e9, RESTRICTED: 0.5840e9}))
+    assert _cash(XBRLParser().extract_quarterly_financials(facts)["2019-03-31"]) == (0.5840e9, "Cash")
 
 
 def test_an_instruments_carrying_amount_is_not_the_years_debt():

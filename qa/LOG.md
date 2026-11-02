@@ -2616,3 +2616,26 @@ Gates: ruff ✓ mypy ✓ pytest 2789 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(mappings): a finance SIC without deposits, and managed care, are general companies (Q9)
 Next: apply BUG-260 (its worker is done), BUG-049 when its worker reports.
 
+## Iteration 147: 2026-11-03 00:41: fix (BUG-260)
+Picked: BUG-260 (P2), prepared by an opus worker.
+Did: `xbrl_parser._cash_parts_set_aside`, after BUG-161's step: a filing's Cash is set aside on its dates where, on one
+of them, its restricted-cash total agrees within 0.5% with a cash-and-equivalents figure above Cash that this filing or
+an earlier one tags there (CashAndCashEquivalentsAtCarryingValue, CashCashEquivalentsAndShortTermInvestments,
+CashAndCashEquivalentsFairValueDisclosure, or Cash plus CashEquivalentsAtCarryingValue). The total then holds no
+restricted cash and is the balance sheet's line. README's Cash note says so.
+- RED: 5 failed of the new tests (5 guards pass); GREEN. Mutants, by me on the checkout: BUG-260's 10, the reshaped
+  BUG-161 (1) and BUG-170/267/161/142 (4) specs, BUG-290's 17, BUG-252's 11, BUG-170's 17, BUG-171's 31: all killed.
+  The worker's look-ahead: 0 cells.
+- The worker's census: 120 records at 4 filers (CF, TGT, GEN, KLAC vintages); ES, HIG, PGR, VRT, AIG, PNC, FSLR unchanged.
+  TGT FY2025 cash $0.276B to $4.762B (net debt $11.771B to $7.285B), CF FY2024 $0.168B to $1.614B. On DB copies (at
+  e5c8dad; cash reaches no model's median): no median, verdict, owner-earnings verdict or label; EPV and EV/EBITDA bands
+  at CF, TGT, GEN; composites through ranks.
+- Residual: TGT's FY2018-19 annual and its 2019-02-02 quarter keep $0.337B/$0.359B: the FY2018 10-K tags its line
+  under unmapped tags with no total (as BUG-261).
+- It reaches the user's DB at each company's next collection.
+Evidence: `qa/evidence/bug260-{investigation,verify-mine}.txt`, `qa/evidence/bug260*-mutants.json`.
+Result: BUG-260 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2797 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): Cash a balance sheet's total shows to be a part gives way (BUG-260)
+Next: BUG-049 when its worker reports; inline BUG-271 or Q16.
+
