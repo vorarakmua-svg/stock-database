@@ -490,15 +490,29 @@ def test_value_lynch_na_sector_and_history():
 
 # ---- Historical multiples band ----
 def test_value_multiples_pe_band_hand_computed():
-    # FY-end P/E multiples: 10, 12, 14 -> band (10, 12, 14) * latest EPS 2.0
+    # FY-end P/E multiples: 10, 12, 14. The band is their inclusive quartiles and median (BUG-172): 11, 12, 13,
+    # times the latest EPS 2.0.
     recs = [_fy(2021, eps=2.0), _fy(2022, eps=2.0), _fy(2023, eps=2.0)]
     prices = {2021: 20.0, 2022: 24.0, 2023: 28.0}
     res = value_multiples(_inputs(fy_records=recs, fy_end_prices=prices))
     assert res.applicable is True
-    assert res.value_bear == pytest.approx(20.0)
+    assert res.value_bear == pytest.approx(22.0)
     assert res.value_base == pytest.approx(24.0)
-    assert res.value_bull == pytest.approx(28.0)
+    assert res.value_bull == pytest.approx(26.0)
     assert res.assumptions["multiple_kind"] == "pe"
+    assert (res.assumptions["band_min"], res.assumptions["band_max"]) == (pytest.approx(10.0), pytest.approx(14.0))
+
+
+def test_one_tiny_earnings_year_cant_stretch_the_band():
+    # BUG-172 (GE): FY2022's diluted EPS of $0.05 read a P/E of 1,044x and set the bull case at $8,498.58. The band is
+    # bounded by quartiles, as the valuation history's ranges are: multiples 10, 12, 14, 16, 1000 give 12, 14, 16.
+    recs = [_fy(fy, eps=e) for fy, e in ((2021, 2.0), (2022, 2.0), (2023, 0.02), (2024, 2.0), (2025, 2.0))]
+    prices = {2021: 20.0, 2022: 24.0, 2023: 20.0, 2024: 28.0, 2025: 32.0}
+    res = value_multiples(_inputs(fy_records=recs, fy_end_prices=prices))
+    assert res.value_bear == pytest.approx(12.0 * 2.0)
+    assert res.value_base == pytest.approx(14.0 * 2.0)
+    assert res.value_bull == pytest.approx(16.0 * 2.0)
+    assert res.assumptions["band_max"] == pytest.approx(1000.0)
 
 
 def test_value_multiples_reit_uses_pffo():

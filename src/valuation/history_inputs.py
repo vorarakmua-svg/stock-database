@@ -23,11 +23,14 @@ from .inputs import (
     SPLIT_JUMP_THRESHOLD,
     _dividend_onto,
     _drop_spin_off_dividends,
-    _simple_ratio,
     _split_marks,
     _yahoo_dividend_factors,
     bars_to_price_factor,
+    is_share_split,
+    price_factor_after,
 )
+
+__all__ = ["is_share_split", "price_factor_after"]  # defined in .inputs, which the multiples band reads too
 
 #: A quarter's 10-Q is known this many days after the quarter ends (the deadline is 40 or 45 days).
 QUARTER_LAG_DAYS = 45
@@ -116,28 +119,6 @@ class HistoryInputs:
     bars_to_price: float = 1.0
     collected_on: Optional[date] = None
     na_reason: Optional[str] = None
-
-
-def is_share_split(ratio: Optional[float]) -> bool:
-    """Whether a ratio in Yahoo's split history is a share split (2:1, 3:2, 1:8...).
-
-    The history also holds spin-off price factors and stock dividends (GE's 1.281 for GE HealthCare,
-    1.04). Those move the price but not the filed share counts.
-    """
-    if ratio is None or ratio <= 0 or abs(ratio - 1.0) < 1e-9:
-        return False
-    return _simple_ratio(ratio)
-
-
-def price_factor_after(day: str, events: Sequence[Tuple[str, float]], last_bar: str) -> float:
-    """PF(d): the product of the factors in *events* that aren't share splits, dated in (*day*, *last_bar*].
-
-    Yahoo divides every close before such a factor's day by it, so a bar's close times PF is the price
-    it traded at, on the bars' split basis. A factor after the last bar isn't in the bars yet.
-    """
-    d, last = str(day)[:10], str(last_bar)[:10]
-    return float(math.prod(r for when, r in events
-                           if r and r > 0 and not is_share_split(r) and d < str(when)[:10] <= last))
 
 
 def _day(value: Any) -> Optional[date]:

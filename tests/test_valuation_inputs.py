@@ -1361,6 +1361,30 @@ def test_fy_end_prices_are_market_closes(tmp_path, bars, expected):
     assert {fy: round(price, 6) for fy, price in inputs.fy_end_prices.items()} == expected
 
 
+def test_fy_end_prices_are_the_closes_as_traded_across_a_spin_off(tmp_path):
+    # BUG-172 (GE): Yahoo divides every close before a spin-off's day by its price factor (GE HealthCare's 1.281 on
+    # 2023-01-04), which moves the price but not the filed EPS. The band's FY2022 price is the close as traded:
+    # 78.07 / 1.281 = 60.95 stored, 78.07 read. After the factor, closes stand as they are.
+    db_path = _dividend_payer_db(tmp_path, "market closes")
+    conn = sqlite3.connect(db_path)
+    conn.execute("DELETE FROM price_bars")
+    conn.execute("DELETE FROM dividend_events")
+    for day, close in (("2021-12-31", 70.0 / 1.281), ("2022-12-30", 78.07 / 1.281), ("2023-01-04", 60.0),
+                       ("2023-12-29", 90.0)):
+        conn.execute("INSERT INTO price_bars (ticker, date, close) VALUES ('PAY', ?, ?)", (day, close))
+    conn.execute("INSERT INTO financials_annual (ticker, fiscal_year, period_end, net_income, total_equity, "
+                 "eps_diluted, weighted_avg_shares_diluted) "
+                 "VALUES ('PAY', 2023, '2023-12-31', 5.0e8, 4.0e9, 5.0, 1.0e8)")
+    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('PAY', '2023-01-04', 1.281)")
+    conn.commit()
+    conn.close()
+    conn = _connect(db_path)
+    inputs = load_inputs(conn, "PAY")
+    conn.close()
+    assert {fy: round(price, 6) for fy, price in inputs.fy_end_prices.items()} == {2021: 70.0, 2022: 78.07,
+                                                                                  2023: 90.0}
+
+
 @pytest.mark.parametrize("bars", ["flagged", "before the flag"])
 def test_a_dividend_after_the_last_adjusted_bar_is_not_undone(tmp_path, bars):
     # BUG-084 (code review 8): Yahoo adjusted the stored bars for the dividends it knew when it served them. A later

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 2 · P2 19 · P3 163 · NEEDS-USER 0 · Decided: 7 · Verified: 125
+**Open:** P0 0 · P1 2 · P2 18 · P3 165 · NEEDS-USER 0 · Decided: 7 · Verified: 126
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1310,9 +1310,9 @@ Fix prepared (%LOCALAPPDATA%\stockdb-qa\bug171\, diffs in its out\, applying to 
 For the user: valuation_summary, valuations, verdicts and indicators identical. One historical-value label moves: AXON near to far above (historical value $421.44 to $320.92 at $420.37: its 2015-16 capital-lease quarters become known, five more months in a 40-month EV/EBITDA window), with a price_far_above_value warning sign. Historical values without a label change: CVX $169.71 to $177.05, KMB $124.76 to $122.79, ORCL $162.03 to $161.78, TYL $582.75 to $576.75. Composite scores through rank_valuation: AXON 54 to 48, CVX 64 to 66, DVN 60 to 58, ORLY 50 to 52, QCOM 66 to 68, WST 66 to 68. 11 EV/EBITDA ranges and 1,433 valuation_history rows. TMUS and CAT stay unread. Findings: BUG-290 to BUG-294.
 
 ### BUG-172 [P2][VAL] The multiples band prices spin-adjusted closes over as-reported EPS, and one tiny-earnings year sets its bull case: GE's band reads 12.2x to 1,044x
-Status: OPEN
+Status: VERIFIED (iteration 135)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): option (c): closes as traded (`price_factor_after`) and a band bounded by quartiles.
-Found: the build's design pass for Milestone 1 (2026-10-21), confirmed in build iteration 9 | Fixed: | Regression test:
+Found: the build's design pass for Milestone 1 (2026-10-21), confirmed in build iteration 9 | Fixed: (this commit) | Regression tests: tests/test_valuation_models.py::test_one_tiny_earnings_year_cant_stretch_the_band, tests/test_valuation_inputs.py::test_fy_end_prices_are_the_closes_as_traded_across_a_spin_off
 Repro: GE's `multiples` row in `valuations`: P/E band low 12.18x, median 32.84x, high 1,044.05x over 4 years, on the latest EPS of $8.14, so a bull value of $8,498.58 (the VAL tab shows it). The FY2022 close in `price_bars` is $52.20: Yahoo's close divided by the later spin-off factors (1.281 for GE HealthCare, 1.253 for GE Vernova), about $83.78 as traded. FY2022's diluted EPS is $0.05.
 Expected: each fiscal year's multiple taken on the price as traded then (the close times the spin-off factors after it), as the valuation history does (`history_inputs.price_factor_after`); and a band that one tiny-earnings year can't stretch to 1,044x.   Actual: closes before a spin-off sit 1.6x low against that year's EPS, so the band mixes bases (here it understates FY2022's P/E: 1,676x as traded). The band's max then multiplies the latest EPS.
 Root cause: `src/valuation/inputs.py` `load_inputs` takes `fy_end_prices` from the `price_bars` closes (put back to the market close and the price's split basis) without undoing Yahoo's non-split price factors. `src/valuation/models.py` (the multiples band) takes the min and max of the yearly multiples, so a single outlier year sets bear or bull.
@@ -1926,6 +1926,18 @@ Status: OPEN
 Found: code review 23 (Minor 2) | Fixed: | Regression test:
 Repro: xbrl_parser.py ~316 `depreciation.get(key) or low[0]`; the docstring states that order, the README reads as "that line plus the amortization". TTWO FY2023 $1,597.0M by the code, $1,629.0M by the README; BMY 2013 453+858 against 763+858; GPN FY2023-24 in its FY2025 10-K; CSGP, FIX, MSCI, NDSN, ALL. Which is the cash flow statement's add-back was not decided offline.
 Expected: the README and the code agree, on the cash flow statement's figure.   Actual: as above.
+
+### BUG-301 [P3][VAL] With four or five years, the band's 75th percentile still interpolates toward an outlier year: GE's bull $3,641 on a 447x multiple
+Status: OPEN
+Found: iteration 135 (BUG-172's measurement) | Fixed: | Regression test:
+Repro: GE's multiples row after BUG-172: band 24.70 / 32.84 / 447.33 over 4 years, one of them FY2022's 1,676x as traded (diluted EPS $0.05); bull $3,641.28 (was $8,498.58).
+Expected: a bull case one tiny-earnings year doesn't set.   Actual: inclusive quartiles of 4 values still weight it by a quarter.
+
+### BUG-302 [P3][VAL] HOOD's P/B band median differs from the valuation oracle: 2.14 against 1.69
+Status: OPEN
+Found: iteration 135 (BUG-172's oracle run) | Fixed: | Regression test:
+Repro: `qa/oracle/valuation_oracle.py --db <copy>` level 2: HOOD multiples band_median stored 2.1397, oracle 1.6950, on head and with BUG-172 alike (the only multiples mismatch left after it). Not diagnosed: likely the book value per share's count or basis.
+Expected: the oracle's within 0.5%.   Actual: 29% apart on the base.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: OPEN

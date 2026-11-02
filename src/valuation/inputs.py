@@ -359,6 +359,28 @@ def _simple_ratio(ratio: float) -> bool:
     return any(abs(float(Fraction(r).limit_denominator(4)) - r) <= 1e-9 * r for r in (ratio, 1.0 / ratio))
 
 
+def is_share_split(ratio: Optional[float]) -> bool:
+    """Whether a ratio in Yahoo's split history is a share split (2:1, 3:2, 1:8...).
+
+    The history also holds spin-off price factors and stock dividends (GE's 1.281 for GE HealthCare,
+    1.04). Those move the price but not the filed share counts.
+    """
+    if ratio is None or ratio <= 0 or abs(ratio - 1.0) < 1e-9:
+        return False
+    return _simple_ratio(ratio)
+
+
+def price_factor_after(day: str, events: Sequence[Tuple[str, float]], last_bar: str) -> float:
+    """PF(d): the product of the factors in *events* that aren't share splits, dated in (*day*, *last_bar*].
+
+    Yahoo divides every close before such a factor's day by it, so a bar's close times PF is the price
+    it traded at, on the bars' split basis. A factor after the last bar isn't in the bars yet.
+    """
+    d, last = str(day)[:10], str(last_bar)[:10]
+    return float(math.prod(r for when, r in events
+                           if r and r > 0 and not is_share_split(r) and d < str(when)[:10] <= last))
+
+
 def _apply_later_splits(records: List[FYRecord], splits: Sequence[Tuple[str, float]],
                         filed: Optional[str], today_counts: Sequence[float] = (),
                         priced_on: Optional[str] = None) -> None:
@@ -799,6 +821,10 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
             if factors is None:
                 factors = _yahoo_dividend_factors(conn, ticker, flagged, splits)
             close /= math.prod(f for ex, f in factors if ex > str(bar["date"])[:10])
+        # Yahoo divides closes before a spin-off by its price factor, which the filed EPS never sees: the band
+        # wants the close as traded (BUG-172; the valuation history's PF(d)).
+        if served:
+            close *= price_factor_after(str(bar["date"])[:10], splits, str(served)[:10])
         fy_end_prices[rec.fiscal_year] = close * bars_to_price
 
     return ValuationInputs(

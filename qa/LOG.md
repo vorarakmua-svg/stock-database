@@ -2406,3 +2406,24 @@ Result: BUG-007 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2739 passed, 1 skipped, 1 warning | CI: PR #29
 Commit: (this commit) fix(valuation): Graham's bear is N/A with a loss year in its window (BUG-007)
 Next: the workers' fixes (BUG-245, BUG-252, BUG-258/160) as they report; inline BUG-049 or BUG-172.
+
+## Iteration 135: 2026-11-02 20:43: fix (BUG-172, decided)
+Picked: BUG-172 (P2), inline, option (c) as decided.
+Did: the band's fiscal-year-end closes are as traded (`price_factor_after`, now in `inputs` beside
+`is_share_split`, re-exported by `history_inputs`), and the band is the multiples' inclusive quartiles; the min and
+max stay in the assumptions (`band_min`, `band_max`). The oracle follows in its own commit, first; it also reads an N/A
+Graham bear, which BUG-007's commit had made it raise on (not run then: my miss).
+- RED: 3 failed (min/max band; closes on the spin-off basis); GREEN. 4 of 4 mutants killed; BUG-007's and BUG-246's
+  still killed.
+- Measured on two DB copies, engine over all 502: 450 multiples rows and 170 medians move; 20 verdicts change: fair
+  to expensive at ALL, AZO, CAH, CF, DOC, GM, HIG, HST, HSY, MDLZ, MGM, OKE, PFE, PNC, USB, WEC, WFC; fair to cheap at
+  GPN, HBAN, T. GE's bull $8,498.58 to $3,641.28. No owner-earnings verdict or label.
+- The oracle: on the copy valued by head's code, 450 multiples mismatches; with the fix 1 (HOOD, which predates it).
+  Level 1: 0 of 2,013 on both.
+New: BUG-301 (GE's bull still high with 4 years), BUG-302 (HOOD's P/B median against the oracle).
+Evidence: %LOCALAPPDATA%\stockdb-qa\bug172\out (verdicts.txt, diff.txt, oracle_head.txt, oracle_fix.txt);
+`qa/evidence/bug172-mutants.json`.
+Result: BUG-172 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2741 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(valuation): the multiples band prices closes as traded and spans its quartiles (BUG-172)
+Next: apply BUG-245 (worker done), then BUG-252 (worker done), then BUG-258/160.

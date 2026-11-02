@@ -404,12 +404,13 @@ def value_multiples(inputs: ValuationInputs) -> ValuationResult:
     if latest_basis is None or latest_basis <= 0:
         return _na("multiples", "latest per-share basis is not positive",
                    basis_fy=latest.fiscal_year)
-    band_low, band_mid, band_high = (min(multiples),
-                                     statistics.median(multiples),
-                                     max(multiples))
+    # The band is the yearly multiples' inclusive quartiles, as the valuation history's ranges are, so one year's
+    # tiny earnings can't set the bull case (BUG-172: GE's FY2022 read 1,044x and a bull of $8,498.58).
+    band_low, band_mid, band_high = statistics.quantiles(multiples, n=4, method="inclusive")
     assumptions: Dict[str, Any] = {
         "multiple_kind": kind,
         "band_low": band_low, "band_median": band_mid, "band_high": band_high,
+        "band_min": min(multiples), "band_max": max(multiples),
         "n_years": len(multiples),
         "latest_basis": latest_basis,
         "split_adjusted": _split_adjusted(recs),
