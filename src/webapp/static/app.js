@@ -373,20 +373,24 @@ function renderDVD(elId, years, amounts) {
  */
 function renderVAL(elId, cfg) {
   var labels = cfg.models.map(function (m) { return m.label; });
-  var bears = cfg.models.map(function (m) { return m.bear; });
-  var spans = cfg.models.map(function (m) { return m.bull - m.bear; });
+  // A model can have no bear (Graham with a loss year in its window, BUG-007): its bar starts at the base.
+  function low(m) { return (m.bear === null || m.bear === undefined) ? m.base : m.bear; }
+  var bears = cfg.models.map(low);
+  var spans = cfg.models.map(function (m) { return m.bull - low(m); });
   var bases = cfg.models.map(function (m) { return m.base; });
 
   // x is the bar SPAN (bull - bear), not the upper bound, so the hover reads
-  // the real endpoints from customdata instead.
-  var bounds = cfg.models.map(function (m) { return [m.bear, m.bull]; });
+  // the real endpoints from its own text instead.
+  var hover = cfg.models.map(function (m) {
+    var bear = (m.bear === null || m.bear === undefined) ? 'bear N/A' : m.bear.toFixed(2);
+    return m.label + ': ' + bear + ' – ' + m.bull.toFixed(2);
+  });
 
   var range = {
-    y: labels, x: spans, base: bears, customdata: bounds,
+    y: labels, x: spans, base: bears, hovertext: hover,
     type: 'bar', orientation: 'h', name: 'Bear–Bull',
     marker: { color: SLATE.accentFill },
-    hovertemplate:
-      '%{y}: %{customdata[0]:.2f} – %{customdata[1]:.2f}<extra></extra>',
+    hovertemplate: '%{hovertext}<extra></extra>',
   };
   var baseMarks = {
     y: labels, x: bases,

@@ -378,6 +378,28 @@ def test_value_graham_na_no_data():
     assert res.na_reason == "EPS or book value unavailable"
 
 
+def test_value_graham_bear_is_na_with_a_loss_year_in_its_window():
+    # BUG-007 (BA): EPS -3.67, -18.36, +2.48. The spec's bear, min EPS of the last 3 FYs, is a loss, whose square
+    # root is undefined: the bear is N/A (left out of the bear median), not the base case again.
+    recs = [_fy(fy, net_income=None, equity=2000.0, eps=e, shares=100.0)
+            for fy, e in ((2023, -3.67), (2024, -18.36), (2025, 2.48))]
+    res = value_graham(_inputs(fy_records=recs))
+    assert res.applicable is True
+    assert res.value_bear is None
+    assert res.value_base == pytest.approx(math.sqrt(22.5 * 2.48 * 20.0))
+    assert res.value_bull == res.value_base
+    assert res.assumptions["eps_bear"] is None
+    assert res.assumptions["bear_na_reason"] == "a loss year in the last 3 fiscal years"
+
+
+def test_value_graham_bear_stands_when_the_loss_is_older_than_its_window():
+    recs = [_fy(fy, net_income=None, equity=2000.0, eps=e, shares=100.0)
+            for fy, e in ((2022, -1.0), (2023, 1.0), (2024, 2.0), (2025, 3.0))]
+    res = value_graham(_inputs(fy_records=recs))
+    assert res.value_bear == pytest.approx(math.sqrt(22.5 * 1.0 * 20.0))
+    assert "bear_na_reason" not in res.assumptions
+
+
 def test_value_graham_is_na_when_the_latest_year_lacks_eps():
     # BUG-246 (ARES, LEN): the spec values the latest fiscal year; an older year with EPS stays unused.
     recs = [_fy(2022, net_income=None, equity=2000.0, eps=2.0, shares=100.0),

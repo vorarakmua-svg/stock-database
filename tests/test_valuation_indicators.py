@@ -451,6 +451,14 @@ def test_a_missing_goodwill_or_intangible_figure_counts_as_zero():
     assert r.assumptions["missing"] == ["intangible_assets"]
 
 
+def test_graham_tangible_has_no_bear_where_the_graham_number_has_none():
+    # BUG-007: a loss year in the 3-FY window leaves the Graham model's bear N/A, and the tangible one's with it.
+    r = graham_tangible(_inputs(_graham(eps=(-2.0, 5.0, 4.0)), book=BOOK))
+    assert r.applicable is True and r.value_bear is None
+    assert r.value_base == pytest.approx(math.sqrt(22.5 * 4.0 * 12.0))
+    assert r.assumptions["eps_bear"] is None
+
+
 def test_graham_tangible_is_na_where_the_graham_number_is():
     r = graham_tangible(_inputs(_graham(eps=(3.0, 5.0, -1.0)), book=BOOK))
     assert (r.applicable, r.na_reason, r.basis_fiscal_year) == (False, "EPS is not positive", 2025)

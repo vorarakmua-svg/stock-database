@@ -303,17 +303,24 @@ def value_graham(inputs: ValuationInputs) -> ValuationResult:
     if bvps <= 0:
         return _na("graham", "book value per share is not positive",
                    basis_fy=latest.fiscal_year)
-    last3 = [e for e in (r.eps() for r in recs[-3:]) if e is not None and e > 0]
-    eps_bear, eps_bull = min(last3), max(last3)
+    window = [e for e in (r.eps() for r in recs[-3:]) if e is not None]
+    last3 = [e for e in window if e > 0]
+    # The spec's bear is the lowest EPS of the last 3 FYs; a loss there has no Graham number, so the bear is N/A
+    # and the bear median is the other models' (BUG-007), not the base case again.
+    loss_in_window = len(last3) < len(window)
+    eps_bear: Optional[float] = None if loss_in_window else min(last3)
+    eps_bull = max(last3)
     assumptions: Dict[str, Any] = {
         "eps_base": eps, "eps_bear": eps_bear, "eps_bull": eps_bull,
         "bvps": bvps, "multiplier": 22.5,
         "history_truncated": inputs.history_truncated,
     }
+    if loss_in_window:
+        assumptions["bear_na_reason"] = "a loss year in the last 3 fiscal years"
     return ValuationResult(
         model="graham",
         applicable=True,
-        value_bear=math.sqrt(22.5 * eps_bear * bvps),
+        value_bear=None if eps_bear is None else math.sqrt(22.5 * eps_bear * bvps),
         value_base=math.sqrt(22.5 * eps * bvps),
         value_bull=math.sqrt(22.5 * eps_bull * bvps),
         assumptions=assumptions,

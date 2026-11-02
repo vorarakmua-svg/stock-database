@@ -2389,3 +2389,20 @@ Result: BUG-246 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2734 passed, 1 skipped, 1 warning | CI: PR #29
 Commit: (this commit) fix(valuation): Graham values the latest fiscal year or none (BUG-246)
 Next: BUG-245 and BUG-252 when their workers report; BUG-258 with BUG-160.
+
+## Iteration 134: 2026-11-02 20:30: fix (BUG-007, decided)
+Picked: BUG-007 (P2, oldest), inline; dispatched BUG-258 with BUG-160 (option A') to a worker first.
+Did: with a loss year among the last 3 fiscal years, Graham's bear is N/A (`bear_na_reason`), not the base case
+again. `intrinsic_summary` takes each case's median over the models that have it, and none when no model does (it
+raised before). The tangible-book indicator's bear follows; the VAL chart starts such a bar at the base and its
+hover says "bear N/A". README's model table and the indicator passage say so. The oracle already gave no bear there.
+- RED: 2 failed (the bear repeated the base; an all-N/A bear median raised StatisticsError); GREEN with 5 new tests.
+  4 of 4 mutants killed; BUG-246's 3 still killed.
+- Measured on two DB copies, engine over all 502: 32 Graham bears become N/A, and 32 bear medians move (none of base
+  or bull). One verdict: SNDK expensive to none (Graham is its only applicable model, so no bear median and no range).
+  No owner-earnings verdict or label.
+Evidence: %LOCALAPPDATA%\stockdb-qa\bug007\out (verdicts.txt, diff.txt); `qa/evidence/bug007-mutants.json`.
+Result: BUG-007 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2739 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(valuation): Graham's bear is N/A with a loss year in its window (BUG-007)
+Next: the workers' fixes (BUG-245, BUG-252, BUG-258/160) as they report; inline BUG-049 or BUG-172.

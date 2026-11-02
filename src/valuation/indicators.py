@@ -377,8 +377,9 @@ def graham_tangible(inputs: IndicatorInputs) -> IndicatorResult:
     if tangible_bvps <= 0:
         return _na(name, "tangible book is negative: goodwill and intangibles exceed equity", assumptions, basis)
 
-    def number(eps: float) -> float:
-        return math.sqrt(GRAHAM_MULTIPLIER * eps * tangible_bvps)
+    def number(eps: Optional[float]) -> Optional[float]:
+        # No EPS, no number: the Graham model's bear with a loss year in its window (BUG-007).
+        return None if eps is None else math.sqrt(GRAHAM_MULTIPLIER * eps * tangible_bvps)
 
     return IndicatorResult(indicator=name, applicable=True, value_bear=number(a["eps_bear"]),
                            value_base=number(a["eps_base"]), value_bull=number(a["eps_bull"]),

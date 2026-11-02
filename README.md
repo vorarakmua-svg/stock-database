@@ -398,7 +398,7 @@ five sector-aware models per ticker, each producing a bear/base/bull per-share r
 |---|---|---|
 | **DCF** (two-stage FCF) | general, utility, energy | Median 3-year FCF, growth = min(historical CAGR, analyst estimate), CAPM discount rate |
 | **DDM** (multi-stage Gordon) | any steady dividend payer | Trailing-12-month dividend, dividend CAGR |
-| **Graham Number** | any company with positive EPS + book value in its latest fiscal year (N/A if that year lacks either) | `sqrt(22.5 × EPS × BVPS)` |
+| **Graham Number** | any company with positive EPS + book value in its latest fiscal year (N/A if that year lacks either); the bear, on the lowest EPS of 3 FYs, is N/A with a loss year among them | `sqrt(22.5 × EPS × BVPS)` |
 | **Peter Lynch fair value** | general, utility, energy | Growth-rate-as-fair-P/E × EPS |
 | **Historical multiples band** | all sectors (sector-appropriate multiple: P/E, P/B for banks/insurers, P/FFO for REITs) | Company's own 5-year multiple range |
 
@@ -768,7 +768,8 @@ The indicators:
   trailing revenue, ...), with the range's reason.
 - **Graham number on tangible book** (`graham_tangible`): `sqrt(22.5 × EPS × tangible book per share)`, tangible book
   being total equity less goodwill and intangible assets, on the Graham model's EPS and share basis; the bear and bull
-  use the lowest and highest positive EPS of the last 3 fiscal years, as the Graham model does. N/A where the Graham
+  use the lowest and highest EPS of the last 3 fiscal years, as the Graham model does, and with a loss year among them
+  the bear is N/A (no Graham number on a loss), so the bear median is the other models'. N/A where the Graham
   model is, where equity isn't positive, or where tangible book isn't (33 of the 127: their goodwill and intangibles
   exceed their equity). A missing goodwill or intangibles figure counts as 0 and is listed.
 

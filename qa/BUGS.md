@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 2 · P2 20 · P3 163 · NEEDS-USER 0 · Decided: 7 · Verified: 124
+**Open:** P0 0 · P1 2 · P2 19 · P3 163 · NEEDS-USER 0 · Decided: 7 · Verified: 125
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -64,9 +64,9 @@ Root cause: `_normalize_splits` (`src/valuation/inputs.py`) multiplied in the ob
 Notes: it did: four of the eight L6 multiples mismatches were this bug. Mixed bases within one year (AAPL FY2018: weighted shares restated, shares_outstanding not) remain a VALID-04 topic. Code review 1 (iteration 10): splits dated after the latest fiscal year are never applied at all (KLAC, BKNG): BUG-014. RTX's "resolved" Lynch is agreement on a shared reading (its 1.589 is a spin-off price factor; see L12), not proof.
 
 ### BUG-007 [P2][VAL] Graham bear case ignores loss years
-Status: OPEN
+Status: VERIFIED (iteration 134)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): the bear case is N/A, excluded from the bear median, when a loss year is in its window (the spec's min(EPS) makes the square root undefined).
-Found: iteration 4 via VAL-03 | Fixed: — | Regression test: —
+Found: iteration 4 via VAL-03 | Fixed: (this commit) | Regression tests: tests/test_valuation_models.py::test_value_graham_bear_is_na_with_a_loss_year_in_its_window (and 4 more; see iteration 134)
 Repro: BA EPS FY2023 −3.67, FY2024 −18.36, FY2025 +2.48 → stored eps_bear = eps_base = eps_bull = 2.48.
 Expected: spec "bear = min(EPS over last 3 FYs)" = −18.36, so Graham's bear value is undefined (√ of a negative).
 Actual: loss years are dropped, so the bear case equals the base case. 8 companies affected (ALL BA BMY GEV MRVL MU VRTX WDC).
