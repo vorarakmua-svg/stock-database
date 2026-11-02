@@ -224,6 +224,34 @@ def _noncurrent_debt(us_gaap: Dict[str, Any], tags: Tuple[str, ...] = _DEBT_NONC
     return noncurrent
 
 
+#: Concepts a balance sheet's noncurrent debt line can carry that long-term debt doesn't read (Corpay's and KMB's
+#: LongTermNotesAndLoans, FICO's SeniorLongTermNotes, ADP's OtherLongTermDebtNoncurrent, JKHY's LongTermLoansPayable;
+#: BUG-290); and the principal due within a year in a filing's maturity schedule, the current maturities of a filing
+#: that tags them only there (FICO's FY2014: $71M inside its $170M of current debt).
+_DEBT_LINES = ("LongTermNotesAndLoans", "SeniorLongTermNotes", "OtherLongTermDebtNoncurrent", "LongTermLoansPayable")
+_NEXT_MATURITIES = "LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths"
+
+
+def _debt_lines(us_gaap: Dict[str, Any], totals: Dict[Tuple[str, str], float],
+                read: Set[Tuple[str, str]]) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """``{(accn, end): its fact}``: the noncurrent line under a ``_DEBT_LINES`` concept on each filing date with a
+    LongTermDebt total and no noncurrent figure long-term debt reads (*read*), the first that makes up the total with a
+    current figure of the filing on the date: its DebtCurrent, its current maturities or its maturity schedule's next
+    twelve months, within rounding (Corpay's FY2022 $4.723B and $2.314B of maturities, its $7.037B total). A line
+    that makes up no total is a part of it (Equinix's FY2024 loans of $0.644B beside $15.334B; BUG-290)."""
+    currents = [_by_filing(us_gaap, tag) for tag in ("DebtCurrent",) + _MATURITIES + (_NEXT_MATURITIES,)]
+    lines: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for tag in _DEBT_LINES:
+        for e in us_gaap.get(tag, {}).get("units", {}).get("USD", []):
+            key = (e.get("accn"), e.get("end"))
+            if key in lines or key in read or key not in totals or e.get("start") or not isinstance(
+                    e.get("val"), (int, float)):
+                continue
+            if any(figures.get(key, 0) > 0 and _agree(e["val"] + figures[key], totals[key]) for figures in currents):
+                lines[key] = e
+    return lines
+
+
 def _debt_totals_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     """*us_gaap* less the LongTermDebt a filing tags beside a noncurrent figure, where its current
     debt holds the current maturities, so the total would count them twice (BA's FY2025 $53.85B
@@ -234,7 +262,11 @@ def _debt_totals_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     them, as ABBV's FY2021 $75.96B does $12.48B due within a year (BUG-141). Short-term debt now
     reads the maturities beside the borrowings, or tagged LongTermDebtAndCapitalLeaseObligationsCurrent
     alone (BUG-159: ABBV's $12.48B), so they hold them there too, where the noncurrent figure and the
-    current debt make up the total (``_MADE_UP``; EXC's FY2023 notes of $0.2B beside its $41.3B)."""
+    current debt make up the total (``_MADE_UP``; EXC's FY2023 notes of $0.2B beside its $41.3B).
+    A filing that tags no such figure there, nor LongTermDebtNoncurrent, weighs its noncurrent line under a concept
+    long-term debt doesn't read (``_debt_lines``), which stands in the total's place as the date's
+    LongTermDebtNoncurrent where the total gives way to it (Corpay's FY2021-25: $4.723B at FY2022, not its $7.037B
+    total, which counted the $2.314B of current maturities twice; BUG-290)."""
     if _DEBT_TOTAL not in us_gaap:
         return us_gaap
     noncurrent = _noncurrent_debt(us_gaap)
@@ -242,6 +274,8 @@ def _debt_totals_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     maturities = _by_filing(us_gaap, "LongTermDebtCurrent")
     either = _maturities(us_gaap)
     totals = _by_filing(us_gaap, _DEBT_TOTAL)
+    lines = _debt_lines(us_gaap, totals, set(noncurrent) | set(_by_filing(us_gaap, "LongTermDebtNoncurrent")))
+    noncurrent.update({key: e["val"] for key, e in lines.items()})
 
     def holds_maturities(key: Tuple[str, str]) -> bool:
         if key in current:
@@ -259,7 +293,13 @@ def _debt_totals_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
         return us_gaap
     units = us_gaap[_DEBT_TOTAL].get("units", {})
     kept = [e for e in units.get("USD", []) if (e.get("accn"), e.get("end")) not in aside]
-    return {**us_gaap, _DEBT_TOTAL: {**us_gaap[_DEBT_TOTAL], "units": {**units, "USD": kept}}}
+    out = {**us_gaap, _DEBT_TOTAL: {**us_gaap[_DEBT_TOTAL], "units": {**units, "USD": kept}}}
+    placed = [dict(e) for key, e in sorted(lines.items()) if key in aside]
+    if placed:
+        body = us_gaap.get("LongTermDebtNoncurrent", {"units": {}})
+        ltdnc = body.get("units", {})
+        out["LongTermDebtNoncurrent"] = {**body, "units": {**ltdnc, "USD": ltdnc.get("USD", []) + placed}}
+    return out
 
 
 #: Short-term debt a refinancing reclassified to long-term debt (ASC 470-10-45-14).

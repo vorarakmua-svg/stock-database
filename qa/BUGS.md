@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 6 · P3 161 · NEEDS-USER 24 · Verified: 122
+**Open:** P0 0 · P1 0 · P2 6 · P3 161 · NEEDS-USER 23 · Verified: 123
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2148,8 +2148,8 @@ Repro: the three retries can be spent a day apart (CLI and web collections count
 Expected: retries spread in time and a count that survives a flipping flag.   Actual: as above.
 
 ### BUG-290 [P2][PARSE] Corpay's FY2021-23 annual records count the current maturities twice: FY2022 total debt $9.35B for $7.04B
-Status: NEEDS-USER (the fix moves 1 historical-value label, no median or verdict; recommended: apply, prepared)
-Found: iteration 121 (BUG-171's investigation) | Fixed: | Regression test:
+Status: VERIFIED (iteration 128; applied at the user's decision, 2026-11-02)
+Found: iteration 121 (BUG-171's investigation) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (`_DEBT_LINES`)
 Repro: LongTermNotesAndLoans isn't among the noncurrent tags BUG-141/159's rules weigh, so where Corpay tags it as its long-term debt with the current maturities inside it, the maturities are read again as short-term debt. FICO FY2014 has the same shape.
 Expected: each year's total debt as its balance sheet's.   Actual: the maturities twice.
 Measured (iteration 126, on 6334d2a; `qa/evidence/bug290-investigation.txt`): wider than recorded. BUG-141 weighs a LongTermDebt total only against the noncurrent concepts long-term debt reads, so a line under any other concept leaves the total standing beside the maturities. Six filers: Corpay FY2021-25 and its 2025-26 quarters, KMB FY2009-11, FICO FY2013-14, ADP's 2010-12 quarters, JKHY FY2011, a PEG FY2015 vintage.

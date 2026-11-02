@@ -426,6 +426,86 @@ def test_a_total_is_weighed_against_the_noncurrent_figure_that_would_replace_it(
                           LongTermNotesPayable=9.0e9) == (12.0e9, "LongTermDebtAndCapitalLeaseObligations")
 
 
+@pytest.mark.parametrize("tag", ["LongTermNotesAndLoans", "SeniorLongTermNotes", "OtherLongTermDebtNoncurrent",
+                                 "LongTermLoansPayable"])
+def test_a_total_gives_way_to_a_noncurrent_line_under_a_concept_long_term_debt_doesnt_read(tag):
+    # BUG-290: Corpay tags its noncurrent notes as LongTermNotesAndLoans ($4.723B at FY2022), beside its LongTermDebt
+    # total ($7.037B) and the $2.314B of current maturities short-term debt reads; BUG-141 weighs only the concepts
+    # long-term debt reads, so the total stood and total debt was $9.351B. KMB's FY2009-11 likewise, FICO's
+    # SeniorLongTermNotes, ADP's OtherLongTermDebtNoncurrent, JKHY's LongTermLoansPayable. The line is read as the
+    # date's noncurrent figure.
+    year = _year_end_balance_sheet(LongTermDebt=7.037e9, LongTermDebtCurrent=2.314e9, **{tag: 4.723e9})
+    assert (year.get("long_term_debt"), year.get("_source_tags", {}).get("long_term_debt")) == (
+        4.723e9, "LongTermDebtNoncurrent")
+    assert _total_debt(year) == pytest.approx(7.037e9)
+
+
+@pytest.mark.parametrize("current, short", [
+    ({"DebtCurrent": 0.049e9}, 0.049e9),  # FICO's FY2012 figures, DebtCurrent on the total's own filing
+    ({"DebtCurrent": 0.610e9, "LongTermDebtCurrent": 0.049e9}, 0.610e9),  # KMB's FY2009: the maturities inside it
+    ({"LongTermDebtAndCapitalLeaseObligationsCurrent": 0.049e9}, 0.049e9),
+    # FICO's FY2014: the notes due within the year only in the maturity schedule, inside its current debt
+    ({"DebtCurrent": 0.170e9, "LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths": 0.049e9}, 0.170e9),
+])
+def test_the_line_and_the_current_maturities_make_up_the_total(current, short):
+    year = _year_end_balance_sheet(LongTermDebt=0.504e9, SeniorLongTermNotes=0.455e9, **current)
+    assert (year.get("long_term_debt"), year.get("short_term_debt")) == (0.455e9, short)
+
+
+def test_a_line_that_doesnt_make_up_the_total_is_a_part_of_it():
+    # Equinix's FY2024 LongTermLoansPayable ($0.644B) is one of its loans beside a $15.334B total.
+    assert _year_end_debt(LongTermDebt=15.334e9, LongTermDebtCurrent=0.555e9, LongTermLoansPayable=0.644e9) == (
+        15.334e9, "LongTermDebt")
+
+
+def test_a_total_whose_maturities_no_short_term_figure_holds_keeps_them_beside_the_line():
+    # FICO's FY2011: $512M of notes, $8M of them due within the year, which no short-term figure holds.
+    assert _year_end_debt(LongTermDebt=0.512e9, SeniorLongTermNotes=0.504e9,
+                          LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths=0.008e9) == (
+        0.512e9, "LongTermDebt")
+    # and in a filing whose other column's total gives way, FICO's FY2011 beside its FY2012 figures
+    facts = _debt_filing(LongTermDebt=0.504e9, SeniorLongTermNotes=0.455e9, DebtCurrent=0.049e9)
+    for tag, val in (("LongTermDebt", 0.512e9), ("SeniorLongTermNotes", 0.504e9),
+                     ("LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths", 0.008e9)):
+        facts["facts"]["us-gaap"].setdefault(tag, {"units": {"USD": []}})["units"]["USD"].append(
+            usd(val, None, "2024-12-31", **_K10))
+    years = XBRLParser().extract_annual_financials(facts)
+    assert [years[fy].get("long_term_debt") for fy in ("2024", "2025")] == [0.512e9, 0.455e9]
+
+
+def test_a_line_that_is_the_total_itself_leaves_it():
+    # One line tagged twice, beside maturities of its own (KLAC's shape): the total is the noncurrent line.
+    assert _year_end_debt(LongTermDebt=5.88e9, LongTermNotesAndLoans=5.88e9, LongTermDebtCurrent=0.75e9) == (
+        5.88e9, "LongTermDebt")
+
+
+def test_the_line_that_makes_up_the_total_stands_not_the_first_concept_tagged():
+    # JKHY's FY2011 10-K/A: $1.015M of other long-term debt, and the $127.939M of loans that with the $26.092M of
+    # current maturities make up its $154.031M total.
+    assert _year_end_debt(LongTermDebt=154.031e6, LongTermDebtCurrent=26.092e6, OtherLongTermDebtNoncurrent=1.015e6,
+                          LongTermLoansPayable=127.939e6) == (127.939e6, "LongTermDebtNoncurrent")
+
+
+def test_a_noncurrent_figure_long_term_debt_reads_stands_before_such_a_line():
+    assert _year_end_debt(LongTermDebt=10.0e9, LongTermDebtCurrent=2.0e9, LongTermNotesPayable=8.0e9,
+                          LongTermNotesAndLoans=8.0e9) == (8.0e9, "LongTermNotesPayable")
+    assert _year_end_debt(LongTermDebt=10.0e9, LongTermDebtCurrent=2.0e9, LongTermDebtNoncurrent=7.96e9,
+                          LongTermNotesAndLoans=8.0e9) == (7.96e9, "LongTermDebtNoncurrent")
+
+
+def test_corpays_quarters_and_vintages_read_the_line_too():
+    # Corpay's 10-Qs tag the same three figures (Q1 2025: $8.171B, $2.255B, $5.916B); each filing's vintage reads
+    # its own.
+    q10 = dict(fy=2025, fp="Q1", form="10-Q", filed="2025-05-12")
+    facts = {"facts": {"us-gaap": {tag: {"units": {"USD": [usd(val, None, "2025-03-31", **q10)]}} for tag, val in (
+        ("LongTermDebt", 8.171e9), ("LongTermDebtCurrent", 2.255e9), ("LongTermNotesAndLoans", 5.916e9))}}}
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2025-03-31"]
+    assert (quarter.get("long_term_debt"), quarter.get("short_term_debt")) == (5.916e9, 2.255e9)
+    facts = _debt_filing(LongTermDebt=7.037e9, LongTermDebtCurrent=2.314e9, LongTermNotesAndLoans=4.723e9)
+    vintage = next(iter(XBRLParser().extract_annual_vintages(facts)["2025"].values()))
+    assert vintage.get("long_term_debt") == 4.723e9
+
+
 _K10 = dict(fy=2025, fp="FY", form="10-K", filed="2026-02-12")
 
 

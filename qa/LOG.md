@@ -2310,3 +2310,17 @@ Result: BUG-248 VERIFIED. New: BUG-297, BUG-298. Four fixes since code review 22
 Gates: ruff ✓ mypy ✓ pytest 2718 passed, 1 skipped, 1 warning | CI: no PR (Q10)
 Commit: (this commit) fix(valuation): equal splits take their seams in order (BUG-248)
 Next: BUG-249, or BUG-290 if the user decides first.
+
+## Iteration 128: 2026-11-02 18:41: fix (BUG-290, the user's decision)
+Picked: BUG-290: the user said "apply BUG-290".
+Did: applied the fix measured in iteration 126 to 91a0633 (BUG-248 touched only the history, not the parser), after
+proving RED on an export of HEAD plus the new tests.
+- Mutants (re-run by me on the checkout): 122 of 122 killed across the 9 parser specs (BUG-290's 17).
+- The moves are iteration 126's: CPAY's historical-value label below to near, no median, verdict or model row.
+- They reach the user's DB at each company's next collection.
+Evidence: `qa/evidence/bug290-{investigation,verify-mine}.txt`, `qa/evidence/bug290-mutants.json`.
+Result: BUG-290 VERIFIED. Five fixes since code review 22 (BUG-285, -171, -170, -248, -290): review 23 is due.
+Gates: ruff ✓ mypy ✓ pytest 2732 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): an unread debt line stands in for a long-term debt total that holds the
+current maturities (BUG-290)
+Next: code review 23.

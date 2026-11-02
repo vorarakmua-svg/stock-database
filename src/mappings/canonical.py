@@ -227,7 +227,10 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         # those who file neither (with finance leases, notes, unsecured or convertible debt: VZ,
         # ORCL, GS, NOW), and last the notes payable in total (O) (BUG-125). A filing's total
         # gives way to its noncurrent figure where its current debt holds the current maturities
-        # or the total is below it (``xbrl_parser._debt_totals_set_aside``, BUG-141). Not
+        # or the total is below it (``xbrl_parser._debt_totals_set_aside``, BUG-141); also to a
+        # noncurrent line under a concept not mapped here that makes up the total with the
+        # current maturities, read as the date's LongTermDebtNoncurrent (Corpay's
+        # LongTermNotesAndLoans; ``xbrl_parser._debt_lines``, BUG-290). Not
         # DebtInstrumentCarryingAmount: often one instrument's, on days with no balance sheet
         # (SLB's $0.5B note at 2020-12-31). A 10-Q that tags none of these reads its line under
         # another concept where its year-end column shows the annual record's figure (ORCL's

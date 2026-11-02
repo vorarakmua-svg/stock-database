@@ -2090,7 +2090,10 @@ numbers SEC filings report:
 - **Long-term debt beside current debt.** Long-term debt is the balance sheet's noncurrent
   figure where the filing's short-term debt holds the current maturities (Boeing's FY2025:
   $45.6B beside $8.5B of current debt, not its $53.8B total, which counted them twice), and
-  the filer's total with the maturities where no short-term figure holds them.
+  the filer's total with the maturities where no short-term figure holds them. A noncurrent
+  line tagged under a concept long-term debt doesn't otherwise read stands in for the total
+  where the two lines make it up (Corpay's FY2022: $4.7B of notes beside $2.3B of current
+  maturities, total debt $7.0B, not $9.4B).
 - **Long-term debt in the 10-Qs.** A 10-Q that tags its long-term debt under a concept the field
   doesn't map is read where its year-end column shows the figure an annual report filed for that
   year end: Oracle's 10-Qs tag their notes as LongTermNotesAndLoans, its 10-Ks as
