@@ -2523,3 +2523,17 @@ Evidence: `qa/evidence/review24.txt`; %LOCALAPPDATA%\stockdb-qa\review24.
 Result: review 24 open on BUG-303 (Important) until it is fixed.
 Gates: no code change | CI: PR #29
 Next: BUG-303, then BUG-304.
+
+## Iteration 141: 2026-11-02 21:29: fix (BUG-303, code review 24's Important finding)
+Picked: BUG-303 (P2), review 24's Important finding, inline.
+Did: the band's close, once as traded (`price_factor_after`), moves to the price's basis by share splits alone
+(`bars_to_split_basis`); the full bars-to-price factor counted a spin-off between the bars and the price a second time.
+The oracle's `bars_to_price_basis` takes `shares_only` for its FY-end price, in its own commit first.
+- RED: 2 failed (x 1.281 and / 1.281), 1 guard passed; GREEN. Mutants: 2 of 2; BUG-172's 4 and BUG-245's 9 still killed.
+- On two DB copies, engine over all 502: nothing moves (no ticker has a factor between its price and its last bar
+  today), as the review found; the oracle the same on both (level 1: 0 of 2,013; level 2: 3).
+Evidence: %LOCALAPPDATA%\stockdb-qa\bug303\out; `qa/evidence/bug303-mutants.json`.
+Result: BUG-303 VERIFIED; code review 24 closed with no open Critical or Important finding.
+Gates: ruff ✓ mypy ✓ pytest 2778 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(valuation): the band's closes reach the price's basis by share splits alone (BUG-303)
+Next: BUG-304 (decided), then the P2s: BUG-260, -271, -274, -295, and the decided questions.

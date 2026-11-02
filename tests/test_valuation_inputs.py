@@ -1464,6 +1464,62 @@ def test_fy_end_prices_are_the_closes_as_traded_across_a_spin_off(tmp_path):
                                                                                   2023: 90.0}
 
 
+def _spin_db(tmp_path, bars, snapshot_day, splits=(("2023-01-04", 1.281),)):
+    """FY2021-23 with a GE-like spin-off factor of 1.281 on 2023-01-04, the given bars and a snapshot on its day."""
+    db_path = tmp_path / "spin.db"
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('PAY', 'general')")
+    for fy in (2021, 2022, 2023):
+        conn.execute("INSERT INTO financials_annual (ticker, fiscal_year, period_end, net_income, total_equity, "
+                     "eps_diluted, weighted_avg_shares_diluted) VALUES ('PAY', ?, ?, 5.0e8, 4.0e9, 5.0, 1.0e8)",
+                     (fy, f"{fy}-12-31"))
+    for day, close in bars:
+        conn.execute("INSERT INTO price_bars (ticker, date, close, dividend_adjusted) VALUES ('PAY', ?, ?, 0)",
+                     (day, close))
+    for when, ratio in splits:
+        conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('PAY', ?, ?)", (when, ratio))
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price, market_cap, shares_outstanding) "
+                 "VALUES ('PAY', ?, 60.0, 6.0e9, 1.0e8)", (snapshot_day + "T12:00:00",))
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def _fy_prices(db_path):
+    conn = _connect(db_path)
+    try:
+        return {fy: round(p, 4) for fy, p in load_inputs(conn, "PAY").fy_end_prices.items()}
+    finally:
+        conn.close()
+
+
+SPIN = 1.281
+
+
+def test_a_price_before_a_spin_off_beside_bars_after_it_reads_the_closes_as_traded(tmp_path):
+    # BUG-303 (code review 24), BUG-094's path: the bars were served through the spin-off (Yahoo divided the
+    # earlier closes by 1.281), the latest price is from before it (a later run's quote failed). The share-split
+    # basis is the only one the price and the bars can differ on: 70 / 78.07 as traded, not x 1.281 again.
+    bars = [("2021-12-31", 70.0 / SPIN), ("2022-12-30", 78.07 / SPIN), ("2023-01-04", 60.0)]
+    assert _fy_prices(_spin_db(tmp_path, bars, "2022-12-31")) == {2021: 70.0, 2022: 78.07, 2023: 60.0}
+
+
+def test_a_refresh_after_a_spin_off_beside_bars_before_it_reads_the_closes_as_traded(tmp_path):
+    # BUG-303, BUG-128's path: a rebased refresh stored the factor with a price after it, the bars (served before
+    # it) are as traded; a full collection that day reads 70 / 78.07, and so must this, not / 1.281.
+    bars = [("2021-12-31", 70.0), ("2022-12-30", 78.07)]
+    assert _fy_prices(_spin_db(tmp_path, bars, "2023-01-10")) == {2021: 70.0, 2022: 78.07, 2023: 78.07}
+
+
+def test_a_share_split_between_the_bars_and_the_price_still_moves_the_closes(tmp_path):
+    # The guard: a 2:1 split after the last bar halves the bars' closes onto the price's basis (BUG-094).
+    bars = [("2021-12-31", 70.0), ("2022-12-30", 78.0)]
+    db = _spin_db(tmp_path, bars, "2023-01-10", splits=(("2023-01-04", 2.0),))
+    assert _fy_prices(db) == {2021: 35.0, 2022: 39.0, 2023: 39.0}
+
+
 @pytest.mark.parametrize("bars", ["flagged", "before the flag"])
 def test_a_dividend_after_the_last_adjusted_bar_is_not_undone(tmp_path, bars):
     # BUG-084 (code review 8): Yahoo adjusted the stored bars for the dividends it knew when it served them. A later

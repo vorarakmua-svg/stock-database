@@ -795,7 +795,9 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
             if rec.shares is not None:
                 rec.shares /= ads
     served = conn.execute("SELECT max(date) FROM price_bars WHERE ticker = ?", (ticker,)).fetchone()[0]
-    bars_to_price = bars_to_price_factor(splits, priced_on, str(served)[:10] if served else None)
+    # The band's closes, once as traded, differ from the price only by the share splits between them (BUG-303).
+    bars_to_split_basis = bars_to_price_factor([s for s in splits if is_share_split(s[1])], priced_on,
+                                               str(served)[:10] if served else None)
     shares, shares_source = _total_shares(
         snap["shares_outstanding"] if snap else None,
         snap["market_cap"] if snap else None,
@@ -848,10 +850,11 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
                 factors = _yahoo_dividend_factors(conn, ticker, flagged, splits)
             close /= math.prod(f for ex, f in factors if ex > str(bar["date"])[:10])
         # Yahoo divides closes before a spin-off by its price factor, which the filed EPS never sees: the band
-        # wants the close as traded (BUG-172; the valuation history's PF(d)).
+        # wants the close as traded (BUG-172; the valuation history's PF(d)). That close then moves to the price's
+        # basis by share splits alone: a spin-off between the bars and the price changes no share (BUG-303).
         if served:
             close *= price_factor_after(str(bar["date"])[:10], splits, str(served)[:10])
-        fy_end_prices[rec.fiscal_year] = close * bars_to_price
+        fy_end_prices[rec.fiscal_year] = close * bars_to_split_basis
 
     return ValuationInputs(
         ticker=ticker,

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 17 · P3 167 · NEEDS-USER 0 · Decided: 7 · Verified: 132
+**Open:** P0 0 · P1 0 · P2 16 · P3 167 · NEEDS-USER 0 · Decided: 7 · Verified: 133
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1940,8 +1940,8 @@ Repro: `qa/oracle/valuation_oracle.py --db <copy>` level 2: HOOD multiples band_
 Expected: the oracle's within 0.5%.   Actual: 29% apart on the base.
 
 ### BUG-303 [P2][VAL] The band's FY-end close counts a spin-off factor twice where the price and the bars sit on either side of it (since BUG-172)
-Status: OPEN
-Found: code review 24 (`qa/evidence/review24.txt`, Important 1) | Fixed: | Regression test:
+Status: VERIFIED (iteration 141)
+Found: code review 24 (`qa/evidence/review24.txt`, Important 1) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py::test_a_price_before_a_spin_off_beside_bars_after_it_reads_the_closes_as_traded, ::test_a_refresh_after_a_spin_off_beside_bars_before_it_reads_the_closes_as_traded
 Repro: inputs.py ~850-854 multiplies the close by `price_factor_after(bar, splits, served)` and then by `bars_to_price`, which holds every factor between the price's day and the last bar, spin-offs included. (A) a price dated before a spin-off with bars served after it (BUG-094's path): the close reads as traded x f (GE-like 1.281: 89.67 for 70); before 4ab45e4 it was right. (B) a spin-off after the last bar with the price after it (BUG-128's rebased refresh): as traded / f (54.64 for 60.94), and README's "as a full collection would put them" is false. The oracle's `bars_to_price_basis` has the same flaw. No case on today's data (every price after its last bar, no factor between). Tests in %LOCALAPPDATA%\stockdb-qa\review24\src\tests\test_review24.py.
 Expected: the close as traded, on the price's share-split basis only.   Actual: as above.
 
