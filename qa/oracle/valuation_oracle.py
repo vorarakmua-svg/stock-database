@@ -141,6 +141,18 @@ def cagr(window: List[Tuple[int, float]]) -> Optional[float]:
     return (window[-1][1] / window[0][1]) ** (1 / (window[-1][0] - window[0][0])) - 1
 
 
+def growth_cagr(window: List[Tuple[int, float]]) -> Optional[float]:
+    """Q5 (decided 2026-11-02, option c): the window's CAGR, else the CAGR from its first positive value when at
+    least 4 fiscal years remain from it; None when neither is measurable."""
+    g = cagr(window)
+    if g is not None:
+        return g
+    k = next((i for i, (_fy, v) in enumerate(window) if v is not None and v > 0), None)
+    if k is None or len(window) - k < 4:
+        return None
+    return cagr(window[k:])
+
+
 def simple_ratio(ratio: float) -> bool:
     """A share split's ratio is a simple fraction (2:1, 3:2, 9:4, 1:8, 10:1); Yahoo's spin-off and merger price
     factors aren't. On the real-data copy all 430 simple factors of 3:2 or more are splits."""
@@ -269,13 +281,10 @@ class Inputs:
         raw = self.rf + (self.beta if self.beta is not None else 1.0) * ERP
         return raw, clamp(raw, *DISCOUNT_CLAMP)
 
-    def growth(self, hist: Optional[float], cap: float) -> Optional[float]:
-        if hist is None:
-            # Spec gap (Q5): with no measurable CAGR the spec doesn't say what growth to use, so the row is
-            # not derivable from it. (The code follows the plan's analyst-only fallback until the user decides.)
-            return None
-        raw = min(hist, self.analyst) if self.analyst is not None else hist
-        return clamp(raw, 0.0, cap)
+    def growth(self, hist: Optional[float], cap: float) -> float:
+        # Q2 (decided 2026-11-02): Yahoo's earningsGrowth is one quarter's year-over-year change, no forecast, so it
+        # takes no part. Q5 (decided, option b behind c): with no measurable CAGR, a flat 0%.
+        return clamp(hist, 0.0, cap) if hist is not None else 0.0
 
     def after_price(self, date: str) -> bool:
         """A split dated after both the latest filing and the latest price's day (BUG-048)."""
@@ -468,12 +477,12 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         fcf = [v for _fy, v in window]
         if len(fcf) < 4:
             return None
-        g = x.growth(cagr(window), 0.15)
+        g = x.growth(growth_cagr(window), 0.15)
         _, r = x.discount()
-        if g is None or not x.snap_shares:
+        if not x.snap_shares:
             return {"inputs": {"fcf_basis": median(fcf[-3:]), "hist_cagr": None}}
         vals = [dcf_per_share(median(fcf[-3:]), gi, ri, x.snap_shares) for gi, ri in scenarios(g, r, 0.15, False)]
-        return {"inputs": {"fcf_basis": median(fcf[-3:]), "hist_cagr": cagr(window),
+        return {"inputs": {"fcf_basis": median(fcf[-3:]), "hist_cagr": growth_cagr(window),
                            "cagr_years": window[-1][0] - window[0][0], "growth_base": g, "discount_base": r,
                            "shares_outstanding": x.snap_shares}, "values": vals}
     if model == "ddm":
@@ -539,7 +548,7 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         hist = (window[-1][1] / window[0][1]) ** (1 / span) - 1 if span and window[0][1] > 0 else None
         g = x.growth(hist, 0.10)
         _, r = x.discount()
-        if g is None or not ttm:
+        if not ttm:
             return {"inputs": {"ttm_dps": ttm, "hist_cagr": hist, "cagr_years": span}}
         vals = [ddm_per_share(ttm, gi, ri) for gi, ri in scenarios(g, r, 0.10, False)]
         return {"inputs": {"ttm_dps": ttm, "hist_cagr": hist, "cagr_years": span,
@@ -562,12 +571,12 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         window = x.last_10_fys(eps)
         if len(window) < 4 or window[-1][1] <= 0:
             return None
-        if cagr(window) is None:  # Lynch publishes nothing without a measurable growth rate
+        if growth_cagr(window) is None:  # Lynch publishes nothing without a measurable growth rate (Q5)
             return {"inputs": {"hist_cagr": None}}
-        g = x.growth(cagr(window), 0.15)
+        g = x.growth(growth_cagr(window), 0.15)
         trio = [max(g - SPREAD_G, 0.0), g, min(g + SPREAD_G, 0.15)]
         latest = window[-1][1]
-        return {"inputs": {"eps_base": latest, "hist_cagr": cagr(window), "cagr_years": window[-1][0] - window[0][0],
+        return {"inputs": {"eps_base": latest, "hist_cagr": growth_cagr(window), "cagr_years": window[-1][0] - window[0][0],
                            "growth_base": g}, "values": [clamp(gi * 100, 5, 25) * latest for gi in trio]}
     if model == "multiples":
         kind = stored.get("multiple_kind")
