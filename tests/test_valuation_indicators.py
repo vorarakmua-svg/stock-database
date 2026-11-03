@@ -498,3 +498,28 @@ def test_one_indicator_failing_leaves_the_others(monkeypatch, caplog):
     assert (results["reverse_dcf"].na_reason, results["reverse_dcf"].unit) == ("internal error: boom", "rate")
     assert results["ncav"].applicable and results["ps_value"].applicable
     assert "boom" in caplog.text
+
+
+def test_every_fiscal_year_indicator_is_na_on_a_basis_more_than_two_fiscal_years_old():
+    # BUG-310 (code review 25; decided): Q8's rule covers every per-share indicator on a fiscal-year basis, as it
+    # covers the tangible Graham number: the reverse DCF (on the DCF's FCF), EPV and NCAV read FY2025 in 2029.
+    from datetime import date
+    stale = date(2029, 6, 1)
+    rows = _epv_rows()
+    results = {r.indicator: r for r in compute_indicators(
+        _inputs(_valuation(fy_records=_dcf_records(), as_of=stale), rows=rows, market=MARKET))}
+    for name in ("reverse_dcf", "epv"):
+        assert results[name].applicable is False, name
+        assert results[name].na_reason.endswith("is more than 2 fiscal years old"), name
+    fresh = {r.indicator: r for r in compute_indicators(
+        _inputs(_valuation(fy_records=_dcf_records(), as_of=date(2026, 6, 1)), rows=rows, market=MARKET))}
+    assert fresh["reverse_dcf"].applicable and fresh["epv"].applicable
+
+
+def test_ncav_is_na_on_a_basis_more_than_two_fiscal_years_old():
+    from datetime import date
+    rows = [_row(2025, 1000.0, 100.0, current_assets=900.0, total_liabilities=300.0)]
+    stale = {r.indicator: r for r in compute_indicators(_inputs(_valuation(as_of=date(2029, 6, 1)), rows=rows))}
+    assert stale["ncav"].applicable is False
+    fresh = {r.indicator: r for r in compute_indicators(_inputs(_valuation(as_of=date(2026, 6, 1)), rows=rows))}
+    assert fresh["ncav"].applicable is True

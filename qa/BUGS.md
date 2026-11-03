@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 8 · P3 170 · NEEDS-USER 0 · Decided: 7 · Verified: 146
+**Open:** P0 0 · P1 0 · P2 7 · P3 170 · NEEDS-USER 0 · Decided: 7 · Verified: 147
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1983,9 +1983,9 @@ Repro: with no company_facts key (a failed request, sec_handler.fetch_all), `cla
 Expected: the stored sector kept, with a warning, when the facts are missing.   Actual: bank, so DCF, Lynch and owner earnings go N/A until the next good collection.
 
 ### BUG-310 [P2][VAL] The reverse DCF, EPV and NCAV indicators still value a basis more than two fiscal years old (since Q8)
-Status: OPEN
+Status: VERIFIED (iteration 153)
 Decision: Decided 2026-11-03 (the user: "use your recommendation for questions"): Q8's rule applies to every per-share indicator on a fiscal-year basis, as it does to the tangible Graham number.
-Found: code review 25 (Important 2; proven by unit tests) | Fixed: | Regression test:
+Found: code review 25 (Important 2; proven by unit tests) | Fixed: (this commit) | Regression tests: tests/test_valuation_indicators.py::test_every_fiscal_year_indicator_is_na_on_a_basis_more_than_two_fiscal_years_old, ::test_ncav_is_na_on_a_basis_more_than_two_fiscal_years_old
 Repro: indicators.py reverse_dcf (~145-175) calls value_dcf directly; epv (~194-274) and ncav (~284-323) take no age check; only graham_tangible does. With as_of 2029-06-01 and records ending FY2025 the engine's DCF is N/A and the three are applicable. No case on today's data.
 Expected: N/A with the same reason.   Actual: valued.
 

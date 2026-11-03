@@ -402,7 +402,11 @@ def compute_indicators(inputs: IndicatorInputs, logger: Optional[logging.Logger]
     results: List[IndicatorResult] = []
     for name in INDICATORS:
         try:
-            results.append(functions[name](inputs))
+            result = functions[name](inputs)
+            stale = stale_basis_reason(inputs.valuation, result.basis_fiscal_year) if result.applicable else None
+            # Every indicator on a fiscal-year basis follows the models' age rule (Q8, BUG-310); the median P/S
+            # value's basis is the trailing year, which carries none.
+            results.append(_na(name, stale, basis_fy=result.basis_fiscal_year) if stale else result)
         except Exception as e:  # never abort a ticker's indicators for one of them
             log.warning(f"{inputs.ticker}: {name} indicator failed: {e}")
             results.append(_na(name, f"internal error: {e}"))

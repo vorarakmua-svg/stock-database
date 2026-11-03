@@ -406,7 +406,9 @@ A model that doesn't fit a company's sector or lacks the data it needs (e.g. DCF
 for banks and REITs, DDM for non-payers) reports `applicable=false` with a plain-English
 `na_reason` instead of a fabricated number. So does a model whose basis fiscal year is more
 than 2 years before the valuation's day ("basis FY2023 is more than 2 fiscal years old"): a
-company whose usable annual reports stopped isn't valued on them beside today's price. Every computed value is stored alongside the
+company whose usable annual reports stopped isn't valued on them beside today's price (the
+same holds for the indicators on a fiscal-year basis: the reverse DCF, EPV, NCAV and the
+tangible Graham number). Every computed value is stored alongside the
 exact assumptions used (growth, discount rate, basis figures) in the `valuations` table,
 with cross-model bear/base/bull medians in `valuation_summary` — so results are
 reproducible and auditable, not just a live calculation.

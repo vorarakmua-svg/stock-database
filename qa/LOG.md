@@ -2718,3 +2718,15 @@ Gates: ruff ✓ mypy ✓ pytest 2813 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(fetchers): a failed companyfacts request keeps the stored sector (BUG-309)
 Next: BUG-310 (decided).
 
+## Iteration 153: 2026-11-03 08:40: fix (BUG-310, decided; code review 25's Important 2)
+Picked: BUG-310 (P2), inline.
+Did: `compute_indicators` applies `stale_basis_reason` to every indicator's result with a basis fiscal year (reverse
+DCF, EPV, NCAV, the tangible Graham number); the median P/S value's trailing-year basis carries none. README says so.
+- RED: 2 new tests failed (reverse DCF and NCAV applicable in 2029 on FY2025); GREEN. 1 of 1 mutant; Q8's 4 still killed.
+- Nothing moves on today's data (no basis that old, iteration 145).
+Evidence: `qa/evidence/bug310-mutants.json`.
+Result: BUG-310 VERIFIED; code review 25 closed with no open Critical or Important finding.
+Gates: ruff ✓ mypy ✓ pytest 2815 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): every fiscal-year indicator follows the models' age rule (BUG-310)
+Next: Q3/Q4 and Q16 as their workers report; BUG-271, BUG-274, BUG-295, Q17 and the P3s.
+
