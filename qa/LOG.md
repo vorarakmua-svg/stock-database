@@ -2743,3 +2743,14 @@ Gates: ruff ✓ mypy ✓ pytest 2817 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix: Q2's and Q9's loose ends: the ERN label, the coverage report, the specs (BUG-312..314)
 Next: the workers' Q3/Q4, Q16 and BUG-271; inline BUG-274 or the P3s.
 
+## Iteration 155: 2026-11-03 09:04: fix (BUG-137, BUG-138; P3s)
+Picked: two related P3s in the web's number formats, inline.
+Did: `fmt_price` puts a negative's sign before the dollar ("-$10.87"), as `fmt_money` does; `fmt_signed_price` is now
+the same. `_suffixed` reads a trillion or more in T ("$3.68T" for MSFT's market cap, not "$3676.66B").
+- RED: 2 new tests failed; GREEN; the 936 web tests pass. 2 of 2 mutants.
+Evidence: `qa/evidence/bug137-138-mutants.json`.
+Result: BUG-137 and BUG-138 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2819 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(web): a negative price's sign before the dollar, and trillions in T (BUG-137, BUG-138)
+Next: the workers' results; inline P3s.
+

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 7 · P3 167 · NEEDS-USER 0 · Decided: 7 · Verified: 150
+**Open:** P0 0 · P1 0 · P2 7 · P3 165 · NEEDS-USER 0 · Decided: 7 · Verified: 152
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1063,14 +1063,14 @@ Expected: a count without a currency ("14.59B").   Actual: "$14.59B". The magnit
 
 Fix: `fmt_count` (and `fmt_value`'s "count" kind) formats a count with fmt_money's B/M/K suffixes and no currency, the two sharing `_suffixed`; every count the app showed as money uses it: DES's Volume and Avg Volume, STAT's Shares outstanding, Float shares and Shares short, the statements' Shares outstanding, the HP table's volume, and the holders' and insiders' shares (the last two found beside the four MATCH-06 named); the comments that called money "consistency" say so no longer. Three tests RED on 96374fa; eight mutants, each failing a test (`qa/evidence/iter96-bug136-{red,green,mutants}.txt`). MATCH-06's sweep, which reads a suffixed count with no currency as a count: the 1,140 and 1,026 dollar-signed counts are gone, every value equal (29,644 on the user's copy, 28,114 on the golden one; `iter96-bug136-realdata.txt`). stock-web on a copy of the user's data: AAPL's DES Volume 18.56M, STAT Shares outstanding 14.59B, statements 14.77B, HP volume 18.56M, Blackrock's 1.14B shares beside $350.76B, an insider's 116 shares beside $34.24K (`iter96-bug136-e2e.txt`).
 ### BUG-137 [P3][UI] A negative price change reads "$-10.87" where a negative amount reads "-$1.63B"
-Status: OPEN
-Found: iteration 91 via MATCH-06 (`qa/evidence/iter91-match06-extra.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 155)
+Found: iteration 91 via MATCH-06 (`qa/evidence/iter91-match06-extra.txt`) | Fixed: (this commit) | Regression test: tests/test_web_formatting.py::test_a_negative_price_puts_its_sign_before_the_dollar
 Repro: `fmt_price` is `f"${x:,.2f}"`, its sign after the dollar sign, and `fmt_money` puts it before: DES's change for ALL reads "$-10.87 (-4.3%)", TSLA's statements "-$1.63B".
 Expected: one placement ("-$10.87").   Actual: two.
 
 ### BUG-138 [P3][UI] Amounts of a trillion or more read in billions, without a separator: MSFT's market cap "$3676.66B"
-Status: OPEN
-Found: iteration 91 via MATCH-06 (`qa/evidence/iter91-match06-real.txt`, spot checks) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 155)
+Found: iteration 91 via MATCH-06 (`qa/evidence/iter91-match06-real.txt`, spot checks) | Fixed: (this commit) | Regression test: tests/test_web_formatting.py::test_a_trillion_or_more_reads_in_trillions
 Repro: `fmt_money`'s largest suffix is B and its format has no thousands separator: MSFT's DES market cap is "$3676.66B" (3,676,657,156,096); AAPL's, NVDA's and GOOGL's read the same way.
 Expected: "$3.68T" (or "$3,676.66B").   Actual: "$3676.66B". The value is right.
 
