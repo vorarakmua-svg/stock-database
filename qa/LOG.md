@@ -2678,3 +2678,17 @@ Gates: ruff ✓ mypy ✓ pytest 2809 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(valuation): Graham's bear window is the last three years on EPS alone; docs (BUG-305, BUG-306)
 Next: code review 25, Q3/Q4 and Q16 as their workers report; BUG-271, -274, -295, Q7, Q17 and the P3s.
 
+## Iteration 150: 2026-11-03 08:22: fix (Q7, decided; BUG-051 with it)
+Picked: Q7 (implemented as a P2), inline.
+Did: `_total_shares` takes market cap / price whenever it is more than SHARE_CLASS_GAP (2%) above Yahoo's count: every
+class and unit counts. The 2-5% tiebreaker on the latest FY's count (SHARE_SOURCE_GAP), which followed that count's
+drift (BUG-051), is gone. The oracle follows in its own commit first.
+- RED: MRVL's case failed (the tiebreaker took Yahoo's count); GREEN, with a 1.5% guard case. 2 of 2 mutants.
+- Measured on two DB copies, engine over all 502: one median, MRVL base 20.94 to 20.62 (expensive either way); no
+  verdict, owner-earnings verdict or label. The oracle: 6 level-2 rows on head's copy (MRVL's DCF new), 5 with the fix.
+Evidence: %LOCALAPPDATA%\stockdb-qa\q7\out; `qa/evidence/q7-mutants.json`.
+Result: Q7 VERIFIED; BUG-051 VERIFIED with it.
+Gates: ruff ✓ mypy ✓ pytest 2810 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): per-share values count every share class and unit (Q7, BUG-051)
+Next: record code review 25 (2 Important) and fix them.
+
