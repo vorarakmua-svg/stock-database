@@ -272,9 +272,9 @@ class Inputs:
                 self.ads_ratio = read
                 fy_today /= read
         by_value = market_cap / self.price if market_cap and self.price else None
-        if self.snap_shares and by_value and by_value > 1.02 * self.snap_shares and not (
-                fy_today and by_value < 1.05 * self.snap_shares
-                and abs(math.log(self.snap_shares / fy_today)) < abs(math.log(by_value / fy_today))):
+        # Q7 (decided 2026-11-02, option a): every class and unit counts, market cap / price whenever it is more
+        # than 2% above Yahoo's count (within it, Yahoo's rounding); the 2-5% tiebreaker is gone.
+        if self.snap_shares and by_value and by_value > 1.02 * self.snap_shares:
             self.snap_shares = by_value
         if self.snap_shares and fy_today and self.snap_shares < 0.75 * fy_today:
             self.snap_shares = fy_today
