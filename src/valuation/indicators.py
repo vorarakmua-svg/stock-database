@@ -350,8 +350,9 @@ def ps_value(inputs: IndicatorInputs) -> IndicatorResult:
 def graham_tangible(inputs: IndicatorInputs) -> IndicatorResult:
     """The Graham number on tangible book: sqrt(GRAHAM_MULTIPLIER x EPS x tangible book per share), tangible book
     being total equity less goodwill and intangible assets, on the Graham model's EPS and share basis, with its
-    bear and bull EPS (the lowest and highest positive EPS of the last 3 fiscal years). A missing goodwill or
-    intangibles figure counts as 0 and is listed."""
+    bear and bull EPS (the lowest and highest EPS of the last 3 fiscal years; with a loss among them the bear is
+    N/A, BUG-007). N/A where the Graham model is, and on a basis more than 2 fiscal years old (Q8). A missing
+    goodwill or intangibles figure counts as 0 and is listed."""
     name = "graham_tangible"
     if inputs.valuation.ads_unreadable:
         return _na(name, inputs.valuation.ads_unreadable)

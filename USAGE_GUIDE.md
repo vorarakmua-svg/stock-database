@@ -332,13 +332,14 @@ extra network calls.
 |---|---|---|
 | **DCF** (two-stage FCF) | general, utility, energy | ≥4 years of FCF history, shares outstanding |
 | **DDM** (multi-stage Gordon) | any steady dividend payer | ≥3 calendar years of dividend history |
-| **Graham Number** | any company with positive EPS + book value | Latest EPS, book value per share |
+| **Graham Number** | any company with positive EPS + book value in its latest fiscal year | The latest fiscal year's EPS and book value per share (N/A if it lacks either; the bear is N/A with a loss year in the last 3) |
 | **Peter Lynch fair value** | general, utility, energy | ≥4 years of EPS history |
-| **Historical multiples band** | all sectors | ≥3 fiscal years of price + sector-appropriate multiple (P/E, P/B for banks/insurers, P/FFO for REITs) |
+| **Historical multiples band** | all sectors | ≥3 fiscal years of price + sector-appropriate multiple (P/E, P/B for banks/insurers, P/FFO for REITs); bear/base/bull at the multiples' 25th percentile, median and 75th percentile, on closes as traded |
 
 Each model returns a **bear / base / bull** per-share range, not a single number — growth
-and discount-rate assumptions are deliberately conservative (growth = min(historical CAGR,
-analyst estimate), CAPM discount rate with a floor/cap). When a model doesn't fit a
+and discount-rate assumptions are deliberately conservative (growth = the historical CAGR
+clamped to 0-15%, from the first profitable year if the window starts on a loss, CAPM discount
+rate with a floor/cap). When a model doesn't fit a
 company's sector (DCF/Lynch for banks, insurers, and REITs) or the data it needs isn't
 available (e.g. no dividend history for DDM), it reports `applicable = false` with a
 plain-English `na_reason` — never a fabricated number.

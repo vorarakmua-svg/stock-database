@@ -369,7 +369,8 @@ function renderDVD(elId, years, amounts) {
 /**
  * Render the VAL fair-value-range chart into the element with the given id.
  * @param {string} elId - The DOM element id to render into.
- * @param {{models: Array<{label: string, bear: number, base: number, bull: number}>, price: (number|null)}} cfg
+ * @param {{models: Array<{label: string, bear: (number|null), base: number, bull: number}>, price: (number|null)}} cfg
+ *   A null bear (Graham with a loss year in its window) draws the bar from the base.
  */
 function renderVAL(elId, cfg) {
   var labels = cfg.models.map(function (m) { return m.label; });

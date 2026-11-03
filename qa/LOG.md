@@ -2663,3 +2663,18 @@ Gates: ruff ✓ mypy ✓ pytest 2808 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(valuation): DDM's growth history comes from SEC's dividends per share (BUG-049)
 Next: Q3 and Q4 (DDM's specials and incomplete histories, now on this history); code review 25 after 1 more fix.
 
+## Iteration 149: 2026-11-03 08:14: fix (BUG-305, BUG-306; P3s)
+Picked: Q3 with Q4, and Q16, to opus workers; inline two related P3s from code review 24 on the Graham model.
+Did: BUG-305: Graham's bear window is the last 3 fiscal years on EPS alone (book value only for the latest year), so
+a loss year without equity still makes the bear N/A. BUG-306: the tangible Graham docstring, USAGE_GUIDE's model table
+and growth line, and renderVAL's JSDoc describe BUG-007, BUG-246, BUG-172, Q2/Q5 and Q8 as they are.
+- RED: BUG-305's test failed (bear 30.0); GREEN. 1 of 1 mutant; BUG-007's spec reshaped for the new line (its
+  "whole history" mutant quoted the old one): 4 of 4; BUG-246's 3 of 3.
+- No case of BUG-305 on today's data (code review 24's probe), so no measurement.
+- The three workers (Q3/Q4, Q16, code review 25) were stopped by the API's usage limit mid-run; resumed after it.
+Evidence: `qa/evidence/bug305-mutants.json`, `qa/evidence/bug007-mutants.json`.
+Result: BUG-305 and BUG-306 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2809 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): Graham's bear window is the last three years on EPS alone; docs (BUG-305, BUG-306)
+Next: code review 25, Q3/Q4 and Q16 as their workers report; BUG-271, -274, -295, Q7, Q17 and the P3s.
+

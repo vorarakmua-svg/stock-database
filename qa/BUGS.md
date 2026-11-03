@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 8 · P3 168 · NEEDS-USER 0 · Decided: 7 · Verified: 141
+**Open:** P0 0 · P1 0 · P2 8 · P3 166 · NEEDS-USER 0 · Decided: 7 · Verified: 143
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1953,14 +1953,14 @@ Repro: SNDK is valued by Graham alone, whose bear is N/A (a loss year in its win
 Expected: expensive.   Actual: none.
 
 ### BUG-305 [P3][VAL] Graham's bear window is the last three years with EPS and book value, so a loss year without equity drops out
-Status: OPEN
-Found: code review 24 (Minor 2) | Fixed: | Regression test:
+Status: VERIFIED (iteration 149)
+Found: code review 24 (Minor 2) | Fixed: (this commit) | Regression test: tests/test_valuation_models.py::test_value_graham_bear_window_counts_a_loss_year_without_book_value
 Repro: models.py ~285-310: FY2022 EPS 2, FY2023 EPS -1 with no equity, FY2024 2, FY2025 3: the bear reads 21.21, not N/A. No case on today's data.
 Expected: the window from the last 3 fiscal years on EPS alone.   Actual: it reaches back past the loss.
 
 ### BUG-306 [P3][DOCS] The tangible Graham docstring, USAGE_GUIDE's Graham and band lines and renderVAL's JSDoc predate BUG-246, BUG-007 and BUG-172
-Status: OPEN
-Found: code review 24 (Minor 3) | Fixed: | Regression test:
+Status: VERIFIED (iteration 149)
+Found: code review 24 (Minor 3) | Fixed: (this commit) | Regression test: none (docs)
 Repro: indicators.py ~353 "lowest and highest positive EPS"; USAGE_GUIDE.md ~335-337 (no latest-FY rule, N/A bear or quartiles); app.js ~372 types bear as a number.
 Expected: they describe the code.   Actual: as above.
 

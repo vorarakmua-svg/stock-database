@@ -474,6 +474,19 @@ def test_value_graham_bear_is_na_with_a_loss_year_in_its_window():
     assert res.assumptions["bear_na_reason"] == "a loss year in the last 3 fiscal years"
 
 
+def test_value_graham_bear_window_counts_a_loss_year_without_book_value():
+    # BUG-305 (code review 24): the window is the last 3 fiscal years on EPS alone; FY2023's loss, whose equity is
+    # missing, still makes the bear N/A rather than the window reaching back to FY2022.
+    recs = [_fy(2022, net_income=None, equity=2000.0, eps=2.0, shares=100.0),
+            _fy(2023, net_income=None, equity=None, eps=-1.0, shares=100.0),
+            _fy(2024, net_income=None, equity=2000.0, eps=2.0, shares=100.0),
+            _fy(2025, net_income=None, equity=2000.0, eps=3.0, shares=100.0)]
+    res = value_graham(_inputs(fy_records=recs))
+    assert res.applicable is True
+    assert res.value_bear is None
+    assert res.assumptions["bear_na_reason"] == "a loss year in the last 3 fiscal years"
+
+
 def test_value_graham_bear_stands_when_the_loss_is_older_than_its_window():
     recs = [_fy(fy, net_income=None, equity=2000.0, eps=e, shares=100.0)
             for fy, e in ((2022, -1.0), (2023, 1.0), (2024, 2.0), (2025, 3.0))]

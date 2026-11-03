@@ -365,7 +365,8 @@ def value_graham(inputs: ValuationInputs) -> ValuationResult:
     if bvps <= 0:
         return _na("graham", "book value per share is not positive",
                    basis_fy=latest.fiscal_year)
-    window = [e for e in (r.eps() for r in recs[-3:]) if e is not None]
+    # The last 3 fiscal years on EPS alone: book value is needed for the latest year only (BUG-305).
+    window = [e for e in (r.eps() for r in inputs.fy_records[-3:]) if e is not None]
     last3 = [e for e in window if e > 0]
     # The spec's bear is the lowest EPS of the last 3 FYs; a loss there has no Graham number, so the bear is N/A
     # and the bear median is the other models' (BUG-007), not the base case again.
