@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 9 · P3 170 · NEEDS-USER 0 · Decided: 7 · Verified: 145
+**Open:** P0 0 · P1 0 · P2 8 · P3 170 · NEEDS-USER 0 · Decided: 7 · Verified: 146
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1977,8 +1977,8 @@ Repro: `qa/oracle/valuation_oracle.py` level 2, EXE dcf: the oracle's window is 
 Expected: the oracle models the truncation (or flags it as such).   Actual: a 124% mismatch on the base.
 
 ### BUG-309 [P2][GATHER] A failed companyfacts request turns a stored general company back into a bank (since Q9)
-Status: OPEN
-Found: code review 25 (`qa/evidence/review25.txt`, Important 1; proven by a unit test) | Fixed: | Regression test:
+Status: VERIFIED (iteration 152)
+Found: code review 25 (`qa/evidence/review25.txt`, Important 1; proven by a unit test) | Fixed: (this commit) | Regression tests: tests/test_fetcher_sector.py (3 items)
 Repro: with no company_facts key (a failed request, sec_handler.fetch_all), `classify_submissions` falls back to the SIC: BLK, BX, KKR, CME, ICE, IBKR... read bank again; the stored-sector fallback (stock_data_fetcher.py ~324) fires only for a None sector and the companies upsert overwrites. Test: %LOCALAPPDATA%\stockdb-qa\review25\head\tests\test_review25.py::test_q9_failed_companyfacts_keeps_a_general_asset_manager_general.
 Expected: the stored sector kept, with a warning, when the facts are missing.   Actual: bank, so DCF, Lynch and owner earnings go N/A until the next good collection.
 

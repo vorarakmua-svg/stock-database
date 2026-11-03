@@ -224,6 +224,14 @@ class StockDataFetcher:
             try:
                 sec_data = self.sec_handler.fetch_all(ticker)
                 stock.merge_sec_data(sec_data)
+                # A finance SIC is a bank only if the companyfacts tag deposits (Q9). Without the facts (a failed
+                # request) the SIC alone says bank, and the last good collection's sector stands (BUG-309).
+                if stock.sector_class == "bank" and not sec_data.get("company_facts"):
+                    stored = self._stored_sector(ticker)
+                    if stored and stored != "bank":
+                        stock.sector_class = stored
+                        stock.add_warning(f"SEC EDGAR: sector '{stored}' taken from the stored record "
+                                          "(the companyfacts data is unavailable)")
 
                 # Parse XBRL financials if company facts available
                 annual: Dict[str, Any] = {}

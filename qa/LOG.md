@@ -2704,3 +2704,17 @@ Evidence: `qa/evidence/review25.txt`; %LOCALAPPDATA%\stockdb-qa\review25.
 Result: review 25 open on BUG-309 and BUG-310 until fixed.
 Gates: no code change | CI: PR #29
 Next: BUG-309, then BUG-310.
+
+## Iteration 152: 2026-11-03 08:31: fix (BUG-309, code review 25's Important 1)
+Picked: BUG-309 (P2), inline.
+Did: after `merge_sec_data`, a bank by SIC alone (no companyfacts: a failed request) keeps the stored sector when it
+isn't bank, with a warning, as a failed submissions request already does; with nothing stored the SIC decides, and
+facts that tag deposits decide over a stored sector.
+- RED: the reviewer's case failed (bank, bank); GREEN with 3 tests. 2 of 2 mutants (the second needed the third test).
+- Nothing moves on today's data: the rule acts only when companyfacts fails.
+Evidence: `qa/evidence/bug309-mutants.json`.
+Result: BUG-309 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2813 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(fetchers): a failed companyfacts request keeps the stored sector (BUG-309)
+Next: BUG-310 (decided).
+
