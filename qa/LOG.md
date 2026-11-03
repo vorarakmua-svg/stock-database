@@ -2754,3 +2754,15 @@ Gates: ruff ✓ mypy ✓ pytest 2819 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(web): a negative price's sign before the dollar, and trillions in T (BUG-137, BUG-138)
 Next: the workers' results; inline P3s.
 
+## Iteration 156: 2026-11-03 09:13: fix (BUG-046, BUG-166; P3s)
+Picked: two CLI P3s, inline.
+Did: BUG-046: `stock-web` parses its arguments: `--help` prints the environment variables it reads and starts nothing,
+an unknown argument is refused (exit 2) rather than ignored. BUG-166: `diagnose.py` prints a canonical share-unit
+field as a count ("14.77B"), money as before ("$391.00B").
+- RED: 3 new tests failed (uvicorn.run patched out: no server started); GREEN. 2 of 2 mutants.
+Evidence: `qa/evidence/bug046-166-mutants.json`.
+Result: BUG-046 and BUG-166 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2822 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(cli): stock-web --help starts nothing; diagnose prints share counts as counts (BUG-046, BUG-166)
+Next: apply Q16 (its worker is done); Q3/Q4 and BUG-271 as their workers report.
+

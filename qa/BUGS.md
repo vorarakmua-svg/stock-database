@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 7 · P3 165 · NEEDS-USER 0 · Decided: 7 · Verified: 152
+**Open:** P0 0 · P1 0 · P2 7 · P3 163 · NEEDS-USER 0 · Decided: 7 · Verified: 154
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -397,8 +397,8 @@ Fix: `StockData.merge_sec_data` records each failed part as an error ("SEC EDGAR
 Notes: that run still exits 0 with every ticker failed: lead L18 (CLI-01).
 Iteration 48: code review 6 found that on this failure path a failed submissions request also wipes a financial company's sector ratios (BUG-064).
 ### BUG-046 [P3][CLI] `stock-web --help` starts the server instead of printing usage
-Status: OPEN
-Found: iteration 38 (looking up the server's settings) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 156)
+Found: iteration 38 (looking up the server's settings) | Fixed: (this commit) | Regression test: tests/test_cli_small.py::test_stock_web_help_prints_usage_and_starts_nothing
 Repro: `stock-web --help`, or any argument, is ignored: uvicorn starts on 127.0.0.1:8000 against the default database. The settings exist only as `STOCK_WEB_*` environment variables (`src/webapp/settings.py`), which nothing on the command line lists; the `__main__` docstring names four of the five (not `STOCK_WEB_ALLOW_QUOTE_REFRESH`).
 Expected: `--help` prints usage with the environment variables, and unknown arguments are refused.   Actual: a server starts. (This loop's lookup started one against the user's database; it served no request, was stopped, and `stock.db` and its WAL are unmodified.)
 
@@ -1261,8 +1261,8 @@ Repro: on a copy of the user's data, AAPL re-collected SEC-only from the cache w
 Expected: a run that reads a ticker's SEC facts replaces its unmapped rows.
 
 ### BUG-166 [P3][CLI] `diagnose.py` prints share counts as dollars: "shares_outstanding: $14.77B"
-Status: OPEN
-Found: iteration 98 by code review 14 (M5), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 156)
+Found: iteration 98 by code review 14 (M5), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: (this commit) | Regression test: tests/test_cli_small.py::test_diagnose_prints_share_counts_as_counts
 Repro: `show_available_fields` on AAPL's latest stored year (a copy of the user's data): shares_outstanding $14.77B, weighted_avg_shares_basic $14.95B, weighted_avg_shares_diluted $15.00B (`diagnose.py`'s field listing; BUG-136 fixed the web app's).
 Expected: counts without "$".
 
