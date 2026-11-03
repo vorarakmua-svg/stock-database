@@ -2692,3 +2692,15 @@ Gates: ruff ✓ mypy ✓ pytest 2810 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(valuation): per-share values count every share class and unit (Q7, BUG-051)
 Next: record code review 25 (2 Important) and fix them.
 
+## Iteration 151: 2026-11-03 08:23: code review 25
+Picked: code review 25 (seven fixes since review 24: BUG-304, Q1, Q2/Q5, Q8, Q9, BUG-260, BUG-049, and BUG-305/306).
+Did: an opus reviewer read `git diff b2ef0ff..92ab897` read-only, wrote failing probes on an export and scanned a DB
+copy's DDM rows.
+- Critical: none. Important: BUG-309 (Q9 and a failed companyfacts request), BUG-310 (Q8 and three indicators;
+  decided by the loop's recommendation). Minor: BUG-311..315.
+- Checked clean: BUG-304 matches the screener's SQL; Q1; every growth caller and the displays; Q8's engine path; Q9's
+  deposit tags; BUG-260's look-ahead guard; BUG-049's basis and None paths; BUG-305; 3.9 syntax.
+Evidence: `qa/evidence/review25.txt`; %LOCALAPPDATA%\stockdb-qa\review25.
+Result: review 25 open on BUG-309 and BUG-310 until fixed.
+Gates: no code change | CI: PR #29
+Next: BUG-309, then BUG-310.

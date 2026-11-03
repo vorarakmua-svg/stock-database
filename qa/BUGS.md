@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 7 · P3 165 · NEEDS-USER 0 · Decided: 7 · Verified: 145
+**Open:** P0 0 · P1 0 · P2 9 · P3 170 · NEEDS-USER 0 · Decided: 7 · Verified: 145
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1975,6 +1975,49 @@ Status: OPEN
 Found: iteration 144 (Q2/Q5's oracle run) | Fixed: | Regression test:
 Repro: `qa/oracle/valuation_oracle.py` level 2, EXE dcf: the oracle's window is metrics_annual's last 10 FYs (FY2016's loss first, so from FY2017: 475M to 1,839M), the code's starts at FY2018 (`history_truncated`, a share-count seam). Exposed by Q2: EXE's growth came from the analyst figure before, which the oracle skipped.
 Expected: the oracle models the truncation (or flags it as such).   Actual: a 124% mismatch on the base.
+
+### BUG-309 [P2][GATHER] A failed companyfacts request turns a stored general company back into a bank (since Q9)
+Status: OPEN
+Found: code review 25 (`qa/evidence/review25.txt`, Important 1; proven by a unit test) | Fixed: | Regression test:
+Repro: with no company_facts key (a failed request, sec_handler.fetch_all), `classify_submissions` falls back to the SIC: BLK, BX, KKR, CME, ICE, IBKR... read bank again; the stored-sector fallback (stock_data_fetcher.py ~324) fires only for a None sector and the companies upsert overwrites. Test: %LOCALAPPDATA%\stockdb-qa\review25\head\tests\test_review25.py::test_q9_failed_companyfacts_keeps_a_general_asset_manager_general.
+Expected: the stored sector kept, with a warning, when the facts are missing.   Actual: bank, so DCF, Lynch and owner earnings go N/A until the next good collection.
+
+### BUG-310 [P2][VAL] The reverse DCF, EPV and NCAV indicators still value a basis more than two fiscal years old (since Q8)
+Status: OPEN
+Decision: Decided 2026-11-03 (the user: "use your recommendation for questions"): Q8's rule applies to every per-share indicator on a fiscal-year basis, as it does to the tangible Graham number.
+Found: code review 25 (Important 2; proven by unit tests) | Fixed: | Regression test:
+Repro: indicators.py reverse_dcf (~145-175) calls value_dcf directly; epv (~194-274) and ncav (~284-323) take no age check; only graham_tangible does. With as_of 2029-06-01 and records ending FY2025 the engine's DCF is N/A and the three are applicable. No case on today's data.
+Expected: N/A with the same reason.   Actual: valued.
+
+### BUG-311 [P3][VAL] An annual payer whose ex-date slips into the previous year loses SEC's dividend figure (BUG-049's one-payment test)
+Status: OPEN
+Found: code review 25 (Minor 1; synthetic test, no real case) | Fixed: | Regression test:
+Repro: models.py `_one_payment` (~49-52) with `dividend_history` (~261-264): one payment a year growing 5%, the next ex-dated 2025-12-30: SEC's 1.1576 is within 2% of one of the year's two payments and is replaced by Yahoo's sum 2.4918 (CAGR 25.6%, capped). On the real copy all 7 overrides at a CAGR endpoint are the intended shape.
+Expected: SEC's figure kept unless the neighbouring years show two payments a year.   Actual: replaced.
+
+### BUG-312 [P3][UI] The ERN tab shows Yahoo's quarterly year-over-year earningsGrowth as "Earnings Growth"
+Status: OPEN
+Found: code review 25 (Minor 2) | Fixed: | Regression test:
+Repro: ern.html ~70, fed by workstation.py ~604. Q2's decision says to label it for what it is wherever it is shown.
+Expected: "Quarterly earnings growth (YoY)" or similar.   Actual: "Earnings Growth".
+
+### BUG-313 [P3][CLI] The coverage report classifies sectors without the companyfacts it holds
+Status: OPEN
+Found: code review 25 (Minor 3; not tested) | Fixed: | Regression test:
+Repro: src/analysis/coverage.py ~70 `classify_submissions(submissions)`: asset managers still count as banks there.
+Expected: Q9's classification.   Actual: the SIC's.
+
+### BUG-314 [P3][DOCS] The valuation and owner-earnings specs still give the analyst-growth rule, and inputs.py still loads analyst_growth
+Status: OPEN
+Found: code review 25 (Minor 4) | Fixed: | Regression test:
+Repro: valuation-layer spec ~63-64 and ~82 (growth_source "analyst"); owner-earnings spec ~96 (min(CAGR, analyst)); inputs.py loads analyst_growth, which nothing reads since Q2.
+Expected: the specs say Q2/Q5's rule; the input dropped or labelled.   Actual: as above.
+
+### BUG-315 [P3][VAL] Q5's fallback edges: losses after the first positive year, a window starting on a missing value, positions not fiscal years
+Status: OPEN
+Found: code review 25 (Minor 5; not tested, no finding claimed) | Fixed: | Regression test:
+Repro: assumptions._cagr_from_first_positive measures from the first positive value even when losses follow; a window whose first value is missing (a gap, not a loss) takes the fallback; "at least 4 FYs" counts positions.
+Expected: decided edges, with tests.   Actual: as above.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: OPEN
