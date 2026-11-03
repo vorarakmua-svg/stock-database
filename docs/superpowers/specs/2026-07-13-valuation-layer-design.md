@@ -70,8 +70,8 @@ class ValuationResult:
 
 - **Growth (base)** = the historical CAGR, clamped to **[0%, 15%]** (amended 2026-11-02, Q2: the analyst term was Yahoo's one-quarter earnings growth, no forecast; Q5: a window starting on a loss is measured from its first positive year when at least 4 FYs remain, else 0%, Lynch N/A).
   Historical CAGR uses up to 10 FYs of the model's basis metric (FCF for DCF, dividends
-  for DDM, EPS for Lynch); requires ≥ 4 FYs. Analyst growth = `analyst_snapshots.earnings_growth`
-  (latest row); if absent, historical CAGR alone.
+  for DDM, EPS for Lynch); requires ≥ 4 FYs. (Before Q2, an "analyst growth" from
+  `analyst_snapshots.earnings_growth` took part; it no longer does.)
 - **Terminal growth** = 2.5%.
 - **Discount rate** = CAPM cost of equity: `risk_free_rate + beta × 4.5% ERP`,
   clamped to **[8%, 14%]**. `risk_free_rate` from the latest `market_snapshots` row;
@@ -79,7 +79,7 @@ class ValuationResult:
 - **Scenario spreads:** bear = growth −3pp (floor 0%) and discount +1pp;
   bull = growth +3pp (cap 15%) and discount −1pp.
 - Every derived number and its provenance goes into `assumptions`
-  (e.g. `"growth_base": 0.082, "growth_source": "analyst", "hist_cagr": 0.114, ...`).
+  (e.g. `"growth_base": 0.082, "growth_source": "hist_only", "hist_cagr": 0.114, ...`).
 
 ### DCF — sectors: general, utility, energy
 

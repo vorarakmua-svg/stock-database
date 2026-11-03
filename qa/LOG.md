@@ -2730,3 +2730,16 @@ Gates: ruff ✓ mypy ✓ pytest 2815 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(valuation): every fiscal-year indicator follows the models' age rule (BUG-310)
 Next: Q3/Q4 and Q16 as their workers report; BUG-271, BUG-274, BUG-295, Q17 and the P3s.
 
+## Iteration 154: 2026-11-03 08:51: fix (BUG-312, BUG-313, BUG-314; P3s from code review 25)
+Picked: three related P3s (Q2's and Q9's loose ends), inline; dispatched BUG-271 to a worker first.
+Did: BUG-312: the ERN tab labels Yahoo's earningsGrowth "Quarterly Earnings Growth (YoY)", with a tooltip saying it is
+no forecast. BUG-313: the coverage report classifies with the companyfacts it holds (Q9). BUG-314: the valuation and
+owner-earnings specs state Q2/Q5's growth rule; inputs.py no longer loads analyst_growth (the field stays, unread).
+- RED: the two new tests failed before the change (the label; the coverage report's bank); GREEN. 2 of 2 mutants.
+- Nothing moves in the valuations (analyst_growth was unread since Q2).
+Evidence: `qa/evidence/bug312-313-mutants.json`.
+Result: BUG-312, BUG-313, BUG-314 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2817 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix: Q2's and Q9's loose ends: the ERN label, the coverage report, the specs (BUG-312..314)
+Next: the workers' Q3/Q4, Q16 and BUG-271; inline BUG-274 or the P3s.
+

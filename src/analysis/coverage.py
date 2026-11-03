@@ -67,7 +67,7 @@ def analyze(ticker: str, facts: Dict[str, Any], submissions: Optional[Dict[str, 
             parser: Optional[XBRLParser] = None) -> CompanyCoverage:
     """Classify every canonical field as reported / derived / empty for one company."""
     parser = parser or XBRLParser()
-    sector = classify_submissions(submissions)
+    sector = classify_submissions(submissions, facts or None)  # a finance SIC without deposits is general (Q9)
     status = {f.key: EMPTY for f in CANONICAL_FIELDS}
 
     annual = parser.extract_annual_financials(facts or {}, years_back=1)

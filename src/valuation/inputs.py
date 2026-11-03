@@ -2,8 +2,8 @@
 
 Pure-read composition over the existing SQLite schema. ``load_inputs`` gathers
 everything a model needs — annual fundamentals joined with calculated metrics,
-the latest market snapshot (beta / risk-free / shares), the latest analyst
-growth estimate, the full dividend history, and each fiscal year's on-or-before
+the latest market snapshot (beta / risk-free / shares), the full dividend
+history, and each fiscal year's on-or-before
 period-end closing price — so the models themselves never touch the database.
 """
 
@@ -162,6 +162,8 @@ class ValuationInputs:
     #: "estimate"); None for snapshots written before they were recorded.
     risk_free_rate_date: Optional[str] = None
     risk_free_rate_source: Optional[str] = None
+    #: Not loaded or read since Q2 (Yahoo's earningsGrowth is one quarter's change, no forecast); kept so callers
+    #: that still pass it keep working.
     analyst_growth: Optional[float] = None
     dividends: List[Tuple[str, float]] = field(default_factory=list)
     fy_end_prices: Dict[int, float] = field(default_factory=dict)
@@ -833,11 +835,6 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
             as_of = date.fromisoformat(str(snap["collected_at"])[:10])
         except ValueError:  # unparseable timestamp -> today
             pass
-    analyst = conn.execute(
-        "SELECT earnings_growth FROM analyst_snapshots "
-        "WHERE ticker = ? ORDER BY collected_at DESC LIMIT 1",
-        (ticker,),
-    ).fetchone()
     # Yahoo's dividends come to the price's basis from the day Yahoo served them, as the
     # bars do (BUG-103), whatever the SEC record holds (BUG-078). A database from before
     # the column, read without migrating, keeps every stored split's basis.
@@ -891,7 +888,6 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
         risk_free_rate=snap["risk_free_rate"] if snap else None,
         risk_free_rate_date=snap["risk_free_rate_date"] if "risk_free_rate_date" in snap_columns else None,
         risk_free_rate_source=snap["risk_free_rate_source"] if "risk_free_rate_source" in snap_columns else None,
-        analyst_growth=analyst["earnings_growth"] if analyst else None,
         dividends=dividends,
         fy_end_prices=fy_end_prices,
         as_of=as_of,

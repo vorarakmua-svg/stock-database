@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 7 · P3 170 · NEEDS-USER 0 · Decided: 7 · Verified: 147
+**Open:** P0 0 · P1 0 · P2 7 · P3 167 · NEEDS-USER 0 · Decided: 7 · Verified: 150
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1996,20 +1996,20 @@ Repro: models.py `_one_payment` (~49-52) with `dividend_history` (~261-264): one
 Expected: SEC's figure kept unless the neighbouring years show two payments a year.   Actual: replaced.
 
 ### BUG-312 [P3][UI] The ERN tab shows Yahoo's quarterly year-over-year earningsGrowth as "Earnings Growth"
-Status: OPEN
-Found: code review 25 (Minor 2) | Fixed: | Regression test:
+Status: VERIFIED (iteration 154)
+Found: code review 25 (Minor 2) | Fixed: (this commit) | Regression test: tests/test_web_workstation.py::test_ern_fragment_names_yahoos_earnings_growth_for_what_it_is
 Repro: ern.html ~70, fed by workstation.py ~604. Q2's decision says to label it for what it is wherever it is shown.
 Expected: "Quarterly earnings growth (YoY)" or similar.   Actual: "Earnings Growth".
 
 ### BUG-313 [P3][CLI] The coverage report classifies sectors without the companyfacts it holds
-Status: OPEN
-Found: code review 25 (Minor 3; not tested) | Fixed: | Regression test:
+Status: VERIFIED (iteration 154)
+Found: code review 25 (Minor 3; not tested) | Fixed: (this commit) | Regression test: tests/test_canonical_sectors.py::test_the_coverage_report_classifies_a_finance_sic_without_deposits_as_general
 Repro: src/analysis/coverage.py ~70 `classify_submissions(submissions)`: asset managers still count as banks there.
 Expected: Q9's classification.   Actual: the SIC's.
 
 ### BUG-314 [P3][DOCS] The valuation and owner-earnings specs still give the analyst-growth rule, and inputs.py still loads analyst_growth
-Status: OPEN
-Found: code review 25 (Minor 4) | Fixed: | Regression test:
+Status: VERIFIED (iteration 154)
+Found: code review 25 (Minor 4) | Fixed: (this commit) | Regression test: tests/test_valuation_inputs.py::test_market_analyst_and_dividends_loaded (analyst_growth not read)
 Repro: valuation-layer spec ~63-64 and ~82 (growth_source "analyst"); owner-earnings spec ~96 (min(CAGR, analyst)); inputs.py loads analyst_growth, which nothing reads since Q2.
 Expected: the specs say Q2/Q5's rule; the input dropped or labelled.   Actual: as above.
 

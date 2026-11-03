@@ -997,3 +997,9 @@ def test_the_fa_and_val_tabs_say_when_annual_financials_stop(tmp_path):
     for tab in ("fa", "val"):
         assert str(escape(note)) in client.get(f"/ui/stocks/TSM/{tab}").text, tab
 
+
+def test_ern_fragment_names_yahoos_earnings_growth_for_what_it_is(client):
+    # BUG-312 (Q2's decision): Yahoo's earningsGrowth is the latest quarter against a year before, no forecast.
+    body = client.get("/ui/stocks/AAA/ern").text
+    assert "Quarterly Earnings Growth (YoY)" in body
+    assert ">Earnings Growth<" not in body

@@ -86,7 +86,7 @@ def test_market_analyst_and_dividends_loaded(val_db):
     assert inputs.shares_outstanding == 100.0
     assert inputs.beta == 1.2
     assert inputs.risk_free_rate == 0.043
-    assert inputs.analyst_growth == 0.08
+    assert inputs.analyst_growth is None  # Q2: Yahoo's quarterly earningsGrowth is no longer read
     assert inputs.dividends == [("2023-03-01", 0.25), ("2023-09-01", 0.25)]
 
 
