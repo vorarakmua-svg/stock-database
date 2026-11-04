@@ -2022,7 +2022,7 @@ Expected: decided edges, with tests.   Actual: as above.
 ### BUG-316 [P3][PARSE] The restore step can put back a net-income-to-common figure Q16 left unread
 Status: OPEN
 Found: code review 26 (`qa/evidence/review26.txt`, Minor 1; proven by a synthetic test) | Fixed: | Regression test:
-Repro: xbrl_parser.py `_annual_filings` (~1911-1929) feeds `_restore_agreed_figures` without skipping the facts `_to_common_contradicted` marks: two 10-Ks' +$50M (contradicted by EPS -0.50 x 100M) beside a later -$50M read as a sign flip and +$50M is restored, reaching Q4 and the TTM. Test: %LOCALAPPDATA%\stockdb-qaeview26\head	ests\test_review26.py::test_a_contradicted_to_common_figure_is_not_put_back_by_the_restore_step. Real data not searched.
+Repro: xbrl_parser.py `_annual_filings` (~1911-1929) feeds `_restore_agreed_figures` without skipping the facts `_to_common_contradicted` marks: two 10-Ks' +$50M (contradicted by EPS -0.50 x 100M) beside a later -$50M read as a sign flip and +$50M is restored, reaching Q4 and the TTM. Test: %LOCALAPPDATA%\stockdb-qa\review26\head\tests\test_review26.py::test_a_contradicted_to_common_figure_is_not_put_back_by_the_restore_step. Real data not searched.
 Expected: unread facts take no part in the restore step.   Actual: restored.
 
 ### BUG-317 [P3][DOCS] USAGE_GUIDE treats Yahoo's earningsGrowth as a forecast, and EPV's share sources omit market cap / price
