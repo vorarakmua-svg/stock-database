@@ -2832,3 +2832,15 @@ Gates: ruff ✓ mypy ✓ pytest 2842 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(parsers): the restore step skips a to-common figure no record reads (BUG-316)
 Next: BUG-317, BUG-318; the workers' Q3/Q4 and BUG-271.
 
+## Iteration 161: 2026-11-04 13:23: fix (BUG-317, BUG-318; P3s from code review 26)
+Picked: the two remaining Minors of code review 26, inline.
+Did: BUG-317: USAGE_GUIDE labels Yahoo's earningsGrowth "Quarterly Earnings Growth (YoY)", no forecast (Q2); its Lynch
+example measures growth as the EPS CAGR of up to 5 fiscal years; EPV's shares_source list adds `market_cap / price`;
+the valuation oracle's comment describes Q7's rule. BUG-318: the indicators oracle applies Q8/BUG-310's age rule to
+the reverse DCF, EPV, NCAV and the tangible Graham number (its own basis years, dated by the latest snapshot).
+- The indicators oracle on a DB copy (q8's fix.db): 12 of 12 gates pass (no basis that old today).
+Result: BUG-317 and BUG-318 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2842 passed, 1 skipped | CI: PR #29
+Commit: (this commit) docs: Q2's and Q7's rules in USAGE_GUIDE and the oracles; the indicators oracle's age rule (BUG-317, BUG-318)
+Next: the workers' Q3/Q4 and BUG-271; the P3s.
+

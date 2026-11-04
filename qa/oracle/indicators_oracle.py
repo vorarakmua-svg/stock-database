@@ -241,6 +241,31 @@ class Data:
         return snap["current_price"] if snap else None
 
 
+#: BUG-310 (decided 2026-11-03, Q8's rule): an indicator on a fiscal-year basis more than this many years before the
+#: valuation's day (the latest snapshot's) is N/A.
+MAX_BASIS_AGE_FYS = 2
+
+
+def basis_year(d: "Data", name: str, t: str) -> Optional[int]:
+    """The fiscal year an indicator values: the DCF's for the reverse DCF, the Graham model's for its tangible number,
+    the latest annual record's for EPV and NCAV; None for the median P/S value (a trailing-year basis)."""
+    if name in ("reverse_dcf", "graham_tangible"):
+        row = d.val.get((t, "dcf" if name == "reverse_dcf" else "graham")) or {}
+        return row.get("basis_fiscal_year")
+    if name in ("epv", "ncav"):
+        return max(d.fa.get(t) or {0: None}) or None
+    return None
+
+
+def aged(d: "Data", name: str, t: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """*result*, or N/A where its basis is more than MAX_BASIS_AGE_FYS fiscal years old."""
+    snap = d.latest.get(t) or {}
+    day, fy = str(snap.get("collected_at") or "")[:4], basis_year(d, name, t)
+    if result["applicable"] and fy and day.isdigit() and int(day) - int(fy) > MAX_BASIS_AGE_FYS:
+        return na(f"basis FY{fy} is more than {MAX_BASIS_AGE_FYS} fiscal years old", result["figures"])
+    return result
+
+
 def na(reason: str, figures: Optional[Dict[str, Any]] = None, side: Optional[str] = None) -> Dict[str, Any]:
     return {"applicable": False, "reason": reason, "base": None, "bear": None, "bull": None,
             "figures": dict(figures or {}), "side": side}
@@ -933,7 +958,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     failures: List[str] = []
     GATES.clear()
     d = Data(db)
-    mine = {name: {t: MINE[name](d, t) for t in d.tickers} for name in INDICATORS}
+    mine = {name: {t: aged(d, name, t, MINE[name](d, t)) for t in d.tickers} for name in INDICATORS}
     print(f"database {args.db}: {len(d.tickers)} companies, {len(d.ind)} valuation_indicators rows, "
           f"{len(d.val)} DCF and Graham rows, {len(d.ps_range)} P/S ranges, {len(d.priced)} companies with a priced "
           f"snapshot")

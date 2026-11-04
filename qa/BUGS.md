@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 6 · P3 161 · NEEDS-USER 0 · Decided: 7 · Verified: 160
+**Open:** P0 0 · P1 0 · P2 6 · P3 159 · NEEDS-USER 0 · Decided: 7 · Verified: 162
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2026,14 +2026,14 @@ Repro: xbrl_parser.py `_annual_filings` (~1911-1929) feeds `_restore_agreed_figu
 Expected: unread facts take no part in the restore step.   Actual: restored.
 
 ### BUG-317 [P3][DOCS] USAGE_GUIDE treats Yahoo's earningsGrowth as a forecast, and EPV's share sources omit market cap / price
-Status: OPEN
-Found: code review 26 (Minors 2, 3) | Fixed: | Regression test:
+Status: VERIFIED (iteration 161)
+Found: code review 26 (Minors 2, 3) | Fixed: (this commit) | Regression test: none (docs and an oracle comment)
 Repro: USAGE_GUIDE.md ~245 prints it as "Expected EPS Growth"; ~1892-1919's Lynch example uses it as the growth rate (Q2); ~581 lists EPV's shares_source values without `market_cap / price`; the valuation oracle's comment ~249-251 still describes the 2-5% tiebreaker Q7 removed.
 Expected: the docs describe Q2's and Q7's rules.   Actual: as above.
 
 ### BUG-318 [P3][QA] The indicators oracle has no BUG-310 age rule
-Status: OPEN
-Found: code review 26 (Minor 4; not a defect today) | Fixed: | Regression test:
+Status: VERIFIED (iteration 161)
+Found: code review 26 (Minor 4; not a defect today) | Fixed: (this commit) | Regression test: the indicators oracle's own run (12 of 12 gates on a DB copy)
 Repro: qa/oracle/indicators_oracle.py values a basis more than 2 fiscal years old; it will flag the engine once a company's basis is that old.
 Expected: the same rule for reverse_dcf, epv, ncav and graham_tangible.   Actual: none.
 

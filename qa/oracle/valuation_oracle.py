@@ -246,9 +246,9 @@ class Inputs:
         # Per-share values divide by every share class (BUG-022). Yahoo's share count can cover one class of
         # several (GOOGL's class A: 5.87B of 12.23B), while market cap / price counts them all; and a count still
         # under 3/4 of the latest FY's diluted shares on today's basis is incomplete too (HON, whose market cap is
-        # halved as well). A gap under 5% can be Yahoo's two figures disagreeing (MRVL, one class, 2.5%), so the
-        # one nearer the latest FY's count wins (BUG-035); every wider gap in the data is a class or units
-        # Yahoo's count leaves out (META 15%, BX 65%). The FY count is the diluted one, else the period-end one.
+        # halved as well). Since Q7 every class and unit counts: market cap / price wherever it is more than 2%
+        # above Yahoo's count (MRVL 2.5%, META 15%, BX 65%); the 2-5% tiebreaker on the FY count is gone. The FY
+        # count is the diluted one, else the period-end one.
         latest_fy = next(((r[5] or r[4], r[1], self.filed_of(r[0], "weighted_avg_shares_diluted" if r[5]
                                                              else "shares_outstanding"))
                           for r in reversed(self.annual) if r[5] or r[4]), None)

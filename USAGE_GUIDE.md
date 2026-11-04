@@ -242,7 +242,9 @@ print(f"Target Price (Mean): ${estimates['target_price_mean']:.2f}")
 print(f"Target Price (Low): ${estimates['target_price_low']:.2f}")
 print(f"Target Price (High): ${estimates['target_price_high']:.2f}")
 print(f"Upside Potential: {estimates['upside_potential']*100:.1f}%")
-print(f"Expected EPS Growth: {estimates.get('earnings_growth', 0)*100:.1f}%")
+# Yahoo's earningsGrowth: the latest quarter's earnings against the same quarter a year before. A trailing
+# figure, not a forecast; the valuation models don't use it.
+print(f"Quarterly Earnings Growth (YoY): {estimates.get('earnings_growth', 0)*100:.1f}%")
 ```
 
 ### Accessing Dividend History
@@ -578,8 +580,8 @@ indicator stores in it:
 - `epv`: `margin_years` and `mean_operating_margin`, `pretax_years` (the years whose EBIT is pretax income plus
   interest) and `no_interest_years` (those without an interest figure), `latest_revenue`, `normalized_ebit`, `tax_rate`
   and `tax_source` (`effective` or `default`), `adjusted_earnings`, `wacc`, `total_debt` (and `debt_missing`),
-  `cash_and_sti`, and `shares_outstanding` with `shares_source` (`market_snapshot`, or `financials_annual` after a
-  failed quote);
+  `cash_and_sti`, and `shares_outstanding` with `shares_source` (`market_snapshot`, `market_cap / price` where
+  Yahoo's count leaves out a class or units, or `financials_annual` after a failed quote);
 - `ncav`: `ncav_per_share`, `nnwc_per_share` (the net-net working capital), `current_assets`, `total_liabilities`,
   `shares`, the four net-net parts (`cash_and_equivalents`, `short_term_investments`, `accounts_receivable`,
   `inventory`) with `receivables_weight` and `inventory_weight`, `nnwc_missing` (the parts counted as 0) and, on an
@@ -1899,7 +1901,6 @@ def peter_lynch_value(stock: dict) -> dict:
     """
     valuation = stock['valuation']
     market = stock['market_data']
-    estimates = stock.get('analyst_estimates', {})
     dividends = stock.get('dividend_history', {})
 
     # Get current metrics
@@ -1910,11 +1911,15 @@ def peter_lynch_value(stock: dict) -> dict:
     if not eps or eps <= 0:
         return {"error": "No positive EPS available"}
 
-    # Get growth rate
-    earnings_growth = estimates.get('earnings_growth')
-    if not earnings_growth:
-        # Fallback to revenue growth
-        earnings_growth = valuation.get('revenue_growth', 0.10)
+    # Growth: the historical EPS CAGR over up to the last 5 fiscal years, as the app's Lynch model measures it.
+    # (Yahoo's earningsGrowth is one quarter's year-over-year change, no forecast: it isn't a growth rate.)
+    annual = stock.get('financials_annual', {})
+    eps_by_year = [(int(fy), row.get('eps_diluted')) for fy, row in sorted(annual.items())
+                   if isinstance(row.get('eps_diluted'), (int, float))][-5:]
+    earnings_growth = 0.0
+    if len(eps_by_year) >= 2 and eps_by_year[0][1] > 0 and eps_by_year[-1][1] > 0:
+        span = eps_by_year[-1][0] - eps_by_year[0][0]
+        earnings_growth = (eps_by_year[-1][1] / eps_by_year[0][1]) ** (1 / span) - 1
 
     growth_rate_pct = abs(earnings_growth) * 100  # Convert to percentage
 
