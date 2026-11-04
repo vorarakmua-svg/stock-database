@@ -86,7 +86,7 @@ class StorageConfig:
         return self.base_dir / "cache"
 
     def ensure_directories(self) -> None:
-        """Create all required directories."""
+        """Create all output and cache directories (on request only: nothing calls this at import)."""
         self.json_dir.mkdir(parents=True, exist_ok=True)
         self.csv_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -125,9 +125,9 @@ class AppConfig:
     # Companies a collection exports, stores and values at a time (DEFAULT_BATCH_SIZE)
     batch_size: int = DEFAULT_BATCH_SIZE
 
-    def __post_init__(self):
-        """Ensure directories exist after initialization."""
-        self.storage.ensure_directories()
+    # No folder is made here: the default instance below is built at import, which made data/output and
+    # data/cache wherever anything imported this module (BUG-284), a read-only web browser too (BUG-158). Each
+    # writer makes its own folder when it writes (the exporters, the SEC cache, the database's parent).
 
 
 # Default configuration instance

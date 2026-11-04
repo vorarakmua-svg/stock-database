@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 6 · P3 163 · NEEDS-USER 0 · Decided: 7 · Verified: 155
+**Open:** P0 0 · P1 0 · P2 6 · P3 161 · NEEDS-USER 0 · Decided: 7 · Verified: 157
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1203,8 +1203,8 @@ Repro: with no bars in the range, GP's compare chart plots two empty traces: the
 Expected: "no bars in this range" as the HP tab says.   Actual: a blank figure.
 
 ### BUG-158 [P3][OPS] The web app makes data/cache and data/output/{csv,json} under the directory it starts in
-Status: OPEN
-Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 158)
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: (this commit) | Regression test: tests/test_config_dirs.py::test_a_read_only_browser_makes_no_folder
 Repro: `AppConfig.__post_init__` creates `json_dir`, `csv_dir` and `cache_dir` (`src/config.py:85-87`); a client session of `create_app(db_path=...)` started in an empty directory leaves `data/cache`, `data/output/csv` and `data/output/json` there (iteration 95), though the app reads only its database.
 Expected: no directories made by a read-only browser.   Actual: three.
 
@@ -2228,8 +2228,8 @@ Repro: the runs endpoint passes the new collection_runs.incomplete column throug
 Expected: an object in the API, and the warning shown beside the figures it explains.   Actual: a string, and no note.
 
 ### BUG-284 [P3][OPS] Importing src.config creates data/output and data/cache folders in the working directory
-Status: OPEN
-Found: iteration 119 (BUG-251's worker, an observation) | Fixed: | Regression test:
+Status: VERIFIED (iteration 158)
+Found: iteration 119 (BUG-251's worker, an observation) | Fixed: (this commit) | Regression test: tests/test_config_dirs.py::test_importing_the_config_makes_no_folder
 Repro: an import with no command run (a test, a script from a scratch tree) makes the default output and cache folders wherever it runs.
 Expected: folders made when something is written there.   Actual: made at import.
 

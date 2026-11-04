@@ -2788,3 +2788,16 @@ Gates: ruff ✓ mypy ✓ pytest 2835 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(valuation): the history's P/E on net income to common (Q16)
 Next: Q3/Q4 and BUG-271 (their workers resumed after the usage limit); code review 26 after this (5 fixes since 25).
 
+## Iteration 158: 2026-11-04 12:51: fix (BUG-284, BUG-158; P3s)
+Picked: two related ops P3s, inline.
+Did: `AppConfig.__post_init__` no longer makes data/output/{json,csv} and data/cache: `default_config` is built at
+import, so any import (a test, a scratch tree, a read-only web browser) left them in the working directory. The
+writers make their own folders (the exporters on construction, the SEC cache on write, the database's parent).
+- RED: 2 new tests failed (folders after an import; after a web session); GREEN, with a guard that an exporter still
+  makes its folder. 1 of 1 mutant.
+Evidence: `qa/evidence/bug284-158-mutants.json`.
+Result: BUG-284 and BUG-158 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2838 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(config): importing the configuration makes no folders (BUG-284, BUG-158)
+Next: the workers' results (Q3/Q4, BUG-271, review 26); inline P3s.
+
