@@ -462,6 +462,77 @@ class Inputs:
         return self._yahoo_factors
 
 
+def _day(s: str) -> datetime.date:
+    return datetime.date.fromisoformat(s[:10])
+
+
+def one_offs(events: List[Tuple[str, float]]) -> Dict[str, float]:
+    """Q3 (decided 2026-11-02, option c): the part of each payment that is a one-off, by ex-date. A payment over 3x
+    the median of the other payments in the year before it and over 3x that of the year after it (both must exist:
+    a payment with none after can be a raise, NVDA) is a one-off, unless in 2 of the 3 years before it a payment over
+    3x its lower side's median falls within 91 days of its anniversary (a recurring variable dividend: PGR, CME). If
+    the payments either side of it are more than 1.5 median intervals apart it holds a regular payment too, and only
+    its excess over the lower median is one-off. 3x is the decision's; the rest (the 365-day sides, 2 of 3 years,
+    91 days, 1.5 intervals) are the fix's own heuristics (loop section 7)."""
+    days = [_day(d) for d, _ in events]
+    gaps = sorted((b - a).days for a, b in zip(days, days[1:]))
+    usual = median([float(g) for g in gaps]) if gaps else None
+    out: Dict[str, float] = {}
+    for i, (d, a) in enumerate(events):
+        lo, hi = days[i] - datetime.timedelta(days=365), days[i] + datetime.timedelta(days=365)
+        before = [v for j, (_, v) in enumerate(events) if j != i and lo < days[j] <= days[i]]
+        after = [v for j, (_, v) in enumerate(events) if j != i and days[i] < days[j] <= hi]
+        if not before or not after or a <= 3 * max(median(before), median(after)):
+            continue
+        low = min(median(before), median(after))
+        years = 0
+        for k in (1, 2, 3):
+            mark = days[i] - datetime.timedelta(days=365 * k)
+            years += any(events[j][1] > 3 * low and abs((days[j] - mark).days) <= 91 for j in range(i))
+        if years >= 2:
+            continue
+        slot = usual is not None and 0 < i < len(events) - 1 and (days[i + 1] - days[i - 1]).days > 1.5 * usual
+        out[d[:10]] = out.get(d[:10], 0.0) + (a - low if slot else a)
+    return out
+
+
+def payment_gaps(db: sqlite3.Connection, ticker: str, splits: List[Tuple[str, float]]) -> List[Tuple[int, str, str]]:
+    """BUG-012's completeness check, re-derived for Q4 (decided 2026-11-02, option c), over the latest 5 fiscal
+    years as a collection scores them: a gap in Yahoo's stored schedule over 1.7x its median interval, beginning
+    no earlier than 1.7 intervals before the year and before its end and ending after its start, with the year's
+    payments under 80% of SEC's dividends per share as filed; years with a split after their start skipped. Q4's
+    extension: a year without SEC's figure but with a payment is measured against the year before's (ACN FY2026).
+    The 1.7 / 0.8 / 4-interval thresholds are BUG-012's heuristics, the extension the fix's own."""
+    paid = [(d[:10], a) for d, a in db.execute("select date, amount from dividend_events where ticker=? and amount is "
+                                               "not null order by date", (ticker,))]
+    intervals = [(_day(b) - _day(a)).days for (a, _), (b, _) in zip(paid, paid[1:])]
+    if len(intervals) < 4:
+        return []
+    usual = median([float(v) for v in intervals])
+    holes = [(paid[i][0], paid[i + 1][0]) for i, v in enumerate(intervals) if v > 1.7 * usual]
+    rows = db.execute("select fiscal_year, period_end, dividends_per_share from financials_annual where ticker=? "
+                      "and fiscal_year is not null order by fiscal_year", (ticker,)).fetchall()
+    by_fy = {fy: (pe, dps) for fy, pe, dps in rows}
+    found = []
+    for fy, pe, dps in rows[-5:]:
+        if not pe:
+            continue
+        end = pe[:10]
+        start = (_day(end) - datetime.timedelta(days=365)).isoformat()
+        total = sum(a for d, a in paid if start < d <= end)
+        since = start
+        if dps is None and total > 0 and fy - 1 in by_fy and by_fy[fy - 1][0] and by_fy[fy - 1][0][:10] < end:
+            dps = by_fy[fy - 1][1]
+            since = (_day(by_fy[fy - 1][0]) - datetime.timedelta(days=365)).isoformat()
+        if dps is None or dps <= 0 or any(str(d)[:10] > since for d, _ in splits):
+            continue
+        recent = (_day(start) - datetime.timedelta(days=1.7 * usual)).isoformat()
+        hole = next(((a, b) for a, b in holes if recent <= a < end and b > start), None)
+        if hole and total < 0.8 * dps:
+            found.append((fy, hole[0], hole[1]))
+    return found
+
+
 def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Optional[Dict]:
     """Oracle inputs and bear/base/bull for one applicable model, or None if not derivable."""
     x = Inputs(db, ticker)
@@ -546,7 +617,8 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
             spans.append((fy, start, end, dps))
         if not fys:
             spans = [(y, f"{y - 1}-12-31", f"{y}-12-31", None) for y in range(int(anchor[:4]) - 10, int(anchor[:4]))]
-        years: List[Tuple[int, Optional[float], bool]] = []
+        extra = one_offs(events)
+        years: List[Tuple[int, Optional[float], bool, bool, float, float]] = []
         for fy, start, end, dps in spans:
             paid = [(d, a) for d, a in events if start < d <= end]
             amounts = [a for _, a in paid]
@@ -557,17 +629,34 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
                                                  - datetime.date.fromisoformat(before[-1])).days > 456
             one = len(amounts) >= 2 and dps is not None and (
                 dps < min(amounts) or any(abs(dps - a) <= 0.02 * a for a in amounts))
-            value = dps if dps is not None and dps > 0 and not one else (sum(amounts) if amounts else None)
-            years.append((fy, value, restart))
+            from_sec = dps is not None and dps > 0 and not one
+            value = dps if from_sec else (sum(amounts) if amounts else None)
+            years.append((fy, value, restart, from_sec, sum(amounts),
+                          sum(v for d, v in extra.items() if start < d <= end)))
         while years and (years[0][1] is None or years[0][2]):
             years = years[1:]
-        window = [(fy, v) for fy, v, _ in years if v is not None]
+        kept = [y for y in years if y[1] is not None]
+        window = [(fy, v) for fy, v, *_ in kept]
+        # Q3: the CAGR's endpoints lose their year's one-offs where the year's figure holds them: Yahoo's sum always,
+        # SEC's when nearer the year's payments with them than without them (COST FY2017 does, LDOS FY2016 doesn't).
+        for pos in ((0, -1) if window else ()):
+            _, value, _, _, paid_sum, off = kept[pos]
+            if off and value is not None and value > paid_sum - off / 2:
+                window[pos] = (window[pos][0], value - off)
         # The spec's historical CAGR "requires >= 4 FYs" (BUG-010): fewer full years measure nothing.
         span = window[-1][0] - window[0][0] if len(window) >= 4 else None
         hist = (window[-1][1] / window[0][1]) ** (1 / span) - 1 if span and window[0][1] > 0 else None
         g = x.growth(hist, 0.10)
         _, r = x.discount()
-        if not ttm:
+        # Q4: no DDM where Yahoo's missing payments are ones it reads: the gap runs into the TTM, or its year is a
+        # growth year taken from Yahoo's payments.
+        from_yahoo = {fy for fy, _, _, sec_year, _, _ in kept if not sec_year} if len(window) >= 4 else set()
+        incomplete = [fy for fy, a, b in payment_gaps(db, ticker, list(x.splits))
+                      if fy in from_yahoo or (b > ttm_start and a < anchor[:10])]
+        if incomplete:
+            return {"na": "dividend history incomplete", "inputs": {"gap_years": incomplete}}
+        ttm -= sum(v for d, v in extra.items() if ttm_start < d <= anchor[:10])
+        if not ttm or ttm <= 0:
             return {"inputs": {"ttm_dps": ttm, "hist_cagr": hist, "cagr_years": span}}
         vals = [ddm_per_share(ttm, gi, ri) for gi, ri in scenarios(g, r, 0.10, False)]
         return {"inputs": {"ttm_dps": ttm, "hist_cagr": hist, "cagr_years": span,
@@ -632,6 +721,11 @@ def check_level2(db: sqlite3.Connection, tickers: List[str], tol: float) -> int:
     for ticker, model, *stored_vals, assumptions in rows:
         stored = json.loads(assumptions)
         o = level2(db, ticker, model, stored)
+        if o and "na" in o:
+            checked += 1
+            bad += 1
+            print(f"L2 MISMATCH {ticker:6} {model:9} stored applicable, oracle N/A: {o['na']} {o['inputs']}")
+            continue
         if not o or "values" not in o:
             # The spec-derived inputs are undefined (e.g. no valid CAGR) yet the code produced a value:
             # never silently pass these; list them.
@@ -651,6 +745,17 @@ def check_level2(db: sqlite3.Connection, tickers: List[str], tol: float) -> int:
             fmt = lambda v: "None" if v is None else f"{v:.4g}"  # noqa: E731
             print(f"L2 MISMATCH {ticker:6} {model:9} base stored={fmt(stored_vals[1])} oracle={fmt(o['values'][1])} "
                   f"worst {worst:.1%}{alt_note}; inputs (oracle, stored) differing: {diffs}")
+    # Q4: a DDM the code made N/A for an incomplete history must be one the oracle finds incomplete too.
+    na_rows = db.execute("select ticker, assumptions from valuations where model = 'ddm' and applicable = 0 and "
+                         f"na_reason like 'dividend history incomplete%' {where} order by ticker", tickers).fetchall()
+    for ticker, _ in na_rows:
+        anchor = db.execute("select substr(collected_at, 1, 10) from market_snapshots where ticker=? order by "
+                            "collected_at desc limit 1", (ticker,)).fetchone()
+        o = level2(db, ticker, "ddm", {"ttm_anchor": anchor[0] if anchor else None})
+        checked += 1
+        if not o or "na" not in o:
+            bad += 1
+            print(f"L2 MISMATCH {ticker:6} ddm       stored N/A (dividend history incomplete), oracle values it")
     print(f"level 2: {checked} applicable rows re-derived from raw tables, {bad} beyond {tol:.1%}")
     if skipped:
         print(f"  not derivable from the spec ({len(skipped)}; the code still valued them): {' '.join(skipped)}")
