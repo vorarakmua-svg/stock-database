@@ -2801,3 +2801,21 @@ Gates: ruff ✓ mypy ✓ pytest 2838 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(config): importing the configuration makes no folders (BUG-284, BUG-158)
 Next: the workers' results (Q3/Q4, BUG-271, review 26); inline P3s.
 
+## Iteration 159: 2026-11-04 13:01: fix (BUG-069, BUG-283; P3s) and code review 26
+Picked: two P3s on /api/quality/runs, inline; then code review 26's report.
+Did: `Reader.collection_runs` always gives `warnings` (a list, [] on a database without the column: BUG-069) and gives
+`incomplete` as an object, not its JSON text (BUG-283); the FA tab's note now also shows the run's "SEC EDGAR: the
+companyfacts lack ..." warning (BUG-283's second half).
+- RED: the 2 API tests failed (KeyError; a string); GREEN; the FA test written after its fix, proven by its mutant.
+  3 of 3 mutants.
+- Code review 26 (92ab897..95a0ddf: Q7, BUG-309, -310, -312..314, -137/138, -046/166, Q16): no Critical or Important
+  finding. Minors logged: BUG-316 (proven synthetic), BUG-317 (docs), BUG-318 (the indicators oracle). Checked clean:
+  Q16 vs BUG-252, the quarterly differencing, the migration and every reader, BUG-137/138's consumers, Q7's, BUG-310's,
+  BUG-309, BUG-046/166, 3.9 syntax, no new look-ahead. It ran 21 targeted test files (952 passed); RAM kept it off the
+  full suite and real data.
+Evidence: `qa/evidence/bug069-283-mutants.json`, `qa/evidence/review26.txt`.
+Result: BUG-069 and BUG-283 VERIFIED; code review 26 closed with no open Critical or Important finding.
+Gates: ruff ✓ mypy ✓ pytest 2841 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(web): the runs API's warnings and incomplete; FA shows the SEC's lag (BUG-069, BUG-283)
+Next: the workers' Q3/Q4 and BUG-271; inline BUG-316..318 and the P3s.
+

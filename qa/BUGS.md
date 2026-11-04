@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 6 · P3 161 · NEEDS-USER 0 · Decided: 7 · Verified: 157
+**Open:** P0 0 · P1 0 · P2 6 · P3 162 · NEEDS-USER 0 · Decided: 7 · Verified: 159
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -560,8 +560,8 @@ Repro (`web_job_sec_failure.py`): after a failed companyfacts request AAPL's FA 
 Expected: with stored years, the note says this collection got no new SEC data and dates the figures shown; the card lists each failed ticker and its error (as the quote job does); an `errors` column like `warnings`.   Actual: as above.
 
 ### BUG-069 [P3][API] `/api/quality/runs` omits `warnings` on a database without the column
-Status: OPEN
-Found: iteration 48 by code review 6 (M4), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 159)
+Found: iteration 48 by code review 6 (M4), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_web_api_quality.py::test_runs_always_carry_warnings_even_on_a_database_without_the_column
 Repro (`web_probe.py` on the user's copy): the rows' keys lack `warnings`; on a migrated database they have it.
 Expected: the field always present, [] when the column is missing.   Actual: absent.
 
@@ -2019,6 +2019,24 @@ Found: code review 25 (Minor 5; not tested, no finding claimed) | Fixed: | Regre
 Repro: assumptions._cagr_from_first_positive measures from the first positive value even when losses follow; a window whose first value is missing (a gap, not a loss) takes the fallback; "at least 4 FYs" counts positions.
 Expected: decided edges, with tests.   Actual: as above.
 
+### BUG-316 [P3][PARSE] The restore step can put back a net-income-to-common figure Q16 left unread
+Status: OPEN
+Found: code review 26 (`qa/evidence/review26.txt`, Minor 1; proven by a synthetic test) | Fixed: | Regression test:
+Repro: xbrl_parser.py `_annual_filings` (~1911-1929) feeds `_restore_agreed_figures` without skipping the facts `_to_common_contradicted` marks: two 10-Ks' +$50M (contradicted by EPS -0.50 x 100M) beside a later -$50M read as a sign flip and +$50M is restored, reaching Q4 and the TTM. Test: %LOCALAPPDATA%\stockdb-qaeview26\head	ests\test_review26.py::test_a_contradicted_to_common_figure_is_not_put_back_by_the_restore_step. Real data not searched.
+Expected: unread facts take no part in the restore step.   Actual: restored.
+
+### BUG-317 [P3][DOCS] USAGE_GUIDE treats Yahoo's earningsGrowth as a forecast, and EPV's share sources omit market cap / price
+Status: OPEN
+Found: code review 26 (Minors 2, 3) | Fixed: | Regression test:
+Repro: USAGE_GUIDE.md ~245 prints it as "Expected EPS Growth"; ~1892-1919's Lynch example uses it as the growth rate (Q2); ~581 lists EPV's shares_source values without `market_cap / price`; the valuation oracle's comment ~249-251 still describes the 2-5% tiebreaker Q7 removed.
+Expected: the docs describe Q2's and Q7's rules.   Actual: as above.
+
+### BUG-318 [P3][QA] The indicators oracle has no BUG-310 age rule
+Status: OPEN
+Found: code review 26 (Minor 4; not a defect today) | Fixed: | Regression test:
+Repro: qa/oracle/indicators_oracle.py values a basis more than 2 fiscal years old; it will flag the engine once a company's basis is that old.
+Expected: the same rule for reverse_dcf, epv, ncav and graham_tangible.   Actual: none.
+
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: the history's P/E on net income to common, as its P/B already is.
@@ -2222,8 +2240,8 @@ Repro: `report_without_facts` needs the submissions' list; with that request fai
 Expected: an unchecked run marked so that the refresh tries again.   Actual: complete.
 
 ### BUG-283 [P3][WEB] /api/quality/runs returns `incomplete` as raw JSON text, and the FA tab doesn't show the SEC-lag warning
-Status: OPEN
-Found: iteration 119 (BUG-251's worker, residuals) | Fixed: | Regression test:
+Status: VERIFIED (iteration 159)
+Found: iteration 119 (BUG-251's worker, residuals) | Fixed: (this commit) | Regression tests: tests/test_web_api_quality.py::test_runs_give_what_the_sec_read_lacked_as_an_object, ::test_the_fa_tab_shows_the_report_the_companyfacts_lack
 Repro: the runs endpoint passes the new collection_runs.incomplete column through as a JSON string; the FA tab's notes don't list the run's "SEC EDGAR: the companyfacts lack ..." warning.
 Expected: an object in the API, and the warning shown beside the figures it explains.   Actual: a string, and no note.
 

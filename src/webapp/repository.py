@@ -35,6 +35,15 @@ def _warning_list(text: Optional[str]) -> List[str]:
     return [w for w in warnings if isinstance(w, str)] if isinstance(warnings, list) else []
 
 
+def _json_object(text: Optional[str]) -> Optional[Dict[str, Any]]:
+    """A JSON object kept as text (``collection_runs.incomplete``), or None."""
+    try:
+        value = json.loads(text) if text else None
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
 class Reader:
     """Read-only DAL over the SQLite stock database."""
 
@@ -888,8 +897,10 @@ class Reader:
         cur = self._conn.execute(sql, params)
         runs = [dict(row) for row in cur.fetchall()]
         for run in runs:
-            if "warnings" in run:  # absent from databases older than the column
-                run["warnings"] = _warning_list(run["warnings"])
+            # Always a list, [] on a database older than the column (BUG-069); what the SEC read lacked (BUG-251/279)
+            # as an object, not its JSON text (BUG-283), None for a complete run or an older database.
+            run["warnings"] = _warning_list(run.get("warnings"))
+            run["incomplete"] = _json_object(run.get("incomplete"))
         return runs
 
     def latest_collection_runs(self) -> List[Dict[str, Any]]:
