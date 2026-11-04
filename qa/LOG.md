@@ -2766,3 +2766,25 @@ Gates: ruff ✓ mypy ✓ pytest 2822 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(cli): stock-web --help starts nothing; diagnose prints share counts as counts (BUG-046, BUG-166)
 Next: apply Q16 (its worker is done); Q3/Q4 and BUG-271 as their workers report.
 
+## Iteration 157: 2026-11-04 12:43: fix (Q16, decided)
+Picked: Q16 (implemented as a P2), prepared by an opus worker.
+Did: a canonical field `net_income_to_common` (NetIncomeLossAvailableToCommonStockholdersBasic), parsed into the annual,
+vintage, quarterly and TTM records (a new column, migrated into old DBs); a figure more than 10% from its own filing's
+EPS x count is not read (BUG-252's test; no check where |EPS| < 0.10). The history's P/E takes it where the trailing
+year has it, else net income (`TTMPoint.earnings`). net_income's own tag order is unchanged. README and the history
+spec say so.
+- RED: 11 failed of 13 new tests; GREEN. Mutants, by me on the checkout: Q16's 14, BUG-252's 11, BUG-260's 10,
+  BUG-290's 17, BUG-249's 8, BUG-248's 5: all killed. The worker's look-ahead (with the new field): 0 cells.
+- Census: no other field or tag moves; 3,353 annual and 10,052 TTM records gain the figure. On DB copies (303
+  re-collected, at 92ab897): valuations identical (0 medians, verdicts, owner-earnings verdicts); 27 historical values,
+  2 labels (GEHC near to below, SRE above to far above, with a new price_far_above_value). history_vs_yahoo P/E within
+  10%: 389/455 to 397/455 (gate 88%, still 4 short); ALB, MCHP, PSA, VST, KKR nearer Yahoo; ARES farther (its
+  mandatory convertible preferred).
+- Residuals: TDG tags to-common only in its 10-Ks (its TTM keeps net income); a filer tagging it in some quarters only
+  switches basis month to month.
+Evidence: `qa/evidence/q16-{investigation,verify-mine}.txt`; %LOCALAPPDATA%\stockdb-qa\q16\out.
+Result: Q16 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2835 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): the history's P/E on net income to common (Q16)
+Next: Q3/Q4 and BUG-271 (their workers resumed after the usage limit); code review 26 after this (5 fixes since 25).
+

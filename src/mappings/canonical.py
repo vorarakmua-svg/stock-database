@@ -150,6 +150,14 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
             "ProfitLoss",
         ),
     ),
+    # Net income less preferred dividends and what participating securities take: the figure basic EPS
+    # divides, and what the valuation history's P/E divides the market cap by (Q16). A figure its own
+    # filing's EPS x count contradicts isn't read (the parser's ``_to_common_contradicted``). The diluted
+    # variant adds back convertibles' costs for diluted EPS, whose count the history doesn't take.
+    CanonicalField(
+        "net_income_to_common", "Net Income to Common", INCOME, UNIT_USD, DURATION,
+        ("NetIncomeLossAvailableToCommonStockholdersBasic",),
+    ),
 
     # ---------------- Per share (duration) ----------------
     # A filer without dilutive securities may tag one figure for both (SCCO FY2011-18,

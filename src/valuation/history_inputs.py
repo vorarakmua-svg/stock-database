@@ -86,6 +86,8 @@ class TTMPoint:
     shares: Optional[float]
     revenue: Optional[float] = None
     net_income: Optional[float] = None
+    #: Net income less preferred dividends and participating securities' share, where all four quarters have it.
+    net_income_to_common: Optional[float] = None
     common_equity: Optional[float] = None
     fcf: Optional[float] = None
     ebitda: Optional[float] = None
@@ -93,6 +95,12 @@ class TTMPoint:
     ffo: Optional[float] = None
     #: The quarter lacks the long-term debt its company's 10-Ks report: no net debt, so no enterprise value.
     debt_missing: bool = False
+
+    @property
+    def earnings(self) -> Optional[float]:
+        """What P/E divides the market cap by: net income to common where the trailing year has it, as Yahoo's
+        price / EPS is and P/B is on common equity, else net income (Q16)."""
+        return self.net_income_to_common if self.net_income_to_common is not None else self.net_income
 
 
 @dataclass
@@ -419,6 +427,8 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
             shares=shares_at.get(end),
             revenue=row.get("revenue"),
             net_income=row.get("net_income"),
+            # None in a database from before the column (``SELECT *``): P/E then takes net income.
+            net_income_to_common=row.get("net_income_to_common"),
             common_equity=equity - (row.get("preferred_equity") or 0.0) if equity is not None else None,
             # Operating cash flow alone isn't free cash flow: without capex there is none.
             fcf=metrics.get("free_cash_flow") if row.get("capex") is not None else None,

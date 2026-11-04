@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 7 · P3 163 · NEEDS-USER 0 · Decided: 7 · Verified: 154
+**Open:** P0 0 · P1 0 · P2 6 · P3 163 · NEEDS-USER 0 · Decided: 7 · Verified: 155
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2020,7 +2020,7 @@ Repro: assumptions._cagr_from_first_positive measures from the first positive va
 Expected: decided edges, with tests.   Actual: as above.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
-Status: OPEN
+Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: the history's P/E on net income to common, as its P/B already is.
 Found: build M5-6 | The valuation history's P/E is market cap / net income (the M1 spec), net income before preferred or participating dividends, while Yahoo's (and most sites') is price / EPS, to common; the history's P/B already subtracts preferred equity. Six of the 58 P/E misses against Yahoo are this (ALB: 224M against 57M to common; MCHP, TDG, VST, PSA, KKR). Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), section 4.
 Default: unchanged (net income, as the spec says). A change moves those companies' P/E history and their historical value, not the five models' medians.

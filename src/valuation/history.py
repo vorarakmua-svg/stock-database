@@ -24,10 +24,11 @@ MIN_FV_METRICS = 2
 #: <= 1.3 < "far above". These cutoffs were approved with the plan (2026-10-21).
 HISTORICAL_VALUE_CUTOFFS: Tuple[float, float, float, float] = (0.7, 0.9, 1.1, 1.3)
 
-#: The total each multiple divides the market cap (or, for EV/EBITDA, the enterprise value) by.
-_FUNDAMENTAL: Dict[str, str] = {"pe": "net_income", "ps": "revenue", "pb": "common_equity", "pfcf": "fcf",
+#: The total each multiple divides the market cap (or, for EV/EBITDA, the enterprise value) by. P/E's is net
+#: income to common where the trailing year has it, else net income (``TTMPoint.earnings``, Q16).
+_FUNDAMENTAL: Dict[str, str] = {"pe": "earnings", "ps": "revenue", "pb": "common_equity", "pfcf": "fcf",
                                 "pffo": "ffo", "ev_ebitda": "ebitda"}
-_LABEL: Dict[str, str] = {"net_income": "net income", "revenue": "revenue", "common_equity": "common equity",
+_LABEL: Dict[str, str] = {"earnings": "net income", "revenue": "revenue", "common_equity": "common equity",
                           "fcf": "free cash flow", "ffo": "FFO", "ebitda": "EBITDA"}
 _GENERAL: Tuple[str, ...] = ("pe", "ps", "pb", "pfcf", "ev_ebitda")
 #: The price multiples the sector rules don't suppress (``sector_metrics.SUPPRESSED_BY_SECTOR``). REITs
@@ -326,4 +327,6 @@ def _no_multiple_reason(metric: str, point: Optional[TTMPoint]) -> str:
     name = _FUNDAMENTAL[metric]
     value = getattr(point, name) if point is not None else None
     label = _LABEL[name]
+    if name == "earnings" and point is not None and point.net_income_to_common is not None:
+        label = "net income to common"
     return f"no {label} in the trailing year" if value is None else f"{label} is zero or negative"

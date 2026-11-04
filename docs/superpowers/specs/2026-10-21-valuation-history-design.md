@@ -126,7 +126,8 @@ Constants:
 - `HISTORICAL_VALUE_CUTOFFS = (0.7, 0.9, 1.1, 1.3)`
 
 **Multiples**: `multiples_at(market_cap, close, fundamentals, ttm_dps) -> Dict[str, Optional[float]]`
-- P/E = mc / net income.
+- P/E = mc / net income to common where the trailing year has it, else net income (Q16, decided
+  2026-11-02: as Yahoo's price / EPS is, and as P/B is on common equity).
 - P/S = mc / revenue.
 - P/B = mc / common equity.
 - P/FCF = mc / FCF.

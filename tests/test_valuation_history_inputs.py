@@ -491,3 +491,28 @@ def test_load_history_inputs_gives_the_listing_quarter_the_public_count(tmp_path
     x = load_history_inputs(conn, "MMM")
     assert x.na_reason is None
     assert x.points[0].period_end == "2012-06-30" and x.points[0].shares == pytest.approx(1.70e9)
+
+
+def test_a_trailing_year_carries_its_net_income_to_common(tmp_path):
+    # Q16: the history's P/E divides by it where the trailing year has it; net income is kept as it is.
+    conn = _db(tmp_path)
+    conn.execute("UPDATE financials_ttm SET net_income_to_common = 4.0e8 WHERE period_end = '2025-12-31'")
+    by_end = {p.period_end: p for p in load_history_inputs(conn, "AAA").points}
+    assert (by_end["2025-12-31"].net_income, by_end["2025-12-31"].net_income_to_common) == (4.4e8, 4.0e8)
+    assert by_end["2025-09-30"].net_income_to_common is None
+
+
+def test_a_database_from_before_net_income_to_common_still_reads(tmp_path):
+    # A database collected before the column (read-only, so never migrated) gives every point net income alone.
+    conn = _db(tmp_path)
+    for table in ("financials_annual", "financials_quarterly", "financials_ttm", "financials_annual_vintages"):
+        conn.execute(f"ALTER TABLE {table} DROP COLUMN net_income_to_common")
+    x = load_history_inputs(conn, "AAA")
+    assert x.na_reason is None
+    assert all(p.net_income_to_common is None for p in x.points)
+    assert x.points[-1].net_income == 4.4e8
+    # A store opened on it adds the column to each of the four tables, and keeps the rows.
+    SQLiteStore(db_path=tmp_path / "hist.db")._migrate(conn)
+    for table in ("financials_annual", "financials_quarterly", "financials_ttm", "financials_annual_vintages"):
+        assert "net_income_to_common" in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+    assert conn.execute("SELECT count(*), max(net_income) FROM financials_ttm").fetchone() == (5, 4.4e8)

@@ -476,6 +476,14 @@ How it's built:
   share count, put on the price bars' split basis. Dividing a price by a filed EPS would cross split
   bases. Zero or negative earnings, book, FCF or EBITDA give no multiple, and the sector rules apply: no
   P/FCF or EV/EBITDA for banks, and P/FFO in place of P/E for REITs.
+- **P/E on net income to common**, as P/B is on common equity (book less preferred) and Yahoo's price /
+  EPS is: the trailing year's `net_income_to_common` (`NetIncomeLossAvailableToCommonStockholdersBasic`, net
+  income less preferred dividends and what participating securities take), else its net income. ALB's
+  trailing year was $224M of net income and $57M to common after its mandatory convertible preferred's
+  dividends (Q16). The field is parsed into the annual, quarterly (year-to-date differences) and trailing
+  records, but a figure its own filing's EPS × count contradicts by more than 10% isn't read (EG's 2016-20,
+  BUG-252's test); a quarter or trailing year without it falls back to net income. Net income itself, and so
+  every model, reads as before.
 - **Share counts.** A filed count jumps where the filings stopped restating it for a split, so a jump
   within 1.25× of a declared split folds by that split. A jump of 1.5× or more that no split explains
   folds by its own ratio only on a split's marks: EPS of one sign moved against the count at least

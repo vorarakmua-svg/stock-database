@@ -222,3 +222,25 @@ def test_months_before_the_fundamentals_and_the_window_are_left_out():
     result = compute_history(x)
     assert result.rows[0].date == "2016-01-31"
     assert len(result.rows) == 120
+
+
+def test_pe_takes_net_income_to_common_where_the_trailing_year_has_it():
+    # Q16: market cap / net income to common, as Yahoo's price / EPS is and the P/B already is on common equity (ALB's
+    # trailing year: $224M of net income, $57M to common after its mandatory convertible preferred's dividends).
+    p = _point(net_income=100.0, net_income_to_common=50.0)
+    assert multiples_at(2000.0, 20.0, p, 0.0)["pe"] == pytest.approx(40.0)
+    assert implied_price("pe", 40.0, p, 100.0) == pytest.approx(20.0)  # 40 x 50 / 100 shares
+    # Without it, net income stands.
+    assert multiples_at(2000.0, 20.0, _point(net_income=100.0), 0.0)["pe"] == pytest.approx(20.0)
+
+
+def test_a_loss_to_common_gives_no_pe_even_beside_positive_net_income():
+    p = _point(net_income=100.0, net_income_to_common=-5.0)
+    assert multiples_at(2000.0, 20.0, p, 0.0)["pe"] is None
+    assert implied_price("pe", 20.0, p, 100.0) is None
+
+
+def test_the_reason_names_net_income_to_common_where_the_year_has_it():
+    from src.valuation.history import _no_multiple_reason
+    assert _no_multiple_reason("pe", _point(net_income_to_common=-5.0)) == "net income to common is zero or negative"
+    assert _no_multiple_reason("pe", _point(net_income=-5.0)) == "net income is zero or negative"

@@ -57,6 +57,58 @@ def _eps_gap(figure: float, eps: float, count: float) -> float:
     return min(abs(count * scale / implied - 1.0) for scale in _SCALES)
 
 
+def _by_fact(us_gaap: Dict[str, Any], key: str, tags: Iterable[str]) -> Dict[Tuple[Any, Any, Any], float]:
+    """Each filing's figure for each period under *key*'s first of *tags* that has one."""
+    values: Dict[Tuple[Any, Any, Any], float] = {}
+    for tag in tags:
+        for entry in us_gaap.get(tag, {}).get("units", {}).get(_FIELDS[key].xbrl_unit, []):
+            if isinstance(entry.get("val"), (int, float)) and entry.get("start"):
+                values.setdefault(_fact_key(entry), float(entry["val"]))
+    return values
+
+
+def _eps_pairs(us_gaap: Dict[str, Any]) -> List[Tuple[Dict[Tuple[Any, Any, Any], float],
+                                                     Dict[Tuple[Any, Any, Any], float]]]:
+    """Each filing's EPS and weighted count for each period, as ``_EPS_PAIRS`` pairs them."""
+    return [(_by_fact(us_gaap, eps, _FIELDS[eps].tags), _by_fact(us_gaap, count, _FIELDS[count].tags))
+            for eps, count in _EPS_PAIRS]
+
+
+#: The field of net income to common alone, which the valuation history's P/E divides by (Q16).
+_TO_COMMON_FIELD = "net_income_to_common"
+#: An EPS filed to the cent checks a figure only from this size: a smaller one is 5% off or more by its rounding alone
+#: (MCHP's nine months to 2025-12-31: $2.4M to common, EPS $0.00; Ford's FY2019 $47M at $0.01).
+_MIN_CHECKING_EPS = 0.10
+
+
+def _to_common_contradicted(us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
+    """The to-common figures, as ``("net_income_to_common", tag, (accn, start, end))``, that their own filing's EPS x
+    count contradicts (Q16): the field of their own doesn't read them at all.
+
+    The test is BUG-252's (``_to_common_set_aside``): its basic pair, else its diluted, more than share_scale's 10%
+    from the figure, a count on its power of 1000. Net income ranks such a figure last only where another tag is the
+    EPS's figure; this field has no other tag, and a figure that isn't the one EPS divides isn't to common: EG's
+    FY2016-20 $792.4M ... where their EPS make $985.7M .... A filing without EPS for the period, or with one under
+    _MIN_CHECKING_EPS, can't contradict it.
+    """
+    figures = _by_fact(us_gaap, "net_income", (_TO_COMMON,))
+    if not figures:
+        return frozenset()
+    pairs = _eps_pairs(us_gaap)
+    unread: Set[Tuple[str, str, Any]] = set()
+    for key, figure in figures.items():
+        pair = next(((eps[key], counts[key]) for eps, counts in pairs if key in eps and key in counts), None)
+        if pair is not None and abs(pair[0]) >= _MIN_CHECKING_EPS and _eps_gap(figure, *pair) > _SCALE_TOLERANCE:
+            unread.add((_TO_COMMON_FIELD, _TO_COMMON, key))
+    return frozenset(unread)
+
+
+def _unread(unread: FrozenSet[Tuple[str, str, Any]], field: Any, tag: str, entry: Dict[str, Any]) -> bool:
+    """Whether *entry*, a fact under *tag*, is one *field* doesn't read (``_to_common_contradicted``). Net income's
+    set-aside figures (``_to_common_set_aside``) are keyed alike: they rank last, and are still read."""
+    return field.key == _TO_COMMON_FIELD and (field.key, tag, _fact_key(entry)) in unread
+
+
 def _to_common_set_aside(us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
     """The to-common figures, as ``("net_income", tag, (accn, start, end))``, that aren't the figure their own
     filing's EPS divides (BUG-252).
@@ -72,21 +124,11 @@ def _to_common_set_aside(us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, A
     """
     field = _FIELDS["net_income"]
     later = field.tags[field.tags.index(_TO_COMMON) + 1:]
-
-    def by_fact(key: str, tags: Iterable[str]) -> Dict[Tuple[Any, Any, Any], float]:
-        """Each filing's figure for each period under *key*'s first tag that has one."""
-        values: Dict[Tuple[Any, Any, Any], float] = {}
-        for tag in tags:
-            for entry in us_gaap.get(tag, {}).get("units", {}).get(_FIELDS[key].xbrl_unit, []):
-                if isinstance(entry.get("val"), (int, float)) and entry.get("start"):
-                    values.setdefault(_fact_key(entry), float(entry["val"]))
-        return values
-
-    figures = by_fact("net_income", (_TO_COMMON,))
+    figures = _by_fact(us_gaap, "net_income", (_TO_COMMON,))
     if not figures:
         return frozenset()
-    others = [by_fact("net_income", (tag,)) for tag in later]
-    pairs = [(by_fact(eps, _FIELDS[eps].tags), by_fact(count, _FIELDS[count].tags)) for eps, count in _EPS_PAIRS]
+    others = [_by_fact(us_gaap, "net_income", (tag,)) for tag in later]
+    pairs = _eps_pairs(us_gaap)
     aside: Set[Tuple[str, str, Any]] = set()
     for key, figure in figures.items():
         pair = next(((eps[key], counts[key]) for eps, counts in pairs if key in eps and key in counts), None)
@@ -1285,7 +1327,7 @@ class XBRLParser:
         data: Dict[Any, Dict[str, Any]] = {}
         best: Dict[Any, Tuple[int, str]] = {}
         period_frames: Dict[Any, set] = {}
-        set_aside = self._set_aside(us_gaap)
+        set_aside = self._aside(us_gaap)
 
         for field in CANONICAL_FIELDS:
             for priority, tag in enumerate(field.tags):
@@ -1296,6 +1338,8 @@ class XBRLParser:
                     if entry.get("form", "") not in _ANNUAL_FORMS:
                         continue
                     if not self._matches_kind(field, entry) or not self._is_full_year(entry):
+                        continue
+                    if _unread(set_aside, field, tag, entry):
                         continue
                     fy = self._fiscal_year_from_end(entry.get("end")) or self._period_year(entry)
                     accn = entry.get("accn")
@@ -1374,7 +1418,7 @@ class XBRLParser:
         for end, (value, tag) in _long_term_debt_lines(us_gaap, annual, periods).items():
             periods[end]["long_term_debt"] = value
             periods[end]["_source_tags"]["long_term_debt"] = tag
-        self._collect_discrete_flows(us_gaap, periods, frames, restored, level, self._set_aside(us_gaap))
+        self._collect_discrete_flows(us_gaap, periods, frames, restored, level, self._aside(us_gaap))
         if level is not None:
             self._instants_on_year_basis(periods, instants_filed, level)
         self._apply_quarter_calendar(periods, frames)
@@ -1542,7 +1586,7 @@ class XBRLParser:
                     if entry.get("form", "") not in _QUARTERLY_FORMS:
                         continue
                     start, end = entry.get("start"), entry.get("end")
-                    if not start or not end:
+                    if not start or not end or _unread(set_aside, field, tag, entry):
                         continue
                     span = self._span(start, end)
                     if span is None or span > _FULL_YEAR_MAX_DAYS:
@@ -1811,6 +1855,8 @@ class XBRLParser:
                         continue
                     if not self._matches_kind(field, entry) or not valid_fn(entry):
                         continue
+                    if _unread(set_aside, field, tag, entry):
+                        continue
 
                     period = period_key_fn(entry)
                     if period is None:
@@ -1857,7 +1903,7 @@ class XBRLParser:
             valid_fn=self._is_full_year,
             period_key_fn=self._annual_fy,
             quarterly=False,
-            set_aside=self._set_aside(us_gaap),
+            set_aside=self._aside(us_gaap),
         )
         self._restore_agreed_figures(us_gaap, data, self._annual_fy)
         return data
@@ -1881,6 +1927,10 @@ class XBRLParser:
         for values in filings.values():
             values.sort(key=lambda filing: filing[0])
         return filings
+
+    def _aside(self, us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
+        """``_set_aside``'s figures and the ones not read at all (``_to_common_contradicted``)."""
+        return self._set_aside(us_gaap) | _to_common_contradicted(us_gaap)
 
     def _set_aside(self, us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
         """The figures that rank after every other tag of their field: ``_revenue_set_aside``'s and

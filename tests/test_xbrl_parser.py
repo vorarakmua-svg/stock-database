@@ -2843,3 +2843,115 @@ def test_a_quarterly_ladder_reads_the_figure_each_filings_eps_makes():
     quarters = XBRLParser().extract_quarterly_financials(facts)
     assert [quarters[end]["net_income"] for end in ("2017-03-31", "2017-06-30", "2017-09-30", "2017-12-31")] == [
         pytest.approx(v) for v in (291.643e6, 245.674e6, -639.374e6, 571.025e6)]
+
+
+# Q16: net income to common, a field of its own, for the valuation history's P/E (as its P/B is on common equity).
+def _alb_like(filed="2026-02-12", start="2025-01-01", end="2025-12-31", form="10-K", **changed):
+    """A year with preferred dividends: net income $224M, $57M to common, basic EPS 0.48 x 118M ($56.6M)."""
+    tagged = {"NetIncomeLoss": 224.0e6, _TO_COMMON: 57.0e6, "EarningsPerShareBasic": 0.48,
+              "WeightedAverageNumberOfSharesOutstandingBasic": 118.0e6, "EarningsPerShareDiluted": 0.48,
+              "WeightedAverageNumberOfDilutedSharesOutstanding": 118.5e6}
+    tagged.update(changed)
+    return filed, start, end, form, tagged
+
+
+def test_net_income_to_common_is_read_beside_net_income():
+    year = XBRLParser().extract_annual_financials(_income_facts(_alb_like()))["2025"]
+    assert (year["net_income"], year["_source_tags"]["net_income"]) == (224.0e6, "NetIncomeLoss")
+    assert (year["net_income_to_common"], year["_source_tags"]["net_income_to_common"]) == (57.0e6, _TO_COMMON)
+
+
+def test_a_to_common_figure_its_own_eps_contradicts_is_not_read_as_net_income_to_common():
+    # EG's FY2016: $792.4M to common where its EPS x count make $985.7M. Net income ranks it last (BUG-252); the field
+    # of its own doesn't read it at all, and the history's P/E then takes net income.
+    year = XBRLParser().extract_annual_financials(_eg_fy2016())["2016"]
+    assert "net_income_to_common" not in year
+    assert year["net_income"] == 996.344e6
+
+
+def test_a_to_common_figure_no_other_figure_makes_is_still_not_read_where_its_eps_contradicts_it():
+    # Unlike net income's rule, no other tag need be the EPS's figure: one that EPS x count contradicts isn't to common.
+    year = XBRLParser().extract_annual_financials(_income_facts(_alb_like(**{_TO_COMMON: 80.0e6})))["2025"]
+    assert "net_income_to_common" not in year
+    assert year["net_income"] == 224.0e6
+
+
+def test_a_to_common_figure_without_eps_in_its_filing_is_read():
+    filed, start, end, form, tagged = _alb_like()
+    tagged = {k: v for k, v in tagged.items() if k in ("NetIncomeLoss", _TO_COMMON)}
+    year = XBRLParser().extract_annual_financials(_income_facts((filed, start, end, form, tagged)))["2025"]
+    assert year["net_income_to_common"] == 57.0e6
+
+
+def test_a_vintage_reads_the_to_common_figure_its_own_eps_makes():
+    # PNC's FY2019: the 10-K of 2020 tags $5.103B, which its EPS x count make; that of 2021 $4.284B, which they don't.
+    first, later = "2020-02-28", "2021-03-01"
+    facts = _income_facts(
+        (first, "2019-01-01", "2019-12-31", "10-K", {_TO_COMMON: 5.103e9, "ProfitLoss": 5.418e9,
+                                                       "EarningsPerShareDiluted": 11.39,
+                                                       "WeightedAverageNumberOfDilutedSharesOutstanding": 448.0e6}),
+        (later, "2019-01-01", "2019-12-31", "10-K", {_TO_COMMON: 4.284e9, "ProfitLoss": 5.418e9,
+                                                       "EarningsPerShareDiluted": 11.39,
+                                                       "WeightedAverageNumberOfDilutedSharesOutstanding": 448.0e6}))
+    vintages = XBRLParser().extract_annual_vintages(facts)["2019"]
+    assert vintages[first]["net_income_to_common"] == 5.103e9
+    assert "net_income_to_common" not in vintages[later]
+    # The annual record reads the latest filing the EPS doesn't contradict.
+    assert XBRLParser().extract_annual_financials(facts)["2019"]["net_income_to_common"] == 5.103e9
+
+
+def _to_common_year(contradicted_nine_months=False):
+    """A year's ladder: to common 100, 250, 330 and 500 year to date; net income 120, 290, 390 and 580."""
+    start = "2025-01-01"
+    rungs = (("2025-05-01", "2025-03-31", "10-Q", 100.0e6, 120.0e6),
+             ("2025-08-01", "2025-06-30", "10-Q", 250.0e6, 290.0e6),
+             ("2025-10-31", "2025-09-30", "10-Q", 330.0e6, 390.0e6),
+             ("2026-02-20", "2025-12-31", "10-K", 500.0e6, 580.0e6))
+    filings = []
+    for filed, end, form, to_common, net_income in rungs:
+        eps = to_common / 100.0e6
+        if contradicted_nine_months and end == "2025-09-30":
+            to_common = 250.0e6  # 2.50 for EPS 3.30 x 100M
+        filings.append((filed, start, end, form, {
+            "NetIncomeLoss": net_income, _TO_COMMON: to_common, "EarningsPerShareBasic": eps,
+            "WeightedAverageNumberOfSharesOutstandingBasic": 100.0e6}))
+    return _income_facts(*filings)
+
+
+def test_net_income_to_common_quarters_are_the_year_to_date_differences():
+    quarters = XBRLParser().extract_quarterly_financials(_to_common_year())
+    ends = ("2025-03-31", "2025-06-30", "2025-09-30", "2025-12-31")
+    assert [quarters[e]["net_income_to_common"] for e in ends] == [
+        pytest.approx(v) for v in (100e6, 150e6, 80e6, 170e6)]
+    assert [quarters[e]["net_income"] for e in ends] == [pytest.approx(v) for v in (120e6, 170e6, 100e6, 190e6)]
+    ttm = compute_ttm(quarters)["2025-12-31"]
+    assert ttm["net_income_to_common"] == pytest.approx(500e6)
+    assert ttm["net_income"] == pytest.approx(580e6)
+
+
+def test_a_contradicted_rung_leaves_its_quarters_without_net_income_to_common():
+    # The nine months' figure its EPS contradicts isn't read: the third and fourth quarters have no difference to take,
+    # and the trailing year falls to net income (the history's fallback).
+    quarters = XBRLParser().extract_quarterly_financials(_to_common_year(contradicted_nine_months=True))
+    assert quarters["2025-06-30"]["net_income_to_common"] == pytest.approx(150e6)
+    assert "net_income_to_common" not in quarters["2025-09-30"]
+    assert "net_income_to_common" not in quarters["2025-12-31"]
+    assert quarters["2025-09-30"]["net_income"] == pytest.approx(100e6)
+    assert "net_income_to_common" not in compute_ttm(quarters)["2025-12-31"]
+
+
+def test_an_eps_rounded_near_zero_contradicts_no_to_common_figure():
+    # MCHP's FY2026 (April to March): nine months of $2.4M to common at EPS $0.00, which checks nothing. Read, the third
+    # and fourth quarters have their differences (otherwise the trailing year fell back to net income).
+    start = "2025-04-01"
+    facts = _income_facts(*[
+        (filed, start, end, form, {_TO_COMMON: tc, "EarningsPerShareBasic": eps,
+                                   "WeightedAverageNumberOfSharesOutstandingBasic": 540.0e6})
+        for filed, end, form, tc, eps in (
+            ("2025-08-07", "2025-06-30", "10-Q", -46.4e6, -0.09),
+            ("2025-11-06", "2025-09-30", "10-Q", -32.5e6, -0.06),
+            ("2026-02-05", "2025-12-31", "10-Q", 2.4e6, 0.0),
+            ("2026-05-21", "2026-03-31", "10-K", 118.8e6, 0.22))])
+    quarters = XBRLParser().extract_quarterly_financials(facts)
+    assert [quarters[e]["net_income_to_common"] for e in ("2025-09-30", "2025-12-31", "2026-03-31")] == [
+        pytest.approx(v) for v in (13.9e6, 34.9e6, 116.4e6)]
