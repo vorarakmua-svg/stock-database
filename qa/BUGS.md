@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 6 · P3 157 · NEEDS-USER 0 · Decided: 7 · Verified: 164
+**Open:** P0 0 · P1 0 · P2 6 · P3 155 · NEEDS-USER 0 · Decided: 7 · Verified: 166
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1514,8 +1514,8 @@ Repro: Altman's "an input is missing" (15 companies) doesn't say which; the Magi
 Expected: the missing input named.   Actual: no name.
 
 ### BUG-194 [P3][SCORES] FCF/share and book/share CAGRs exist only for 5 years
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 163)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression tests: tests/test_scores_fundamentals.py::test_growth_gives_the_cagrs_of_each_series, tests/test_scores_store.py::test_an_old_scores_table_gains_the_fcf_and_book_cagr_columns
 Repro: `fundamentals.py`; the plan asks for 3/5/10 for all five series, and the STAT growth table shows four unexplained "—" cells.
 Expected: the CAGRs, or the cells labelled.   Actual: "—".
 
@@ -1550,8 +1550,8 @@ Repro: `signs._gross_margin_change` doesn't fall back as `_gross_margin` does. N
 Expected: the same fallback.   Actual: none.
 
 ### BUG-200 [P3][SCORES] Profitable years is a count, not a share
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 163)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression tests: tests/test_scores_ranks.py::test_profitable_years_is_a_share_of_the_years_available
 Repro: `ranks.py`: short histories (GEV, SNDK) can't rank high on it.
 Expected: a share of the years available.   Actual: a count.
 

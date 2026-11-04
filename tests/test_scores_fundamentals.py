@@ -90,8 +90,10 @@ def test_years_with_the_private_count_have_no_per_share_figures(tmp_path):
 
 def test_growth_gives_the_cagrs_of_each_series(tmp_path):
     g = growth(load_fundamentals(_db(tmp_path), "AAA"))
+    # BUG-194: FCF/share and book/share have their 3- and 10-year CAGRs too, as the plan asks for every series.
     for key in ("rev_ps_cagr_3y", "rev_ps_cagr_5y", "rev_ps_cagr_10y", "eps_cagr_5y", "ebitda_ps_cagr_10y",
-                "fcf_ps_cagr_5y", "book_ps_cagr_5y"):
+                "fcf_ps_cagr_3y", "fcf_ps_cagr_5y", "fcf_ps_cagr_10y", "book_ps_cagr_3y", "book_ps_cagr_5y",
+                "book_ps_cagr_10y"):
         assert g[key] == pytest.approx(0.10), key  # the same 10% a year, the split notwithstanding
 
 

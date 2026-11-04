@@ -171,6 +171,21 @@ def test_the_scores_store_their_debt_to_ebitda(tmp_path):
     assert _scores(db)["AAA"].get("debt_to_ebitda") == pytest.approx(5.0)  # debt = revenue, EBITDA 20% of it
 
 
+
+def test_an_old_scores_table_gains_the_fcf_and_book_cagr_columns(tmp_path):
+    # BUG-194: the 3- and 10-year FCF/share and book/share CAGRs are new columns; a table from before them gains them.
+    db = _seed(tmp_path / "s.db")
+    conn = sqlite3.connect(db)
+    for column in ("fcf_ps_cagr_3y", "fcf_ps_cagr_10y", "book_ps_cagr_3y", "book_ps_cagr_10y"):
+        if column in {r[1] for r in conn.execute("PRAGMA table_info(quality_scores)")}:
+            conn.execute(f"ALTER TABLE quality_scores DROP COLUMN {column}")
+    conn.commit()
+    conn.close()
+    compute_and_store(db)
+    row = _scores(db)["AAA"]
+    assert {"fcf_ps_cagr_3y", "fcf_ps_cagr_10y", "book_ps_cagr_3y", "book_ps_cagr_10y"} <= set(row)
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # The industry ranks (Milestone 5): docs/superpowers/specs/2026-10-25-universe-automation-design.md, "SIC codes and
 # industries"

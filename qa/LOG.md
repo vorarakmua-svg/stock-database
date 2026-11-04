@@ -2858,3 +2858,18 @@ Gates: ruff ✓ mypy ✓ pytest 2844 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(scores): no Sloan ratio for banks and insurers; the gross-margin sign's fallback (BUG-197, BUG-199)
 Next: the workers' Q3/Q4, BUG-271, BUG-274; the P3s.
 
+## Iteration 163: 2026-11-04 13:49: fix (BUG-194, BUG-200; P3s)
+Picked: two quality-score P3s, inline.
+Did: BUG-194: FCF/share and book/share get their 3- and 10-year CAGRs, as the plan asks for every series (four new
+quality_scores columns, migrated into old tables; the STAT growth table fills its "—" cells from them). BUG-200: the
+profitability rank's profitable years is a share of the last 5 to 10 years, not a count. README says so.
+- RED: BUG-194's store test and BUG-200's test failed; GREEN. 3 of 3 mutants (the growth list's, written in the same
+  step as its test, proven by its mutant).
+- Measured on two DB copies, engine over all 502: 16 profitability ranks, 18 industry ones, 12 composites and 15
+  industry composites move; no median, verdict or label.
+Evidence: %LOCALAPPDATA%\stockdb-qa\bug194\out; `qa/evidence/bug194-200-mutants.json`.
+Result: BUG-194 and BUG-200 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2846 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(scores): FCF and book CAGRs over 3 and 10 years; profitable years as a share (BUG-194, BUG-200)
+Next: apply Q3/Q4 (its worker is done); BUG-271 and BUG-274 as they report.
+

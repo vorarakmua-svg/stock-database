@@ -43,7 +43,8 @@ PER_SHARE: Dict[str, str] = {"revenue_ps": "revenue", "ebitda_ps": "ebitda", "fc
 #: The CAGRs stored: (series, years).
 GROWTH: Tuple[Tuple[str, int], ...] = (
     ("rev_ps", 3), ("rev_ps", 5), ("rev_ps", 10), ("eps", 3), ("eps", 5), ("eps", 10),
-    ("ebitda_ps", 3), ("ebitda_ps", 5), ("ebitda_ps", 10), ("fcf_ps", 5), ("book_ps", 5),
+    ("ebitda_ps", 3), ("ebitda_ps", 5), ("ebitda_ps", 10), ("fcf_ps", 3), ("fcf_ps", 5), ("fcf_ps", 10),
+    ("book_ps", 3), ("book_ps", 5), ("book_ps", 10),
 )
 
 

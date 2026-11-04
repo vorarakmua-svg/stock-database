@@ -103,7 +103,9 @@ def components(f: Fundamentals, s: Scores, growth: Dict[str, Optional[float]], h
             "piotroski_share": div(s.piotroski_f, s.piotroski_tested),
             "predictability_stars": s.predictability_stars,
             "roic_10y_median": statistics.median(roics) if len(roics) >= 5 else None,
-            "profitable_years": float(sum(1 for v in incomes if v > 0)) if len(incomes) >= 5 else None,
+            # A share of the years available (5 to 10), so a short history isn't ranked below a decade of profits
+            # no better than its own (BUG-200).
+            "profitable_years": sum(1 for v in incomes if v > 0) / len(incomes) if len(incomes) >= 5 else None,
         },
         "growth": {
             "rev_ps_cagr_3y": growth.get("rev_ps_cagr_3y"),

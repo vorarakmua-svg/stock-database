@@ -649,7 +649,7 @@ any run re-ranks everyone.
 | Rank | Components |
 |---|---|
 | Financial strength | interest coverage (capped at 100), Altman Z, equity / assets, cash / debt (capped at 10), debt / revenue (lower is better) |
-| Profitability | operating margin, its 10-year mean and 5-year slope, the share of Piotroski tests passed, predictability stars, 10-year median ROIC, profitable years out of 10 |
+| Profitability | operating margin, its 10-year mean and 5-year slope, the share of Piotroski tests passed, predictability stars, 10-year median ROIC, the share of profitable years (of the last 5 to 10) |
 | Growth | revenue per share CAGR over 3 and 5 years, EBITDA per share CAGR over 5 years (EPS for banks and insurers) |
 | Valuation | price / historical value (lower is better), else the P/E's percentile in its 10 years (lower is better) |
 | Momentum | the mean of the 12-1 and 6-1 month returns (the close a month back against 12 and 6 months back), over max(beta, 0.5) |

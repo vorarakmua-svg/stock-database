@@ -212,3 +212,24 @@ def test_the_industry_ranks_leave_the_universe_ranks_alone():
     before = rank_universe(rows)
     rank_industries(rows, _groups(rows))
     assert rank_universe(rows) == before
+
+
+def test_profitable_years_is_a_share_of_the_years_available():
+    # BUG-200: a count put short histories (GEV, SNDK) below a decade of profits that were no better; a share doesn't.
+    from src.scores.fundamentals import AnnualRow, Fundamentals
+    from src.scores.ranks import components
+    from src.scores.scores import Scores
+    from src.scores.signs import HistoryContext
+
+    def company(incomes):
+        rows = [AnnualRow(fiscal_year=2016 + i, period_end=f"{2016 + i}-12-31", shares=100.0, eps=1.0,
+                          figures={"net_income": v, "revenue": 1000.0}) for i, v in enumerate(incomes)]
+        return Fundamentals(ticker="AAA", rows=rows)
+
+    def share(incomes):
+        return components(company(incomes), Scores(), {}, HistoryContext(), None)["profitability"]["profitable_years"]
+
+    assert share([10.0] * 6) == pytest.approx(1.0)
+    assert share([10.0] * 8 + [-5.0, -5.0]) == pytest.approx(0.8)
+    assert share([10.0] * 4) is None  # fewer than 5 years: no figure
+

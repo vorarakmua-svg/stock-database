@@ -164,6 +164,7 @@ QUALITY_COLUMNS: Tuple[str, ...] = (
     "ticker", "fiscal_year",
     "rev_ps_cagr_3y", "rev_ps_cagr_5y", "rev_ps_cagr_10y", "eps_cagr_3y", "eps_cagr_5y", "eps_cagr_10y",
     "ebitda_ps_cagr_3y", "ebitda_ps_cagr_5y", "ebitda_ps_cagr_10y", "fcf_ps_cagr_5y", "book_ps_cagr_5y",
+    "fcf_ps_cagr_3y", "fcf_ps_cagr_10y", "book_ps_cagr_3y", "book_ps_cagr_10y",
     "piotroski_f", "piotroski_tested", "piotroski_tests", "altman_z", "altman_zone", "beneish_m",
     "beneish_variables", "sloan_ratio", "roic", "wacc", "roic_minus_wacc", "debt_to_ebitda", "predictability_stars",
     "predictability_r2", "ncav_per_share", "earnings_yield", "return_on_capital", "momentum",
@@ -1580,7 +1581,9 @@ class SQLiteStore:
         try:
             self._create_schema(conn)
             # A table from before the scores' own debt / EBITDA (BUG-190).
-            self._ensure_columns(conn, "quality_scores", {"debt_to_ebitda": "REAL"})
+            self._ensure_columns(conn, "quality_scores", {"debt_to_ebitda": "REAL", "fcf_ps_cagr_3y": "REAL",
+                                                          "fcf_ps_cagr_10y": "REAL", "book_ps_cagr_3y": "REAL",
+                                                          "book_ps_cagr_10y": "REAL"})  # BUG-190, BUG-194
             for table in ("per_share_annual", "warning_signs", "quality_scores"):
                 conn.execute(f"DELETE FROM {table} WHERE ticker = ?", (ticker,))
             conn.executemany(
