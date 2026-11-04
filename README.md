@@ -602,7 +602,8 @@ The scores. Each is N/A, with its reason stored, where its inputs are missing:
     LVGI (7 companies: ANET, DE, GEV, ISRG, PANW, PLTR, VRTX). Any other missing variable makes M N/A, and the
     reason names it. Banks, insurers and REITs are N/A too.
 - **Sloan ratio**: `(net income - CFO - investing cash flow) / total assets`. Within ±10% is safe, 10-25% a
-  warning, and beyond ±25% flagged.
+  warning, and beyond ±25% flagged. N/A for banks and insurers, whose loans and deposits move their assets
+  (as Beneish M).
 - **ROIC vs WACC**: the stored ROIC less `WACC = E/(D+E)·Re + D/(D+E)·Rd·(1-t)`, N/A for banks and insurers. E
   is the market cap and D the total debt. Re is the DCF's CAPM cost of equity, the risk-free rate + beta ×
   4.5%, held between 8% and 14%. Rd = interest expense / D, clamped between the risk-free rate and 10 points

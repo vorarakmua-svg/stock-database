@@ -33,6 +33,9 @@ _NOT_SCORED = {
     # distress. Z'' for non-manufacturers needs the SIC code (M5).
     "altman": _FINANCIALS + ("reit", "utility"),
     "beneish": _FINANCIALS + ("reit",),
+    # Accrual measures leave financials out, as Beneish does: a bank's loans and deposits move its assets, not
+    # earnings quality (BUG-197).
+    "sloan": _FINANCIALS,
     "wacc": _FINANCIALS,
 }
 _SECTOR_NAMES = {"bank": "banks", "insurance": "insurers", "reit": "REITs", "utility": "utilities"}
@@ -311,9 +314,10 @@ def compute_scores(f: Fundamentals, market: Market) -> Scores:
             if s.beneish_m is None:
                 missing = [k for k, v in s.beneish_variables.items() if v is None]
                 s.na_reasons["beneish"] = "missing " + ", ".join(missing)
-    s.sloan_ratio = sloan(cur)
-    if s.sloan_ratio is None:
-        s.na_reasons["sloan"] = "an input is missing"
+    if not skipped("sloan"):
+        s.sloan_ratio = sloan(cur)
+        if s.sloan_ratio is None:
+            s.na_reasons["sloan"] = "an input is missing"
     s.roic = cur.figures.get("roic")
     if s.roic is None:
         s.na_reasons["roic"] = _roic_reason(cur, sector)

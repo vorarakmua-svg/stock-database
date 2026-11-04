@@ -237,7 +237,7 @@ def test_a_bank_gets_reasons_not_scores():
     s = compute_scores(f, Market(market_cap=2000.0, risk_free_rate=0.04, beta=1.2, price=20.0))
     assert s.piotroski_f is None and "banks" in s.na_reasons["piotroski"]
     assert s.altman_z is None and s.beneish_m is None and s.wacc is None
-    assert s.sloan_ratio is not None  # needs no sector exception
+    assert s.sloan_ratio is None and "banks" in s.na_reasons["sloan"]  # accruals leave financials out (BUG-197)
 
 
 def test_one_year_is_not_enough_for_the_changes():
@@ -281,3 +281,13 @@ def test_the_magic_formula_says_why_a_company_has_no_rank():
     # SPCX: no annual financials at all, so no reason was given for its missing rank.
     assert compute_scores(Fundamentals(ticker="SPCX"), _market()).na_reasons["magic_formula"] == (
         "no annual financials")
+
+
+def test_the_sloan_ratio_is_not_scored_for_banks_and_insurers():
+    # BUG-197: accrual measures conventionally leave out financials, as Beneish here does: JPM's 10.6% and WFC's 11%
+    # fired medium signs.
+    for sector, name in (("bank", "banks"), ("insurance", "insurers")):
+        s = compute_scores(_steady(sector=sector), _market())
+        assert s.sloan_ratio is None
+        assert s.na_reasons["sloan"] == f"not meaningful for {name}"
+    assert compute_scores(_steady(), _market()).sloan_ratio is not None

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 6 · P3 159 · NEEDS-USER 0 · Decided: 7 · Verified: 162
+**Open:** P0 0 · P1 0 · P2 6 · P3 157 · NEEDS-USER 0 · Decided: 7 · Verified: 164
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1532,8 +1532,8 @@ Repro: the plan says the oracle computes "from raw companyfacts"; it reads `fina
 Expected: a companyfacts spot-check for PP&E, debt and operating income.   Actual: none.
 
 ### BUG-197 [P3][SCORES] The Sloan ratio applies to banks
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 162)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression test: tests/test_scores_scores.py::test_the_sloan_ratio_is_not_scored_for_banks_and_insurers
 Repro: JPM 10.6% and WFC 11% fire medium signs; accrual measures conventionally leave out financials, as the spec does for Beneish (GuruFocus does compute it).
 Expected: N/A or a caveat for banks and insurers.   Actual: a sign.
 
@@ -1544,8 +1544,8 @@ Repro: `scores.py`; signs use `rows[-k]`, while the oracle reads FY t-1. No gaps
 Expected: FY t-1 exactly, else N/A.   Actual: the previous row.
 
 ### BUG-199 [P3][SCORES] The gross-margin sign lacks the revenue - cost of revenue fallback
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 162)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression test: tests/test_scores_signs.py::test_the_gross_margin_sign_falls_back_on_revenue_less_cost_of_revenue
 Repro: `signs._gross_margin_change` doesn't fall back as `_gross_margin` does. No effect on today's data.
 Expected: the same fallback.   Actual: none.
 

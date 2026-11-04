@@ -2844,3 +2844,17 @@ Gates: ruff ✓ mypy ✓ pytest 2842 passed, 1 skipped | CI: PR #29
 Commit: (this commit) docs: Q2's and Q7's rules in USAGE_GUIDE and the oracles; the indicators oracle's age rule (BUG-317, BUG-318)
 Next: the workers' Q3/Q4 and BUG-271; the P3s.
 
+## Iteration 162: 2026-11-04 13:36: fix (BUG-197, BUG-199; P3s)
+Picked: two quality-score P3s, inline; dispatched BUG-274 (P2, D&A) to an opus worker first.
+Did: BUG-197: the Sloan ratio is N/A, "not meaningful for banks/insurers", as Beneish M is (accruals leave financials
+out); README says so. BUG-199: the gross-margin-decline sign falls back on revenue less cost of revenue, as the scores'
+gross margin does.
+- RED: 2 new tests failed; GREEN; one existing test that pinned a bank's Sloan ratio now pins its N/A. 2 of 2 mutants.
+- Measured on two DB copies, engine over all 502: 68 banks' and insurers' Sloan ratios become N/A and 7 sloan_high
+  warnings go; no composite, median, verdict or label moves.
+Evidence: %LOCALAPPDATA%\stockdb-qa\bug197\out; `qa/evidence/bug197-199-mutants.json`.
+Result: BUG-197 and BUG-199 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2844 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(scores): no Sloan ratio for banks and insurers; the gross-margin sign's fallback (BUG-197, BUG-199)
+Next: the workers' Q3/Q4, BUG-271, BUG-274; the P3s.
+

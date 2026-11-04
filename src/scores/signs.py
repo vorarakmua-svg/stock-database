@@ -69,6 +69,9 @@ def _gross_margin_change(f: Fundamentals, years: int) -> Optional[float]:
 
     def margin(row_figures: Dict[str, Any]) -> Optional[float]:
         gp, revenue = row_figures.get("gross_profit"), row_figures.get("revenue")
+        cogs = row_figures.get("cost_of_revenue")
+        if gp is None and revenue is not None and cogs is not None:
+            gp = revenue - cogs  # as the scores' gross margin falls back (BUG-199)
         return None if gp is None or not revenue else gp / revenue
 
     a, b = margin(now.figures), margin(then.figures)

@@ -113,3 +113,9 @@ def test_severe_signs_come_first():
 def test_too_short_a_record_fires_no_trend_sign():
     f = _company(years=3, revenue=lambda i, r: 1000.0 * 0.9 ** i)
     assert "revenue_decline" not in _codes(f=f)  # three years of declines need four years of figures
+
+
+def test_the_gross_margin_sign_falls_back_on_revenue_less_cost_of_revenue():
+    # BUG-199: a filer that tags cost of revenue but no gross profit; the margin falls 1.5 points a year.
+    f = _company(gross_profit=None, cost_of_revenue=lambda i, r: (0.60 + 0.015 * i) * r)
+    assert "gross_margin_decline" in _codes(f)
