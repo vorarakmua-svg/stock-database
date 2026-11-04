@@ -1688,3 +1688,54 @@ def test_secs_dividends_per_share_go_onto_the_basis_of_yahoos_payments_across_a_
     conn.close()
     assert [by_fy[fy].dividends_per_share for fy in range(2019, 2024)] == pytest.approx(
         [0.5 / 1.319, 0.55 / 1.319, 0.605 / 1.319, 0.6655 / 1.319, 0.73205])
+
+
+def _missing_payments_db(tmp_path):
+    """CB: FY2016-2025 declaring 3.88 a year, 0.97 a quarter, and no payment stored between 2025-06-13 and
+    2026-03-13 (Yahoo lacks the Sep and Dec 2025 payments)."""
+    db_path = tmp_path / "gap.db"
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('CB', 'insurance')")
+    for fy in range(2016, 2026):
+        conn.execute("INSERT INTO financials_annual (ticker, fiscal_year, period_end, dividends_per_share) "
+                     "VALUES ('CB', ?, ?, 3.88)", (fy, f"{fy}-12-31"))
+    for year in range(2015, 2027):
+        for month in ("03", "06", "09", "12"):
+            if f"{year}-{month}" not in ("2025-09", "2025-12", "2026-09", "2026-12"):
+                conn.execute("INSERT INTO dividend_events (ticker, date, amount) VALUES ('CB', ?, 0.97)",
+                             (f"{year}-{month}-13",))
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price, beta, risk_free_rate) "
+                 "VALUES ('CB', '2026-08-04T00:00:00', 300.0, 0.4, 0.045)")
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_the_completeness_checks_gaps_come_with_the_inputs(tmp_path):
+    # Q4: DDM is N/A where the check (BUG-012) finds Yahoo's payments missing, as a collection scores it.
+    from src.valuation.models import value_ddm
+
+    conn = _connect(_missing_payments_db(tmp_path))
+    inputs = load_inputs(conn, "CB")
+    conn.close()
+    assert inputs.dividend_gaps == [(2025, "2025-06-13", "2026-03-13")]
+    res = value_ddm(inputs)
+    assert (res.applicable, res.na_reason) == (False, "dividend history incomplete (Yahoo is missing payments in "
+                                                      "FY2025)")
+
+
+def test_payments_a_refresh_stores_close_the_gap(tmp_path):
+    # A refresh stores Yahoo's payments (BUG-160, BUG-258): once it serves the missing ones, DDM values again.
+    db_path = _missing_payments_db(tmp_path)
+    conn = _connect(db_path)
+    conn.executemany("INSERT INTO dividend_events (ticker, date, amount) VALUES ('CB', ?, 0.97)",
+                     [("2025-09-13",), ("2025-12-13",)])
+    conn.commit()
+    inputs = load_inputs(conn, "CB")
+    conn.close()
+    assert inputs.dividend_gaps == []
+    from src.valuation.models import value_ddm
+
+    assert value_ddm(inputs).assumptions["ttm_dps"] == pytest.approx(3.88)

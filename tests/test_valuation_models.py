@@ -391,12 +391,12 @@ def test_value_ddm_skips_a_first_year_that_opens_the_record_with_one_larger_paym
     assert res.assumptions["hist_cagr"] == pytest.approx(0.10)
 
 
-def test_value_ddm_leaves_a_special_in_the_last_year_as_it_is():
-    # A special dividend counts as paid: whether specials count is the user's question (Q3).
+def test_value_ddm_takes_a_special_in_the_last_year_out():
+    # Q3 (decided, option c): a one-off special leaves the CAGR's endpoints (it counted as paid before).
     divs = sorted(_quarterly_dividends(2015, 2025, 2.0 / 1.1, 0.10) + [("2025-07-01", 7.0)])
     res = value_ddm(_inputs(dividends=divs, as_of=date(2026, 8, 4)))
-    total_2025 = 2.0 * 1.1 ** 9 + 7.0
-    assert res.assumptions["hist_cagr"] == pytest.approx((total_2025 / 2.0) ** (1 / 9) - 1)
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.10)
+    assert res.assumptions["growth_one_offs"] == [[2025, pytest.approx(7.0)]]
 
 
 def test_value_ddm_keeps_a_short_last_year_as_it_is():

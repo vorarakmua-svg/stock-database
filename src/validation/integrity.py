@@ -10,7 +10,7 @@ FLAG-ONLY — it emits Findings and never mutates data.
 
 import statistics
 from datetime import date, timedelta
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, CASHFLOW, DURATION, INCOME, UNIT_USD
 from .quality import HIGH, LOW, MEDIUM, Finding, _num
@@ -282,13 +282,44 @@ def check_ratio_bounds(
                 ))
     return findings
 
+class DividendGap(NamedTuple):
+    """A fiscal year whose Yahoo payments miss what SEC declares (``dividend_gaps``)."""
+
+    year: str
+    gap_from: str  # the payments either side of the gap in Yahoo's schedule
+    gap_to: str
+    total: float  # Yahoo's payments ex-dated in the year
+    declared: float  # SEC's dividends per share for the year, or the year before's
+    whose: str  # which SEC figure ``declared`` is, for the message
+    usual: float  # the usual interval between Yahoo's payments, in days
+
+
 def check_dividend_completeness(
     annual: Dict[str, Dict[str, Any]],
     dividend_payments: Iterable[Dict[str, Any]],
     splits: Iterable[Dict[str, Any]],
     scored_years: Iterable[str],
 ) -> List[Finding]:
-    """Flag a fiscal year whose Yahoo dividend payments miss what SEC filings declare.
+    """Flag a fiscal year whose Yahoo dividend payments miss what SEC filings declare (``dividend_gaps``)."""
+    return [
+        Finding(
+            MEDIUM, "dividend_payments_missing",
+            f"Yahoo's dividend payments sum to {gap.total:.2f}/share, but {gap.whose} "
+            f"{gap.declared:.2f}; there is no payment between {gap.gap_from} and {gap.gap_to} (usual "
+            f"interval {gap.usual:.0f} days), so Yahoo's dividend history is likely missing payments.",
+            gap.year,
+        )
+        for gap in dividend_gaps(annual, dividend_payments, splits, scored_years)
+    ]
+
+
+def dividend_gaps(
+    annual: Dict[str, Dict[str, Any]],
+    dividend_payments: Iterable[Dict[str, Any]],
+    splits: Iterable[Dict[str, Any]],
+    scored_years: Iterable[str],
+) -> List[DividendGap]:
+    """The fiscal years whose Yahoo dividend payments miss what SEC filings declare.
 
     Two independent signals must agree: a gap in Yahoo's payment schedule that overlaps
     the year, and Yahoo's total for the year falling well short of the SEC-declared
@@ -299,6 +330,10 @@ def check_dividend_completeness(
     is an initiation, not a missing payment (MU FY2021). Years with a later split are
     skipped, because Yahoo's amounts are split-adjusted and SEC's are as filed. (CB: no
     payment between 2025-06-13 and 2026-03-13, so FY2025 sums to 1.88 against 3.82.)
+    A year whose 10-K gives no dividends per share is measured against the year before's
+    (Q4): ACN's FY2026 has none, and Yahoo lacks its Oct 2025 and Jan 2026 payments (3.26
+    against FY2025's 5.92), if Yahoo shows a payment in it. A real cut of more than a fifth
+    with a gap is flagged too.
     """
     paid = sorted(
         (str(p["date"])[:10], float(p["amount"]))
@@ -318,26 +353,33 @@ def check_dividend_completeness(
         if days > _DIVIDEND_GAP_FACTOR * usual
     ]
     split_dates = [str(s["date"])[:10] for s in splits if s.get("date")]
-    findings: List[Finding] = []
+    found: List[DividendGap] = []
     for year in sorted(set(scored_years)):
         period = annual.get(year) or {}
         declared = _num(period, "dividends_per_share")
         end = str(period.get("period_end") or "")[:10]
-        if declared is None or declared <= 0 or not end:
+        if not end:
             continue
         start_day = date.fromisoformat(end) - timedelta(days=365)
         start = start_day.isoformat()
+        whose = "SEC filings declare"
+        reference_start = start
+        total = sum(amount for d, amount in paid if start < d <= end)
+        # Without the year's own figure, a year Yahoo shows no payment in is as likely a real pause (TKO's FY2024,
+        # between its 2023 dividend and its 2025 initiation), so it isn't measured against the year before's.
+        if declared is None and total > 0 and year.isdigit():
+            before = annual.get(str(int(year) - 1)) or {}
+            before_end = str(before.get("period_end") or "")[:10]
+            if before_end and before_end < end:
+                declared = _num(before, "dividends_per_share")
+                whose = "SEC filings declare none for the year, and the year before's declared"
+                reference_start = (date.fromisoformat(before_end) - timedelta(days=365)).isoformat()
+        if declared is None or declared <= 0:
+            continue
         recent = (start_day - timedelta(days=_DIVIDEND_GAP_FACTOR * usual)).isoformat()
-        if any(d > start for d in split_dates):
+        if any(d > reference_start for d in split_dates):
             continue
         gap = next(((a, b) for a, b in gaps if recent <= a < end and b > start), None)
-        total = sum(amount for d, amount in paid if start < d <= end)
         if gap is not None and total < _DIVIDEND_SHORTFALL * declared:
-            findings.append(Finding(
-                MEDIUM, "dividend_payments_missing",
-                f"Yahoo's dividend payments sum to {total:.2f}/share, but SEC filings declare "
-                f"{declared:.2f}; there is no payment between {gap[0]} and {gap[1]} (usual "
-                f"interval {usual:.0f} days), so Yahoo's dividend history is likely missing payments.",
-                year,
-            ))
-    return findings
+            found.append(DividendGap(year, gap[0], gap[1], total, declared, whose, usual))
+    return found

@@ -353,3 +353,31 @@ def test_dividend_check_silent_on_a_first_dividend_declared_before_the_year_end(
     annual = {"2021": {"period_end": "2021-09-02", "dividends_per_share": 0.10}}
     assert check_dividend_completeness(annual, old + new, [], {"2021"}) == []
 
+
+def test_dividend_check_measures_a_year_without_secs_figure_against_the_year_before():
+    # Q4: ACN's FY2026 10-K gives no dividends per share, and Yahoo lacks its Oct 2025 and Jan 2026 payments
+    # (3.26 against FY2025's 5.92).
+    payments = _payments(lambda ym: 0.97, skip={"2025-09", "2025-12"})
+    findings = check_dividend_completeness(_declared(y_2024=3.88, y_2025=None), payments, [], {"2024", "2025"})
+    assert [(f.code, f.period) for f in findings] == [("dividend_payments_missing", "2025")]
+    assert "the year before's declared 3.88" in findings[0].message
+
+
+def test_dividend_check_leaves_a_year_without_a_figure_or_a_payment_alone():
+    # TKO's FY2024: no SEC figure and no payment between its 2023 dividend and its 2025 initiation, a real pause.
+    payments = _payments(lambda ym: 0.97, skip={"2025-03", "2025-06", "2025-09", "2025-12"})
+    assert check_dividend_completeness(_declared(y_2024=3.88, y_2025=None), payments, [], {"2025"}) == []
+
+
+def test_dividend_check_without_secs_figure_is_silent_when_the_year_matches_the_year_before():
+    # A gap with every payment there: a change of schedule (quarterly to semiannual), not a missing payment.
+    payments = _payments(lambda ym: 0.97 if ym < "2025" else 1.94, skip={"2025-03", "2025-09"})
+    assert check_dividend_completeness(_declared(y_2024=3.88, y_2025=None), payments, [], {"2025"}) == []
+
+
+def test_dividend_check_without_secs_figure_skips_a_split_since_the_year_before():
+    # The year before's figure is as filed, before the split, while Yahoo's payments are split-adjusted.
+    payments = _payments(lambda ym: 0.97, skip={"2025-09", "2025-12"})
+    splits = [{"date": "2024-05-01", "ratio": 2.0}]
+    assert check_dividend_completeness(_declared(y_2024=7.76, y_2025=None), payments, splits, {"2025"}) == []
+

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 6 · P3 155 · NEEDS-USER 0 · Decided: 7 · Verified: 166
+**Open:** P0 0 · P1 0 · P2 4 · P3 154 · NEEDS-USER 0 · Decided: 7 · Verified: 169
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -346,7 +346,7 @@ Found: iteration 29 by code review 4 (confirmed by reading `_total_shares`) | Fi
 Repro: `_total_shares` looks at market cap ÷ price only when Yahoo's count exists; without it the count is None and DCF and owner earnings fall back to the FY diluted count (1.6x off for a unit structure like BX's). The oracle has the same gap.
 
 ### BUG-040 [P3][VAL] The DDM slip rule scales a regular-size extra at a window end, and misses a slip next to a big raise
-Status: OPEN
+Status: VERIFIED (iteration 164: moot since BUG-049 removed the slip rule; Q3's one-off rule covers the special)
 Found: iteration 29 by code review 4 (#7, #8), re-checked at 1810180 (`qa/evidence/iter29-review4-checks.txt`); moved out of BUG-017 in iteration 31 | Fixed: — | Regression test: —
 Repro: (a) four regular payments plus a 1.2x extra in the last full year: the extra is scaled as if it had slipped, so growth reads 5.46%, between 5.00% without it and 8.11% with it. The iteration-25 demo's MSFT "slipped" payment was such an extra, and SCCO's 2019 (5 payments, 4 in each neighbouring year) will be scaled once it opens the window (anchor 2029). (b) a slipped ex-date in a year whose payments rose by more than half: the size test fails, so the extra payment counts in full (8.01% against a true 5.36%).
 Expected: (a) under today's rule that every payment counts (Q3), only a payment shown to have slipped (a neighbouring year one short, or an ex-date at the year boundary) is scaled; (b) the slip is scaled.
@@ -2341,13 +2341,13 @@ Context: `src/webapp/static/screener.js` auto-runs only when the URL has a query
 Proposal: run the default (unfiltered) screen on load. Small effort, low risk. Awaiting the user's decision.
 
 ### Q3 [VAL] NEEDS-USER: how should DDM treat special and variable dividends?
-Status: OPEN
+Status: VERIFIED (iteration 164; regression tests tests/test_valuation_ddm_specials.py and 3 more files)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: option (c), one-off outliers (over 3x the surrounding regular payments) leave the TTM and the CAGR endpoints; recurring variable dividends such as PGR's stay.
 Context: `value_ddm` counts every payment in the TTM basis and the yearly totals. Today: PGR's TTM is $13.90, of which $13.60 is one January 2026 payment (its annual variable dividend; the regular one is $0.10 a quarter), and DDM is the primary model for insurers. NVDA's latest payment is $0.25 after years of $0.01 (a raise or a special?). COST ($7, $10, $15), PSA ($13.15) and COP specials sit mid-window, so they affect neither the CAGR nor the TTM today, but would at a window edge. (DHR's spin-off is a data bug: BUG-011.)
 Options: (a) keep every payment (today); (b) exclude one-off outliers (e.g. > 3× the surrounding regular payments) from the TTM and the CAGR endpoints; (c) like (b), but keep recurring variable dividends such as PGR's. This is policy, so it's the user's call.
 
 ### Q4 [VAL] NEEDS-USER: what should DDM do when Yahoo's dividend history is missing payments?
-Status: OPEN
+Status: VERIFIED (iteration 164; regression tests tests/test_valuation_ddm_specials.py and 3 more files)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: option (c), DDM N/A ("dividend history incomplete") where the completeness check fires.
 Context: the dividend completeness check (BUG-012) flags CB FY2025: Yahoo lacks its Sep and Dec 2025 payments, so the DDM's TTM dividend is $1.99 instead of ≈ $3.93 and CB's DDM is about half. The spec bases the DDM on TTM dividends from `dividend_events` (Yahoo).
 Options: (a) keep the Yahoo TTM and rely on the data-quality warning (today); (b) when the check fires, use SEC's declared dividends per share for the trailing four quarters (needs BUG-013 fixed first); (c) make DDM N/A ("dividend history incomplete") for flagged companies. (b) and (c) change the spec's DDM basis or N/A rules, so it's the user's call.

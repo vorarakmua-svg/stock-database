@@ -2873,3 +2873,31 @@ Gates: ruff ✓ mypy ✓ pytest 2846 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(scores): FCF and book CAGRs over 3 and 10 years; profitable years as a share (BUG-194, BUG-200)
 Next: apply Q3/Q4 (its worker is done); BUG-271 and BUG-274 as they report.
 
+## Iteration 164: 2026-11-04 14:05: fix (Q3 with Q4, decided)
+Picked: Q3 and Q4 (implemented as P2s), one unit, prepared by an opus worker on BUG-049's history.
+Did: Q3 option (c): a payment over 3x the median of the payments in the 365 days on each side is a one-off (both sides
+must exist, so the latest payment never is: it could be a raise) unless a payment over 3x its regular level fell
+within 91 days of its anniversary in 2 of the 3 years before (PGR's, PCAR's, WRB's, CME's recurring ones stay); where
+the special took a regular payment's slot only its excess goes (HST). One-offs leave the TTM and the CAGR's endpoints
+(SEC's figure only where it holds them). Q4 option (c): `load_inputs` reruns the completeness check (BUG-012) on the
+stored payments and DDM is N/A, "dividend history incomplete (Yahoo is missing payments in FY...)", where a flagged gap
+reaches the TTM window or a growth year read from Yahoo's payments; a year without its own SEC figure is measured
+against the year before's (ACN). The oracle follows in its own commit first (85bea87), naming the fix's heuristics.
+- Reading of Q4: keyed on the gap, not "for as long as the check fires" (that would keep CB N/A to about FY2030 after
+  its TTM and growth are sound again); both give the same rows today.
+- RED: 16 failed (on the right files: my first RED run named two wrong ones); GREEN. Mutants, by me: Q3/Q4's 25,
+  BUG-049's 11, BUG-007's 4, BUG-173's 9, BUG-245's 9, Q7's 2, Q8's 4: all killed.
+- Measured by the worker on DB copies (at 05d77a4; its files unchanged to here): DDM N/A at ACN, ALLE, AON, CB, CBOE,
+  EG, JCI, STE, TT; values COST +53%, CPT +18%, VMRK +17%, HST -43%; 12 medians; 4 verdicts (ACN, AON, CPT expensive
+  to fair; EG fair to cheap); no owner-earnings verdict or label. The new oracle: 17 level-2 rows on head's copy, the
+  4 known with the fix.
+- BUG-040 (the slip rule) is moot since BUG-049; closed with it.
+- Residuals: FERG's 1.5x special served with an interim payment; a special that is the latest payment stays until one
+  follows; a new variable programme's first years read as one-offs.
+Evidence: `qa/evidence/q3q4-{investigation,verify-mine}.txt`; %LOCALAPPDATA%\stockdb-qa\q3q4\out.
+Result: Q3 and Q4 VERIFIED; BUG-040 VERIFIED (moot).
+Gates: ruff ✓ mypy ✓ pytest 2869 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): DDM leaves one-off specials out and refuses an incomplete history (Q3, Q4)
+Next: BUG-271 and BUG-274 as their workers report; code review 27 (5 units since 26: BUG-316, -317/318, -197/199,
+-194/200, Q3/Q4); BUG-295 with Q17.
+
