@@ -1908,14 +1908,18 @@ class XBRLParser:
         self._restore_agreed_figures(us_gaap, data, self._annual_fy)
         return data
 
-    def _annual_filings(self, us_gaap: Dict[str, Any], field: Any, tag: str,
-                        period_key_fn) -> Dict[Any, List[Tuple[str, float, str]]]:
+    def _annual_filings(self, us_gaap: Dict[str, Any], field: Any, tag: str, period_key_fn,
+                        unread: FrozenSet[Tuple[str, str, Any]] = frozenset()
+                        ) -> Dict[Any, List[Tuple[str, float, str]]]:
         """Each annual report's figure for *field* under *tag*, as ``_resolve_canonical``
-        reads them: ``{period: [(filed, value, end), ...]}`` in filing order."""
+        reads them: ``{period: [(filed, value, end), ...]}`` in filing order, without the facts
+        *unread* names (``_to_common_contradicted``; BUG-316)."""
         filings: Dict[Any, List[Tuple[str, float, str]]] = defaultdict(list)
         for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
             value = entry.get("val")
             if entry.get("form", "") not in _ANNUAL_FORMS or not isinstance(value, (int, float)):
+                continue
+            if _unread(unread, field, tag, entry):
                 continue
             if not self._matches_kind(field, entry) or not self._is_full_year(entry):
                 continue
@@ -1994,13 +1998,14 @@ class XBRLParser:
         error keeps its figure (BRK-B's FY2010 share count, LLY's FY2008 D&A).
         """
         conflicts: List[Tuple[Any, str, str, float, float, str, str]] = []
+        unread = _to_common_contradicted(us_gaap)  # a figure no record reads can't be put back either (BUG-316)
         for field in CANONICAL_FIELDS:
             years_by_tag: Dict[str, List[Any]] = defaultdict(list)
             for fy, period in data.items():
                 if isinstance(period.get(field.key), (int, float)):
                     years_by_tag[period["_source_tags"][field.key]].append(fy)
             for tag, years in years_by_tag.items():
-                filings = self._annual_filings(us_gaap, field, tag, period_key_fn)
+                filings = self._annual_filings(us_gaap, field, tag, period_key_fn, unread)
                 for fy in years:
                     history = filings.get(fy, [])
                     latest = float(data[fy][field.key])

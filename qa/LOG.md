@@ -2819,3 +2819,16 @@ Gates: ruff ✓ mypy ✓ pytest 2841 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(web): the runs API's warnings and incomplete; FA shows the SEC's lag (BUG-069, BUG-283)
 Next: the workers' Q3/Q4 and BUG-271; inline BUG-316..318 and the P3s.
 
+## Iteration 160: 2026-11-04 13:14: fix (BUG-316; P3 from code review 26)
+Picked: BUG-316, inline.
+Did: `_annual_filings` takes the facts no record reads (`_to_common_contradicted`) and skips them; the restore step
+(`_restore_agreed_figures`) passes them, so a contradicted to-common figure can't be put back as a "sign flip".
+- RED: the reviewer's case failed (+$50M restored); GREEN. Mutants: BUG-316's 1, and Q16's 14, BUG-252's 11, BUG-260's
+  10, BUG-290's 17, BUG-171's 31, BUG-170's 17: all killed.
+- Not searched on real data (code review 26 found the shape rare); the parser reads fewer facts, so no look-ahead risk.
+Evidence: `qa/evidence/bug316-mutants.json`.
+Result: BUG-316 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2842 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): the restore step skips a to-common figure no record reads (BUG-316)
+Next: BUG-317, BUG-318; the workers' Q3/Q4 and BUG-271.
+

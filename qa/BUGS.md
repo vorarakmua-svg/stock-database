@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 6 · P3 162 · NEEDS-USER 0 · Decided: 7 · Verified: 159
+**Open:** P0 0 · P1 0 · P2 6 · P3 161 · NEEDS-USER 0 · Decided: 7 · Verified: 160
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2020,8 +2020,8 @@ Repro: assumptions._cagr_from_first_positive measures from the first positive va
 Expected: decided edges, with tests.   Actual: as above.
 
 ### BUG-316 [P3][PARSE] The restore step can put back a net-income-to-common figure Q16 left unread
-Status: OPEN
-Found: code review 26 (`qa/evidence/review26.txt`, Minor 1; proven by a synthetic test) | Fixed: | Regression test:
+Status: VERIFIED (iteration 160)
+Found: code review 26 (`qa/evidence/review26.txt`, Minor 1; proven by a synthetic test) | Fixed: (this commit) | Regression test: tests/test_xbrl_parser.py::test_a_contradicted_to_common_figure_is_not_put_back_by_the_restore_step
 Repro: xbrl_parser.py `_annual_filings` (~1911-1929) feeds `_restore_agreed_figures` without skipping the facts `_to_common_contradicted` marks: two 10-Ks' +$50M (contradicted by EPS -0.50 x 100M) beside a later -$50M read as a sign flip and +$50M is restored, reaching Q4 and the TTM. Test: %LOCALAPPDATA%\stockdb-qa\review26\head\tests\test_review26.py::test_a_contradicted_to_common_figure_is_not_put_back_by_the_restore_step. Real data not searched.
 Expected: unread facts take no part in the restore step.   Actual: restored.
 

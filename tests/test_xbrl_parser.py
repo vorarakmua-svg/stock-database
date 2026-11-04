@@ -2955,3 +2955,28 @@ def test_an_eps_rounded_near_zero_contradicts_no_to_common_figure():
     quarters = XBRLParser().extract_quarterly_financials(facts)
     assert [quarters[e]["net_income_to_common"] for e in ("2025-09-30", "2025-12-31", "2026-03-31")] == [
         pytest.approx(v) for v in (13.9e6, 34.9e6, 116.4e6)]
+
+
+def _to_common_filing(filed, fy, to_common, eps):
+    return (filed, f"{fy}-01-01", f"{fy}-12-31", "10-K", {
+        "NetIncomeLoss": eps * 100.0e6, _TO_COMMON: to_common, "EarningsPerShareBasic": eps,
+        "WeightedAverageNumberOfSharesOutstandingBasic": 100.0e6})
+
+
+def test_a_contradicted_to_common_figure_is_not_put_back_by_the_restore_step():
+    # BUG-316 (code review 26): FY2020's 10-Ks of 2021 and 2022 tag +$50M to common beside EPS -0.50 x 100M (their
+    # own EPS contradicts them: not read, Q16); the 10-K of 2023 tags -$50M, which its EPS makes. The restore step
+    # read the unread facts and put +$50M back as a "sign flip" between profitable neighbours.
+    facts = _income_facts(
+        _to_common_filing("2019-02-20", 2018, 80.0e6, 0.80),
+        _to_common_filing("2020-02-20", 2019, 90.0e6, 0.90),
+        _to_common_filing("2021-02-20", 2020, 50.0e6, -0.50),
+        _to_common_filing("2022-02-20", 2020, 50.0e6, -0.50),
+        _to_common_filing("2022-02-20", 2021, 110.0e6, 1.10),
+        _to_common_filing("2023-02-20", 2020, -50.0e6, -0.50),
+        _to_common_filing("2023-02-20", 2022, 120.0e6, 1.20),
+        _to_common_filing("2024-02-20", 2023, 130.0e6, 1.30),
+    )
+    year = XBRLParser().extract_annual_financials(facts)["2020"]
+    assert year["net_income_to_common"] == -50.0e6, (year["net_income_to_common"], year.get("_repairs"))
+
