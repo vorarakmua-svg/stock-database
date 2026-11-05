@@ -1807,3 +1807,19 @@ Gates: ruff ✓ mypy ✓ pytest 1183 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) chore(qa): record code review 14
 Next: the P2s oldest first: BUG-029, BUG-142, BUG-149, BUG-150, BUG-151, BUG-159, BUG-160, BUG-161. Fixes since review
 14's range (16f3005): 2 (BUG-140, BUG-141); review 15 after three more.
+
+## Iteration 100: 2026-11-05: user decisions
+Picked: the user answered every NEEDS-USER item (Q1–Q9, BUG-007, BUG-008 via Q5, BUG-049), taking the recommended
+option each time. No code changed.
+Did: recorded each choice as a `Decision:` line in `qa/BUGS.md`, and moved the 12 items from NEEDS-USER to OPEN:
+Q1 run the unfiltered screen on load; Q2 drop the analyst term from growth; Q3 (b) leave >3x one-off payments out of
+DDM's trailing year and growth endpoints; Q4 (c) DDM N/A when the completeness check flags the year; Q5 (b) flat 0%,
+Lynch N/A (BUG-008's iteration-6 fix comes back); Q6 (a) an explicit successor-CIK map (XOM, BLK); Q7 (a) count every
+share class and unit; Q8 (a) per-share models N/A past a two-year-old basis; Q9 (a) a bank needs deposits, SIC 6324
+is general; BUG-007 Graham's bear N/A with a loss year in the window; BUG-049 (a) DDM growth from SEC's annual
+dividends per share. VAL-02, VAL-03 and VAL-04 go back to TODO for a re-test once implemented.
+Result: NEEDS-USER 0; BUG-008 OPEN (P1); BUG-007, BUG-049 OPEN (P2); Q1–Q9 OPEN (decided, to implement).
+Gates: not run (docs-only change to `qa/`)
+Commit: (this commit) chore(qa): record the user's decisions on every NEEDS-USER item
+Next: the P1 first (BUG-008 with Q2 and Q5), then the P2s oldest first: BUG-007, BUG-029, BUG-049, BUG-142, BUG-149,
+BUG-150, BUG-151, BUG-159, BUG-160, BUG-161.

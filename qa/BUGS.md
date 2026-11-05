@@ -4,7 +4,9 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 8 · P3 82 · NEEDS-USER 12 · Verified: 74
+**Open:** P0 0 · P1 1 · P2 10 · P3 82 · Decided, to implement: 9 (Q1–Q9) · NEEDS-USER 0 · Verified: 74
+
+User decisions (2026-11-05): every NEEDS-USER item was answered; each entry's `Decision:` line records the choice. Under loop rule 6 these are now authorized policy changes: implement each test-first like any fix.
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -64,7 +66,8 @@ Root cause: `_normalize_splits` (`src/valuation/inputs.py`) multiplied in the ob
 Notes: it did: four of the eight L6 multiples mismatches were this bug. Mixed bases within one year (AAPL FY2018: weighted shares restated, shares_outstanding not) remain a VALID-04 topic. Code review 1 (iteration 10): splits dated after the latest fiscal year are never applied at all (KLAC, BKNG): BUG-014. RTX's "resolved" Lynch is agreement on a shared reading (its 1.589 is a spin-off price factor; see L12), not proof.
 
 ### BUG-007 [P2][VAL] Graham bear case ignores loss years
-Status: NEEDS-USER (decide the intended bear case; parked in iteration 8 so the priority rule stops picking it)
+Status: OPEN (decided by the user on 2026-11-05)
+Decision: N/A with a reason. A loss year in the 3-FY window makes Graham's bear value N/A ("loss year in the bear window"), and that value is left out of the bear median. Not zero, and loss years are no longer dropped.
 Found: iteration 4 via VAL-03 | Fixed: — | Regression test: —
 Repro: BA EPS FY2023 −3.67, FY2024 −18.36, FY2025 +2.48 → stored eps_bear = eps_base = eps_bull = 2.48.
 Expected: spec "bear = min(EPS over last 3 FYs)" = −18.36, so Graham's bear value is undefined (√ of a negative).
@@ -72,7 +75,8 @@ Actual: loss years are dropped, so the bear case equals the base case. 8 compani
 Notes: decide whether the bear should be N/A (excluded from the bear median) or 0 when a loss year is in the window.
 
 ### BUG-008 [P1][VAL] When the historical CAGR is undefined, growth falls back to a quarterly "analyst" figure
-Status: REVERTED in iteration 13 (BUG-016): the plan's analyst-only fallback is back until the user decides Q5
+Status: OPEN (decided by the user on 2026-11-05)
+Decision: Q5 option (b): restore iteration 6's fix. No measurable CAGR gives `growth_source: none`, so DCF, DDM and owner earnings project flat 0% and Lynch is N/A. The regression tests named above come back.
 Found: iteration 4 via VAL-01 / VAL-04 | Fixed: iteration 6 (see LOG) | Regression tests: `tests/test_valuation_assumptions.py::test_derive_growth_never_uses_analyst_growth_alone`, `tests/test_valuation_models.py::test_value_dcf_growth_is_flat_when_fcf_history_starts_negative`, `::test_value_lynch_na_when_eps_history_starts_with_losses`
 Repro: DELL Lynch `growth_source: analyst_only`, `hist_cagr: None`, `analyst_growth: 2.825`, giving growth 15% (cap) and base $130.2. With DELL's 6 years of EPS (2020→2026: 6.3%/yr) the oracle gets $54.3.
 Expected: spec growth = min(hist CAGR, analyst), conservative by design; it never says to use analyst growth alone.
@@ -107,7 +111,7 @@ Root cause: upstream, confirmed: Yahoo's own dividend series (DHR.json from the 
 Notes: a "dividend" dated the same day as a non-integer split is the spin-off signature. DHR's 2023 Veralto spin-off appears only as a 1.128 split.
 
 ### BUG-012 [P1][GATHER] CB's stored dividends are missing the Sep and Dec 2025 payments
-Status: VERIFIED for detection; the gap itself is upstream, and the DDM's handling of it is Q4 (NEEDS-USER)
+Status: VERIFIED for detection; the gap itself is upstream, and the DDM's handling of it is Q4 (decided 2026-11-05: DDM N/A when flagged)
 Found: iteration 8 (dividend-gap scan, `qa/evidence/iter08-dividend-gaps.txt`) | Fixed: iteration 9 (see LOG) | Regression tests: `tests/test_integrity.py::test_dividend_check_flags_payments_yahoo_is_missing` plus 4 guard tests, `tests/test_fetcher_concurrency.py::test_assess_flags_dividend_payments_missing_from_yahoo`
 Repro: `dividend_events` CB: 2025-03-14 0.91, 2025-06-13 0.97, then 2026-03-13 0.97, 2026-06-12 1.02: a 273-day gap where the usual is 91. Every other year in the window has 4 payments.
 Expected: 4 payments a year; TTM ≈ $3.93.
@@ -421,7 +425,8 @@ Notes: the oracle applies simple ratios unconditionally too, so its rule changes
 Fix: values stay on the basis of the price they are compared with. `load_inputs` takes the latest priced snapshot's day; `_apply_later_splits` applies a post-filing split only up to that day, and Yahoo's dividends and FY-end price bars, adjusted for every split it knew when fetched, are multiplied back by any split dated after both the latest filing and that day. The oracle took the rule first (30b3c5a): on the scenario valued by the unfixed code it flagged all five applicable models (10x), and its verdicts on the real and golden copies didn't change. The whole scenario (`iter43_stale_db.py`: 10 FYs, dividends, bars) valued by the fix: median $277.31 beside the $1,000 price (was $27.73), and the oracle agrees at both levels (`qa/evidence/iter43-bug048-{oracle,e2e}.txt`). Impact: 0 of 762 real and 0 of 114 golden valuation rows change. Three mutants each fail a test.
 Notes: a split between the price's day and the latest filing, which the filing restated, is a different case: BUG-060.
 ### BUG-049 [P2][VAL] BUG-017's third fix reads a special dividend next to a window end as a schedule change
-Status: NEEDS-USER (§10: BUG-017 has had three fixes; how DDM reads the payment history is your decision)
+Status: OPEN (decided by the user on 2026-11-05)
+Decision: option (a): DDM's growth history comes from SEC's annual `dividends_per_share` (declared, else cash paid; restated for splits); Yahoo's payments give only the latest rate. Where SEC leaves a year empty (BUG-013's 9 years), fall back to Yahoo's yearly totals for that year and say so. Supersedes BUG-017's count-based reading; BUG-040 is to be re-checked against it.
 Found: iteration 39 by code review 5 (I3), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
 Repro: a quarterly dividend growing 5% a year, with 2026's March payment ex-dated 2025-12-31 (`t_bug017/s3_min.py`), reads 5.12% (DDM base $125.23). Add a 3× special in 2024 and HEAD reads 7.75% ($139.97), against 5.12% at 61f8a56: the adjacent-year condition (e84da96) counts the special as a payment, so 2025's slip is no longer scaled. Shapes misread at both revisions, true growth 5% (`ddm_shapes.py`): semiannual to quarterly with a slip, 7.75%; quarterly to monthly with a slip, 5.98%; annual to semiannual from November 2025 with the transition year last, 9.84% (DDM $150.78 against $125); semiannual 40/60 with a slip, 4.36%. The oracle mirrors the rule and gives the same numbers, so it can't see any of them.
 Impact today: none (every DDM value is the same at 61f8a56 and 98013f4: 99 real and 14 golden payers).
@@ -1256,49 +1261,58 @@ Found: iteration 98 by code review 14 (M6), re-run in iteration 99 (`qa/evidence
 Repro: `src/webapp/routes/stocks_api.py:458`: "Submit a lightweight quote-only refresh job", where since BUG-128 a refresh also stores Yahoo's split history and revalues the ticker.
 Expected: the docstring says what the job does.
 
-### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
-Status: NEEDS-USER
+### Q2 [VAL] DECIDED: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
+Status: OPEN (decided by the user on 2026-11-05)
+Decision: drop the analyst term. Growth is the capped historical CAGR alone; `analyst_snapshots.earnings_growth` (Yahoo's one-quarter YoY figure) no longer enters any model's growth. With Q5 (b), an unmeasurable CAGR gives flat 0%.
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
 Proposal: use a forward growth estimate if one is available, or drop the analyst term and rely on the clamped historical CAGR. This is a policy change, so it's the user's call.
 
-### Q1 [UX] NEEDS-USER: show all companies on /screener before a filter is chosen
-Status: NEEDS-USER
+### Q1 [UX] DECIDED: show all companies on /screener before a filter is chosen
+Status: OPEN (decided by the user on 2026-11-05)
+Decision: accepted: a bare `/screener` runs the default, unfiltered screen on load.
 Context: `src/webapp/static/screener.js` auto-runs only when the URL has a query string, so a bare `/screener` shows filters and no rows, which looks broken.
 Proposal: run the default (unfiltered) screen on load. Small effort, low risk. Awaiting the user's decision.
 
-### Q3 [VAL] NEEDS-USER: how should DDM treat special and variable dividends?
-Status: NEEDS-USER
+### Q3 [VAL] DECIDED: how should DDM treat special and variable dividends?
+Status: OPEN (decided by the user on 2026-11-05)
+Decision: option (b): a payment more than 3x the surrounding regular payments is a one-off and is left out of the trailing-year basis and the growth endpoints. Recurring variable dividends (PGR's) are treated the same: DDM values the regular dividend only.
 Context: `value_ddm` counts every payment in the TTM basis and the yearly totals. Today: PGR's TTM is $13.90, of which $13.60 is one January 2026 payment (its annual variable dividend; the regular one is $0.10 a quarter), and DDM is the primary model for insurers. NVDA's latest payment is $0.25 after years of $0.01 (a raise or a special?). COST ($7, $10, $15), PSA ($13.15) and COP specials sit mid-window, so they affect neither the CAGR nor the TTM today, but would at a window edge. (DHR's spin-off is a data bug: BUG-011.)
 Options: (a) keep every payment (today); (b) exclude one-off outliers (e.g. > 3× the surrounding regular payments) from the TTM and the CAGR endpoints; (c) like (b), but keep recurring variable dividends such as PGR's. This is policy, so it's the user's call.
 
-### Q4 [VAL] NEEDS-USER: what should DDM do when Yahoo's dividend history is missing payments?
-Status: NEEDS-USER
+### Q4 [VAL] DECIDED: what should DDM do when Yahoo's dividend history is missing payments?
+Status: OPEN (decided by the user on 2026-11-05)
+Decision: option (c): when the dividend completeness check (BUG-012) flags the trailing year, DDM is N/A with the reason "dividend history incomplete".
 Context: the dividend completeness check (BUG-012) flags CB FY2025: Yahoo lacks its Sep and Dec 2025 payments, so the DDM's TTM dividend is $1.99 instead of ≈ $3.93 and CB's DDM is about half. The spec bases the DDM on TTM dividends from `dividend_events` (Yahoo).
 Options: (a) keep the Yahoo TTM and rely on the data-quality warning (today); (b) when the check fires, use SEC's declared dividends per share for the trailing four quarters (needs BUG-013 fixed first); (c) make DDM N/A ("dividend history incomplete") for flagged companies. (b) and (c) change the spec's DDM basis or N/A rules, so it's the user's call.
 
-### Q5 [VAL] NEEDS-USER: when a model's historical growth can't be measured, what growth should it use?
-Status: NEEDS-USER
+### Q5 [VAL] DECIDED: when a model's historical growth can't be measured, what growth should it use?
+Status: OPEN (decided by the user on 2026-11-05)
+Decision: option (b): flat 0% growth for DCF, DDM and owner earnings, and Lynch N/A ("no usable earnings-growth history"). Implemented as BUG-008's fix. With Q2 the analyst figure is gone, so (a) is no longer possible. The same rule governs the 7 DDM rows with fewer than 4 full years of dividends (BUG-010) wherever their growth can't be measured.
 Context: the CAGR is undefined when the 10-FY window starts on a loss or negative FCF (DELL, CVX, MU, PLTR, AMD and others). The plan uses yfinance's one-quarter "analyst" figure alone, clamped to the cap (seen from −85% to +1,369%). Iteration 6 switched to flat 0%, with Lynch N/A; BUG-016 restores the plan until you decide. The switch moved 31 valuations (CVX DCF $293 → $124). It also governs 7 DDM rows with fewer than 4 full years of dividends (BUG-010): BKNG, CRM, DELL, GEV, GOOGL, META, TMUS; under (a) CRM's DDM takes its 52.2% one-quarter figure capped at 10% ($32.25, against $25.16 from its measured 4.0%). Once you decide, a DDM test with an analyst figure will pin the choice.
 Options: (a) the plan's analyst-only fallback; (b) flat 0% (iteration 6); (c) measure from the first profitable year when at least 4 FYs remain (DELL 6.3%; CVX's FCF would hit the 15% cap again). Related: Q2 (what the "analyst" figure is).
 
-### Q6 [GATHER] NEEDS-USER: should XOM keep Exxon Mobil Corp's history now that SEC maps the ticker to a new registrant?
-Status: NEEDS-USER
+### Q6 [GATHER] DECIDED: should XOM keep Exxon Mobil Corp's history now that SEC maps the ticker to a new registrant?
+Status: OPEN (decided by the user on 2026-11-05)
+Decision: option (a): an explicit successor map in the code (2115436 → 34088 for XOM; BLK's 2012383 → its predecessor's CIK), reading the predecessor's facts for the years the new registrant lacks.
 Context: SEC's ticker map now sends XOM to ExxonMobil Holdings Corp (CIK 2115436), which has filed only 10-Qs since 2026-07; the 20 fiscal years of history are under Exxon Mobil Corp (CIK 34088). A fresh collection therefore has no XOM fundamentals, and every model that needs fiscal years is N/A; re-collecting into your existing database keeps the stored years. Since iteration 38 the gap is explained in the run, the database and the FA and VAL tabs (BUG-042).
 Options: (a) a small, explicit successor map in the code (2115436 → 34088), reading the predecessor's facts for the years the new registrant lacks: safe, but each reorganization needs an entry; (b) fall back automatically to the CIK already stored for the ticker when the new one has no 10-K: no upkeep, but a reassigned ticker could mix two unrelated companies, and a fresh database has no stored CIK; (c) keep the explanation only and wait for the new registrant's first 10-K. Recommendation: (a).
 Iteration 77: BLK likewise. SEC maps it to CIK 2012383 (BlackRock, Inc.), whose company facts start with a 10-Q filed 2024-11-06 and the FY2024 10-K, so its record starts at FY2021 (opening balances only) and FY2022 has no balance sheet; the earlier registrant's filings aren't in the cache or your data (`qa/evidence/iter77-quality-sweep.txt`).
 
-### Q7 [VAL] NEEDS-USER: should per-share values count every share class and partnership unit?
-Status: NEEDS-USER
+### Q7 [VAL] DECIDED: should per-share values count every share class and partnership unit?
+Status: OPEN (decided by the user on 2026-11-05)
+Decision: option (a): per-share values count every share class and partnership unit, i.e. market cap ÷ price whenever it is larger than Yahoo's count. Replaces BUG-035's 2–5% gap rule, which resolves BUG-051.
 Context: `_total_shares` takes market cap ÷ price (every class and unit, the way Yahoo values the company) when it is more than 5% above Yahoo's count, and settles a 2–5% gap by whichever figure is nearer the latest FY count (BUG-035). That decides the question company by company, and between 2% and 5% the answer flips with count drift (BUG-051): PLD takes market cap ÷ price on the real copy (954.8M) but Yahoo's count on the golden one (950.3M); KKR, BLK and PLTR sit in the same band. Above 5%: SPG's partnership units (17%), BX's (65%), and the second classes of APP, V, META, GOOGL and BRK-B. Raised by code review 5.
 Options: (a) always count every class and unit (market cap ÷ price whenever it is larger); (b) count only the listed class (Yahoo's count, or the FY diluted count); (c) keep the gap rule and make its tiebreaker fresher (BUG-051). Recommendation: (a) for classes, which share the same earnings; units are your call (they are exchangeable into shares, so (a) is the conservative choice).
 
-### Q8 [VAL] NEEDS-USER: should a company be valued on a basis year that is years old?
-Status: NEEDS-USER
+### Q8 [VAL] DECIDED: should a company be valued on a basis year that is years old?
+Status: OPEN (decided by the user on 2026-11-05)
+Decision: option (a): the per-share models are N/A, with the reason, when the basis fiscal year is more than two fiscal years old.
 Context: when a company's usable annual reports stop (it moved to IFRS, BUG-066, or stopped filing), its models keep valuing it on the last fiscal year it has, beside today's price: in code review 6's example Graham on FY2017 and the multiples band on FY2019, computed in 2026. Nothing in the valuation checks how old the basis is; the "Basis FY" column shows it.
 Options: (a) mark the per-share models N/A past a cutoff (say a basis more than two fiscal years old), with the reason; (b) keep the values and add a staleness flag to the verdict; (c) keep things as they are, with BUG-066's note explaining the gap. Recommendation: (a) at two years.
 
-### Q9 [VAL] NEEDS-USER: should asset managers and a health insurer be valued as banks and insurers?
-Status: NEEDS-USER
+### Q9 [VAL] DECIDED: should asset managers and a health insurer be valued as banks and insurers?
+Status: OPEN (decided by the user on 2026-11-05)
+Decision: option (a): a company is a bank only if its balance sheet reports deposits; otherwise it is valued as a general company (BLK, BX, KKR). SIC 6324 (UNH) is general.
 Context: `classify_sic` makes SIC 6020-6299 a bank ("depository institutions, holding companies, broker-dealers, finance") and 6300-6411 an insurer, so BLK (6211), BX and KKR (6282, investment advice) are banks and UNH (6324, hospital and medical service plans) an insurer. Their DCF, Lynch and owner-earnings models are "not applicable to sector 'bank'" (or 'insurance'), leaving DDM, Graham and the P/B band (KKR's DDM base 7.2 at a price of 107.78; BLK's 345.6 at 1132.74), and the bank ratios are empty for all three asset managers, which report no deposits or net interest income. The other ten banks (AXP, BAC, C, COF, GS, JPM, MS, SCHW, USB, WFC) report both.
 Options: (a) a bank also needs deposits on its balance sheet, otherwise it is valued as a general company, and SIC 6324 is general (managed care is valued on its earnings); (b) (a) for the asset managers only, with UNH kept an insurer; (c) keep the SIC routing and say on the VAL tab why the cash-flow models don't apply. Recommendation: (a).
 
