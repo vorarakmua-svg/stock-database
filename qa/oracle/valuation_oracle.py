@@ -178,9 +178,6 @@ class Inputs:
                           "from market_snapshots where ticker=? order by collected_at desc limit 1",
                           (ticker,)).fetchone() or (None,) * 6
         self.beta, self.rf, self.snap_shares, self.price, market_cap, collected_at = snap
-        row = db.execute("select earnings_growth from analyst_snapshots where ticker=? order by collected_at desc "
-                         "limit 1", (ticker,)).fetchone()
-        self.analyst = row[0] if row else None
         self.splits = db.execute("select date, ratio from split_events where ticker=? order by date",
                                  (ticker,)).fetchall()
         self.annual = db.execute("select fiscal_year, period_end, net_income, total_equity, shares_outstanding, "
@@ -259,13 +256,11 @@ class Inputs:
         raw = self.rf + (self.beta if self.beta is not None else 1.0) * ERP
         return raw, clamp(raw, *DISCOUNT_CLAMP)
 
-    def growth(self, hist: Optional[float], cap: float) -> Optional[float]:
-        if hist is None:
-            # Spec gap (Q5): with no measurable CAGR the spec doesn't say what growth to use, so the row is
-            # not derivable from it. (The code follows the plan's analyst-only fallback until the user decides.)
-            return None
-        raw = min(hist, self.analyst) if self.analyst is not None else hist
-        return clamp(raw, 0.0, cap)
+    def growth(self, hist: Optional[float], cap: float) -> float:
+        # The user's decisions of 2026-11-05: growth is the historical CAGR alone, clamped (Q2: Yahoo's
+        # "earningsGrowth" is one quarter's change, not a forecast), and flat 0% when no CAGR can be measured
+        # (Q5 (b)). Lynch publishes nothing without a measured CAGR, and checks that before calling this.
+        return 0.0 if hist is None else clamp(hist, 0.0, cap)
 
     def after_price(self, date: str) -> bool:
         """A split dated after both the latest filing and the latest price's day (BUG-048)."""
