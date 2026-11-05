@@ -72,6 +72,9 @@ class ValuationResult:
   Historical CAGR uses up to 10 FYs of the model's basis metric (FCF for DCF, dividends
   for DDM, EPS for Lynch); requires ≥ 4 FYs. Analyst growth = `analyst_snapshots.earnings_growth`
   (latest row); if absent, historical CAGR alone.
+  *Changed 2026-11-05 by the user's decisions Q2 and Q5 (`qa/BUGS.md`): growth is the historical
+  CAGR alone, clamped; `analyst_snapshots.earnings_growth` (Yahoo's one-quarter YoY figure) is no
+  longer used, and with no measurable CAGR growth is flat 0% (Lynch N/A).*
 - **Terminal growth** = 2.5%.
 - **Discount rate** = CAPM cost of equity: `risk_free_rate + beta × 4.5% ERP`,
   clamped to **[8%, 14%]**. `risk_free_rate` from the latest `market_snapshots` row;
@@ -97,6 +100,7 @@ class ValuationResult:
 
 - Basis = trailing 12-month dividends per share from `dividend_events`.
 - Dividend growth = `min(hist dividend CAGR (≤10 yrs), analyst growth)`, clamped **[0%, 10%]**.
+  *Since 2026-11-05 (Q2, Q5): the hist dividend CAGR alone; flat 0% when it can't be measured.*
 - Stage 1: 5 years at that growth; terminal Gordon at 2.5%. Same CAPM discount.
 - **N/A when:** < 3 calendar years of dividend history, or TTM dividends = 0.
 

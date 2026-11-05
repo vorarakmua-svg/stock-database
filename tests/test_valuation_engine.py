@@ -17,7 +17,7 @@ from src.valuation.models import ValuationResult
 def _inputs(**kwargs):
     defaults = dict(ticker="AAA", sector_class="general", fy_records=[],
                     shares_outstanding=100.0, beta=1.0, risk_free_rate=0.045,
-                    analyst_growth=None, dividends=[], fy_end_prices={})
+                    dividends=[], fy_end_prices={})
     defaults.update(kwargs)
     return ValuationInputs(**defaults)
 

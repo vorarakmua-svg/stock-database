@@ -1,7 +1,10 @@
 """Conservative mechanical assumption rules shared by the valuation models.
 
-Growth = min(historical CAGR, analyst estimate), clamped to [0, cap] — biased
-toward not overpaying. Discount = CAPM cost of equity with hard floor/cap.
+Growth = historical CAGR, clamped to [0, cap], and flat 0% when no CAGR can be
+measured — biased toward not overpaying. (The user's decisions of 2026-11-05, Q2
+and Q5: Yahoo's ``earningsGrowth``, the plan's "analyst estimate", is one
+quarter's year-over-year change, not a forecast, so it no longer enters growth.)
+Discount = CAPM cost of equity with hard floor/cap.
 Every derived number and every fallback is recorded in a meta dict that the
 models fold into their stored ``assumptions`` JSON (the trust anchor).
 """
@@ -71,32 +74,24 @@ def historical_cagr(
 
 def derive_growth(
     history: Sequence[Optional[float]],
-    analyst_growth: Optional[float],
     *,
     cap: float = GROWTH_CAP,
     periods: Optional[Sequence[int]] = None,
 ) -> Tuple[float, Dict[str, Any]]:
-    """Base growth = min(hist CAGR, analyst), clamped to [0, cap].
+    """Base growth = the history's CAGR, clamped to [0, cap].
 
     Callers enforce their own minimum-history applicability rules BEFORE
-    calling; with no usable candidate this conservatively returns 0.0
-    (flat projection) with ``growth_source: "none"`` — a caller that cannot
-    honestly publish a number without a growth rate must check for that.
+    calling; with no measurable CAGR (an endpoint at or below zero, or too
+    short a history) this conservatively returns 0.0 (flat projection) with
+    ``growth_source: "none"`` — a caller that cannot honestly publish a number
+    without a growth rate (Lynch) must check for that.
     ``periods`` (the year label of each history value) is passed through to
     ``historical_cagr`` so calendar gaps do not inflate the CAGR.
     """
     hist = list(history)
     cagr = historical_cagr(hist, periods=periods)
-    candidates = [g for g in (cagr, analyst_growth) if g is not None]
-    if cagr is not None and analyst_growth is not None:
-        source = "min(hist,analyst)"
-    elif cagr is not None:
-        source = "hist_only"
-    elif analyst_growth is not None:
-        source = "analyst_only"
-    else:
-        source = "none"
-    raw = min(candidates) if candidates else 0.0
+    source = "hist_only" if cagr is not None else "none"
+    raw = cagr if cagr is not None else 0.0
     base = min(max(raw, 0.0), cap)
     meta: Dict[str, Any] = {
         "growth_base": base,
@@ -104,7 +99,6 @@ def derive_growth(
         "growth_source": source,
         "hist_cagr": cagr,
         "cagr_years": _cagr_span(len(hist), periods),
-        "analyst_growth": analyst_growth,
         "growth_cap": cap,
     }
     return base, meta

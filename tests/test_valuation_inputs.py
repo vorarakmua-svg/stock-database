@@ -77,14 +77,13 @@ def test_fcf_prefers_levered_fcf(val_db):
     assert inputs.fy_records[0].fcf == 70.0  # levered_fcf, not free_cash_flow
 
 
-def test_market_analyst_and_dividends_loaded(val_db):
+def test_market_and_dividends_loaded(val_db):
     conn = _connect(val_db)
     inputs = load_inputs(conn, "AAA")
     conn.close()
     assert inputs.shares_outstanding == 100.0
     assert inputs.beta == 1.2
     assert inputs.risk_free_rate == 0.043
-    assert inputs.analyst_growth == 0.08
     assert inputs.dividends == [("2023-03-01", 0.25), ("2023-09-01", 0.25)]
 
 
@@ -1158,3 +1157,51 @@ def test_an_ads_ratio_is_a_whole_number_or_unreadable(filed_to_market, ratio):
 
     assert _ads_ratio(filed_to_market) == ratio
 
+
+
+# ---- Growth ignores Yahoo's "earningsGrowth" (user decisions Q2 and Q5, 2026-11-05; BUG-008) ----
+
+def _valued(db_path):
+    from src.valuation.engine import run_valuations
+
+    conn = _connect(db_path)
+    try:
+        return {r.model: r for r in run_valuations(load_inputs(conn, "AAA"))}
+    finally:
+        conn.close()
+
+
+def _set(db_path, sql, *params):
+    conn = sqlite3.connect(db_path)
+    conn.execute(sql, params)
+    conn.commit()
+    conn.close()
+
+
+def test_growth_is_the_historical_cagr_whatever_yahoo_quarterly_growth_says(val_db):
+    # Yahoo's earningsGrowth is one quarter's year-over-year change, not a forecast (Q2): a weak
+    # quarter (1%) no longer pulls the growth below the measured CAGR.
+    _set(val_db, "UPDATE analyst_snapshots SET earnings_growth = 0.01 WHERE ticker = 'AAA'")
+    res = _valued(val_db)
+    dcf, lynch = res["dcf"], res["lynch"]
+    assert dcf.applicable and lynch.applicable
+    assert dcf.assumptions["growth_base"] == pytest.approx((90.0 / 70.0) ** 0.25 - 1)
+    assert lynch.assumptions["growth_base"] == pytest.approx((1.4 / 1.0) ** 0.25 - 1)
+    for r in (dcf, lynch):
+        assert r.assumptions["growth_source"] == "hist_only"
+        assert "analyst_growth" not in r.assumptions
+
+
+def test_unmeasurable_growth_is_flat_and_lynch_na_whatever_yahoo_says(val_db):
+    # A window that starts on a loss and negative FCF has no CAGR. Q5 (b): DCF projects flat 0% and
+    # Lynch publishes nothing, even beside a large Yahoo figure (MU's +1,368.5%).
+    _set(val_db, "UPDATE analyst_snapshots SET earnings_growth = 13.685 WHERE ticker = 'AAA'")
+    _set(val_db, "UPDATE metrics_annual SET levered_fcf = -10.0 WHERE ticker = 'AAA' AND fiscal_year = 2019")
+    _set(val_db, "UPDATE financials_annual SET eps_diluted = -0.5 WHERE ticker = 'AAA' AND fiscal_year = 2019")
+    res = _valued(val_db)
+    dcf, lynch = res["dcf"], res["lynch"]
+    assert dcf.applicable
+    assert dcf.assumptions["growth_source"] == "none"
+    assert dcf.assumptions["growth_base"] == 0.0
+    assert lynch.applicable is False
+    assert lynch.na_reason == "no usable earnings-growth history"

@@ -1823,3 +1823,17 @@ Gates: not run (docs-only change to `qa/`)
 Commit: (this commit) chore(qa): record the user's decisions on every NEEDS-USER item
 Next: the P1 first (BUG-008 with Q2 and Q5), then the P2s oldest first: BUG-007, BUG-029, BUG-049, BUG-142, BUG-149,
 BUG-150, BUG-151, BUG-159, BUG-160, BUG-161.
+
+## Iteration 101: 2026-11-05: fix
+Picked: BUG-008 (P1), with Q2 and Q5, the user's growth decisions of iteration 100. Run in a Claude Code cloud
+session: no `SCRATCH`, no real or golden database, and `data.sec.gov` blocked by the session's network policy.
+Did: the oracle first (f3c9a07): growth is the CAGR alone, clamped, and 0.0 with none measured. Then two tests through
+`load_inputs` and `run_valuations`, watched failing (DCF took Yahoo's 1% for a 6.48% CAGR; with a loss year first
+it read `analyst_only`). Fix: `derive_growth` has no analyst argument; `ValuationInputs.analyst_growth` and its read
+are gone. The flat-DCF model test came back and a 5% fallback mutant fails four tests. Docs: README (model table and
+growth paragraph), USAGE_GUIDE, and dated notes in the two design specs.
+Result: BUG-008, Q2, Q5 FIXED; VERIFIED waits on a re-measure of the impact on the real or golden copy.
+Gates: ruff ✓ mypy ✓ pytest 1187 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(valuation): growth is the historical CAGR alone, flat where it can't be measured
+Next: the P2s oldest first: BUG-007 (Graham bear N/A), BUG-029, BUG-049, BUG-142, BUG-149, BUG-150, BUG-151, BUG-159,
+BUG-160, BUG-161. Fixes since review 14's range: 3 (BUG-140, BUG-141, BUG-008); review 15 after two more.

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 1 · P2 10 · P3 82 · Decided, to implement: 9 (Q1–Q9) · NEEDS-USER 0 · Verified: 74
+**Open:** P0 0 · P1 0 · P2 10 · P3 82 · Decided, to implement: 7 (Q1, Q3, Q4, Q6–Q9) · NEEDS-USER 0 · Fixed, to verify on real data: 3 (BUG-008, Q2, Q5) · Verified: 74
 
 User decisions (2026-11-05): every NEEDS-USER item was answered; each entry's `Decision:` line records the choice. Under loop rule 6 these are now authorized policy changes: implement each test-first like any fix.
 
@@ -75,8 +75,9 @@ Actual: loss years are dropped, so the bear case equals the base case. 8 compani
 Notes: decide whether the bear should be N/A (excluded from the bear median) or 0 when a loss year is in the window.
 
 ### BUG-008 [P1][VAL] When the historical CAGR is undefined, growth falls back to a quarterly "analyst" figure
-Status: OPEN (decided by the user on 2026-11-05)
+Status: FIXED (decided by the user on 2026-11-05; fixed in iteration 101, to verify on real data)
 Decision: Q5 option (b): restore iteration 6's fix. No measurable CAGR gives `growth_source: none`, so DCF, DDM and owner earnings project flat 0% and Lynch is N/A. The regression tests named above come back.
+Fixed: iteration 101 (Q2 and Q5 together). `derive_growth` (`src/valuation/assumptions.py`) takes no analyst figure: growth is the history's CAGR clamped to [0, cap], else flat 0% with `growth_source: none`; Lynch is N/A on `none` (unchanged path). `ValuationInputs.analyst_growth` and its `analyst_snapshots` read are gone, so the figure can't re-enter a model. The oracle took the rule first (f3c9a07). Regression tests: `tests/test_valuation_inputs.py::test_growth_is_the_historical_cagr_whatever_yahoo_quarterly_growth_says`, `::test_unmeasurable_growth_is_flat_and_lynch_na_whatever_yahoo_says` (both watched failing: 0.01 for 6.48%, and `analyst_only` for `none`), `tests/test_valuation_models.py::test_value_dcf_growth_is_flat_when_fcf_history_starts_negative`, `tests/test_valuation_assumptions.py::test_derive_growth_sources`; a 5% fallback mutant fails all four. Not yet VERIFIED: this cloud session has no copy of the real or golden database and SEC is blocked, so the impact (iteration 6 measured 31 rows, e.g. CVX DCF $293 → $124) is still to be re-measured. Stored valuations change only after the next collection or `python -m src.valuation.backfill`.
 Found: iteration 4 via VAL-01 / VAL-04 | Fixed: iteration 6 (see LOG) | Regression tests: `tests/test_valuation_assumptions.py::test_derive_growth_never_uses_analyst_growth_alone`, `tests/test_valuation_models.py::test_value_dcf_growth_is_flat_when_fcf_history_starts_negative`, `::test_value_lynch_na_when_eps_history_starts_with_losses`
 Repro: DELL Lynch `growth_source: analyst_only`, `hist_cagr: None`, `analyst_growth: 2.825`, giving growth 15% (cap) and base $130.2. With DELL's 6 years of EPS (2020→2026: 6.3%/yr) the oracle gets $54.3.
 Expected: spec growth = min(hist CAGR, analyst), conservative by design; it never says to use analyst growth alone.
@@ -1262,7 +1263,7 @@ Repro: `src/webapp/routes/stocks_api.py:458`: "Submit a lightweight quote-only r
 Expected: the docstring says what the job does.
 
 ### Q2 [VAL] DECIDED: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
-Status: OPEN (decided by the user on 2026-11-05)
+Status: FIXED (decided by the user on 2026-11-05; fixed in iteration 101 with BUG-008, to verify on real data)
 Decision: drop the analyst term. Growth is the capped historical CAGR alone; `analyst_snapshots.earnings_growth` (Yahoo's one-quarter YoY figure) no longer enters any model's growth. With Q5 (b), an unmeasurable CAGR gives flat 0%.
 Context: the spec uses `analyst_snapshots.earnings_growth`, which is yfinance `earningsGrowth` (trailing quarterly YoY): values run from −84.6% to +1,368.5%. `min(hist, analyst)` mostly masks it, but it is not a long-term growth estimate.
 Proposal: use a forward growth estimate if one is available, or drop the analyst term and rely on the clamped historical CAGR. This is a policy change, so it's the user's call.
@@ -1286,7 +1287,7 @@ Context: the dividend completeness check (BUG-012) flags CB FY2025: Yahoo lacks 
 Options: (a) keep the Yahoo TTM and rely on the data-quality warning (today); (b) when the check fires, use SEC's declared dividends per share for the trailing four quarters (needs BUG-013 fixed first); (c) make DDM N/A ("dividend history incomplete") for flagged companies. (b) and (c) change the spec's DDM basis or N/A rules, so it's the user's call.
 
 ### Q5 [VAL] DECIDED: when a model's historical growth can't be measured, what growth should it use?
-Status: OPEN (decided by the user on 2026-11-05)
+Status: FIXED (decided by the user on 2026-11-05; fixed in iteration 101 with BUG-008, to verify on real data)
 Decision: option (b): flat 0% growth for DCF, DDM and owner earnings, and Lynch N/A ("no usable earnings-growth history"). Implemented as BUG-008's fix. With Q2 the analyst figure is gone, so (a) is no longer possible. The same rule governs the 7 DDM rows with fewer than 4 full years of dividends (BUG-010) wherever their growth can't be measured.
 Context: the CAGR is undefined when the 10-FY window starts on a loss or negative FCF (DELL, CVX, MU, PLTR, AMD and others). The plan uses yfinance's one-quarter "analyst" figure alone, clamped to the cap (seen from −85% to +1,369%). Iteration 6 switched to flat 0%, with Lynch N/A; BUG-016 restores the plan until you decide. The switch moved 31 valuations (CVX DCF $293 → $124). It also governs 7 DDM rows with fewer than 4 full years of dividends (BUG-010): BKNG, CRM, DELL, GEV, GOOGL, META, TMUS; under (a) CRM's DDM takes its 52.2% one-quarter figure capped at 10% ($32.25, against $25.16 from its measured 4.0%). Once you decide, a DDM test with an analyst figure will pin the choice.
 Options: (a) the plan's analyst-only fallback; (b) flat 0% (iteration 6); (c) measure from the first profitable year when at least 4 FYs remain (DELL 6.3%; CVX's FCF would hit the 15% cap again). Related: Q2 (what the "analyst" figure is).

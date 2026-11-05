@@ -30,7 +30,7 @@ def _fy(fy, fcf=None, net_income=None, equity=None, eps=None, shares=100.0,
 def _inputs(**kwargs):
     defaults = dict(ticker="AAA", sector_class="general", fy_records=[],
                     shares_outstanding=100.0, beta=1.0, risk_free_rate=0.045,
-                    analyst_growth=None, dividends=[], fy_end_prices={},
+                    dividends=[], fy_end_prices={},
                     as_of=date(2024, 1, 1))
     defaults.update(kwargs)
     return ValuationInputs(**defaults)
@@ -82,6 +82,15 @@ def test_value_dcf_na_negative_fcf():
     res = value_dcf(_inputs(fy_records=recs))
     assert res.applicable is False
     assert res.na_reason == "median 3-year FCF is not positive"
+
+
+def test_value_dcf_growth_is_flat_when_fcf_history_starts_negative():
+    # BUG-008, Q5 (b): no measurable CAGR projects flat 0%, not some other figure.
+    recs = [_fy(fy, fcf=f) for fy, f in zip(range(2019, 2024), (-20.0, 80.0, 90.0, 100.0, 110.0))]
+    res = value_dcf(_inputs(fy_records=recs))
+    assert res.applicable is True
+    assert res.assumptions["growth_source"] == "none"
+    assert res.assumptions["growth_base"] == 0.0
 
 
 def test_value_dcf_na_missing_shares():
@@ -380,11 +389,11 @@ def test_value_graham_na_no_data():
 
 # ---- Peter Lynch ----
 def test_value_lynch_hand_computed():
-    # EPS CAGR 10%/yr; analyst 12% -> min is hist 10%.
+    # EPS CAGR 10%/yr.
     # fair P/E = growth*100 clamped [5,25]: bear 7 -> base 10 -> bull 13.
     eps_hist = [2.00, 2.20, 2.42, 2.662, 2.9282]
     recs = [_fy(2019 + i, eps=e, shares=100.0) for i, e in enumerate(eps_hist)]
-    res = value_lynch(_inputs(fy_records=recs, analyst_growth=0.12))
+    res = value_lynch(_inputs(fy_records=recs))
     assert res.applicable is True
     g = res.assumptions["growth_base"]
     expected_pe = min(max(g * 100.0, 5.0), 25.0)
@@ -400,12 +409,12 @@ def test_value_lynch_fair_pe_floor_applies():
 
 
 def test_value_lynch_na_when_no_growth_is_derivable():
-    # 5 FYs of EPS but the first is negative -> no CAGR; no analyst estimate
+    # 5 FYs of EPS but the first is negative -> no CAGR
     # -> growth_source "none". Publishing floor-P/E x EPS here would be a
     # fabricated number.
     eps_hist = [-1.0, 1.0, 2.0, 3.0, 4.0]
     recs = [_fy(2019 + i, eps=e, shares=100.0) for i, e in enumerate(eps_hist)]
-    res = value_lynch(_inputs(fy_records=recs, analyst_growth=None))
+    res = value_lynch(_inputs(fy_records=recs))
     assert res.applicable is False
     assert res.na_reason == "no usable earnings-growth history"
     assert res.basis_fiscal_year == 2023

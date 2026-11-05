@@ -94,7 +94,8 @@ years 6-10 fading linearly to the 2.5% terminal rate, Gordon terminal at year 10
 
 Growth is derived by the existing conservative rule (`derive_growth`) on the
 owner-earnings history: `min(historical CAGR, analyst estimate)`, clamped to
-`[0, 15%]`. Bear/base/bull come from the existing `growth_scenarios` spread
+`[0, 15%]` (since 2026-11-05, Q2 and Q5: the historical CAGR alone, flat 0% when it
+can't be measured). Bear/base/bull come from the existing `growth_scenarios` spread
 (+/- 3pp), with the discount rate held **fixed** across scenarios — under this
 method the rate is an observable market fact (the Treasury yield), not a risk
 knob to be flexed.

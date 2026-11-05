@@ -315,8 +315,8 @@ extra network calls.
 | **Historical multiples band** | all sectors | ≥3 fiscal years of price + sector-appropriate multiple (P/E, P/B for banks/insurers, P/FFO for REITs) |
 
 Each model returns a **bear / base / bull** per-share range, not a single number — growth
-and discount-rate assumptions are deliberately conservative (growth = min(historical CAGR,
-analyst estimate), CAPM discount rate with a floor/cap). When a model doesn't fit a
+and discount-rate assumptions are deliberately conservative (growth = historical CAGR,
+capped, and flat when it can't be measured; CAPM discount rate with a floor/cap). When a model doesn't fit a
 company's sector (DCF/Lynch for banks, insurers, and REITs) or the data it needs isn't
 available (e.g. no dividend history for DDM), it reports `applicable = false` with a
 plain-English `na_reason` — never a fabricated number.

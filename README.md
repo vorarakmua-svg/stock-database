@@ -299,7 +299,7 @@ five sector-aware models per ticker, each producing a bear/base/bull per-share r
 
 | Model | Applies to | Basis |
 |---|---|---|
-| **DCF** (two-stage FCF) | general, utility, energy | Median 3-year FCF, growth = min(historical CAGR, analyst estimate), CAPM discount rate |
+| **DCF** (two-stage FCF) | general, utility, energy | Median 3-year FCF, growth = historical CAGR (flat 0% when it can't be measured), CAPM discount rate |
 | **DDM** (multi-stage Gordon) | any steady dividend payer | Trailing-12-month dividend, dividend CAGR |
 | **Graham Number** | any company with positive EPS + book value | `sqrt(22.5 × EPS × BVPS)` |
 | **Peter Lynch fair value** | general, utility, energy | Growth-rate-as-fair-P/E × EPS |
@@ -307,7 +307,11 @@ five sector-aware models per ticker, each producing a bear/base/bull per-share r
 
 A model that doesn't fit a company's sector or lacks the data it needs (e.g. DCF/Lynch
 for banks and REITs, DDM for non-payers) reports `applicable=false` with a plain-English
-`na_reason` instead of a fabricated number. Every computed value is stored alongside the
+`na_reason` instead of a fabricated number. Growth is each model's own historical CAGR
+(FCF, dividends, EPS or owner earnings over up to 10 years), clamped to [0%, 15%] (10% for
+DDM); where it can't be measured (the window starts on a loss or negative cash flow) the
+projection is flat and Lynch is N/A. Yahoo's `earningsGrowth`, a single quarter's
+year-over-year change, plays no part. Every computed value is stored alongside the
 exact assumptions used (growth, discount rate, basis figures) in the `valuations` table,
 with cross-model bear/base/bull medians in `valuation_summary` — so results are
 reproducible and auditable, not just a live calculation.

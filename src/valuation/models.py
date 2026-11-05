@@ -125,7 +125,7 @@ def value_dcf(inputs: ValuationInputs) -> ValuationResult:
         if not shares:
             return _na("dcf", "shares outstanding unavailable", basis_fy=basis_fy)
 
-    growth, gmeta = derive_growth(fcf_hist, inputs.analyst_growth,
+    growth, gmeta = derive_growth(fcf_hist,
                                   periods=[r.fiscal_year for r in recs])
     discount, dmeta = derive_discount(inputs.risk_free_rate, inputs.beta)
     g_bear, g_base, g_bull = growth_scenarios(growth)
@@ -247,7 +247,7 @@ def value_ddm(inputs: ValuationInputs) -> ValuationResult:
     if len(complete_years) < 4:
         complete_years = []
     complete = [total for _, total in complete_years]
-    growth, gmeta = derive_growth(complete, inputs.analyst_growth, cap=DDM_GROWTH_CAP,
+    growth, gmeta = derive_growth(complete, cap=DDM_GROWTH_CAP,
                                   periods=[year for year, _ in complete_years])
     discount, dmeta = derive_discount(inputs.risk_free_rate, inputs.beta)
     g_bear, g_base, g_bull = growth_scenarios(growth, cap=DDM_GROWTH_CAP)
@@ -331,10 +331,10 @@ def value_lynch(inputs: ValuationInputs) -> ValuationResult:
     assert eps is not None
     if eps <= 0:
         return _na("lynch", "EPS is not positive", basis_fy=latest.fiscal_year)
-    growth, gmeta = derive_growth([r.eps() for r in recs], inputs.analyst_growth,
+    growth, gmeta = derive_growth([r.eps() for r in recs],
                                   periods=[r.fiscal_year for r in recs])
     if gmeta["growth_source"] == "none":
-        # Lynch IS the growth rate: with no CAGR and no analyst estimate the
+        # Lynch IS the growth rate: with no measurable CAGR the
         # P/E floor would publish 5 x EPS — a number with no information in it.
         return _na("lynch", "no usable earnings-growth history",
                    basis_fy=latest.fiscal_year)
@@ -515,7 +515,7 @@ def value_owner_earnings(inputs: ValuationInputs) -> ValuationResult:
                        basis_fy=basis_fy)
 
     growth, gmeta = derive_growth(
-        oe_hist, inputs.analyst_growth,
+        oe_hist,
         periods=[r.fiscal_year for r in window],
     )
     g_bear, g_base, g_bull = growth_scenarios(growth)
