@@ -1837,3 +1837,15 @@ Gates: ruff ✓ mypy ✓ pytest 1187 passed (1 known warning) | CI: pending for 
 Commit: (this commit) fix(valuation): growth is the historical CAGR alone, flat where it can't be measured
 Next: the P2s oldest first: BUG-007 (Graham bear N/A), BUG-029, BUG-049, BUG-142, BUG-149, BUG-150, BUG-151, BUG-159,
 BUG-160, BUG-161. Fixes since review 14's range: 3 (BUG-140, BUG-141, BUG-008); review 15 after two more.
+
+## Iteration 102: 2026-11-05: fix
+Picked: BUG-007 (P2), the user's decision: Graham's bear is N/A with a loss year in its 3-FY window.
+Did: two tests watched failing (bear 33.41 = base; `intrinsic_summary` raised StatisticsError with no bear left). Fix:
+`value_graham` keeps losses in the bear window and sets `bear_na_reason`; `intrinsic_summary` leaves a None scenario
+out of its median; the VAL chart starts such a bar at the base ("bear n/a" on hover, checked with a stub Plotly).
+README and the design spec note the rule. The oracle already took min(last 3) with None below zero.
+Result: BUG-007 FIXED; VERIFIED waits on the real or golden copy (8 companies expected to lose their Graham bear).
+Gates: ruff ✓ mypy ✓ pytest 1189 passed (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(valuation): Graham's bear is N/A with a loss year in its window
+Next: the P2s oldest first: BUG-029, BUG-049, BUG-142, BUG-149, BUG-150, BUG-151, BUG-159, BUG-160, BUG-161; then
+the decided Q1, Q3, Q4, Q6–Q9. Fixes since review 14's range: 4; review 15 after one more.

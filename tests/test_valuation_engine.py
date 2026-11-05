@@ -55,6 +55,18 @@ def test_intrinsic_summary_medians():
     assert s["median_bull"] == 120.0
 
 
+def test_intrinsic_summary_leaves_an_na_bear_out_of_the_bear_median():
+    # BUG-007: Graham's bear is N/A with a loss year in its window.
+    graham = ValuationResult(model="graham", applicable=True, value_bear=None,
+                             value_base=90.0, value_bull=110.0)
+    s = intrinsic_summary([_res("dcf", 80.0, 100.0, 120.0), graham, _res("multiples", 70.0, 110.0, 130.0)])
+    assert s["median_bear"] == 75.0
+    assert s["median_base"] == 100.0
+    alone = intrinsic_summary([graham])
+    assert alone["median_bear"] is None
+    assert alone["median_base"] == 90.0
+
+
 def test_intrinsic_summary_empty():
     s = intrinsic_summary([ValuationResult(model="dcf", applicable=False)])
     assert s == {"n_applicable": 0, "median_bear": None,

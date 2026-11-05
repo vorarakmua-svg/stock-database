@@ -374,6 +374,20 @@ def test_value_graham_hand_computed():
     assert res.basis_fiscal_year == 2023
 
 
+def test_value_graham_bear_is_na_with_a_loss_year_in_the_window():
+    # BUG-007, the user's decision of 2026-11-05: bear = min(EPS over the last 3 FYs), and BA's
+    # -18.36 has no Graham Number, so the bear is N/A with a reason, not the base case again.
+    recs = [_fy(fy, equity=2000.0, eps=e, shares=100.0)
+            for fy, e in ((2023, -3.67), (2024, -18.36), (2025, 2.48))]
+    res = value_graham(_inputs(fy_records=recs))
+    assert res.applicable is True
+    assert res.value_bear is None
+    assert res.assumptions["eps_bear"] == -18.36
+    assert res.assumptions["bear_na_reason"] == "loss year in the bear window"
+    assert res.value_base == pytest.approx(math.sqrt(22.5 * 2.48 * 20.0))
+    assert res.value_bull == res.value_base
+
+
 def test_value_graham_na_negative_eps():
     recs = [_fy(2023, equity=2000.0, eps=-1.0, shares=100.0)]
     res = value_graham(_inputs(fy_records=recs))

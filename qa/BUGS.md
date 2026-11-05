@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 10 · P3 82 · Decided, to implement: 7 (Q1, Q3, Q4, Q6–Q9) · NEEDS-USER 0 · Fixed, to verify on real data: 3 (BUG-008, Q2, Q5) · Verified: 74
+**Open:** P0 0 · P1 0 · P2 9 · P3 82 · Decided, to implement: 7 (Q1, Q3, Q4, Q6–Q9) · NEEDS-USER 0 · Fixed, to verify on real data: 4 (BUG-007, BUG-008, Q2, Q5) · Verified: 74
 
 User decisions (2026-11-05): every NEEDS-USER item was answered; each entry's `Decision:` line records the choice. Under loop rule 6 these are now authorized policy changes: implement each test-first like any fix.
 
@@ -66,8 +66,9 @@ Root cause: `_normalize_splits` (`src/valuation/inputs.py`) multiplied in the ob
 Notes: it did: four of the eight L6 multiples mismatches were this bug. Mixed bases within one year (AAPL FY2018: weighted shares restated, shares_outstanding not) remain a VALID-04 topic. Code review 1 (iteration 10): splits dated after the latest fiscal year are never applied at all (KLAC, BKNG): BUG-014. RTX's "resolved" Lynch is agreement on a shared reading (its 1.589 is a spin-off price factor; see L12), not proof.
 
 ### BUG-007 [P2][VAL] Graham bear case ignores loss years
-Status: OPEN (decided by the user on 2026-11-05)
+Status: FIXED (decided by the user on 2026-11-05; fixed in iteration 102, to verify on real data)
 Decision: N/A with a reason. A loss year in the 3-FY window makes Graham's bear value N/A ("loss year in the bear window"), and that value is left out of the bear median. Not zero, and loss years are no longer dropped.
+Fixed: iteration 102. `value_graham` takes the bear's EPS from every one of the last 3 FYs, losses included; at or below zero the bear is None with `bear_na_reason: "loss year in the bear window"` while base and bull stand. `intrinsic_summary` leaves a None scenario out of that scenario's median, and is None when none is left (it raised StatisticsError before). The VAL chart starts such a bar at the base and its hover reads "bear n/a" (it would have drawn from $0). The oracle already took min(last 3) with None below zero. Regression tests: `tests/test_valuation_models.py::test_value_graham_bear_is_na_with_a_loss_year_in_the_window`, `tests/test_valuation_engine.py::test_intrinsic_summary_leaves_an_na_bear_out_of_the_bear_median` (watched failing: bear 33.41 = base, and StatisticsError). Not yet VERIFIED on real data (no database in this session): expect the 8 companies (ALL BA BMY GEV MRVL MU VRTX WDC) to lose their Graham bear, and their bear medians to move.
 Found: iteration 4 via VAL-03 | Fixed: — | Regression test: —
 Repro: BA EPS FY2023 −3.67, FY2024 −18.36, FY2025 +2.48 → stored eps_bear = eps_base = eps_bull = 2.48.
 Expected: spec "bear = min(EPS over last 3 FYs)" = −18.36, so Graham's bear value is undefined (√ of a negative).

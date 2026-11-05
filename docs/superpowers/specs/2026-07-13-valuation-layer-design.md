@@ -111,6 +111,8 @@ class ValuationResult:
 - Bear/base/bull from EPS variants: bear = min(EPS over last 3 FYs), base = latest FY,
   bull = max(last 3 FYs), BVPS fixed at latest.
 - **N/A when:** EPS ≤ 0 or BVPS ≤ 0.
+  *Since 2026-11-05 (BUG-007): with a loss year in the last 3 FYs only the bear is N/A
+  (`bear_na_reason` in the assumptions), and the bear median leaves it out.*
 
 ### Peter Lynch fair value — sectors: general, utility, energy
 

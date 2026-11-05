@@ -88,11 +88,17 @@ def intrinsic_summary(results: List[ValuationResult]) -> Dict[str, Any]:
     if not app:
         return {"n_applicable": 0, "median_bear": None,
                 "median_base": None, "median_bull": None}
+    def median(values: List[Optional[float]]) -> Optional[float]:
+        # A model can be applicable with one scenario N/A (Graham's bear beside a loss year,
+        # BUG-007): that scenario's median leaves it out.
+        known = [v for v in values if v is not None]
+        return statistics.median(known) if known else None
+
     return {
         "n_applicable": len(app),
-        "median_bear": statistics.median([v for v in [r.value_bear for r in app] if v is not None]),
-        "median_base": statistics.median([v for v in [r.value_base for r in app] if v is not None]),
-        "median_bull": statistics.median([v for v in [r.value_bull for r in app] if v is not None]),
+        "median_bear": median([r.value_bear for r in app]),
+        "median_base": median([r.value_base for r in app]),
+        "median_bull": median([r.value_bull for r in app]),
     }
 
 
