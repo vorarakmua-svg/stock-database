@@ -1,13 +1,18 @@
 """Tests that parallel fetch_multiple preserves order and matches sequential."""
 
+import json
 import sqlite3
 import time
 
 import pytest
 
 from src.config import AppConfig, StorageConfig
+from src.fetchers.fred_handler import FREDHandler
+from src.fetchers.sec_handler import SECHandler
 from src.fetchers.stock_data_fetcher import StockDataFetcher
+from src.fetchers.yahoo_handler import YahooHandler
 from src.models.stock_data import StockData
+from tests.test_sec_cache import _FakeResp
 from tests.test_xbrl_parser import _split_restated_facts
 
 
@@ -404,3 +409,221 @@ def test_a_collected_quarterly_record_and_its_trailing_years_sit_on_one_split_ba
     assert stock.financials_ttm["2019-12-31"]["eps_diluted"] == pytest.approx(23.01)
     assert not [end for end, period in stock.financials_quarterly.items() if "_split_levels" in period]
 
+
+
+def test_a_successor_registrant_is_noted_with_its_predecessor(tmp_path, monkeypatch):
+    # Q6: XOM reads ExxonMobil Holdings Corp with Exxon Mobil Corp's filings; the run says so, where it used to say
+    # there were no annual financials.
+    year = {"val": 339.2e9, "start": "2025-01-01", "end": "2025-12-31", "fy": 2025, "fp": "FY", "form": "10-K",
+            "filed": "2026-02-18", "accn": "0000034088-26-000009"}
+    stock = _collect_from_sec(tmp_path, monkeypatch, {
+        "cik": "0002115436", "ticker": "XOM", "source": "sec_edgar",
+        "predecessor_cik": "0000034088", "predecessor_name": "EXXON MOBIL CORP",
+        "company_facts": {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [year]}}}}},
+        "submissions": {"name": "ExxonMobil Holdings Corp", "filings": []}})
+    assert stock.financials_annual["2025"]["revenue"] == 339.2e9
+    assert ("SEC EDGAR: XOM reads CIK 0002115436 (ExxonMobil Holdings Corp) with its predecessor's filings, "
+            "CIK 0000034088 (EXXON MOBIL CORP)") in stock.warnings
+    assert not any(w.startswith("SEC EDGAR: no annual financials") for w in stock.warnings)
+
+
+def test_a_predecessor_that_couldnt_be_read_is_named(tmp_path, monkeypatch):
+    entry = {"val": 81.0e9, "start": "2026-04-01", "end": "2026-06-30", "fy": 2026, "fp": "Q2", "form": "10-Q",
+             "filed": "2026-08-01"}
+    stock = _collect_from_sec(tmp_path, monkeypatch, {
+        "cik": "0002115436", "ticker": "XOM", "source": "sec_edgar",
+        "predecessor_cik": "0000034088", "predecessor_error": "503 Server Error",
+        "company_facts": {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [entry]}}}}},
+        "submissions": {"name": "ExxonMobil Holdings Corp", "filings": []}})
+    assert ("SEC EDGAR: XOM's predecessor, CIK 0000034088, couldn't be read (503 Server Error), so its history is "
+            "missing from this run") in stock.warnings
+
+
+# ---- BUG-179: a successor whose predecessor's filings couldn't be read, through each collection that stores it ----
+
+_SUCCESSOR_10K = {"fy": 2024, "fp": "FY", "form": "10-K", "filed": "2025-02-25", "accn": "0000950170-25-026584"}
+_PREDECESSOR_10K = {"fy": 2022, "fp": "FY", "form": "10-K", "filed": "2023-02-24", "accn": "0000950170-23-004343"}
+_PREDECESSOR_FACTS = "companyfacts/CIK0001364742.json"
+#: BLK's two filers as the SEC serves them, cut to FY2022's revenue, assets and equity: BlackRock, Inc. (CIK 2012383),
+#: whose first report is its 10-Q of 2024-11-06 and whose FY2024 10-K gives FY2022's revenue and its statement of
+#: equity's total, with the noncontrolling interests; the old BlackRock (CIK 1364742), whose FY2022 10-K gives the
+#: year's balance sheet.
+BLK_SEC = {
+    "files/company_tickers.json": {"0": {"ticker": "BLK", "cik_str": 2012383}},
+    "submissions/CIK0002012383.json": {"name": "BlackRock, Inc.", "filings": {"recent": {}}},
+    "companyfacts/CIK0002012383.json": {"entityName": "BlackRock, Inc.", "facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": [
+            {"val": 5.197e9, "start": "2024-07-01", "end": "2024-09-30", "fy": 2024, "fp": "Q3", "form": "10-Q",
+             "filed": "2024-11-06", "accn": "0002012383-24-000005"},
+            {"val": 17.873e9, "start": "2022-01-01", "end": "2022-12-31", **_SUCCESSOR_10K},
+            {"val": 20.407e9, "start": "2024-01-01", "end": "2024-12-31", **_SUCCESSOR_10K}]}},
+        "Assets": {"units": {"USD": [{"val": 138.615e9, "end": "2024-12-31", **_SUCCESSOR_10K}]}},
+        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest": {"units": {"USD": [
+            {"val": 37.876e9, "end": "2022-12-31", **_SUCCESSOR_10K}]}}}}},
+    _PREDECESSOR_FACTS: {"entityName": "BlackRock Finance, Inc.", "facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": [{"val": 17.873e9, "start": "2022-01-01", "end": "2022-12-31",
+                                        **_PREDECESSOR_10K}]}},
+        "Assets": {"units": {"USD": [{"val": 117.628e9, "end": "2022-12-31", **_PREDECESSOR_10K}]}},
+        "StockholdersEquity": {"units": {"USD": [{"val": 37.744e9, "end": "2022-12-31", **_PREDECESSOR_10K}]}}}}},
+}
+#: BLK's FY2022 revenue, assets and equity as a run that read both filers stores them.
+BLK_FY2022 = (17.873e9, 117.628e9, 37.744e9)
+
+
+def _serve(monkeypatch, payloads, status=lambda suffix: 200):
+    """Every SEC handler (a refresh's FreshSECHandler too) answers from *payloads* (a URL's suffix -> its JSON, with
+    *status(suffix)*; 404 for any other URL), reading nothing from its payload cache. Yahoo has nothing for a
+    collection that asks it, FRED no rate, and the valuations aren't computed."""
+    def request(self, url, timeout=30):
+        for suffix, payload in payloads.items():
+            if url.endswith(suffix):
+                return _FakeResp(status(suffix), payload)
+        return _FakeResp(404, {})
+
+    monkeypatch.setattr(SECHandler, "_request", request)
+    monkeypatch.setattr(SECHandler, "_read_payload_cache", lambda self, path: None)
+    monkeypatch.setattr(YahooHandler, "fetch_all", lambda self, ticker: {})
+    monkeypatch.setattr(YahooHandler, "fetch_benchmark_bars", lambda self, symbol="^GSPC": [])
+    monkeypatch.setattr(FREDHandler, "get_risk_free_rate_details", lambda self, maturity="10y": None)
+    monkeypatch.setattr(FREDHandler, "get_market_risk_premium", lambda self: {})
+    monkeypatch.setattr("src.valuation.engine.compute_and_store", lambda db_path, tickers=None, logger=None: 0)
+
+
+def serve_blk(monkeypatch, predecessor=200):
+    """The SEC answers from BLK_SEC (``_serve``), the old BlackRock's companyfacts with *predecessor*: 200, or 503 or
+    404 for a read that failed."""
+    _serve(monkeypatch, BLK_SEC, lambda suffix: predecessor if suffix == _PREDECESSOR_FACTS else 200)
+
+
+def stored_blk(db):
+    """BLK's stored FY2022 (revenue, total assets, total equity), and its latest run's warnings."""
+    conn = sqlite3.connect(db)
+    try:
+        year = conn.execute("SELECT revenue, total_assets, total_equity FROM financials_annual "
+                            "WHERE ticker = 'BLK' AND fiscal_year = 2022").fetchone()
+        warnings = conn.execute("SELECT warnings FROM collection_runs WHERE ticker = 'BLK' "
+                                "ORDER BY collected_at DESC LIMIT 1").fetchone()[0]
+        return year, json.loads(warnings)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("answer, why", [(503, "HTTPError"), (404, "no XBRL data")])
+def test_a_collection_whose_predecessor_read_failed_keeps_the_predecessors_figures(tmp_path, monkeypatch, answer,
+                                                                                    why):
+    # `stock-data`'s collection: after a run that read both filers, one whose read of the old BlackRock failed
+    # stored FY2022 as BlackRock, Inc.'s 10-K gives it, without assets and with the other equity (BUG-179).
+    db = tmp_path / "stock.db"
+    config = AppConfig(storage=StorageConfig(base_dir=tmp_path, db_path=db))
+    for predecessor in (200, answer):
+        serve_blk(monkeypatch, predecessor)
+        with StockDataFetcher(config=config) as fetcher:
+            assert fetcher.fetch_and_export(["BLK"], formats=["sqlite"])["stored"] == 1
+        assert stored_blk(db)[0] == BLK_FY2022
+    assert (f"SEC EDGAR: BLK's predecessor, CIK 0001364742, couldn't be read ({why}), so its history is missing "
+            "from this run") in stored_blk(db)[1]
+
+
+# ---- BUG-251: the latest report the SEC's companyfacts lack, through each collection that stores it ----
+
+#: DLR's 10-Q of 2026-07-31 as a run names it: its submissions list it, its companyfacts of 2026-10-25 have no fact of
+#: it.
+DLR_10Q ={"form": "10-Q", "accession": "0001104659-26-089296", "filed": "2026-07-31"}
+#: What such a run says.
+DLR_LAG = ("SEC EDGAR: the companyfacts lack DLR's 10-Q filed 2026-07-31 (0001104659-26-089296), so this run's "
+           "figures stop before it; the refresh collects DLR again")
+_DLR_Q1 = {"start": "2026-01-01", "end": "2026-03-31", "fy": 2026, "fp": "Q1", "form": "10-Q", "filed": "2026-05-01",
+           "frame": "CY2026Q1", "accn": "0001104659-26-054255"}
+_DLR_Q2 = {"start": "2026-04-01", "end": "2026-06-30", "fy": 2026, "fp": "Q2", "form": "10-Q", "filed": "2026-07-31",
+           "frame": "CY2026Q2", "accn": "0001104659-26-089296"}
+
+
+def _dlr_sec(lagging):
+    """DLR as the SEC served it on 2026-10-25, cut to its quarters' revenue: its submissions list a 424B7 of
+    2026-08-19, the 10-Q of 2026-07-31 and the 10-Q of 2026-05-01; its companyfacts hold the 424B7's fee and the first
+    quarter's revenue, and, unless *lagging*, the second quarter's (a test's figure, as the SEC would add it)."""
+    revenue = [{"val": 1635173000, **_DLR_Q1}] + ([] if lagging else [{"val": 1.71e9, **_DLR_Q2}])
+    return {
+        "files/company_tickers.json": {"0": {"ticker": "DLR", "cik_str": 1297996}},
+        "submissions/CIK0001297996.json": {"name": "DIGITAL REALTY TRUST, INC.", "sic": "6798", "filings": {"recent": {
+            "accessionNumber": ["0001193125-26-357076", "0001104659-26-089296", "0001104659-26-054255"],
+            "form": ["424B7", "10-Q", "10-Q"],
+            "filingDate": ["2026-08-19", "2026-07-31", "2026-05-01"],
+            "reportDate": ["", "2026-06-30", "2026-03-31"],
+            "acceptanceDateTime": ["2026-08-19T20:55:58.000Z", "2026-07-31T21:23:41.000Z", "2026-05-01T21:22:35.000Z"],
+            "isXBRL": [1, 1, 1],
+            "primaryDocument": ["d914399d424b7.htm", "dlr-20260630x10q.htm", "dlr-20260331x10q.htm"]}}},
+        "companyfacts/CIK0001297996.json": {"entityName": "DIGITAL REALTY TRUST, INC.", "facts": {
+            "ffd": {"TtlFeeAmt": {"units": {"USD": [{"val": 18777.23, "end": "2026-08-19", "form": "424B7",
+                                                     "filed": "2026-08-19", "accn": "0001193125-26-357076"}]}}},
+            "us-gaap": {"Revenues": {"units": {"USD": revenue}}}}},
+    }
+
+
+def serve_dlr(monkeypatch, lagging=True):
+    """The SEC answers as for DLR on 2026-10-25 (``_dlr_sec``, ``_serve``)."""
+    _serve(monkeypatch, _dlr_sec(lagging))
+
+
+def stored_run(db, ticker):
+    """*ticker*'s latest collection run as stored: its warnings, and why its SEC read was incomplete (the
+    ``incomplete`` column, parsed; None for a complete run, as for a database without the column)."""
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = dict(conn.execute("SELECT * FROM collection_runs WHERE ticker = ? ORDER BY collected_at DESC LIMIT 1",
+                                (ticker,)).fetchone())
+    finally:
+        conn.close()
+    return json.loads(row["warnings"]), json.loads(row["incomplete"]) if row.get("incomplete") else None
+
+
+def test_a_report_the_companyfacts_lack_is_a_warning_naming_it(tmp_path, monkeypatch):
+    # BUG-251: the run's figures stopped at DLR's March quarter, and nothing said so.
+    stock = _collect_from_sec(tmp_path, monkeypatch, {
+        "cik": "0001297996", "ticker": "DLR", "source": "sec_edgar",
+        "company_facts": {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [{"val": 1635173000, **_DLR_Q1}]}}}}},
+        "submissions": {"name": "DIGITAL REALTY TRUST, INC.", "filings": []}, "missing_report": dict(DLR_10Q)})
+    assert DLR_LAG in stock.warnings
+    assert stock.missing_report == DLR_10Q
+
+
+def test_a_failed_companyfacts_request_isnt_called_the_secs_lag(tmp_path, monkeypatch):
+    # Its error says why the run read no facts; the run still read none of the latest report's.
+    stock = _collect_from_sec(tmp_path, monkeypatch, {
+        "cik": "0001297996", "ticker": "DLR", "source": "sec_edgar", "company_facts_error": "503 Server Error",
+        "submissions": {"name": "DIGITAL REALTY TRUST, INC.", "filings": []}, "missing_report": dict(DLR_10Q)})
+    assert stock.missing_report == DLR_10Q
+    assert "SEC EDGAR companyfacts: 503 Server Error" in stock.errors
+    assert not [w for w in stock.warnings if w.startswith("SEC EDGAR: the companyfacts lack")]
+
+
+def test_a_collection_whose_companyfacts_lack_the_latest_report_stores_it_as_incomplete(tmp_path, monkeypatch):
+    # `stock-data`'s collection: the run says so and its collection_runs row keeps the report, so the refresh can
+    # collect DLR again; once the SEC's companyfacts carry the report, a run is complete.
+    db = tmp_path / "stock.db"
+    config = AppConfig(storage=StorageConfig(base_dir=tmp_path, db_path=db))
+    serve_dlr(monkeypatch, lagging=True)
+    with StockDataFetcher(config=config) as fetcher:
+        assert fetcher.fetch_and_export(["DLR"], formats=["sqlite"])["stored"] == 1
+    warnings, incomplete = stored_run(db, "DLR")
+    assert incomplete == {"report": DLR_10Q}
+    assert DLR_LAG in warnings
+    serve_dlr(monkeypatch, lagging=False)
+    with StockDataFetcher(config=config) as fetcher:
+        assert fetcher.fetch_and_export(["DLR"], formats=["sqlite"])["stored"] == 1
+    warnings, incomplete = stored_run(db, "DLR")
+    assert incomplete is None and DLR_LAG not in warnings
+
+
+@pytest.mark.parametrize("answer, why", [(503, "HTTPError"), (404, "no XBRL data")])
+def test_a_collection_whose_predecessor_read_failed_is_stored_as_incomplete(tmp_path, monkeypatch, answer, why):
+    # BUG-279: the refresh took such a run for BLK's last collection; its row now says what it lacked, and a run that
+    # reads both filers again is complete.
+    db = tmp_path / "stock.db"
+    config = AppConfig(storage=StorageConfig(base_dir=tmp_path, db_path=db))
+    for predecessor, expected in ((answer, {"predecessor": why}), (200, None)):
+        serve_blk(monkeypatch, predecessor)
+        with StockDataFetcher(config=config) as fetcher:
+            assert fetcher.fetch_and_export(["BLK"], formats=["sqlite"])["stored"] == 1
+        assert stored_run(db, "BLK")[1] == expected

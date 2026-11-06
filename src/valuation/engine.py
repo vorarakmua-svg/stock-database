@@ -16,9 +16,15 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from ..exporters.sqlite_store import SQLiteStore
+from ..scores import engine as scores_engine
+from ..scores.engine import rank_all
+from .history import compute_history
+from .history_inputs import load_history_inputs
+from .indicators import compute_indicators, load_indicator_inputs
 from .inputs import ValuationInputs, load_inputs
 from .models import (
     ValuationResult,
+    stale_basis_reason,
     value_dcf,
     value_ddm,
     value_graham,
@@ -72,6 +78,13 @@ def run_valuations(inputs: ValuationInputs,
             continue
         try:
             results.append(fn(inputs))
+            stale = stale_basis_reason(inputs, results[-1].basis_fiscal_year) if name != "ddm" else None
+            if stale and results[-1].applicable:
+                # A basis more than two fiscal years old beside today's price values nothing (Q8). DDM's basis is
+                # the trailing year of Yahoo's payments, which is current.
+                results[-1] = ValuationResult(model=name, applicable=False, na_reason=stale,
+                                              basis_fiscal_year=results[-1].basis_fiscal_year)
+                continue
             if inputs.ads_ratio != 1.0 and results[-1].applicable:
                 # Per-share values are per ADS, as the price is (BUG-065).
                 results[-1].assumptions["ads_ratio"] = inputs.ads_ratio
@@ -88,19 +101,30 @@ def intrinsic_summary(results: List[ValuationResult]) -> Dict[str, Any]:
     if not app:
         return {"n_applicable": 0, "median_bear": None,
                 "median_base": None, "median_bull": None}
+    def median(values: List[Optional[float]]) -> Optional[float]:
+        # A model can be applicable with one case N/A (Graham's bear with a loss year, BUG-007): the median is the
+        # other models', or none.
+        present = [v for v in values if v is not None]
+        return statistics.median(present) if present else None
+
     return {
         "n_applicable": len(app),
-        "median_bear": statistics.median([v for v in [r.value_bear for r in app] if v is not None]),
-        "median_base": statistics.median([v for v in [r.value_base for r in app] if v is not None]),
-        "median_bull": statistics.median([v for v in [r.value_bull for r in app] if v is not None]),
+        "median_bear": median([r.value_bear for r in app]),
+        "median_base": median([r.value_base for r in app]),
+        "median_bull": median([r.value_bull for r in app]),
     }
 
 
 def verdict(median_bear: Optional[float], median_bull: Optional[float],
             price: Optional[float]) -> Optional[str]:
-    """Where the live price sits vs the median fair-value range."""
-    if median_bear is None or median_bull is None or price is None or price <= 0:
+    """Where the live price sits vs the median fair-value range.
+
+    Without a bear median (Graham alone with its bear N/A, BUG-007) a price above the bull median is still expensive;
+    below it, cheap and fair can't be told apart (BUG-304). The screener's SQL filters read it the same way."""
+    if median_bull is None or price is None or price <= 0:
         return None
+    if median_bear is None:
+        return "expensive" if price > median_bull else None
     if price < median_bear:
         return "cheap"
     if price > median_bull:
@@ -170,6 +194,33 @@ def compute_and_store(db_path: Union[str, Path],
                 stored += 1
             except Exception as e:
                 log.warning(f"Valuation failed for {ticker}: {e}")
+            # The valuation history is a separate indicator: its failure never blocks the valuations
+            # above, and it touches none of their rows (docs/superpowers/specs/2026-10-21-valuation-
+            # history-design.md).
+            try:
+                history = compute_history(load_history_inputs(conn, ticker))
+                store.export_valuation_history(ticker, history, computed_at)
+            except Exception as e:
+                log.warning(f"Valuation history failed for {ticker}: {e}")
+            # The quality scores, after the history they read; likewise isolated
+            # (docs/superpowers/specs/2026-10-21-quality-scores-design.md).
+            try:
+                scores_engine.store_ticker(conn, store, ticker, computed_at)
+            except Exception as e:
+                log.warning(f"Quality scores failed for {ticker}: {e}")
+            # The other valuation indicators: display-only like owner earnings (never in MEDIAN_MODELS, the verdicts
+            # or the upside), after the scores whose figures they read; likewise isolated
+            # (docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md).
+            try:
+                store.export_valuation_indicators(ticker, compute_indicators(load_indicator_inputs(conn, ticker)),
+                                                  computed_at)
+            except Exception as e:
+                log.warning(f"Valuation indicators failed for {ticker}: {e}")
+        # The ranks are percentiles across every stored company, so any run re-ranks them all.
+        try:
+            rank_all(db_path, computed_at)
+        except Exception as e:
+            log.warning(f"Quality ranks failed: {e}")
         return stored
     finally:
         conn.close()

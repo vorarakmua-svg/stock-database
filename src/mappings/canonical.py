@@ -150,6 +150,14 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
             "ProfitLoss",
         ),
     ),
+    # Net income less preferred dividends and what participating securities take: the figure basic EPS
+    # divides, and what the valuation history's P/E divides the market cap by (Q16). A figure its own
+    # filing's EPS x count contradicts isn't read (the parser's ``_to_common_contradicted``). The diluted
+    # variant adds back convertibles' costs for diluted EPS, whose count the history doesn't take.
+    CanonicalField(
+        "net_income_to_common", "Net Income to Common", INCOME, UNIT_USD, DURATION,
+        ("NetIncomeLossAvailableToCommonStockholdersBasic",),
+    ),
 
     # ---------------- Per share (duration) ----------------
     # A filer without dilutive securities may tag one figure for both (SCCO FY2011-18,
@@ -176,12 +184,14 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "cash_and_equivalents", "Cash and Equivalents", BALANCE, UNIT_USD, INSTANT,
-        ("CashAndCashEquivalentsAtCarryingValue", "Cash", "CashEquivalentsAtCarryingValue",
-         # Last, the total with restricted cash: some balance sheets tag nothing else (GE's,
+        ("CashAndCashEquivalentsAtCarryingValue", "Cash",
+         # Then the total with restricted cash: some balance sheets tag nothing else (GE's,
          # CVX's and five more FY2025 10-Ks), and without it net debt was their whole debt
-         # (BUG-139). Where a filer tags both, it runs a median 0.3% above the cash line. Read
-         # on balance-sheet dates only (xbrl_parser._BALANCE_SHEET_ONLY).
-         "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"),
+         # (BUG-139). Where a filing tags both, it runs a median 0.4% above the cash line. Read
+         # on balance-sheet dates only (xbrl_parser._BALANCE_SHEET_ONLY). Before the cash
+         # equivalents, which most filers tag only in a note, as a part of the cash line (PG's
+         # FY2025 $8.3B of its $9.556B; BUG-161).
+         "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "CashEquivalentsAtCarryingValue"),
         description="Cash and cash equivalents; where a balance sheet tags only the total with restricted "
                     "cash, that total.",
     ),
@@ -225,19 +235,41 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         # those who file neither (with finance leases, notes, unsecured or convertible debt: VZ,
         # ORCL, GS, NOW), and last the notes payable in total (O) (BUG-125). A filing's total
         # gives way to its noncurrent figure where its current debt holds the current maturities
-        # or the total is below it (``xbrl_parser._debt_totals_set_aside``, BUG-141). Not
+        # or the total is below it (``xbrl_parser._debt_totals_set_aside``, BUG-141); also to a
+        # noncurrent line under a concept not mapped here that makes up the total with the
+        # current maturities, read as the date's LongTermDebtNoncurrent (Corpay's
+        # LongTermNotesAndLoans; ``xbrl_parser._debt_lines``, BUG-290). Not
         # DebtInstrumentCarryingAmount: often one instrument's, on days with no balance sheet
-        # (SLB's $0.5B note at 2020-12-31).
+        # (SLB's $0.5B note at 2020-12-31). A 10-Q that tags none of these reads its line under
+        # another concept where its year-end column shows the annual record's figure (ORCL's
+        # LongTermNotesAndLoans; ``xbrl_parser._long_term_debt_lines``, BUG-171).
         ("LongTermDebtNoncurrent", "LongTermDebt", "LongTermDebtAndCapitalLeaseObligations",
          "LongTermNotesPayable", "UnsecuredLongTermDebt", "ConvertibleLongTermNotesPayable",
          "NotesPayable"),
     ),
     CanonicalField(
         "short_term_debt", "Short-Term Debt", BALANCE, UNIT_USD, INSTANT,
-        ("DebtCurrent", "ShortTermBorrowings", "LongTermDebtCurrent"),
+        # A filing's DebtCurrent gives way to its short-term borrowings where it is the debt
+        # before a refinancing moved part of it to long-term debt, which then holds that part:
+        # the filer tags the part refinanced, and the borrowings are DebtCurrent less it (CVX's;
+        # ``xbrl_parser._current_debt_set_aside``, BUG-142). A filing's borrowings and current
+        # maturities on separate lines, without a DebtCurrent, are read as one DebtCurrent unless the
+        # borrowings already hold them (IBM's); the maturities a filer tags only as
+        # LongTermDebtAndCapitalLeaseObligationsCurrent last (UNP's, HD's;
+        # ``xbrl_parser._current_debt_combined``, BUG-159).
+        ("DebtCurrent", "ShortTermBorrowings", "LongTermDebtCurrent", "LongTermDebtAndCapitalLeaseObligationsCurrent"),
+        description="Debt due within a year: short-term borrowings and the current maturities of long-term debt.",
     ),
     CanonicalField(
-        "commercial_paper", "Commercial Paper", BALANCE, UNIT_USD, INSTANT, ("CommercialPaper",),
+        "commercial_paper", "Commercial Paper", BALANCE, UNIT_USD, INSTANT,
+        # The paper the short-term debt figure doesn't hold, which total debt adds to it: 0.0 where
+        # the short-term total the record reads on its date, DebtCurrent or else ShortTermBorrowings,
+        # holds it (PG's, LIN's, KO's): the annual reports' for the annual record, the 10-Qs' and
+        # 10-Ks' for a quarter, a vintage's own filing's (``xbrl_parser._current_debt_set_aside``,
+        # BUG-143, BUG-256, BUG-257). Read on balance-sheet dates only (xbrl_parser._BALANCE_SHEET_ONLY).
+        ("CommercialPaper",),
+        description="Commercial paper outside the short-term debt figure (a line of its own); 0 where "
+                    "the short-term debt holds it.",
     ),
     CanonicalField(
         "total_equity", "Total Stockholders Equity", BALANCE, UNIT_USD, INSTANT,
@@ -279,8 +311,15 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "depreciation_amortization", "Depreciation & Amortization", CASHFLOW, UNIT_USD, DURATION,
+        # A filing's total, else its depreciation alone. A filing that tags its depreciation and its amortization of
+        # intangibles on lines of their own, with no total that can hold them, has the two read as one
+        # DepreciationAndAmortization (AbbVie's FY2025: $8.139B, not its $0.762B of depreciation), and a "total" no
+        # larger than that amortization is its depreciation line (CME's, EME's) (``xbrl_parser._depreciation_combined``,
+        # BUG-170).
         ("DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet",
          "DepreciationAmortizationAndOther", "DepreciationAndAmortization", "Depreciation"),
+        description="Depreciation and amortization: the filing's total, else its depreciation and its amortization of "
+                    "intangibles where it tags them apart.",
     ),
     CanonicalField(
         "stock_based_comp", "Stock-Based Compensation", CASHFLOW, UNIT_USD, DURATION,

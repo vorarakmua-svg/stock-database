@@ -14,17 +14,26 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from ...fetchers.stock_data_fetcher import NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS
+from ...fetchers.stock_data_fetcher import NO_ANNUAL_FINANCIALS, REPORT_WITHOUT_FACTS, STALE_ANNUAL_FINANCIALS
+from ...ownership.portfolio import share_classes
+from ...scores.ranks import MAGIC_EXCLUDED
+from ...universe.industries import sic_label
 from ...valuation.assumptions import DISCOUNT_SPREAD, GROWTH_CAP
 from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
+from ...valuation.history import HISTORICAL_VALUE_CUTOFFS, METRICS, historical_value_label
 from ...valuation.models import ValuationResult, dcf_per_share
 from ..dependencies import get_job_manager, get_reader, get_settings
-from ..formatting import fmt_count, fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
+from ..formatting import fmt_count, fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_signed_price, fmt_value
+from ..gurus import gurus_holding, has_gurus
+from ..insiders import insider_view
 from ..jobs import CollectionJobManager
+from ..quality import GROWTH_SPANS, RANK_LABELS, quality_view
 from ..repository import Reader
 from ..settings import WebSettings
+from ..valuation_indicators import indicators_view
+from .gurus import holder_rows
 from .pages import _STATEMENT_ROWS, _build_statement_display, templates
-from .stocks_api import VALID_RANGES, resolve_range_start
+from .stocks_api import VALID_RANGES, range_anchor, resolve_range_start
 
 router = APIRouter()
 
@@ -170,7 +179,7 @@ def des_fragment(
     r: Reader = Depends(get_reader),
     settings: WebSettings = Depends(get_settings),
 ) -> Any:
-    """DES panel: quote header, summary grid, description, officers, next earnings."""
+    """DES panel: quote header, summary grid, description with the SEC's SIC industry, officers, next earnings."""
     profile = r.profile(ticker)
     if profile is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
@@ -234,6 +243,8 @@ def des_fragment(
             "marker_pct": marker_pct,
             "summary": summary,
             "description": profile["company"].get("description"),
+            # The SEC's industry (Milestone 5): "SIC 3571 Electronic Computers", None where no code is stored.
+            "sic_label": sic_label(profile["company"].get("sic"), profile["company"].get("sic_description")),
             "earnings_date": analyst.get("earnings_date") if analyst else None,
             "allow_quote_refresh": settings.allow_quote_refresh,
             "val_verdict": val_verdict,
@@ -373,10 +384,10 @@ def gp_fragment(
 
 
 def _sec_gap_note(r: Reader, ticker: str) -> Optional[str]:
-    """Why the latest collection got no annual financials from SEC, or why they stop
-    years ago (BUG-066), if it said."""
+    """Why the latest collection got no annual financials from SEC, why they stop
+    years ago (BUG-066), or which report the SEC's companyfacts lack so far (BUG-251, BUG-283), if it said."""
     return next((w for w in r.latest_run_warnings(ticker)
-                 if w.startswith((NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS))), None)
+                 if w.startswith((NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS, REPORT_WITHOUT_FACTS))), None)
 
 
 @router.get("/ui/stocks/{ticker}/fa", response_class=HTMLResponse)
@@ -612,7 +623,8 @@ def hp_fragment(
     """HP panel: OHLCV table newest-first + range buttons + CSV download link.
 
     Reuses ``stocks_api.resolve_range_start`` for range->start-date resolution
-    (no duplicate range math) and validates ``range`` against the same
+    (no duplicate range math), counted back from the ticker's last bar
+    (``range_anchor``, BUG-151), and validates ``range`` against the same
     ``VALID_RANGES`` set the GP route uses — an unknown value silently falls
     back to ``1Y`` rather than being echoed back raw or erroring.
     """
@@ -620,7 +632,7 @@ def hp_fragment(
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
 
     resolved_range = range if range in VALID_RANGES else "1Y"
-    start = resolve_range_start(resolved_range)
+    start = resolve_range_start(resolved_range, range_anchor(r, ticker))
     start_iso = start.isoformat() if start is not None else None
     bars = r.price_bars(ticker, start=start_iso)
 
@@ -646,7 +658,8 @@ def hp_fragment(
             "range": resolved_range,
             "range_options": _GP_RANGES,
             "rows": rows,
-            "csv_href": f"/api/export/stock/{ticker}/bars.csv?range={resolved_range}",
+            # the daily bars the table lists: the CSV's default interval resamples by range (BUG-150)
+            "csv_href": f"/api/export/stock/{ticker}/bars.csv?range={resolved_range}&interval=1d",
         },
     )
 
@@ -824,7 +837,8 @@ def hds_fragment(
     request: Request,
     r: Reader = Depends(get_reader),
 ) -> Any:
-    """HDS panel: institutional + mutual-fund holder tables."""
+    """HDS panel: the gurus holding the stock or its other class in their latest 13F quarter (once any is stored),
+    above Yahoo's institutional + mutual-fund holder tables."""
     if r.get_company(ticker) is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
 
@@ -837,6 +851,8 @@ def hds_fragment(
         {
             "request": request,
             "ticker": ticker,
+            "gurus": holder_rows(gurus_holding(r, ticker)) if has_gurus(r) else None,
+            "other_classes": share_classes(ticker)[1:],
             "institutional": institutional,
             "mutualfund": mutualfund,
         },
@@ -873,9 +889,39 @@ def ins_fragment(
     request: Request,
     r: Reader = Depends(get_reader),
 ) -> Any:
-    """INS panel: insider transaction table, tinted green/red by buy/sell keyword."""
+    """INS panel: the SEC's Form 4 trades with their open-market aggregates; else Yahoo's insider rows, tinted
+    green/red by buy/sell keyword."""
     if r.get_company(ticker) is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    view = insider_view(r, ticker)
+    if view["source"] == "sec":
+        s = view["summary"]
+        year = s["windows"]["12m"]
+        sec = {
+            "bought": fmt_money(year["bought_value"]), "buyers": year["buyers"],
+            "sold": fmt_money(year["sold_value"]), "sellers": year["sellers"],
+            "windows": [{"label": label, "net": fmt_money(s["windows"][key]["net_value"])}
+                        for key, label in (("3m", "3 months"), ("6m", "6 months"), ("12m", "12 months"))],
+            "ceo_cfo": [{"date": b["date"], "name": b["owner_name"], "title": b["officer_title"],
+                         "shares": fmt_count(b["shares"]), "value": fmt_money(b["value"])}
+                        for b in s["ceo_cfo_buys_12m"]],
+            "clusters": [{"start": c["start"], "end": c["end"], "buyers": c["buyers"],
+                          "names": ", ".join(c["names"]), "value": fmt_money(c["value"])}
+                         for c in s["clusters_12m"]],
+            "planned": fmt_pct(s["planned_sale_share_12m"]),
+            "trades": [{"date": t["date"], "insider": t["owner_name"], "role": t["role"], "code": t["code"],
+                        "meaning": t["meaning"], "derivative": t["kind"] == "derivative",
+                        "shares": fmt_count(t["shares"]), "price": fmt_price(t["price"]),
+                        "price_note": t["price_note"],
+                        "value": fmt_money(t["value"]), "after": fmt_count(t["owned_after"]),
+                        "plan": "yes" if t["plan"] else "", "form": t["form"],
+                        "tint_class": "up" if t["code"] == "P" else "down" if t["code"] == "S" else "flat"}
+                       for t in view["trades"][:200]],
+            "count": len(view["trades"]),
+        }
+        return templates.TemplateResponse(request, "fragments/ins.html",
+                                          {"request": request, "ticker": ticker, "sec": sec, "rows": []})
 
     transactions = r.insider_transactions(ticker)
     rows = [
@@ -930,6 +976,241 @@ def _dcf_sensitivity(assumptions: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "values": [dcf_per_share(fcf, shares, g, d) for g in growths],
         })
     return {"growths": growths, "rows": rows}
+
+
+_HISTORY_LABELS = {"pe": "P/E", "ps": "P/S", "pb": "P/B", "pfcf": "P/FCF", "ev_ebitda": "EV/EBITDA",
+                   "pffo": "P/FFO", "div_yield": "Dividend yield"}
+#: The pill colours of the historical-value labels: under the value reads like cheap, over it like expensive.
+_HISTORY_PILLS = {"far below": "cheap", "below": "cheap", "near": "fair", "above": "expensive",
+                  "far above": "expensive"}
+
+
+def _window_text(row: Dict[str, Any]) -> str:
+    """A range's window: "10 years", "10 years (49 months with a value)" when a full window has gaps (loss years:
+    BUG-181), or "since 2022-03 (37 months)" when the history is shorter."""
+    n, start, as_of = row.get("n_months") or 0, row.get("window_start"), row.get("as_of")
+    if n >= 120:
+        return "10 years"
+    span = None
+    if start and as_of:
+        s, a = str(start)[:7], str(as_of)[:7]
+        if len(s) == 7 and len(a) == 7 and s[:4].isdigit() and a[:4].isdigit():
+            span = (int(a[:4]) - int(s[:4])) * 12 + int(a[5:7]) - int(s[5:7])
+    if n and span is not None and span >= 119:
+        return f"10 years ({n} months with a value)"
+    if n and start:
+        return f"since {str(start)[:7]} ({n} months)"
+    return "—"
+
+
+@router.get("/ui/stocks/{ticker}/val-history", response_class=HTMLResponse)
+def val_history_fragment(
+    ticker: str,
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """The VAL panel's valuation history: the historical value against the live price,
+    each multiple's 10-year range, and the price against the historical value
+    (docs/superpowers/specs/2026-10-21-valuation-history-design.md)."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    quote = r.quote(ticker)
+    price = quote.get("current_price") if quote else None
+    ranges = {row["metric"]: row for row in r.valuation_ranges(ticker)}
+    fv = ranges.get("fair_value") or {}
+    value = fv.get("current_value")
+    label = historical_value_label(price, value)
+    rows = r.valuation_history(ticker)
+    table = []
+    chart_metrics = []
+    for metric in METRICS:
+        g = ranges.get(metric)
+        if g is None:
+            continue
+        fmt = fmt_pct if metric == "div_yield" else fmt_mult
+        table.append({
+            "label": _HISTORY_LABELS[metric],
+            "applicable": bool(g["applicable"]),
+            "na_reason": g.get("na_reason"),
+            "current": fmt(g.get("current_value")),
+            "min": fmt(g.get("min")),
+            "median": fmt(g.get("median")),
+            "max": fmt(g.get("max")),
+            "pct": fmt_pct(g.get("pct_rank")),
+            "window": _window_text(g),
+            "implied": fmt_price(g.get("implied_value")),
+            "in_fv": bool(g.get("in_fair_value")),
+        })
+        if g["applicable"]:
+            chart_metrics.append({"key": metric, "label": _HISTORY_LABELS[metric], "pct": metric == "div_yield",
+                                  "values": [row.get(metric) for row in rows],
+                                  "min": g.get("min"), "median": g.get("median"), "max": g.get("max")})
+    cfg = {
+        "dates": [row["date"] for row in rows],
+        "close": [row["close"] for row in rows],
+        "fair_value": [row["fair_value"] for row in rows],
+        "cutoffs": list(HISTORICAL_VALUE_CUTOFFS),
+        "metrics": chart_metrics,
+    }
+    return templates.TemplateResponse(
+        request,
+        "fragments/val_history.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "has_history": bool(ranges),
+            "applicable": bool(fv.get("applicable")),
+            "na_reason": fv.get("na_reason"),
+            "label": label,
+            "pill": _HISTORY_PILLS.get(label or "", "none"),
+            "value_fmt": fmt_price(value),
+            "low_fmt": fmt_price(fv.get("p25")),
+            "high_fmt": fmt_price(fv.get("p75")),
+            "price_fmt": fmt_price(price),
+            "ratio_fmt": f"{price / value:.2f}" if price and value else "—",
+            "combined": [_HISTORY_LABELS[m] for m in METRICS if (ranges.get(m) or {}).get("in_fair_value")],
+            "cutoffs_text": ", ".join(f"{c:g}" for c in HISTORICAL_VALUE_CUTOFFS),
+            "window": _window_text(fv),
+            # The day the stored history was computed: a failed computation keeps the previous run's rows (BUG-182).
+            "computed_on": str(fv.get("computed_at") or "")[:10] or None,
+            "rows": table,
+            "has_chart": bool(rows),
+            # The XSS defense of the other inline configs: "</" can't close the <script>.
+            "cfg_json": json.dumps(cfg).replace("</", "<\\/"),
+        },
+    )
+
+
+@router.get("/ui/stocks/{ticker}/val-indicators", response_class=HTMLResponse)
+def val_indicators_fragment(
+    ticker: str,
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """The VAL panel's other indicators: the reverse DCF solved at the live price beside the DCF's own growth, EPV,
+    NCAV with Graham's net-net, the median P/S value and the Graham number on tangible book, each with its bear, base
+    and bull, the base's upside from the live price, its method and its notes, or its N/A reason. Display-only: none
+    enters the median, the verdict or the upside
+    (docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md)."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    view = indicators_view(r, ticker)
+    live = view["reverse_dcf_live"]
+    rows: List[Dict[str, Any]] = []
+    for ind in view["indicators"]:
+        row: Dict[str, Any] = {"label": ind["label"], "method": ind["method"], "notes": ind["notes"],
+                               "assumptions": ind["assumptions"], "basis_fy": ind["basis_fiscal_year"]}
+        if ind["indicator"] == "reverse_dcf":
+            # The growth at the live price, not the stored one, beside the DCF's own.
+            dcf_growth = live["dcf_growth_base"]
+            row.update(applicable=live["growth"] is not None, na_reason=live["na_reason"], bear="—",
+                       base=fmt_pct(live["growth"]), bull="—",
+                       versus=f"the DCF assumes {fmt_pct(dcf_growth)}" if dcf_growth is not None else "—")
+        else:
+            # A value below zero (EPV with debt above the earnings power) reads "-$5.88", as in the notes.
+            row.update(applicable=ind["applicable"], na_reason=ind["na_reason"],
+                       bear=fmt_signed_price(ind["value_bear"]), base=fmt_signed_price(ind["value_base"]),
+                       bull=fmt_signed_price(ind["value_bull"]), versus=fmt_pct(ind["upside_pct"]))
+        rows.append(row)
+    return templates.TemplateResponse(
+        request,
+        "fragments/val_indicators.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "computed": view["computed"],
+            "computed_at": str(view["computed_at"] or "")[:10],
+            "price_fmt": fmt_price(view["price"]),
+            "rows": rows,
+        },
+    )
+
+
+def _stars(stars: Optional[float]) -> str:
+    """Predictability as "4.5 / 5", or "—"."""
+    return f"{stars:g} / 5" if stars is not None else "—"
+
+
+@router.get("/ui/stocks/{ticker}/scores", response_class=HTMLResponse)
+def scores_fragment(
+    ticker: str,
+    request: Request,
+    r: Reader = Depends(get_reader),
+) -> Any:
+    """The STAT panel's Quality section: the composite and its radar, the five ranks with the industry's beside them
+    (or why there are none), the scores with their tests, the growth table and the warning signs
+    (docs/superpowers/specs/2026-10-21-quality-scores-design.md, docs/superpowers/specs/2026-10-25-universe-
+    automation-design.md)."""
+    company = r.get_company(ticker)
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    q = quality_view(r, ticker)
+    if not q["computed"]:
+        return templates.TemplateResponse(request, "fragments/quality.html",
+                                          {"request": request, "ticker": ticker, "computed": False})
+    ranks = q["composite"]["ranks"]
+    cfg = {"labels": [RANK_LABELS[k] for k in ranks], "values": list(ranks.values())}
+    p, a, b, s, w = q["piotroski"], q["altman"], q["beneish"], q["sloan"], q["roic_vs_wacc"]
+    pred, magic = q["predictability"], q["magic_formula"]
+    scores = [
+        {"label": "Piotroski F", "value": f"{p['f']} / {p['tested']}" if p["f"] is not None else "—",
+         "note": p["na_reason"] or "tests passed, of the nine those with their inputs"},
+        {"label": "Altman Z", "value": fmt_raw2(a["z"]),
+         "note": a["na_reason"] or f"{a['zone']} zone (distress below 1.81, safe above 2.99)"},
+        {"label": "Beneish M", "value": fmt_raw2(b["m"]),
+         "note": b["na_reason"] or ("above -1.78: the earnings may be managed" if b["flagged"]
+                                    else "below -1.78: no sign of managed earnings")},
+        {"label": "Sloan ratio", "value": fmt_pct(s["ratio"]),
+         "note": s["na_reason"] or f"{s['zone']} (within 10% safe, beyond 25% flagged)"},
+        {"label": "ROIC - WACC", "value": fmt_pct(w["spread"]),
+         "note": w["na_reason"] or f"ROIC {fmt_pct(w['roic'])} against WACC {fmt_pct(w['wacc'])}"},
+        {"label": "Predictability", "value": _stars(pred["stars"]),
+         "note": pred["na_reason"] or "10-year consistency of revenue and EBITDA per share"},
+        {"label": "Magic Formula rank", "value": str(magic["rank"]) if magic["rank"] is not None else "—",
+         "note": "not ranked for banks, insurers, utilities and REITs"
+                 if magic["rank"] is None and company.get("sector_class") in MAGIC_EXCLUDED
+                 else f"not ranked: {magic['na_reason']}" if magic["rank"] is None and magic["na_reason"]
+                 else f"earnings yield {fmt_pct(magic['earnings_yield'])}, return on capital "
+                      f"{fmt_pct(magic['return_on_capital'])}"},
+        {"label": "NCAV / share", "value": fmt_price(q["ncav_per_share"]),
+         "note": "current assets less all liabilities, per share (Graham's net-net)"},
+        {"label": "Momentum", "value": fmt_pct(q["momentum"]),
+         "note": "mean of the 12-1 and 6-1 month returns, over beta"},
+    ]
+    growth = [{"label": g["label"], **{span: fmt_pct(g[f"cagr_{span}"]) for span in GROWTH_SPANS}}
+              for g in q["growth"]]
+    composite = q["composite"]["score"]
+    # The industry ranks beside the universe's (Milestone 5), or why there are none.
+    ind = q["industry"]
+    industry = {
+        "ranked": ind["group"] is not None,
+        "composite": f"{ind['composite']:.1f}" if ind["composite"] is not None else None,
+        "note": (f"Industry ranks among the {ind['size']} companies of {ind['label']}" if ind["group"] is not None
+                 else f"No industry ranks: {ind['na_reason']}"),
+    }
+    return templates.TemplateResponse(
+        request,
+        "fragments/quality.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "computed": True,
+            "fiscal_year": q["fiscal_year"],
+            "computed_at": str(q["computed_at"] or "")[:10],
+            "composite": f"{composite:.1f}" if composite is not None else None,
+            "industry": industry,
+            "ranks": [{"label": RANK_LABELS[k], "value": v if v is not None else "—",
+                       "industry": ind["ranks"][k] if ind["ranks"][k] is not None else "—"}
+                      for k, v in ranks.items()],
+            "scores": scores,
+            "tests": p["tests"],
+            "growth": growth,
+            "spans": GROWTH_SPANS,
+            "signs": q["warning_signs"],
+            # The XSS defense of the other inline configs: "</" can't close the <script>.
+            "cfg_json": json.dumps(cfg).replace("</", "<\\/"),
+        },
+    )
 
 
 @router.get("/ui/stocks/{ticker}/val", response_class=HTMLResponse)

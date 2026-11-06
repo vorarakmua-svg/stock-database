@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Gurus' portfolio — Stock DB{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">The gurus' aggregated portfolio</h1>
+    <p class="page-subtitle">What the gurus hold together at the end of each one's latest 13F quarter.</p>
+  </div>
+  <a class="btn btn-sm" href="/gurus">All gurus</a>
+</div>
+
+<p class="text-muted">Per security held in shares or principal amounts (options apart): the gurus holding it, their
+  shares and value summed, and of them how many bought it (a new position or an addition) or sold it (a reduction,
+  or a position sold out) that quarter. A guru's latest quarter may be older than the others' when it stopped filing.</p>
+
+{% if rows %}
+<div class="table-wrap mt-2">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th class="num">#</th>
+        <th>Security</th>
+        <th>Issuer</th>
+        <th class="num">Gurus</th>
+        <th class="num">Shares</th>
+        <th class="num">Value</th>
+        <th class="num">Buyers</th>
+        <th class="num">Sellers</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in rows %}
+      <tr>
+        <td class="num">{{ loop.index }}</td>
+        <td class="row-label">{% if s.ours %}<a href="/stocks/{{ s.ticker }}">{{ s.ticker }}</a>{% elif s.ticker %}{{ s.ticker }}{% else %}<span class="text-muted" title="CUSIP">{{ s.security or "—" }}</span>{% endif %}</td>
+        <td>{{ s.issuer or "—" }}</td>
+        <td class="num">{{ s.gurus }}</td>
+        <td class="num">{{ s.shares }}</td>
+        <td class="num">{{ s.value }}</td>
+        <td class="num{% if s.buyers %} up{% endif %}">{{ s.buyers }}</td>
+        <td class="num{% if s.sellers %} down{% endif %}">{{ s.sellers }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty-state">No 13F holdings collected. Run <code>python -m src.ownership.collect --gurus</code>.</div>
+{% endif %}
+{% endblock %}

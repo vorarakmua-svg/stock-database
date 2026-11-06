@@ -62,6 +62,10 @@ files = [
     "src/models/canonical.py",
     "src/validation",
     "src/valuation",
+    "src/scores",
+    "src/ownership",
+    "src/market",
+    "src/universe",
     "src/parsers/derived_fields.py",
     "src/parsers/metric_utils.py",
     "src/parsers/sector_metrics.py",
@@ -72,6 +76,8 @@ files = [
     "src/query/asof.py",
     "src/query/pit_metrics.py",
     "src/webapp",
+    "src/refresh.py",
+    "src/fetchers/quote_refresh.py",
 ]
 
 # click 8.x uses `match` (3.10+) which mypy's 3.9 parser rejects with a syntax

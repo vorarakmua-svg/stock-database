@@ -38,36 +38,54 @@ def test_historical_cagr_none_when_span_not_positive():
 
 
 def test_derive_growth_threads_periods_and_records_cagr_years():
-    base, meta = derive_growth([1.0, 6.0], None, periods=[1996, 2023])
+    base, meta = derive_growth([1.0, 6.0], periods=[1996, 2023])
     assert meta["cagr_years"] == 27
     assert meta["hist_cagr"] == pytest.approx(6.0 ** (1 / 27) - 1)
     assert base == pytest.approx(meta["hist_cagr"])
-    _, meta_default = derive_growth([100.0, 105.0, 121.0], None)
+    _, meta_default = derive_growth([100.0, 105.0, 121.0])
     assert meta_default["cagr_years"] == 2
     assert meta_default["hist_cagr"] == pytest.approx(0.10)
 
 
-def test_derive_growth_takes_min_of_hist_and_analyst():
-    base, meta = derive_growth([100.0, 105.0, 121.0], 0.05)
-    assert base == pytest.approx(0.05)
-    assert meta["growth_source"] == "min(hist,analyst)"
-    assert meta["hist_cagr"] == pytest.approx(0.10)
-    assert meta["analyst_growth"] == 0.05
+def test_derive_growth_is_the_historical_cagr_with_no_analyst_term():
+    # Q2 (decided): Yahoo's earningsGrowth is one quarter's year-over-year change, no forecast: growth is the
+    # clamped historical CAGR alone, and the figure isn't recorded as a growth input.
+    base, meta = derive_growth([100.0, 105.0, 121.0])
+    assert base == pytest.approx(0.10)
+    assert meta["growth_source"] == "hist_only"
+    assert "analyst_growth" not in meta
 
 
 def test_derive_growth_clamps_to_cap_and_floor():
-    base, _ = derive_growth([100.0, 400.0], None)  # 300% growth
+    base, _ = derive_growth([100.0, 400.0])  # 300% growth
     assert base == 0.15
-    base, _ = derive_growth([100.0, 50.0], None)  # negative CAGR -> floor 0
+    base, _ = derive_growth([100.0, 50.0])  # negative CAGR -> floor 0
     assert base == 0.0
 
 
+def test_derive_growth_measures_from_the_first_positive_year_when_four_remain():
+    # Q5 (decided), option (c): a window starting on a loss is measured from its first positive year when at least
+    # 4 fiscal years remain from it; DELL's FCF from its first positive year.
+    base, meta = derive_growth([-1.0, 1.0, 1.1, 1.21, 1.331], periods=[2019, 2020, 2021, 2022, 2023])
+    assert meta["growth_source"] == "hist_from_first_positive"
+    assert meta["hist_cagr"] == pytest.approx(0.10)
+    assert meta["cagr_years"] == 3
+    assert base == pytest.approx(0.10)
+
+
+def test_derive_growth_is_flat_with_fewer_than_four_years_from_the_first_positive():
+    # Q5, option (b) behind (c): otherwise a flat 0% with source "none" (Lynch then N/A).
+    base, meta = derive_growth([-1.0, -2.0, 1.0, 2.0, 3.0])
+    assert base == 0.0
+    assert meta["growth_source"] == "none"
+    base, meta = derive_growth([1.0, 2.0, -1.0])  # the latest isn't positive: nothing to measure to
+    assert (base, meta["growth_source"]) == (0.0, "none")
+
+
 def test_derive_growth_sources():
-    _, meta = derive_growth([100.0, 110.0], None)
+    _, meta = derive_growth([100.0, 110.0])
     assert meta["growth_source"] == "hist_only"
-    _, meta = derive_growth([-1.0, 5.0], 0.07)  # cagr None -> analyst only
-    assert meta["growth_source"] == "analyst_only"
-    base, meta = derive_growth([-1.0, 5.0], None)
+    base, meta = derive_growth([-1.0, 5.0])
     assert base == 0.0
     assert meta["growth_source"] == "none"
 

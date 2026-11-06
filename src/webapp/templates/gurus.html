@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Gurus — Stock DB{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Gurus</h1>
+    <p class="page-subtitle">What the value investors we follow held at the end of their latest quarter, from their 13F filings.</p>
+  </div>
+  <a class="btn btn-sm" href="/gurus/portfolio">Aggregated portfolio</a>
+</div>
+
+<div class="alert alert-info">
+  Each guru's holdings come from its 13F-HR filings with the SEC: the long positions in US-listed stocks, ETFs,
+  options and convertible notes (the SEC's 13(f) securities) it managed at a quarter's end, filed up to 45 days after
+  it. Short positions, cash, bonds and foreign listings aren't reported, so a 13F is part of a portfolio, as it stood
+  up to four and a half months before. Each guru shows its latest quarter; its changes are against the quarter before,
+  by shares, adjusted for splits.
+</div>
+
+{% if gurus %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Guru</th>
+        <th>13F filer</th>
+        <th>Quarter</th>
+        <th>Filed</th>
+        <th class="num">Value</th>
+        <th class="num">Positions</th>
+        <th class="num">New</th>
+        <th class="num">Sold out</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for g in gurus %}
+      <tr>
+        <td class="row-label"><a href="/gurus/{{ g.cik }}">{{ g.name }}</a></td>
+        <td>{{ g.filers }}</td>
+        <td>{{ g.period }}</td>
+        <td>{{ g.filed or "—" }}</td>
+        <td class="num">{{ g.value }}</td>
+        <td class="num">{{ g.positions }}</td>
+        <td class="num">{{ g.new }}</td>
+        <td class="num">{{ g.sold_out }}</td>
+        <td>{% if not g.complete %}<span class="pill down" title="A filer's report for the quarter failed its checksum or wasn't collected: its holdings are left out">Incomplete</span>{% elif not g.has_prior %}<span class="text-muted">no quarter before</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="text-muted mt-2">Positions are held in shares or principal amounts, options apart; new and sold out compare
+  them with the quarter before.</p>
+{% else %}
+<div class="empty-state">No 13F holdings collected. Run <code>python -m src.ownership.collect --gurus</code>.</div>
+{% endif %}
+{% endblock %}

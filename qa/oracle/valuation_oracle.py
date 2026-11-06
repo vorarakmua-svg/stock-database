@@ -84,7 +84,8 @@ def level1_candidates(model: str, a: Dict) -> Dict[str, Triple]:
             out["scenario discount re-clamped" if reclamp else "scenario discount unclamped"] = tuple(vals)
     elif model == "graham":
         m, b = a["multiplier"], a["bvps"]
-        out["spec"] = tuple(math.sqrt(m * a[k] * b) if a[k] > 0 and b > 0 else None
+        # A stored bear EPS of None is a loss year in the window (BUG-007): no Graham number for it.
+        out["spec"] = tuple(math.sqrt(m * a[k] * b) if a[k] is not None and a[k] > 0 and b > 0 else None
                             for k in ("eps_bear", "eps_base", "eps_bull"))
     elif model == "lynch":
         g, cap, lo, hi, eps = a["growth_base"], a["growth_cap"], a["fair_pe_floor"], a["fair_pe_cap"], a["eps_base"]
@@ -140,10 +141,31 @@ def cagr(window: List[Tuple[int, float]]) -> Optional[float]:
     return (window[-1][1] / window[0][1]) ** (1 / (window[-1][0] - window[0][0])) - 1
 
 
+def growth_cagr(window: List[Tuple[int, float]]) -> Optional[float]:
+    """Q5 (decided 2026-11-02, option c): the window's CAGR, else the CAGR from its first positive value when at
+    least 4 fiscal years remain from it; None when neither is measurable."""
+    g = cagr(window)
+    if g is not None:
+        return g
+    k = next((i for i, (_fy, v) in enumerate(window) if v is not None and v > 0), None)
+    if k is None or len(window) - k < 4:
+        return None
+    return cagr(window[k:])
+
+
 def simple_ratio(ratio: float) -> bool:
     """A share split's ratio is a simple fraction (2:1, 3:2, 9:4, 1:8, 10:1); Yahoo's spin-off and merger price
     factors aren't. On the real-data copy all 430 simple factors of 3:2 or more are splits."""
     return any(abs(r * d - round(r * d)) < 1e-9 * max(1.0, r * d) for r in (ratio, 1 / ratio) for d in (1, 2, 3, 4))
+
+
+def quartile(xs: List[float], p: float) -> float:
+    """The inclusive p-quantile: linear between the sorted values, at position (n - 1) x p."""
+    s = sorted(xs)
+    pos = (len(s) - 1) * p
+    lo = int(math.floor(pos))
+    hi = min(lo + 1, len(s) - 1)
+    return s[lo] + (s[hi] - s[lo]) * (pos - lo)
 
 
 def median(xs: List[float]) -> float:
@@ -201,9 +223,11 @@ class Inputs:
             for fy, *dates in db.execute(
                     "select fiscal_year, max(case when weighted_avg_shares_diluted is not null then filed_date end), "
                     "max(case when eps_diluted is not null then filed_date end), "
-                    "max(case when shares_outstanding is not null then filed_date end) "
+                    "max(case when shares_outstanding is not null then filed_date end), "
+                    "max(case when dividends_per_share is not null then filed_date end) "
                     "from financials_annual_vintages where ticker=? group by fiscal_year", (ticker,)):
-                for field, filed in zip(("weighted_avg_shares_diluted", "eps_diluted", "shares_outstanding"), dates):
+                for field, filed in zip(("weighted_avg_shares_diluted", "eps_diluted", "shares_outstanding",
+                                         "dividends_per_share"), dates):
                     if filed:
                         self.filed_by_field[(fy, field)] = filed
         except sqlite3.OperationalError:  # a database from before vintages were kept
@@ -222,9 +246,9 @@ class Inputs:
         # Per-share values divide by every share class (BUG-022). Yahoo's share count can cover one class of
         # several (GOOGL's class A: 5.87B of 12.23B), while market cap / price counts them all; and a count still
         # under 3/4 of the latest FY's diluted shares on today's basis is incomplete too (HON, whose market cap is
-        # halved as well). A gap under 5% can be Yahoo's two figures disagreeing (MRVL, one class, 2.5%), so the
-        # one nearer the latest FY's count wins (BUG-035); every wider gap in the data is a class or units
-        # Yahoo's count leaves out (META 15%, BX 65%). The FY count is the diluted one, else the period-end one.
+        # halved as well). Since Q7 every class and unit counts: market cap / price wherever it is more than 2%
+        # above Yahoo's count (MRVL 2.5%, META 15%, BX 65%); the 2-5% tiebreaker on the FY count is gone. The FY
+        # count is the diluted one, else the period-end one.
         latest_fy = next(((r[5] or r[4], r[1], self.filed_of(r[0], "weighted_avg_shares_diluted" if r[5]
                                                              else "shares_outstanding"))
                           for r in reversed(self.annual) if r[5] or r[4]), None)
@@ -248,9 +272,9 @@ class Inputs:
                 self.ads_ratio = read
                 fy_today /= read
         by_value = market_cap / self.price if market_cap and self.price else None
-        if self.snap_shares and by_value and by_value > 1.02 * self.snap_shares and not (
-                fy_today and by_value < 1.05 * self.snap_shares
-                and abs(math.log(self.snap_shares / fy_today)) < abs(math.log(by_value / fy_today))):
+        # Q7 (decided 2026-11-02, option a): every class and unit counts, market cap / price whenever it is more
+        # than 2% above Yahoo's count (within it, Yahoo's rounding); the 2-5% tiebreaker is gone.
+        if self.snap_shares and by_value and by_value > 1.02 * self.snap_shares:
             self.snap_shares = by_value
         if self.snap_shares and fy_today and self.snap_shares < 0.75 * fy_today:
             self.snap_shares = fy_today
@@ -259,13 +283,10 @@ class Inputs:
         raw = self.rf + (self.beta if self.beta is not None else 1.0) * ERP
         return raw, clamp(raw, *DISCOUNT_CLAMP)
 
-    def growth(self, hist: Optional[float], cap: float) -> Optional[float]:
-        if hist is None:
-            # Spec gap (Q5): with no measurable CAGR the spec doesn't say what growth to use, so the row is
-            # not derivable from it. (The code follows the plan's analyst-only fallback until the user decides.)
-            return None
-        raw = min(hist, self.analyst) if self.analyst is not None else hist
-        return clamp(raw, 0.0, cap)
+    def growth(self, hist: Optional[float], cap: float) -> float:
+        # Q2 (decided 2026-11-02): Yahoo's earningsGrowth is one quarter's year-over-year change, no forecast, so it
+        # takes no part. Q5 (decided, option b behind c): with no measurable CAGR, a flat 0%.
+        return clamp(hist, 0.0, cap) if hist is not None else 0.0
 
     def after_price(self, date: str) -> bool:
         """A split dated after both the latest filing and the latest price's day (BUG-048)."""
@@ -362,25 +383,33 @@ class Inputs:
         close = row[1]
         if not flagged or row[2]:
             close /= math.prod(f for ex, f in self.yahoo_dividend_factors() if ex > row[0][:10])
-        return close * self.bars_to_price_basis()
+        # BUG-172 (decided 2026-11-02): the close as traded. Yahoo divides every close before a factor that isn't a
+        # share split (a spin-off's, a stock dividend's) by it, up to the last bar it served.
+        served = self.db.execute("select max(date) from price_bars where ticker=?", (self.t,)).fetchone()[0]
+        for day, ratio in self.splits:
+            if ratio and ratio > 0 and abs(ratio - 1) > 1e-9 and not simple_ratio(ratio) \
+                    and row[0][:10] < day[:10] <= str(served)[:10]:
+                close *= ratio
+        return close * self.bars_to_price_basis(shares_only=True)
 
-    def bars_to_price_basis(self) -> float:
+    def bars_to_price_basis(self, shares_only: bool = False) -> float:
         """The factor that puts the stored bars on the latest price's split basis (VAL-09's per-share consistency).
         Yahoo served the bars on the basis of every split up to their last day, which their history reaches: a split
         between that day and the price's is in one of them only. A later run whose price-history request failed left
-        bars older than a split it stored, beside a price from before it or after it (BUG-094)."""
-        if getattr(self, "_bars_factor", None) is None:
-            served = self.db.execute("select max(date) from price_bars where ticker=?", (self.t,)).fetchone()[0]
-            factor = 1.0
-            if self.priced_on and served:
-                last = str(served)[:10]
-                for date, ratio in self.splits:
-                    if ratio and self.priced_on < date[:10] <= last:
-                        factor *= ratio
-                    elif ratio and last < date[:10] <= self.priced_on:
-                        factor /= ratio
-            self._bars_factor = factor
-        return self._bars_factor
+        bars older than a split it stored, beside a price from before it or after it (BUG-094). With *shares_only*,
+        share splits alone: a close already put back as traded differs from the price by no spin-off (BUG-303)."""
+        served = self.db.execute("select max(date) from price_bars where ticker=?", (self.t,)).fetchone()[0]
+        factor = 1.0
+        if self.priced_on and served:
+            last = str(served)[:10]
+            for date, ratio in self.splits:
+                if not ratio or (shares_only and not simple_ratio(ratio)):
+                    continue
+                if self.priced_on < date[:10] <= last:
+                    factor *= ratio
+                elif last < date[:10] <= self.priced_on:
+                    factor /= ratio
+        return factor
 
     def dividend_onto(self, onto: Optional[str], served: Optional[str]) -> float:
         """The factor that puts a dividend Yahoo served on *served* onto the split basis of the day *onto* (the
@@ -433,6 +462,77 @@ class Inputs:
         return self._yahoo_factors
 
 
+def _day(s: str) -> datetime.date:
+    return datetime.date.fromisoformat(s[:10])
+
+
+def one_offs(events: List[Tuple[str, float]]) -> Dict[str, float]:
+    """Q3 (decided 2026-11-02, option c): the part of each payment that is a one-off, by ex-date. A payment over 3x
+    the median of the other payments in the year before it and over 3x that of the year after it (both must exist:
+    a payment with none after can be a raise, NVDA) is a one-off, unless in 2 of the 3 years before it a payment over
+    3x its lower side's median falls within 91 days of its anniversary (a recurring variable dividend: PGR, CME). If
+    the payments either side of it are more than 1.5 median intervals apart it holds a regular payment too, and only
+    its excess over the lower median is one-off. 3x is the decision's; the rest (the 365-day sides, 2 of 3 years,
+    91 days, 1.5 intervals) are the fix's own heuristics (loop section 7)."""
+    days = [_day(d) for d, _ in events]
+    gaps = sorted((b - a).days for a, b in zip(days, days[1:]))
+    usual = median([float(g) for g in gaps]) if gaps else None
+    out: Dict[str, float] = {}
+    for i, (d, a) in enumerate(events):
+        lo, hi = days[i] - datetime.timedelta(days=365), days[i] + datetime.timedelta(days=365)
+        before = [v for j, (_, v) in enumerate(events) if j != i and lo < days[j] <= days[i]]
+        after = [v for j, (_, v) in enumerate(events) if j != i and days[i] < days[j] <= hi]
+        if not before or not after or a <= 3 * max(median(before), median(after)):
+            continue
+        low = min(median(before), median(after))
+        years = 0
+        for k in (1, 2, 3):
+            mark = days[i] - datetime.timedelta(days=365 * k)
+            years += any(events[j][1] > 3 * low and abs((days[j] - mark).days) <= 91 for j in range(i))
+        if years >= 2:
+            continue
+        slot = usual is not None and 0 < i < len(events) - 1 and (days[i + 1] - days[i - 1]).days > 1.5 * usual
+        out[d[:10]] = out.get(d[:10], 0.0) + (a - low if slot else a)
+    return out
+
+
+def payment_gaps(db: sqlite3.Connection, ticker: str, splits: List[Tuple[str, float]]) -> List[Tuple[int, str, str]]:
+    """BUG-012's completeness check, re-derived for Q4 (decided 2026-11-02, option c), over the latest 5 fiscal
+    years as a collection scores them: a gap in Yahoo's stored schedule over 1.7x its median interval, beginning
+    no earlier than 1.7 intervals before the year and before its end and ending after its start, with the year's
+    payments under 80% of SEC's dividends per share as filed; years with a split after their start skipped. Q4's
+    extension: a year without SEC's figure but with a payment is measured against the year before's (ACN FY2026).
+    The 1.7 / 0.8 / 4-interval thresholds are BUG-012's heuristics, the extension the fix's own."""
+    paid = [(d[:10], a) for d, a in db.execute("select date, amount from dividend_events where ticker=? and amount is "
+                                               "not null order by date", (ticker,))]
+    intervals = [(_day(b) - _day(a)).days for (a, _), (b, _) in zip(paid, paid[1:])]
+    if len(intervals) < 4:
+        return []
+    usual = median([float(v) for v in intervals])
+    holes = [(paid[i][0], paid[i + 1][0]) for i, v in enumerate(intervals) if v > 1.7 * usual]
+    rows = db.execute("select fiscal_year, period_end, dividends_per_share from financials_annual where ticker=? "
+                      "and fiscal_year is not null order by fiscal_year", (ticker,)).fetchall()
+    by_fy = {fy: (pe, dps) for fy, pe, dps in rows}
+    found = []
+    for fy, pe, dps in rows[-5:]:
+        if not pe:
+            continue
+        end = pe[:10]
+        start = (_day(end) - datetime.timedelta(days=365)).isoformat()
+        total = sum(a for d, a in paid if start < d <= end)
+        since = start
+        if dps is None and total > 0 and fy - 1 in by_fy and by_fy[fy - 1][0] and by_fy[fy - 1][0][:10] < end:
+            dps = by_fy[fy - 1][1]
+            since = (_day(by_fy[fy - 1][0]) - datetime.timedelta(days=365)).isoformat()
+        if dps is None or dps <= 0 or any(str(d)[:10] > since for d, _ in splits):
+            continue
+        recent = (_day(start) - datetime.timedelta(days=1.7 * usual)).isoformat()
+        hole = next(((a, b) for a, b in holes if recent <= a < end and b > start), None)
+        if hole and total < 0.8 * dps:
+            found.append((fy, hole[0], hole[1]))
+    return found
+
+
 def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Optional[Dict]:
     """Oracle inputs and bear/base/bull for one applicable model, or None if not derivable."""
     x = Inputs(db, ticker)
@@ -442,19 +542,20 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         return None  # a foreign issuer whose ADS ratio can't be read: its filed per-share basis isn't the price's
 
     if model == "dcf":
-        rows = db.execute("select fiscal_year, coalesce(levered_fcf, free_cash_flow) from metrics_annual where "
-                          "ticker=? and coalesce(levered_fcf, free_cash_flow) is not null order by fiscal_year",
+        # The spec's basis: equity FCF = OCF - capex, interest already through OCF (ASC 230).
+        rows = db.execute("select fiscal_year, free_cash_flow from metrics_annual where "
+                          "ticker=? and free_cash_flow is not null order by fiscal_year",
                           (ticker,)).fetchall()
         window = x.last_10_fys([(fy, v) for fy, v in rows])
         fcf = [v for _fy, v in window]
         if len(fcf) < 4:
             return None
-        g = x.growth(cagr(window), 0.15)
+        g = x.growth(growth_cagr(window), 0.15)
         _, r = x.discount()
-        if g is None or not x.snap_shares:
+        if not x.snap_shares:
             return {"inputs": {"fcf_basis": median(fcf[-3:]), "hist_cagr": None}}
         vals = [dcf_per_share(median(fcf[-3:]), gi, ri, x.snap_shares) for gi, ri in scenarios(g, r, 0.15, False)]
-        return {"inputs": {"fcf_basis": median(fcf[-3:]), "hist_cagr": cagr(window),
+        return {"inputs": {"fcf_basis": median(fcf[-3:]), "hist_cagr": growth_cagr(window),
                            "cagr_years": window[-1][0] - window[0][0], "growth_base": g, "discount_base": r,
                            "shares_outstanding": x.snap_shares}, "values": vals}
     if model == "ddm":
@@ -480,47 +581,82 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         events = [(d, a * x.dividend_to_price_basis(served_on[d])) for d, a in events if not spun_off(d, a)]
         ttm_start = (datetime.date.fromisoformat(anchor[:10]) - datetime.timedelta(days=365)).isoformat()
         ttm = sum(a for d, a in events if ttm_start < d <= anchor[:10])
-        by_year: Dict[int, List[float]] = {}
-        for d, a in events:
-            if d[:4] < anchor[:4]:
-                by_year.setdefault(int(d[:4]), []).append(a)
-        # The spec's "<= 10 yrs" is a calendar window (complete years before the anchor year), and the
-        # exponent is the calendar span, so a payment gap can't stretch or shrink the growth rate.
-        window = [(y, sum(v), len(v)) for y, v in sorted(by_year.items()) if y >= int(anchor[:4]) - 10]
-        # Growth compares full years (BUG-009, BUG-017). Each end is judged by the cadence of the (up to 3) years
-        # next to it, since a payer can change frequency (PGR and TSM: annual, then quarterly from 2019). A first
-        # year with fewer payments than those is partial (a dividend started, paused or restarted, or an ex-date
-        # slipped a year back), unless it continues a lower-frequency schedule: the year before paid as often,
-        # and each payment is larger than the later years' typical one (an annual payment is several quarterly
-        # ones; a suspension restarted with the same count pays the same size, BUG-017's third fix). An end year
-        # with exactly one payment more, next to a year still on the usual schedule and each within 1.5x of that
-        # year's typical payment, holds one that slipped across the year boundary (O 2025's Dec 31 ex-date), so
-        # it counts at the usual number. A neighbour that already pays more often means the schedule changed (KO
-        # semiannual from 2024); a special is larger and counts in full (Q3); a higher frequency pays less each.
-        def cadence(years: List[Tuple[int, float, int]]) -> float:
-            return median([float(n) for _, _, n in years])
-
-        def lower_frequency(first: Tuple[int, float, int], later: List[Tuple[int, float, int]]) -> bool:
-            typical = median([a for y, _, _ in later for a in by_year[y]])
-            return (len(by_year.get(first[0] - 1, [])) == first[2]
-                    and all(a >= 1.5 * typical for a in by_year[first[0]]))
-
-        while (len(window) >= 2 and window[0][2] < cadence(window[1:4])
-               and not lower_frequency(window[0], window[1:4])):
-            window = window[1:]
-        for end, adjacent, near in ((0, 1, window[1:4]), (-1, -2, window[-4:-1])):
-            if len(window) >= 2:
-                year, total, n = window[end]
-                usual, typical = cadence(near), median(by_year[window[adjacent][0]])
-                if (n == usual + 1 and window[adjacent][2] <= usual
-                        and all(typical / 1.5 < a < typical * 1.5 for a in by_year[year])):
-                    window[end] = (year, total * usual / n, n)
+        # BUG-049 (decided 2026-11-02, option a): the growth history is SEC's dividends per share for the last 10
+        # fiscal years (the 10-K's declared, else cash-paid, series), with Yahoo's payments for the TTM. A year's
+        # figure goes onto the basis of Yahoo's payments: today's split basis, as the EPS (VAL-09's per-share
+        # consistency: the declared splits the figure's own filing hadn't restated yet), then divided by the
+        # spin-off and stock-dividend factors after the year, as Yahoo divides its payments (VAL-02: comparable
+        # years). Where SEC has no figure (a filer that tags only point-in-time payments, BUG-013), or one that
+        # holds at most one of the year's two or more payments (below all of them, or within 2% of one: a quarter's
+        # rate tagged as the year, BUG-020), the year's payments stand in, ex-dates in (the previous FY end, this
+        # FY end]. A company without fiscal years uses calendar years of payments. These two thresholds are the
+        # fix's own heuristics (loop section 7), not the spec's.
+        served_day = x.db.execute("select max(date) from price_bars where ticker=?", (ticker,)).fetchone()[0]
+        sec = {fy: v for fy, v in db.execute("select fiscal_year, dividends_per_share from financials_annual where "
+                                             "ticker=?", (ticker,))}
+        spans: List[Tuple[int, str, str, Optional[float]]] = []
+        fys = [row for row in x.annual if row[1]][-10:]
+        for i, (fy, pe, ni, _eq, so, wd, eps) in enumerate(fys):
+            end = pe[:10]
+            prev = fys[i - 1] if i else None
+            start = (prev[1][:10] if prev and prev[0] == fy - 1 else
+                     (datetime.date.fromisoformat(end) - datetime.timedelta(days=365)).isoformat())
+            dps = sec.get(fy)
+            if dps is not None:
+                basis = wd or (ni / eps if ni and eps else None) or so
+                # Share splits alone (simple ratios), as a filing restates its per-share figures; the factors
+                # that aren't (spin-offs, stock dividends, RTX's 1.589) come next, once.
+                all_splits, x.splits = x.splits, [sp for sp in x.splits if sp[1] and simple_ratio(sp[1])]
+                today = x.to_current_basis(basis, pe, x.filed_of(fy, "dividends_per_share")) if basis else None
+                x.splits = all_splits
+                dps = dps * basis / today if basis and today else dps
+                for day, ratio in x.splits:
+                    if (ratio and ratio > 0 and abs(ratio - 1) > 1e-9 and not simple_ratio(ratio) and served_day
+                            and end < day[:10] <= str(served_day)[:10]):
+                        dps /= ratio
+            spans.append((fy, start, end, dps))
+        if not fys:
+            spans = [(y, f"{y - 1}-12-31", f"{y}-12-31", None) for y in range(int(anchor[:4]) - 10, int(anchor[:4]))]
+        extra = one_offs(events)
+        years: List[Tuple[int, Optional[float], bool, bool, float, float]] = []
+        for fy, start, end, dps in spans:
+            paid = [(d, a) for d, a in events if start < d <= end]
+            amounts = [a for _, a in paid]
+            before = [d for d, _ in events if d <= start]
+            # A year whose dividend started or restarted in it is partial (VAL-02's "comparable full years"): no
+            # payment, none before it, or the first more than 456 days (15 months) after the last one before it.
+            restart = not paid or not before or (datetime.date.fromisoformat(paid[0][0])
+                                                 - datetime.date.fromisoformat(before[-1])).days > 456
+            one = len(amounts) >= 2 and dps is not None and (
+                dps < min(amounts) or any(abs(dps - a) <= 0.02 * a for a in amounts))
+            from_sec = dps is not None and dps > 0 and not one
+            value = dps if from_sec else (sum(amounts) if amounts else None)
+            years.append((fy, value, restart, from_sec, sum(amounts),
+                          sum(v for d, v in extra.items() if start < d <= end)))
+        while years and (years[0][1] is None or years[0][2]):
+            years = years[1:]
+        kept = [y for y in years if y[1] is not None]
+        window = [(fy, v) for fy, v, *_ in kept]
+        # Q3: the CAGR's endpoints lose their year's one-offs where the year's figure holds them: Yahoo's sum always,
+        # SEC's when nearer the year's payments with them than without them (COST FY2017 does, LDOS FY2016 doesn't).
+        for pos in ((0, -1) if window else ()):
+            _, value, _, _, paid_sum, off = kept[pos]
+            if off and value is not None and value > paid_sum - off / 2:
+                window[pos] = (window[pos][0], value - off)
         # The spec's historical CAGR "requires >= 4 FYs" (BUG-010): fewer full years measure nothing.
         span = window[-1][0] - window[0][0] if len(window) >= 4 else None
         hist = (window[-1][1] / window[0][1]) ** (1 / span) - 1 if span and window[0][1] > 0 else None
         g = x.growth(hist, 0.10)
         _, r = x.discount()
-        if g is None or not ttm:
+        # Q4: no DDM where Yahoo's missing payments are ones it reads: the gap runs into the TTM, or its year is a
+        # growth year taken from Yahoo's payments.
+        from_yahoo = {fy for fy, _, _, sec_year, _, _ in kept if not sec_year} if len(window) >= 4 else set()
+        incomplete = [fy for fy, a, b in payment_gaps(db, ticker, list(x.splits))
+                      if fy in from_yahoo or (b > ttm_start and a < anchor[:10])]
+        if incomplete:
+            return {"na": "dividend history incomplete", "inputs": {"gap_years": incomplete}}
+        ttm -= sum(v for d, v in extra.items() if ttm_start < d <= anchor[:10])
+        if not ttm or ttm <= 0:
             return {"inputs": {"ttm_dps": ttm, "hist_cagr": hist, "cagr_years": span}}
         vals = [ddm_per_share(ttm, gi, ri) for gi, ri in scenarios(g, r, 0.10, False)]
         return {"inputs": {"ttm_dps": ttm, "hist_cagr": hist, "cagr_years": span,
@@ -543,12 +679,12 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         window = x.last_10_fys(eps)
         if len(window) < 4 or window[-1][1] <= 0:
             return None
-        if cagr(window) is None:  # Lynch publishes nothing without a measurable growth rate
+        if growth_cagr(window) is None:  # Lynch publishes nothing without a measurable growth rate (Q5)
             return {"inputs": {"hist_cagr": None}}
-        g = x.growth(cagr(window), 0.15)
+        g = x.growth(growth_cagr(window), 0.15)
         trio = [max(g - SPREAD_G, 0.0), g, min(g + SPREAD_G, 0.15)]
         latest = window[-1][1]
-        return {"inputs": {"eps_base": latest, "hist_cagr": cagr(window), "cagr_years": window[-1][0] - window[0][0],
+        return {"inputs": {"eps_base": latest, "hist_cagr": growth_cagr(window), "cagr_years": window[-1][0] - window[0][0],
                            "growth_base": g}, "values": [clamp(gi * 100, 5, 25) * latest for gi in trio]}
     if model == "multiples":
         kind = stored.get("multiple_kind")
@@ -569,7 +705,8 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         latest = basis_by_fy.get(x.annual[-1][0]) if x.annual else None
         if len(mults) < 3 or not latest or latest <= 0:
             return None
-        band = (min(mults), median(mults), max(mults))
+        # BUG-172 (decided 2026-11-02): the band is the multiples' inclusive quartiles (p25, median, p75).
+        band = (quartile(mults, 0.25), median(mults), quartile(mults, 0.75))
         return {"inputs": {"band_low": band[0], "band_median": band[1], "band_high": band[2], "latest_basis": latest,
                            "n_years": len(mults)}, "values": [m * latest for m in band]}
     return None
@@ -584,6 +721,11 @@ def check_level2(db: sqlite3.Connection, tickers: List[str], tol: float) -> int:
     for ticker, model, *stored_vals, assumptions in rows:
         stored = json.loads(assumptions)
         o = level2(db, ticker, model, stored)
+        if o and "na" in o:
+            checked += 1
+            bad += 1
+            print(f"L2 MISMATCH {ticker:6} {model:9} stored applicable, oracle N/A: {o['na']} {o['inputs']}")
+            continue
         if not o or "values" not in o:
             # The spec-derived inputs are undefined (e.g. no valid CAGR) yet the code produced a value:
             # never silently pass these; list them.
@@ -603,6 +745,17 @@ def check_level2(db: sqlite3.Connection, tickers: List[str], tol: float) -> int:
             fmt = lambda v: "None" if v is None else f"{v:.4g}"  # noqa: E731
             print(f"L2 MISMATCH {ticker:6} {model:9} base stored={fmt(stored_vals[1])} oracle={fmt(o['values'][1])} "
                   f"worst {worst:.1%}{alt_note}; inputs (oracle, stored) differing: {diffs}")
+    # Q4: a DDM the code made N/A for an incomplete history must be one the oracle finds incomplete too.
+    na_rows = db.execute("select ticker, assumptions from valuations where model = 'ddm' and applicable = 0 and "
+                         f"na_reason like 'dividend history incomplete%' {where} order by ticker", tickers).fetchall()
+    for ticker, _ in na_rows:
+        anchor = db.execute("select substr(collected_at, 1, 10) from market_snapshots where ticker=? order by "
+                            "collected_at desc limit 1", (ticker,)).fetchone()
+        o = level2(db, ticker, "ddm", {"ttm_anchor": anchor[0] if anchor else None})
+        checked += 1
+        if not o or "na" not in o:
+            bad += 1
+            print(f"L2 MISMATCH {ticker:6} ddm       stored N/A (dividend history incomplete), oracle values it")
     print(f"level 2: {checked} applicable rows re-derived from raw tables, {bad} beyond {tol:.1%}")
     if skipped:
         print(f"  not derivable from the spec ({len(skipped)}; the code still valued them): {' '.join(skipped)}")

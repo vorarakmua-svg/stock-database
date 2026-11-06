@@ -1,0 +1,181 @@
+<SEC-DOCUMENT>0001437749-26-023711.txt : 20260716
+<SEC-HEADER>0001437749-26-023711.hdr.sgml : 20260716
+<ACCEPTANCE-DATETIME>20260716160858
+ACCESSION NUMBER:		0001437749-26-023711
+CONFORMED SUBMISSION TYPE:	13F-HR
+PUBLIC DOCUMENT COUNT:		2
+CONFORMED PERIOD OF REPORT:	20260630
+FILED AS OF DATE:		20260716
+DATE AS OF CHANGE:		20260716
+EFFECTIVENESS DATE:		20260716
+
+FILER:
+
+	COMPANY DATA:	
+		COMPANY CONFORMED NAME:			DAILY JOURNAL CORP
+		CENTRAL INDEX KEY:			0000783412
+		STANDARD INDUSTRIAL CLASSIFICATION:	NEWSPAPERS:  PUBLISHING OR PUBLISHING & PRINTING [2711]
+		ORGANIZATION NAME:           	04 Manufacturing
+		EIN:				954133299
+		STATE OF INCORPORATION:			SC
+		FISCAL YEAR END:			0930
+
+	FILING VALUES:
+		FORM TYPE:		13F-HR
+		SEC ACT:		1934 Act
+		SEC FILE NUMBER:	028-15782
+		FILM NUMBER:		261180466
+
+	BUSINESS ADDRESS:	
+		STREET 1:		915 EAST FIRST STREET
+		CITY:			LOS ANGELES
+		STATE:			CA
+		ZIP:			90012
+		BUSINESS PHONE:		2132295300
+
+	MAIL ADDRESS:	
+		STREET 1:		915 EAST FIRST STREET
+		CITY:			LOS ANGELES
+		STATE:			CA
+		ZIP:			90012
+
+	FORMER COMPANY:	
+		FORMER CONFORMED NAME:	DAILY JOURNAL CO
+		DATE OF NAME CHANGE:	19870427
+</SEC-HEADER>
+<DOCUMENT>
+<TYPE>13F-HR
+<SEQUENCE>1
+<FILENAME>primary_doc.xml
+<TEXT>
+<XML>
+<?xml version="1.0" encoding="UTF-8"?>
+<edgarSubmission xmlns="http://www.sec.gov/edgar/thirteenffiler" xmlns:com="http://www.sec.gov/edgar/common">
+  <schemaVersion>X0202</schemaVersion>
+  <headerData>
+    <submissionType>13F-HR</submissionType>
+    <filerInfo>
+      <liveTestFlag>LIVE</liveTestFlag>
+      <filer>
+        <credentials>
+          <cik>0000783412</cik>
+          <ccc>XXXXXXXX</ccc>
+        </credentials>
+        <fileNumber>028-15782</fileNumber>
+      </filer>
+      <periodOfReport>06-30-2026</periodOfReport>
+    </filerInfo>
+  </headerData>
+  <formData>
+    <coverPage>
+      <reportCalendarOrQuarter>06-30-2026</reportCalendarOrQuarter>
+      <filingManager>
+        <name>DAILY JOURNAL CORP</name>
+        <address>
+          <com:street1>915 EAST FIRST STREET</com:street1>
+          <com:city>LOS ANGELES</com:city>
+          <com:stateOrCountry>CA</com:stateOrCountry>
+          <com:zipCode>90012</com:zipCode>
+        </address>
+      </filingManager>
+      <reportType>13F HOLDINGS REPORT</reportType>
+      <form13FFileNumber>028-15782</form13FFileNumber>
+      <provideInfoForInstruction5>N</provideInfoForInstruction5>
+    </coverPage>
+    <signatureBlock>
+      <name>Erik Nakamura</name>
+      <title>Chief Financial Officer</title>
+      <phone>2134261711</phone>
+      <signature>/s/ Erik Nakamura</signature>
+      <city>Los Angeles</city>
+      <stateOrCountry>CA</stateOrCountry>
+      <signatureDate>07-16-2026</signatureDate>
+    </signatureBlock>
+    <summaryPage>
+      <otherIncludedManagersCount>0</otherIncludedManagersCount>
+      <tableEntryTotal>4</tableEntryTotal>
+      <tableValueTotal>256664220</tableValueTotal>
+      <isConfidentialOmitted>false</isConfidentialOmitted>
+    </summaryPage>
+  </formData>
+</edgarSubmission>
+</XML>
+</TEXT>
+</DOCUMENT>
+<DOCUMENT>
+<TYPE>INFORMATION TABLE
+<SEQUENCE>2
+<FILENAME>F13InfoTable_83992.xml
+<TEXT>
+<XML>
+<?xml version="1.0"?>
+<informationTable xmlns="http://www.sec.gov/edgar/document/thirteenf/informationtable" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<infoTable>
+<nameOfIssuer>Alibaba Group Holding Ltd</nameOfIssuer>
+<titleOfClass>Sponsored ADS</titleOfClass>
+<cusip>01609W102</cusip>
+<value>18716100</value>
+<shrsOrPrnAmt>
+<sshPrnamt>195000</sshPrnamt>
+<sshPrnamtType>SH</sshPrnamtType>
+</shrsOrPrnAmt>
+<investmentDiscretion>SOLE</investmentDiscretion>
+<votingAuthority>
+<Sole>195000</Sole>
+<Shared>0</Shared>
+<None>0</None>
+</votingAuthority>
+</infoTable>
+<infoTable>
+<nameOfIssuer>Bank of America Corp</nameOfIssuer>
+<titleOfClass>Common Stock</titleOfClass>
+<cusip>060505104</cusip>
+<value>113960000</value>
+<shrsOrPrnAmt>
+<sshPrnamt>2000000</sshPrnamt>
+<sshPrnamtType>SH</sshPrnamtType>
+</shrsOrPrnAmt>
+<investmentDiscretion>SOLE</investmentDiscretion>
+<votingAuthority>
+<Sole>2000000</Sole>
+<Shared>0</Shared>
+<None>0</None>
+</votingAuthority>
+</infoTable>
+<infoTable>
+<nameOfIssuer>US Bancorp</nameOfIssuer>
+<titleOfClass>Common Stock</titleOfClass>
+<cusip>902973304</cusip>
+<value>7217800</value>
+<shrsOrPrnAmt>
+<sshPrnamt>119500</sshPrnamt>
+<sshPrnamtType>SH</sshPrnamtType>
+</shrsOrPrnAmt>
+<investmentDiscretion>SOLE</investmentDiscretion>
+<votingAuthority>
+<Sole>119500</Sole>
+<Shared>0</Shared>
+<None>0</None>
+</votingAuthority>
+</infoTable>
+<infoTable>
+<nameOfIssuer>Wells Fargo &amp; Co</nameOfIssuer>
+<titleOfClass>Common Stock</titleOfClass>
+<cusip>949746101</cusip>
+<value>116770320</value>
+<shrsOrPrnAmt>
+<sshPrnamt>1413000</sshPrnamt>
+<sshPrnamtType>SH</sshPrnamtType>
+</shrsOrPrnAmt>
+<investmentDiscretion>SOLE</investmentDiscretion>
+<votingAuthority>
+<Sole>1413000</Sole>
+<Shared>0</Shared>
+<None>0</None>
+</votingAuthority>
+</infoTable>
+</informationTable>
+</XML>
+</TEXT>
+</DOCUMENT>
+</SEC-DOCUMENT>

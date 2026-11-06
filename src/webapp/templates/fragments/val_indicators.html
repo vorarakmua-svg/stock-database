@@ -1,0 +1,47 @@
+<section class="section" id="val-indicators">
+  <h2 class="section-heading">Other indicators</h2>
+  {% if not computed %}
+  <div class="empty-state">No indicators computed yet — run <code>python -m src.valuation.backfill</code>, or click
+    UPDATE DATA above.</div>
+  {% else %}
+  <p class="text-muted">Display-only: these never enter the median, the verdict or the upside above. Price vs base is
+    each base value's upside from the live price, {{ price_fmt }}. Computed {{ computed_at }}.</p>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>Indicator</th><th class="num">Bear</th><th class="num">Base</th><th class="num">Bull</th>
+        <th class="num">Price vs base</th><th>Notes</th></tr></thead>
+      <tbody>
+        {% for m in rows %}
+        <tr>
+          <td class="row-label">{{ m.label }}{% if m.basis_fy %} <span class="text-muted">FY{{ m.basis_fy }}</span>{% endif %}</td>
+          {% if m.applicable %}
+          <td class="num">{{ m.bear }}</td>
+          <td class="num">{{ m.base }}</td>
+          <td class="num">{{ m.bull }}</td>
+          <td class="num">{{ m.versus }}</td>
+          {% else %}
+          <td colspan="4"><span class="pill verdict-none">N/A</span> <span class="text-muted">{{ m.na_reason }}</span></td>
+          {% endif %}
+          <td>
+            <div class="text-muted">{{ m.method }}</div>
+            {% for note in m.notes %}<div>{{ note }}</div>{% endfor %}
+            {% if m.assumptions %}
+            <details>
+              <summary>assumptions</summary>
+              <table class="data-table">
+                <tbody>
+                  {% for k, v in m.assumptions.items() %}
+                  <tr><td class="row-label">{{ k }}</td><td class="num">{{ v }}</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </details>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>

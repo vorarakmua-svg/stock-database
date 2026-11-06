@@ -110,3 +110,16 @@ def test_a_failed_dividend_request_keeps_the_earlier_history(tmp_path, sample_st
     assert data["dividend_history"] == history
     assert data["warnings"] == ["Yahoo Finance: dividend history unavailable (boom)"]
 
+
+def test_a_complete_run_carries_no_report_an_earlier_run_lacked(tmp_path, sample_stock_data):
+    # BUG-251: which report a run's companyfacts lacked is the database's (collection_runs.incomplete). In the file,
+    # the merge would keep an earlier run's for a later run that has none, as it keeps a section the run didn't get.
+    exporter = JSONExporter(output_dir=tmp_path)
+    sample_stock_data.missing_report = {"form": "10-Q", "accession": "0001104659-26-089296", "filed": "2026-07-31"}
+    exporter.export(sample_stock_data)
+    sample_stock_data.missing_report = None
+    exporter.export(sample_stock_data)
+    with open(tmp_path / "TEST.json", encoding="utf-8") as f:
+        data = json.load(f)
+    assert data.get("missing_report") is None
+

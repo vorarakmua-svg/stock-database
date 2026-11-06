@@ -11,17 +11,39 @@ A comprehensive guide on how to use the output data from the Stock Data Collecti
 3. [Working with JSON Data](#working-with-json-data)
 4. [Working with CSV Data](#working-with-csv-data)
 5. [Valuation Layer](#valuation-layer) — built-in, stored fair-value models
+   - [Valuation history](#valuation-history) — monthly multiples, 10-year ranges, the historical value
+   - [Quality scores](#quality-scores) — Piotroski F, Altman Z, Beneish M, ranks, warning signs
+   - [Other valuation indicators](#other-valuation-indicators) — reverse DCF, earnings power value, NCAV and net-net, median P/S value, tangible Graham number
    - [Owner Earnings ("Buffett mode")](#owner-earnings-buffett-mode) — separate lens, excluded from the median
-6. [Updating Data from the Web](#updating-data-from-the-web) — UPDATE DATA button, fetching new tickers
-7. [Valuation Models](#valuation-models) — DIY formulas over the raw JSON/CSV
-   - [DCF (Discounted Cash Flow)](#dcf-discounted-cash-flow)
-   - [Graham Number](#graham-number)
-   - [Peter Lynch Fair Value](#peter-lynch-fair-value)
-   - [Buffett-Style Analysis](#buffett-style-analysis)
-8. [Financial Analysis Examples](#financial-analysis-examples)
-9. [Building Dashboards](#building-dashboards)
-10. [Data Quality Checks](#data-quality-checks)
-11. [Common Use Cases](#common-use-cases)
+6. [SEC Ownership](#sec-ownership) — insiders' Form 4 trades and the gurus' 13F holdings
+   - [Collecting ownership data](#collecting-ownership-data) — the commands and what each touches
+   - [Insiders (Form 4)](#insiders-form-4) — `insider_filings`, `insider_trades` and queries
+   - [Gurus (13F)](#gurus-13f) — the six 13F tables, what a position's change means, and queries
+   - [Viewing ownership](#viewing-ownership) — the web pages, the API and the screener fields
+7. [Market Data](#market-data) — FRED's corporate equities and GDP, Shiller's CAPE and the Treasury yield curve
+   - [Collecting market data](#collecting-market-data) — the command, its cache and its exit codes
+   - [The market series](#the-market-series) — `market_series`, `market_fetches` and queries
+   - [Viewing market data](#viewing-market-data) — the Market page, the API and how to read each section
+8. [The Universe and Industries](#the-universe-and-industries) — lists of tickers, SIC codes, industry groups and the ranks within them
+   - [Collecting a list of tickers](#collecting-a-list-of-tickers) — `--tickers-file` and `--skip-existing`
+   - [Adding the S&P 500](#adding-the-sp-500) — the commands, in order
+   - [Filling SIC codes](#filling-sic-codes) — the offline fill
+   - [Industries in the database](#industries-in-the-database) — the columns and queries
+   - [Reading the industry ranks](#reading-the-industry-ranks) — the web pages, the API and the screener
+9. [Keeping Data Current](#keeping-data-current) — `stock-data refresh`, its log and a Windows scheduled task
+   - [Running a refresh](#running-a-refresh) — the steps, their cadence and the options
+   - [The refresh log](#the-refresh-log) — `refresh_log`, the log file and the lock
+   - [Scheduling it on Windows](#scheduling-it-on-windows) — a Task Scheduler example
+10. [Updating Data from the Web](#updating-data-from-the-web) — UPDATE DATA button, fetching new tickers
+11. [Valuation Models](#valuation-models) — DIY formulas over the raw JSON/CSV
+    - [DCF (Discounted Cash Flow)](#dcf-discounted-cash-flow)
+    - [Graham Number](#graham-number)
+    - [Peter Lynch Fair Value](#peter-lynch-fair-value)
+    - [Buffett-Style Analysis](#buffett-style-analysis)
+12. [Financial Analysis Examples](#financial-analysis-examples)
+13. [Building Dashboards](#building-dashboards)
+14. [Data Quality Checks](#data-quality-checks)
+15. [Common Use Cases](#common-use-cases)
 
 ---
 
@@ -220,7 +242,9 @@ print(f"Target Price (Mean): ${estimates['target_price_mean']:.2f}")
 print(f"Target Price (Low): ${estimates['target_price_low']:.2f}")
 print(f"Target Price (High): ${estimates['target_price_high']:.2f}")
 print(f"Upside Potential: {estimates['upside_potential']*100:.1f}%")
-print(f"Expected EPS Growth: {estimates.get('earnings_growth', 0)*100:.1f}%")
+# Yahoo's earningsGrowth: the latest quarter's earnings against the same quarter a year before. A trailing
+# figure, not a forecast; the valuation models don't use it.
+print(f"Quarterly Earnings Growth (YoY): {estimates.get('earnings_growth', 0)*100:.1f}%")
 ```
 
 ### Accessing Dividend History
@@ -310,13 +334,14 @@ extra network calls.
 |---|---|---|
 | **DCF** (two-stage FCF) | general, utility, energy | ≥4 years of FCF history, shares outstanding |
 | **DDM** (multi-stage Gordon) | any steady dividend payer | ≥3 calendar years of dividend history |
-| **Graham Number** | any company with positive EPS + book value | Latest EPS, book value per share |
+| **Graham Number** | any company with positive EPS + book value in its latest fiscal year | The latest fiscal year's EPS and book value per share (N/A if it lacks either; the bear is N/A with a loss year in the last 3) |
 | **Peter Lynch fair value** | general, utility, energy | ≥4 years of EPS history |
-| **Historical multiples band** | all sectors | ≥3 fiscal years of price + sector-appropriate multiple (P/E, P/B for banks/insurers, P/FFO for REITs) |
+| **Historical multiples band** | all sectors | ≥3 fiscal years of price + sector-appropriate multiple (P/E, P/B for banks/insurers, P/FFO for REITs); bear/base/bull at the multiples' 25th percentile, median and 75th percentile, on closes as traded |
 
 Each model returns a **bear / base / bull** per-share range, not a single number — growth
-and discount-rate assumptions are deliberately conservative (growth = min(historical CAGR,
-analyst estimate), CAPM discount rate with a floor/cap). When a model doesn't fit a
+and discount-rate assumptions are deliberately conservative (growth = the historical CAGR
+clamped to 0-15%, from the first profitable year if the window starts on a loss, CAPM discount
+rate with a floor/cap). When a model doesn't fit a
 company's sector (DCF/Lynch for banks, insurers, and REITs) or the data it needs isn't
 available (e.g. no dividend history for DDM), it reports `applicable = false` with a
 plain-English `na_reason` — never a fabricated number.
@@ -332,10 +357,10 @@ Results are stored in two tables:
 
 ### Running the backfill
 
-Valuations recompute **automatically** at the end of every collection run — whether a
-`python -m src.main` terminal run or a web-submitted job (see
-[Updating Data from the Web](#updating-data-from-the-web)) — for the tickers just
-collected, so you normally don't need to run anything extra. To
+Valuations recompute **automatically** with every collection run — a `python -m src.main`
+terminal run values each batch of companies as it stores it (25 at a time, `--batch-size`),
+a web-submitted job (see [Updating Data from the Web](#updating-data-from-the-web)) at its
+end — for the tickers just collected, so you normally don't need to run anything extra. To
 (re)compute valuations for tickers already in the database without re-collecting data
 (e.g. after upgrading the valuation models, or to backfill a ticker collected before the
 valuation layer existed):
@@ -372,6 +397,277 @@ Valuations stored for 50 tickers in data/output/stock.db
   `applicable`/`na_reason`/`assumptions`); `GET /api/screen?verdict=cheap` filters the
   screener by verdict; `GET /api/export/screen.csv` includes `median_base` and
   `val_upside_pct` columns.
+
+### Valuation history
+
+Alongside the models, every company gets a **valuation history**. It is computed with the valuations,
+so the backfill above fills it too, and holds:
+- each month's multiples since its filings begin;
+- each multiple's 10-year range;
+- a *historical value* drawn against the price.
+
+See the README's [Valuation history](README.md#valuation-history) for the method. Two tables hold it:
+
+- **`valuation_history`**: one row per (ticker, month-end):
+  - `close`, `market_cap`, `enterprise_value`, and the trailing year used (`ttm_period_end`);
+  - `pe`, `ps`, `pb`, `pfcf`, `ev_ebitda`, `pffo`, `div_yield`;
+  - `fair_value` (per share, on the price bars' basis), with `fair_value_n`, the number of multiples it
+    combined.
+- **`valuation_ranges`**: one row per (ticker, metric) at the latest month:
+  - `applicable` / `na_reason`, `window_start`, `n_months`;
+  - `current_value`, `pct_rank`, `min`, `p25`, `median`, `p75`, `max`;
+  - `implied_value` (the price that metric's 10-year median implies) and `in_fair_value`.
+
+  The historical value itself is the row with `metric = 'fair_value'`: its `current_value`, its range in
+  `p25` / `p75`, and `n_metrics`.
+
+```sql
+-- AAPL's P/E and historical value over the last ten years, month by month
+SELECT date, close, pe, fair_value
+FROM valuation_history
+WHERE ticker = 'AAPL' AND date >= date('now', '-10 years')
+ORDER BY date;
+
+-- Every company's historical value against its latest price, cheapest first
+SELECT v.ticker, v.current_value AS historical_value, v.p25 AS low, v.p75 AS high,
+       m.current_price, m.current_price / v.current_value AS price_to_value
+FROM valuation_ranges v
+JOIN market_snapshots m ON m.ticker = v.ticker
+ AND m.collected_at = (SELECT MAX(collected_at) FROM market_snapshots WHERE ticker = v.ticker)
+WHERE v.metric = 'fair_value' AND v.applicable = 1
+ORDER BY price_to_value;
+```
+
+It is also shown in three places:
+- **Web**: the **VAL** tab's *Historical Value* section, with the label against the live price, the two
+  charts and the ranges table.
+- **Screener**: the *Historical value* fields, `pe_pct_10y` … `div_yield_pct_10y` (a multiple's
+  percentile in its 10 years, as a fraction) and `price_to_hist_value`.
+- **API**: `GET /api/stocks/{ticker}/valuation-history`.
+
+It changes none of the models, their median or the verdict.
+
+### Quality scores
+
+Every company also gets **quality scores**: Piotroski F, Altman Z, Beneish M, the Sloan ratio, ROIC vs WACC,
+predictability stars, 20 warning signs, five percentile ranks and a composite out of 100. They are computed
+with the valuations, so the backfill above fills them too, and any run re-ranks every company. See the
+README's [Quality scores](README.md#quality-scores) for the formulas, cutoffs and weights. Three tables hold
+them:
+
+- **`per_share_annual`**: one row per (ticker, fiscal_year), the latest 11 years, on today's split basis:
+  - `revenue_ps`, `eps`, `ebitda_ps`, `fcf_ps`, `book_ps`.
+- **`quality_scores`**: one row per ticker, for its latest `fiscal_year`:
+  - the CAGRs, as fractions (NULL where undefined): `rev_ps_cagr_3y`, `rev_ps_cagr_5y`, `rev_ps_cagr_10y`,
+    `eps_cagr_3y`, `eps_cagr_5y`, `eps_cagr_10y`, `ebitda_ps_cagr_3y`, `ebitda_ps_cagr_5y`,
+    `ebitda_ps_cagr_10y`, `fcf_ps_cagr_5y` and `book_ps_cagr_5y`;
+  - `piotroski_f`, `piotroski_tested` (the tests that could run) and `piotroski_tests` (JSON: each test true,
+    false or null);
+  - `altman_z` and `altman_zone` (`distress`, `grey` or `safe`), `beneish_m` and `beneish_variables` (JSON),
+    `sloan_ratio`, `roic`, `wacc` and `roic_minus_wacc`, `debt_to_ebitda` (on the scores' reading of the
+    debt: 0 for a filer tagging no debt and paying no interest), `predictability_stars` and
+    `predictability_r2` (JSON);
+  - `ncav_per_share`, `earnings_yield`, `return_on_capital` and `momentum`;
+  - `rank_strength`, `rank_profitability`, `rank_growth`, `rank_valuation` and `rank_momentum` (1-10),
+    `composite_score` (out of 100) and `magic_formula_rank`;
+  - `components` (JSON: the values each rank is built from), `warning_count`, `na_reasons` (JSON: why a score
+    is NULL), `computed_at` and `ranked_at`;
+  - the industry group and the same ranks within it (Milestone 5): `industry_group`, `industry_label`,
+    `industry_size`, `ind_rank_strength` ... `ind_rank_momentum` and `ind_composite` (see
+    [The Universe and Industries](#the-universe-and-industries)).
+- **`warning_signs`**: one row per (ticker, code) for each sign that fires: `severity` (`severe` or `medium`),
+  `message`, `value` and `threshold`.
+
+The JSON columns read with SQLite's JSON functions, e.g. `json_extract(piotroski_tests, '$.cfo_above_ni')` (1
+passed, 0 failed, NULL not run).
+
+```sql
+-- The ten highest composite scores, with the five ranks behind them
+SELECT q.ticker, c.company_name, q.composite_score,
+       q.rank_strength, q.rank_profitability, q.rank_growth, q.rank_valuation, q.rank_momentum
+FROM quality_scores q
+JOIN companies c ON c.ticker = q.ticker
+WHERE q.composite_score IS NOT NULL
+ORDER BY q.composite_score DESC, q.ticker
+LIMIT 10;
+
+-- Piotroski F of 8 or more, out of how many tests could run
+SELECT ticker, piotroski_f, piotroski_tested, altman_zone, predictability_stars
+FROM quality_scores
+WHERE piotroski_f >= 8
+ORDER BY piotroski_f DESC, piotroski_tested DESC, ticker;
+
+-- NVDA's warning signs, severe first
+SELECT code, severity, message
+FROM warning_signs
+WHERE ticker = 'NVDA'
+ORDER BY CASE severity WHEN 'severe' THEN 0 ELSE 1 END, code;
+
+-- AAPL's per-share series on today's split basis, newest year first
+SELECT fiscal_year, revenue_ps, eps, ebitda_ps, fcf_ps, book_ps
+FROM per_share_annual
+WHERE ticker = 'AAPL'
+ORDER BY fiscal_year DESC;
+```
+
+It is also shown in three places:
+- **Web**: the **STAT** tab's *Quality* section: the composite with a radar of the five ranks, the ranks, each
+  score with its reading, the nine Piotroski tests, the growth table and the warning signs, severe first.
+- **Screener**: the quality fields (`piotroski_f`, `altman_z`, `composite_score`, `rank_strength` …
+  `rank_momentum`, `warning_count` and the rest), `price_to_ncav` and `lynch_upside_pct`, and a *Preset
+  screens* dropdown: Buffett-Munger, Peter Lynch, Graham net-net, Magic Formula and Undervalued-predictable
+  (the README lists their filters).
+- **API**: `GET /api/stocks/{ticker}/scores`.
+
+It changes none of the models, their median or the verdict.
+
+### Other valuation indicators
+
+Every company also gets five **other valuation indicators**: a reverse DCF, the earnings power value (EPV), NCAV with
+Graham's net-net, the median P/S value and the Graham number on tangible book. They are computed with the valuations,
+after the quality scores whose figures they read, so the backfill above fills them too, and every collection, in the
+terminal or the web interface, recomputes them. They are display-only, like owner earnings: none enters the five-model
+median, the verdicts or the upside. See the README's
+[Other valuation indicators](README.md#other-valuation-indicators) for the formulas and the N/A rules.
+
+How to read them: each answers a different question about the price.
+
+- **Reverse DCF** (`reverse_dcf`): what growth does the price need? It turns the DCF around. On the DCF's own cash flow
+  basis, share count, discount rate and terminal growth, it finds the growth of years 1-5 at which the DCF gives the
+  price. Read it beside the growth the DCF itself assumes (`dcf_growth_base` in the assumptions). On 2026-10-24 the price
+  implied more growth than the DCF assumes for 72 of the 91 companies it applies to (AAPL: 26.5% a year against the
+  DCF's 7.1%). It is a rate, so it has no bear, bull or upside, and the search covers -50% to +100% a year: a price
+  outside that range is N/A, with the side it is on.
+- **EPV** (`epv`): what is the business worth if it never grows? Its normalized after-tax operating earnings over the
+  WACC, less debt plus cash and short-term investments. A price above the EPV pays for growth; a price below it is less
+  than the business's current earnings are worth with none. On 2026-10-24 only VZ ($44.54) traded under its EPV
+  ($55.69); the median company's EPV was a quarter of its price, and D and INTC read negative, their debt exceeding
+  their earnings power.
+- **NCAV and the net-net** (`ncav`): what are the current assets worth after every liability? NCAV per share is current
+  assets less total liabilities, and Graham bought below two thirds of it (`netnet_buy_price` in the assumptions). The
+  bear, Graham's net-net working capital, is stricter: it counts receivables at 75% and inventory at half their book
+  value. Most large companies are N/A here, their liabilities exceeding their current assets (83 of the 98 with the
+  figures). Of the 15 with a positive NCAV, none was near a net-net on 2026-10-24: the lowest price over NCAV was ISRG's
+  21.9.
+- **Median P/S value** (`ps_value`): what would the price be at the company's own typical sales multiple? The 10-year
+  median P/S times the trailing revenue per share, with the 25th and 75th percentile P/S as the bear and bull. It
+  compares the price with the company's own history, and it needs 36 months of it. On 2026-10-24 the price was under
+  the median P/S value for 45 of the 120 companies it applies to.
+- **Graham number on tangible book** (`graham_tangible`): the Graham model's `sqrt(22.5 × EPS × book value per share)`
+  with goodwill and intangibles taken out of book value, so a company that grew by acquisition reads lower than on the
+  Graham model (the tangible number was the lower for 74 of the 81 companies it applies to). N/A where tangible book is
+  negative (33 of the 127).
+
+One table holds them:
+
+- **`valuation_indicators`**: one row per (ticker, indicator), five per company, replaced together whenever the
+  company's valuations are computed:
+  - `indicator`: `reverse_dcf`, `epv`, `ncav`, `ps_value` or `graham_tangible`;
+  - `applicable` (1 or 0) and `na_reason` (NULL when applicable);
+  - `value_bear`, `value_base` and `value_bull`: per share, on the price's basis, NULL where the method gives no such
+    case or the indicator is N/A. For `reverse_dcf` the base is the growth as a fraction (0.265 is 26.5% a year), and
+    the bear and bull are NULL;
+  - `unit`: `per_share`, or `rate` for `reverse_dcf`;
+  - `assumptions` (JSON): the inputs. An N/A row may carry the ones computed before the method stopped, a negative NCAV
+    per share for instance;
+  - `basis_fiscal_year` (NULL for `ps_value`) and `computed_at`.
+
+The JSON column reads with SQLite's JSON functions, e.g. `json_extract(assumptions, '$.dcf_growth_base')`. What each
+indicator stores in it:
+- `reverse_dcf`: `price` and `price_date` (the snapshot it was solved at), the DCF's inputs (`fcf_basis`,
+  `shares_outstanding`, `discount_base`, `terminal_growth`), `dcf_growth_base` (the DCF's own growth), `dcf_value_base`
+  and the search range (`search_low`, `search_high`);
+- `epv`: `margin_years` and `mean_operating_margin`, `pretax_years` (the years whose EBIT is pretax income plus
+  interest) and `no_interest_years` (those without an interest figure), `latest_revenue`, `normalized_ebit`, `tax_rate`
+  and `tax_source` (`effective` or `default`), `adjusted_earnings`, `wacc`, `total_debt` (and `debt_missing`),
+  `cash_and_sti`, and `shares_outstanding` with `shares_source` (`market_snapshot`, `market_cap / price` where
+  Yahoo's count leaves out a class or units, or `financials_annual` after a failed quote);
+- `ncav`: `ncav_per_share`, `nnwc_per_share` (the net-net working capital), `current_assets`, `total_liabilities`,
+  `shares`, the four net-net parts (`cash_and_equivalents`, `short_term_investments`, `accounts_receivable`,
+  `inventory`) with `receivables_weight` and `inventory_weight`, `nnwc_missing` (the parts counted as 0) and, on an
+  applicable row, `netnet_buy_price`;
+- `ps_value`: `median_ps`, `p25_ps`, `p75_ps`, `current_ps`, `as_of` and `n_months`;
+- `graham_tangible`: `eps_base`, `eps_bear`, `eps_bull`, `bvps`, `tangible_bvps`, `total_equity`, `goodwill`,
+  `intangible_assets`, `multiplier` and `missing` (the goodwill or intangibles figures counted as 0).
+
+```sql
+-- AAPL's five indicators: the bear, base and bull per share (a growth rate for the reverse DCF), or why not
+SELECT indicator, applicable, value_bear, value_base, value_bull, unit, na_reason
+FROM valuation_indicators
+WHERE ticker = 'AAPL'
+ORDER BY indicator;
+
+-- Every company's earnings power value against its latest price, the ones furthest under it first
+SELECT i.ticker, i.value_bear, i.value_base, i.value_bull, m.current_price,
+       i.value_base / m.current_price - 1 AS epv_upside
+FROM valuation_indicators i
+JOIN market_snapshots m ON m.ticker = i.ticker
+ AND m.collected_at = (SELECT MAX(collected_at) FROM market_snapshots WHERE ticker = i.ticker)
+WHERE i.indicator = 'epv' AND i.applicable = 1
+ORDER BY epv_upside DESC
+LIMIT 10;
+
+-- The growth each stored price implies, beside the growth the DCF itself assumes, the widest gap first
+SELECT ticker,
+       value_base AS implied_growth,
+       json_extract(assumptions, '$.dcf_growth_base') AS dcf_growth,
+       value_base - json_extract(assumptions, '$.dcf_growth_base') AS gap,
+       json_extract(assumptions, '$.price') AS price,
+       json_extract(assumptions, '$.price_date') AS price_date
+FROM valuation_indicators
+WHERE indicator = 'reverse_dcf' AND applicable = 1
+ORDER BY gap DESC
+LIMIT 10;
+
+-- The companies with a positive NCAV: Graham's buy line, the net-net working capital per share and the price over NCAV
+-- (a net-net trades at or under the buy line: a price over NCAV of two thirds or less)
+SELECT i.ticker, i.value_base AS ncav_per_share, i.value_bear AS netnet_working_capital,
+       json_extract(i.assumptions, '$.netnet_buy_price') AS buy_line,
+       m.current_price, m.current_price / i.value_base AS price_to_ncav
+FROM valuation_indicators i
+JOIN market_snapshots m ON m.ticker = i.ticker
+ AND m.collected_at = (SELECT MAX(collected_at) FROM market_snapshots WHERE ticker = i.ticker)
+WHERE i.indicator = 'ncav' AND i.applicable = 1
+ORDER BY price_to_ncav;
+
+-- The Graham number on tangible book against the Graham model's own, the biggest cuts first
+SELECT t.ticker, g.value_base AS graham, t.value_base AS graham_tangible,
+       t.value_base / g.value_base - 1 AS change
+FROM valuation_indicators t
+JOIN valuations g ON g.ticker = t.ticker AND g.model = 'graham' AND g.applicable = 1
+WHERE t.indicator = 'graham_tangible' AND t.applicable = 1
+ORDER BY change
+LIMIT 10;
+
+-- Why an indicator is N/A, and for how many companies
+SELECT indicator, na_reason, COUNT(*) AS companies
+FROM valuation_indicators
+WHERE applicable = 0
+GROUP BY indicator, na_reason
+ORDER BY indicator, companies DESC;
+```
+
+It is also shown in three places:
+- **Web**: the **VAL** tab's *Other indicators* section, after the models and owner earnings: per indicator its bear,
+  base and bull, *Price vs base* (the base's upside from the live price), its method in one line, notes read from its
+  assumptions and the assumptions themselves, or its N/A reason. The reverse DCF is solved again at the live price,
+  beside the growth the DCF assumes; the stored growth is at the price of the last computation. Before the indicators
+  are computed the section says to run the backfill or click UPDATE DATA.
+- **Screener**: five fields, under *Other indicators* in the field list: `reverse_dcf_growth` (the growth the price
+  implies, a fraction, as stored), `epv_upside_pct`, `ps_value_upside_pct` and `graham_tangible_upside_pct` (the base
+  over the snapshot's price, less 1) and `price_to_nnwc` (the price over Graham's net-net working capital per share,
+  where that is positive; `price_to_ncav` is the same over NCAV). The results show the first as an *Implied growth*
+  column, and the CSV export carries all five. For example `GET /api/screen?epv_upside_pct_gt=0&sort=epv_upside_pct&sort_dir=desc`
+  or `GET /api/screen?reverse_dcf_growth_gt=0.3&sort=reverse_dcf_growth&sort_dir=desc`. A database from before the table
+  screens with all five empty.
+- **API**: `GET /api/stocks/{ticker}/valuation-indicators` (not `/indicators`, the price chart's MA/RSI/MACD bundle)
+  returns `{ticker, price, computed, computed_at, indicators, reverse_dcf_live}`. `computed` is false before the
+  indicators are stored. Each of the five `indicators` has its `indicator`, `label`, `method`, `applicable`,
+  `na_reason`, `unit`, `value_bear`, `value_base`, `value_bull`, `basis_fiscal_year`, `assumptions`, `upside_pct` (the
+  base over the price, less 1; null for the reverse DCF) and `notes`. `reverse_dcf_live` is the reverse DCF solved again
+  at `price`, the latest quote: `{price, growth, na_reason, dcf_growth_base}`. An unknown ticker answers 404.
+
+It changes none of the models, their median or the verdict.
 
 ### Owner Earnings ("Buffett mode")
 
@@ -461,6 +757,905 @@ this model exists to value properly.
   `GET /api/export/screen.csv`.
 - Computed by the same `python -m src.valuation.backfill` as the other five
   models, and recomputed automatically after each collection run.
+
+---
+
+## SEC Ownership
+
+`src/ownership/` stores what the SEC's own filings say about a company's insiders and about a list of 34
+gurus: each insider's Form 4 trades of the last three years, and each guru's 13F holdings of the last eight
+quarters, mapped to tickers. See the README's
+[SEC ownership: insiders and gurus](README.md#sec-ownership-insiders-and-gurus) for the rules and the limits.
+It changes none of the models, scores or histories, and neither a `python -m src.main` collection nor the web
+interface's update collects it: it has its own command (which `stock-data refresh` also runs every week, see
+[Keeping Data Current](#keeping-data-current)), and eight tables hold it.
+
+### Collecting ownership data
+
+```bash
+# Insiders: three years of Form 4s for every company in the database
+python -m src.ownership.collect --insiders
+
+# Some tickers only, or another look-back in years
+python -m src.ownership.collect --insiders AAPL PFE --years 1
+
+# Gurus: the last eight quarters' 13F-HRs, their CUSIPs mapped to tickers, then the quarters and positions
+python -m src.ownership.collect --gurus
+
+# The same, asking OpenFIGI nothing (only our companies' CUSIPs are mapped)
+python -m src.ownership.collect --gurus --no-openfigi
+
+# Rebuild the gurus' quarters and positions from the stored filings (offline)
+python -m src.ownership.collect --positions
+
+# Another database or cache
+python -m src.ownership.collect --insiders --gurus --db data/output/stock.db --cache-dir data/cache
+```
+
+The collector sends the SEC User-Agent of `SEC_USER_AGENT` (in `.env` or the environment, as the README's
+[SEC User-Agent Requirement](README.md#sec-user-agent-requirement) describes); it has no `--sec-user-agent`
+option. `--insiders` reads each company's CIK from `companies`, so run a collection first.
+
+The first run takes what the SEC's rate limit allows: about two hours for every company's Form 4s (an
+estimate: PFE's and AAPL's 452 filings took 107 seconds), under two minutes for the gurus' 248 13F filings,
+and at least 7.5 minutes more for OpenFIGI's 1,817 codes. `--positions` takes seconds and touches no network.
+Later runs fetch only what the caches (`data/cache/form4/`, `13f/` and `openfigi/`) lack. Each run prints a
+line per company or guru and a total; the end of `--positions` looks like:
+
+```
+Warren Buffett (1067983): 7 quarters, 283 position rows stored
+...
+Guru quarters stored: 235 quarters, 16813 position rows for 34 gurus
+```
+
+### Insiders (Form 4)
+
+Two tables hold each company's Form 4 and 4/A filings of the last three years:
+
+- **`insider_filings`**: one row per (`accession`, `owner_cik`), a filing and one of its reporting owners:
+  - `ticker` (our company, the issuer), `form` (`4` or `4/A`), `filed_date`, `period_of_report` (the date the
+    report covers) and `original_filed` (for a 4/A, the day its original was filed);
+  - the owner: `owner_name`, `is_director`, `is_officer`, `officer_title`, `is_ten_percent` and `is_other` (1
+    or 0), and `is_ceo_cfo` (1 when the title names the chief executive or financial officer);
+  - `aff10b5one`: 1 when the filing says its trades were made under a Rule 10b5-1 plan, 0 when it says they
+    weren't, NULL when it doesn't say;
+  - `superseded_by`: the accession of the 4/A that amended this filing, NULL otherwise; the trades the 4/A
+    restated are marked in `insider_trades`, and the filing's other trades stand;
+  - `collected_at`.
+- **`insider_trades`**: one row per transaction, (`accession`, `seq`), `seq` being its place in the filing:
+  - `ticker`, `kind` (`nonderivative` or `derivative`), `security_title`, `date`, and `code`, the SEC's
+    transaction code: `P` is an open-market purchase and `S` an open-market sale; the others (`A` grant or
+    award, `M` exercise or conversion, `F` shares withheld for tax, `G` gift, ...) are shown but never summed;
+  - `shares`, `price` (NULL where the filing states none: a footnote alone, whose ids `price_footnotes`
+    keeps), `acquired_disposed` (`A` or `D`), `owned_after` (NULL where the filing doesn't say),
+    `direct_indirect` (`D` or `I`) and `nature_of_ownership`;
+  - a derivative row (an option, an RSU) also has `exercise_price`, `underlying_title` and
+    `underlying_shares`;
+  - `superseded_by`: the accession of the 4/A that restated this trade, NULL for a trade that stands. A
+    restated trade stays in the table, and every aggregate, the INS tab and the screener leave it out, so test
+    `t.superseded_by IS NULL`;
+  - `price_suspect`: 1 when the open-market price is a filer's dropped decimal point (1,000 times, or a
+    thousandth of, a price within 10% of the stock's close that day; the Lilly Endowment filed $1,031,414 for
+    $1,031.41), 0 when checked, NULL when unchecked (no price or no close, or a derivative row). The price stays
+    as filed and every dollar figure treats it as missing, so add `AND t.price_suspect IS NOT 1` to a dollar sum.
+
+A filing with several reporting owners has a row in `insider_filings` for each, so a join on `accession`
+repeats its trades once per owner: add dollars from `insider_trades` alone, as the first query does. The INS
+tab and the API name the first owner (the lowest `owner_cik`) and count one buyer; the screener's
+`ins_buyers_12m` and `ins_cluster_buyers_12m` count every owner.
+
+```sql
+-- Open-market dollars bought and sold over the last 12 months, per company, the biggest net buyers first
+SELECT t.ticker,
+       SUM(CASE WHEN t.code = 'P' THEN t.shares * t.price ELSE 0 END) AS bought,
+       SUM(CASE WHEN t.code = 'S' THEN t.shares * t.price ELSE 0 END) AS sold,
+       SUM(CASE t.code WHEN 'P' THEN t.shares * t.price ELSE -t.shares * t.price END) AS net
+FROM insider_trades t
+WHERE t.kind = 'nonderivative' AND t.code IN ('P', 'S') AND t.price IS NOT NULL AND t.price_suspect IS NOT 1
+  AND t.date >= date('now', '-365 days') AND t.superseded_by IS NULL
+GROUP BY t.ticker
+ORDER BY net DESC;
+
+-- PFE's open-market purchases over the last 12 months: who bought, and what they held after
+SELECT t.date, f.owner_name, f.officer_title, f.is_director,
+       t.shares, t.price, t.shares * t.price AS value, t.owned_after
+FROM insider_trades t
+JOIN insider_filings f ON f.accession = t.accession
+WHERE t.ticker = 'PFE' AND t.kind = 'nonderivative' AND t.code = 'P'
+  AND t.superseded_by IS NULL AND t.date >= date('now', '-365 days')
+ORDER BY t.date;
+
+-- Purchases by a company's CEO or CFO, newest first
+SELECT t.ticker, t.date, f.owner_name, f.officer_title, t.shares, t.price, t.shares * t.price AS value
+FROM insider_trades t
+JOIN insider_filings f ON f.accession = t.accession
+WHERE t.kind = 'nonderivative' AND t.code = 'P' AND f.is_ceo_cfo = 1 AND t.superseded_by IS NULL
+ORDER BY t.date DESC;
+
+-- The trades a 4/A restated, with the 4/A that restated each
+SELECT t.ticker, t.accession AS amended, t.date, t.code, t.shares, t.price, t.superseded_by AS restated_by
+FROM insider_trades t
+WHERE t.superseded_by IS NOT NULL
+ORDER BY t.ticker, t.date;
+```
+
+### Gurus (13F)
+
+Six tables hold the gurus' 13F-HR filings and what they add up to. A guru's id, `guru_cik`, is its current 13F
+filer's CIK, as text without leading zeros.
+
+- **`guru_filers`**: one row per 13F filer, `filer_cik`: its `guru_cik`, the filer's `name` as the SEC lists
+  it and the `manager` the list follows (Warren Buffett). A guru with an earlier filer has two rows with one
+  `guru_cik`; the current filer's own row has `filer_cik = guru_cik`.
+- **`guru_filings`**: one row per 13F-HR or 13F-HR/A, `accession`:
+  - `guru_cik`, `filer_cik`, `form`, `period` (the quarter's last day), `filed`, `report_type`
+    (`13F HOLDINGS REPORT` or `13F COMBINATION REPORT`) and `amendment_type` (`RESTATEMENT` or `NEW HOLDINGS`
+    for an amendment, else NULL);
+  - the cover's totals, `entry_total` and `value_total`, beside the parsed ones, `rows` and `rows_value`, all
+    values in dollars;
+  - `checksum_ok`: 1 when `entry_total` equals the entries parsed and `value_total` is within rounding of
+    their sum (half a unit per entry plus half a unit, in the units the filing states). A filing with 0 stays
+    in the table and out of every quarter;
+  - `multiplier`: the units the filing's values were read in, 1000 for thousands of dollars and 1 for dollars,
+    so `value_usd` is the value as filed times it. By the filing date it is 1000 before 2023-01-03 and 1 from
+    then, unless the holdings' prices overrule it: Baupost's and Duquesne's filings are 1000 after the switch;
+  - `confidential_omitted` (the cover's flag, NULL where it isn't stated) and `collected_at`.
+- **`guru_holdings`**: one row per entry of a filing's information table, (`accession`, `row`), as filed:
+  - `guru_cik`, `cusip` (nine characters; a letter first for a foreign issuer's CINS), `issuer` and
+    `title_of_class`;
+  - `value_usd` (dollars), `shares` (the shares or the principal amount) and `share_type` (`SH` or `PRN`),
+    `put_call` (`Put`, `Call`, or NULL for the security itself) and `discretion`;
+  - one CUSIP may take several rows of a filing (other managers, discretion).
+- **`cusip_map`**: one row per CUSIP: `ticker` (NULL where there is none), `name`, `security_type`
+  (OpenFIGI's), `mapped_at`, and `source`: `universe` for our companies' codes, curated in
+  `src/ownership/cusips.py`; `openfigi` for a listing OpenFIGI gave; `none` where OpenFIGI knows no listing,
+  so there is no ticker and `name` is the issuer's name from the holdings.
+- **`guru_quarters`**: one row per (`guru_cik`, `period`), a guru's quarter as built from the filings that
+  stand: `total_value`, `positions` (held, options too), `complete` (0 when a filer's report for the quarter
+  is missing or fails its checksum: its rows are left out), `has_prior` (1 when the quarter before is stored,
+  so the changes exist), `accessions` (a JSON list of the filings it stands on), `filed` (the latest of their
+  filing days) and `computed_at`.
+- **`guru_positions`**: one row per position of a quarter, (`guru_cik`, `period`, `security`, `put_call`):
+  - `security` is the ticker where `cusip_map` has one, else the CUSIP; `ticker` is NULL where there is none;
+    `cusips` lists the CUSIPs the position covers, comma-separated; `issuer`, `title_of_class` and
+    `share_type` are its first row's;
+  - `put_call = ''` (an empty string, not NULL) is a position in shares or principal amounts; `'Put'` and
+    `'Call'` are options, apart from the shares, so filter `put_call = ''` for the shares;
+  - `shares` and `value_usd`, summed over the position's rows, and `weight`, its value over the quarter's
+    total (options included);
+  - the change from the quarter before: `action` (`new`, `added`, `reduced` or `unchanged`), `shares_before`
+    and `value_before`, `split_factor` (the share splits between the two quarters, applied to the shares
+    before) and `change_pct` (the change in shares against the split-adjusted shares before, as a fraction:
+    0.25 is a quarter more; NULL for a new position). `action` is NULL on every row of a quarter whose quarter
+    before isn't stored (`has_prior = 0`);
+  - a `sold_out` row for each position of the quarter before that is gone: `shares`, `value_usd` and `weight`
+    are NULL, and `shares_before` and `value_before` say what the guru held. To leave these out use
+    `action IS NOT 'sold_out'`: `<> 'sold_out'` also drops the rows whose `action` is NULL.
+
+Each guru has its own latest quarter (`MAX(period)` in `guru_quarters`): Scion's is Q3 2025, the others'
+Q2 2026. `guru_positions` is derived from `guru_filings`, `guru_holdings`, `cusip_map` and `split_events`, and
+`--positions` rebuilds it.
+
+```sql
+-- Each guru's latest quarter: when it was filed, what it holds, and whether it stands complete
+SELECT g.manager, q.period, q.filed, q.total_value, q.positions, q.complete, q.has_prior
+FROM guru_quarters q
+JOIN guru_filers g ON g.filer_cik = q.guru_cik
+WHERE q.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = q.guru_cik)
+ORDER BY q.total_value DESC;
+
+-- Berkshire Hathaway's ten largest positions in its latest quarter
+SELECT p.ticker, p.issuer, p.shares, p.value_usd, ROUND(p.weight * 100, 1) AS weight_pct, p.action
+FROM guru_positions p
+WHERE p.guru_cik IN (SELECT guru_cik FROM guru_filers WHERE manager = 'Warren Buffett')
+  AND p.put_call = '' AND p.action IS NOT 'sold_out'
+  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik)
+ORDER BY p.weight DESC
+LIMIT 10;
+
+-- The gurus holding GOOGL or its other class GOOG in their latest quarter, the largest first
+SELECT g.manager, p.ticker, p.period, p.shares, p.value_usd, ROUND(p.weight * 100, 1) AS weight_pct,
+       p.action, ROUND(p.change_pct * 100, 1) AS change_pct
+FROM guru_positions p
+JOIN guru_filers g ON g.filer_cik = p.guru_cik
+WHERE p.ticker IN ('GOOGL', 'GOOG') AND p.put_call = '' AND p.action IS NOT 'sold_out'
+  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik)
+ORDER BY p.value_usd DESC;
+
+-- How many gurus hold it (each counted once, as the screener's gurus_holding) and how many are buying it
+SELECT COUNT(DISTINCT CASE WHEN p.action IS NOT 'sold_out' THEN p.guru_cik END) AS holding,
+       COUNT(DISTINCT CASE WHEN p.action IN ('new', 'added') THEN p.guru_cik END) AS buying
+FROM guru_positions p
+WHERE p.ticker IN ('GOOGL', 'GOOG') AND p.put_call = ''
+  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik);
+
+-- The gurus that sold GOOGL or GOOG out in their latest quarter, and what they held before
+SELECT g.manager, p.ticker, p.period, p.shares_before, p.value_before
+FROM guru_positions p
+JOIN guru_filers g ON g.filer_cik = p.guru_cik
+WHERE p.ticker IN ('GOOGL', 'GOOG') AND p.put_call = '' AND p.action = 'sold_out'
+  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik);
+
+-- What the gurus hold together: per security, the gurus holding it, their shares and value summed,
+-- and how many bought (new or added) and sold (reduced or sold out) it in their latest quarter
+SELECT p.security, MIN(p.issuer) AS issuer,
+       COUNT(DISTINCT CASE WHEN p.action IS NOT 'sold_out' THEN p.guru_cik END) AS gurus,
+       SUM(p.shares) AS shares, SUM(p.value_usd) AS value,
+       COUNT(DISTINCT CASE WHEN p.action IN ('new', 'added') THEN p.guru_cik END) AS buyers,
+       COUNT(DISTINCT CASE WHEN p.action IN ('reduced', 'sold_out') THEN p.guru_cik END) AS sellers
+FROM guru_positions p
+JOIN (SELECT guru_cik, MAX(period) AS period FROM guru_quarters GROUP BY guru_cik) l
+  ON l.guru_cik = p.guru_cik AND l.period = p.period
+WHERE p.put_call = ''
+GROUP BY p.security
+HAVING gurus > 0
+ORDER BY gurus DESC, value DESC
+LIMIT 15;
+
+-- Berkshire Hathaway's buys and sells in its latest quarter, by the value involved
+SELECT p.action, p.security, p.issuer, p.shares_before, p.shares,
+       ROUND(p.change_pct * 100, 1) AS change_pct, p.value_before, p.value_usd
+FROM guru_positions p
+WHERE p.guru_cik IN (SELECT guru_cik FROM guru_filers WHERE manager = 'Warren Buffett')
+  AND p.put_call = '' AND p.action IN ('new', 'added', 'reduced', 'sold_out')
+  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik)
+ORDER BY p.action, MAX(COALESCE(p.value_usd, 0), COALESCE(p.value_before, 0)) DESC;
+
+-- The filings whose values the holdings' prices put in thousands after the SEC's switch to dollars
+SELECT g.manager, f.period, f.filed, f.multiplier
+FROM guru_filings f
+JOIN guru_filers g ON g.filer_cik = f.filer_cik
+WHERE f.multiplier = 1000 AND f.filed >= '2023-01-03'
+ORDER BY g.manager, f.period;
+
+-- The filings whose cover totals differ from their entries, in the units as filed: a sum within half a unit
+-- per entry plus half a unit is rounding; a sum beyond it, or another count, sets checksum_ok to 0
+SELECT g.manager, f.accession, f.period, f.checksum_ok, f.entry_total, f.rows,
+       (f.rows_value - f.value_total) / f.multiplier AS off_by_units
+FROM guru_filings f
+JOIN guru_filers g ON g.filer_cik = f.filer_cik
+WHERE f.rows <> f.entry_total OR f.rows_value <> f.value_total
+ORDER BY ABS(off_by_units) DESC, f.accession;
+
+-- The codes OpenFIGI doesn't know: no ticker, the issuer's name, and what the gurus hold in them
+SELECT m.cusip, m.name, COUNT(*) AS entries, SUM(h.value_usd) AS value_usd
+FROM cusip_map m
+JOIN guru_holdings h ON h.cusip = m.cusip
+WHERE m.source = 'none'
+GROUP BY m.cusip
+ORDER BY value_usd DESC;
+```
+
+### Viewing ownership
+
+- **Web**:
+  - the **INS** tab (`/stocks/{ticker}?tab=ins`, or `AAPL INS` in the command bar): the SEC's Form 4 trades
+    with their aggregates, and Yahoo's rows for a company with no Form 4 stored;
+  - the **HDS** tab (`?tab=hds`): a Gurus section above Yahoo's holders, once any quarter is stored;
+  - `/gurus` (each guru at its latest quarter), `/gurus/{cik}` (a guru's holdings, the changes from the
+    quarter before and its filings; `?period=2026-03-31` for an earlier quarter) and `/gurus/portfolio` (what
+    they hold together). The nav has a Gurus link. A guru or quarter that isn't stored answers 404.
+- **API** (values in dollars; a position's `value_usd` is `value`):
+  - `GET /api/stocks/{ticker}/form4` returns `{ticker, source, summary, trades}`. `source` is `sec`, `yahoo`
+    (no Form 4 stored: `summary` is null and `trades` are Yahoo's rows) or null. `summary` holds `windows`
+    (`3m`, `6m` and `12m`, each with `bought_shares`, `bought_value`, `sold_shares`, `sold_value`,
+    `net_value`, `buyers` and `sellers`), `ceo_cfo_buys_12m`, `clusters_12m` and `planned_sale_share_12m`.
+    Each trade has its `date`, `code` and `meaning`, `kind`, `shares`, `price`, `value`, `owned_after`, the
+    owner's `owner_name`, `role` and `is_ceo_cfo`, and `plan` (true, false or null), among others;
+  - `GET /api/stocks/{ticker}/gurus` returns `{ticker, classes, gurus}`: the ticker and its other share
+    classes (`GOOGL` with `GOOG`), and each guru's positions in them in its latest quarter (the guru's `cik`,
+    `manager`, `period`, `filed` and `complete`, and the position's `put_call` (null for shares), `shares`,
+    `value`, `weight`, `action`, `shares_before`, `value_before`, `split_factor` and `change_pct`): the shares
+    first, then the options, then the positions sold out;
+  - `GET /api/gurus` returns each guru at its latest quarter: `cik`, `manager`, `filers`, `period`, `filed`,
+    `total_value`, `positions` (held in shares or principal amounts), `new` and `sold_out` (null without the
+    quarter before), `complete` and `has_prior`;
+  - `GET /api/gurus/portfolio?limit=200` (1 to 10,000) returns the securities held by most gurus: `security`,
+    `ticker`, `issuer`, `gurus`, `shares`, `value`, `buyers` and `sellers`;
+  - `GET /api/gurus/{cik}?period=2026-03-31` returns one guru's quarter (its latest without `period`):
+    `periods` (those stored, newest first), `filed`, `total_value`, `complete`, `has_prior`, `accessions` and
+    `filings`, `positions` (the shares before the options, the largest first) and `changes`, the positions
+    grouped as `new`, `added`, `reduced` and `sold_out` (null without the quarter before).
+- **Screener**: the *Insiders (SEC)* fields `ins_net_buy_12m` (open-market dollars bought less sold),
+  `ins_buyers_12m`, `ins_ceo_cfo_buys_12m` (filings with a CEO/CFO purchase) and `ins_cluster_buyers_12m` (the
+  most insiders buying within 30 days of one purchase: 3 or more is a cluster), and the *Gurus (13F)* fields
+  `gurus_holding` and `gurus_buying` (the gurus holding the stock in their latest quarter and, of them, the
+  ones whose position is new or added; each guru counted once over the stock's share classes), shown as one
+  "Gurus (buying)" column. For example `GET /api/screen?gurus_buying_gte=5&sort=gurus_buying&sort_dir=desc` or
+  `GET /api/screen?ins_cluster_buyers_12m_gte=3`.
+
+A company with no Form 4 collected reads 0 in `ins_buyers_12m` and `ins_ceo_cfo_buys_12m`, as one whose
+insiders bought nothing does, and empty in `ins_net_buy_12m` and `ins_cluster_buyers_12m`; a company no guru
+holds reads 0 in `gurus_holding` and `gurus_buying`. A database without the ownership tables screens with all
+six fields empty.
+
+---
+
+## Market Data
+
+`src/market/` stores three market-wide sources that no company's filings give: FRED's corporate equities and GDP, Robert
+Shiller's monthly S&P data with his cyclically adjusted P/E (CAPE), and Treasury.gov's daily yield curve. The **Market**
+page (`/market`) draws the Buffett indicator, the CAPE and the yield curve from them. See the README's
+[Market data](README.md#market-data) for the sources, the cache and the methods. They change nothing collected for the
+companies, and neither a `python -m src.main` collection nor the web interface's update collects them: they have their
+own command (which `stock-data refresh` also runs every day, see [Keeping Data Current](#keeping-data-current)), and two
+tables hold them.
+
+### Collecting market data
+
+```bash
+# All three sources
+python -m src.market.collect
+
+# One or two of them
+python -m src.market.collect --shiller
+python -m src.market.collect --fred --treasury
+
+# Another database or cache
+python -m src.market.collect --db data/output/stock.db --cache-dir data/cache
+```
+
+The database must already exist (run a collection first: nothing is created, and a missing one exits with 2). No key
+and no SEC User-Agent are needed: the three sites are asked with requests' own User-Agent, a request a second.
+`--treasury-from YEAR` starts the Treasury's files at another year than 1990: the stored yields from that year on are
+refreshed, and the earlier ones stay.
+
+The first run takes about 12 minutes (725 seconds on 2026-10-24), nearly all of it Treasury.gov, which answers slowly
+(about 19 seconds for each of its 37 yearly files). Every answer is cached under `data/cache/market/`, and a later run
+fetches only what is a day old: FRED's two series, Shiller's page and workbook, and the Treasury's current year. A past
+Treasury year is not fetched again once it was cached after that year ended. A run with everything fresh takes about 3
+seconds and stores the same rows, so a run within a day of the last one adds nothing new. A fetch that fails, or an
+answer that doesn't parse (a Treasury file without its yields, a changed Shiller sheet), falls back to the cached copy
+and says so. Each run prints a line per source and a summary; the end of a run looks like:
+
+```
+Market data: 4 of 4 sources stored
+  fred:NCBEILQ027S: 305 rows, 1945-10-01 to 2026-04-01
+  ...
+  ust:30y: 8215 rows, 1990-01-02 to 2026-10-23
+Latest: fred:NCBEILQ027S 2026-04-01; fred:GDP 2026-04-01; shiller 2026-10-01; treasury 2026-10-23
+Stale: none
+Failed: none
+```
+
+A source that fell back to a cached copy is listed on the `Stale:` line with the copy's age: it stored the copy's rows
+again, so the exit code stays 0, but its series stop at the copy's latest date until a fetch works again. A source
+that fails, or returns no rows, is listed on the `Failed:` line with its reason and stores nothing; what it stored
+before stays, and the others still go on. The exit code is 0 when every source asked for stored rows and 1 when any
+did not.
+
+### The market series
+
+Two tables hold them:
+
+- **`market_series`**: one row per (`series`, `date`) with its `value`. `date` is ISO: the first day of the quarter for
+  FRED, of the month for Shiller, and the trading day for the Treasury. A series is replaced when its source is
+  fetched: FRED's and Shiller's whole, the Treasury's from the run's first year on (the earlier yields stay). The
+  series:
+  - `fred:NCBEILQ027S`: the corporate equities of US nonfinancial corporate business at market value, quarterly, in
+    $ millions, from 1945-10-01. It is annual before 1951-Q4, and its empty quarters are not stored;
+  - `fred:GDP`: gross domestic product, quarterly, in $ billions at a seasonally adjusted annual rate, from 1947-01-01;
+  - `shiller:price`, `shiller:dividend`, `shiller:earnings`, `shiller:cpi` and `shiller:cape`: Shiller's monthly S&P
+    Composite price (the month's mean of daily closes), dividend and earnings, the CPI and the CAPE, from 1871-01-01 (the
+    CAPE from 1881-01-01). Each stops at its own last month: on 2026-10-24 the price and CPI reach 2026-10 and the
+    dividend and earnings 2026-06;
+  - `ust:1m`, `ust:6w`, `ust:2m`, `ust:3m`, `ust:4m`, `ust:6m`, `ust:1y`, `ust:2y`, `ust:3y`, `ust:5y`, `ust:7y`,
+    `ust:10y`, `ust:20y` and `ust:30y`: the Treasury's daily par yield curve, in percent as published (`4.69` is 4.69%),
+    from 1990. A maturity has rows only from the day Treasury began publishing it (the 20-year 1993-10-01, the 1-month
+    2001-07-31, the 2-month 2018-10-16, the 4-month 2022-10-19, the 1.5-month `6w` 2025-02-18), and the 30-year has none
+    from 2002 to 2006.
+- **`market_fetches`**: one row per source (`fred:NCBEILQ027S`, `fred:GDP`, `shiller`, `treasury`): the `url` it came
+  from (Shiller's workbook link, the Treasury's current-year file), the `rows` stored for it and `fetched_at`, when the
+  answer came from the source. A cached copy keeps its own time, so a fall back to an old copy shows its age.
+
+```sql
+-- Every series: its rows and its first and last date
+SELECT series, COUNT(*) AS n_rows, MIN(date) AS first_date, MAX(date) AS last_date
+FROM market_series
+GROUP BY series
+ORDER BY series;
+
+-- What was collected from each source, and when its answer was fetched
+SELECT source, rows, fetched_at, url
+FROM market_fetches
+ORDER BY source;
+
+-- The Buffett indicator for the latest quarters both FRED series have:
+-- equities ($ millions) over GDP ($ billions), in percent
+SELECT e.date AS quarter, e.value AS equities_musd, g.value AS gdp_busd,
+       e.value / 1000 / g.value * 100 AS equities_to_gdp_pct
+FROM market_series e
+JOIN market_series g ON g.series = 'fred:GDP' AND g.date = e.date
+WHERE e.series = 'fred:NCBEILQ027S'
+ORDER BY e.date DESC
+LIMIT 8;
+
+-- Shiller's CAPE: the latest month against its mean since 1881, its low and high,
+-- and the share of months at or below the latest
+WITH cape AS (SELECT date, value FROM market_series WHERE series = 'shiller:cape'),
+     latest AS (SELECT date, value FROM cape ORDER BY date DESC LIMIT 1)
+SELECT latest.date AS month, latest.value AS latest, AVG(cape.value) AS mean,
+       MIN(cape.value) AS low, MAX(cape.value) AS high, AVG(cape.value <= latest.value) AS percentile
+FROM cape, latest;
+
+-- The 10-year less the 2-year yield on the latest days; below 0 is an inverted curve
+SELECT t.date, t.value AS ten_year, w.value AS two_year, ROUND(t.value - w.value, 2) AS spread
+FROM market_series t
+JOIN market_series w ON w.series = 'ust:2y' AND w.date = t.date
+WHERE t.series = 'ust:10y'
+ORDER BY t.date DESC
+LIMIT 10;
+
+-- Days the 10-year yield was under the 2-year yield, by year
+SELECT substr(t.date, 1, 4) AS year, COUNT(*) AS days, SUM(t.value < w.value) AS inverted_days
+FROM market_series t
+JOIN market_series w ON w.series = 'ust:2y' AND w.date = t.date
+WHERE t.series = 'ust:10y'
+GROUP BY year
+HAVING inverted_days > 0
+ORDER BY year DESC;
+```
+
+### Viewing market data
+
+- **Web**: the **Market** page (`/market`, a link in the nav bar) has three sections, each with its figures, its
+  chart, a source line (the link, the day it was fetched and the latest date) and its method note. A section whose
+  series aren't stored says which command collects them (`--fred`, `--shiller` or `--treasury`).
+- **API**: `GET /api/market` returns `{available, buffett, cape, yield_curve, sources}`, computed at each request from
+  the stored series (about 430 KB, since it carries the charts' series). `available` says whether any section is. Each
+  section has `available`, `date` (its latest), `method` (the published note), `reason` and `collect`. A section whose
+  series aren't stored has none of its figures: its `reason` says why and `collect` is the command that collects them
+  (both null for an available section), so the answer is 200 before anything is collected. `sources` lists, per
+  section, its `latest` date and its `fetches`: `source`, `name`, `url` and `fetched_at` (null if never fetched).
+
+How to read each section:
+
+- **The Buffett indicator** (`buffett`): the corporate equities over GDP, as a percentage. The ratio has a long-run
+  trend, so the section reads it against that trend: `z` is how many standard deviations the latest quarter is from it
+  (`sd` is the standard deviation of the log residuals), and `zone` names where that falls, with the `pill` the page
+  colors it by:
+
+  | z | `zone` | `pill` |
+  |---|---|---|
+  | below -2 | significantly undervalued | cheap |
+  | -2 up to -1 | modestly undervalued | cheap |
+  | -1 to +1 | fairly valued | fair |
+  | above +1 up to +2 | modestly overvalued | expensive |
+  | above +2 | significantly overvalued | expensive |
+
+  The trend is the least-squares line through ln(ratio) against time over every quarter both series have. The section
+  also gives `ratio`, `trend` (its value in the same quarter), `growth` (the trend's growth a year), `percentile` (the
+  share of the quarters at or below the latest, as a fraction; null under 36 quarters), `date` (the latest quarter both
+  series have, the first day of the quarter), `first_date`, `quarters`, `cutoffs`, `zones` and `series` (the chart's
+  `dates`, `ratio`, `trend` and the bands at the trend times e to the ±1 and ±2 standard deviations: `lower_2sd`,
+  `lower_1sd`, `upper_1sd`, `upper_2sd`). On 2026-10-24 the ratio read 255.0% for Q2 2026, the highest of 303 quarters
+  (percentile 1.0), 1.68 standard deviations above its trend of 147.6%: *modestly overvalued*. A record ratio can still
+  read that way: the zone depends on the span of the fit, and over 1947-2026 the spread around the trend is wide (0.325
+  in logs). The same quarter would read +1.21 on a fit from 1970; the page fits the whole history.
+- **Shiller's CAPE** (`cape`): the real price over the mean real earnings of the 120 months ending the month before.
+  The section gives `value` and `date` (the latest month), and over its `months` months from `first_date` the `mean`,
+  `median`, `min` (with `min_date`), `max` (with `max_date`) and `percentile` (a fraction), and `series` (`dates`,
+  `values`). On 2026-10-24: 40.7 for 2026-10 against a mean of 17.8 and a median of 16.6 since 1881, at the 98.9th
+  percentile. It says where the market's price stands against ten years of its earnings and its own history, not what
+  comes next. Shiller's latest month is a single day's close with an estimated CPI.
+- **The yield curve** (`yield_curve`): `curve` is the latest day's yield at each maturity that has one that day
+  (`{maturity, label, value}`, shortest first), and `year_ago` (`{date, curve}`) the curve of the latest day on or before
+  365 days earlier, so the section shows how the whole curve moved over the year. `spreads` has the 10-year less the
+  2-year (`key` `10y_2y`) and the 10-year less the 3-month (`10y_3m`), in percentage points, on each day both have:
+  `dates` and `values`, `days`, `latest_value`, `inverted` (below 0 now), `inverted_share` (a fraction of its days,
+  since `first_date`), `last_inverted_day` and `latest_episode`. An inverted curve has short yields above long ones.
+  `latest_episode` is the latest sustained inversion, `{first, last, days}` or null: the spread's runs of days below 0
+  are joined into episodes across gaps of at most 20 of its days, and the latest episode with at least 20 days below 0
+  counts (`days` is the days below 0, not the span), so a one-day dip after an inversion doesn't replace it. On
+  2026-10-23 the 10-year less 2-year spread was +0.31 (last inverted 2024-09-05; sustained inversion 2022-07-06 to
+  2024-09-05, 539 days) and the 10-year less 3-month +0.78 (last inverted 2025-10-16; sustained 2025-02-26 to 2025-09-15,
+  85 days).
+
+---
+
+## The Universe and Industries
+
+`universe/` keeps the lists of tickers the app collects, and `src/universe/` reads them, stores each company's SEC
+industry code and forms the industry groups that the quality scores' five ranks are also computed within. See the
+README's [The universe and industries](README.md#the-universe-and-industries) for the rules and the limits. A list is
+collected with `stock-data`, every collection stores a company's SIC code, and nine more columns of `quality_scores`
+hold the industry group and the ranks within it. Nothing collected before changes: not a model, a valuation or a
+history, and not the quality scores' own ranks and composite.
+
+### Collecting a list of tickers
+
+```bash
+# A file of tickers: the 127 companies the database started with
+stock-data --tickers-file universe/core.txt
+
+# The S&P 500's members the database doesn't hold yet
+stock-data --tickers-file universe/sp500-2026-10-25.csv --skip-existing
+
+# The option repeats, and tickers can be named beside the files
+stock-data NVDA --tickers-file my-watchlist.txt --tickers-file universe/core.txt
+```
+
+A `.txt` file is a ticker a line; `#` starts a comment (a whole line's or the rest of a line) and blank lines are
+ignored:
+
+```
+# my watchlist
+AAPL
+BRK.B      # a class share: collected as BRK-B
+msft
+```
+
+A `.csv` file's tickers are its `ticker` column, else its `Symbol` column (the header read without case or spaces), so
+`universe/sp500-2026-10-25.csv` works as it is. The tickers collected are the positional ones, then each file's in
+order, each once, upper-cased, with a class share's dot as a dash. `--skip-existing` leaves out the tickers already in
+the database's `companies` table (`--db`, else `data/output/stock.db`) and says how many:
+`--skip-existing: 125 of 500 tickers already in data\output\stock.db left out, 375 to collect`.
+
+A ticker is letters and digits with at most one dash or dot between them. A list with anything else, a file that can't
+be read or isn't a `.txt` or `.csv`, no tickers at all, or tickers that are all in the database already under
+`--skip-existing`, ends with an error and exit 1 before anything is collected:
+
+```
+Cannot read the tickers: x.txt, line 3: not a ticker: 'AAPL,MSFT' (letters and digits, with at most one dash or dot between them)
+No tickers given: name some, or a --tickers-file that lists some
+All 127 tickers given are already in the database (data\output\stock.db): nothing to collect (--skip-existing)
+```
+
+### Adding the S&P 500
+
+```bash
+# A newer list, if you want one: one request to Wikipedia, and it never overwrites a file
+python -m src.universe.sp500
+
+# 1. SIC codes for the companies collected before Milestone 5 (offline, seconds)
+python -m src.universe.sic
+
+# 2. The members the database doesn't hold yet, collected in full
+stock-data --tickers-file universe/sp500-2026-10-25.csv --skip-existing --sec-user-agent "YourName you@example.com"
+
+# 3. The insiders (three years of Form 4s: the new members' are fetched, the others come from the cache), then the
+#    gurus' positions
+python -m src.ownership.collect --insiders
+python -m src.ownership.collect --positions
+```
+
+Start step 2 in the background: earlier collections took about 6 seconds a ticker with a warm SEC cache and about 20
+cold, so the 375 new members are an estimated 2 to 3 hours, and step 3's Form 4s take hours at the SEC's rate. A company
+that Yahoo or the SEC can't serve is counted in the summary's "With errors" and the rest go on. A collection stores its
+companies 25 at a time as they arrive (`--batch-size`), values each batch and ranks all the stored ones, in the universe
+and within industries, so filling the codes first (step 1) lets the collection's ranks see every one; if you fill them
+after collecting, `python -m src.valuation.backfill` ranks again. Stopping step 2 (Ctrl+C, exit 130) or a company's
+failed write keeps what was stored, and running step 2 again as it is collects the rest. The summary's
+`Stored in the database: N of M` line says whether the database took every company, and the exit code is 1 when it
+didn't, each one named in the log. A company that leaves the index stays in the database, and
+`stock-data refresh` (below) keeps all of them current.
+
+### Filling SIC codes
+
+Every collection stores the company's SEC SIC code and its description from the submissions feed it fetches. For the
+companies collected before, one command fills them without a request:
+
+```bash
+python -m src.universe.sic
+python -m src.universe.sic --db data/output/stock.db --json-dir data/output/json --cache-dir data/cache
+```
+
+For each company without a code it reads `sec_submissions.sic` and `sec_submissions.sic_description` from its JSON
+export (`<json-dir>/<TICKER>.json`), else from the SEC handler's cached submissions for its CIK
+(`<cache-dir>/submissions_CIK<CIK>.json`, whatever its age), and writes those two columns of `companies`, never
+another. The database must exist and have a `companies` table, else it prints `No database at PATH` or
+`No companies table in PATH` and exits 1. The end of a run:
+
+```
+SIC codes in data\output\stock.db: 127 companies, 127 without a code
+  filled from the JSON exports: 127 (data\output\json)
+  filled from the SEC cache: 0 (data\cache)
+  still missing: 0
+```
+
+It took about 4 seconds for the 127 companies. The industry ranks follow from the next ranking, which
+`python -m src.valuation.backfill` does (about 7 seconds for 127 companies), as does a collection or a refresh.
+
+### Industries in the database
+
+- **`companies`**: `sic` (four digits, as text) and `sic_description` (the SEC's words for it), NULL where the SEC gives
+  none.
+- **`quality_scores`**, beside the universe ranks (which are unchanged), nine columns, all NULL for a company with no
+  industry group:
+  - `industry_group`: its 3-digit SIC prefix when at least 10 of the companies ranked share it, else its 2-digit prefix
+    when at least 10 share that;
+  - `industry_label`: "SIC 283: " and the group's three most common SEC descriptions, joined with "; ";
+  - `industry_size`: the group's members, every company whose code starts with the group. A 2-digit group takes in
+    its 3-digit groups' companies, so it is larger than the number of companies ranked *in* it;
+  - `ind_rank_strength`, `ind_rank_profitability`, `ind_rank_growth`, `ind_rank_valuation` and `ind_rank_momentum`
+    (1-10, 10 best) and `ind_composite` (out of 100), ranked among the group's members. A component counts only when at
+    least 10 members have it, so a rank is NULL where too few components do (two are needed, one for valuation and
+    momentum), and the composite where fewer than four ranks are given.
+
+```sql
+-- A company's SIC code, and the industry group it is ranked in
+SELECT c.ticker, c.sic, c.sic_description, q.industry_group, q.industry_size
+FROM companies c
+LEFT JOIN quality_scores q ON q.ticker = c.ticker
+WHERE c.ticker IN ('AAPL', 'NVDA', 'JPM')
+ORDER BY c.ticker;
+
+-- The industry groups: the members each covers, the companies ranked in it and those with a composite
+SELECT industry_group,
+       industry_size AS members,
+       COUNT(*) AS ranked_in_it,
+       COUNT(ind_composite) AS with_composite,
+       industry_label
+FROM quality_scores
+WHERE industry_group IS NOT NULL
+GROUP BY industry_group, industry_size, industry_label
+ORDER BY industry_group;
+
+-- The companies ranked in SIC 367 (semiconductors), best industry composite first
+SELECT q.ticker, c.company_name, q.ind_composite,
+       q.ind_rank_strength, q.ind_rank_profitability, q.ind_rank_growth, q.ind_rank_valuation, q.ind_rank_momentum
+FROM quality_scores q
+JOIN companies c ON c.ticker = q.ticker
+WHERE q.industry_group = '367'
+ORDER BY q.ind_composite DESC, q.ticker;
+
+-- NVDA's five ranks and composite in the universe and in its industry
+SELECT 'strength' AS rank, rank_strength AS universe, ind_rank_strength AS industry
+FROM quality_scores WHERE ticker = 'NVDA'
+UNION ALL SELECT 'profitability', rank_profitability, ind_rank_profitability FROM quality_scores WHERE ticker = 'NVDA'
+UNION ALL SELECT 'growth', rank_growth, ind_rank_growth FROM quality_scores WHERE ticker = 'NVDA'
+UNION ALL SELECT 'valuation', rank_valuation, ind_rank_valuation FROM quality_scores WHERE ticker = 'NVDA'
+UNION ALL SELECT 'momentum', rank_momentum, ind_rank_momentum FROM quality_scores WHERE ticker = 'NVDA'
+UNION ALL SELECT 'composite', composite_score, ind_composite FROM quality_scores WHERE ticker = 'NVDA';
+
+-- How many companies share each 3-digit SIC prefix: 10 or more forms an industry group
+SELECT substr(sic, 1, 3) AS prefix, COUNT(*) AS companies, group_concat(ticker, ' ') AS tickers
+FROM companies
+WHERE sic IS NOT NULL
+GROUP BY prefix
+HAVING COUNT(*) >= 4
+ORDER BY companies DESC, prefix;
+
+-- The companies with no industry group: no code, or an industry under 10 companies in the database
+SELECT c.ticker, c.sic, c.sic_description
+FROM companies c
+JOIN quality_scores q ON q.ticker = c.ticker
+WHERE q.industry_group IS NULL
+ORDER BY c.sic, c.ticker;
+```
+
+On the 127 companies (2026-10-25) eight groups form: 283 (drugs), 357 (computers), 367 (semiconductors) and 737
+(software) with 10 to 12 members each, and their major groups 28, 35, 36 and 73; 55 companies have a group and 54 of
+them an industry rank.
+
+### Reading the industry ranks
+
+- **Web**: the **DES** tab shows the SEC's industry under the description ("Industry (SEC): SIC 3571 Electronic
+  Computers"). The **STAT** tab's *Quality* section gains an *Industry* column beside the 1-10 ranks, an *Industry
+  composite* pill beside the composite and a line naming the group ("Industry ranks among the 10 companies of SIC 367:
+  ..."); a company without industry ranks says why, for example "No industry ranks: SIC 6021's industry has fewer than
+  10 companies here".
+- **API**: `GET /api/stocks/{ticker}/scores` has an `industry` block with `group`, `label`, `size`, `sic`, `ranks`
+  (the five: `strength`, `profitability`, `growth`, `valuation`, `momentum`), `composite` and `na_reason`. `na_reason`
+  is null with a group, else "no SIC code stored", "industry ranks not computed yet" (ranked before this milestone) or
+  "SIC <code>'s industry has fewer than 10 companies here".
+- **Screener**: an *Industry* drop-down (every 2-digit major group and 3-digit industry group that has a company, with
+  its label and size), the `industry` parameter and the six fields `ind_rank_strength` ... `ind_rank_momentum` and
+  `ind_composite`. `industry` is a 2- or 3-digit SIC prefix, the companies whose code starts with it, whether or not it
+  forms a group; anything else is a 400. The results and the CSV carry a `sic` column. For example
+  `GET /api/screen?industry=367&sort=ind_composite&sort_dir=desc`, or
+  `GET /api/screen?industry=28&ind_rank_growth_gte=8` for the companies of major group 28 with an industry growth rank
+  of 8 or more.
+
+How to read them: an industry rank is the decile of a company among the members of its group that have the
+components, so a 10 is the best of its industry, not of the universe; read it beside the universe's, which it doesn't
+replace (NVDA is 10, 8, 10, 9 and 5 in the universe and 9, 8, 10, 10 and 2 among the semiconductors). A component
+counts only when at least 10 members have it, so with only 10 members one missing figure drops it for the whole group
+(at 127 companies none of the 10 computers in 357 has an industry composite). A company in a 2-digit group is ranked
+against the whole major group, and an option's size in the drop-down counts every company with the code, while a screen
+lists those with annual metrics.
+
+---
+
+## Keeping Data Current
+
+`stock-data refresh` (`src/refresh.py`) keeps the database current with one command: the quotes and the new daily bars,
+the SEC's new filings, the insiders, the gurus and the market data, then the recomputation of the valuations, history,
+scores, indicators and ranks. See the README's
+[Keeping the data current](README.md#keeping-the-data-current-stock-data-refresh) for each step's rules, the timings and
+the limits. It works on the companies already in the database (add new ones with `--tickers-file` and
+`--skip-existing`, above), and `python -m src.main refresh` is the same command.
+
+### Running a refresh
+
+```bash
+# Every step that is due: what a scheduler runs
+stock-data refresh
+
+# Only some steps, whatever their cadence
+stock-data refresh --steps quotes,bars
+
+# Every step, whatever its cadence
+stock-data refresh --force
+
+# Two companies only (for testing; it counts for no step's cadence)
+stock-data refresh --tickers AAPL,MSFT
+
+# On a copy of the database: give it an output directory too, or a collection's
+# JSON and CSV go into data/output and the run's log into data/logs
+stock-data refresh --db scratch/stock.db --output-dir scratch
+```
+
+The eight steps, in this order, each in its own try/except (a failure is reported and the others go on):
+
+| Step | Runs | What it does |
+|---|---|---|
+| `quotes` | daily | Every company's Yahoo quote, stored as a new snapshot. A company with a split since its last collection goes on the collection list instead |
+| `bars` | daily | Every company's daily bars since its last stored bar, then `^GSPC`'s. A company whose prices no longer match the stored bars' basis goes on the collection list; an answer with no bars (Yahoo's answer to a timeout or throttling) is that company's error, its bars kept and nothing queued |
+| `sec` | weekly | Every company's submissions feed, read fresh. A 10-K, 10-Q, 20-F, 40-F, 10-KT or 10-QT, or an amendment of one, filed since the company's last collection puts it on the collection list. So does that collection when its SEC read was incomplete (`collection_runs.incomplete`: its companyfacts had no fact of the latest report its submissions listed, or its predecessor's filings couldn't be read), three times at most for one gap |
+| `collect` | when the list isn't empty | A full collection of the list, as `stock-data` runs one |
+| `insiders` | weekly | The last three years of Form 4s for every company, each fetched once and cached |
+| `gurus` | weekly | The gurus' 13F filings of the last eight quarters, their CUSIPs' tickers and their positions |
+| `market` | daily | FRED, Shiller and Treasury.gov |
+| `recompute` | when a step stored something | Every company's valuations, history, scores and indicators, then the ranks |
+
+A step with a cadence is skipped while it succeeded in a run that started within its period: a daily step 20 hours, a
+weekly one 6 days 20 hours, so a run scheduled daily never skips one because yesterday's started a few minutes later.
+The age is measured from the start of the run, so a step that finished hours into a long run is still due the next day.
+A weekly step runs again at the next run while its latest success left something undone, and says why: `sec` after a
+company's feed failed, or when a company it put on the collection list (for a new report, or to redo an incomplete
+collection) wasn't collected in that run (the collection failed, `--steps` left `collect` out, or the run was stopped);
+`insiders` and `gurus` after a company's or a guru's filings failed. A feed that keeps failing makes `sec` run every day, each day naming the company. A `--tickers` run
+counts for no step's cadence (its rows are logged with its `subset`), so the next full run is due as if it hadn't
+happened. `--steps` names the steps to run, whatever their cadence (`collect` alone has nothing to collect, as the list
+is built by `quotes`, `bars` and `sec` in the same run), and `--force` ignores the cadence of every step.
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--steps` | Run only these steps, whatever their cadence (comma-separated) | every step that is due |
+| `--force` | Run every step, whatever its cadence | `false` |
+| `--tickers` | Limit the per-company steps to these of the database's companies (comma-separated; for testing). Such a run counts for no step's cadence | all companies |
+| `--db` | SQLite database path; it must exist. It doesn't move the outputs: see `--output-dir` | `<output-dir>/output/stock.db` |
+| `--output-dir` | The base output directory: a collection's exports go under `output/`, the log under `logs/`. A run on a copy with `--db` alone writes a collection's JSON and CSV into `data/output` and its log into `data/logs`, so give both options when testing on a copy | `data` |
+| `--cache-dir` | The cache of the SEC's answers, the ownership filings and the market data | `data/cache` |
+
+The SEC's User-Agent is `SEC_USER_AGENT` (in `.env` or the environment, as for the ownership collector): `refresh` has no
+`--sec-user-agent`. A run prints a time-stamped line as each step starts and finishes, one for every 25 companies and a
+collection's line for each company, then a summary. The end of the first real run, on a copy of the 127-company
+database (the path shortened):
+
+```
+06:15:08 Summary of the refresh started 2026-10-25T06:01:39+07:00:
+06:15:08   quotes: ran, ok: 127 of 127 quotes stored, 0 to collect, 0 errors
+...
+06:15:08   sec: ran, ok: 127 feeds read, 19 new reports at 19 companies, 0 without a CIK, 0 errors
+06:15:08   collect: ran, ok: 19 of 19 collected (19 without errors, 0 with errors)
+06:15:08   insiders: skipped (not named in --steps)
+06:15:08   gurus: skipped (not named in --steps)
+06:15:08   market: ran, ok: 4 of 4 sources stored
+06:15:08   recompute: ran, ok: 127 of 127 companies valued, then ranked
+06:15:08 Collection list (19): AXP (sec: 10-Q filed 2026-10-23 (0000004962-26-000409)), DHR (sec: 10-Q filed 2026-10-21 (0000313616-26-000199)), ...
+06:15:08 Exit 0: every step ran or was skipped
+```
+
+That run took 13 minutes 31 seconds on 127 companies, nearly all of it the quotes and the bars (about 5 minutes each,
+Yahoo being asked once a company 2.5 seconds apart). A run without `--steps` right after every step had succeeded
+skipped them all, in about 3 seconds. The exit code is 0 when every step ran or was skipped, 1 when a step failed (the
+others went on) or the companies couldn't be read, 2 when there is no database at `--db` (none is created), `--tickers`
+names a company that isn't in it or an option is wrong, and 3 when another refresh is running (see below); 130 after
+Ctrl+C.
+
+### The refresh log
+
+Two things record a run. The `refresh_log` table has a row for each step of each run, ran or skipped:
+
+- `id`, `step`, `started_at` and `finished_at` (UTC, ISO 8601);
+- `ok`: 1 for a step that ran and succeeded, 0 for one that failed, NULL for one that was skipped. A step's cadence
+  reads its latest row with `ok = 1` and no `subset`: its run's start (`summary`'s `run`), and for a weekly step whether
+  that run left something undone (its `errors`; for `sec`, its `new_filings` and `incomplete` and that run's `collect`
+  row);
+- `summary`: JSON. `run` is the run's start, the same on every row of a run; `subset`, on every row of a `--tickers`
+  run, its companies; then the step's counts (`quotes`: `stored`, `rebased`, `to_collect`, `errors`; `sec`: `feeds`,
+  `new_filings`, `incomplete` (the companies put on the list again for an incomplete collection, each with
+  `collected_at`, `why` and `again`, the time it is), `incomplete_left` (those left after three, with `collections` in a
+  row and `since`), `errors`; `collect`: `collected`, `not_stored`; and so on), `skipped` with the reason for a skipped
+  step, or `error` for a failed one; `again`, why a weekly step ran again within its period.
+
+```sql
+-- The latest run, step by step: whether it ran, and why it was skipped or failed
+SELECT step, ok, finished_at,
+       COALESCE(json_extract(summary, '$.skipped'), json_extract(summary, '$.error')) AS skipped_or_error
+FROM refresh_log
+WHERE json_extract(summary, '$.run') = (SELECT json_extract(summary, '$.run') FROM refresh_log ORDER BY id DESC LIMIT 1)
+ORDER BY id;
+
+-- Each step's latest success in a full run (a --tickers run's rows carry its subset), and the start of that run:
+-- what the cadence measures its age from
+SELECT step, json_extract(summary, '$.run') AS run_started, finished_at,
+       json_extract(summary, '$.errors') AS errors
+FROM refresh_log
+WHERE id IN (SELECT MAX(id) FROM refresh_log
+             WHERE ok = 1 AND json_extract(summary, '$.subset') IS NULL GROUP BY step)
+ORDER BY id;
+
+-- The weekly steps that ran again within their period, and why
+SELECT id, step, started_at, json_extract(summary, '$.again') AS why
+FROM refresh_log
+WHERE json_extract(summary, '$.again') IS NOT NULL
+ORDER BY id DESC
+LIMIT 20;
+
+-- How long each step took in its latest successful run
+SELECT step, ROUND((julianday(finished_at) - julianday(started_at)) * 86400) AS seconds
+FROM refresh_log
+WHERE ok = 1 AND id IN (SELECT MAX(id) FROM refresh_log WHERE ok = 1 GROUP BY step)
+ORDER BY id;
+
+-- The companies the latest SEC step put on the collection list, with the report that did it
+SELECT j.key AS ticker, json_extract(j.value, '$[0].form') AS form, json_extract(j.value, '$[0].filed') AS filed
+FROM refresh_log r, json_each(r.summary, '$.new_filings') j
+WHERE r.id = (SELECT MAX(id) FROM refresh_log WHERE step = 'sec' AND ok = 1)
+ORDER BY filed DESC, ticker;
+
+-- The failed steps, newest first
+SELECT id, step, started_at, json_extract(summary, '$.error') AS error
+FROM refresh_log
+WHERE ok = 0
+ORDER BY id DESC
+LIMIT 20;
+
+-- The companies whose latest collection with the SEC was incomplete, and what it lacked: what the SEC step reads
+-- (collection_runs.incomplete; empty for every run stored before the column)
+SELECT r.ticker, r.collected_at, json_extract(r.incomplete, '$.report.form') AS form,
+       json_extract(r.incomplete, '$.report.filed') AS filed, json_extract(r.incomplete, '$.predecessor') AS predecessor
+FROM collection_runs r
+WHERE r.incomplete IS NOT NULL
+  AND r.collected_at = (SELECT MAX(collected_at) FROM collection_runs
+                        WHERE ticker = r.ticker AND data_sources LIKE '%sec_edgar%')
+ORDER BY filed, r.ticker;
+```
+
+A database from before the refresh has no `refresh_log` until its first run. The other record is the log file,
+`<output-dir>/logs/refresh-<YYYY-MM-DD>.log` (`data/logs/refresh-2026-10-25.log`, appended through the day the run
+started, UTF-8): every line the run printed, and the detail the console leaves out (each quote stored, each company's
+bars, a failed step's traceback).
+
+One refresh runs at a time. `<db>.refresh.lock` (`data\output\stock.db.refresh.lock`) is held with an OS file lock for
+the whole run and released by the OS if the process dies; it holds the running process's PID and start time. A second
+refresh prints `Not started: another refresh holds <path>: PID <n>, started <time>. One refresh runs at a time.` and
+exits 3. The lock stops other refreshes only.
+
+### Scheduling it on Windows
+
+Installing a scheduled task is a persistent change to the machine, so it is the user's decision (Q15 in
+`qa/BUGS.md`): the build did not install one, and nothing in the repository does. This creates a daily task that runs
+the refresh from the repository folder, whose relative paths it needs; change `C:\dev\stock-database` to where the
+repository is, and run it in a Command Prompt or PowerShell:
+
+```bat
+schtasks /Create /SC DAILY /ST 05:00 /TN "stock-database refresh" /TR "cmd /c cd /d C:\dev\stock-database && stock-data refresh"
+```
+
+Pick the time after the US close, 16:00 New York time, at least an hour later in your local time: a run before the close
+stores that day's bar as it stands, and the next run replaces it. New York is on UTC-4 until the first Sunday of
+November and UTC-5 after, so on a machine at UTC+7 the close is 03:00 and then 04:00 the next morning, and 05:00 or
+later is an hour past it all year. Three more commands look at the task, run it once and remove it:
+
+```bat
+schtasks /Query /TN "stock-database refresh" /V /FO LIST
+schtasks /Run /TN "stock-database refresh"
+schtasks /Delete /TN "stock-database refresh" /F
+```
+
+`/Query` shows whether the task exists, its last and next run times and its Last Result, which is the exit code of the
+refresh (0 is a good run, see above); `/Run` starts it now; `/Delete` removes it. The first run finds every step due.
+Its insiders step fetches only the Form 4s not in the cache yet: a minute or two for companies collected before, but
+three years of filings for a company never collected for insiders, hours at the SEC's rate for the S&P 500's new
+members. Run `python -m src.ownership.collect --insiders` by hand first if you would rather the scheduled run didn't.
+If Task Scheduler can't find `stock-data`, give the command's full path (`where stock-data` prints it). Its
+conditions (running on battery, waking the machine) and the account it runs as are Task Scheduler's: open the task
+there, or see `schtasks /Create /?` for `/RU` and `/RP`. A day the machine was off is made up by the next run, which
+fetches the bars since each company's last stored bar and looks for the reports filed since its last collection.
 
 ---
 
@@ -706,7 +1901,6 @@ def peter_lynch_value(stock: dict) -> dict:
     """
     valuation = stock['valuation']
     market = stock['market_data']
-    estimates = stock.get('analyst_estimates', {})
     dividends = stock.get('dividend_history', {})
 
     # Get current metrics
@@ -717,11 +1911,15 @@ def peter_lynch_value(stock: dict) -> dict:
     if not eps or eps <= 0:
         return {"error": "No positive EPS available"}
 
-    # Get growth rate
-    earnings_growth = estimates.get('earnings_growth')
-    if not earnings_growth:
-        # Fallback to revenue growth
-        earnings_growth = valuation.get('revenue_growth', 0.10)
+    # Growth: the historical EPS CAGR over up to the last 5 fiscal years, as the app's Lynch model measures it.
+    # (Yahoo's earningsGrowth is one quarter's year-over-year change, no forecast: it isn't a growth rate.)
+    annual = stock.get('financials_annual', {})
+    eps_by_year = [(int(fy), row.get('eps_diluted')) for fy, row in sorted(annual.items())
+                   if isinstance(row.get('eps_diluted'), (int, float))][-5:]
+    earnings_growth = 0.0
+    if len(eps_by_year) >= 2 and eps_by_year[0][1] > 0 and eps_by_year[-1][1] > 0:
+        span = eps_by_year[-1][0] - eps_by_year[0][0]
+        earnings_growth = (eps_by_year[-1][1] / eps_by_year[0][1]) ** (1 / span) - 1
 
     growth_rate_pct = abs(earnings_growth) * 100  # Convert to percentage
 

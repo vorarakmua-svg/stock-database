@@ -1,0 +1,518 @@
+"""History inputs (Milestone 1): share counts on the price bars' split basis, price factors, known dates.
+
+docs/superpowers/specs/2026-10-21-valuation-history-design.md
+"""
+import sqlite3
+from datetime import date
+
+import pytest
+
+from src.exporters.sqlite_store import SQLiteStore
+from src.valuation.history_inputs import (
+    is_share_split,
+    known_on,
+    load_history_inputs,
+    normalize_share_series,
+    pick_share_field,
+    price_factor_after,
+)
+
+# GE's split history: the 1:8 reverse split, then the GE HealthCare and GE Vernova spin-off factors.
+GE_EVENTS = [("2021-08-02", 0.125), ("2023-01-04", 1.281), ("2024-04-02", 1.253)]
+ENDS = ["2019-12-28", "2020-03-28", "2020-06-27", "2020-09-26", "2020-12-26"]
+
+
+def test_share_splits_are_simple_ratios():
+    assert is_share_split(4.0) and is_share_split(0.125) and is_share_split(1.5)
+    assert not is_share_split(1.281)  # a spin-off's price factor
+    assert not is_share_split(1.04)
+    assert not is_share_split(1.0)
+    assert not is_share_split(None)
+
+
+def test_price_factor_counts_the_spin_offs_after_the_day():
+    last = "2026-10-20"
+    assert price_factor_after("2022-06-30", GE_EVENTS, last) == pytest.approx(1.281 * 1.253)
+    assert price_factor_after("2023-06-30", GE_EVENTS, last) == pytest.approx(1.253)
+    assert price_factor_after("2024-06-28", GE_EVENTS, last) == 1.0
+    # The 1:8 is a share split: it moves the share counts, never the price factor.
+    assert price_factor_after("2020-12-31", GE_EVENTS, last) == pytest.approx(1.281 * 1.253)
+    # The ex-date's own close is already after the factor.
+    assert price_factor_after("2023-01-04", GE_EVENTS, last) == pytest.approx(1.253)
+    # A factor after the last bar isn't in the bars yet.
+    assert price_factor_after("2026-06-30", [("2026-12-01", 1.3)], last) == 1.0
+
+
+def test_known_dates_follow_the_filing_lag():
+    collected = date(2026, 10, 21)
+    assert known_on("2026-06-30", 2, None, collected) == date(2026, 8, 14)  # a 10-Q: + 45 days
+    assert known_on("2025-12-31", 4, "2026-02-20", collected) == date(2026, 2, 20)  # the 10-K's own day
+    assert known_on("2025-12-31", 4, None, collected) == date(2026, 3, 16)  # no 10-K date: + 75 days
+    assert known_on("2025-12-31", 4, "2026-06-30", collected) == date(2026, 3, 16)  # 181 days on: not its 10-K
+    assert known_on("2026-09-30", 3, None, collected) == collected  # stored, so known by the collection day
+
+
+def test_share_field_is_the_first_covering_most_quarters():
+    rows = [{"weighted_avg_shares_basic": 1.0 if i < 5 else None,
+             "shares_outstanding": 1.0 if i < 9 else None} for i in range(10)]
+    assert pick_share_field(rows) == "shares_outstanding"  # basic covers 50% of the quarters
+    rows[5]["weighted_avg_shares_basic"] = 1.0
+    assert pick_share_field(rows) == "weighted_avg_shares_basic"  # 60%
+    assert pick_share_field([{"net_income": 10.0, "eps_diluted": 2.0}] * 4) == "net_income/eps_diluted"
+    assert pick_share_field([{}] * 4) is None
+
+
+def test_share_field_coverage_counts_the_latest_40_quarters():
+    # PRU-like: weighted shares filed only for the latest 40 of 80 quarters, net income / EPS for all of them.
+    old, recent = {"net_income": 1.0e9, "eps_diluted": 2.0}, {"weighted_avg_shares_basic": 5e8}
+    rows = [dict(old) for _ in range(40)] + [dict(old, **recent) for _ in range(40)]
+    assert pick_share_field(rows) == "weighted_avg_shares_basic"
+
+
+def test_a_count_from_eps_of_cents_is_rounding_noise():
+    # PRU's 2009 Q1: $14M over EPS of $0.01 reads 1.4B shares; to the cent, EPS that small is up to 50% off.
+    assert pick_share_field([{"net_income": 14e6, "eps_diluted": 0.01}] * 4) is None
+    assert pick_share_field([{"net_income": -52e6, "eps_diluted": -0.09}] * 4) is None
+    assert pick_share_field([{"net_income": 1.0e9, "eps_diluted": 0.10}] * 4) == "net_income/eps_diluted"
+
+
+def test_a_declared_split_folds_its_seam():
+    # AAPL-like: the 4:1 of 2020-08-31 shows as 3.97x between the June and September quarters.
+    counts = [4.40e9, 4.36e9, 4.33e9, 17.19e9, 17.11e9]
+    eps = [5.0, 2.6, 2.6, 0.73, 1.7]
+    out, applied = normalize_share_series(ENDS, counts, eps, [("2020-08-31", 4.0)])
+    assert out == pytest.approx([17.60e9, 17.44e9, 17.32e9, 17.19e9, 17.11e9])
+    assert applied == [("2020-08-31", 4.0)]
+
+
+def test_a_merger_seam_stays_organic():
+    # COF-like: 1.56x the shares from a stock-paid merger, EPS not inverted, no split declared.
+    counts = [380e6, 382e6, 596e6, 600e6, 601e6]
+    out, applied = normalize_share_series(ENDS, counts, [3.0, 3.1, 3.3, 3.4, 3.5], [])
+    assert out == pytest.approx(counts)
+    assert applied == []
+
+
+def test_an_undeclared_seam_folds_only_when_eps_moved_inversely():
+    counts = [100e6, 101e6, 202e6, 203e6, 204e6]
+    out, _ = normalize_share_series(ENDS, counts, [2.0, 2.0, 1.0, 1.0, 1.0], [])
+    assert out[:2] == pytest.approx([200e6, 202e6])  # folded by the seam's own ratio, 2.0
+
+
+def test_a_merger_seam_with_an_eps_dip_stays_organic():
+    # DUK-like (BUG-175): Progress Energy's stock-paid merger, 1.567x the shares while EPS dipped from 0.99 to
+    # 0.86. A split would have cut EPS by about the ratio.
+    counts = [446e6, 446e6, 699e6, 704e6, 705e6]
+    out, applied = normalize_share_series(ENDS, counts, [0.98, 0.99, 0.86, 0.95, 1.0], [])
+    assert out == pytest.approx(counts)
+    assert applied == []
+
+
+@pytest.mark.parametrize("eps", [(4.90, -5.00), (-0.16, 2.58), (None, 1.0), (0.0, -0.05)])
+def test_a_seam_without_comparable_eps_stays_organic(eps):
+    # Citigroup's 2009 exchange offer (2.242x, EPS 4.90 to -5.00) and HON's 2026 halving (EPS -0.16 to 2.58):
+    # EPS that changes sign, or is missing or zero, says nothing of a split (BUG-175).
+    counts = [100e6, 100e6, 224e6, 225e6, 226e6]
+    out, _ = normalize_share_series(ENDS, counts, [eps[0], eps[0], eps[1], eps[1], eps[1]], [])
+    assert out == pytest.approx(counts)
+
+
+def test_revenue_rising_with_the_count_marks_a_merger():
+    # EPS fell by the seam's ratio, as across a split, but revenue doubled with the shares (BUG-175).
+    counts = [100e6, 101e6, 202e6, 203e6, 204e6]
+    eps = [2.0, 2.0, 1.0, 1.0, 1.0]
+    out, _ = normalize_share_series(ENDS, counts, eps, [], revenue=[1.0e9, 1.0e9, 2.1e9, 2.1e9, 2.2e9])
+    assert out == pytest.approx(counts)
+    out, _ = normalize_share_series(ENDS, counts, eps, [], revenue=[1.0e9, 1.0e9, 1.1e9, 1.1e9, 1.2e9])
+    assert out[:2] == pytest.approx([200e6, 202e6])  # revenue held: a split's marks, so it folds
+
+
+def test_the_listing_quarter_takes_the_public_count():
+    # UBER-like: the quarter of the 2019-05-10 listing averages the private count with the public one (1.11B
+    # against 1.70B after), and its EPS changed sign. Every bar is public, so the public count applies back.
+    ends = ["2019-06-30", "2019-09-30", "2019-12-31"]
+    counts = [1.11e9, 1.70e9, 1.72e9]
+    eps = [-5.72, 1.19, -0.64]
+    out, _ = normalize_share_series(ends, counts, eps, [], listed="2019-05-10")
+    assert out == pytest.approx([1.70e9, 1.70e9, 1.72e9])
+    # A first quarter long after the listing is like any other: no comparable EPS, so no fold.
+    out, _ = normalize_share_series(ends, counts, eps, [], listed="2012-05-18")
+    assert out == pytest.approx(counts)
+    # PLTR-like, listed on a quarter's last day: only that quarter is the listing's, not the one after it.
+    ends = ["2020-09-30", "2020-12-31", "2021-03-31"]
+    out, _ = normalize_share_series(ends, [2.0e9, 2.0e9, 3.1e9], [None] * 3, [], listed="2020-09-30")
+    assert out == pytest.approx([2.0e9, 2.0e9, 3.1e9])
+
+
+def test_a_one_quarter_spike_is_dropped():
+    counts = [100e6, 100e6, 130e6, 101e6, 100e6]
+    out, _ = normalize_share_series(ENDS, counts, [None] * 5, [])
+    assert out == pytest.approx([100e6, 100e6, 100e6, 101e6, 100e6])  # the gap carries the count before it
+
+
+def test_a_split_after_the_latest_quarter_needs_yahoos_count():
+    # APH-like: a 2:1 on 2026-09-03, after the latest quarter, which no stored quarter reflects.
+    ends = ["2025-12-31", "2026-03-31", "2026-06-30"]
+    out, applied = normalize_share_series(ends, [1.21e9, 1.215e9, 1.22e9], [None] * 3, [("2026-09-03", 2.0)],
+                                          yahoo_count=2.44e9)
+    assert out == pytest.approx([2.42e9, 2.43e9, 2.44e9])
+    assert applied == [("2026-09-03", 2.0)]
+    # Quarters a filing already restated: the split would move them away from Yahoo's count.
+    out, applied = normalize_share_series(ends, [2.42e9, 2.43e9, 2.44e9], [None] * 3, [("2026-09-03", 2.0)],
+                                          yahoo_count=2.44e9)
+    assert out == pytest.approx([2.42e9, 2.43e9, 2.44e9])
+    assert applied == []
+
+
+def test_a_unit_seam_cuts_the_older_quarters():
+    counts = [100e3, 101e3, 102e6, 103e6, 104e6]  # filed in thousands, then in units
+    out, _ = normalize_share_series(ENDS, counts, [None] * 5, [])
+    assert out[:2] == [None, None]
+    assert out[2:] == pytest.approx([102e6, 103e6, 104e6])
+
+
+# ---------- load_history_inputs on a synthetic database ----------
+
+QUARTERS = [  # (period_end, fiscal_year, fiscal_quarter, basic shares as filed, diluted EPS as filed)
+    ("2024-03-31", 2024, 1, 100e6, 1.0),
+    ("2024-06-30", 2024, 2, 100e6, 1.0),
+    ("2024-09-30", 2024, 3, 100e6, 1.0),
+    ("2024-12-31", 2024, 4, 100e6, 1.0),
+    ("2025-03-31", 2025, 1, 100e6, 1.1),
+    ("2025-06-30", 2025, 2, 200e6, 0.55),  # the 2:1 of 2025-05-15
+    ("2025-09-30", 2025, 3, 200e6, 0.55),
+    ("2025-12-31", 2025, 4, 200e6, 0.55),
+]
+
+
+def _db(tmp_path, sector="general", yahoo_cap=4.0e9, ttm=True):
+    store = SQLiteStore(db_path=tmp_path / "hist.db")
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('AAA', ?)", (sector,))
+    for end, fy, fq, shares, eps in QUARTERS:
+        conn.execute(
+            "INSERT INTO financials_quarterly (ticker, period_end, fiscal_year, fiscal_quarter, "
+            "weighted_avg_shares_basic, eps_diluted, net_income) VALUES ('AAA', ?, ?, ?, ?, ?, ?)",
+            (end, fy, fq, shares, eps, 110e6))
+        if ttm and end >= "2024-12-31":
+            conn.execute(
+                "INSERT INTO financials_ttm (ticker, period_end, fiscal_year, revenue, net_income, total_equity, "
+                "preferred_equity, operating_cash_flow, capex, operating_income, depreciation_amortization, "
+                "long_term_debt, cash_and_equivalents) VALUES ('AAA', ?, ?, 1.0e9, 4.4e8, 2.0e9, 1.0e8, 5.0e8, "
+                "-1.0e8, 6.0e8, 1.0e8, 9.0e8, 3.0e8)", (end, fy))
+    for fy, end, filed in ((2024, "2024-12-31", "2025-02-20"), (2025, "2025-12-31", "2026-02-19")):
+        conn.execute("INSERT INTO financials_annual (ticker, fiscal_year, period_end) VALUES ('AAA', ?, ?)",
+                     (fy, end))
+        conn.execute("INSERT INTO financials_annual_vintages (ticker, fiscal_year, accn, filed_date, period_end, "
+                     "form) VALUES ('AAA', ?, ?, ?, ?, '10-K')", (fy, f"acc-{fy}", filed, end))
+    # A later 10-K restating FY2024 is not its first report.
+    conn.execute("INSERT INTO financials_annual_vintages (ticker, fiscal_year, accn, filed_date, period_end, form) "
+                 "VALUES ('AAA', 2024, 'acc-2025', '2026-02-19', '2024-12-31', '10-K')")
+    conn.executemany("INSERT INTO split_events (ticker, date, ratio) VALUES ('AAA', ?, ?)",
+                     [("2025-05-15", 2.0), ("2025-08-01", 1.1)])
+    bars = [("2023-12-29", 9.0), ("2025-01-15", 10.0), ("2025-01-31", 11.0), ("2025-02-27", 12.0),
+            ("2025-02-28", 12.5), ("2025-12-31", 20.0), ("2026-02-24", 21.0)]
+    conn.executemany("INSERT INTO price_bars (ticker, date, close) VALUES ('AAA', ?, ?)", bars)
+    conn.executemany("INSERT INTO dividend_events (ticker, date, amount) VALUES ('AAA', ?, ?)",
+                     [("2025-03-01", 0.10), ("2025-09-01", 0.10)])
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price, market_cap, "
+                 "shares_outstanding) VALUES ('AAA', '2026-02-25T10:00:00', 21.0, ?, 190e6)", (yahoo_cap,))
+    conn.execute("INSERT INTO collection_runs (ticker, collected_at) VALUES ('AAA', '2026-02-25T10:00:00')")
+    conn.commit()
+    return conn
+
+
+def test_load_history_inputs_puts_every_quarter_on_the_bars_basis(tmp_path):
+    conn = _db(tmp_path)
+    x = load_history_inputs(conn, "AAA")
+    assert x.na_reason is None
+    assert x.share_field == "weighted_avg_shares_basic"
+    assert x.splits_applied == [("2025-05-15", 2.0)]
+    by_end = {p.period_end: p for p in x.points}
+    assert by_end["2024-12-31"].shares == pytest.approx(200e6)  # 100M as filed, on the post-split basis
+    assert by_end["2025-12-31"].shares == pytest.approx(200e6)
+    # Known dates: a Q4 on its first 10-K (not the later one restating it), a Q1 + 45 days.
+    assert by_end["2024-12-31"].known_on == date(2025, 2, 20)
+    assert by_end["2025-03-31"].known_on == date(2025, 5, 15)
+    assert by_end["2025-12-31"].known_on == date(2026, 2, 19)
+    # Fundamentals through CalculatedMetrics: FCF = OCF - |capex|, EBITDA = EBIT + D&A, net debt = debt - cash.
+    p = by_end["2025-12-31"]
+    assert (p.revenue, p.net_income, p.common_equity) == (1.0e9, 4.4e8, 1.9e9)
+    assert (p.fcf, p.ebitda, p.net_debt) == (4.0e8, 7.0e8, 6.0e8)
+    # One sample per month, its last bar; the latest bar last.
+    assert x.months == [("2023-12-29", 9.0), ("2025-01-31", 11.0), ("2025-02-28", 12.5), ("2025-12-31", 20.0),
+                        ("2026-02-24", 21.0)]
+    assert x.last_bar == "2026-02-24"
+    assert x.price_factors == [("2025-08-01", 1.1)]  # the spin-off factor only
+    assert x.yahoo_shares == pytest.approx(4.0e9 / 21.0)
+    assert x.collected_on == date(2026, 2, 25)
+    assert [d for d, _ in x.dividends] == ["2025-03-01", "2025-09-01"]
+
+
+def test_a_bank_has_no_fcf_ebitda_or_net_debt(tmp_path):
+    conn = _db(tmp_path, sector="bank")
+    p = load_history_inputs(conn, "AAA").points[-1]
+    assert (p.fcf, p.ebitda, p.net_debt) == (None, None, None)
+    assert p.revenue == 1.0e9
+
+
+def test_no_trailing_years_means_no_history(tmp_path):
+    conn = _db(tmp_path, ttm=False)
+    assert load_history_inputs(conn, "AAA").na_reason == "no trailing-twelve-month financials"
+
+
+def test_a_share_count_far_from_yahoos_means_no_history(tmp_path):
+    conn = _db(tmp_path, yahoo_cap=21.0 * 400e6)  # Yahoo counts 400M, we count 200M: another class
+    reason = load_history_inputs(conn, "AAA").na_reason
+    assert reason is not None and "share count" in reason
+
+
+def test_an_unknown_ticker_means_no_history(tmp_path):
+    conn = _db(tmp_path)
+    assert load_history_inputs(conn, "ZZZ").na_reason == "no company record"
+
+
+def test_no_capex_means_no_fcf(tmp_path):
+    # Operating cash flow alone isn't free cash flow (CalculatedMetrics falls back to OCF).
+    conn = _db(tmp_path)
+    conn.execute("UPDATE financials_ttm SET capex = NULL")
+    p = load_history_inputs(conn, "AAA").points[-1]
+    assert p.fcf is None
+    assert p.ebitda == 7.0e8
+
+
+def test_a_spin_off_factor_never_folds_a_share_seam(tmp_path):
+    # A 1.3x jump in the count (an acquisition) beside a 1.3 spin-off factor: only share splits fold.
+    conn = _db(tmp_path)
+    conn.execute("UPDATE financials_quarterly SET weighted_avg_shares_basic = weighted_avg_shares_basic * 1.3 "
+                 "WHERE period_end >= '2024-09-30'")
+    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('AAA', '2024-08-01', 1.3)")
+    conn.execute("INSERT INTO financials_ttm (ticker, period_end, fiscal_year, revenue) "
+                 "VALUES ('AAA', '2024-06-30', 2024, 1.0e9)")
+    by_end = {p.period_end: p for p in load_history_inputs(conn, "AAA").points}
+    assert by_end["2024-06-30"].shares == pytest.approx(200e6)  # 100M as filed, folded by the 2:1 only
+    assert by_end["2024-12-31"].shares == pytest.approx(260e6)  # the acquisition's 130M, likewise
+
+
+def test_quarters_before_the_listing_are_left_out(tmp_path):
+    # UBER-like: the first bar is after 2024's quarters, whose counts are the pre-IPO share base.
+    conn = _db(tmp_path)
+    conn.execute("DELETE FROM price_bars WHERE date < '2025-01-01'")
+    x = load_history_inputs(conn, "AAA")
+    assert [p.period_end for p in x.points] == ["2025-03-31", "2025-06-30", "2025-09-30", "2025-12-31"]
+
+
+def test_a_quarter_without_its_long_term_debt_has_no_net_debt(tmp_path):
+    # TMUS-like: the 10-Qs carry no long-term debt the 10-Ks report ($81B), so a net debt from what's left
+    # would be short by all of it. Unknown, then, not wrong.
+    conn = _db(tmp_path)
+    conn.execute("UPDATE financials_annual SET long_term_debt = 9.0e8")
+    conn.execute("UPDATE financials_ttm SET short_term_debt = 1.0e8")
+    conn.execute("UPDATE financials_ttm SET long_term_debt = NULL WHERE period_end = '2025-09-30'")
+    by_end = {p.period_end: p for p in load_history_inputs(conn, "AAA").points}
+    assert by_end["2025-09-30"].net_debt is None  # not 1e8 short-term - 3e8 cash
+    assert by_end["2025-09-30"].debt_missing
+    assert by_end["2025-12-31"].net_debt == 7.0e8  # 9e8 + 1e8 - 3e8
+    assert not by_end["2025-12-31"].debt_missing
+
+
+def _quarter_ends(first_year, last):
+    quarters = ((3, 31), (6, 30), (9, 30), (12, 31))
+    ends = [date(y, m, d).isoformat() for y in range(first_year, 2030) for m, d in quarters]
+    return [e for e in ends if e <= last]
+
+
+def test_a_seam_years_before_its_split_folds_by_it():
+    # NFLX-like (BUG-174): the stored quarters are the latest restated, so the 10:1 of 2025-11-17 shows as a
+    # seam at 2022-12-31 -> 2023-03-31, 2.6 years before; EPS rose across it, so only the declared split explains it.
+    ends = _quarter_ends(2021, "2025-09-30")
+    counts = [445e6 if e <= "2022-12-31" else 4452e6 for e in ends]
+    eps = [0.12 if e <= "2022-12-31" else 0.288 for e in ends]
+    out, applied = normalize_share_series(ends, counts, eps, [("2015-07-15", 7.0), ("2025-11-17", 10.0)])
+    assert out[0] == pytest.approx(4450e6)
+    assert ("2025-11-17", 10.0) in applied
+
+
+def test_an_earlier_split_takes_its_seam_and_leaves_the_later_one():
+    # APH-like: 2:1 splits of 2021-03-05, 2024-06-12 and 2026-09-03, the last after the latest quarter. The
+    # 2024 seam must take the 2024 split, leaving the 2026 one for Yahoo's count to confirm.
+    ends = _quarter_ends(2019, "2026-06-30")
+    counts = [300e6 if e <= "2020-12-31" else 600e6 if e <= "2023-12-31" else 1200e6 for e in ends]
+    splits = [("2021-03-05", 2.0), ("2024-06-12", 2.0), ("2026-09-03", 2.0)]
+    out, applied = normalize_share_series(ends, counts, [None] * len(ends), splits, yahoo_count=2400e6)
+    assert applied == splits
+    assert out[0] == pytest.approx(2400e6) and out[-1] == pytest.approx(2400e6)
+
+
+def test_equal_splits_take_their_seams_in_order():
+    # WRB-like (BUG-248): 3:2 splits of 2019, 2022 and 2024 whose seams sit at 2017, 2020 and 2022. The 2022 seam
+    # is the 2024 split's: taking the 2022 split there leaves the 2020 seam, under the threshold, nothing.
+    ends = _quarter_ends(2015, "2026-06-30")
+    counts = [122e6 if e <= "2016-12-31" else 183e6 if e <= "2019-12-31" else 274.5e6 if e <= "2021-12-31"
+              else 412e6 for e in ends]
+    splits = [("2019-04-03", 1.5), ("2022-03-24", 1.5), ("2024-07-11", 1.5)]
+    out, applied = normalize_share_series(ends, counts, [None] * len(ends), splits, yahoo_count=412e6)
+    assert applied == splits
+    assert out[0] == pytest.approx(411.75e6) and out[len(out) // 2] == pytest.approx(411.75e6)
+    assert out[-1] == pytest.approx(412e6)
+
+
+def test_equal_splits_after_the_stored_quarters_wait_for_yahoo():
+    # The tie goes to the latest split a stored quarter can reflect, however near the seam a later one is.
+    ends = _quarter_ends(2023, "2026-06-30")
+    counts = [600e6 if e <= "2023-12-31" else 1200e6 for e in ends]
+    splits = [("2024-06-12", 2.0), ("2026-09-03", 2.0)]
+    out, applied = normalize_share_series(ends, counts, [None] * len(ends), splits, yahoo_count=2400e6)
+    assert applied == splits
+    assert out == pytest.approx([2400e6] * len(ends))
+
+
+def test_a_split_in_the_latest_quarter_counts_as_stored():
+    # Dated within the latest quarter, the 2026 split is one the stored quarters can reflect: it takes the newest
+    # seam, and the 2025 split the one before.
+    ends = _quarter_ends(2021, "2026-06-30")
+    counts = [300e6 if e <= "2021-12-31" else 600e6 if e <= "2023-12-31" else 1200e6 for e in ends]
+    splits = [("2025-01-15", 2.0), ("2026-05-10", 2.0)]
+    out, applied = normalize_share_series(ends, counts, [None] * len(ends), splits, yahoo_count=1200e6)
+    assert applied == splits
+    assert out == pytest.approx([1200e6] * len(ends))
+
+
+def test_a_split_after_the_latest_quarter_can_still_make_a_seam():
+    # A 10-Q filed after the split restates its quarters though the quarter ended before it: with no other
+    # candidate, the seam takes it, and Yahoo's count then has nothing left to confirm.
+    ends = _quarter_ends(2024, "2026-06-30")
+    counts = [600e6 if e <= "2024-12-31" else 1200e6 for e in ends]
+    out, applied = normalize_share_series(ends, counts, [None] * len(ends), [("2026-07-20", 2.0)], yahoo_count=1200e6)
+    assert applied == [("2026-07-20", 2.0)]
+    assert out == pytest.approx([1200e6] * len(ends))
+
+
+def test_market_cap_stays_continuous_across_a_restated_seam(tmp_path):
+    # End to end: a 4:1 split of 2020-08-31 whose seam sits at 2017-12-31 (AAPL-like), EPS rising across it.
+    store = SQLiteStore(db_path=tmp_path / "seam.db")
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('SSS', 'general')")
+    ends = _quarter_ends(2015, "2021-12-31")
+    for e in ends:
+        pre = e <= "2017-09-30"
+        conn.execute("INSERT INTO financials_quarterly (ticker, period_end, fiscal_quarter, weighted_avg_shares_basic, "
+                     "eps_diluted, net_income) VALUES ('SSS', ?, ?, ?, ?, ?)",
+                     (e, int(e[5:7]) // 3, 1000e6 if pre else 4000e6, 0.40 if pre else 0.50, 1.0e9))
+        if e >= "2015-12-31":
+            conn.execute("INSERT INTO financials_ttm (ticker, period_end, revenue, net_income, total_equity) "
+                         "VALUES ('SSS', ?, 2.0e10, 4.0e9, 1.0e10)", (e,))
+    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('SSS', '2020-08-31', 4.0)")
+    months = [m for m in (date(y, mo, 28).isoformat() for y in range(2015, 2022) for mo in range(1, 13))]
+    conn.executemany("INSERT INTO price_bars (ticker, date, close) VALUES ('SSS', ?, 25.0)", [(m,) for m in months])
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price, market_cap) "
+                 "VALUES ('SSS', '2022-01-03T10:00:00', 25.0, 1.0e11)")
+    conn.commit()
+    conn.row_factory = sqlite3.Row
+    x = load_history_inputs(conn, "SSS")
+    assert x.na_reason is None and ("2020-08-31", 4.0) in x.splits_applied
+    from src.valuation.history import compute_history
+    caps = [r.market_cap for r in compute_history(x).rows if r.market_cap]
+    assert caps and max(caps) / min(caps) == pytest.approx(1.0)  # a flat price, one share count: no seam jump
+
+
+def test_a_seam_years_older_than_the_restatements_reach_takes_no_split():
+    # A 2x merger seam in 2016 (EPS not inverted) and a 2:1 split after the latest quarter, ten years on: the
+    # merger stays organic, and the split is left for Yahoo's count to confirm.
+    ends = _quarter_ends(2015, "2026-06-30")
+    counts = [500e6 if e <= "2016-06-30" else 1000e6 for e in ends]
+    eps = [1.0 if e <= "2016-06-30" else 1.1 for e in ends]
+    out, applied = normalize_share_series(ends, counts, eps, [("2026-09-03", 2.0)], yahoo_count=2000e6)
+    assert out[0] == pytest.approx(1000e6)  # 500M, x2 for the later split only
+    assert out[-1] == pytest.approx(2000e6)  # the latest quarter carries the later split too
+    assert applied == [("2026-09-03", 2.0)]
+
+
+def _priceless_snapshot(conn, when="2026-02-26T10:00:00"):
+    # A later run whose quote failed: the snapshot row holds no price, market cap or share count (BUG-176).
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at) VALUES ('AAA', ?)", (when,))
+
+
+def test_a_priceless_latest_snapshot_doesnt_switch_off_the_share_guard(tmp_path):
+    conn = _db(tmp_path, yahoo_cap=21.0 * 400e6)  # Yahoo counts 400M against our 200M
+    _priceless_snapshot(conn)
+    x = load_history_inputs(conn, "AAA")
+    assert x.na_reason is not None and "share count" in x.na_reason
+    assert x.current_price == 21.0 and x.priced_on == "2026-02-25"  # the latest snapshot with a price
+
+
+def test_without_any_priced_snapshot_the_history_says_so(tmp_path):
+    conn = _db(tmp_path)
+    conn.execute("DELETE FROM market_snapshots")
+    _priceless_snapshot(conn)
+    assert load_history_inputs(conn, "AAA").na_reason == "no quote with a price to check the share count against"
+
+
+def _seam_db(tmp_path, quarters, first_bar, yahoo_count):
+    # One ticker, MMM, with quarters of (end, weighted shares, diluted EPS, revenue), a flat $30 monthly close
+    # from *first_bar*, and a quote that counts *yahoo_count* shares.
+    store = SQLiteStore(db_path=tmp_path / "merge.db")
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('MMM', 'general')")
+    for end, shares, eps, revenue in quarters:
+        conn.execute("INSERT INTO financials_quarterly (ticker, period_end, fiscal_quarter, weighted_avg_shares_basic, "
+                     "eps_diluted, net_income, revenue) VALUES ('MMM', ?, ?, ?, ?, 1.0e8, ?)",
+                     (end, int(end[5:7]) // 3, shares, eps, revenue))
+        conn.execute("INSERT INTO financials_ttm (ticker, period_end, revenue, net_income, total_equity) "
+                     "VALUES ('MMM', ?, 1.6e10, 4.0e8, 2.0e9)", (end,))
+    months = [date(y, m, 28).isoformat() for y in range(2011, 2014) for m in range(1, 13)]
+    conn.executemany("INSERT INTO price_bars (ticker, date, close) VALUES ('MMM', ?, 30.0)",
+                     [(d,) for d in months if d >= first_bar])
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price, market_cap) "
+                 "VALUES ('MMM', '2014-01-03T10:00:00', 30.0, ?)", (30.0 * yahoo_count,))
+    conn.commit()
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def test_load_history_inputs_reads_revenue_across_a_seam(tmp_path):
+    # DUK-like, end to end: EPS fell by the seam's ratio, but revenue rose 1.86x with the shares (BUG-175).
+    ends = _quarter_ends(2011, "2013-12-31")
+    conn = _seam_db(tmp_path, [(e, 446e6, 1.0, 3.6e9) if e <= "2012-06-30" else (e, 699e6, 0.62, 6.7e9)
+                               for e in ends], "2011-01-01", 699e6)
+    x = load_history_inputs(conn, "MMM")
+    assert x.na_reason is None
+    assert x.points[0].shares == pytest.approx(446e6)
+
+
+def test_load_history_inputs_gives_the_listing_quarter_the_public_count(tmp_path):
+    # UBER-like, end to end: listed 2012-05-28, so 2012's Q1 is left out and Q2 averages the private count.
+    ends = _quarter_ends(2012, "2013-12-31")
+    conn = _seam_db(tmp_path, [(e, 0.9e9 if e < "2012-06-30" else 1.11e9 if e == "2012-06-30" else 1.70e9,
+                                -5.72 if e <= "2012-06-30" else 1.19, 2.0e9) for e in ends], "2012-05-28", 1.70e9)
+    x = load_history_inputs(conn, "MMM")
+    assert x.na_reason is None
+    assert x.points[0].period_end == "2012-06-30" and x.points[0].shares == pytest.approx(1.70e9)
+
+
+def test_a_trailing_year_carries_its_net_income_to_common(tmp_path):
+    # Q16: the history's P/E divides by it where the trailing year has it; net income is kept as it is.
+    conn = _db(tmp_path)
+    conn.execute("UPDATE financials_ttm SET net_income_to_common = 4.0e8 WHERE period_end = '2025-12-31'")
+    by_end = {p.period_end: p for p in load_history_inputs(conn, "AAA").points}
+    assert (by_end["2025-12-31"].net_income, by_end["2025-12-31"].net_income_to_common) == (4.4e8, 4.0e8)
+    assert by_end["2025-09-30"].net_income_to_common is None
+
+
+def test_a_database_from_before_net_income_to_common_still_reads(tmp_path):
+    # A database collected before the column (read-only, so never migrated) gives every point net income alone.
+    conn = _db(tmp_path)
+    for table in ("financials_annual", "financials_quarterly", "financials_ttm", "financials_annual_vintages"):
+        conn.execute(f"ALTER TABLE {table} DROP COLUMN net_income_to_common")
+    x = load_history_inputs(conn, "AAA")
+    assert x.na_reason is None
+    assert all(p.net_income_to_common is None for p in x.points)
+    assert x.points[-1].net_income == 4.4e8
+    # A store opened on it adds the column to each of the four tables, and keeps the rows.
+    SQLiteStore(db_path=tmp_path / "hist.db")._migrate(conn)
+    for table in ("financials_annual", "financials_quarterly", "financials_ttm", "financials_annual_vintages"):
+        assert "net_income_to_common" in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+    assert conn.execute("SELECT count(*), max(net_income) FROM financials_ttm").fetchone() == (5, 4.4e8)

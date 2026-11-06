@@ -68,10 +68,10 @@ class ValuationResult:
 
 ### Shared conservative assumptions (`assumptions.py`)
 
-- **Growth (base)** = `min(historical CAGR, analyst growth)`, clamped to **[0%, 15%]**.
+- **Growth (base)** = the historical CAGR, clamped to **[0%, 15%]** (amended 2026-11-02, Q2: the analyst term was Yahoo's one-quarter earnings growth, no forecast; Q5: a window starting on a loss is measured from its first positive year when at least 4 FYs remain, else 0%, Lynch N/A).
   Historical CAGR uses up to 10 FYs of the model's basis metric (FCF for DCF, dividends
-  for DDM, EPS for Lynch); requires ≥ 4 FYs. Analyst growth = `analyst_snapshots.earnings_growth`
-  (latest row); if absent, historical CAGR alone.
+  for DDM, EPS for Lynch); requires ≥ 4 FYs. (Before Q2, an "analyst growth" from
+  `analyst_snapshots.earnings_growth` took part; it no longer does.)
 - **Terminal growth** = 2.5%.
 - **Discount rate** = CAPM cost of equity: `risk_free_rate + beta × 4.5% ERP`,
   clamped to **[8%, 14%]**. `risk_free_rate` from the latest `market_snapshots` row;
@@ -79,14 +79,14 @@ class ValuationResult:
 - **Scenario spreads:** bear = growth −3pp (floor 0%) and discount +1pp;
   bull = growth +3pp (cap 15%) and discount −1pp.
 - Every derived number and its provenance goes into `assumptions`
-  (e.g. `"growth_base": 0.082, "growth_source": "analyst", "hist_cagr": 0.114, ...`).
+  (e.g. `"growth_base": 0.082, "growth_source": "hist_only", "hist_cagr": 0.114, ...`).
 
 ### DCF — sectors: general, utility, energy
 
-- Basis FCF = **median of the last 3 annual `levered_fcf`** (falls back to
-  `free_cash_flow` when `levered_fcf` is NULL). FCF here is equity free cash flow
-  (OCF − capex, interest already through OCF), so it is discounted at the CAPM cost
-  of equity with **no net-debt adjustment**.
+- Basis FCF = **median of the last 3 annual `free_cash_flow`**. FCF here is equity
+  free cash flow (OCF − capex, interest already through OCF), so it is discounted at
+  the CAPM cost of equity with **no net-debt adjustment**. (Until BUG-169's fix, the
+  basis read `levered_fcf`, which took interest off a second time.)
 - Projection: years 1–5 at base growth, years 6–10 linear fade to terminal 2.5%,
   Gordon terminal value at year 10.
 - Per-share: divide equity value by `market_snapshots.shares_outstanding` (latest).
@@ -96,9 +96,11 @@ class ValuationResult:
 ### Dividend Discount (multi-stage Gordon) — sectors: bank, insurance; also any company with ≥ 3 years of dividends
 
 - Basis = trailing 12-month dividends per share from `dividend_events`.
-- Dividend growth = `min(hist dividend CAGR (≤10 yrs), analyst growth)`, clamped **[0%, 10%]**.
+- Dividend growth = the hist dividend CAGR (≤10 yrs), clamped **[0%, 10%]** (amended 2026-11-02, Q2/Q5).
+  Its history (amended 2026-11-03, BUG-049) is SEC's annual dividends per share over the valuation's fiscal years, on the EPS's split basis and Yahoo's non-split price factors; a year SEC lacks, or whose figure holds at most one of its payments, takes Yahoo's payments. The TTM dividend stays Yahoo's.
+- Special dividends (amended 2026-11-03, Q3 option c): a one-off payment, over 3× the median of the other payments in the year before it and over 3× that of the year after it, leaves the TTM basis and the CAGR's first and last years (SEC's figure loses it only when it holds it); one in place of a regular payment loses only its excess over the regular level. A recurring variable dividend stays: in 2 of the 3 years before it, a payment over 3× its regular level within 91 days of its anniversary (PGR, CME). The latest payment is never a one-off (it can be a raise).
 - Stage 1: 5 years at that growth; terminal Gordon at 2.5%. Same CAPM discount.
-- **N/A when:** < 3 calendar years of dividend history, or TTM dividends = 0.
+- **N/A when:** < 3 calendar years of dividend history, or TTM dividends = 0, or (amended 2026-11-03, Q4 option c) "dividend history incomplete": the dividend completeness check (BUG-012), rerun on the stored payments over the latest 5 fiscal years, finds Yahoo missing payments in a gap that runs into the TTM, or in a growth year taken from Yahoo's payments.
 
 ### Graham Number — all sectors
 

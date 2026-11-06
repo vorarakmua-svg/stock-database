@@ -6,11 +6,87 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import requests
 
 from .rate_limiter import RateLimiter, RetryHandler, is_transient_error
+
+#: A registrant SEC's ticker map now sends to a successor formed to take its place (a holding
+#: company reorganization), mapped from the successor's CIK: the successor's company facts are
+#: read with the predecessor's, so the ticker keeps its history (Q6, the user's decisions of
+#: 2026-10-21). XOM since 2026-07: ExxonMobil Holdings Corp, whose 10-Qs follow Exxon Mobil
+#: Corp's 20 years. BLK since 2024-10: BlackRock, Inc., formed with the GIP acquisition, after
+#: the old BlackRock, now BlackRock Finance, Inc.
+PREDECESSOR_CIKS: Dict[str, str] = {
+    "0002115436": "0000034088",
+    "0002012383": "0001364742",
+}
+
+_REPORT_FORMS = ("10-K", "10-Q", "20-F", "40-F")
+
+
+def _entries(facts: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+    for tags in (facts.get("facts") or {}).values():
+        for body in tags.values():
+            for entries in (body.get("units") or {}).values():
+                yield from entries
+
+
+def merge_company_facts(current: Dict[str, Any], earlier: Dict[str, Any]) -> Dict[str, Any]:
+    """*current*'s company facts with a predecessor's (*earlier*) beside them: each tag's entries
+    from both filers, whose accession numbers never coincide, and the successor's own name. The
+    predecessor's count only as filed before the successor's first annual or quarterly report:
+    from then on the successor reports, and a predecessor that keeps filing as its subsidiary
+    (Exxon Mobil Corp's 10-Q of 2026-08-03) reports another entity."""
+    reports = [e.get("filed") or "" for e in _entries(current) if (e.get("form") or "").startswith(_REPORT_FORMS)]
+    first = min(reports) if reports else None
+    facts: Dict[str, Dict[str, Any]] = {}
+    for source in (earlier, current):
+        for taxonomy, tags in (source.get("facts") or {}).items():
+            merged = facts.setdefault(taxonomy, {})
+            for tag, body in tags.items():
+                into = merged.setdefault(tag, {**{k: v for k, v in body.items() if k != "units"}, "units": {}})
+                for unit, entries in (body.get("units") or {}).items():
+                    into["units"].setdefault(unit, []).extend(
+                        entries if source is current or first is None
+                        else [e for e in entries if (e.get("filed") or "") < first])
+    return {**current, "facts": facts}
+
+
+def _latest_report(filings: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The latest of *filings* (a submissions feed's entries) that ``report_without_facts`` looks for, None when there
+    is none: a report the parser reads, as filed (a 10-K, 10-Q, 20-F or 40-F, not an amendment, which often has no
+    financial facts: a 10-K/A of Part III; nor a 10-KT), and filed with XBRL, as only such a report ever gets facts
+    that change the record."""
+    reports = [f for f in filings if f.get("form") in _REPORT_FORMS and f.get("isXBRL") != 0]
+    if not reports:
+        return None
+    return max(reports, key=lambda f: (str(f.get("filingDate") or ""), str(f.get("acceptanceDateTime") or "")))
+
+
+def report_without_facts(submissions: Optional[Dict[str, Any]],
+                         facts: Optional[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+    """The latest report *submissions* (``get_submissions``') list when *facts*, the companyfacts read with them (None
+    when that request failed or the SEC has none), carry no fact of it: the SEC's lag, after which a run's figures
+    stop at the report before (BUG-251: on 2026-10-25 DLR's companyfacts had no fact of its 10-Q of 2026-07-31, though
+    they had its 424B7 of 2026-08-19). Its form, accession and filing date; None when the facts carry it, or when there
+    is none to look for.
+
+    The report is the latest of the feed's whole "recent" block (``_latest_report``'s rule: as filed, with XBRL), kept
+    beside the newest 100 filings as ``latest_report``, which a bank's 424B2s fill in days (BUG-285: JPM's held 94
+    424B2s of two days and no report); submissions cached before that was kept give their newest 100 alone. Its facts
+    count under any taxonomy (an IFRS filer's 20-F under ifrs-full)."""
+    listed = submissions or {}
+    # The newest 100 and the latest report behind them: an empty entry where none was kept is no report.
+    latest = _latest_report([*(listed.get("filings") or []), listed.get("latest_report") or {}])
+    if latest is None:
+        return None
+    accession = latest.get("accessionNumber")
+    if not accession or any(e.get("accn") == accession for e in _entries(facts or {})):
+        return None
+    return {"form": str(latest["form"]), "accession": str(accession), "filed": str(latest.get("filingDate") or "")[:10]}
+
 
 # Default time-to-live for cached SEC payloads (companyfacts/submissions).
 # These update at most quarterly, so a week-long cache is safe and slashes
@@ -159,7 +235,8 @@ class SECHandler:
             ticker: Stock ticker symbol (e.g., 'AAPL')
 
         Returns:
-            Dictionary containing all fetched SEC data
+            Dictionary containing all fetched SEC data, with ``missing_report`` when the companyfacts carry no fact of
+            the latest report the submissions list (``report_without_facts``)
         """
         self.logger.info(f"Fetching SEC EDGAR data for {ticker}")
 
@@ -189,6 +266,22 @@ class SECHandler:
             self.logger.error(f"Error fetching company facts: {e}")
             data["company_facts_error"] = str(e)
 
+        # A successor's history is its predecessor's filings (PREDECESSOR_CIKS).
+        predecessor = PREDECESSOR_CIKS.get(cik)
+        if predecessor and data.get("company_facts"):
+            data["predecessor_cik"] = predecessor
+            try:
+                earlier = self.get_company_facts(predecessor)
+            except Exception as e:
+                earlier = None
+                data["predecessor_error"] = str(e) or type(e).__name__
+            if earlier:
+                data["company_facts"] = merge_company_facts(data["company_facts"], earlier)
+                data["predecessor_name"] = earlier.get("entityName")
+            else:
+                data.setdefault("predecessor_error", "no XBRL data")
+                self.logger.warning(f"Predecessor CIK {predecessor} of {ticker} not read: {data['predecessor_error']}")
+
         # Fetch submissions (filing history)
         try:
             submissions = self.get_submissions(cik)
@@ -197,6 +290,13 @@ class SECHandler:
         except Exception as e:
             self.logger.error(f"Error fetching submissions: {e}")
             data["submissions_error"] = str(e)
+
+        # The latest report the submissions list whose facts the companyfacts lack (BUG-251).
+        missing = report_without_facts(data.get("submissions"), data.get("company_facts"))
+        if missing:
+            data["missing_report"] = missing
+            self.logger.warning(f"The SEC's companyfacts of {ticker} carry no fact of its {missing['form']} filed "
+                                f"{missing['filed']} ({missing['accession']})")
 
         if "company_facts_error" in data or "submissions_error" in data:
             self.logger.warning(f"SEC data for {ticker} is incomplete (see the error above)")
@@ -330,7 +430,9 @@ class SECHandler:
             cik: 10-digit CIK number
 
         Returns:
-            Dictionary containing submissions data, or None on error
+            Dictionary containing submissions data, or None on error: ``filings``, the newest 100 of the feed's
+            "recent" block, and ``latest_report``, the latest report of that whole block (``_latest_report``; None
+            when it lists none), which the newest 100 of a bank's feed don't reach (BUG-285)
         """
         cik = str(cik).zfill(10)
 
@@ -351,6 +453,9 @@ class SECHandler:
 
         response.raise_for_status()
         data = response.json()
+        # Every entry of the "recent" block (a year's, or the latest 1,000 when that's more), newest first.
+        feed = data.get("filings", {})
+        recent = self._extract_recent_filings(feed, limit=len((feed.get("recent") or {}).get("accessionNumber") or []))
 
         # Extract relevant fields
         result = {
@@ -368,7 +473,8 @@ class SECHandler:
             "state_of_incorporation_description": data.get("stateOfIncorporationDescription"),
             "addresses": data.get("addresses", {}),
             "phone": data.get("phone"),
-            "filings": self._extract_recent_filings(data.get("filings", {})),
+            "filings": recent[:100],
+            "latest_report": _latest_report(recent),
         }
 
         self._write_payload_cache(cache_path, result)
@@ -436,6 +542,11 @@ class SECHandler:
         ][:limit]
 
         return form4_filings
+
+    def get_raw(self, url: str) -> requests.Response:
+        """GET any SEC URL (a filing's document, a submissions page) through this handler's rate limiter,
+        retries and User-Agent; the caller reads the status and the body."""
+        return self._request(url, timeout=30)
 
     def close(self) -> None:
         """Close the session."""
