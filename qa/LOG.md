@@ -2901,3 +2901,17 @@ Commit: (this commit) fix(valuation): DDM leaves one-off specials out and refuse
 Next: BUG-271 and BUG-274 as their workers report; code review 27 (5 units since 26: BUG-316, -317/318, -197/199,
 -194/200, Q3/Q4); BUG-295 with Q17.
 
+## Iteration 165: 2026-11-06 10:30: fix (BUG-180, BUG-181, BUG-182; P3s), then paused
+Picked: three P3s in the VAL tab's history section, inline.
+Did: BUG-180: with no live price the pill reads "No live price", not "Price None historical value". BUG-181: a full
+10-year window with gaps reads "10 years (49 months with a value)", not as a short history. BUG-182: the section says
+the day its history was computed ("Computed 2025-04-01"), so rows a failed computation left stand out.
+- RED: 3 new tests failed; GREEN. 3 of 3 mutants.
+Result: BUG-180, BUG-181, BUG-182 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2872 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(web): the VAL history's no-price state, gapped windows and its computed day (BUG-180..182)
+Paused: the user said "that all for now, save, commit, push". The Ralph loop is stopped. Three agents stopped at the
+API usage limit, their work saved in scratch: BUG-271 (%LOCALAPPDATA%\stockdb-qa\bug271), BUG-274
+(...\bug274) and code review 27 (scope 95a0ddf..1cb9a5d). Left: P2s BUG-271, BUG-274, BUG-295 (with Q17, decided),
+151 P3s, then the convergence sweeps (LOOP_PROMPT section 9).
+

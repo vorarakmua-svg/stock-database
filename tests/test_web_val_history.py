@@ -104,3 +104,33 @@ def test_a_ticker_not_computed_yet(client):
 
 def test_an_unknown_ticker_is_404(client):
     assert client.get("/ui/stocks/ZZZZ/val-history").status_code == 404
+
+
+def test_a_value_without_a_live_price_says_so(client, web_db):
+    # BUG-180: EEE has no snapshot; the pill read "Price None historical value".
+    _seed(web_db, ticker="EEE")
+    html = client.get("/ui/stocks/EEE/val-history").text
+    assert "No live price" in html
+    assert "Price None" not in html
+
+
+def test_a_full_window_with_gaps_reads_as_ten_years(client, web_db):
+    # BUG-181: BA's P/E window spans ten years with 49 months of values (loss years between); it read as a short
+    # history, "since 2016-10 (49 months)".
+    rows = [HistoryRow(date="2025-03-31", close=21.0, market_cap=2.1e9, ttm_period_end="2024-12-31",
+                       multiples={"pe": 14.0}, fair_value=None, fair_value_n=0)]
+    ranges = [MetricRange(metric="pe", applicable=True, as_of="2025-03-31", window_start="2015-04-30", n_months=49,
+                          current=14.0, pct_rank=0.9, min=8.0, p25=10.0, median=11.5, p75=13.0, max=16.0),
+              MetricRange(metric="fair_value", as_of="2025-03-31", na_reason="too few metrics")]
+    SQLiteStore(db_path=web_db).export_valuation_history(
+        "AAA", HistoryResult(ticker="AAA", rows=rows, ranges=ranges), "2025-04-01T00:00:00+00:00")
+    html = client.get("/ui/stocks/AAA/val-history").text
+    assert "10 years (49 months with a value)" in html
+    assert "since 2015-04" not in html
+
+
+def test_the_section_says_when_its_history_was_computed(client, web_db):
+    # BUG-182: a failed computation keeps the previous run's rows; the section now shows their day.
+    _seed(web_db)
+    assert "Computed 2025-04-01" in client.get("/ui/stocks/AAA/val-history").text
+

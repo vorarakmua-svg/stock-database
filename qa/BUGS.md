@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 4 · P3 154 · NEEDS-USER 0 · Decided: 7 · Verified: 169
+**Open:** P0 0 · P1 0 · P2 4 · P3 151 · NEEDS-USER 0 · Decided: 7 · Verified: 172
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1394,20 +1394,20 @@ Notes: until the next good run. XOM is exposed the same way after its first 10-K
 Fix (iteration 118, `qa/evidence/bug179-done.txt`): wider than recorded, and "only adds" isn't enough. On a real copy, a run whose predecessor read failed (a 503 and a 404 alike) also wrote lower-ranked tags over the predecessor's values (BLK's FY2021 equity with the noncontrolling interests, $37.806B for $37.693B), rewrote periods' metadata (filed dates; quarters' fiscal year and quarter cleared) and replaced metrics and unmapped facts; XOM is exposed today, its no-annual run taking BUG-029's "only adds" path. The store now learns of the failure (`StockData.predecessor_error`, kept out of the JSON), and such a run only fills (`_upsert(fill_only=True)`: COALESCE of the stored value first) in financials_annual, financials_quarterly, financials_ttm, the vintages and unmapped_facts, metadata included, each year's metrics computed on the year as stored. Every write path goes through it: the CLI collection, the refresh's collect step and the web's jobs (a test each). On backup-API copies, offline: at HEAD the failed run cleared 56 annual, 188 quarterly and 75 TTM cells of BLK's and moved its valuations (multiples bull $1,302.98 to $1,136.89), its quality scores and 7 peers' ranks; with the fix all 36 tables stay as stored; good runs identical between HEAD and the fix over all 502; a failed run then a good one equals a good one. Residuals: BUG-277 to BUG-279.
 
 ### BUG-180 [P3][UI] The VAL tab's history pill reads "Price None historical value" when the quote has no price
-Status: OPEN
-Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 165)
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: (this commit) | Regression test: tests/test_web_val_history.py::test_a_value_without_a_live_price_says_so
 Repro: `templates/fragments/val_history.html:8`, `routes/workstation.py:969`: a historical value with no live price (EEE in the test fixtures; the price-less snapshots of BUG-176 on real data).
 Expected: a "no live price" state.   Actual: "Price None historical value".
 
 ### BUG-181 [P3][UI] A full 10-year window with gaps is labelled as if the history were short
-Status: OPEN
-Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 165)
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: (this commit) | Regression test: tests/test_web_val_history.py::test_a_full_window_with_gaps_reads_as_ten_years
 Repro: `routes/workstation.py` `_window_text`: BA's P/E window starts 2016-10-31 but holds 49 months of values (loss years between), and shows "since 2016-10 (49 months)".
 Expected: the window's span and its count apart.
 
 ### BUG-182 [P3][UI] A failed history computation keeps the previous run's rows with no sign they are stale
-Status: OPEN
-Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 165)
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: (this commit) | Regression test: tests/test_web_val_history.py::test_the_section_says_when_its_history_was_computed
 Repro: `valuation/engine.compute_and_store` logs a history failure and moves on; the VAL section doesn't show `computed_at`, so stale rows look current.
 Expected: the section shows when its history was computed, or a failure is stored as an N/A reason.
 

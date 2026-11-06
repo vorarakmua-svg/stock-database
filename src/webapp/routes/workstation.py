@@ -986,10 +986,18 @@ _HISTORY_PILLS = {"far below": "cheap", "below": "cheap", "near": "fair", "above
 
 
 def _window_text(row: Dict[str, Any]) -> str:
-    """A range's window: "10 years", or "since 2022-03 (37 months)" when the history is shorter."""
-    n, start = row.get("n_months") or 0, row.get("window_start")
+    """A range's window: "10 years", "10 years (49 months with a value)" when a full window has gaps (loss years:
+    BUG-181), or "since 2022-03 (37 months)" when the history is shorter."""
+    n, start, as_of = row.get("n_months") or 0, row.get("window_start"), row.get("as_of")
     if n >= 120:
         return "10 years"
+    span = None
+    if start and as_of:
+        s, a = str(start)[:7], str(as_of)[:7]
+        if len(s) == 7 and len(a) == 7 and s[:4].isdigit() and a[:4].isdigit():
+            span = (int(a[:4]) - int(s[:4])) * 12 + int(a[5:7]) - int(s[5:7])
+    if n and span is not None and span >= 119:
+        return f"10 years ({n} months with a value)"
     if n and start:
         return f"since {str(start)[:7]} ({n} months)"
     return "—"
@@ -1063,6 +1071,8 @@ def val_history_fragment(
             "combined": [_HISTORY_LABELS[m] for m in METRICS if (ranges.get(m) or {}).get("in_fair_value")],
             "cutoffs_text": ", ".join(f"{c:g}" for c in HISTORICAL_VALUE_CUTOFFS),
             "window": _window_text(fv),
+            # The day the stored history was computed: a failed computation keeps the previous run's rows (BUG-182).
+            "computed_on": str(fv.get("computed_at") or "")[:10] or None,
             "rows": table,
             "has_chart": bool(rows),
             # The XSS defense of the other inline configs: "</" can't close the <script>.
