@@ -242,7 +242,9 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         # DebtInstrumentCarryingAmount: often one instrument's, on days with no balance sheet
         # (SLB's $0.5B note at 2020-12-31). A 10-Q that tags none of these reads its line under
         # another concept where its year-end column shows the annual record's figure (ORCL's
-        # LongTermNotesAndLoans; ``xbrl_parser._long_term_debt_lines``, BUG-171).
+        # LongTermNotesAndLoans; ``xbrl_parser._long_term_debt_lines``, BUG-171). A figure on a day the filing's
+        # balance sheet doesn't show, or under half of another of its kind under a later tag, is a note's or a
+        # part, not read (``xbrl_parser._debt_on_balance_sheet_dates``, ``_debt_parts_set_aside``; BUG-319).
         ("LongTermDebtNoncurrent", "LongTermDebt", "LongTermDebtAndCapitalLeaseObligations",
          "LongTermNotesPayable", "UnsecuredLongTermDebt", "ConvertibleLongTermNotesPayable",
          "NotesPayable"),

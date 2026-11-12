@@ -3003,3 +3003,21 @@ Result: BUG-274 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2916 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(parsers): a D&A "total" the filings show to be the depreciation line takes the amortization (BUG-274)
 Next: code review 28 (5 fixes since 27); BUG-319 (its worker's measurement, then apply).
+
+## Iteration 172: 2026-11-13 00:26: fix (BUG-319, long-term debt)
+Picked: the P2 BUG-271's census found; an opus worker, its heavy step held until BUG-274's measurement was done.
+Did: long-term debt reads only figures on the filing's balance-sheet dates and sets aside a part tagged above the line
+beside it (`_debt_on_balance_sheet_dates`, `_debt_parts_set_aside` in `_filer_facts`): PHM FY2021-25 $0.03-0.08B ->
+$1.6-2.0B, PSX FY2015 $1.1B -> $8.843B, ECHO FY2024 $1.98B -> $25.66B, TGT, GNRC, BIIB, PLD and 8 more (20 annual
+cells at 15 filers). The bank revenue and HSY share cases are other causes: BUG-328, BUG-329 (P2).
+- RED: 10 of 327 failed on 5efa1be's src; GREEN. 17 of 17 mutants; two existing specs reshaped for the new chain
+  (qa/evidence/bug260-reshaped-bug319-mutants.json, bug260-bug170-bug267-bug161-bug142-bug319-mutants.json). Look-ahead 0.
+- DB copies (with BUG-274), 55 tickers re-collected offline, the engine over 502: 0 medians, verdicts, owner-earnings
+  verdicts or labels; PHM FY2025 total debt $0.044B -> $1.631B, EV/EBITDA 6.99 -> 7.52, Piotroski 3 -> 4 (its
+  piotroski_low warning gone); 312 valuation_history months at 21 tickers, latest month at PHM and PLD only. The
+  valuation oracle's output identical on both.
+- New: BUG-328, BUG-329 (P2); BUG-330, BUG-331 (P3).
+Result: BUG-319 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2933 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): long-term debt reads the balance sheet's date and sets aside a part tagged above the line (BUG-319)
+Next: code review 28 (running); BUG-327, BUG-328, BUG-329; Q17.

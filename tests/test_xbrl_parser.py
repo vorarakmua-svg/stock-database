@@ -427,6 +427,175 @@ def test_a_total_is_weighed_against_the_noncurrent_figure_that_would_replace_it(
                           LongTermNotesPayable=9.0e9) == (12.0e9, "LongTermDebtAndCapitalLeaseObligations")
 
 
+def _balance_sheet_filings(*filings, form="10-K"):
+    """Facts of filings, each (filed, its balance-sheet dates, {tag: {end: value}}): the filing tags its balance
+    sheet's total (LiabilitiesAndStockholdersEquity) on each of those dates."""
+    us_gaap = {}
+    for filed, dates, tagged in filings:
+        tagged = {"LiabilitiesAndStockholdersEquity": {end: 100.0e9 for end in dates}, **tagged}
+        for tag, by_end in tagged.items():
+            us_gaap.setdefault(tag, {"units": {"USD": []}})["units"]["USD"].extend(
+                usd(v, None, end, fy=int(filed[:4]), fp="FY" if form == "10-K" else "Q1", form=form, filed=filed)
+                for end, v in by_end.items())
+    return {"facts": {"us-gaap": us_gaap}}
+
+
+def _ltd(period):
+    return period.get("long_term_debt"), period.get("_source_tags", {}).get("long_term_debt")
+
+
+def test_a_notes_long_term_debt_on_another_day_isnt_the_years():
+    # BUG-319: PSX's FY2015 10-K tags LongTermDebt $1.1B at 2015-03-02, a note's figure (its balance sheets are at
+    # 2015-12-31 and 2014-12-31), which the year read ahead of its balance sheet's $8.843B under a later tag.
+    facts = _balance_sheet_filings(("2016-02-19", ("2015-12-31", "2014-12-31"), {
+        "LongTermDebt": {"2015-03-02": 1.1e9},
+        "LongTermDebtAndCapitalLeaseObligations": {"2015-12-31": 8.843e9, "2014-12-31": 7.793e9},
+        "DebtCurrent": {"2015-12-31": 0.044e9}}))
+    year = XBRLParser().extract_annual_financials(facts)["2015"]
+    assert _ltd(year) == (8.843e9, "LongTermDebtAndCapitalLeaseObligations")
+    assert _total_debt(year) == pytest.approx(8.887e9)  # $1.144B before
+    vintage = XBRLParser().extract_annual_vintages(facts)["2015"]["2016-02-19"]
+    assert _ltd(vintage) == (8.843e9, "LongTermDebtAndCapitalLeaseObligations")
+
+
+def test_a_figure_dated_after_its_filing_takes_no_year():
+    # ECHO's FY2023 10-K (filed 2024-02-29) tags LongTermDebt $1.98B at 2024-11-30, a maturity; FY2024 read it ahead
+    # of its own 10-K's $25.66B, and the FY2023 10-K had a vintage of FY2024 made of it.
+    facts = _balance_sheet_filings(
+        ("2024-02-29", ("2023-12-31", "2022-12-31"), {
+            "LongTermDebt": {"2024-11-30": 1.98e9},
+            "LongTermDebtAndCapitalLeaseObligations": {"2023-12-31": 19.717e9}}),
+        ("2025-02-27", ("2024-12-31", "2023-12-31"), {
+            "LongTermDebtAndCapitalLeaseObligations": {"2024-12-31": 25.660e9, "2023-12-31": 19.717e9}}))
+    assert _ltd(XBRLParser().extract_annual_financials(facts)["2024"]) == (
+        25.660e9, "LongTermDebtAndCapitalLeaseObligations")
+    assert list(XBRLParser().extract_annual_vintages(facts)["2024"]) == ["2025-02-27"]
+
+
+def test_a_later_10qs_note_figure_isnt_the_quarters_debt():
+    # CHD's Q1 2024 10-Q tags LongTermDebtNoncurrent $2.203B at 2023-03-31, a date its balance sheets don't show;
+    # the quarter read it for its own 10-Q's $2.400B (EQIX's, CCI's and DAL's quarters likewise).
+    facts = _balance_sheet_filings(
+        ("2023-04-27", ("2023-03-31", "2022-12-31"), {"LongTermDebtNoncurrent": {"2023-03-31": 2.4001e9}}),
+        ("2024-05-02", ("2024-03-31", "2023-12-31"), {"LongTermDebtNoncurrent": {"2023-03-31": 2.2028e9,
+                                                                               "2024-03-31": 2.2034e9}}),
+        form="10-Q")
+    assert XBRLParser().extract_quarterly_financials(facts)["2023-03-31"]["long_term_debt"] == 2.4001e9
+
+
+def _gis_10k(tagged):
+    return {"facts": {"us-gaap": {tag: {"units": {"USD": [
+        usd(v, None, end, fy=2014, form="10-K", filed="2014-07-03") for end, v in by_end.items()]}}
+        for tag, by_end in tagged.items()}}}
+
+
+@pytest.mark.parametrize("total", ["LiabilitiesAndStockholdersEquity", "Assets"])
+def test_a_filing_dates_its_balance_sheet_by_its_total_or_its_assets(total):
+    # GIS's older 10-Ks tag Assets and no LiabilitiesAndStockholdersEquity: their total assets date the balance sheet.
+    facts = _gis_10k({total: {"2014-05-25": 23.1457e9}, "LongTermDebt": {"2014-03-01": 1.0e9},
+                      "LongTermDebtAndCapitalLeaseObligations": {"2014-05-25": 6.4235e9}})
+    assert _ltd(XBRLParser().extract_annual_financials(facts)["2014"]) == (
+        6.4235e9, "LongTermDebtAndCapitalLeaseObligations")
+
+
+def test_a_filing_that_tags_no_balance_sheet_keeps_its_debt():
+    # REG's and MAA's 10-Ks for FY2010-17 tag neither total (the company facts don't carry their balance sheets).
+    facts = _gis_10k({"LongTermDebtAndCapitalLeaseObligations": {"2014-05-25": 6.4235e9}})
+    assert _ltd(XBRLParser().extract_annual_financials(facts)["2014"]) == (
+        6.4235e9, "LongTermDebtAndCapitalLeaseObligations")
+
+
+def test_a_total_far_below_the_notes_payable_beside_it_is_a_part():
+    # BUG-319: PHM's 10-Ks for FY2021-25 tag LongTermDebt of $31-77M beside the notes payable of their balance
+    # sheets ($2.029B for FY2021), and the year read the part: total debt $0.064B, net debt -$1.7B.
+    year = _year_end_balance_sheet(LongTermDebt=63.9e6, NotesPayable=2029.043e6, OtherNotesPayable=40.185e6,
+                                   SeniorNotes=1988.858e6)
+    assert _ltd(year) == (2029.043e6, "NotesPayable")
+    assert _total_debt(year) == pytest.approx(2029.043e6)
+
+
+def test_a_noncurrent_figure_far_below_another_is_a_part():
+    # GNRC's FY2016 10-K tags LongTermDebtNoncurrent $1,048,400 (its $1,048.4M term loan in thousands) beside its
+    # balance sheet's $1.007B line of long-term borrowings and capital leases.
+    year = _year_end_balance_sheet(LongTermDebtNoncurrent=1048400.0, LongTermDebtAndCapitalLeaseObligations=1006.758e6,
+                                   LongTermDebt=903.673e6, LongTermDebtCurrent=14.399e6,
+                                   LongTermDebtAndCapitalLeaseObligationsCurrent=14.965e6,
+                                   ShortTermBorrowings=31.198e6)
+    assert _ltd(year) == (1006.758e6, "LongTermDebtAndCapitalLeaseObligations")
+
+
+def test_a_part_a_later_10k_repeats_alone_is_still_a_part():
+    # BIIB's FY2015 10-K tags LongTermDebtAndCapitalLeaseObligations $18.1M beside $6.56B of notes; its FY2016 10-K
+    # repeats FY2015's $18.1M without the notes, and as the later filing it took the year.
+    facts = _balance_sheet_filings(
+        ("2016-02-03", ("2015-12-31", "2014-12-31"), {
+            "LongTermDebtAndCapitalLeaseObligations": {"2015-12-31": 18.1e6},
+            "LongTermNotesPayable": {"2015-12-31": 6559.6e6},
+            "LongTermDebt": {"2015-12-31": 6521.5e6}, "DebtCurrent": {"2015-12-31": 4.8e6}}),
+        ("2017-02-02", ("2016-12-31", "2015-12-31"), {
+            "LongTermDebtAndCapitalLeaseObligations": {"2016-12-31": 16.4e6, "2015-12-31": 18.1e6},
+            "LongTermNotesPayable": {"2016-12-31": 6556.2e6},
+            "LongTermDebt": {"2016-12-31": 6512.7e6, "2015-12-31": 6521.5e6},
+            "DebtCurrent": {"2016-12-31": 4.7e6, "2015-12-31": 4.8e6}}))
+    years = XBRLParser().extract_annual_financials(facts)
+    assert [years[fy]["long_term_debt"] for fy in ("2015", "2016")] == [6521.5e6, 6556.2e6]  # $18.1M, $16.4M before
+    vintages = XBRLParser().extract_annual_vintages(facts)
+    assert vintages["2015"]["2017-02-02"]["long_term_debt"] == 6521.5e6
+
+
+def test_a_vintage_doesnt_read_a_later_filings_evidence():
+    # A filing's vintage holds what was known when it was filed: the figure a later 10-K shows to be a part stands in
+    # the earlier filing's own vintage.
+    facts = _balance_sheet_filings(
+        ("2016-02-03", ("2015-12-31", "2014-12-31"), {
+            "LongTermDebtAndCapitalLeaseObligations": {"2015-12-31": 18.1e6}}),
+        ("2017-02-02", ("2016-12-31", "2015-12-31"), {
+            "LongTermDebtAndCapitalLeaseObligations": {"2016-12-31": 16.4e6, "2015-12-31": 18.1e6},
+            "LongTermNotesPayable": {"2016-12-31": 6556.2e6, "2015-12-31": 6559.6e6}}))
+    vintages = XBRLParser().extract_annual_vintages(facts)["2015"]
+    assert (vintages["2016-02-03"]["long_term_debt"], vintages["2017-02-02"]["long_term_debt"]) == (18.1e6, 6559.6e6)
+
+
+def test_a_figure_a_later_filing_restates_isnt_a_part_of_the_earlier_ones():
+    # AXON's FY2024 10-K tags its $680M of convertible notes as noncurrent; its 10-K/A moves them to current debt and
+    # tags the noncurrent figure $0, as its later filings do. The $0 is the restated figure, not a part of the notes
+    # the first 10-K showed: total debt stays $680M, not the notes twice.
+    facts = _balance_sheet_filings(
+        ("2025-02-28", ("2024-12-31", "2023-12-31"), {"ConvertibleLongTermNotesPayable": {"2024-12-31": 680.289e6}}),
+        ("2025-05-07", ("2024-12-31", "2023-12-31"), {
+            "ConvertibleLongTermNotesPayable": {"2024-12-31": 0.0}, "LongTermDebtNoncurrent": {"2024-12-31": 0.0},
+            "LongTermDebtCurrent": {"2024-12-31": 680.289e6}}),
+        ("2026-02-25", ("2025-12-31", "2024-12-31"), {
+            "LongTermDebt": {"2024-12-31": 680.289e6}, "LongTermDebtCurrent": {"2024-12-31": 680.289e6},
+            "LongTermDebtNoncurrent": {"2024-12-31": 0.0}, "LongTermNotesPayable": {"2024-12-31": 0.0}}))
+    year = XBRLParser().extract_annual_financials(facts)["2024"]
+    assert _ltd(year) == (0.0, "LongTermDebtNoncurrent")
+    assert _total_debt(year) == pytest.approx(680.289e6)
+
+
+def test_a_figure_under_half_of_another_is_a_part():
+    # Half is the bound, not a factor of ten: 40% of the line is no line of its own.
+    year = _year_end_balance_sheet(LongTermDebtNoncurrent=0.4e9, LongTermDebtAndCapitalLeaseObligations=1.0e9)
+    assert _ltd(year) == (1.0e9, "LongTermDebtAndCapitalLeaseObligations")
+
+
+@pytest.mark.parametrize("tagged, read", [
+    # RMD's FY2013: its debt all due within the year, the noncurrent figure is the total less the maturities
+    ({"LongTermDebtNoncurrent": 0.769e6, "LongTermDebt": 300.786e6, "LongTermDebtCurrent": 300.017e6},
+     (0.769e6, "LongTermDebtNoncurrent")),
+    # two noncurrent figures no further apart than half: the tag order decides
+    ({"LongTermDebtNoncurrent": 0.6e9, "LongTermDebtAndCapitalLeaseObligations": 1.0e9},
+     (0.6e9, "LongTermDebtNoncurrent")),
+    ({"LongTermDebtNoncurrent": 0.5e9, "LongTermDebtAndCapitalLeaseObligations": 1.0e9},
+     (0.5e9, "LongTermDebtNoncurrent")),
+    ({"LongTermDebt": 1.0e9, "NotesPayable": 1.9e9}, (1.0e9, "LongTermDebt")),
+    # a figure with no other of its kind beside it isn't weighed: ETR's 2009 10-Q/A tags -$10.185B, as filed
+    ({"LongTermDebtNoncurrent": -10.185e9, "LongTermDebtCurrent": -0.806e9}, (-10.185e9, "LongTermDebtNoncurrent")),
+])
+def test_figures_that_arent_parts_stand(tagged, read):
+    assert _ltd(_year_end_balance_sheet(**tagged)) == read
+
+
 @pytest.mark.parametrize("tag", ["LongTermNotesAndLoans", "SeniorLongTermNotes", "OtherLongTermDebtNoncurrent",
                                  "LongTermLoansPayable"])
 def test_a_total_gives_way_to_a_noncurrent_line_under_a_concept_long_term_debt_doesnt_read(tag):
@@ -464,10 +633,12 @@ def test_a_total_whose_maturities_no_short_term_figure_holds_keeps_them_beside_t
     assert _year_end_debt(LongTermDebt=0.512e9, SeniorLongTermNotes=0.504e9,
                           LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths=0.008e9) == (
         0.512e9, "LongTermDebt")
-    # and in a filing whose other column's total gives way, FICO's FY2011 beside its FY2012 figures
+    # and in a filing whose other column's total gives way, FICO's FY2011 beside its FY2012 figures (the balance
+    # sheet's total on both columns)
     facts = _debt_filing(LongTermDebt=0.504e9, SeniorLongTermNotes=0.455e9, DebtCurrent=0.049e9)
     for tag, val in (("LongTermDebt", 0.512e9), ("SeniorLongTermNotes", 0.504e9),
-                     ("LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths", 0.008e9)):
+                     ("LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths", 0.008e9),
+                     ("LiabilitiesAndStockholdersEquity", 100.0e9)):
         facts["facts"]["us-gaap"].setdefault(tag, {"units": {"USD": []}})["units"]["USD"].append(
             usd(val, None, "2024-12-31", **_K10))
     years = XBRLParser().extract_annual_financials(facts)

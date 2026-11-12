@@ -2117,6 +2117,14 @@ numbers SEC filings report:
   line tagged under a concept long-term debt doesn't otherwise read stands in for the total
   where the two lines make it up (Corpay's FY2022: $4.7B of notes beside $2.3B of current
   maturities, total debt $7.0B, not $9.4B).
+- **Long-term debt's own line.** A long-term debt figure a filing tags on a day its balance
+  sheet doesn't show is a note's (an issue, a maturity) and isn't the year's (Phillips 66's
+  FY2015 10-K tags $1.1B at 2015-03-02 beside its year end's $8.8B). On a balance-sheet date a
+  figure under half of another of its kind (two noncurrent figures, or two totals) under a tag
+  the field reads after it is a part of that line, which is read instead: PulteGroup's 10-Ks
+  tag $31-77M as LongTermDebt beside notes payable of $1.6-2.0B. A later filing that repeats the
+  part alone doesn't bring it back (Biogen's FY2015 $18.1M), but a filing's vintage reads no
+  later filing's evidence.
 - **Long-term debt in the 10-Qs.** A 10-Q that tags its long-term debt under a concept the field
   doesn't map is read where its year-end column shows the figure an annual report filed for that
   year end: Oracle's 10-Qs tag their notes as LongTermNotesAndLoans, its 10-Ks as

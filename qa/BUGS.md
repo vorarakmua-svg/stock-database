@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 4 · P3 152 · NEEDS-USER 0 · Decided: 7 · Verified: 180
+**Open:** P0 0 · P1 0 · P2 5 · P3 154 · NEEDS-USER 0 · Decided: 7 · Verified: 181
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2073,6 +2073,30 @@ Found: code review 27 (Minor 5) | Fixed: (this commit) | Regression test: none (
 Repro: docs/superpowers/specs/2026-10-21-quality-scores-design.md ~153; the README was updated.
 Expected: the share of profitable years (of the last 5 to 10).   Actual: out of 10.
 
+### BUG-328 [P2][VALID] A bank's revenue reads a contract-revenue line, a part of its noninterest income: FITB FY2016-23 $0.55-0.60B for $6.3-8.7B, RF FY2016-21 $58-104M for $5.4-6.4B
+Status: OPEN
+Found: iteration 172 (BUG-319's worker, `qa/evidence/bug319-investigation.txt` section 7, P1) | Fixed: | Regression test:
+Repro: FITB (CIK 35527) FY2016-23 read RevenueFromContractWithCustomerIncludingAssessedTax $0.549-0.600B (FY2022 $0.589B beside net interest income $5.609B + noninterest income $2.766B; FY2015's derived $6.536B); RF FY2016-21 $58-104M (FY2022 derived $7.215B); HBAN FY2018-25 (the excluding-tax tag) $0.881-1.562B for $4.51-8.17B; MTB FY2024-25 $1.541B/$1.657B for $9.28B/$9.69B. 24 filer-years at 4 banks sit at 0.011-0.201 of NII + noninterest income; the other 366 bank-years with both at 0.95-1.3. The derivation (derived_fields._bank_revenue) fills only an absent revenue, and _revenue_set_aside weighs against figures banks don't tag; the including-tax tag is left out of its weighing (BUG-099). MS FY2012 (negative NII) is right: compare with the sum, not noninterest income alone.
+Expected: net interest income + noninterest income, as their other years.   Actual: the contract-revenue figure.
+
+### BUG-329 [P2][VALID] HSY's FY2009-11 weighted-average shares are a later 10-K's comparative in thousands, and FY2009's shares outstanding is rescaled to match: 227,998 for 227,998,276
+Status: OPEN
+Found: iteration 172 (BUG-319's worker, section 7, P2) | Fixed: | Regression test:
+Repro: the FY2011 10-K (0001193125-12-067143) tags FY2009's counts in thousands (basic 227,845; diluted 228,995), the latest filing wins, and FY2010-11 basic read 227,740 / 226,574; _restore_agreed_figures' x10^-3 repair needs neighbouring years on the earlier figure's side, and they are mis-scaled too; HSY's EPS isn't in the company facts, so share_scale has no check and its pass 3 rescales FY2009's correct shares outstanding to the weighted count.
+Expected: the counts in units (FY2009 shares 227,998,276; basic 227,845,000).   Actual: thousands.
+
+### BUG-330 [P3][VALID] Long-term debt reads one of two noncurrent lines a balance sheet shows without a total: CRM FY2014 $1.047B for $1.302B
+Status: OPEN
+Found: iteration 172 (BUG-319's residual R1) | Fixed: | Regression test:
+Repro: CRM FY2014 term loan $255M + convertible notes $1,046.9M (head read $0.255B, BUG-319 the larger line); TMUS FY2019 LTDNC $10.958B beside $13.986B due to affiliates (DueToAffiliateNoncurrent), which its FY2020 10-K's LongTermDebt $24.969B holds; Carvana's and Ciena's quarters (2018-19, 2014).
+Expected: the lines together.   Actual: one line.
+
+### BUG-331 [P3][VALID] HST's long-term debt reads its credit facility: FY2011-25 $0.33-1.58B for $3.8-5.8B
+Status: OPEN
+Found: iteration 172 (BUG-319's residual R2) | Fixed: | Regression test:
+Repro: HST tags LongTermDebt on its credit facility; the balance sheet's debt (FY2024 $5.083B = senior notes $3.993B + facility $0.896B + mortgage $0.098B + other) is tagged only as DebtAndCapitalLeaseObligations / DebtInstrumentCarryingAmount, which long-term debt doesn't read (BUG-133's kind).
+Expected: the balance sheet's debt.   Actual: the facility.
+
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: the history's P/E on net income to common, as its P/B already is.
@@ -2211,10 +2235,11 @@ Since BUG-267 EXC's FY2023-24 vintages read their own maturities ($4.124B, $3.33
 Fix (iteration 167, `qa/evidence/bug271-investigation.txt`): the annual record ranks a field's tags first, the as-of view ranked by filing date alone (BUG-116's split of rules). Each vintage now keeps the tag of each figure (`financials_annual_vintages.source_tags`, JSON; added by `_migrate`). A later filing's figure replaces the held one unless its tag ranks below the held one's and it is under half of it; the debt (long-term, short-term, paper) is read as one filing's view, since a filing's lines split it one way (reading EXC's long-term figure from one 10-K and its short-term from the other counts the maturities twice; KO's paper likewise). Vintages stored without tags read as before. Four candidate rules were measured over every cached filer's 39,047 filer-year-date points; ranking alone imports the annual record's own errors (BUG-319) and the latest-unless-under-half rule undoes split restatements, so HALF was chosen. On backup-API copies re-collected offline (all 502): only the new column and BUG-277's hash-order cells differ in the stored tables; no valuation reads the as-of view, so no median, verdict or label moves. As-of reads: 649 figures move (198 as of today) in 192 company-years at 105 companies; debt under half of the annual record's today: 23 years at 9 filers before, 0 after (EXC FY2023 $41.279B + $2.523B); of the 198 today moves, 196 land on the annual record's figure. Look-ahead: 178,730 reads on 35 days, 0 differ. RED 10 of 95; 22 mutants killed. The user's DB gains the tags at its next collection. Residuals: BUG-319, BUG-320; lesser concepts between half and whole stay (OMC FY2011-13 notes 0.8x, TGT FY2011 0.75x, BUG-116's equity).
 
 ### BUG-319 [P2][PARSE] The annual record reads a narrow concept as some years' long-term debt or revenue: PHM FY2021-24 $0.06B for about $2.0B, PSX FY2015 $1.1B for $8.8B
-Status: OPEN
-Found: iteration 167 (BUG-271's census, `qa/evidence/bug271-investigation.txt`, rule RANK) | Fixed: | Regression test:
+Status: VERIFIED (iteration 172; long-term debt; revenue and shares split out as BUG-328, BUG-329)
+Found: iteration 167 (BUG-271's census, `qa/evidence/bug271-investigation.txt`, rule RANK) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (17 new items, 10 failing first)
 Repro: ranking each figure by the field's tag order, as the annual record does, moves the as-of view onto the annual record's own figures, and some are narrow concepts: long-term debt PHM FY2021-24 ($2.0B to $0.06B), PSX FY2015 ($8.8B to $1.1B), GNRC, ECHO, CRM; revenue FITB ($8.4B to $0.6B) and RF. Also XEL FY2024 short-term debt reads the FY2025 10-K's borrowings alone ($0.695B, where its own 10-K's DebtCurrent is $1.798B with the maturities) and HSY FY2009's shares 228,000 (the share-scale step).
 Expected: the filings' balance-sheet debt and total revenue.   Actual: a narrower tag's figure, ranked first. To confirm each against the filing before fixing.
+Fix (iteration 172, `qa/evidence/bug319-investigation.txt`): long-term debt took the first of its tags a year has, latest filing first, and two shapes got through: (a) a note's figure on a day the filing's balance sheet doesn't show (PSX FY2015 $1.1B dated 2015-03-02; ECHO FY2024 $1.98B from the FY2023 10-K; TGT's year to 2010-01-30); (b) a part under a better-ranked tag than the line beside it on the balance-sheet date (PHM FY2021-25 LongTermDebt $31-77M beside NotesPayable $1.6-2.0B; GNRC FY2016's term loan in thousands; BIIB FY2015-16). In `_filer_facts`, so every record: long-term debt's tags are kept only on dates the same filing tags LiabilitiesAndStockholdersEquity or Assets on (a filing with neither keeps all: REG, MAA), and a figure is set aside where the same filing tags a lower-ranked tag of its kind (noncurrent or total) on the date more than twice as large, or where a later filing only repeats it; only filings filed by then are read. Census over 504 filers: annual long-term debt 20 cells at 15 filers (PHM, PSX $8.843B, ECHO $25.66B, GNRC, TGT $10.643B, BIIB $6.52B, PLD FY2021 $17.715B, CRM, VICI, DXCM, LDOS, TDY, TMO, DE; IP FY2007's stray $2.1B emptied), quarterly 53, TTM 40, vintages 34; 20 quarterly and 13 vintage rows of off-date figures alone not built (none stored). XEL's case is BUG-259(b). On DB copies (with BUG-274): 0 medians, verdicts, owner-earnings verdicts or labels; PHM's and PLD's historical values move within their labels; PHM FY2025 EV/EBITDA 6.99 -> 7.52, Piotroski 3 -> 4; ECHO May-July 2024 has no EV now (its Q1 10-Q tags no debt the field reads: BUG-259(g)). Look-ahead 0; 17 mutants. Residuals: BUG-330, BUG-331; short-term debt is not date-filtered (ILMN's one-day-off checkpoint); CVS FY2018's adoption-day figure; BIIB FY2014 $0.
 
 ### BUG-320 [P3][ASOF] A fill-only run's figures carry no tag, so the as-of view ranks them last
 Status: OPEN
