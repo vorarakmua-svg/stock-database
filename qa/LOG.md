@@ -3032,3 +3032,20 @@ BUG-320. BUG-274's worker prepares BUG-332 and BUG-333.
 Gates: unchanged (qa/ only) | CI: PR #29
 Commit: (this commit) chore(qa): code review 28 recorded; one Important finding (BUG-332)
 Next: BUG-332 (worker); BUG-327, BUG-328, BUG-329; Q17.
+
+## Iteration 174: 2026-11-13 04:57: fix (BUG-332, BUG-333; code review 28's D&A findings)
+Picked: review 28's Important finding, a regression of BUG-274, with its Minor 1; BUG-274's worker.
+Did: a fiscal year with no 10-K yet now reads its 10-Qs as the last earlier 10-K was read (with no earlier 10-K, by
+the 10-Qs' own evidence), so the year in progress and the year before sit on one D&A basis; the LMT guard now runs
+before the 10-Q gate reads the year's 10-K. Only quarterly records move: HUM Q1 2026 163 -> 194; SWK Q1/Q2 2026
+84.4/101.8 -> 113.0/129.4 (TTM to 2026-07-04 $440.1M -> $496.3M); DDOG Q1/Q2 2026. The "own evidence for every year"
+variant was rejected: it re-mixes where the last 10-K kept its line.
+- RED: 2 of 330 failed on 33d60b1; GREEN. 36 of 36 mutants (qa/evidence/bug332-mutants.json supersedes bug274's); bug319
+  17 of 17. Look-ahead 0. Negatives and halvings 0. A new basis-mixing census: 6 latest-year flips -> 3 (HD, DVA, NTAP:
+  BUG-275's Q4 lumps, noted on its entry).
+- DB copies: 0 medians, verdicts, owner-earnings rows or labels; EV/EBITDA SWK 10.85 -> 10.51, HUM 13.31 -> 13.19,
+  DDOG; HUM's historical value 316.62 -> 319.04, still "far above".
+Result: BUG-332 and BUG-333 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2936 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): a year with no 10-K yet reads its 10-Qs' D&A as the last 10-K was read (BUG-332, BUG-333)
+Next: BUG-328 (worker, measuring); BUG-327, BUG-329; Q17.

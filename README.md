@@ -2191,8 +2191,8 @@ numbers SEC filings report:
   filing's depreciation, else the set-aside line, plus the amortization, provided the two come
   to more than the line. The result enters under the line's tag, so a later filing's figure
   stands over an earlier one's. Only filings filed by then are read, so each vintage is as known
-  then; a year's 10-Qs are read so only where its latest 10-K is, so its quarters stay on one
-  basis. No other amortization (capitalized software, finance leases) is added: it lies
+  then; a year's 10-Qs are read so only where its latest 10-K is, and a year with no 10-K yet
+  as the last 10-K before it was, so its quarters and the trailing year stay on one basis. No other amortization (capitalized software, finance leases) is added: it lies
   inside the depreciation at one filer and apart at another. A total above the amortization
   that nothing in the filings contradicts is read as the D&A, though it can be the depreciation
   line: GE's FY2025 total is $0.86B beside $0.36B of amortization, which Yahoo reads as $1.22B

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 6 · P3 156 · NEEDS-USER 0 · Decided: 7 · Verified: 181
+**Open:** P0 0 · P1 0 · P2 5 · P3 155 · NEEDS-USER 0 · Decided: 7 · Verified: 183
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2098,14 +2098,14 @@ Repro: HST tags LongTermDebt on its credit facility; the balance sheet's debt (F
 Expected: the balance sheet's debt.   Actual: the facility.
 
 ### BUG-332 [P2][TTM] Since BUG-274 the year in progress keeps its 10-Qs' D&A on the old basis, so the latest TTM mixes two: SWK $440.1M for $496.3M
-Status: OPEN
-Found: code review 28 (`qa/evidence/review28.txt`, Important 1; probes fail at HEAD) | Fixed: | Regression test:
+Status: VERIFIED (iteration 174)
+Found: code review 28 (`qa/evidence/review28.txt`, Important 1; probes fail at HEAD) | Fixed: (this commit) | Regression test: tests/test_xbrl_parser.py::test_a_year_with_no_10k_yet_is_read_as_the_last_10k_was, guard ::test_a_year_with_no_10k_yet_stays_on_the_last_10ks_line_basis (`qa/evidence/bug332-investigation.txt`)
 Repro: xbrl_parser.py ~978-990: `years` holds only fiscal years whose latest 10-K was read as a line; a year with no 10-K yet has its 10-Qs' line reading cleared even where the 10-Q proves it in the same filing. SWK's 10-Q filed 2026-04-29 tags D&A $113.0M = $84.4M line + $28.6M amortization; Q1/Q2 2026 read 84.4/101.8 beside 2025's 128.4/130.1/130.2/123.7; TTM to 2026-07-04 $440.1M (bf7e23e $368.0M, one basis; the filings' totals $496.3M). HUM Q1 2026 $163M for $194M. The TTM's EBITDA feeds ev_ebitda. Probes: %LOCALAPPDATA%\stockdb-qa\review28\head\tests\test_review28.py::test_the_current_years_10q_reads_its_own_total_beside_its_line, ::test_swk_ttm_mixes_bases_on_the_cached_filing.
 Expected: the year in progress on the basis its own 10-Qs (or the last 10-K) show.   Actual: the old basis.
 
 ### BUG-333 [P3][TTM] BUG-274's 10-Q gate reads a 10-K line the guard then keeps
-Status: OPEN
-Found: code review 28 (Minor 1; synthetic, no real case in the census) | Fixed: | Regression test:
+Status: VERIFIED (iteration 174)
+Found: code review 28 (Minor 1; synthetic, no real case in the census) | Fixed: (this commit) | Regression test: tests/test_xbrl_parser.py::test_a_10k_line_the_guard_keeps_doesnt_move_its_10qs
 Repro: xbrl_parser.py ~978-985 decides which years' 10-Qs move before the "combined must exceed the line" guard (~991-996, LMT's) has run, so a 10-K line the guard keeps still moves its 10-Qs: a synthetic Q4 $13M for $226M (bf7e23e $226M). Probe: %LOCALAPPDATA%\stockdb-qa\review28\head\tests\test_review28.py::test_a_10k_line_the_guard_keeps_doesnt_move_its_10qs.
 Expected: the 10-Qs follow the 10-K as the guard leaves it.   Actual: they move alone.
 
@@ -2296,6 +2296,7 @@ Status: OPEN
 Found: iteration 116 (BUG-170's investigation, R2) | Fixed: | Regression test:
 Repro: the fourth quarter is the 10-K's figure less nine months of another basis. 1,140 such lump/hole quarters at HEAD (DHR FY2022-23's among them), 674 with BUG-170's V3 (573 healed, 107 new): AVGO FY2023-24 (its 10-Qs tag no amortization those years; the TTM 2025-02-02 to 2025-08-03 reads $11.9-15.9B for ~$8.6B), GOOGL 2025 (the reverse, +$0.1-0.3B), BR, TTWO, KKR, J, MRSH FY2022-23, EME FY2010-13. The TTM at a fiscal year end equals the annual figure in 6,776 of 6,790 cases.
 Expected: each quarter's D&A on its year's basis.   Actual: a lump or a hole in the fourth quarter and the TTM rows over it.
+Also (iteration 174, BUG-332's residual): where a 10-K is combined (BUG-274) but its 10-Qs carry the line with no evidence, Q4 takes the whole year's amortization: SWK FY2020-23 Q4 about $297M beside about $93M, HD FY2025 $1.289B beside $0.824B, FY2026 $1.515B beside $0.869B; HD's, DVA's and NTAP's latest TTMs hold the prior year's lump.
 
 ### BUG-276 [P3][VALID] Some filers carry their D&A on tags BUG-170's rule leaves alone: WDAY, MET and VEEV's OtherDepreciationAndAmortization, TXN's capitalized software
 Status: OPEN

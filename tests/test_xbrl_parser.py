@@ -2223,6 +2223,45 @@ def test_a_years_10qs_are_read_so_only_where_its_10k_is():
     assert quarters["2025-12-31"]["depreciation_amortization"] == pytest.approx(17.8e6)
 
 
+_SWK_2025 = [("2025-01-01", "2025-03-31", "10-Q", "2025-04-30", {DDA: 91.1e6, DA: 128.4e6, INTANGIBLES: 37.3e6}),
+             ("2025-01-01", "2025-12-31", "10-K", "2026-02-24", {DDA: 365.6e6, DA: 512.4e6, INTANGIBLES: 146.8e6})]
+
+
+def test_a_year_with_no_10k_yet_is_read_as_the_last_10k_was():
+    # BUG-332 (code review 28, I1): SWK's 10-Q of April 2026 tags $113.0M = its $84.4M line + $28.6M of amortization;
+    # FY2026 has no 10-K yet, and the gate left the quarter at the line beside FY2025's quarters on the 10-K's total:
+    # the trailing year mixed the two ($440.1M for $496.3M).
+    q1 = ("2026-01-01", "2026-03-31", "10-Q", "2026-04-29", {DDA: 84.4e6, DA: 113.0e6, INTANGIBLES: 28.6e6})
+    quarters = XBRLParser().extract_quarterly_financials(_da_filings(*_SWK_2025, q1))
+    assert quarters["2025-03-31"]["depreciation_amortization"] == pytest.approx(128.4e6)
+    assert quarters["2026-03-31"]["depreciation_amortization"] == pytest.approx(113.0e6)
+
+
+def test_a_year_with_no_10k_yet_stays_on_the_last_10ks_line_basis():
+    # The last 10-K reads its line ($65.0M beside $16.8M makes no $83.2M), so the next year's 10-Q stays on it too,
+    # though its own figures make a total.
+    before = ("2024-01-01", "2024-12-31", "10-K", "2025-02-12", {DDA: 60.0e6, DA: 75.0e6, INTANGIBLES: 15.0e6})
+    year = ("2025-01-01", "2025-12-31", "10-K", "2026-02-12", {DDA: 65.0e6, DA: 83.2e6, INTANGIBLES: 16.8e6})
+    q1 = ("2026-01-01", "2026-03-31", "10-Q", "2026-04-29", {DDA: 16.0e6, DA: 20.2e6, INTANGIBLES: 4.2e6})
+    quarters = XBRLParser().extract_quarterly_financials(_da_filings(before, year, q1))
+    assert quarters["2026-03-31"]["depreciation_amortization"] == pytest.approx(16.0e6)
+
+
+def test_a_10k_line_the_guard_keeps_doesnt_move_its_10qs():
+    # BUG-333 (code review 28, M1): the year's latest 10-K keeps its $906M line ($794M + $111M come to no more), but
+    # the gate read the line before the guard, so the 10-Q's nine months moved to $893M and the fourth quarter read
+    # $13M, not $226M.
+    facts = _da_filings(
+        ("2025-01-01", "2025-09-30", "10-Q", "2025-10-25", {DDA: 680e6, DA: 893e6, INTANGIBLES: 213e6}),
+        ("2025-01-01", "2025-12-31", "10-K", "2026-02-07", {DDA: 1189e6}),
+        ("2025-01-01", "2025-12-31", "10-K", "2027-01-25",
+         {DDA: 906e6, DEPRECIATION: 794e6, INTANGIBLES: 284e6, AMORTIZATION: 111e6}))
+    parser = XBRLParser()
+    assert parser.extract_annual_financials(facts)["2025"]["depreciation_amortization"] == pytest.approx(906e6)
+    assert parser.extract_quarterly_financials(facts)["2025-12-31"]["depreciation_amortization"] == pytest.approx(
+        226e6)
+
+
 def test_a_later_filings_total_beside_a_line_stands_over_an_earlier_ones_line():
     # DDOG's FY2021: its first 10-K tags $18.5M under the first-ranked tag and $22.9M under another, with no usable
     # amortization; its later 10-K's $4.4M shows $18.5M the line and $22.9M the total, which stands for the year.

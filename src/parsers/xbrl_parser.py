@@ -936,7 +936,9 @@ def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
 
     Beside a line, the filing's D&A enters under the line's tag, so a later filing's figure stands over an earlier
     one's as for any restatement (DDOG's FY2021 $22.9M over its first 10-K's $18.5M line). A year's 10-Qs are read so
-    only where its latest 10-K is, so its quarters stay on one basis (PSTG's FY2022)."""
+    only where its latest 10-K is, as that 10-K is finally read, so its quarters stay on one basis (PSTG's FY2022);
+    a year with no 10-K yet, as the last 10-K before it was, so the trailing year stays on one basis too (SWK's 10-Q
+    of April 2026: $113.0M, beside FY2025's quarters on its 10-K's total; BUG-332)."""
     amortization: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
     figures: Dict[Tuple[str, str, str], List[float]] = defaultdict(list)
     for tag in _AMORTIZATION:
@@ -1048,26 +1050,34 @@ def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
             base = (dep or lines[0][1])["val"] + least[key]
             lines += [(tag, e) for tag, e in here if (tag, e) not in low + lines
                       and e["val"] < base and not _agree(e["val"], base)]
-        final[key] = (part, dep, here, low, lines)
-    # a year's 10-Qs are read so only where its latest 10-K is, so its quarters stay on one basis (PSTG's FY2022: nine
-    # months of $47.2M and $12.4M make the 10-Q's $59.6M, but the 10-K's $65.9M beside $16.8M is no $83.2M)
-    latest: Dict[str, Tuple[str, bool]] = {}
-    for key, (_, _, _, _, lines) in final.items():
-        when = amortization[key].get("filed") or ""
-        if _span_at_least_a_year(key) and when >= latest.get(key[1], ("", False))[0]:
-            latest[key[1]] = (when, bool(lines))
-    years = {start for start, (_, lined) in latest.items() if lined}
-    aside: Dict[str, Set[Tuple[str, str, str]]] = defaultdict(set)
-    added: List[Dict[str, Any]] = []
-    for key, (part, dep, here, low, lines) in final.items():
-        if lines and not _span_at_least_a_year(key) and key[1] not in years:
-            lines = []
         if lines and len(low) + len(lines) == len(here):
             # the depreciation and the amortization must come to more than the line they replace, else it held them
             # (LMT's FY2019: $794M and $111M beside a $906M line)
             both = (dep or lines[0][1])["val"] + part
             if any(e["val"] >= both or _agree(e["val"], both) for _, e in lines):
                 lines = []
+        final[key] = (part, dep, here, low, lines)
+    # a year's 10-Qs are read so only where its latest 10-K is, so its quarters stay on one basis (PSTG's FY2022: nine
+    # months of $47.2M and $12.4M make the 10-Q's $59.6M, but the 10-K's $65.9M beside $16.8M is no $83.2M); a year
+    # with no 10-K yet, as the last 10-K before it was read, so the trailing year stays on one basis too (SWK's 10-Q of
+    # April 2026: $84.4M + $28.6M = $113.0M, beside FY2025's quarters on its 10-K's total)
+    latest: Dict[str, Tuple[str, bool]] = {}
+    for key, (_, _, _, _, lines) in final.items():
+        when = amortization[key].get("filed") or ""
+        if _span_at_least_a_year(key) and when >= latest.get(key[1], ("", False))[0]:
+            latest[key[1]] = (when, bool(lines))
+
+    def year_read_so(start: str) -> bool:
+        if start in latest:
+            return latest[start][1]
+        before = [earlier for earlier in latest if earlier < start]
+        return latest[max(before)][1] if before else True
+
+    aside: Dict[str, Set[Tuple[str, str, str]]] = defaultdict(set)
+    added: List[Dict[str, Any]] = []
+    for key, (part, dep, here, low, lines) in final.items():
+        if lines and not _span_at_least_a_year(key) and not year_read_so(key[1]):
+            lines = []
         for tag, _ in low + lines:
             aside[tag].add(key)
         # beside a line the filings show, the filing's D&A enters under its tag too, so a later filing's figure stands
