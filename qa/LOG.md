@@ -3021,3 +3021,14 @@ Result: BUG-319 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2933 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(parsers): long-term debt reads the balance sheet's date and sets aside a part tagged above the line (BUG-319)
 Next: code review 28 (running); BUG-327, BUG-328, BUG-329; Q17.
+
+## Iteration 173: 2026-11-13 00:26: code review 28
+Picked: code review 28 (bf7e23e..5efa1be: review 27's record, BUG-271, BUG-321/326, BUG-324/325, BUG-322/323, BUG-274).
+Did: an opus reviewer (`qa/evidence/review28.txt`); 5 probe tests, each failing at HEAD; the six touched test files
+pass (499). Free RAM 4.3 GB; no full suite or DB run.
+Result: no Critical; Important 1 -> BUG-332 (P2, a regression of BUG-274: the year in progress's 10-Qs stay on the old
+D&A basis, so the latest TTM mixes two; SWK $440.1M for $496.3M); Minors -> BUG-333, BUG-334 (P3); Minor 3 joins
+BUG-320. BUG-274's worker prepares BUG-332 and BUG-333.
+Gates: unchanged (qa/ only) | CI: PR #29
+Commit: (this commit) chore(qa): code review 28 recorded; one Important finding (BUG-332)
+Next: BUG-332 (worker); BUG-327, BUG-328, BUG-329; Q17.

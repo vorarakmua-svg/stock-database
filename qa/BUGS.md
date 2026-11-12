@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 5 · P3 154 · NEEDS-USER 0 · Decided: 7 · Verified: 181
+**Open:** P0 0 · P1 0 · P2 6 · P3 156 · NEEDS-USER 0 · Decided: 7 · Verified: 181
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2097,6 +2097,24 @@ Found: iteration 172 (BUG-319's residual R2) | Fixed: | Regression test:
 Repro: HST tags LongTermDebt on its credit facility; the balance sheet's debt (FY2024 $5.083B = senior notes $3.993B + facility $0.896B + mortgage $0.098B + other) is tagged only as DebtAndCapitalLeaseObligations / DebtInstrumentCarryingAmount, which long-term debt doesn't read (BUG-133's kind).
 Expected: the balance sheet's debt.   Actual: the facility.
 
+### BUG-332 [P2][TTM] Since BUG-274 the year in progress keeps its 10-Qs' D&A on the old basis, so the latest TTM mixes two: SWK $440.1M for $496.3M
+Status: OPEN
+Found: code review 28 (`qa/evidence/review28.txt`, Important 1; probes fail at HEAD) | Fixed: | Regression test:
+Repro: xbrl_parser.py ~978-990: `years` holds only fiscal years whose latest 10-K was read as a line; a year with no 10-K yet has its 10-Qs' line reading cleared even where the 10-Q proves it in the same filing. SWK's 10-Q filed 2026-04-29 tags D&A $113.0M = $84.4M line + $28.6M amortization; Q1/Q2 2026 read 84.4/101.8 beside 2025's 128.4/130.1/130.2/123.7; TTM to 2026-07-04 $440.1M (bf7e23e $368.0M, one basis; the filings' totals $496.3M). HUM Q1 2026 $163M for $194M. The TTM's EBITDA feeds ev_ebitda. Probes: %LOCALAPPDATA%\stockdb-qa\review28\head\tests\test_review28.py::test_the_current_years_10q_reads_its_own_total_beside_its_line, ::test_swk_ttm_mixes_bases_on_the_cached_filing.
+Expected: the year in progress on the basis its own 10-Qs (or the last 10-K) show.   Actual: the old basis.
+
+### BUG-333 [P3][TTM] BUG-274's 10-Q gate reads a 10-K line the guard then keeps
+Status: OPEN
+Found: code review 28 (Minor 1; synthetic, no real case in the census) | Fixed: | Regression test:
+Repro: xbrl_parser.py ~978-985 decides which years' 10-Qs move before the "combined must exceed the line" guard (~991-996, LMT's) has run, so a 10-K line the guard keeps still moves its 10-Qs: a synthetic Q4 $13M for $226M (bf7e23e $226M). Probe: %LOCALAPPDATA%\stockdb-qa\review28\head\tests\test_review28.py::test_a_10k_line_the_guard_keeps_doesnt_move_its_10qs.
+Expected: the 10-Qs follow the 10-K as the guard leaves it.   Actual: they move alone.
+
+### BUG-334 [P3][ASOF] The as-of debt view carries a field its filing lacks from an earlier filing: a later total plus the first 10-K's maturities
+Status: OPEN
+Found: code review 28 (Minor 2; also at bf7e23e) | Fixed: | Regression test:
+Repro: asof.py ~115-117, ~190-195: the debt view is documented as one filing's (asof.py ~87, README ~2343), but a debt field the viewed filing lacks is read from an earlier one: a later 10-K's LongTermDebt total $44B (holding the maturities) beside the first 10-K's $4B of maturities reads $48B. QCOM's test relies on the carry for paper beside borrowings. Probe: %LOCALAPPDATA%\stockdb-qa\review28\head\tests\test_review28.py::test_the_debt_view_doesnt_carry_maturities_its_total_holds.
+Expected: no short-term debt carried beside a later total that can hold the maturities, or the docs say so.   Actual: counted twice.
+
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: the history's P/E on net income to common, as its P/B already is.
@@ -2246,6 +2264,7 @@ Status: OPEN
 Found: iteration 167 (BUG-271's residuals) | Fixed: | Regression test:
 Repro: a run whose predecessor read failed only fills (BUG-179: COALESCE of the stored value first), source_tags included, so a figure it fills into a vintage has no tag in the stored JSON and ranks last; a broader earlier filing's figure could then set it aside as narrower.
 Expected: the filled figure's tag merged into the vintage's source_tags.   Actual: the stored tags kept whole.
+Also (code review 28, Minor 3): on a database from before the column, a first fill-only run writes its JSON whole into the empty source_tags while every stored figure stays, so an old narrow figure gets the new run's first-ranked tag and is never set aside (sqlite_store.py ~801 with ~1051; probe %LOCALAPPDATA%\stockdb-qa\review28\head\tests\test_review28.py::test_a_fill_only_run_on_an_old_database_doesnt_tag_figures_it_didnt_write).
 
 ### BUG-272 [P3][PARSE] An adoption-day instant becomes a fiscal year's period_end: ICE FY2018 "2019-01-01", FY2019 "2020-01-01"
 Status: OPEN
