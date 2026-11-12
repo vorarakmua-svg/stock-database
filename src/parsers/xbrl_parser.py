@@ -814,6 +814,12 @@ def _by_period(us_gaap: Dict[str, Any], tag: str) -> Dict[Tuple[str, str, str], 
     return out
 
 
+def _span_at_least_a_year(key: Tuple[str, str, str]) -> bool:
+    """Whether a ``(accn, start, end)`` period is a year's (at least ``_FULL_YEAR_MIN_DAYS``), not a 10-Q's to date."""
+    start, end = date.fromisoformat(key[1][:10]), date.fromisoformat(key[2][:10])
+    return (end - start).days >= _FULL_YEAR_MIN_DAYS
+
+
 def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     """*us_gaap* with one DepreciationAndAmortization fact of a filing's depreciation and its amortization of
     intangibles on each period it tags them on lines of their own, with no total that can hold them.
@@ -827,28 +833,180 @@ def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     another total of the filing that can hold it is read (MCK's), and with none the D&A is the depreciation, else that
     line, plus the amortization. No other amortization joins: capitalized software's is inside the depreciation at one
     filer (EXPE's) and apart at another. Each filing's periods are judged alone, so the annual record, the quarters
-    (the 10-Qs' figures to date) and each vintage read the same figures."""
-    amortization: Dict[Tuple[str, str, str], float] = {}
+    (the 10-Qs' figures to date) and each vintage read the same figures.
+
+    Where both amortizations are tagged and no total exceeds the cash flow statement's, the intangibles' is the test:
+    a total holds it only as large as the depreciation and it together. ALL's FY2021 total ($1.086B) holds its
+    depreciation ($411M) and its intangibles' amortization ($376M) beside the statement's broader $1.281B (BUG-299);
+    CSGP's 2012 six months ($4.7M beside $4.5M and $4.2M) is its depreciation line.
+
+    A total larger than the amortization is the depreciation line too where the filings show it (BUG-274). With the
+    amortization it makes another total of the period: in the same filing (SWK's FY2023 $432.4M and $625.1M, with
+    $192.7M), or in an earlier one on the same basis (the same revenue: HLT's 2016 restated after its spin-offs isn't)
+    and for an amortization at least 5% of it, beyond what a restatement's change can match by chance (MRSH's FY2023
+    10-K tagged $713M, its later 10-Ks $370M beside $343M; not DAL's FY2016 $1.886B and $17M beside $1.902B). Or it is
+    below the filing's Depreciation, or below the depreciation and amortization its 10-Qs gave for part of the
+    period (as first reported), and is no gross total; but a net add-back is the cash flow statement's own figure
+    (BMY's "Depreciation and amortization, net", $382M beside $448M), so such a total is a line only where the
+    filings, by then, show its tag to carry one (HUM's FY2024 $839M beside $908M) or the filing tags a total that
+    holds the two (BA's FY2009 $1.066B beside $1.459B, $207M and $1.678B). Only filings filed by then are read, so a
+    vintage reads what was known. Beside such a line another total holds the two only if it is as large as the
+    depreciation and the amortization together (HD's FY2023 $2.455B, an income statement's line, doesn't hold its
+    $2.796B line and $179M); with none, the two must come to more than the line, else it held them (LMT's FY2019
+    $906M beside $794M and $111M).
+
+    A total that with the amortization makes another is the depreciation line under its tag in the filing's other
+    periods too, one line of its statements, where it doesn't differ from their Depreciation: HD's 10-K of March 2025
+    tags FY2023's $2.796B and FY2025's $3.336B, beside $425M. Known only so, it sets aside the period's smaller totals
+    (HD's $3.034B) and gives way to a larger one, which holds it (SBUX's FY2018 $1.306B beside its $1.247B line).
+
+    Beside a line, the filing's D&A enters under the line's tag, so a later filing's figure stands over an earlier
+    one's as for any restatement (DDOG's FY2021 $22.9M over its first 10-K's $18.5M line). A year's 10-Qs are read so
+    only where its latest 10-K is, so its quarters stay on one basis (PSTG's FY2022)."""
+    amortization: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    figures: Dict[Tuple[str, str, str], List[float]] = defaultdict(list)
     for tag in _AMORTIZATION:
         for key, e in _by_period(us_gaap, tag).items():
-            amortization.setdefault(key, e["val"])
-    amortization = {key: value for key, value in amortization.items() if value > 0}
+            amortization.setdefault(key, e)
+            if e["val"] > 0:
+                figures[key].append(e["val"])
+    amortization = {key: e for key, e in amortization.items() if e["val"] > 0}
+    least = {key: min(figures[key]) for key in amortization}
     if not amortization:
         return us_gaap
     depreciation = _by_period(us_gaap, _DEPRECIATION)
     totals = {tag: _by_period(us_gaap, tag) for tag in _DA_TOTALS}
+    # every filing's totals and its depreciation with the amortization, by period, with the filing's date
+    filed_totals: Dict[Tuple[str, str], List[Tuple[str, str, float]]] = defaultdict(list)
+    for by_key in totals.values():
+        for (accn, start, end), e in by_key.items():
+            filed_totals[(start, end)].append((accn, e.get("filed") or "", e["val"]))
+    first: Dict[Tuple[str, str], str] = {}  # when a period was first reported: its own year's basis
+    for by_key in (*totals.values(), depreciation, amortization):
+        for (_, start, end), e in by_key.items():
+            first[(start, end)] = min(first.get((start, end), e.get("filed") or ""), e.get("filed") or "")
+    first_totals: Dict[Tuple[str, str], List[float]] = defaultdict(list)
+    for span, entries in filed_totals.items():
+        first_totals[span] = [val for _, when, val in entries if when == first[span]]
+    to_date: Dict[str, List[Tuple[str, str, float]]] = defaultdict(list)
+    for key in amortization:  # a depreciation tagged as a total too may hold the amortization (BBY's)
+        d = depreciation.get(key)
+        if d is not None and not any(key in t and _agree(t[key]["val"], d["val"]) for t in totals.values()):
+            to_date[key[1]].append((key[2], d.get("filed") or "", d["val"] + least[key]))
+    revenue = [_by_period(us_gaap, tag) for tag in _FIELDS["revenue"].tags]
+
+    def revenue_of(key: Tuple[str, str, str]) -> Optional[float]:
+        return next((by_key[key]["val"] for by_key in revenue if key in by_key), None)
+
+    def same_basis(accn: str, key: Tuple[str, str, str]) -> bool:
+        # another filing gives the period the revenue this one does: a restated period (HLT's 2016 after its spin-offs)
+        # is on another basis, and its totals show nothing
+        mine, theirs = revenue_of(key), revenue_of((accn, key[1], key[2]))
+        return mine is not None and theirs is not None and _agree(mine, theirs)
+
+    def a_part(key: Tuple[str, str, str], total: float) -> bool:
+        # with the amortization it makes another total of the period filed by then: another filing's only on the same
+        # basis and for an amortization well beyond the agreement's band, which a restatement's change can match
+        # (DAL's FY2016 $1.886B and $17M make its first 10-K's $1.902B)
+        filed = amortization[key].get("filed") or ""
+        return any(when <= filed and _agree(other, total + a) and not _agree(total + a, total)
+                   and (accn == key[0] or (a >= 10 * _AGREE * total and same_basis(accn, key)))
+                   for accn, when, other in filed_totals[key[1:]] for a in figures[key])
+
+    periods: Dict[Tuple[str, str, str], Tuple[List[Tuple[str, Dict[str, Any]]], float]] = {}
+    tagged_lines: Dict[str, List[str]] = defaultdict(list)  # a total's tag the filings show to carry a line, when
+    for key, fact in amortization.items():
+        here = [(tag, by_key[key]) for tag, by_key in totals.items() if key in by_key]
+        # the amortization a total must exceed to hold it: the cash flow statement's, unless no total does (ALL's)
+        bar = fact["val"] if any(e["val"] > fact["val"] for _, e in here) else least[key]
+        periods[key] = (here, bar)
+        for tag, e in here:
+            if e["val"] > bar and a_part(key, e["val"]):
+                tagged_lines[tag].append(fact.get("filed") or "")
+    shown: Set[Tuple[str, str]] = set()  # (filing, tag): a filing's total shown to be its depreciation line
+    judged: List[Tuple[Tuple[str, str, str], float, Optional[Dict[str, Any]], List[Tuple[str, Dict[str, Any]]],
+                       List[Tuple[str, Dict[str, Any]]], List[Tuple[str, Dict[str, Any]]]]] = []
+    for key, fact in amortization.items():
+        part, filed = fact["val"], fact.get("filed") or ""
+        here, bar = periods[key]
+        dep = depreciation.get(key)
+
+        def a_line(tag: str, total: float) -> bool:
+            if a_part(key, total):
+                return True
+            # below the filing's depreciation, or below the depreciation and amortization its 10-Qs gave for part of
+            # the period (judged only as the report that first gave the period gave it: a later comparative can be on
+            # another basis, GE's FY2013 after GE Capital left), it is no gross total
+            short = (dep is not None and total < dep["val"] and not _agree(total, dep["val"])) or (
+                any(_agree(total, val) for val in first_totals[key[1:]]) and not _agree(total + least[key], total)
+                and any(end < key[2] and when <= filed and both > total and not _agree(both, total)
+                        for end, when, both in to_date[key[1]]))
+            # but a net add-back (BMY's "Depreciation and amortization, net") is the cash flow statement's own figure:
+            # it is a line only where the filings, by then, show the tag to carry one (HUM's FY2024 $839M beside $908M:
+            # its 10-K of 2024 shows FY2022's $709M the line of $845M) or the filing tags a total that holds the two
+            # (BA's FY2009 $1.066B beside $1.459B of depreciation, $207M and a $1.678B total)
+            base = (dep["val"] if dep is not None else total) + least[key]
+            return short and (any(when <= filed for when in tagged_lines[tag]) or any(
+                e["val"] > total and (e["val"] >= base or _agree(e["val"], base)) for _, e in here))
+
+        low = [(tag, e) for tag, e in here if 0 < e["val"] <= bar]
+        if bar < part and dep is not None:
+            # against the intangibles' own figure a total holds it only as large as the depreciation and it together
+            # (ALL's $1.086B beside $411M and $376M; CSGP's 2012 six months, $4.7M beside $4.5M and $4.2M, doesn't)
+            both = dep["val"] + bar
+            low += [(tag, e) for tag, e in here if bar < e["val"] < both and not _agree(e["val"], both)]
+        lines = [(tag, e) for tag, e in here if (tag, e) not in low and e["val"] > bar and a_line(tag, e["val"])]
+        # a total that with the amortization makes another is the line under its tag throughout its filing
+        shown.update((key[0], tag) for tag, e in lines if a_part(key, e["val"]))
+        judged.append((key, part, dep, here, low, lines))
+    final: Dict[Tuple[str, str, str], Tuple[float, Optional[Dict[str, Any]], List[Tuple[str, Dict[str, Any]]],
+                                            List[Tuple[str, Dict[str, Any]]], List[Tuple[str, Dict[str, Any]]]]] = {}
+    for key, part, dep, here, low, lines in judged:
+        # the filing's same line in its other periods (HD's FY2025), giving way to a larger total (SBUX's FY2018)
+        same = [(tag, e) for tag, e in here if (key[0], tag) in shown and e["val"] > 0
+                and (tag, e) not in low + lines and (dep is None or _agree(e["val"], dep["val"]))]
+        if same and not lines:
+            least_line = min(e["val"] for _, e in same)
+            lines = same + [(tag, e) for tag, e in here if (tag, e) not in low + same and e["val"] < least_line
+                            and not _agree(e["val"], least_line)]
+        elif lines:
+            lines += same
+            base = (dep or lines[0][1])["val"] + least[key]
+            lines += [(tag, e) for tag, e in here if (tag, e) not in low + lines
+                      and e["val"] < base and not _agree(e["val"], base)]
+        final[key] = (part, dep, here, low, lines)
+    # a year's 10-Qs are read so only where its latest 10-K is, so its quarters stay on one basis (PSTG's FY2022: nine
+    # months of $47.2M and $12.4M make the 10-Q's $59.6M, but the 10-K's $65.9M beside $16.8M is no $83.2M)
+    latest: Dict[str, Tuple[str, bool]] = {}
+    for key, (_, _, _, _, lines) in final.items():
+        when = amortization[key].get("filed") or ""
+        if _span_at_least_a_year(key) and when >= latest.get(key[1], ("", False))[0]:
+            latest[key[1]] = (when, bool(lines))
+    years = {start for start, (_, lined) in latest.items() if lined}
     aside: Dict[str, Set[Tuple[str, str, str]]] = defaultdict(set)
     added: List[Dict[str, Any]] = []
-    for key, part in amortization.items():
-        here = [(tag, by_key[key]) for tag, by_key in totals.items() if key in by_key]
-        low = [(tag, e) for tag, e in here if 0 < e["val"] <= part]
-        for tag, _ in low:
+    for key, (part, dep, here, low, lines) in final.items():
+        if lines and not _span_at_least_a_year(key) and key[1] not in years:
+            lines = []
+        if lines and len(low) + len(lines) == len(here):
+            # the depreciation and the amortization must come to more than the line they replace, else it held them
+            # (LMT's FY2019: $794M and $111M beside a $906M line)
+            both = (dep or lines[0][1])["val"] + part
+            if any(e["val"] >= both or _agree(e["val"], both) for _, e in lines):
+                lines = []
+        for tag, _ in low + lines:
             aside[tag].add(key)
-        if len(low) < len(here):
+        # beside a line the filings show, the filing's D&A enters under its tag too, so a later filing's figure stands
+        # over an earlier one's as for any restated figure (DDOG's FY2021: not its first 10-K's $18.5M line)
+        under = min((t for t, _ in lines), key=_DA_TOTALS.index) if lines else _DA_COMBINED
+        if len(low) + len(lines) < len(here):
+            held = [(tag, e) for tag, e in here if (tag, e) not in low + lines]
+            if lines and _DA_TOTALS.index(under) < _DA_TOTALS.index(held[0][0]):
+                added.append({**held[0][1], "_tag": under})
             continue  # a total that can hold the amortization
-        line = depreciation.get(key) or (low[0][1] if low else None)
+        line = dep or (lines[0][1] if lines else low[0][1] if low else None)
         if line is not None:
-            added.append({**line, "val": line["val"] + part})
+            added.append({**line, "val": line["val"] + part, "_tag": under})
     if not aside and not added:
         return us_gaap
     out = dict(us_gaap)
@@ -856,10 +1014,13 @@ def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
         units = out[tag].get("units", {})
         out[tag] = {**out[tag], "units": {**units, "USD": [
             e for e in units.get("USD", []) if (e.get("accn"), e.get("start"), e.get("end")) not in keys]}}
-    if added:
-        body = out.get(_DA_COMBINED, {"units": {}})
+    by_tag: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for e in added:
+        by_tag[e.pop("_tag")].append(e)
+    for tag, entries in by_tag.items():
+        body = out.get(tag, {"units": {}})
         units = body.get("units", {})
-        out[_DA_COMBINED] = {**body, "units": {**units, "USD": units.get("USD", []) + added}}
+        out[tag] = {**body, "units": {**units, "USD": units.get("USD", []) + entries}}
     return out
 
 

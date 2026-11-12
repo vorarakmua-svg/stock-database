@@ -2985,3 +2985,21 @@ Result: BUG-322 and BUG-323 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2891 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(web): every SEC gap note on FA and VAL; a gapped short window counts its months (BUG-322, BUG-323)
 Next: BUG-274 (worker, rework); BUG-319 (worker); Q17.
+
+## Iteration 171: 2026-11-13 00:11: fix (BUG-274)
+Picked: the oldest open P2 with a fix ready; its worker resumed after the usage limit, then sent back once.
+Did: a D&A "total" larger than the amortization is read as the depreciation line where the filings show it, and the
+amortization joins it. Round 1 was not applied: it made HLT's Q4 2016 D&A negative (a restated period matched against
+the original by chance) and replaced net add-backs (BMY, PNC) and other bases (IP, CTAS) with gross figures. Round 2
+adds a same-revenue test for an earlier filing's evidence, corroboration for (a)/(c), entry under the line's own tag,
+and a census of negatives and halvings (0 of each).
+- RED: 13 of 310 failed on HEAD's src (14 on round 1's code, the HLT test among them); GREEN. 32 of 32 mutants; BUG-170's
+  spec reshaped for this code (qa/evidence/bug170-mutants.json, 17 of 17). Look-ahead 0.
+- Census and DB copies: D&A only (annual 95 cells at 19 filers); 0 medians, verdicts or labels; one owner-earnings
+  verdict, HUM expensive -> fair; 5 historical values move within their labels; HD composite 42 -> 44.
+- GE FY2022-25, the title's case, is undecidable from the facts: residual, with WELL, VRSK, BKNG, SCHW FY2022-23.
+- New: BUG-327 (P2, UPS's round D&A figures).
+Result: BUG-274 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2916 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): a D&A "total" the filings show to be the depreciation line takes the amortization (BUG-274)
+Next: code review 28 (5 fixes since 27); BUG-319 (its worker's measurement, then apply).

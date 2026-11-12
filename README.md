@@ -2162,11 +2162,33 @@ numbers SEC filings report:
   depreciation and its amortization of intangibles on lines of their own, with no total that
   can hold them, it is the two together (AbbVie's FY2025: $8.1B, not its $0.8B of depreciation;
   EBITDA $23.2B, not $15.8B); the amortization is the cash flow statement's (Intuit's holds the
-  acquired technology's in cost of revenue too). A "total" no larger than that amortization is
-  the filing's depreciation line under a total's tag (CME's $107.5M beside $223.4M), and the two
-  are added too. Each 10-Q and 10-K is read so, so a year's quarters stay on one basis where its
-  10-Qs tag the lines its 10-K does. No other amortization (capitalized software, finance
-  leases) is added: it lies inside the depreciation at one filer and apart at another.
+  acquired technology's in cost of revenue too). A "total" can't hold the amortization where it
+  is no larger than it (CME's $107.5M beside $223.4M; where no total is larger than the cash flow
+  statement's figure, the intangibles' own is the test, and a total holds it only as large as
+  the depreciation and it together: Allstate's FY2021 $1.09B stands beside $0.41B and $0.38B),
+  and none where the filings show it to be the depreciation line. With the amortization it
+  makes another total of the period, in the same filing (SWK's FY2023 $432M and $625M) or an
+  earlier one on the same basis (the same revenue) and for an amortization of at least 5% of it
+  (MRSH's first FY2023 10-K tagged $713M, its later ones $370M beside $343M; Hilton's 2016,
+  restated after its spin-offs, shows nothing). A total below the filing's depreciation, or below
+  the depreciation and amortization its 10-Qs first gave for part of the year, is no gross
+  total, but a net add-back is the cash flow statement's own figure (Bristol-Myers Squibb's
+  "Depreciation and amortization, net" stays): it is a line only where the filer's filings, by
+  then, show its tag to carry one (Humana's FY2024 $839M beside $908M) or the filing tags a total
+  holding the two (Boeing's FY2009). A filing's total shown by another total to be its line is
+  its line for the filing's other periods too (Home Depot's 10-K of March 2025 tags FY2025's
+  $3.34B line beside $425M as it did FY2023's). Such a total is set aside; another one is read
+  only if it is at least the depreciation and the amortization together (Home Depot's FY2023
+  income-statement $2.46B isn't, beside its $2.80B line and $179M); with none the D&A is the
+  filing's depreciation, else the set-aside line, plus the amortization, provided the two come
+  to more than the line. The result enters under the line's tag, so a later filing's figure
+  stands over an earlier one's. Only filings filed by then are read, so each vintage is as known
+  then; a year's 10-Qs are read so only where its latest 10-K is, so its quarters stay on one
+  basis. No other amortization (capitalized software, finance leases) is added: it lies
+  inside the depreciation at one filer and apart at another. A total above the amortization
+  that nothing in the filings contradicts is read as the D&A, though it can be the depreciation
+  line: GE's FY2025 total is $0.86B beside $0.36B of amortization, which Yahoo reads as $1.22B
+  together.
 - **Balance-sheet checkpoints** at every quarter-end (instant facts), full history.
 - **`fiscal_quarter`** (1–4, company calendar) and **`calendar_quarter`** (1–4, calendar)
   are both attached; `calendar_quarter` comes from the SEC frame and is the reliable

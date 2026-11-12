@@ -1862,6 +1862,281 @@ def test_a_later_filings_d_and_a_restates_an_earlier_ones(earlier, later, da):
     assert _da(XBRLParser().extract_annual_financials(facts)["2025"]) == (da, DA)
 
 
+DAAN = "DepreciationAmortizationAndAccretionNet"
+
+
+def test_a_total_that_holds_the_intangibles_amortization_stays_beside_a_broader_cash_flow_figure():
+    # BUG-299 (code review 23): ALL's FY2021 10-K tags a $1.086B total, $411M of depreciation, $376M of amortization
+    # of intangibles and a cash flow statement's $1.281B of amortization (more than the intangibles'): the total was
+    # set aside against the broader figure, and the vintage read $1.692B.
+    tagged = {DAAN: 1086e6, DEPRECIATION: 411e6, AMORTIZATION: 1281e6, INTANGIBLES: 376e6}
+    assert _da_records(_da_year(**tagged)) == [(1086e6, DAAN)] * 2
+
+
+@pytest.mark.parametrize("tagged", [
+    # SWK's FY2023 10-K: its depreciation line ($432.4M) under the first-ranked tag, the total of it and the $192.7M of
+    # amortization ($625.1M) under another; the cash flow statement's amortization ($49.1M) is another's, inside it.
+    {DDA: 432.4e6, DA: 625.1e6, DEPRECIATION: 383.3e6, AMORTIZATION: 49.1e6, INTANGIBLES: 192.7e6},
+    {DDA: 432.4e6, DA: 625.1e6, INTANGIBLES: 192.7e6},
+])
+def test_a_total_the_filing_shows_to_be_its_depreciation_line_is_set_aside(tagged):
+    # BUG-274: a total larger than the amortization beside it was read as holding it. One that, with the amortization,
+    # makes another total of the filing is that total's part.
+    assert _da_records(_da_year(**tagged)) == [(625.1e6, DDA)] * 2
+
+
+def test_a_net_add_back_below_the_depreciation_stays():
+    # BMY's FY2016 cash flow statement adds back "Depreciation and amortization, net", $382M, below its $448M of
+    # depreciation and beside $178M of amortization, and below its 10-Qs' nine months of the two: it is no gross total,
+    # but nothing shows the tag to carry a line, so it is the statement's own add-back. A total of the filing that
+    # holds the two shows it a line (BA's FY2009: $1.066B beside $1.459B, $207M and a $1.678B total).
+    q3 = ("2025-01-01", "2025-09-30", "10-Q", "2025-10-25", {DEPRECIATION: 330e6, INTANGIBLES: 133e6})
+    year = ("2025-01-01", "2025-12-31", "10-K", "2026-02-12")
+    facts = _da_filings(q3, (*year, {DDA: 382e6, DEPRECIATION: 448e6, INTANGIBLES: 178e6}))
+    assert _da_records(facts) == [(382e6, DDA)] * 2
+    facts = _da_filings((*year, {DDA: 1066e6, DA: 1678e6, DEPRECIATION: 1459e6, INTANGIBLES: 207e6}))
+    assert _da_records(facts) == [(1678e6, DDA)] * 2
+
+
+def _da_filings(*filings):
+    """A filer's facts from filings, each (start, end, form, filed, {tag: value}); a period's revenue, the same in
+    every filing unless given, puts the filings on one basis."""
+    us_gaap = {"Assets": {"units": {"USD": []}}}
+    for start, end, form, filed, tagged in filings:
+        filing = dict(fy=int(filed[:4]), fp="FY" if form == "10-K" else "Q", form=form, filed=filed)
+        us_gaap["Assets"]["units"]["USD"].append(usd(1e12, None, end, **filing))
+        for tag, val in {"Revenues": 1e11, **tagged}.items():
+            us_gaap.setdefault(tag, {"units": {"USD": []}})["units"]["USD"].append(usd(val, start, end, **filing))
+    return {"facts": {"us-gaap": us_gaap}}
+
+
+@pytest.mark.parametrize("earlier, later, da", [
+    # MRSH's FY2023: its first 10-K tags a $713M total, $370M of depreciation and $343M of amortization; its later
+    # 10-Ks tag the depreciation line as the total ($370M) beside the same amortization.
+    ({DDA: 713e6, DEPRECIATION: 370e6, INTANGIBLES: 343e6}, {DDA: 370e6, DEPRECIATION: 370e6, INTANGIBLES: 343e6},
+     713e6),
+    # HD's FY2023: its first 10-K's total ($2.975B) is a later 10-K's first-ranked line ($2.796B) and its $179M of
+    # amortization; that 10-K's other total ($2.455B, the income statement's) is smaller than the two.
+    ({DDA: 2975e6}, {DDA: 2796e6, DA: 2455e6, INTANGIBLES: 179e6}, 2975e6),
+])
+def test_an_earlier_filings_total_shows_a_later_ones_line(earlier, later, da):
+    year = ("2025-01-01", "2025-12-31", "10-K")
+    facts = _da_filings((*year, "2026-02-12", earlier), (*year, "2027-02-18", later))
+    parser = XBRLParser()
+    assert parser.extract_annual_financials(facts)["2025"]["depreciation_amortization"] == da
+    assert parser.extract_annual_vintages(facts)["2025"]["2027-02-18"]["depreciation_amortization"] == da
+
+
+def test_an_earlier_filings_total_on_another_basis_shows_nothing():
+    # HLT's 2016: its first report's $509M (Park Hotels and Hilton Grand Vacations inside) is its later restated
+    # $273M and $234M of amortization by chance; the revenue shows the two on other bases.
+    year = ("2016-01-01", "2016-12-31", "10-K")
+    facts = _da_filings((*year, "2017-02-15", {DA: 509e6, "Revenues": 11.7e9}),
+                        (*year, "2018-02-14", {DA: 273e6, INTANGIBLES: 234e6, "Revenues": 7.0e9}))
+    assert _da(XBRLParser().extract_annual_financials(facts)["2016"]) == (273e6, DA)
+
+
+def test_the_combination_stands_over_an_earlier_filings_figure_as_any_restatement():
+    # BEN's FY2019: its 10-K of 2020 tags its depreciation line ($78.7M) under the first-ranked tag beside $14.7M of
+    # amortization, together its first 10-K's $93.4M total; entered under that tag, the later figure stands, not the
+    # first 10-K's $83.2M under it.
+    year = ("2018-10-01", "2019-09-30", "10-K")
+    facts = _da_filings((*year, "2019-11-12", {DDA: 83.2e6, DA: 93.4e6, INTANGIBLES: 14.7e6}),
+                        (*year, "2020-11-23", {DDA: 78.7e6, DA: 83.2e6, INTANGIBLES: 14.7e6}))
+    assert _da(XBRLParser().extract_annual_financials(facts)["2019"]) == (93.4e6, DDA)
+
+
+_HD_SHOWN = [("2022-01-31", "2023-01-29", "10-K", "2023-03-15", {DDA: 2975e6}),
+             ("2022-01-31", "2023-01-29", "10-K", "2025-03-21", {DDA: 2796e6, DA: 2455e6, INTANGIBLES: 179e6})]
+_HD_FY2025 = ("2024-01-29", "2025-02-02", "10-K")
+
+
+def test_a_filings_line_shown_in_one_year_is_its_line_in_the_others():
+    # HD's 10-K of March 2025 tags its depreciation line as the total for FY2023 ($2.796B, its first 10-K's $2.975B
+    # less $179M of amortization) and for FY2025 ($3.336B beside $425M), where nothing else shows it.
+    year = (*_HD_FY2025, "2025-03-21", {DDA: 3336e6, DA: 3034e6, INTANGIBLES: 425e6})
+    parser = XBRLParser()
+    facts = _da_filings(*_HD_SHOWN, year)
+    assert _da(parser.extract_annual_financials(facts)["2025"]) == (3761e6, DDA)
+    assert _da(parser.extract_annual_vintages(facts)["2025"]["2025-03-21"]) == (3761e6, DDA)
+    alone = _da_filings(year)  # the year alone: nothing shows its line
+    assert _da(parser.extract_annual_financials(alone)["2025"]) == (3336e6, DDA)
+
+
+@pytest.mark.parametrize("year, tag", [
+    ((*_HD_FY2025, "2025-03-21", {DAAN: 3336e6, INTANGIBLES: 425e6}), DAAN),  # the filing's other tag
+    ((*_HD_FY2025, "2026-03-18", {DDA: 3336e6, INTANGIBLES: 425e6}), DDA),  # the next 10-K, which shows nothing
+    ((*_HD_FY2025, "2025-03-21", {DDA: 3336e6, DEPRECIATION: 3000e6, INTANGIBLES: 425e6}), DDA),  # not its depreciation
+])
+def test_only_the_filings_own_line_is_shown_so(year, tag):
+    # Nothing shows these totals to be lines: they stay.
+    assert _da(XBRLParser().extract_annual_financials(_da_filings(*_HD_SHOWN, year))["2025"]) == (3336e6, tag)
+
+
+_HUM_SHOWN = [("2022-01-01", "2022-12-31", "10-K", "2023-02-16", {DA: 845e6}),
+              ("2022-01-01", "2022-12-31", "10-K", "2024-02-16", {DA: 709e6, INTANGIBLES: 136e6})]
+
+
+def test_a_total_below_the_depreciation_is_a_line_where_the_filer_tags_one_there():
+    # HUM's 10-K of 2024 tags FY2022's DepreciationAndAmortization as $709M, its first 10-K's $845M less $136M of
+    # amortization: the tag carries a line, so FY2024's $839M beside $908M of depreciation is that line, not a net
+    # add-back.
+    facts = _da_filings(*_HUM_SHOWN, ("2024-01-01", "2024-12-31", "10-K", "2025-02-19",
+                                      {DA: 839e6, DEPRECIATION: 908e6, AMORTIZATION: 60e6, INTANGIBLES: 60e6}))
+    assert _da(XBRLParser().extract_annual_financials(facts)["2024"]) == (968e6, DA)
+    assert _da(XBRLParser().extract_annual_vintages(facts)["2024"]["2025-02-19"]) == (968e6, DA)
+    # a 10-K filed before the filings showed the line is read as filed
+    early = _da_filings(*_HUM_SHOWN, ("2023-01-01", "2023-12-31", "10-K", "2024-02-15",
+                                      {DA: 779e6, DEPRECIATION: 850e6, INTANGIBLES: 67e6}))
+    assert _da(XBRLParser().extract_annual_vintages(early)["2023"]["2024-02-15"]) == (779e6, DA)
+
+
+def test_a_total_below_the_depreciation_shows_no_line_in_the_filings_other_years():
+    # A total below its depreciation, in a filing whose tag the filings show to carry a line elsewhere, is that line
+    # ($19.3M + $4.5M); it shows nothing of the filing's other years: FY2024's $48.4M beside $17.4M stays.
+    facts = _da_filings(("2022-01-01", "2022-12-31", "10-K", "2023-02-28", {DDA: 24.4e6}),
+                        ("2022-01-01", "2022-12-31", "10-K", "2024-02-27", {DDA: 20.4e6, INTANGIBLES: 4.0e6}),
+                        ("2023-01-01", "2023-12-31", "10-K", "2025-02-28",
+                         {DDA: 19.3e6, DEPRECIATION: 28.1e6, INTANGIBLES: 4.5e6}),
+                        ("2024-01-01", "2024-12-31", "10-K", "2025-02-28", {DDA: 48.4e6, INTANGIBLES: 17.4e6}))
+    annual = XBRLParser().extract_annual_financials(facts)
+    assert _da(annual["2023"]) == (32.6e6, DDA)
+    assert _da(annual["2024"]) == (48.4e6, DDA)
+
+
+def test_a_restatement_the_size_of_a_small_amortization_shows_no_line():
+    # DAL's 10-K of February 2019 restates FY2016's total from $1.902B to $1.886B; its $17M of amortization makes up
+    # the difference only by chance. In one filing the two totals do show the line (DVA's FY2022 $721.1M and $732.6M,
+    # with $11.5M).
+    year = ("2016-01-01", "2016-12-31", "10-K")
+    facts = _da_filings((*year, "2017-02-13", {DDA: 1902e6}), (*year, "2019-02-15", {DDA: 1886e6, INTANGIBLES: 17e6}))
+    assert _da(XBRLParser().extract_annual_vintages(facts)["2016"]["2019-02-15"]) == (1886e6, DDA)
+    assert _da_records(_da_year(**{DDA: 721.1e6, DA: 732.6e6, INTANGIBLES: 11.5e6})) == [(732.6e6, DDA)] * 2
+
+
+def test_a_larger_total_holds_a_line_known_from_another_year():
+    # SBUX's 10-K of November 2018: FY2017's income-statement D&A ($1.011B) and $57.5M of amortization make its cash
+    # flow statement's $1.067B, so that tag is a line; FY2018's $1.247B under it stands beside the cash flow
+    # statement's $1.306B, which holds it, not beside $1.433B.
+    filed = ("10-K", "2018-11-16")
+    facts = _da_filings(("2016-10-03", "2017-10-01", *filed, {DDA: 1067.1e6, DA: 1011.4e6, INTANGIBLES: 57.5e6}),
+                        ("2017-10-02", "2018-09-30", *filed, {DDA: 1305.9e6, DA: 1247e6, INTANGIBLES: 186.5e6}))
+    assert _da(XBRLParser().extract_annual_financials(facts)["2018"]) == (1305.9e6, DDA)
+
+
+def test_against_the_intangibles_figure_a_total_holds_it_only_beside_the_depreciation():
+    # CSGP's 2012 six months: $4.7M under the first-ranked tag beside $4.5M of depreciation, the cash flow statement's
+    # $7.0M of amortization and $4.2M of the intangibles': no total exceeds $7.0M, and $4.7M is the depreciation line,
+    # not a total of it and the $4.2M (ALL's $1.086B beside $411M and $376M is).
+    assert _da_records(_da_year(**{DDA: 4.7e6, DEPRECIATION: 4.5e6, AMORTIZATION: 7.0e6, INTANGIBLES: 4.2e6})) == [
+        (11.5e6, DA)] * 2
+
+
+def test_a_years_10qs_are_read_so_only_where_its_10k_is():
+    # PSTG's FY2022: its nine months' $47.2M and $12.4M make the 10-Q's $59.6M, but the 10-K's $65.9M beside $16.8M
+    # isn't its $83.2M: read alone, the nine months would leave the fourth quarter $6.3M of the 10-K's line.
+    facts = _da_filings(("2025-01-01", "2025-09-30", "10-Q", "2025-10-30",
+                         {DDA: 47.2e6, DA: 59.6e6, INTANGIBLES: 12.4e6}),
+                        ("2025-01-01", "2025-12-31", "10-K", "2026-02-12",
+                         {DDA: 65.9e6, DA: 83.2e6, INTANGIBLES: 16.8e6}))
+    quarters = XBRLParser().extract_quarterly_financials(facts)
+    assert quarters["2025-12-31"]["depreciation_amortization"] == pytest.approx(18.7e6)
+    # the year's latest 10-K decides, as the quarters read it
+    facts = _da_filings(("2025-01-01", "2025-09-30", "10-Q", "2025-10-30",
+                         {DDA: 47.2e6, DA: 59.6e6, INTANGIBLES: 12.4e6}),
+                        ("2025-01-01", "2025-12-31", "10-K", "2026-02-12",
+                         {DDA: 65.9e6, DA: 82.7e6, INTANGIBLES: 16.8e6}),
+                        ("2025-01-01", "2025-12-31", "10-K", "2027-02-12",
+                         {DDA: 65.0e6, DA: 83.2e6, INTANGIBLES: 16.8e6}))
+    quarters = XBRLParser().extract_quarterly_financials(facts)
+    assert quarters["2025-12-31"]["depreciation_amortization"] == pytest.approx(17.8e6)
+
+
+def test_a_later_filings_total_beside_a_line_stands_over_an_earlier_ones_line():
+    # DDOG's FY2021: its first 10-K tags $18.5M under the first-ranked tag and $22.9M under another, with no usable
+    # amortization; its later 10-K's $4.4M shows $18.5M the line and $22.9M the total, which stands for the year.
+    year = ("2021-01-01", "2021-12-31", "10-K")
+    facts = _da_filings((*year, "2022-02-25", {DDA: 18.5e6, DA: 22.9e6}),
+                        (*year, "2024-02-23", {DDA: 18.5e6, DA: 22.9e6, INTANGIBLES: 4.4e6}))
+    assert _da(XBRLParser().extract_annual_financials(facts)["2021"]) == (22.9e6, DDA)
+
+
+def test_a_line_the_depreciation_and_amortization_dont_exceed_held_them():
+    # LMT's FY2019: its 10-K of 2022 tags $906M, its first 10-K's $1.189B less the $284M of the intangibles'
+    # amortization, but $794M of depreciation and the cash flow statement's $111M come to $905M: no more than the
+    # line, which stands.
+    year = ("2019-01-01", "2019-12-31", "10-K")
+    parts = {DEPRECIATION: 794e6, INTANGIBLES: 284e6, AMORTIZATION: 111e6}
+    facts = _da_filings((*year, "2020-02-07", {DA: 1189e6, **parts}), (*year, "2022-01-25", {DA: 906e6, **parts}))
+    assert _da(XBRLParser().extract_annual_financials(facts)["2019"]) == (906e6, DA)
+
+
+def test_a_later_filing_doesnt_judge_an_earlier_ones_figures():
+    # A vintage reads what was known when it was filed: the later 10-K's $713M total says nothing to the first.
+    year = ("2025-01-01", "2025-12-31", "10-K")
+    facts = _da_filings((*year, "2026-02-12", {DDA: 370e6, DEPRECIATION: 370e6, INTANGIBLES: 343e6}),
+                        (*year, "2027-02-18", {DDA: 713e6, DEPRECIATION: 370e6, INTANGIBLES: 343e6}))
+    assert _da(XBRLParser().extract_annual_vintages(facts)["2025"]["2026-02-12"]) == (370e6, DDA)
+
+
+_MRSH_10QS = [("2025-01-01", end, "10-Q", filed, {DEPRECIATION: d, INTANGIBLES: a}) for end, filed, d, a in (
+    ("2025-03-31", "2025-04-24", 86e6, 85e6), ("2025-06-30", "2025-07-24", 172e6, 171e6),
+    ("2025-09-30", "2025-10-23", 259e6, 258e6))]
+
+
+_MRSH_SHOWN = [("2023-01-01", "2023-12-31", "10-K", "2024-02-12", {DDA: 713e6}),
+               ("2023-01-01", "2023-12-31", "10-K", "2025-02-12", {DDA: 370e6, INTANGIBLES: 343e6})]
+
+
+def test_nine_months_of_the_10qs_lines_above_the_years_total_show_its_line():
+    # A 10-K that tags its depreciation line as the total ($381M) beside $338M of amortization, its 10-Qs $259M and
+    # $258M for nine months: the year's "total" was below nine months of its parts, its fourth quarter -$136M. The
+    # filer's earlier 10-K shows the tag to carry its line (MRSH's 10-K of 2025: FY2023's $370M, its first $713M).
+    facts = _da_filings(*_MRSH_SHOWN, *_MRSH_10QS, ("2025-01-01", "2025-12-31", "10-K", "2026-02-12",
+                                                    {DDA: 381e6, DEPRECIATION: 381e6, INTANGIBLES: 338e6}))
+    assert _da_records(facts) == [(719e6, DDA)] * 2
+    quarters = XBRLParser().extract_quarterly_financials(facts)
+    assert [quarters[end]["depreciation_amortization"] for end in ("2025-03-31", "2025-06-30", "2025-09-30",
+                                                                    "2025-12-31")] == [171e6, 172e6, 174e6, 202e6]
+
+
+def _shown(tag):
+    """Two 10-Ks of FY2024 that show *tag* to carry the filer's depreciation line ($800M + $100M = $900M)."""
+    year = ("2024-01-01", "2024-12-31", "10-K")
+    return [(*year, "2025-02-01", {tag: 900e6}), (*year, "2025-06-02", {tag: 800e6, INTANGIBLES: 100e6})]
+
+
+def test_the_10qs_judge_a_total_only_as_first_reported():
+    # GE's FY2013: its 10-Qs and first 10-K held GE Capital ($9.762B of depreciation by the year's end); its FY2015
+    # 10-K restates the year without it (here a $5.5B total beside $5.202B of depreciation and $1.286B of
+    # amortization), below the first basis's nine months.
+    q3 = ("2025-01-01", "2025-09-30", "10-Q", "2025-10-30", {DEPRECIATION: 7300e6, INTANGIBLES: 1290e6})
+    year = ("2025-01-01", "2025-12-31", "10-K")
+    facts = _da_filings(*_shown(DDA), q3,
+                        (*year, "2026-02-27", {DDA: 11473e6, DEPRECIATION: 9762e6, INTANGIBLES: 1711e6}),
+                        (*year, "2028-02-26", {DDA: 5500e6, DEPRECIATION: 5202e6, INTANGIBLES: 1286e6}))
+    assert _da(XBRLParser().extract_annual_financials(facts)["2025"]) == (5500e6, DDA)
+
+
+def test_a_depreciation_tagged_as_the_total_too_doesnt_judge_the_year():
+    # GE's FY2019 10-Qs tag one figure as the depreciation and the total ($2.969B for nine months) beside $1.220B of
+    # amortization: it may hold the amortization, so it says nothing of the 10-K's $4.026B.
+    facts = _da_filings(*_shown(DAAN), ("2025-01-01", "2025-09-30", "10-Q", "2025-10-30",
+                                        {DAAN: 2969e6, DEPRECIATION: 2969e6, INTANGIBLES: 1220e6}),
+                        ("2025-01-01", "2025-12-31", "10-K", "2026-02-24",
+                         {DAAN: 4026e6, DEPRECIATION: 4026e6, INTANGIBLES: 1569e6}))
+    assert _da_records(facts, filed="2026-02-24") == [(4026e6, DAAN)] * 2
+
+
+def test_the_10qs_filed_after_a_10k_dont_judge_it():
+    # The next year's 10-Q shows the nine months again, filed after the 10-K: the 10-K is read as filed.
+    facts = _da_filings(*_shown(DDA),
+                        ("2025-01-01", "2025-09-30", "10-Q", "2026-10-23", {DEPRECIATION: 259e6, INTANGIBLES: 258e6}),
+                        ("2025-01-01", "2025-12-31", "10-K", "2026-02-12",
+                         {DDA: 381e6, DEPRECIATION: 381e6, INTANGIBLES: 338e6}))
+    assert _da(XBRLParser().extract_annual_vintages(facts)["2025"]["2026-02-12"]) == (381e6, DDA)
+
+
 def _outflow_quarters(tag, field, values, start="2008-01-01", ends=("2008-03-31", "2008-06-30", "2008-09-30",
                                                                   "2008-12-31")):
     """An outflow's year-to-date ladder (three 10-Qs, then the 10-K's year), and its derived quarters."""

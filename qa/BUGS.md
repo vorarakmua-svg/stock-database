@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 4 · P3 152 · NEEDS-USER 0 · Decided: 7 · Verified: 179
+**Open:** P0 0 · P1 0 · P2 4 · P3 152 · NEEDS-USER 0 · Decided: 7 · Verified: 180
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2235,10 +2235,17 @@ Repro: CHD's FY2023 10-K tags its 2023 LongTermDebtNoncurrent ($2.202B) at 2021-
 Expected: FY2021's own long-term debt.   Actual: a stray later figure.
 
 ### BUG-274 [P2][VALID] D&A reads a "total" that is the filing's depreciation line where it is larger than the amortization beside it: GE FY2022-25 $0.85B for $1.18-1.22B
-Status: OPEN
-Found: iteration 116 (BUG-170's investigation, `qa/evidence/bug170-investigation.txt` R1) | Fixed: | Regression test:
+Status: VERIFIED (iteration 171; GE FY2022-25 itself undecidable from the filings: residual)
+Found: iteration 116 (BUG-170's investigation, `qa/evidence/bug170-investigation.txt` R1) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (25 new items, 13 failing first; among them ::test_an_earlier_filings_total_on_another_basis_shows_nothing)
 Repro: BUG-170's V3 sets a "total" aside only where it is no larger than the amortization it can't then hold. A depreciation line tagged as the total and larger than the amortization looks like a total that holds it: it equals the filing's own depreciation in 34 years (MRSH FY2022-23, HUM FY2013-16, EME FY2010-13, AON FY2009/16, FLEX FY2017-19, GE FY2010, TTWO FY2015-17, BBY FY2023-26), where equality decides nothing (MRSH's is the depreciation line, BBY's one line tagged twice); and Yahoo reads total + amortization in 77 of the 379 Yahoo years whose total is larger with no depreciation tagged (GE FY2022-25, WELL, VRSK, SCHW, LVS, UPS, KR, NEE, BKNG, PEP...; HUM FY2022-25's total is even below its Depreciation).
 Expected: D&A as the filing's cash flow statement adds it back.   Actual: the depreciation line alone. The filing alone carries no evidence: a 10-Q-based test (a total below nine months of the 10-Qs' parts) would decide some.
+Fix (iteration 171, `qa/evidence/bug274-investigation.txt`, two rounds): a total larger than the amortization is the depreciation line where (b) the line plus the amortization equals another total of the period filed by then, in the same filing, or in an earlier one showing the same revenue for the period with the amortization at least 5% of the line; (a)/(c) it is below the filing's Depreciation, or below the 10-Qs' first depreciation plus amortization to date, and the filer's filings by then show the tag carrying a line, or the same filing tags a total as large as both (else it is a net add-back and stays: BMY, PNC); (d) the same filing shows the tag a line in another period and here it equals the Depreciation. The combined figure must exceed the line, is entered under the line's own tag (the latest filing wins: IP, CTAS, BEN keep their figures), and a year's 10-Qs move only with its latest 10-K. Census over 504 filers: D&A only, annual 95 cells at 19 filers (MRSH, HUM, SWK, HD, AXON FY2023, BA FY2008-09, eBay, NTAP, DVA, DDOG, MCO, NDAQ, GWW, RJF, L, TPR, SCHW FY2018-19, BR), quarterly 136, TTM 337, vintages 233; no cell goes negative or drops by half (22 negative Q4s become positive). On DB copies: 0 medians, 0 verdicts, 0 labels; owner earnings HUM expensive -> fair (base $411.11 -> $476.50, price $422.07); HD, SWK, NTAP, DVA, TPR values move within their verdicts. Look-ahead 0; 32 mutants. Residuals, undecidable from the facts: GE, WELL, VRSK, BKNG FY2022-25 (GE tags only the PP&E line and the amortization since 2021, in 10-Ks and 10-Qs alike), SCHW FY2022-23, KDP, TTWO FY2021, EME, BEN; Q4 lumps where the 10-Qs lack the amortization (BUG-275's kind). New: BUG-327 (UPS).
+
+### BUG-327 [P2][VALID] D&A reads round figures UPS tags under the first-ranked tag: FY2023-25 $2.8B/$3.0B/$3.0B for $3.366B/$3.609B/$3.746B
+Status: OPEN
+Found: iteration 171 (BUG-274's worker, round 2) | Fixed: | Regression test:
+Repro: UPS's 10-K 0001628280-26-008432 (filed 2026-02-17) tags DepreciationDepletionAndAmortization at 2,800 / 3,000 / 3,000 ($M), beside DepreciationAndAmortization 3,366 / 3,609 / 3,746; DDA is read first and the latest filing stands. Same at HEAD and with BUG-274.
+Expected: the cash-flow add-back, $3.366B / $3.609B / $3.746B (Yahoo agrees).   Actual: $2.8B / $3.0B / $3.0B.
 
 ### BUG-275 [P3][TTM] A year's quarters sit on two D&A bases where its 10-Qs tag lines its 10-K doesn't, or the reverse: AVGO's FY2023-24 fourth quarters $3.37B and $9.42B
 Status: OPEN
