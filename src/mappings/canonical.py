@@ -91,7 +91,9 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
             "SalesRevenueGoodsNet",
         ),
         description="Total net revenue / sales. For banks, derived from net interest "
-                    "income + noninterest income when no single tag is filed. A figure "
+                    "income + noninterest income when no single tag is filed, or the "
+                    "figure filed is under 0.8 of the two (a part of it: "
+                    "xbrl_parser._bank_revenue_parts). A figure "
                     "the year's other figures show isn't its revenue gives way "
                     "(XBRLParser._revenue_set_aside).",
     ),

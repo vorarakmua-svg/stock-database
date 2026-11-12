@@ -3049,3 +3049,20 @@ Result: BUG-332 and BUG-333 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2936 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(parsers): a year with no 10-K yet reads its 10-Qs' D&A as the last 10-K was read (BUG-332, BUG-333)
 Next: BUG-328 (worker, measuring); BUG-327, BUG-329; Q17.
+
+## Iteration 175: 2026-11-13 05:30: fix (BUG-328)
+Picked: the P2 BUG-319's census found; an opus worker. Its R1 (NTRS's and BNY's 10-Qs read the part at 0.61-0.71)
+decided by the loop: the bound 0.8, the gap in the data being 0.776 (a part) to 0.9015 (a total).
+Did: a bank's revenue no longer reads the ASC 606 contract revenue of a part of its noninterest income: a revenue fact
+under 0.8 of the same filing's net interest income + noninterest income for the period is not read, and the existing
+derivation fills it. FITB FY2022 $0.589B -> $8.375B, RF FY2021 $0.104B -> $6.438B, HBAN FY2025 $1.562B -> $8.166B, MTB
+FY2025 $1.657B -> $9.690B; NTRS's and BNY's quarters.
+- RED: 6 of 342 failed on 55b9bf8's src; GREEN. 17 of 17 mutants; q16's two reshaped (the `_aside` line); bug332 36,
+  bug319 17 killed. Look-ahead unchanged (9 cells at JCI, YUM, ICE from BUG-099's rule, the same at HEAD).
+- DB copies (6 banks re-collected, the engine over 502): 0 medians, verdicts or owner-earnings verdicts; labels FITB near
+  -> far above, HBAN above -> near; quality composites FITB 77.5 -> 55.0, MTB 62.5 -> 80.0, RF 70.0 -> 62.5 and sector
+  peers; MTB's revenue-decline warning gone, FITB gains a price/historical-value one. The three oracles as at HEAD.
+Result: BUG-328 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2948 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): a bank's revenue isn't a part of its noninterest income (BUG-328)
+Next: BUG-327 (worker); BUG-329; Q17 with BUG-295; code review 29 after 2 more fixes.

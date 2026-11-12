@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 5 · P3 155 · NEEDS-USER 0 · Decided: 7 · Verified: 183
+**Open:** P0 0 · P1 0 · P2 4 · P3 155 · NEEDS-USER 0 · Decided: 7 · Verified: 184
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2074,10 +2074,11 @@ Repro: docs/superpowers/specs/2026-10-21-quality-scores-design.md ~153; the READ
 Expected: the share of profitable years (of the last 5 to 10).   Actual: out of 10.
 
 ### BUG-328 [P2][VALID] A bank's revenue reads a contract-revenue line, a part of its noninterest income: FITB FY2016-23 $0.55-0.60B for $6.3-8.7B, RF FY2016-21 $58-104M for $5.4-6.4B
-Status: OPEN
-Found: iteration 172 (BUG-319's worker, `qa/evidence/bug319-investigation.txt` section 7, P1) | Fixed: | Regression test:
+Status: VERIFIED (iteration 175)
+Found: iteration 172 (BUG-319's worker, `qa/evidence/bug319-investigation.txt` section 7, P1) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (12 new items, 6 failing first; guards MS FY2012, STT Q4 2019)
 Repro: FITB (CIK 35527) FY2016-23 read RevenueFromContractWithCustomerIncludingAssessedTax $0.549-0.600B (FY2022 $0.589B beside net interest income $5.609B + noninterest income $2.766B; FY2015's derived $6.536B); RF FY2016-21 $58-104M (FY2022 derived $7.215B); HBAN FY2018-25 (the excluding-tax tag) $0.881-1.562B for $4.51-8.17B; MTB FY2024-25 $1.541B/$1.657B for $9.28B/$9.69B. 24 filer-years at 4 banks sit at 0.011-0.201 of NII + noninterest income; the other 366 bank-years with both at 0.95-1.3. The derivation (derived_fields._bank_revenue) fills only an absent revenue, and _revenue_set_aside weighs against figures banks don't tag; the including-tax tag is left out of its weighing (BUG-099). MS FY2012 (negative NII) is right: compare with the sum, not noninterest income alone.
 Expected: net interest income + noninterest income, as their other years.   Actual: the contract-revenue figure.
+Fix (iteration 175, `qa/evidence/bug328-investigation.txt`): a revenue fact is not read where its own filing tags net interest income and noninterest income for the same accession and period and it is under 0.8 of their sum (`_bank_revenue_parts`, into `_aside`); the derivation then fills the period, in the annual record, quarters, TTMs and vintages alike, look-ahead free (a figure is judged against its own filing). The bound: at fact level every figure under 0.8 is a contract-revenue part (the highest 0.776, IBKR's, which its Revenues total outranks), the lowest real total 0.9015 (STT); 0.8 also catches NTRS's 10-Qs (0.61-0.68) and BNY's 2018 ones. In the parser, not derived_fields: a record-level rule would turn STT's right Q4 2019 revenue into $9.784B. Census over 504 filers: revenue only, annual 24 (FITB, HBAN, MTB, RF), quarterly 97, TTM 101, vintages 57 (with NTRS, BNY), each equal to its filing's NII + noninterest income. On DB copies: 0 medians, verdicts or owner-earnings verdicts; two historical-value labels, FITB near -> far above (48.69 -> 35.21 at 52.98; its P/S median was 31.15 on the part, now 2.99) and HBAN above -> near (14.01 -> 15.03 at 15.73); FITB composite 77.5 -> 55.0, MTB 62.5 -> 80.0, RF 70.0 -> 62.5, sector peers move. Three oracles agree as before. Residuals: quarterly ladder artifacts at PNC, WFC, STT (the same at HEAD); the stored IBKR row's sector predates Q9.
 
 ### BUG-329 [P2][VALID] HSY's FY2009-11 weighted-average shares are a later 10-K's comparative in thousands, and FY2009's shares outstanding is rescaled to match: 227,998 for 227,998,276
 Status: OPEN

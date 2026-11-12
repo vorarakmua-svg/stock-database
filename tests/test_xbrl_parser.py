@@ -5,6 +5,7 @@ import pytest
 from src.exporters.sqlite_store import SQLiteStore
 from src.models.stock_data import StockData
 from src.parsers.calculated_metrics import CalculatedMetrics
+from src.parsers.derived_fields import apply_derivations
 from src.parsers.share_scale import normalize_share_scale
 from src.parsers.ttm import compute_ttm
 from src.parsers.xbrl_parser import XBRLParser, explain_no_annual_financials, explain_stale_annual_financials
@@ -3193,6 +3194,135 @@ def test_net_revenue_is_no_noninterest_income():
     annual = _annual(*_one_year(2025, "2026-02-06", InterestIncomeExpenseNet=17.364e9,
                                 RevenuesNetOfInterestExpense=72.229e9))
     assert "noninterest_income" not in annual["2025"]
+
+
+def _derived(periods):
+    """*periods* as the fetcher stores them: each derived (``apply_derivations``)."""
+    for period in periods.values():
+        apply_derivations(period)
+    return periods
+
+
+def _revenue_of(period):
+    return period.get("revenue"), period.get("_source_tags", {}).get("revenue")
+
+
+def test_a_banks_contract_revenue_gives_way_to_its_net_interest_and_noninterest_income():
+    # BUG-328: FITB's FY2016-23 10-Ks tag the contract revenue of a part of its noninterest income, under the tag
+    # including assessed taxes, and no total: FY2022 read $0.589B beside NII of $5.609B and noninterest income of
+    # $2.766B, where its other years read the two's sum.
+    annual = _derived(_annual(*_one_year(2022, "2023-02-24",
+                                         RevenueFromContractWithCustomerIncludingAssessedTax=0.589e9,
+                                         InterestIncomeExpenseNet=5.609e9, NoninterestIncome=2.766e9)))
+    assert _revenue_of(annual["2022"]) == (8.375e9, "derived")
+
+
+def test_a_banks_contract_revenue_net_of_taxes_gives_way_too():
+    # BUG-328: HBAN's FY2018-25 under the tag excluding them: FY2022 $1.318B for $7.254B.
+    annual = _derived(_annual(*_one_year(2022, "2023-02-17",
+                                         RevenueFromContractWithCustomerExcludingAssessedTax=1.318e9,
+                                         InterestIncomeExpenseNet=5.273e9, NoninterestIncome=1.981e9)))
+    assert _revenue_of(annual["2022"]) == (7.254e9, "derived")
+
+
+def test_a_banks_revenue_less_than_its_net_interest_income_is_its_revenue():
+    # MS's FY2012: revenues of $26.178B beside noninterest income of $26.383B and net interest income of -$0.205B.
+    annual = _derived(_annual(*_one_year(2012, "2013-02-26", Revenues=26.178e9, InterestIncomeExpenseNet=-0.205e9,
+                                         NoninterestIncome=26.383e9)))
+    assert _revenue_of(annual["2012"]) == (26.178e9, "Revenues")
+
+
+@pytest.mark.parametrize("share, read", [(0.78, "derived"), (0.8, "Revenues"), (0.82, "Revenues")])
+def test_a_banks_revenue_gives_way_under_its_bound_of_the_two(share, read):
+    # The bound: every revenue fact under 0.8 of its filing's NII + noninterest income is a contract-revenue part (the
+    # highest 0.776); the lowest total is 0.90 (STT's Q3 2023).
+    annual = _derived(_annual(*_one_year(2022, "2023-02-24", Revenues=share * 8.0e9, InterestIncomeExpenseNet=5.0e9,
+                                         NoninterestIncome=3.0e9)))
+    assert _revenue_of(annual["2022"])[1] == read
+
+
+def test_a_companys_net_interest_figure_alone_leaves_its_revenue():
+    # Operating companies tag their net interest expense under the bank's tag; without noninterest income the
+    # revenue stays.
+    annual = _derived(_annual(*_one_year(2022, "2023-02-24", Revenues=2.0e9, InterestIncomeExpenseNet=5.0e9)))
+    assert _revenue_of(annual["2022"]) == (2.0e9, "Revenues")
+
+
+def test_noninterest_income_without_net_interest_income_leaves_the_revenue():
+    # With one of the two missing there is no sum to weigh the figure against, nor one to take its place.
+    annual = _derived(_annual(*_one_year(2022, "2023-02-24", Revenues=2.0e9, NoninterestIncome=5.0e9)))
+    assert _revenue_of(annual["2022"]) == (2.0e9, "Revenues")
+
+
+def test_a_banks_quarters_and_trailing_year_take_the_two_not_the_part():
+    # BUG-328: FITB's 10-Qs tag the part year to date too, and its quarters read it ($154M for Q2 2022), so the
+    # trailing year to 2022-12-31 read $0.589B.
+    start, filed = "2022-01-01", "2023-02-24"
+    ladders = {"RevenueFromContractWithCustomerIncludingAssessedTax": (152e6, 306e6, 449e6, 589e6),
+               "InterestIncomeExpenseNet": (1195e6, 2534e6, 4032e6, 5609e6),
+               "NoninterestIncome": (684e6, 1359e6, 2031e6, 2766e6)}
+    us_gaap = {tag: {"units": {"USD": [usd(v, start, end, fy=2022, fp=fp, form=form, filed=f) for v, (end, fp, form, f)
+                                       in zip(values, (("2022-03-31", "Q1", "10-Q", "2022-05-06"),
+                                                       ("2022-06-30", "Q2", "10-Q", "2022-08-05"),
+                                                       ("2022-09-30", "Q3", "10-Q", "2022-11-04"),
+                                                       ("2022-12-31", "FY", "10-K", filed)))]}}
+               for tag, values in ladders.items()}
+    quarters = _derived(XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": us_gaap}}))
+    assert [quarters[end]["revenue"] for end in ("2022-03-31", "2022-06-30", "2022-09-30", "2022-12-31")] == [
+        1879e6, 2014e6, 2170e6, 2312e6]
+    assert compute_ttm(quarters)["2022-12-31"]["revenue"] == 8375e6
+
+
+def test_a_banks_10q_part_above_half_of_the_two_gives_way_too():
+    # BUG-328: NTRS's 10-Qs tag only the contract revenue, 0.63 of NII + noninterest income ($928.9M for Q1 2019 beside
+    # $422.0M + $1,058.9M), and its 10-K the total too ($6,073.1M): Q1-Q3 read the part, and Q4 the total less nine
+    # months of it ($3,213.2M). The noninterest income alone is under 1.25 times the part: the bound is on the two.
+    start = "2019-01-01"
+    ladders = {"RevenueFromContractWithCustomerExcludingAssessedTax": (928.9e6, 1884.4e6, 2859.9e6, 3852.1e6),
+               "InterestIncomeExpenseNet": (422.0e6, 839.4e6, 1257.1e6, 1677.9e6),
+               "NoninterestIncome": (1058.9e6, 2148.1e6, 3268.3e6, 4395.2e6)}
+    rungs = (("2019-03-31", "Q1", "10-Q", "2019-04-29"), ("2019-06-30", "Q2", "10-Q", "2019-07-30"),
+             ("2019-09-30", "Q3", "10-Q", "2019-10-28"), ("2019-12-31", "FY", "10-K", "2020-02-25"))
+    us_gaap = {tag: {"units": {"USD": [usd(v, start, end, fy=2019, fp=fp, form=form, filed=f)
+                                       for v, (end, fp, form, f) in zip(values, rungs)]}}
+               for tag, values in ladders.items()}
+    us_gaap["Revenues"] = {"units": {"USD": [usd(6073.1e6, start, "2019-12-31", fy=2019, filed="2020-02-25")]}}
+    facts = {"facts": {"us-gaap": us_gaap}}
+    quarters = _derived(XBRLParser().extract_quarterly_financials(facts))
+    assert [quarters[end]["revenue"] for end in ("2019-03-31", "2019-06-30", "2019-09-30", "2019-12-31")] == (
+        pytest.approx([1480.9e6, 1506.6e6, 1537.9e6, 1547.7e6]))
+    assert _revenue_of(_derived(_annual(us_gaap))["2019"]) == (6073.1e6, "Revenues")
+
+
+def test_a_banks_revenue_is_weighed_against_its_own_filings_two_not_its_quarters():
+    # STT's 2020 10-Qs tag 2019's noninterest income to date as -$1M, so its Q4 2019 noninterest income reads $9.148B,
+    # the year less -$1M, beside revenue of $3.048B, the year's $11.756B less nine months' $8.708B. Each filing's
+    # revenue is its NII + noninterest income, and the quarter keeps it.
+    start = "2019-01-01"
+    ladders = {"Revenues": (2932e6, 5805e6, 8708e6, 11756e6),
+               "InterestIncomeExpenseNet": (673e6, 1286e6, 1930e6, 2566e6),
+               "NoninterestIncome": (2260e6, 4520e6, 6779e6, 9147e6)}
+    rungs = (("2019-03-31", "Q1", "10-Q", "2019-05-01"), ("2019-06-30", "Q2", "10-Q", "2019-07-26"),
+             ("2019-09-30", "Q3", "10-Q", "2019-10-25"), ("2019-12-31", "FY", "10-K", "2020-02-20"))
+    us_gaap = {tag: {"units": {"USD": [usd(v, start, end, fy=2019, fp=fp, form=form, filed=f)
+                                       for v, (end, fp, form, f) in zip(values, rungs)]}}
+               for tag, values in ladders.items()}
+    us_gaap["NoninterestIncome"]["units"]["USD"] += [usd(-1e6, start, end, fy=2020, fp=fp, form="10-Q", filed=f)
+                                                     for end, fp, f in (("2019-03-31", "Q1", "2020-04-28"),
+                                                                        ("2019-06-30", "Q2", "2020-07-27"),
+                                                                        ("2019-09-30", "Q3", "2020-10-23"))]
+    q4 = _derived(XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": us_gaap}}))["2019-12-31"]
+    assert (q4["noninterest_income"], q4["revenue"]) == (9148e6, 3048e6)
+
+
+def test_a_banks_filing_vintage_takes_the_two_not_the_part():
+    # BUG-328: the as-of view reads each filing's own figures, and RF's FY2021 10-K tags FY2021's part, $104M.
+    filed = "2022-02-24"
+    facts = {"facts": {"us-gaap": {k: v for tag in _one_year(
+        2021, filed, RevenueFromContractWithCustomerIncludingAssessedTax=104e6, InterestIncomeExpenseNet=3.914e9,
+        NoninterestIncome=2.524e9) for k, v in tag.items()}}}
+    vintage = _derived(XBRLParser().extract_annual_vintages(facts)["2021"])[filed]
+    assert _revenue_of(vintage) == (6.438e9, "derived")
 
 
 _TO_COMMON = "NetIncomeLossAvailableToCommonStockholdersBasic"

@@ -103,10 +103,40 @@ def _to_common_contradicted(us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str
     return frozenset(unread)
 
 
+#: A bank's revenue is its net interest income plus its noninterest income (``derived_fields._bank_revenue``); a revenue
+#: figure under this share of the two is a part of it (BUG-328). Over the cached filings every figure under it is a
+#: contract-revenue part (the highest 0.776 of the two); the lowest total is 0.90 (STT's Q3 2023).
+_BANK_REVENUE_SHARE = 0.8
+
+
+def _bank_revenue_parts(us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
+    """The revenue figures, as ``("revenue", tag, (accn, start, end))``, that are a part of a bank's revenue: under
+    0.8 of the net interest income plus the noninterest income their own filing tags for the period (BUG-328).
+    Revenue doesn't read them, so the year or quarter takes the two's sum (``derived_fields._bank_revenue``), as
+    the filer's other periods do: FITB's FY2016-23 10-Ks tag the contract revenue of a part of its noninterest
+    income, $0.55-0.60B, beside net interest income and noninterest income of $6.3-8.7B together (RF's $58-104M,
+    HBAN's and MTB's likewise), and NTRS's 10-Qs only theirs, 0.61-0.68 of the two (BNY's of 2018, 0.70-0.71). The
+    sum, not the noninterest income alone: MS's FY2012 revenues of $26.178B, beside
+    noninterest income of $26.383B and net interest income of -$0.205B, are its revenue."""
+    nii = _by_fact(us_gaap, "net_interest_income", _FIELDS["net_interest_income"].tags)
+    noninterest = _by_fact(us_gaap, "noninterest_income", _FIELDS["noninterest_income"].tags)
+    parts: Set[Tuple[str, str, Any]] = set()
+    for tag in _FIELDS["revenue"].tags:
+        for key, figure in _by_fact(us_gaap, "revenue", (tag,)).items():
+            if key in nii and key in noninterest and figure < _BANK_REVENUE_SHARE * (nii[key] + noninterest[key]):
+                parts.add(("revenue", tag, key))
+    return frozenset(parts)
+
+
+#: The fields some of whose figures aren't read at all (``_unread``).
+_UNREAD_FIELDS = frozenset({_TO_COMMON_FIELD, "revenue"})
+
+
 def _unread(unread: FrozenSet[Tuple[str, str, Any]], field: Any, tag: str, entry: Dict[str, Any]) -> bool:
-    """Whether *entry*, a fact under *tag*, is one *field* doesn't read (``_to_common_contradicted``). Net income's
-    set-aside figures (``_to_common_set_aside``) are keyed alike: they rank last, and are still read."""
-    return field.key == _TO_COMMON_FIELD and (field.key, tag, _fact_key(entry)) in unread
+    """Whether *entry*, a fact under *tag*, is one *field* doesn't read (``_to_common_contradicted``,
+    ``_bank_revenue_parts``). Net income's set-aside figures (``_to_common_set_aside``) are keyed alike: they rank
+    last, and are still read; revenue's (``_revenue_set_aside``) are keyed by fiscal year."""
+    return field.key in _UNREAD_FIELDS and (field.key, tag, _fact_key(entry)) in unread
 
 
 def _to_common_set_aside(us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
@@ -2181,8 +2211,9 @@ class XBRLParser:
         return filings
 
     def _aside(self, us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
-        """``_set_aside``'s figures and the ones not read at all (``_to_common_contradicted``)."""
-        return self._set_aside(us_gaap) | _to_common_contradicted(us_gaap)
+        """``_set_aside``'s figures and the ones not read at all (``_to_common_contradicted``,
+        ``_bank_revenue_parts``)."""
+        return self._set_aside(us_gaap) | _to_common_contradicted(us_gaap) | _bank_revenue_parts(us_gaap)
 
     def _set_aside(self, us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
         """The figures that rank after every other tag of their field: ``_revenue_set_aside``'s and

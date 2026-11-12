@@ -2231,7 +2231,10 @@ pipeline is designed so this never breaks ingestion or silently loses data:
   statement doesn't add up to (operating income plus operating expenses, or cost of revenue
   plus gross profit) gives way to one it does; where it adds up to neither, a zero gives way
   to a positive figure, and one below the year's cost of revenue to one that isn't. Revenue
-  including excise taxes only fills a year with no other figure.
+  including excise taxes only fills a year with no other figure. A revenue figure under 0.8
+  of the net interest income plus the noninterest income its own filing tags for the period
+  is a part of a bank's revenue (the contract revenue of some of its fees) and isn't read:
+  the year or quarter takes the two's sum, as derived for a bank that tags no revenue.
 - **Nothing is silently dropped.** Any *material* fact under a tag not yet in the registry
   (a new taxonomy element or an unanticipated tag) is captured in the **`unmapped_facts`**
   table (the tag stored as a row value) — so the data is preserved and visible even before
