@@ -254,6 +254,40 @@ def test_vintages_table_written_and_idempotent(tmp_path):
     assert rows == [("acc-A", "2023-02-15", 100.0), ("acc-B", "2024-02-15", 110.0)]
 
 
+def test_a_vintage_keeps_the_tag_each_figure_was_read_from(tmp_path):
+    # BUG-271: the as-of view ranks a filing's figure by its concept, as the annual record does.
+    s = StockData(ticker="ZZ", cik="9", company_name="Z Co")
+    s.financials_annual_vintages = {"2023": {"acc-A": {
+        "fiscal_year": 2023, "accn": "acc-A", "filed_date": "2025-02-12", "form": "10-K",
+        "long_term_debt": 0.198e9, "total_liabilities": 60.0e9, "revenue": None,
+        "_source_tags": {"long_term_debt": "LongTermNotesPayable", "total_liabilities": "derived",
+                         "revenue": "Revenues", "not_a_field": "X"}}}}
+    db = tmp_path / "v.db"
+    SQLiteStore(db_path=str(db)).export([s])
+    conn = sqlite3.connect(str(db))
+    (tags,) = conn.execute("SELECT source_tags FROM financials_annual_vintages").fetchone()
+    conn.close()
+    assert json.loads(tags) == {"long_term_debt": "LongTermNotesPayable", "total_liabilities": "derived"}
+
+
+def test_a_database_stored_before_the_vintage_tags_gains_them(tmp_path):
+    db = tmp_path / "v.db"
+    s = StockData(ticker="ZZ", cik="9", company_name="Z Co")
+    s.financials_annual_vintages = {"2023": {"acc-A": {"fiscal_year": 2023, "accn": "acc-A",
+                                                       "filed_date": "2025-02-12", "long_term_debt": 1.0}}}
+    SQLiteStore(db_path=str(db)).export([s])
+    conn = sqlite3.connect(str(db))
+    conn.execute("ALTER TABLE financials_annual_vintages DROP COLUMN source_tags")
+    conn.commit()
+    conn.close()
+    s.financials_annual_vintages["2023"]["acc-A"]["_source_tags"] = {"long_term_debt": "LongTermDebt"}
+    SQLiteStore(db_path=str(db)).export([s])
+    conn = sqlite3.connect(str(db))
+    (tags,) = conn.execute("SELECT source_tags FROM financials_annual_vintages").fetchone()
+    conn.close()
+    assert json.loads(tags) == {"long_term_debt": "LongTermDebt"}
+
+
 def test_vintages_do_not_affect_financials_annual(tmp_path):
     import sqlite3
 

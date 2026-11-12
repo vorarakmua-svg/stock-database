@@ -2926,3 +2926,22 @@ Result: no Critical; Important 1 -> BUG-321 (P2); Minors -> BUG-322 to BUG-326 (
 Gates: unchanged (qa/ only) | CI: PR #29
 Commit: (this commit) chore(qa): code review 27 recorded; one Important finding (BUG-321)
 Next: BUG-271 (applied, waiting on the full suite for RAM); BUG-274 (worker); BUG-321.
+
+## Iteration 167: 2026-11-12 19:42: fix (BUG-271)
+Picked: the oldest open P2; its worker's fix, saved at the usage limit (`%LOCALAPPDATA%\stockdb-qa\bug271`), resumed.
+Did: the as-of view no longer takes a later 10-K's narrower comparative over the year's own figure: each vintage keeps
+its figures' tags (`source_tags`), a lesser-ranked figure under half the held one is set aside, and the debt is read as
+one filing's view. The worker's exported diff predated its last refactor; the final asof.py and test file were taken
+from its fix2 tree (the mutant spec's form; mypy clean). The full suite caught one test pinning the old view:
+test_the_as_of_view_reads_each_10ks_debt_in_its_window[AEP] read $28.836B after the later 10-K (the paper beside
+the maturities, without $0.728B of borrowings); it now reads the balance sheet's $29.564B, the first 10-K's view
+(the later maturities, $1.599B under a lesser tag, are under half the $4.437B held). Expectation and comment updated.
+- RED: 10 of 95 failed on HEAD's src; GREEN. 22 of 22 mutants (qa/evidence/bug271-mutants.json).
+- Measured by the worker on backup-API copies, offline, all 502: stored tables unchanged but for the new column (and
+  BUG-277's hash order); no valuation reads the as-of view, so no median, verdict, owner-earnings verdict or label
+  moves. As-of reads: 649 figures move, 198 as of today; debt under half the annual record's 23 -> 0. Look-ahead 0.
+- New: BUG-319 (P2, the annual record's narrow concepts: PHM, PSX debt; FITB revenue), BUG-320 (P3).
+Result: BUG-271 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2889 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(asof): a later filing's narrower figure doesn't replace the year's own; debt read from one filing (BUG-271)
+Next: BUG-274 (worker); BUG-321 (the scores oracle's Sloan).

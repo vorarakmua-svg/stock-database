@@ -736,9 +736,10 @@ def _debt_as_of(tmp_path, facts, *days):
     (_ko_fy2019, (41.776e9, 38.510e9)),
     (_hon_fy2014, (7.744e9, 7.744e9)),  # the paper beside the other borrowings, then the combined line: not $9.391B
     # the paper inside the short-term debt, beside the maturities on a line of their own: its balance sheet's
-    # $29.564B (BUG-159; $27.965B left the maturities out); then the maturities alone, beside which the paper stands
-    # (the borrowings the later 10-K leaves out aren't carried: BUG-110's carry fills gaps, not narrower figures)
-    (_aep_fy2019, (29.564e9, 28.836e9)),
+    # $29.564B (BUG-159; $27.965B left the maturities out); the later 10-K's maturities alone ($1.599B, a lesser
+    # tag under half the $4.437B held) are a narrower figure, so the debt stays the first 10-K's view (BUG-271;
+    # it read $28.836B, the paper beside the maturities without the $0.728B of other borrowings)
+    (_aep_fy2019, (29.564e9, 29.564e9)),
     # the line as borrowings; then as paper alone, read beside the borrowings carried from the first: not $11.969B
     (_qcom_fy2015, (10.969e9, 10.969e9)),
 ], ids=["KO", "HON", "AEP", "QCOM"])

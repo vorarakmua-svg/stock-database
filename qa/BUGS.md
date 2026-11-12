@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 5 · P3 156 · NEEDS-USER 0 · Decided: 7 · Verified: 172
+**Open:** P0 0 · P1 0 · P2 5 · P3 157 · NEEDS-USER 0 · Decided: 7 · Verified: 173
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2203,11 +2203,24 @@ Repro: unlike `_normalize_splits` and `_apply_later_splits`, `inputs._restated_b
 Expected: MAX_SPLIT_RATIO's bound, and tests at the three boundaries.   Actual: neither.
 
 ### BUG-271 [P2][ASOF] Later 10-Ks' narrow comparatives make the as-of view's debt less than half the annual record's: EXC FY2023 $2.72B for $43.80B
-Status: OPEN
-Found: code review 21 (declined as pre-existing; at 9f536a4 and d5e6ec2 alike) | Fixed: | Regression test:
+Status: VERIFIED (iteration 167)
+Found: code review 21 (declined as pre-existing; at 9f536a4 and d5e6ec2 alike) | Fixed: (this commit) | Regression tests: tests/test_asof_reader.py (13 new: ::test_a_later_filings_narrower_debt_figure_leaves_the_balance_sheets, ::test_a_date_reads_its_debt_from_one_filings_view, ::test_a_later_filings_narrower_figure_of_any_field_leaves_the_earlier_one, ::test_a_narrower_figure_just_under_half_is_set_aside, ::test_a_derived_figure_ranks_after_every_tag, ::test_sizes_are_compared_whatever_their_sign, ::test_the_paper_is_read_from_the_filing_whose_short_term_debt_is_read, ::test_a_database_stored_before_the_tags_column_reads_as_before and 5 guards); tests/test_sqlite_store.py::test_a_vintage_keeps_the_tag_each_figure_was_read_from, ::test_a_database_stored_before_the_vintage_tags_gains_them
 Repro: in 23 fiscal years at 9 filers the as-of view's debt as known today is less than half the annual record's: EXC FY2023 reads LongTermNotesPayable $0.198B as its long-term debt ($2.721B against $43.802B), EXC FY2024 $1.880B against $46.527B, FRT FY2011-24. A later 10-K's comparative on the date tags a narrower figure, which the as-of carry takes as the latest.
 Expected: the as-of view's latest figure for a date is the filings' balance-sheet debt.   Actual: a narrow comparative.
 Since BUG-267 EXC's FY2023-24 vintages read their own maturities ($4.124B, $3.333B), still beside the narrow long-term figure.
+Fix (iteration 167, `qa/evidence/bug271-investigation.txt`): the annual record ranks a field's tags first, the as-of view ranked by filing date alone (BUG-116's split of rules). Each vintage now keeps the tag of each figure (`financials_annual_vintages.source_tags`, JSON; added by `_migrate`). A later filing's figure replaces the held one unless its tag ranks below the held one's and it is under half of it; the debt (long-term, short-term, paper) is read as one filing's view, since a filing's lines split it one way (reading EXC's long-term figure from one 10-K and its short-term from the other counts the maturities twice; KO's paper likewise). Vintages stored without tags read as before. Four candidate rules were measured over every cached filer's 39,047 filer-year-date points; ranking alone imports the annual record's own errors (BUG-319) and the latest-unless-under-half rule undoes split restatements, so HALF was chosen. On backup-API copies re-collected offline (all 502): only the new column and BUG-277's hash-order cells differ in the stored tables; no valuation reads the as-of view, so no median, verdict or label moves. As-of reads: 649 figures move (198 as of today) in 192 company-years at 105 companies; debt under half of the annual record's today: 23 years at 9 filers before, 0 after (EXC FY2023 $41.279B + $2.523B); of the 198 today moves, 196 land on the annual record's figure. Look-ahead: 178,730 reads on 35 days, 0 differ. RED 10 of 95; 22 mutants killed. The user's DB gains the tags at its next collection. Residuals: BUG-319, BUG-320; lesser concepts between half and whole stay (OMC FY2011-13 notes 0.8x, TGT FY2011 0.75x, BUG-116's equity).
+
+### BUG-319 [P2][PARSE] The annual record reads a narrow concept as some years' long-term debt or revenue: PHM FY2021-24 $0.06B for about $2.0B, PSX FY2015 $1.1B for $8.8B
+Status: OPEN
+Found: iteration 167 (BUG-271's census, `qa/evidence/bug271-investigation.txt`, rule RANK) | Fixed: | Regression test:
+Repro: ranking each figure by the field's tag order, as the annual record does, moves the as-of view onto the annual record's own figures, and some are narrow concepts: long-term debt PHM FY2021-24 ($2.0B to $0.06B), PSX FY2015 ($8.8B to $1.1B), GNRC, ECHO, CRM; revenue FITB ($8.4B to $0.6B) and RF. Also XEL FY2024 short-term debt reads the FY2025 10-K's borrowings alone ($0.695B, where its own 10-K's DebtCurrent is $1.798B with the maturities) and HSY FY2009's shares 228,000 (the share-scale step).
+Expected: the filings' balance-sheet debt and total revenue.   Actual: a narrower tag's figure, ranked first. To confirm each against the filing before fixing.
+
+### BUG-320 [P3][ASOF] A fill-only run's figures carry no tag, so the as-of view ranks them last
+Status: OPEN
+Found: iteration 167 (BUG-271's residuals) | Fixed: | Regression test:
+Repro: a run whose predecessor read failed only fills (BUG-179: COALESCE of the stored value first), source_tags included, so a figure it fills into a vintage has no tag in the stored JSON and ranks last; a broader earlier filing's figure could then set it aside as narrower.
+Expected: the filled figure's tag merged into the vintage's source_tags.   Actual: the stored tags kept whole.
 
 ### BUG-272 [P3][PARSE] An adoption-day instant becomes a fiscal year's period_end: ICE FY2018 "2019-01-01", FY2019 "2020-01-01"
 Status: OPEN

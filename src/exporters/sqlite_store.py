@@ -298,6 +298,7 @@ class SQLiteStore:
                 period_end TEXT,
                 form TEXT,
                 calendar_year INTEGER,
+                source_tags TEXT,
                 {_cols_ddl(_CANONICAL_COLUMNS)},
                 PRIMARY KEY (ticker, fiscal_year, accn)
             );
@@ -727,7 +728,9 @@ class SQLiteStore:
             "financials_ttm": {"fiscal_year": "INTEGER", "calendar_year": "INTEGER",
                                "calendar_quarter": "INTEGER",
                                **{c: "REAL" for c in _CANONICAL_COLUMNS}},
-            "financials_annual_vintages": {"calendar_year": "INTEGER",
+            # Each figure's tag (BUG-271): NULL in a vintage stored before the column, which the as-of view
+            # reads as it did, by filing date alone, until the next collection.
+            "financials_annual_vintages": {"calendar_year": "INTEGER", "source_tags": "TEXT",
                                             **{c: "REAL" for c in _CANONICAL_COLUMNS}},
             "metrics_annual": {c: "REAL" for c in _METRIC_COLUMNS},
             "market_snapshots": {**{c: "REAL" for c in _SNAPSHOT_COLUMNS},
@@ -813,6 +816,14 @@ class SQLiteStore:
         if restated:
             return {c: period.get(c) for c in _CANONICAL_COLUMNS}
         return {c: period.get(c) for c in _CANONICAL_COLUMNS if c in period}
+
+    @staticmethod
+    def _figure_tags(period: Dict[str, Any]) -> Optional[str]:
+        """The tag each canonical figure of *period* was read from (its ``_source_tags``: a us-gaap tag, "derived",
+        "rescaled x1000"), as JSON; None without any. The as-of view ranks a vintage's figure by it (BUG-271)."""
+        tags = period.get("_source_tags") or {}
+        kept = {c: tags[c] for c in _CANONICAL_COLUMNS if period.get(c) is not None and c in tags}
+        return json.dumps(kept, sort_keys=True) if kept else None
 
     @staticmethod
     def _stored_year(conn: sqlite3.Connection, ticker: str, fiscal_year: int) -> Dict[str, Any]:
@@ -1037,6 +1048,7 @@ class SQLiteStore:
                     "period_end": period.get("period_end"),
                     "form": period.get("form"),
                     "calendar_year": period.get("calendar_year"),
+                    "source_tags": self._figure_tags(period),
                 }
                 vrow.update(self._canonical_values(period, restated))
                 self._upsert(conn, "financials_annual_vintages",

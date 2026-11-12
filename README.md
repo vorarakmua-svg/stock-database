@@ -2311,7 +2311,18 @@ To read fundamentals **as they were known on a given date** (no look-ahead), tak
 figure from the latest filing made on or before that date that reports it. A 10-K repeats
 only part of each earlier year (two years of income and cash-flow statements, one balance
 sheet, the equity statement's opening balances), so a later filing's row for a year is
-mostly empty, and a figure it leaves out keeps the value last filed. In SQL, for one figure:
+mostly empty, and a figure it leaves out keeps the value last filed.
+
+A later filing's figure under a narrower concept doesn't replace an earlier one's: under a tag
+the field ranks below the held figure's (each vintage row keeps the tag of each figure in
+`source_tags`, as JSON) and under half of it, it is a part of the figure, not the year restated
+(Exelon's FY2024 10-K tags only a $0.198B note as FY2023's long-term debt, beside the $41.3B its
+FY2023 10-K reports). A restatement under the same tag, a better-ranked one, or a lesser one from
+half the figure up still replaces it. The debt is read as one filing's view of the date (its
+long-term and short-term debt and commercial paper together, since a filing's lines split the
+debt one way): the latest filing's, unless its long-term or short-term debt is such a narrower
+figure. A vintage stored before `source_tags` (NULL) is never set aside, until the next
+collection. In SQL, for one figure, the latest filing that reports it (without that exception):
 
 ```sql
 -- Net income for FY2019 as it was known on 2020-06-30:
@@ -2335,7 +2346,7 @@ with AsOfReader("data/output/stock.db") as r:
 `as_of_date` accepts an ISO `YYYY-MM-DD` string or a `datetime.date`. A year not yet filed
 as of that date resolves to `None` (and is absent from `history_as_of`). A period carries the
 latest filing's `accn`, `filed_date` and `form`, and `carried_from` names the filing of each
-figure last filed earlier (`{"revenue": {"accn": ..., "filed_date": ..., "form": ...}}`).
+figure read from an earlier filing (`{"revenue": {"accn": ..., "filed_date": ..., "form": ...}}`).
 
 For point-in-time **ratios** (computed on the as-of financials), use `PointInTimeMetrics`:
 
