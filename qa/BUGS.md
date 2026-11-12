@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 4 · P3 156 · NEEDS-USER 0 · Decided: 7 · Verified: 175
+**Open:** P0 0 · P1 0 · P2 4 · P3 154 · NEEDS-USER 0 · Decided: 7 · Verified: 177
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2056,14 +2056,14 @@ Repro: `window_start` is the first month with a value (history.py ~288, ~307), s
 Expected: the months with a value out of the months in the window.   Actual: read as a short history.
 
 ### BUG-324 [P3][TEST] BUG-194's tests don't check that the new CAGRs are stored
-Status: OPEN
-Found: code review 27 (Minor 3; mutant tree built, not run) | Fixed: | Regression test:
+Status: VERIFIED (iteration 169)
+Found: code review 27 (Minor 3; mutant tree built, not run) | Fixed: (this commit) | Regression test: tests/test_scores_store.py::test_an_old_scores_table_gains_the_fcf_and_book_cagr_columns (now the values; the review's mutant, the four names out of QUALITY_COLUMNS, fails it)
 Repro: test_scores_store.py ~175-186 checks only that the four columns exist, which `_ensure_columns` adds anyway; dropping the four names from QUALITY_COLUMNS (sqlite_store.py ~167) stores NULL and, by reading, no test fails. Mutant tree: %LOCALAPPDATA%\stockdb-qa\review27\mut; probe test_the_new_cagr_columns_are_stored_with_their_values.
 Expected: a test that reads the stored values back.   Actual: the column's presence only.
 
 ### BUG-325 [P3][VAL] Q4 is implemented more narrowly than its Decision line, and the entry doesn't say so
-Status: OPEN
-Found: code review 27 (Minor 4) | Fixed: | Regression test:
+Status: VERIFIED (iteration 169)
+Found: code review 27 (Minor 4) | Fixed: (this commit) | Regression test: none (Q4's entry gains its Reading line)
 Repro: Q4's decision makes DDM N/A "where the completeness check fires"; models.py ~379-388 does so only where the gap reaches the trailing 12 months or the flagged year is a growth year taken from Yahoo (test_an_older_flagged_year_with_secs_figure_leaves_ddm_alone pins a flagged company DDM still values). The reading (the same rows today) is recorded only in LOG iteration 164.
 Expected: the narrower reading recorded on Q4's entry with its reason (the loop's recommendation: keep it, since an older gap with SEC's figure doesn't touch DDM's inputs).   Actual: only in the LOG.
 
@@ -2398,6 +2398,7 @@ Options: (a) keep every payment (today); (b) exclude one-off outliers (e.g. > 3�
 ### Q4 [VAL] NEEDS-USER: what should DDM do when Yahoo's dividend history is missing payments?
 Status: VERIFIED (iteration 164; regression tests tests/test_valuation_ddm_specials.py and 3 more files)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: option (c), DDM N/A ("dividend history incomplete") where the completeness check fires.
+Reading (iteration 164, recorded here by BUG-325): N/A where the check's gap touches what DDM reads, the trailing 12 months or a growth year taken from Yahoo's payments, not for as long as the check fires on any year: an older flagged year with SEC's own figure leaves DDM's inputs whole (CB would otherwise stay N/A to about FY2030 after its TTM and growth are sound again). The same rows today. Pinned by tests/test_valuation_ddm_specials.py::test_an_older_flagged_year_with_secs_figure_leaves_ddm_alone.
 Context: the dividend completeness check (BUG-012) flags CB FY2025: Yahoo lacks its Sep and Dec 2025 payments, so the DDM's TTM dividend is $1.99 instead of ≈ $3.93 and CB's DDM is about half. The spec bases the DDM on TTM dividends from `dividend_events` (Yahoo).
 Options: (a) keep the Yahoo TTM and rely on the data-quality warning (today); (b) when the check fires, use SEC's declared dividends per share for the trailing four quarters (needs BUG-013 fixed first); (c) make DDM N/A ("dividend history incomplete") for flagged companies. (b) and (c) change the spec's DDM basis or N/A rules, so it's the user's call.
 

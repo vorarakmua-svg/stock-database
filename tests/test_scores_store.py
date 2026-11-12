@@ -183,7 +183,10 @@ def test_an_old_scores_table_gains_the_fcf_and_book_cagr_columns(tmp_path):
     conn.close()
     compute_and_store(db)
     row = _scores(db)["AAA"]
-    assert {"fcf_ps_cagr_3y", "fcf_ps_cagr_10y", "book_ps_cagr_3y", "book_ps_cagr_10y"} <= set(row)
+    # stored with their values, not only as columns (BUG-324): AAA's FCF and equity grow 8% a year on flat shares
+    assert {column: row.get(column) for column in ("fcf_ps_cagr_3y", "fcf_ps_cagr_10y", "book_ps_cagr_3y",
+                                                   "book_ps_cagr_10y")} == pytest.approx(
+        {"fcf_ps_cagr_3y": 0.08, "fcf_ps_cagr_10y": 0.08, "book_ps_cagr_3y": 0.08, "book_ps_cagr_10y": 0.08})
 
 
 # ---------------------------------------------------------------------------------------------------------------

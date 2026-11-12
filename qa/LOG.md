@@ -2960,3 +2960,15 @@ Result: BUG-321 and BUG-326 VERIFIED.
 Gates: ruff ✓ (qa/oracle) | CI: PR #29
 Commit: (this commit) test(qa): the scores oracle and spec leave Sloan out for banks and insurers (BUG-321, BUG-326)
 Next: BUG-274 (worker); BUG-319; the P3s from review 27 (BUG-322..325).
+
+## Iteration 169: 2026-11-12 20:28: fix (BUG-324, BUG-325; P3s from code review 27)
+Picked: two of review 27's Minors, inline, while the BUG-274 worker reworks its fix and the BUG-319 worker
+investigates.
+Did: BUG-324: the BUG-194 store test now reads the four 3- and 10-year FCF and book CAGRs back (0.08 each on the seed),
+not only the columns; the review's mutant (the names out of QUALITY_COLUMNS, stored NULL) fails it, the code passes.
+BUG-325: Q4's entry gains a Reading line: DDM N/A where the gap touches what DDM reads (the TTM or a Yahoo growth
+year), not for as long as the check fires; the same rows today; pinned by an existing test.
+Result: BUG-324 and BUG-325 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2889 passed, 1 skipped | CI: PR #29
+Commit: (this commit) test(scores): the new CAGRs are read back from the store; Q4's reading on its entry (BUG-324, BUG-325)
+Next: BUG-274 (worker, rework); BUG-319 (worker); BUG-322, BUG-323.
