@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 4 · P3 154 · NEEDS-USER 0 · Decided: 7 · Verified: 177
+**Open:** P0 0 · P1 0 · P2 4 · P3 152 · NEEDS-USER 0 · Decided: 7 · Verified: 179
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2044,14 +2044,14 @@ Repro: src/scores/scores.py `_NOT_SCORED["sloan"] = _FINANCIALS` (668d28c) makes
 Expected: the spec and the oracle take BUG-197's exception, in their own commit, and the oracle run on a DB copy agrees.   Actual: the Sloan gate fails on the 68 banks and insurers.
 
 ### BUG-322 [P3][UI] The FA and VAL gap note shows the SEC-lag warning in place of the stale or no-annual note
-Status: OPEN
-Found: code review 27 (Minor 1; by reading, no real case in the 502) | Fixed: | Regression test:
+Status: VERIFIED (iteration 170)
+Found: code review 27 (Minor 1; by reading, no real case in the 502) | Fixed: (this commit) | Regression test: tests/test_web_workstation.py::test_the_fa_and_val_tabs_keep_the_stale_note_beside_the_sec_lag_note
 Repro: workstation.py ~386-390 returns the first matching warning, and the collection adds the lag warning (stock_data_fetcher.py ~281-285) before the no-annual and stale ones (~287-296): an IFRS filer whose newest 20-F isn't in companyfacts yet loses BUG-066's explanation. Probe: %LOCALAPPDATA%\stockdb-qa\review27\head\tests\test_review27.py::test_the_fa_tab_keeps_the_stale_annual_note_beside_the_sec_lag_note.
 Expected: both notes.   Actual: the lag note alone.
 
 ### BUG-323 [P3][UI] BUG-181's window text still counts from the first month with a value
-Status: OPEN
-Found: code review 27 (Minor 2; by reading) | Fixed: | Regression test:
+Status: VERIFIED (iteration 170)
+Found: code review 27 (Minor 2; by reading) | Fixed: (this commit) | Regression test: tests/test_web_val_history.py::test_a_short_window_with_gaps_counts_its_months_out_of_the_span
 Repro: `window_start` is the first month with a value (history.py ~288, ~307), so `_window_text` (workstation.py ~988-1003) reads "since 2018-01 (49 months)" when 86 months have passed: a full window opening on loss months, or a short history with gaps. Probe: %LOCALAPPDATA%\stockdb-qa\review27\head\tests\test_review27.py::test_a_window_whose_first_value_is_late_does_not_read_as_a_count_since_then.
 Expected: the months with a value out of the months in the window.   Actual: read as a short history.
 

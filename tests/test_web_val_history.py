@@ -129,6 +129,15 @@ def test_a_full_window_with_gaps_reads_as_ten_years(client, web_db):
     assert "since 2015-04" not in html
 
 
+def test_a_short_window_with_gaps_counts_its_months_out_of_the_span():
+    # BUG-323 (code review 27): the window opens at the first month with a value; 49 months of values from 2018-01
+    # to 2025-03 (87 months) read "since 2018-01 (49 months)", as if the history began 49 months ago.
+    from src.webapp.routes.workstation import _window_text
+    texts = [_window_text({"n_months": n, "window_start": "2018-01-31", "as_of": "2025-03-31"}) for n in (49, 86, 87)]
+    assert texts == ["since 2018-01 (49 of 87 months with a value)", "since 2018-01 (86 of 87 months with a value)",
+                     "since 2018-01 (87 months)"]
+
+
 def test_the_section_says_when_its_history_was_computed(client, web_db):
     # BUG-182: a failed computation keeps the previous run's rows; the section now shows their day.
     _seed(web_db)

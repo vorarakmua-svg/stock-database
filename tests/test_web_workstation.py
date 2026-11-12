@@ -998,6 +998,21 @@ def test_the_fa_and_val_tabs_say_when_annual_financials_stop(tmp_path):
         assert str(escape(note)) in client.get(f"/ui/stocks/TSM/{tab}").text, tab
 
 
+def test_the_fa_and_val_tabs_keep_the_stale_note_beside_the_sec_lag_note(tmp_path):
+    # BUG-322 (code review 27): the collection adds the SEC-lag warning before the stale one, and the tabs showed the
+    # first matching warning only, so a run with both lost BUG-066's explanation.
+    from markupsafe import escape
+
+    lag = ("SEC EDGAR: the companyfacts lack TSM's 20-F filed 2026-04-01 (0001046179-26-000001), so this run's "
+           "figures stop before it; the refresh collects TSM again")
+    stale = ("SEC EDGAR: annual financials stop at FY2019 for TSM: later annual reports are in IFRS (20-F), which "
+             "isn't mapped")
+    client = _client_for(_db_after_a_run_with(tmp_path, [lag, stale]))
+    for tab in ("fa", "val"):
+        body = client.get(f"/ui/stocks/TSM/{tab}").text
+        assert [str(escape(note)) in body for note in (lag, stale)] == [True, True], tab
+
+
 def test_ern_fragment_names_yahoos_earnings_growth_for_what_it_is(client):
     # BUG-312 (Q2's decision): Yahoo's earningsGrowth is the latest quarter against a year before, no forecast.
     body = client.get("/ui/stocks/AAA/ern").text

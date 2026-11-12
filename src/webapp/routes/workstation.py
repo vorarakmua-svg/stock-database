@@ -383,11 +383,12 @@ def gp_fragment(
 # ---------------------------------------------------------------------------
 
 
-def _sec_gap_note(r: Reader, ticker: str) -> Optional[str]:
+def _sec_gap_notes(r: Reader, ticker: str) -> List[str]:
     """Why the latest collection got no annual financials from SEC, why they stop
-    years ago (BUG-066), or which report the SEC's companyfacts lack so far (BUG-251, BUG-283), if it said."""
-    return next((w for w in r.latest_run_warnings(ticker)
-                 if w.startswith((NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS, REPORT_WITHOUT_FACTS))), None)
+    years ago (BUG-066), and which report the SEC's companyfacts lack so far (BUG-251, BUG-283), as far as it said:
+    each of them, since one doesn't explain the other (BUG-322)."""
+    return [w for w in r.latest_run_warnings(ticker)
+            if w.startswith((NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS, REPORT_WITHOUT_FACTS))]
 
 
 @router.get("/ui/stocks/{ticker}/fa", response_class=HTMLResponse)
@@ -420,7 +421,7 @@ def fa_fragment(
             "ticker": ticker,
             "columns": columns,
             "rows": display_rows,
-            "gap_note": _sec_gap_note(r, ticker),
+            "gap_notes": _sec_gap_notes(r, ticker),
         },
     )
 
@@ -987,7 +988,8 @@ _HISTORY_PILLS = {"far below": "cheap", "below": "cheap", "near": "fair", "above
 
 def _window_text(row: Dict[str, Any]) -> str:
     """A range's window: "10 years", "10 years (49 months with a value)" when a full window has gaps (loss years:
-    BUG-181), or "since 2022-03 (37 months)" when the history is shorter."""
+    BUG-181), or "since 2022-03 (37 months)" when the history is shorter, "since 2018-01 (49 of 87 months with a
+    value)" when it has gaps (BUG-323: the window opens at its first month with a value)."""
     n, start, as_of = row.get("n_months") or 0, row.get("window_start"), row.get("as_of")
     if n >= 120:
         return "10 years"
@@ -998,6 +1000,8 @@ def _window_text(row: Dict[str, Any]) -> str:
             span = (int(a[:4]) - int(s[:4])) * 12 + int(a[5:7]) - int(s[5:7])
     if n and span is not None and span >= 119:
         return f"10 years ({n} months with a value)"
+    if n and start and span is not None and n < span + 1:
+        return f"since {str(start)[:7]} ({n} of {span + 1} months with a value)"
     if n and start:
         return f"since {str(start)[:7]} ({n} months)"
     return "—"
@@ -1321,7 +1325,7 @@ def val_fragment(
             "sensitivity": sensitivity,
             "oe": oe_ctx,
             "computed_at": computed_at,
-            "gap_note": _sec_gap_note(r, ticker),
+            "gap_notes": _sec_gap_notes(r, ticker),
             # Same XSS defense-in-depth as gp_fragment's cfg_json/ern_fragment's
             # ern_cfg_json/dvd_fragment's dvd_cfg_json: escape "</" so a literal
             # "</script>" can't break out of the inline <script> block. Today's

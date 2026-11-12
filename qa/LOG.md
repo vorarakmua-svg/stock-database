@@ -2972,3 +2972,16 @@ Result: BUG-324 and BUG-325 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2889 passed, 1 skipped | CI: PR #29
 Commit: (this commit) test(scores): the new CAGRs are read back from the store; Q4's reading on its entry (BUG-324, BUG-325)
 Next: BUG-274 (worker, rework); BUG-319 (worker); BUG-322, BUG-323.
+
+## Iteration 170: 2026-11-12 20:38: fix (BUG-322, BUG-323; P3s from code review 27)
+Picked: review 27's two UI Minors, inline.
+Did: BUG-322: FA and VAL show every SEC gap note of the latest run, each on its own line (`_sec_gap_notes`, a list;
+the templates loop), so the SEC-lag note no longer hides BUG-066's stale or no-annual explanation. BUG-323: a window
+shorter than ten years with gaps reads "since 2018-01 (49 of 87 months with a value)", not "(49 months)"; a window
+without gaps reads as before.
+- RED: 2 new tests failed on HEAD (the stale note missing; "(49 months)"); GREEN. Mutants by hand, BUG-323: 3 of 3
+  (n < span, n <= span + 1, the branch off); BUG-322's first-only reading is its RED.
+Result: BUG-322 and BUG-323 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2891 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(web): every SEC gap note on FA and VAL; a gapped short window counts its months (BUG-322, BUG-323)
+Next: BUG-274 (worker, rework); BUG-319 (worker); Q17.
