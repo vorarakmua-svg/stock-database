@@ -2915,3 +2915,14 @@ API usage limit, their work saved in scratch: BUG-271 (%LOCALAPPDATA%\stockdb-qa
 (...\bug274) and code review 27 (scope 95a0ddf..1cb9a5d). Left: P2s BUG-271, BUG-274, BUG-295 (with Q17, decided),
 151 P3s, then the convergence sweeps (LOOP_PROMPT section 9).
 
+
+## Iteration 166: 2026-11-12 19:20: code review 27
+Picked: code review 27 (95a0ddf..bf7e23e, 10 commits: BUG-284/158, -069/283, -316, -317/318, -197/199, -194/200,
+Q3/Q4, BUG-180..182), restarted after the usage limit stopped it.
+Did: an opus reviewer read the range (`qa/evidence/review27.txt`); free RAM stayed at 1.1-1.5 GB, so no tests ran:
+findings are by reading, with probe tests written in %LOCALAPPDATA%\stockdb-qa\review27. Important 1 confirmed by the
+orchestrator in the code (scores.py `_NOT_SCORED`, scores_oracle.py `check_sloan`, `same`).
+Result: no Critical; Important 1 -> BUG-321 (P2); Minors -> BUG-322 to BUG-326 (P3).
+Gates: unchanged (qa/ only) | CI: PR #29
+Commit: (this commit) chore(qa): code review 27 recorded; one Important finding (BUG-321)
+Next: BUG-271 (applied, waiting on the full suite for RAM); BUG-274 (worker); BUG-321.

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 4 · P3 151 · NEEDS-USER 0 · Decided: 7 · Verified: 172
+**Open:** P0 0 · P1 0 · P2 5 · P3 156 · NEEDS-USER 0 · Decided: 7 · Verified: 172
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2036,6 +2036,42 @@ Status: VERIFIED (iteration 161)
 Found: code review 26 (Minor 4; not a defect today) | Fixed: (this commit) | Regression test: the indicators oracle's own run (12 of 12 gates on a DB copy)
 Repro: qa/oracle/indicators_oracle.py values a basis more than 2 fiscal years old; it will flag the engine once a company's basis is that old.
 Expected: the same rule for reverse_dcf, epv, ncav and graham_tangible.   Actual: none.
+
+### BUG-321 [P2][QA] The scores oracle still values Sloan for banks and insurers, so its gate fails since BUG-197
+Status: OPEN
+Found: code review 27 (`qa/evidence/review27.txt`, Important 1; by reading, confirmed by the orchestrator) | Fixed: | Regression test:
+Repro: src/scores/scores.py `_NOT_SCORED["sloan"] = _FINANCIALS` (668d28c) makes Sloan N/A for banks and insurers; qa/oracle/scores_oracle.py `check_sloan` (~883-900) still values it for every company and `same()` counts (value, None) as a disagreement; the severe-sign report (~1289) still expects `sloan_high` for banks. The quality-scores spec (docs/superpowers/specs/2026-10-21-quality-scores-design.md ~89, ~227) has no sector exception. No commit touched the oracle (loop rules 7 and 9.5). Probe: %LOCALAPPDATA%\stockdb-qa\review27\head\tests\test_review27.py::test_the_scores_oracle_agrees_with_a_banks_sloan_na.
+Expected: the spec and the oracle take BUG-197's exception, in their own commit, and the oracle run on a DB copy agrees.   Actual: the Sloan gate fails on the 68 banks and insurers.
+
+### BUG-322 [P3][UI] The FA and VAL gap note shows the SEC-lag warning in place of the stale or no-annual note
+Status: OPEN
+Found: code review 27 (Minor 1; by reading, no real case in the 502) | Fixed: | Regression test:
+Repro: workstation.py ~386-390 returns the first matching warning, and the collection adds the lag warning (stock_data_fetcher.py ~281-285) before the no-annual and stale ones (~287-296): an IFRS filer whose newest 20-F isn't in companyfacts yet loses BUG-066's explanation. Probe: %LOCALAPPDATA%\stockdb-qa\review27\head\tests\test_review27.py::test_the_fa_tab_keeps_the_stale_annual_note_beside_the_sec_lag_note.
+Expected: both notes.   Actual: the lag note alone.
+
+### BUG-323 [P3][UI] BUG-181's window text still counts from the first month with a value
+Status: OPEN
+Found: code review 27 (Minor 2; by reading) | Fixed: | Regression test:
+Repro: `window_start` is the first month with a value (history.py ~288, ~307), so `_window_text` (workstation.py ~988-1003) reads "since 2018-01 (49 months)" when 86 months have passed: a full window opening on loss months, or a short history with gaps. Probe: %LOCALAPPDATA%\stockdb-qa\review27\head\tests\test_review27.py::test_a_window_whose_first_value_is_late_does_not_read_as_a_count_since_then.
+Expected: the months with a value out of the months in the window.   Actual: read as a short history.
+
+### BUG-324 [P3][TEST] BUG-194's tests don't check that the new CAGRs are stored
+Status: OPEN
+Found: code review 27 (Minor 3; mutant tree built, not run) | Fixed: | Regression test:
+Repro: test_scores_store.py ~175-186 checks only that the four columns exist, which `_ensure_columns` adds anyway; dropping the four names from QUALITY_COLUMNS (sqlite_store.py ~167) stores NULL and, by reading, no test fails. Mutant tree: %LOCALAPPDATA%\stockdb-qa\review27\mut; probe test_the_new_cagr_columns_are_stored_with_their_values.
+Expected: a test that reads the stored values back.   Actual: the column's presence only.
+
+### BUG-325 [P3][VAL] Q4 is implemented more narrowly than its Decision line, and the entry doesn't say so
+Status: OPEN
+Found: code review 27 (Minor 4) | Fixed: | Regression test:
+Repro: Q4's decision makes DDM N/A "where the completeness check fires"; models.py ~379-388 does so only where the gap reaches the trailing 12 months or the flagged year is a growth year taken from Yahoo (test_an_older_flagged_year_with_secs_figure_leaves_ddm_alone pins a flagged company DDM still values). The reading (the same rows today) is recorded only in LOG iteration 164.
+Expected: the narrower reading recorded on Q4's entry with its reason (the loop's recommendation: keep it, since an older gap with SEC's figure doesn't touch DDM's inputs).   Actual: only in the LOG.
+
+### BUG-326 [P3][DOCS] The quality-scores spec still says "profitable years out of 10" after BUG-200
+Status: OPEN
+Found: code review 27 (Minor 5) | Fixed: | Regression test:
+Repro: docs/superpowers/specs/2026-10-21-quality-scores-design.md ~153; the README was updated.
+Expected: the share of profitable years (of the last 5 to 10).   Actual: out of 10.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
