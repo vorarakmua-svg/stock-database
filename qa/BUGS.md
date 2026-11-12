@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 5 · P3 157 · NEEDS-USER 0 · Decided: 7 · Verified: 173
+**Open:** P0 0 · P1 0 · P2 4 · P3 156 · NEEDS-USER 0 · Decided: 7 · Verified: 175
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2038,8 +2038,8 @@ Repro: qa/oracle/indicators_oracle.py values a basis more than 2 fiscal years ol
 Expected: the same rule for reverse_dcf, epv, ncav and graham_tangible.   Actual: none.
 
 ### BUG-321 [P2][QA] The scores oracle still values Sloan for banks and insurers, so its gate fails since BUG-197
-Status: OPEN
-Found: code review 27 (`qa/evidence/review27.txt`, Important 1; by reading, confirmed by the orchestrator) | Fixed: | Regression test:
+Status: VERIFIED (iteration 168)
+Found: code review 27 (`qa/evidence/review27.txt`, Important 1; by reading, confirmed by the orchestrator) | Fixed: (this commit) | Regression test: the scores oracle's own run on a DB copy scored with BUG-197 (`%LOCALAPPDATA%\stockdb-qa\bug321`): Sloan 434/502 -> 502/502
 Repro: src/scores/scores.py `_NOT_SCORED["sloan"] = _FINANCIALS` (668d28c) makes Sloan N/A for banks and insurers; qa/oracle/scores_oracle.py `check_sloan` (~883-900) still values it for every company and `same()` counts (value, None) as a disagreement; the severe-sign report (~1289) still expects `sloan_high` for banks. The quality-scores spec (docs/superpowers/specs/2026-10-21-quality-scores-design.md ~89, ~227) has no sector exception. No commit touched the oracle (loop rules 7 and 9.5). Probe: %LOCALAPPDATA%\stockdb-qa\review27\head\tests\test_review27.py::test_the_scores_oracle_agrees_with_a_banks_sloan_na.
 Expected: the spec and the oracle take BUG-197's exception, in their own commit, and the oracle run on a DB copy agrees.   Actual: the Sloan gate fails on the 68 banks and insurers.
 
@@ -2068,8 +2068,8 @@ Repro: Q4's decision makes DDM N/A "where the completeness check fires"; models.
 Expected: the narrower reading recorded on Q4's entry with its reason (the loop's recommendation: keep it, since an older gap with SEC's figure doesn't touch DDM's inputs).   Actual: only in the LOG.
 
 ### BUG-326 [P3][DOCS] The quality-scores spec still says "profitable years out of 10" after BUG-200
-Status: OPEN
-Found: code review 27 (Minor 5) | Fixed: | Regression test:
+Status: VERIFIED (iteration 168)
+Found: code review 27 (Minor 5) | Fixed: (this commit) | Regression test: none (a spec line)
 Repro: docs/superpowers/specs/2026-10-21-quality-scores-design.md ~153; the README was updated.
 Expected: the share of profitable years (of the last 5 to 10).   Actual: out of 10.
 

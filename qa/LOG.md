@@ -2945,3 +2945,18 @@ Result: BUG-271 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2889 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(asof): a later filing's narrower figure doesn't replace the year's own; debt read from one filing (BUG-271)
 Next: BUG-274 (worker); BUG-321 (the scores oracle's Sloan).
+
+## Iteration 168: 2026-11-12 19:43: fix (BUG-321, with BUG-326)
+Picked: code review 27's Important finding, inline; BUG-326 rides along (the same spec).
+Did: the quality-scores spec gives Sloan BUG-197's exception (N/A for banks and insurers, as Beneish M) and the share
+of profitable years (BUG-200); the scores oracle takes `NO_SLOAN = FINANCIALS` in `check_sloan` and in the severe signs
+it expects. The code was already right (668d28c); this is the oracle catching up, so it is its own commit.
+- On the BUG-194 worker's DB copy (scored by code with BUG-197): HEAD's oracle fails Sloan 434/502 and expects a
+  BRO sloan_high the code doesn't fire; the new oracle passes Sloan 502/502 with no severe-sign mismatch.
+- Both oracles still fail 3 gates on EG alone (per-share rows FY2015-19, 4 CAGRs, predictability): the copy's EG
+  rows predate BUG-252, whose fix reaches the user's DB at EG's next collection (iteration 138: EG agrees fully on a
+  re-collected copy). Not a code disagreement.
+Result: BUG-321 and BUG-326 VERIFIED.
+Gates: ruff ✓ (qa/oracle) | CI: PR #29
+Commit: (this commit) test(qa): the scores oracle and spec leave Sloan out for banks and insurers (BUG-321, BUG-326)
+Next: BUG-274 (worker); BUG-319; the P3s from review 27 (BUG-322..325).

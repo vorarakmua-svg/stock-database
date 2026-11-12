@@ -88,6 +88,7 @@ are N/A where the sector rules suppress an input (`sector_metrics`), with a reas
   - N/A for banks, insurers and REITs.
 - **Sloan ratio**: (NI - CFO - CFI) / total assets.
   - Within ±10% is safe, 10-25% is a warning, and beyond ±25% is flagged.
+  - N/A for banks and insurers, whose loans and deposits move their assets, as Beneish M (BUG-197).
 - **ROIC vs WACC**:
   - ROIC is `metrics_annual.roic`, or the same formula on zero debt for a debt-free year (see Debt). Where it
     is None, `na_reasons.roic` says why: not meaningful for banks, insurers and REITs (the sector rules
@@ -150,7 +151,7 @@ re-ranks everyone.
 | Rank | Components |
 |---|---|
 | Financial strength | interest coverage (capped at 100), Altman Z, equity/assets, cash/debt (capped at 10), debt/revenue (lower is better) |
-| Profitability | operating margin, its 10-year mean, its 5-year slope, Piotroski F, predictability stars, 10-year median ROIC, profitable years out of 10 |
+| Profitability | operating margin, its 10-year mean, its 5-year slope, Piotroski F, predictability stars, 10-year median ROIC, the share of profitable years (of the last 5 to 10; BUG-200) |
 | Growth | revenue/share CAGR over 3 and 5 years, EBITDA/share CAGR over 5 years (EPS for banks and insurers) |
 | Valuation | price / historical value (lower is better; M1), else the P/E percentile in its 10 years (lower is better) |
 | Momentum | ((P[-1m]/P[-12m] - 1) + (P[-1m]/P[-6m] - 1)) / 2 / max(beta, 0.5), from the bars and the snapshot's beta |

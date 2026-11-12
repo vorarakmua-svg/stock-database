@@ -118,6 +118,7 @@ FINANCIALS = ("bank", "insurance")
 NO_PIOTROSKI = FINANCIALS
 NO_ALTMAN = FINANCIALS + ("reit", "utility")
 NO_BENEISH = FINANCIALS + ("reit",)
+NO_SLOAN = FINANCIALS  # BUG-197: accruals leave financials out, as Beneish does
 NO_MAGIC = FINANCIALS + ("utility", "reit")
 
 #: The stored JSON's names (src/scores' layouts, read for the names only).
@@ -881,12 +882,12 @@ def check_beneish(d: Data, mine: Dict[str, Oracle], failures: List[str]) -> None
 
 
 def check_sloan(d: Data, mine: Dict[str, Oracle], failures: List[str]) -> None:
-    print("== Sloan ratio: (NI - CFO - CFI) / TA on FY t")
+    print("== Sloan ratio: (NI - CFO - CFI) / TA on FY t; N/A for banks and insurers (BUG-197)")
     checked = agreed = 0
     lines = []
     for t in d.tickers:
         o, q = mine[t], d.qs.get(t) or {}
-        s = sloan(o.cur) if o.cur else None
+        s = sloan(o.cur) if o.cur and o.sector not in NO_SLOAN else None
         checked += 1
         if same(s, q.get("sloan_ratio"), SLOAN_TOL, False):
             agreed += 1
@@ -1286,7 +1287,7 @@ def severe_signs(d: Data, mine: Dict[str, Oracle]) -> None:
             m = beneish(o.cur, o.prev)[0]
             if m is not None and m > BENEISH_FLAG:
                 expected[(t, "beneish_flag")] = f"M {m:.4f}"
-        s = sloan(o.cur)
+        s = None if o.sector in NO_SLOAN else sloan(o.cur)
         if s is not None and abs(s) > SLOAN_SEVERE:
             expected[(t, "sloan_high")] = f"Sloan {s:.4f}"
         cov = (d.ma.get(t, {}).get(o.fy) or {}).get("interest_coverage")
