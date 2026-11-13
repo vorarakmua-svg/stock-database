@@ -2814,6 +2814,62 @@ def test_a_later_filing_that_misscales_two_years_has_both_put_back():
     assert (annual["2022"]["dividends_per_share"], annual["2023"]["dividends_per_share"]) == (2.77, 2.80)
 
 
+_BASIC = "WeightedAverageNumberOfSharesOutstandingBasic"
+
+
+def _hsy_basic(outstanding=None):
+    """HSY's FY2008-12 basic counts: its FY2011 10-K (filed 2012-02-17) tags FY2009-11's in thousands, FY2009-10's
+    beside the FY2010 10-K's figures in units; and the years' shares outstanding (*outstanding* for FY2009-10)."""
+    old, new = "2011-02-18", "2012-02-17"
+    basic = _filed_years(_BASIC, "shares", {
+        2008: [(old, 227_486_000)], 2009: [(old, 227_845_000), (new, 227_845)],
+        2010: [(old, 227_740_000), (new, 227_740)], 2011: [(new, 226_574)], 2012: [("2015-02-20", 225_036_000)]})
+    outstanding = {2009: 227_998_276, 2010: 227_030_232, **(outstanding or {})}
+    shares = _filed_years("CommonStockSharesOutstanding", "shares", {
+        2008: [(old, 227_035_071)], 2009: [(new, outstanding[2009])], 2010: [(new, outstanding[2010])],
+        2011: [(new, 225_205_918)], 2012: [("2013-02-22", 223_786_030)]}, instant=True)
+    income = _filed_years("NetIncomeLoss", "USD", {fy: [("2013-02-22", 5e8)] for fy in range(2008, 2013)})
+    return _annual(basic, shares, income)
+
+
+def test_a_count_a_later_filing_tags_in_thousands_keeps_the_figure_the_shares_outstanding_agree_with():
+    # BUG-329: the FY2011 10-K's FY2009-10 counts are in thousands, and so is its FY2011 count, so the years around
+    # side with it; the years' shares outstanding (227,998,276 and 227,030,232) side with the earlier figures.
+    annual = _hsy_basic()
+    assert (annual["2009"]["weighted_avg_shares_basic"], annual["2010"]["weighted_avg_shares_basic"]) == (
+        227_845_000, 227_740_000)
+    assert [(r["field"], r["kind"], r["dropped"]) for r in annual["2009"]["_repairs"]] == [
+        ("weighted_avg_shares_basic", "scale x10^-3", 227_845)]
+
+
+def test_shares_outstanding_more_than_a_tenth_from_the_earlier_count_decide_nothing():
+    # FY2009's shares outstanding 15% above its earlier count (an issuance) don't side with it, and its years around,
+    # FY2010-11 in thousands as the later filing has them, side with the later figure; FY2010 is still put back.
+    annual = _hsy_basic(outstanding={2009: 262_000_000})
+    assert (annual["2009"]["weighted_avg_shares_basic"], annual["2010"]["weighted_avg_shares_basic"]) == (
+        227_845, 227_740_000)
+
+
+def test_a_later_filings_count_in_units_isnt_put_back_to_thousands():
+    # GRMN's 10-Ks of 2018-19 tag FY2017's basic count (187,828) and shares outstanding (188,189) in thousands; its
+    # 10-K of 2020 the count in units. The outstanding side with the earlier figure, but only a smaller later figure
+    # is theirs to judge.
+    count = _filed_years(_BASIC, "shares", {2017: [("2018-02-21", 187_828), ("2019-02-20", 187_828),
+                                                   ("2020-02-19", 187_828_000)]})
+    shares = _filed_years("CommonStockSharesOutstanding", "shares", {2017: [("2019-02-20", 188_189)]}, instant=True)
+    income = _filed_years("NetIncomeLoss", "USD", {2017: [("2020-02-19", 7.09e8)]})
+    year = _annual(count, shares, income)["2017"]
+    assert (year["weighted_avg_shares_basic"], year.get("_repairs")) == (187_828_000, None)
+
+
+def test_shares_outstanding_on_the_later_figures_scale_leave_it():
+    # Shares outstanding on the later filing's scale don't side with the earlier figure, and the years around
+    # don't either: the latest filing wins.
+    annual = _hsy_basic(outstanding={2009: 227_998.276, 2010: 227_030.232})
+    assert (annual["2009"]["weighted_avg_shares_basic"], annual["2010"]["weighted_avg_shares_basic"]) == (
+        227_845, 227_740)
+
+
 def test_a_fourth_quarter_comes_from_the_restored_year():
     # AMD's Q4 FY2021 is the year less nine months; with the 2024 10-K's flipped year its investing cash flow read
     # +$0.99B.

@@ -438,7 +438,7 @@ class StockDataFetcher:
 
         # Derive identities within each point-in-time vintage (self-contained snapshots).
         for by_accn in (stock.financials_annual_vintages or {}).values():
-            normalize_share_scale(by_accn)
+            normalize_share_scale(by_accn, neighbours=False)  # no scale from a later filing's view (BUG-329)
             for period in by_accn.values():
                 apply_derivations(period)
 

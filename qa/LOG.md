@@ -3082,3 +3082,20 @@ Result: BUG-327 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2962 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(parsers): a D&A total a later filing shows to be a part gives way to the full one (BUG-327)
 Next: BUG-329 (worker); Q17 with BUG-295; code review 29 after 2 more fixes.
+
+## Iteration 177: 2026-11-13 11:10: fix (BUG-329)
+Picked: the P2 BUG-319's census found; an opus worker.
+Did: share counts no EPS can check no longer rescale shares outstanding (pass 3 needs a checked count), a new pass 4
+puts an unchecked filed count on its neighbours' power of 1000 under tight agreement rules, and the restore step puts
+back an earlier weighted count a later filing gives in thousands where the year's shares outstanding agree. HSY FY2009
+shares outstanding 227,998 -> 227,998,276, its FY2009-11 weighted counts back to units; BRK-B, CPAY FY2009; quarters at
+FITB, HBAN, REGN, TER, C, BRO, TSCO; vintages at NTRS, AMT, DLR, HST. Wider variants (a x10 band; every neighbour
+agreeing; an unrestricted restore) measured and rejected.
+- RED: 5 of 18 failed on 800bdf3; GREEN. 19 of 19 mutants; bug327, bug252, bug332, bug319, bug328 killed. bug170's 4 and
+  bug260-...-bug319's 3 stale mutants went stale with BUG-327 (not this fix): to reshape. Look-ahead as at HEAD.
+- DB copies (15 tickers re-collected, the engine over 502): only financials tables move; 0 medians, verdicts,
+  owner-earnings verdicts, labels or indicators; EPS unchanged. Three oracles as at HEAD.
+Result: BUG-329 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2980 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(share-scale): an unchecked count doesn't rescale shares outstanding; a later thousands count gives way (BUG-329)
+Next: Q17 with BUG-295 (worker); code review 29 (due).

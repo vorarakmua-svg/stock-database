@@ -1394,6 +1394,25 @@ def _years_side_with_earlier(kind: str, earlier: float, latest: float,
         latest == 0 or abs(math.log10(abs(latest)) - mid) > 1)
 
 
+#: The weighted-average counts, whose scale the year's shares outstanding can decide where a later filing gives a
+#: count a power of 1000 smaller, as in thousands or millions (BUG-329). A larger one is left to the years around:
+#: GRMN's 10-Ks of 2018-19 tag FY2017's counts and shares outstanding in thousands, and its 10-K of 2020 the count
+#: in units.
+_WEIGHTED_COUNTS = ("weighted_avg_shares_basic", "weighted_avg_shares_diluted")
+
+
+def _outstanding_sides_with(period: Dict[str, Any], earlier: float) -> bool:
+    """Whether the year's shares outstanding side with the earlier filings' weighted count
+    over a later filing's figure a power of 1000 below it: within share_scale's 10% of the
+    earlier one. HSY's FY2011 10-K tags FY2009's and FY2010's basic counts in thousands
+    (227,845 for 227,845,000) and FY2011's too, so the years around side with it; FY2009's
+    227,998,276 shares outstanding don't."""
+    outstanding = period.get("shares_outstanding")
+    if not isinstance(outstanding, (int, float)) or outstanding <= 0:
+        return False
+    return abs(earlier / outstanding - 1.0) <= _SCALE_TOLERANCE
+
+
 def _cash_adds_up(sections: List[float], period: Dict[str, Any]) -> bool:
     """Whether a year's cash-flow sections sum to its net change in cash, within 1% of
     the largest, with or without the FX effect and discontinued operations (filers
@@ -2398,6 +2417,10 @@ class XBRLParser:
                 agreed = [agreed_cash[fy].get(k, v) for k, v in zip(_CASH_SECTIONS, sections)]
                 if not _cash_adds_up(sections, period) and _cash_adds_up(agreed, period):
                     restored.append(conflict)
+                continue
+            if (key in _WEIGHTED_COUNTS and kind.startswith("scale x10^-")
+                    and _outstanding_sides_with(period, earlier_value)):
+                restored.append(conflict)
                 continue
             neighbours = [data[y][key] for y in range(fy - _NEIGHBOUR_YEARS, fy + _NEIGHBOUR_YEARS + 1)
                           if y != fy and isinstance(data.get(y, {}).get(key), (int, float))]

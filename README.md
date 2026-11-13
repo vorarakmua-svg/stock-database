@@ -2099,6 +2099,14 @@ numbers SEC filings report:
   each weighted count goes onto the scale its own net income and EPS imply, provided
   another of the year's counts agrees; otherwise it follows the year's checked counts.
   A count at or below zero, filed or derived, is left empty.
+- **Share counts no EPS checks.** Across periods, a count goes onto the scale its net
+  income and EPS imply; the shares outstanding follow a weighted count only where an EPS
+  checked it. A filed count no EPS checks takes the scale of its own field's neighbouring
+  periods, where two or more agree within a factor of two and it is a power of 1000 from
+  them, unless another count of its own period is on its scale. Where a later
+  filing tags a year's weighted count a power of 1000 below the one earlier filings agree
+  on, the year's shares outstanding can decide: within 10% of the earlier figure, it is
+  kept (Hershey's FY2011 10-K tags FY2009-11's counts in thousands).
 - **Outflows by size.** Capex, buybacks, debt repaid and dividends paid are stored as
   positive amounts, and filers tag them with either sign, sometimes both within one year.
   Their quarters difference the year-to-date totals' sizes, and a quarter whose total

@@ -105,6 +105,20 @@ def test_assess_flags_magnitude_outlier_end_to_end(tmp_path):
     assert stock.data_quality["score"] < 100
 
 
+def test_a_filings_vintage_takes_no_count_scale_from_another_filings_view(tmp_path):
+    # BUG-329: HSY's FY2011 10-K tags FY2011's diluted count in thousands (229,919); the 10-Ks of 2013 and 2014 give it
+    # in units. The first filing's vintage is its own view, as filed: no later filing sets its scale.
+    fetcher = _make_fetcher(tmp_path, workers=1)
+    stock = StockData(ticker="HSY", cik="47111", company_name="Hershey")
+    stock.financials_annual = {"2011": {"fiscal_year": 2011, "net_income": 6.29e8}}
+    stock.financials_annual_vintages = {"2011": {
+        accn: {"fiscal_year": 2011, "net_income": 6.29e8, "weighted_avg_shares_diluted": count}
+        for accn, count in (("0001193125-12-067143", 229_919.0), ("0000047111-13-000007", 229_919_000.0),
+                            ("0000047111-14-000006", 229_919_000.0))}}
+    fetcher._clean_and_derive(stock)
+    assert stock.financials_annual_vintages["2011"]["0001193125-12-067143"]["weighted_avg_shares_diluted"] == 229_919.0
+
+
 def test_assess_clean_company_scores_100(tmp_path):
     fetcher = _make_fetcher(tmp_path, workers=1)
     stock = StockData(ticker="OK", cik="000", company_name="OK Inc.")
