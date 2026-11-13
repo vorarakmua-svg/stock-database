@@ -2196,7 +2196,11 @@ numbers SEC filings report:
   inside the depreciation at one filer and apart at another. A total above the amortization
   that nothing in the filings contradicts is read as the D&A, though it can be the depreciation
   line: GE's FY2025 total is $0.86B beside $0.36B of amortization, which Yahoo reads as $1.22B
-  together.
+  together. A total the filer's filings show to be a part of its D&A is set aside from then on:
+  a filing repeats a period's D&A as an earlier filing tagged it alone and tags a smaller figure
+  beside it under a higher-ranked tag (UPS's 10-K of 2026: a note's rounded $2.8B/$3.0B/$3.0B of
+  depreciation beside the cash flow statement's $3.37B/$3.61B/$3.75B); the D&A then enters under
+  the part's tag, and a year's 10-Qs are read so only together.
 - **Balance-sheet checkpoints** at every quarter-end (instant facts), full history.
 - **`fiscal_quarter`** (1–4, company calendar) and **`calendar_quarter`** (1–4, calendar)
   are both attached; `calendar_quarter` comes from the SEC frame and is the reliable

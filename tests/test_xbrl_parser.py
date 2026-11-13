@@ -2282,6 +2282,147 @@ def test_a_line_the_depreciation_and_amortization_dont_exceed_held_them():
     assert _da(XBRLParser().extract_annual_financials(facts)["2019"]) == (906e6, DA)
 
 
+_UPS_FILED = [("2023-01-01", "2023-12-31", "10-K", "2024-02-20", {DA: 3366e6}),
+              ("2024-01-01", "2024-12-31", "10-K", "2025-02-18", {DA: 3609e6})]
+_UPS_2026 = [("2023-01-01", "2023-12-31", "10-K", "2026-02-17", {DDA: 2800e6, DA: 3366e6}),
+             ("2024-01-01", "2024-12-31", "10-K", "2026-02-17", {DDA: 3000e6, DA: 3609e6}),
+             ("2025-01-01", "2025-12-31", "10-K", "2026-02-17", {DDA: 3000e6, DA: 3746e6})]
+
+
+def test_a_total_the_filing_shows_to_be_another_line_is_set_aside():
+    # BUG-327: UPS's 10-K of 2026 repeats FY2023's and FY2024's D&A as its earlier 10-Ks tagged it alone
+    # (DepreciationAndAmortization, $3.366B and $3.609B) and tags a note's rounded $2.8B and $3.0B under the
+    # first-ranked DepreciationDepletionAndAmortization: D&A read $2.8B/$3.0B/$3.0B for FY2023-25.
+    parser = XBRLParser()
+    facts = _da_filings(*_UPS_FILED, *_UPS_2026)
+    annual = parser.extract_annual_financials(facts)
+    assert [_da(annual[fy]) for fy in ("2023", "2024", "2025")] == [(3366e6, DDA), (3609e6, DDA), (3746e6, DDA)]
+    assert _da(parser.extract_annual_vintages(facts)["2025"]["2026-02-17"]) == (3746e6, DDA)
+
+
+def test_a_10q_shows_its_other_line_so_too():
+    # UPS's 10-Q of May 2026: Q1 2025's $912M as its 10-Q of 2025 tagged it alone, beside $743M under the first-ranked
+    # tag; so Q1 2026's $791M there is that line too, beside $985M.
+    facts = _da_filings(("2025-01-01", "2025-03-31", "10-Q", "2025-05-07", {DA: 912e6}),
+                        ("2025-01-01", "2025-12-31", "10-K", "2026-02-17", {DA: 3746e6}),
+                        ("2025-01-01", "2025-03-31", "10-Q", "2026-05-06", {DDA: 743e6, DA: 912e6}),
+                        ("2026-01-01", "2026-03-31", "10-Q", "2026-05-06", {DDA: 791e6, DA: 985e6}))
+    quarters = XBRLParser().extract_quarterly_financials(facts)
+    assert quarters["2026-03-31"]["depreciation_amortization"] == pytest.approx(985e6)
+
+
+@pytest.mark.parametrize("earlier, later, expected", [
+    # the earlier filing tagged both: nothing shows which is the D&A, so the first-ranked one stands
+    ({DDA: 2000e6, DA: 2455e6}, {DDA: 2001e6, DA: 2455e6}, (2001e6, DDA)),
+    # the same figure under another tag is the same D&A
+    ({DA: 3366e6}, {DDA: 3366e6, DA: 3366e6}, (3366e6, DDA)),
+    # the later filing changes the earlier tag's figure: the period was restated, not repeated
+    ({DA: 3366e6}, {DDA: 2800e6, DA: 3400e6}, (2800e6, DDA)),
+])
+def test_only_a_repeated_total_beside_another_shows_it(earlier, later, expected):
+    year = ("2023-01-01", "2023-12-31", "10-K")
+    facts = _da_filings((*year, "2024-02-20", earlier), (*year, "2026-02-17", later))
+    assert _da(XBRLParser().extract_annual_financials(facts)["2023"]) == expected
+
+
+def test_the_tag_is_judged_only_where_the_two_differ():
+    # A filing whose two tags agree on a repeated year shows nothing of a year where they don't; and where a filing's
+    # tag is shown to be another line, a year it agrees with the D&A on keeps it.
+    filed = ("2023-01-01", "2023-12-31", "10-K", "2024-02-20", {DA: 3366e6})
+    facts = _da_filings(filed, ("2023-01-01", "2023-12-31", "10-K", "2026-02-17", {DDA: 3366e6, DA: 3366e6}),
+                        ("2024-01-01", "2024-12-31", "10-K", "2026-02-17", {DDA: 3700e6, DA: 3609e6}))
+    assert _da(XBRLParser().extract_annual_financials(facts)["2024"]) == (3700e6, DDA)
+    facts = _da_filings(filed, ("2023-01-01", "2023-12-31", "10-K", "2026-02-17", {DDA: 2800e6, DA: 3366e6}),
+                        ("2022-01-01", "2022-12-31", "10-K", "2026-02-17", {DDA: 3188e6, DA: 3188e6}),
+                        ("2021-01-01", "2021-12-31", "10-K", "2026-02-17", {DDA: 4000e6, DA: 2953e6}))
+    annual = XBRLParser().extract_annual_financials(facts)
+    assert _da(annual["2022"]) == (3188e6, DDA)
+    assert _da(annual["2021"]) == (4000e6, DDA)  # larger: it can hold more
+    # a larger figure beside the repeated D&A shows nothing of a smaller one in another year
+    facts = _da_filings(filed, ("2023-01-01", "2023-12-31", "10-K", "2026-02-17", {DDA: 3500e6, DA: 3366e6}),
+                        ("2024-01-01", "2024-12-31", "10-K", "2026-02-17", {DDA: 3000e6, DA: 3609e6}))
+    assert _da(XBRLParser().extract_annual_financials(facts)["2024"]) == (3000e6, DDA)
+
+
+def _shown_part(tag=DDA, other=DA):
+    """Two 10-Ks of FY2010 that show *tag* a part of *other*: the first tags $10.6M under *other* alone, the next
+    repeats it beside $10.0M under *tag* (TSLA's of February and March 2012)."""
+    year = ("2010-01-01", "2010-12-31", "10-K")
+    return [(*year, "2012-02-27", {other: 10.6e6}), (*year, "2012-03-28", {tag: 10.0e6, other: 10.6e6})]
+
+
+def test_the_part_stays_a_part_in_the_filers_later_filings():
+    # PACCAR's DDA is its property's depreciation, apart from the equipment it leases out: once its filings show it,
+    # a later 10-K's FY2016 $302M beside $993M is that part too.
+    facts = _da_filings(*_shown_part(), ("2016-01-01", "2016-12-31", "10-K", "2017-02-21", {DDA: 302e6, DA: 993e6}))
+    assert _da(XBRLParser().extract_annual_financials(facts)["2016"]) == (993e6, DDA)
+
+
+def test_a_part_alone_gives_way_to_the_d_and_a_given_before():
+    # TSLA's 10-K of 2019 repeats FY2017 as its $769.3M part alone; its 10-K of 2018 gave the year's D&A, $1.636B.
+    year = ("2017-01-01", "2017-12-31", "10-K")
+    facts = _da_filings(*_shown_part(), (*year, "2018-02-23", {DDA: 769.3e6, DA: 1636e6}),
+                        (*year, "2019-02-19", {DDA: 769.3e6}))
+    assert _da(XBRLParser().extract_annual_financials(facts)["2017"]) == (1636e6, DDA)
+
+
+def test_a_years_10qs_set_the_part_aside_only_together():
+    # TSLA's 2018: the first quarter's $245.2M part beside $416.2M, but six months under the part's tag alone, with no
+    # D&A beside it: the quarters stay on the part, or the second would read $80.8M.
+    facts = _da_filings(*_shown_part(), ("2017-01-01", "2017-12-31", "10-K", "2018-02-23", {DA: 1636e6}),
+                        ("2018-01-01", "2018-03-31", "10-Q", "2018-05-07", {DDA: 245.2e6, DA: 416.2e6}),
+                        ("2018-01-01", "2018-06-30", "10-Q", "2018-08-06", {DDA: 497.0e6}))
+    quarters = XBRLParser().extract_quarterly_financials(facts)
+    assert quarters["2018-06-30"]["depreciation_amortization"] == pytest.approx(251.8e6)
+
+
+def test_the_d_and_a_enters_under_the_parts_tag():
+    # NTAP's FY2017: its own 10-K's $178M part (filed before its filings showed the tag a part) would outrank the next
+    # 10-K's $226M under the lower-ranked tag; entered under the part's tag, the later figure stands.
+    facts = _da_filings(("2015-05-01", "2016-04-29", "10-K", "2016-06-22", {DA: 279e6}),
+                        ("2016-04-30", "2017-04-28", "10-K", "2017-06-20", {DDA: 178e6, DA: 226e6}),
+                        ("2015-05-01", "2016-04-29", "10-K", "2018-06-19", {DDA: 212e6, DA: 279e6}),
+                        ("2016-04-30", "2017-04-28", "10-K", "2018-06-19", {DDA: 178e6, DA: 226e6}))
+    parser = XBRLParser()
+    assert _da(parser.extract_annual_financials(facts)["2017"]) == (226e6, DDA)
+    assert _da(parser.extract_annual_vintages(facts)["2017"]["2017-06-20"]) == (178e6, DDA)
+
+
+def test_a_total_ranked_between_keeps_the_part():
+    # KEY's FY2021: its part's tag ($107M) beside a $32M accretion figure ranked between it and the D&A's tag ($298M):
+    # set aside, the part would give way to the $32M, so it stays.
+    facts = _da_filings(*_shown_part(), ("2021-01-01", "2021-12-31", "10-K", "2022-02-22",
+                                         {DDA: 107e6, DAAN: 32e6, DA: 298e6}))
+    assert _da(XBRLParser().extract_annual_financials(facts)["2021"]) == (107e6, DDA)
+
+
+def test_a_years_10qs_are_judged_on_their_latest_figures():
+    # PACCAR's 2015: its 10-Q of August 2015 gave six months before its filings showed the part; the 10-Qs of 2016
+    # repeat the first quarter and six months, both on the D&A, which the quarters read.
+    facts = _da_filings(("2015-01-01", "2015-06-30", "10-Q", "2016-08-03", {DDA: 146.2e6, DA: 448.4e6}),
+                        ("2015-01-01", "2015-03-31", "10-Q", "2016-05-04", {DDA: 70.3e6, DA: 221.1e6}),
+                        ("2015-01-01", "2015-12-31", "10-K", "2016-02-16", {DA: 907.1e6}),
+                        ("2015-01-01", "2015-06-30", "10-Q", "2015-08-06", {DDA: 146.2e6, DA: 448.4e6}),
+                        ("2015-01-01", "2015-03-31", "10-Q", "2015-05-06", {DA: 221.1e6}))
+    quarters = XBRLParser().extract_quarterly_financials(facts)
+    assert quarters["2015-06-30"]["depreciation_amortization"] == pytest.approx(227.3e6)
+
+
+def test_two_lines_below_the_amortization_are_left_to_it():
+    # BEN's FY2024: its part's tag ($116.5M) and the D&A's ($129.9M) are both below its $338.2M of amortization, both
+    # lines (BUG-170): the first-ranked one and the amortization make the D&A, $454.7M.
+    facts = _da_filings(*_shown_part(), ("2023-10-01", "2024-09-30", "10-K", "2024-11-12",
+                                         {DDA: 116.5e6, DA: 129.9e6, INTANGIBLES: 338.2e6}))
+    assert _da(XBRLParser().extract_annual_financials(facts)["2024"]) == (pytest.approx(454.7e6), DA)
+
+
+def test_a_later_filing_doesnt_show_an_earlier_ones_line():
+    # A vintage reads what was known: the first 10-K's two figures stand as filed, whatever a later one repeats.
+    year = ("2023-01-01", "2023-12-31", "10-K")
+    facts = _da_filings((*year, "2024-02-20", {DDA: 2800e6, DA: 3366e6}), (*year, "2025-02-18", {DA: 3366e6}))
+    assert _da(XBRLParser().extract_annual_vintages(facts)["2023"]["2024-02-20"]) == (2800e6, DDA)
+
+
 def test_a_later_filing_doesnt_judge_an_earlier_ones_figures():
     # A vintage reads what was known when it was filed: the later 10-K's $713M total says nothing to the first.
     year = ("2025-01-01", "2025-12-31", "10-K")

@@ -924,6 +924,90 @@ def _span_at_least_a_year(key: Tuple[str, str, str]) -> bool:
     return (end - start).days >= _FULL_YEAR_MIN_DAYS
 
 
+def _da_totals_displaced(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+    """*us_gaap* less the D&A totals under a tag the filer's filings show to carry a part of its D&A (BUG-327).
+
+    A filing repeats a period's D&A as an earlier filing gave it, under the tag that filing used alone, and beside it
+    tags a smaller figure under another total's tag: that figure is a part, another line (UPS's 10-K of 2026 repeats
+    FY2023's $3.366B DepreciationAndAmortization and tags $2.8B, a note's rounded depreciation, as
+    DepreciationDepletionAndAmortization, which ranks first; PACCAR's DDA, its property's depreciation beside the
+    equipment it leases out). From that filing on, the tag is set aside in every period whose filing gives the D&A's
+    tag beside it, larger, with no other total ranked above that tag (FY2025's $3.0B beside $3.746B), and the D&A
+    enters under the part's tag too, so the latest filing's figure stands over an earlier filing's part; and where
+    a filing tags the part alone, it is set aside beside a larger D&A a filing gave the period by then (TSLA's 10-K
+    of 2019 repeats FY2017 as its $769.3M part; its 10-K of 2018 gave $1.636B). A year's 10-Qs are read so only where
+    the latest figure of each of its periods to date under the tag is (TSLA's 2018). A larger figure under the new
+    tag can hold more than the earlier D&A and stands. Only filings filed by then are read."""
+    totals = {tag: _by_period(us_gaap, tag) for tag in _DA_TOTALS}
+    periods: Dict[Tuple[str, str], Dict[str, Dict[str, Dict[str, Any]]]] = defaultdict(lambda: defaultdict(dict))
+    for tag, by_key in totals.items():
+        for (accn, start, end), e in by_key.items():
+            periods[(start, end)][accn][tag] = e
+    shown: Dict[Tuple[str, str], str] = {}  # (tag, the D&A's tag): the filings show the tag a part of it, from when
+    for filings in periods.values():
+        for accn, tagged in filings.items():
+            filed = min(e.get("filed") or "" for e in tagged.values())
+            for tag, e in tagged.items():
+                for other, o in tagged.items():
+                    if other != tag and e["val"] < o["val"] and not _agree(e["val"], o["val"]) and any(
+                            (f.get("filed") or "") < filed and set(earlier) == {other} and _agree(f["val"], o["val"])
+                            for earlier_accn, earlier in filings.items() if earlier_accn != accn
+                            for f in earlier.values()):
+                        shown[(tag, other)] = min(shown.get((tag, other), filed), filed)
+    if not shown:
+        return us_gaap
+    amortized: Dict[Tuple[str, str, str], float] = {}
+    for tag in _AMORTIZATION:
+        for key, e in _by_period(us_gaap, tag).items():
+            amortized[key] = max(amortized.get(key, 0.0), e["val"])
+    aside: Dict[str, Set[Tuple[str, str, str]]] = defaultdict(set)
+    copies: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for filings in periods.values():
+        for accn, tagged in filings.items():
+            filed = min(e.get("filed") or "" for e in tagged.values())
+            for (tag, other), since in shown.items():
+                e = tagged.get(tag)
+                if e is None or since > filed or any(_DA_TOTALS.index(k) < _DA_TOTALS.index(other)
+                                                     for k in tagged if k not in (tag, other)):
+                    continue
+                o = tagged.get(other)
+                if o is not None:
+                    # the D&A beside it, larger, enters under the part's tag too, so the latest filing's figure stands;
+                    # where it is no larger than the amortization beside it, both are lines (BUG-170) and stay (BEN's
+                    # FY2024 $116.5M and $129.9M beside $338.2M)
+                    if e["val"] < o["val"] and not _agree(e["val"], o["val"]) and o["val"] > amortized.get(
+                            (accn, e["start"], e["end"]), 0.0):
+                        aside[tag].add((accn, e["start"], e["end"]))
+                        copies[tag].append(dict(o))
+                elif any((f.get("filed") or "") <= filed and other in earlier and e["val"] < earlier[other]["val"]
+                         and not _agree(e["val"], earlier[other]["val"])
+                         for earlier_accn, earlier in filings.items() if earlier_accn != accn
+                         for f in earlier.values()):
+                    # alone, it is the part still, beside the D&A a filing gave the period by then (TSLA's 10-Q of
+                    # 2018 repeats six months of 2017 as its $336.7M line, its first 10-Q's D&A $765.8M)
+                    aside[tag].add((accn, e["start"], e["end"]))
+    # a year's 10-Qs are read so only where the latest figure of every one of its periods to date under the tag is, so
+    # its quarters stay on one basis (TSLA's 2018: the first quarter's $245.2M beside $416.2M, but six and nine months
+    # under the tag alone)
+    for tag, keys in aside.items():
+        latest: Dict[Tuple[str, str], Tuple[str, Tuple[str, str, str]]] = {}
+        for key, e in totals[tag].items():
+            when = e.get("filed") or ""
+            if not _span_at_least_a_year(key) and when >= latest.get(key[1:], ("", key))[0]:
+                latest[key[1:]] = (when, key)
+        for (start, _), (_, key) in latest.items():
+            if key not in keys:
+                keys -= {k for k in keys if k[1] == start and not _span_at_least_a_year(k)}
+        copies[tag] = [e for e in copies[tag] if (e.get("accn"), e.get("start"), e.get("end")) in keys]
+    out = dict(us_gaap)
+    for tag, keys in aside.items():
+        units = out[tag].get("units", {})
+        out[tag] = {**out[tag], "units": {**units, "USD": [
+            e for e in units.get("USD", []) if (e.get("accn"), e.get("start"), e.get("end")) not in keys]
+            + copies[tag]}}
+    return out
+
+
 def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     """*us_gaap* with one DepreciationAndAmortization fact of a filing's depreciation and its amortization of
     intangibles on each period it tags them on lines of their own, with no total that can hold them.
@@ -1148,14 +1232,15 @@ def _filer_facts(facts: Dict[str, Any], view: str) -> Dict[str, Any]:
     figure should stand (judged on DebtCurrent as filed); then, judged on those facts as filed, the borrowings and the
     maturities that view's records read as one DebtCurrent where a filing tags none (``_current_debt_combinations``),
     DebtCurrent before a refinancing set aside, 0.0 for the CommercialPaper the short-term total that view's record
-    reads on its date holds (those combinations among them), the combinations themselves, and last the depreciation
-    and the amortization of intangibles as one D&A figure where the filing tags no total that can hold them."""
+    reads on its date holds (those combinations among them), the combinations themselves, a D&A total a filing shows
+    to be another line set aside (``_da_totals_displaced``), and last the depreciation and the amortization of
+    intangibles as one D&A figure where the filing tags no total that can hold them."""
     totals = _debt_totals_set_aside(_debt_parts_set_aside(_net_outflows_as_paid(_cash_parts_set_aside(
         _cash_totals_set_aside(_debt_on_balance_sheet_dates(_on_balance_sheet_dates(_dollar_filings(
             facts.get("facts", {}).get("us-gaap", {})))))))))
     combined, held_by_totals = _current_debt_combinations(totals, view)
-    return _depreciation_combined(_current_debt_combined(_current_debt_set_aside(totals, view, frozenset(combined)),
-                                                         combined, held_by_totals))
+    return _depreciation_combined(_da_totals_displaced(_current_debt_combined(
+        _current_debt_set_aside(totals, view, frozenset(combined)), combined, held_by_totals)))
 
 
 #: The quarterly reports, whose balance sheets are a quarter's: a 10-K's year end is the annual record's.

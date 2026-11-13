@@ -3066,3 +3066,19 @@ Result: BUG-328 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2948 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(parsers): a bank's revenue isn't a part of its noninterest income (BUG-328)
 Next: BUG-327 (worker); BUG-329; Q17 with BUG-295; code review 29 after 2 more fixes.
+
+## Iteration 176: 2026-11-13 09:53: fix (BUG-327)
+Picked: the P2 BUG-274's round 2 found; BUG-274's worker.
+Did: a D&A total a filing tags below another total that repeats an earlier filing's figure for the period is a part
+(UPS's rounded depreciation), and is set aside beside the larger total from then on (`_da_totals_displaced`). Narrowed
+by the all-filer census from 42 filers and 48 negatives/halvings to 23 filers, all moving up, and none negative; the 3
+remaining halvings repair head's broken ladders (ELV, AES). The rule is wider than UPS by design: CRM, MCD, PCAR, TSLA,
+EXC read the same way (their cash-flow add-backs; spot-checked against Yahoo and known statement figures).
+- RED: 6 of 356 failed on 9d476be's src; GREEN. 13 of 13 mutants; bug332 36, bug319 17, bug328 17 killed. Look-ahead 0.
+- DB copies (27 tickers re-collected, the engine over 502): 0 medians, verdicts, owner-earnings verdicts; one label,
+  TSLA far above -> above (its price_far_above_value warning gone); owner-earnings bases CRM $374.96 -> $516.99, PCAR
+  $373.15 -> $268.28, UPS $185.81 -> $187.22, verdicts unchanged; TSLA predictability 1.0 -> 3.0 stars.
+Result: BUG-327 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2962 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): a D&A total a later filing shows to be a part gives way to the full one (BUG-327)
+Next: BUG-329 (worker); Q17 with BUG-295; code review 29 after 2 more fixes.
