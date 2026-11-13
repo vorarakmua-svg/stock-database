@@ -44,7 +44,7 @@ from tests import refresh_fakes as rf
 from tests.test_fetcher_concurrency import (
     BLK_FY2022,
     DLR_10Q,
-    DLR_LAG,
+    DLR_UNREAD,
     serve_blk,
     serve_dlr,
     stored_blk,
@@ -923,7 +923,7 @@ def test_the_real_collection_stores_what_the_companyfacts_lack_and_the_sec_step_
     serve_dlr(monkeypatch, lagging=True)
     assert collect_tickers(db, tmp_path / "out", tmp_path / "cache", ["DLR"], lambda line: None)["stored"] == 1
     warnings, incomplete = stored_run(db, "DLR")
-    assert incomplete == {"report": DLR_10Q} and DLR_LAG in warnings
+    assert incomplete == {"report": DLR_10Q} and DLR_UNREAD in warnings
     feed = rf.FakeSEC({"0001297996": [rf.filing("10-Q", "2026-07-31", "0001104659-26-089296")]})
     queue = rf.run(db, rf.services(db, sec=feed), steps=["sec"]).queue
     assert list(queue) == ["DLR"] and len(queue["DLR"]) == 1
@@ -1495,3 +1495,14 @@ def test_the_real_services_are_the_apps_collectors(tmp_path, monkeypatch):
     assert calls["cusips"] == (db, "OpenFIGI") and calls["positions"][0] == db
     assert calls["market"] == (db, ("fred", "shiller", "treasury"), tmp_path / "cache")
     assert calls["compute"] == (db, None)
+
+
+def test_a_collection_that_read_the_report_from_its_own_xbrl_isnt_collected_again(tmp_path, monkeypatch):
+    # Q17: the collect step's collection read DLR's 10-Q of 2026-07-31 from the filing, which its companyfacts lacked:
+    # its figures are whole, so the next SEC step, whose feed lists no report since, leaves DLR alone.
+    db = tmp_path / "stock.db"
+    serve_dlr(monkeypatch, lagging=True, instance=True)
+    assert collect_tickers(db, tmp_path / "out", tmp_path / "cache", ["DLR"], lambda line: None)["stored"] == 1
+    assert stored_run(db, "DLR")[1] is None
+    feed = rf.FakeSEC({"0001297996": [rf.filing("10-Q", "2026-07-31", "0001104659-26-089296")]})
+    assert rf.run(db, rf.services(db, sec=feed), steps=["sec"]).queue == {}

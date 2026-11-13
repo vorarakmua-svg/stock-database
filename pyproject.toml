@@ -71,6 +71,7 @@ files = [
     "src/parsers/sector_metrics.py",
     "src/parsers/ttm.py",
     "src/parsers/unmapped.py",
+    "src/parsers/xbrl_instance.py",
     "src/analysis",
     "src/exporters/sqlite_store.py",
     "src/query/asof.py",

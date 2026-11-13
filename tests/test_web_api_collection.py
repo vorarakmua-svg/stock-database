@@ -20,7 +20,7 @@ from src.webapp.settings import WebSettings
 from tests.test_fetcher_concurrency import (
     BLK_FY2022,
     DLR_10Q,
-    DLR_LAG,
+    DLR_UNREAD,
     serve_blk,
     serve_dlr,
     stored_blk,
@@ -306,7 +306,7 @@ def test_a_job_keeps_what_a_failed_predecessor_read_cant_give(monkeypatch, web_d
 
 
 @pytest.mark.parametrize("ticker, serve, incomplete, warning", [
-    ("DLR", lambda monkeypatch: serve_dlr(monkeypatch, lagging=True), {"report": DLR_10Q}, DLR_LAG),  # BUG-251
+    ("DLR", lambda monkeypatch: serve_dlr(monkeypatch, lagging=True), {"report": DLR_10Q}, DLR_UNREAD),  # BUG-251
     ("BLK", lambda monkeypatch: serve_blk(monkeypatch, 503), {"predecessor": "HTTPError"},  # BUG-279
      "SEC EDGAR: BLK's predecessor, CIK 0001364742, couldn't be read (HTTPError), so its history is missing from "
      "this run"),

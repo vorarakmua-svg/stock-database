@@ -1651,7 +1651,9 @@ companies on the **collection list**, each with its reason: `quotes`, `bars` and
   company without a CIK is counted and skipped, and a feed that fails is that company's error.
   - A company also goes on the list when that latest collection's SEC read was incomplete, as its `collection_runs` row
     says (`incomplete`): it read no facts of the latest report its submissions listed (its companyfacts lacked them,
-    the SEC's lag, BUG-251, or their request failed), or it couldn't read its predecessor's filings (BUG-279). Such a
+    the SEC's lag, BUG-251, and the filing's own XBRL couldn't be read either, or their request failed), or it
+    couldn't read its predecessor's filings (BUG-279). A collection that read the report, and every earlier one its
+    companyfacts lacked, from the filings' own XBRL isn't incomplete: its figures are whole. Such a
     collection counted as one that had it all, and the company waited for its next report. On 2026-10-25 the companyfacts of 58 of the 502 companies lacked
     their latest 10-Q or 10-K, most of them filed between 2026-07-28 and 2026-08-07: DLR's 10-Q of 2026-07-31 had no
     fact there 86 days on, though the 424B7 DLR filed on 2026-08-19 had.
@@ -2326,13 +2328,32 @@ equity and XOM's with the noncontrolling interests), so it stores the periods an
 stored yet and keeps every stored one, each year's metrics computed on the year as stored, until a
 run reads both filers again. A run whose companyfacts carry no fact of the latest report its
 submissions list (a 10-K, 10-Q, 20-F or 40-F as filed, with XBRL: an amendment or a 10-KT isn't
-looked for) says so, naming it: `SEC EDGAR: the companyfacts lack DLR's 10-Q filed 2026-07-31
-(0001104659-26-089296), so this run's figures stop before it; the refresh collects DLR again`. Its
-figures are stored as they are. That report is the latest of the feed's whole `recent` block,
+looked for) reads that report, and each report before it back to the latest the companyfacts carry
+(four at most), from the filing's own XBRL instance: EDGAR's extracted instance of an inline filing
+(`<primary document>_htm.xml`, one more rate-limited request per report), else the instance its
+index names (two). Its facts are read as the companyfacts give a filing's (`parsers/xbrl_instance.py`:
+the non-dimensional numeric facts of us-gaap, ifrs-full, dei, srt and invest; values as filed, at
+most six decimal places; the filing's fiscal year and period focus on each, and the SEC's frame
+rule, which gives every frame of the 1,013 cached companyfacts), beside the companyfacts' own, which
+win wherever they carry the accession (once they carry the report, it isn't read at all). Checked
+on eight filings the companyfacts carry (2012 to 2026, inline and not, a bank, a utility's combined
+10-Q, 10-Ks and 10-Qs): all 4,084 of their facts found with the same value, period, fiscal year and
+period, form and filing date. Each filing's facts are cached (`xbrl_CIK<cik>_<accession>.json`
+beside the companyfacts; a filing never changes, so the cache doesn't expire), so a re-collection
+from the cache reads them again. The run says so, naming the report: `SEC EDGAR: the companyfacts
+lack C's 10-Q filed 2026-11-05 (0000831001-26-000056), so this run read its figures from the
+filing's own XBRL (c-20260930_htm.xml), and those of the earlier reports they lack from theirs: ...`
+(BUG-295: Citigroup's companyfacts carried none of its 2026 10-Qs). A report whose XBRL can't be
+read (its instance missing or unreadable, the request failed) never fails the run: the warning says
+why, `SEC EDGAR: the companyfacts lack DLR's 10-Q filed 2026-07-31 (0001104659-26-089296), so this
+run's figures stop before it (its own XBRL couldn't be read: ...); the refresh collects DLR again`,
+and its figures are stored as they are. That report is the latest of the feed's whole `recent` block,
 kept beside the newest 100 filings the handler keeps (`latest_report`), which a bank's prospectus
 supplements fill in days (BUG-285: JPM's held 94 424B2s of two days and no report); submissions
-cached before it was kept give their newest 100 alone until the cache's week is out. `collection_runs.incomplete` keeps what a run's SEC read lacked
-(JSON: `report`, that report's `form`, `accession` and `filed`; `predecessor`, why the
+cached before it was kept give their newest 100 alone until the cache's week is out (and only the
+latest report is read from its XBRL, the earlier ones the newest 100 list among them). `collection_runs.incomplete` keeps what a run's SEC read lacked
+(JSON: `report`, that report's `form`, `accession` and `filed`, unless the run read it and every
+earlier report the companyfacts lack from their own XBRL; `predecessor`, why the
 predecessor's filings couldn't be read), empty for a complete run, so that `stock-data refresh`
 collects the company again (see [Keeping the data current](#keeping-the-data-current-stock-data-refresh)).
 `dividend_events` keeps each payment as Yahoo served it,

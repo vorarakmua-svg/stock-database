@@ -38,8 +38,8 @@ from .yahoo_handler import YahooHandler
 NO_ANNUAL_FINANCIALS = "SEC EDGAR: no annual financials"
 #: How it begins for a record that stops where the filer's IFRS reports begin.
 STALE_ANNUAL_FINANCIALS = "SEC EDGAR: annual financials stop"
-#: How it begins for a record that stops before the latest report the SEC's submissions list, which its companyfacts
-#: lack (BUG-251).
+#: How it begins for the latest report the SEC's submissions list, which its companyfacts lack (BUG-251): the record
+#: stops before it, or the run read it from the filing's own XBRL (Q17).
 REPORT_WITHOUT_FACTS = "SEC EDGAR: the companyfacts lack"
 #: The tickers a collection's worker has submitted at most: one fetching and one waiting its turn, so the workers go
 #: on while the calling thread exports a batch, and the finished companies it hasn't taken yet stay few.
@@ -276,13 +276,11 @@ class StockDataFetcher:
                                       f"predecessor's filings, CIK {sec_data['predecessor_cik']} "
                                       f"({sec_data.get('predecessor_name') or 'name unknown'})")
 
-                # The latest report the submissions list, which the companyfacts lack: the SEC's lag (BUG-251).
-                # A companyfacts request that failed has its error.
-                missing = sec_data.get("missing_report")
-                if missing and "company_facts_error" not in sec_data:
-                    stock.add_warning(f"{REPORT_WITHOUT_FACTS} {ticker}'s {missing['form']} filed {missing['filed']} "
-                                      f"({missing['accession']}), so this run's figures stop before it; the refresh "
-                                      f"collects {ticker} again")
+                # The latest report the submissions list, which the companyfacts lack: the SEC's lag (BUG-251), and
+                # whether the run read it from the filing's own XBRL (Q17). A companyfacts request that failed has its
+                # error.
+                if sec_data.get("missing_report") and "company_facts_error" not in sec_data:
+                    stock.add_warning(self._report_without_facts(ticker, sec_data))
 
                 # An empty record otherwise reads like a short history: say why.
                 if sec_data.get("cik") and not annual:
@@ -444,6 +442,40 @@ class StockDataFetcher:
 
         if stock.financials_quarterly:
             stock.financials_ttm = compute_ttm(stock.financials_quarterly, split_levels)
+
+    @staticmethod
+    def _report_without_facts(ticker: str, sec_data: Dict[str, Any]) -> str:
+        """The run's warning for the latest report the companyfacts lack (``missing_report``, BUG-251): read from the
+        filing's own XBRL with the earlier reports they lack (``reports_read``, Q17), or the run's figures stop before
+        it, with why its XBRL couldn't be read (``reports_unread``); a run that couldn't read every one is collected
+        again by the refresh."""
+        missing = sec_data["missing_report"]
+        lag = f"{REPORT_WITHOUT_FACTS} {ticker}'s {missing['form']} filed {missing['filed']} ({missing['accession']})"
+        read = {r["accession"]: r for r in sec_data.get("reports_read") or []}
+        unread = sec_data.get("reports_unread") or []
+
+        def listed(reports: List[Dict[str, str]]) -> str:
+            return ", ".join(f"{r['form']} filed {r['filed']} ({r['accession']})" for r in reports)
+
+        latest = read.get(missing["accession"])
+        earlier = [r for accession, r in read.items() if accession != missing["accession"]]
+        if latest:
+            text = f"{lag}, so this run read its figures from the filing's own XBRL ({latest['instance']})"
+            if earlier:
+                text += f", and those of the earlier reports they lack from theirs: {listed(earlier)}"
+        else:
+            why = next((f" (its own XBRL couldn't be read: {r['why']})" for r in unread
+                        if r["accession"] == missing["accession"]), "")
+            text = f"{lag}, so this run's figures stop before it{why}"
+            if earlier:
+                text += f"; it read the earlier reports they lack from their own XBRL: {listed(earlier)}"
+        others = [r for r in unread if r["accession"] != missing["accession"]]
+        if others:
+            text += "; " + "; ".join(f"the XBRL of its {r['form']} filed {r['filed']} ({r['accession']}), which they "
+                                     f"lack too, couldn't be read: {r['why']}" for r in others)
+        if missing.get("recovered"):
+            return text
+        return f"{text}; the refresh collects {ticker} again"
 
     @staticmethod
     def _no_annual_financials(ticker: str, sec_data: Dict[str, Any]) -> str:

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 2 · P3 155 · NEEDS-USER 0 · Decided: 7 · Verified: 186
+**Open:** P0 0 · P1 0 · P2 0 · P3 157 · NEEDS-USER 0 · Decided: 7 · Verified: 188
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2117,6 +2117,18 @@ Found: code review 28 (Minor 2; also at bf7e23e) | Fixed: | Regression test:
 Repro: asof.py ~115-117, ~190-195: the debt view is documented as one filing's (asof.py ~87, README ~2343), but a debt field the viewed filing lacks is read from an earlier one: a later 10-K's LongTermDebt total $44B (holding the maturities) beside the first 10-K's $4B of maturities reads $48B. QCOM's test relies on the carry for paper beside borrowings. Probe: %LOCALAPPDATA%\stockdb-qa\review28\head\tests\test_review28.py::test_the_debt_view_doesnt_carry_maturities_its_total_holds.
 Expected: no short-term debt carried beside a later total that can hold the maturities, or the docs say so.   Actual: counted twice.
 
+### BUG-335 [P3][TTM] A third quarter's EPS derived as nine months less six carries the halves' rounding: C Q3 2026 2.86 for 2.85
+Status: OPEN
+Found: iteration 178 (Q17's worker, C's recovered quarters) | Fixed: | Regression test:
+Repro: C's 10-Q tags Q3 2026 diluted EPS 2.85 and nine months; the quarterly ladder's 9M - 6M gives 2.86; C's companyfacts-based Q3 2025 likewise (1.8600000000000003 for 1.86).
+Expected: the quarter's own 3-month EPS where the filing tags it.   Actual: the difference of rounded year-to-date figures.
+
+### BUG-336 [P3][GATHER] A run that recovered a gap from the filing's XBRL isn't collected again when the SEC's companyfacts catch up
+Status: OPEN
+Found: iteration 178 (Q17's residuals) | Fixed: | Regression test:
+Repro: since Q17 a fully recovered gap is stored complete, so the refresh doesn't queue it; the companyfacts' version of the report (which may round or restate differently) is read only at the company's next scheduled collection.
+Expected: the company collected again once the companyfacts carry the report.   Actual: it waits for its next report.
+
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: the history's P/E on net income to common, as its P/B already is.
@@ -2421,10 +2433,11 @@ Repro: of the 1,020 NULL quarters on a filing's own balance-sheet date: 270 at 8
 Expected: each quarter's long-term debt as its balance sheet's.   Actual: as listed.
 
 ### BUG-295 [P2][GATHER] Citigroup's companyfacts hold no fact of any 2026 10-Q: its stored quarters stop at 2025-12-31
-Status: OPEN
-Found: iteration 122 (BUG-285's worker; `qa/evidence/bug285-realdata.txt`) | Fixed: | Regression test:
+Status: VERIFIED (iteration 178, with Q17)
+Found: iteration 122 (BUG-285's worker; `qa/evidence/bug285-realdata.txt`) | Fixed: (this commit, Q17) | Regression tests: tests/test_fetcher_concurrency.py, tests/test_xbrl_instance.py (Q17's)
 Repro: C's cached companyfacts are fresh (cached 2026-10-21, with 424B2 fees of 2026-10-20) but carry no fact of its 2026 10-Qs, so its record stops at FY2025; the gap BUG-285 hid. The other banks and DELL carry their Q2 reports.
 Expected: the gap named at C's next collection (BUG-251/285's warning; to confirm online) and its figures recovered (Q17).   Actual: stored quarters stop at 2025-12-31.
+Fix (iteration 178, Q17): C's companyfacts fetched 2026-11-13 still carry none of its three 2026 10-Qs; the collection now reads them from their own XBRL (4 requests: submissions and three instances). C's quarters 2026-03-31, 06-30, 09-30: revenue $24.633B / $24.766B / $23.845B, net income $5.785B / $5.831B / $5.245B; TTM to 09-30 revenue $93.115B; 14 of 15 values equal the raw filings' (Q3 EPS: BUG-335). Its historical-value band appears (104.05 at 120.62, above).
 
 ### BUG-296 [P3][GATHER] Submissions cached before BUG-285 keep the banks' blind spot until the 7-day cache expires
 Status: OPEN
@@ -2564,7 +2577,8 @@ Default applied: nothing installed. The README gives the Task Scheduler command 
 Decision needed: install the task (a persistent system change the build loop doesn't make), and at what time?
 
 ### Q17 [GATHER] NEEDS-USER: should a collection read a report the SEC's companyfacts lack from the filing's own XBRL?
-Status: OPEN
+Status: VERIFIED (iteration 178; regression tests tests/test_xbrl_instance.py and 4 more files, 74 new)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2 (unblocks BUG-295): read a gap's report from the filing's own XBRL instance, one more rate-limited SEC request per gap.
 Found: iteration 119 (BUG-251's fix, `qa/evidence/bug251-done.txt` residuals) | Since BUG-251 a collection names the SEC's lag (the latest report its submissions list has no fact in its companyfacts: 58 of the 502 today, most 80-90 days old) and the refresh tries again three times, but nothing recovers the missing figures: those companies' records stop a quarter or a year early (21 of the 58 P/E misses). Reading them would need another source: the filing's own XBRL instance (one more SEC request per gap, a new parser path) or the SEC's frames API.
 Default: unchanged (the gap is warned and retried; the figures wait for the SEC).
+Fix (iteration 178, `qa/evidence/q17-investigation.txt`): `fetch_all` reads every report a gap spans (the latest back to the first the companyfacts carry, at most 4; submissions keep `reports`) from its own XBRL instance: EDGAR's `<primary>_htm.xml` for inline filings (one request), else through index.json. The new `src/parsers/xbrl_instance.py` (stdlib iterparse) reads non-dimensional facts of the filer's own context in us-gaap, ifrs-full, dei, srt and invest, fy/fp from dei, frames by the SEC's rule (reproducing all 5.2M frames of the 1,013 cached companyfacts), shaped as companyfacts entries; `merge_report_facts` drops any accession the companyfacts carry (they win). Parsed facts cached per accession; each report's failure caught alone (the BUG-251 warning then gives the reason). A fully recovered gap is not stored incomplete, so the refresh doesn't re-queue it. Oracle: 8 filings the companyfacts carry (inline and not, 10-K and 10-Q, a bank, a combined filing): all 4,084 facts equal in value, period, fy, fp, form, filed. On DB copies (the 59 gap CIKs' 60 reports, 86 requests in all): 62 quarters and 62 TTMs added, 52 quarters restated by the newer 10-Qs' comparatives, CLX's FY2026 annual record; median CLX 77.98 -> 64.29 (owner earnings expensive -> fair); 14 historical-value labels (C's first band; AEP, F, HUBB, LNT up a step, BIIB, CB, CDNS, KO, HUM, SRE down a step, D below -> near, PLD near -> below, VRSK below -> far below). Look-ahead 0. Residuals: BUG-336; caches from before the fix read only the latest report until they turn over; gaps over 4 reports read the newest 4; a gap between two reports with facts isn't read; an IFRS 20-F instance untested.

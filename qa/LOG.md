@@ -3099,3 +3099,24 @@ Result: BUG-329 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 2980 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(share-scale): an unchecked count doesn't rescale shares outstanding; a later thousands count gives way (BUG-329)
 Next: Q17 with BUG-295 (worker); code review 29 (due).
+
+## Iteration 178: 2026-11-13 16:15: fix (Q17 with BUG-295)
+Picked: Q17 (decided P2), which unblocks BUG-295; an opus worker on the orchestrator's design.
+Did: a collection now reads the reports the SEC's companyfacts lack from each filing's own XBRL instance (every report
+of the gap, at most 4; one request each for inline filings), with a new stdlib reader, the SEC's frame rule, a cache
+per accession, and the companyfacts winning on any overlap; a failure leaves BUG-251's warning with its reason. One
+change from the design: all the gap's reports, not only the latest (C lacks three; the latest alone gives no Q1/Q2).
+- Oracle on 8 filings the companyfacts carry: 4,084 of 4,084 facts equal. C's three 2026 quarters recovered live
+  (4 requests); 14 of 15 values equal the raw filings (BUG-335).
+- RED: the reader module missing (5 collection errors), then 37 failing with the reader alone; GREEN. 52 of 52
+  mutants; 11 stale old mutants re-quoted (qa/evidence/q17-stale-reruns.json), 11 killed. Look-ahead 0.
+- DB copies (59 gap CIKs' 60 reports; 86 SEC requests in all, through the handler): 62 quarters and TTMs added;
+  CLX's FY2026 annual record; median CLX 77.98 -> 64.29, owner earnings expensive -> fair; 14 labels (C's first band
+  among them); 0 verdicts.
+- New: BUG-335, BUG-336 (P3).
+Result: Q17 and BUG-295 VERIFIED. No P0-P2 open.
+Gates: ruff ✓ mypy ✓ pytest 3053 passed, 1 skipped | CI: PR #29
+Commit: (this commit) feat(sec): a report the companyfacts lack is read from the filing's own XBRL (Q17, BUG-295)
+Paused after this unit at the user's request ("after current bug fixing finish, stop for now"). Next on resume: code
+review 29 (scope a28be26's predecessors since 33d60b1: BUG-332/333, -328, -327, -329, Q17), reshape the bug170 and
+bug260-...-bug319 mutant specs gone stale with BUG-327, then the 157 P3s.

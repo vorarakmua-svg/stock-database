@@ -88,10 +88,12 @@ class StockData:
 
     # The latest report the SEC's submissions list whose facts the run's companyfacts lacked, the SEC's
     # lag (sec_handler.report_without_facts: its form, accession and filing date), None when they had
-    # it or there was none to look for: the run's figures stop at the report before (BUG-251).
-    # SQLite-only, like the predecessor's error: collection_runs.incomplete keeps it, so that
-    # `stock-data refresh` collects the company again, and the run's warning names the report.
-    missing_report: Optional[Dict[str, str]] = None
+    # it or there was none to look for: the run's figures stop at the report before (BUG-251), unless
+    # the run read it, and every earlier report they lacked, from the filings' own XBRL ("recovered":
+    # True, Q17). SQLite-only, like the predecessor's error: collection_runs.incomplete keeps an
+    # unrecovered one, so that `stock-data refresh` collects the company again, and the run's warning
+    # names the report either way.
+    missing_report: Optional[Dict[str, Any]] = None
 
     # Insider transactions (from SEC Form 4)
     insider_transactions: List[Dict[str, Any]] = field(default_factory=list)

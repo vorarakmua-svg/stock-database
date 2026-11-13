@@ -13,6 +13,7 @@ from src.fetchers.stock_data_fetcher import StockDataFetcher
 from src.fetchers.yahoo_handler import YahooHandler
 from src.models.stock_data import StockData
 from tests.test_sec_cache import _FakeResp
+from tests.test_xbrl_instance import CONTEXTS, instance
 from tests.test_xbrl_parser import _split_restated_facts
 
 
@@ -546,18 +547,29 @@ DLR_10Q ={"form": "10-Q", "accession": "0001104659-26-089296", "filed": "2026-07
 #: What such a run says.
 DLR_LAG = ("SEC EDGAR: the companyfacts lack DLR's 10-Q filed 2026-07-31 (0001104659-26-089296), so this run's "
            "figures stop before it; the refresh collects DLR again")
+#: What a run says whose read of the filing's own XBRL failed too (Q17): the SEC's archive has no instance for it.
+DLR_UNREAD = ("SEC EDGAR: the companyfacts lack DLR's 10-Q filed 2026-07-31 (0001104659-26-089296), so this run's "
+              "figures stop before it (its own XBRL couldn't be read: HTTP 404 for the filing's index); the refresh "
+              "collects DLR again")
+#: And one that read it from there (Q17).
+DLR_READ = ("SEC EDGAR: the companyfacts lack DLR's 10-Q filed 2026-07-31 (0001104659-26-089296), so this run read "
+            "its figures from the filing's own XBRL (dlr-20260630x10q_htm.xml)")
 _DLR_Q1 = {"start": "2026-01-01", "end": "2026-03-31", "fy": 2026, "fp": "Q1", "form": "10-Q", "filed": "2026-05-01",
            "frame": "CY2026Q1", "accn": "0001104659-26-054255"}
 _DLR_Q2 = {"start": "2026-04-01", "end": "2026-06-30", "fy": 2026, "fp": "Q2", "form": "10-Q", "filed": "2026-07-31",
            "frame": "CY2026Q2", "accn": "0001104659-26-089296"}
 
 
-def _dlr_sec(lagging):
+def _dlr_sec(lagging, instance=False):
     """DLR as the SEC served it on 2026-10-25, cut to its quarters' revenue: its submissions list a 424B7 of
     2026-08-19, the 10-Q of 2026-07-31 and the 10-Q of 2026-05-01; its companyfacts hold the 424B7's fee and the first
-    quarter's revenue, and, unless *lagging*, the second quarter's (a test's figure, as the SEC would add it)."""
+    quarter's revenue, and, unless *lagging*, the second quarter's (a test's figure, as the SEC would add it). With
+    *instance*, the feed says the 10-Qs are inline, as the SEC's does, and EDGAR's archive serves the 10-Q of
+    2026-07-31's instance with that quarter's revenue (Q17); else it serves no document of it."""
     revenue = [{"val": 1635173000, **_DLR_Q1}] + ([] if lagging else [{"val": 1.71e9, **_DLR_Q2}])
-    return {
+    inline = {"isInlineXBRL": [0, 1, 1]} if instance else {}
+    documents = {"000110465926089296/dlr-20260630x10q_htm.xml": _DLR_10Q2_INSTANCE} if instance else {}
+    return {**documents,
         "files/company_tickers.json": {"0": {"ticker": "DLR", "cik_str": 1297996}},
         "submissions/CIK0001297996.json": {"name": "DIGITAL REALTY TRUST, INC.", "sic": "6798", "filings": {"recent": {
             "accessionNumber": ["0001193125-26-357076", "0001104659-26-089296", "0001104659-26-054255"],
@@ -566,7 +578,7 @@ def _dlr_sec(lagging):
             "reportDate": ["", "2026-06-30", "2026-03-31"],
             "acceptanceDateTime": ["2026-08-19T20:55:58.000Z", "2026-07-31T21:23:41.000Z", "2026-05-01T21:22:35.000Z"],
             "isXBRL": [1, 1, 1],
-            "primaryDocument": ["d914399d424b7.htm", "dlr-20260630x10q.htm", "dlr-20260331x10q.htm"]}}},
+            "primaryDocument": ["d914399d424b7.htm", "dlr-20260630x10q.htm", "dlr-20260331x10q.htm"], **inline}}},
         "companyfacts/CIK0001297996.json": {"entityName": "DIGITAL REALTY TRUST, INC.", "facts": {
             "ffd": {"TtlFeeAmt": {"units": {"USD": [{"val": 18777.23, "end": "2026-08-19", "form": "424B7",
                                                      "filed": "2026-08-19", "accn": "0001193125-26-357076"}]}}},
@@ -574,9 +586,9 @@ def _dlr_sec(lagging):
     }
 
 
-def serve_dlr(monkeypatch, lagging=True):
+def serve_dlr(monkeypatch, lagging=True, instance=False):
     """The SEC answers as for DLR on 2026-10-25 (``_dlr_sec``, ``_serve``)."""
-    _serve(monkeypatch, _dlr_sec(lagging))
+    _serve(monkeypatch, _dlr_sec(lagging, instance))
 
 
 def stored_run(db, ticker):
@@ -622,12 +634,12 @@ def test_a_collection_whose_companyfacts_lack_the_latest_report_stores_it_as_inc
         assert fetcher.fetch_and_export(["DLR"], formats=["sqlite"])["stored"] == 1
     warnings, incomplete = stored_run(db, "DLR")
     assert incomplete == {"report": DLR_10Q}
-    assert DLR_LAG in warnings
+    assert DLR_UNREAD in warnings
     serve_dlr(monkeypatch, lagging=False)
     with StockDataFetcher(config=config) as fetcher:
         assert fetcher.fetch_and_export(["DLR"], formats=["sqlite"])["stored"] == 1
     warnings, incomplete = stored_run(db, "DLR")
-    assert incomplete is None and DLR_LAG not in warnings
+    assert incomplete is None and not [w for w in warnings if w.startswith("SEC EDGAR: the companyfacts lack")]
 
 
 @pytest.mark.parametrize("answer, why", [(503, "HTTPError"), (404, "no XBRL data")])
@@ -641,3 +653,73 @@ def test_a_collection_whose_predecessor_read_failed_is_stored_as_incomplete(tmp_
         with StockDataFetcher(config=config) as fetcher:
             assert fetcher.fetch_and_export(["BLK"], formats=["sqlite"])["stored"] == 1
         assert stored_run(db, "BLK")[1] == expected
+
+
+# ---- Q17: the reports the companyfacts lack, read from their own XBRL ----
+
+#: DLR's 10-Q of 2026-07-31's instance, cut to the second quarter's revenue and the half year's (a test's figures).
+_DLR_10Q2_INSTANCE = instance([("us-gaap:Revenues", "q2", "usd", "1712345000"),
+                               ("us-gaap:Revenues", "h1", "usd", "3347518000")], contexts=CONTEXTS)
+
+
+def _lagging_dlr(**read):
+    """DLR's SEC read as fetch_all gives it when its companyfacts lack the 10-Q of 2026-07-31 and it read *read*
+    (reports_read, reports_unread, and the report "recovered" when every one was read)."""
+    recovered = {"recovered": True} if read.pop("recovered", False) else {}
+    return {"cik": "0001297996", "ticker": "DLR", "source": "sec_edgar",
+            "company_facts": {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [{"val": 1635173000, **_DLR_Q1}]}}}}},
+            "submissions": {"name": "DIGITAL REALTY TRUST, INC.", "filings": []},
+            "missing_report": {**DLR_10Q, **recovered}, **read}
+
+
+_READ_Q2 = {**DLR_10Q, "instance": "dlr-20260630x10q_htm.xml"}
+_READ_Q1 = {"form": "10-Q", "accession": "0001104659-26-054255", "filed": "2026-05-01",
+            "instance": "dlr-20260331x10q_htm.xml"}
+_UNREAD_Q2 = {**DLR_10Q, "why": "HTTP 404 for dlr-20260630x10q_htm.xml; HTTP 404 for the filing's index"}
+_UNREAD_Q1 = {"form": "10-Q", "accession": "0001104659-26-054255", "filed": "2026-05-01", "why": "not an XBRL instance"}
+
+
+@pytest.mark.parametrize("read, warning", [
+    ({"reports_read": [_READ_Q2], "reports_unread": [], "recovered": True}, DLR_READ),
+    ({"reports_read": [_READ_Q2, _READ_Q1], "reports_unread": [], "recovered": True},
+     DLR_READ + ", and those of the earlier reports they lack from theirs: 10-Q filed 2026-05-01 "
+                "(0001104659-26-054255)"),
+    ({"reports_read": [], "reports_unread": [_UNREAD_Q2]},
+     "SEC EDGAR: the companyfacts lack DLR's 10-Q filed 2026-07-31 (0001104659-26-089296), so this run's figures stop "
+     "before it (its own XBRL couldn't be read: HTTP 404 for dlr-20260630x10q_htm.xml; HTTP 404 for the filing's "
+     "index); the refresh collects DLR again"),
+    ({"reports_read": [_READ_Q2], "reports_unread": [_UNREAD_Q1]},
+     DLR_READ + "; the XBRL of its 10-Q filed 2026-05-01 (0001104659-26-054255), which they lack too, couldn't be "
+                "read: not an XBRL instance; the refresh collects DLR again"),
+    ({"reports_read": [_READ_Q1], "reports_unread": [_UNREAD_Q2]},
+     "SEC EDGAR: the companyfacts lack DLR's 10-Q filed 2026-07-31 (0001104659-26-089296), so this run's figures stop "
+     "before it (its own XBRL couldn't be read: HTTP 404 for dlr-20260630x10q_htm.xml; HTTP 404 for the filing's "
+     "index); it read the earlier reports they lack from their own XBRL: 10-Q filed 2026-05-01 "
+     "(0001104659-26-054255); the refresh collects DLR again"),
+    ({}, DLR_LAG),  # nothing read (a run whose companyfacts were missing): as before
+])
+def test_the_runs_warning_says_where_its_figures_of_a_report_the_companyfacts_lack_came_from(tmp_path, monkeypatch,
+                                                                                                read, warning):
+    stock = _collect_from_sec(tmp_path, monkeypatch, _lagging_dlr(**read))
+    assert [w for w in stock.warnings if w.startswith("SEC EDGAR: the companyfacts lack")] == [warning]
+
+
+def test_a_collection_that_read_the_report_from_its_own_xbrl_stores_its_figures_and_is_complete(tmp_path,
+                                                                                               monkeypatch):
+    # `stock-data`'s collection of DLR while its companyfacts lack the 10-Q of 2026-07-31: the quarter is stored from
+    # the filing, the run says where it came from, and nothing is left for the refresh to collect again.
+    db = tmp_path / "stock.db"
+    config = AppConfig(storage=StorageConfig(base_dir=tmp_path, db_path=db))
+    serve_dlr(monkeypatch, lagging=True, instance=True)
+    with StockDataFetcher(config=config) as fetcher:
+        assert fetcher.fetch_and_export(["DLR"], formats=["sqlite"])["stored"] == 1
+    warnings, incomplete = stored_run(db, "DLR")
+    assert incomplete is None
+    assert DLR_READ in warnings
+    conn = sqlite3.connect(db)
+    try:
+        quarters = conn.execute("SELECT period_end, revenue FROM financials_quarterly WHERE ticker = 'DLR' "
+                                "ORDER BY period_end").fetchall()
+    finally:
+        conn.close()
+    assert quarters == [("2026-03-31", 1635173000.0), ("2026-06-30", 1712345000.0)]
