@@ -9,8 +9,8 @@ ones, with no look-ahead.
 
 Only the **fundamental** ratios are produced (profitability, returns, margins, capital
 structure, coverage, efficiency, and the bank/insurer/REIT sector ratios). Valuation/EV
-ratios are intentionally absent: they need the share price as of ``D`` and the project stores
-no historical per-date price series. (``calculate_all`` is called without ``market_data``,
+ratios are absent here: the valuation history (``valuation/history.py``) pairs each month's
+close with the trailing year known then. (``calculate_all`` is called without ``market_data``,
 so those keys never appear.)
 
 Caveat: the financials are point-in-time, but the company's **sector** is read from the

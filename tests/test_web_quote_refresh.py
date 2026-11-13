@@ -525,6 +525,8 @@ def test_a_refresh_after_a_stored_factor_its_price_predates_values_the_ticker_on
 
 def test_a_refresh_without_a_new_factor_writes_only_the_snapshot(web_db: Path, monkeypatch) -> None:
     # GATHER-13: an older split the stored history lacks isn't one the stored valuations aren't on (the date rule).
+    # "Only the snapshot" as against the split history and a valuation: since BUG-160 and BUG-258 a saved refresh
+    # stores Yahoo's payments too (this canned quote has none; tests/test_quote_refresh_payments.py).
     runs = _valuation_runs(monkeypatch)
     client = _quote_with_splits_client(
         web_db, [{"date": "2021-03-01", "ratio": 3.0}, {"date": "2023-06-01", "ratio": 2.0}])

@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import statistics
+from datetime import date
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Union
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple, Union
 
 from ..exporters.sqlite_store import _CANONICAL_COLUMNS, _METRIC_COLUMNS, _SNAPSHOT_COLUMNS, read_only_uri
 from .screener import SCREEN_COLUMNS, ScreenSpec, build_count_query, build_screen_query
@@ -32,6 +33,15 @@ def _warning_list(text: Optional[str]) -> List[str]:
     except ValueError:
         return []
     return [w for w in warnings if isinstance(w, str)] if isinstance(warnings, list) else []
+
+
+def _json_object(text: Optional[str]) -> Optional[Dict[str, Any]]:
+    """A JSON object kept as text (``collection_runs.incomplete``), or None."""
+    try:
+        value = json.loads(text) if text else None
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 class Reader:
@@ -134,6 +144,14 @@ class Reader:
             "ORDER BY ticker LIMIT ?",
             (pattern, pattern, limit),
         )
+        return [dict(row) for row in cur.fetchall()]
+
+    def sic_codes(self) -> List[Dict[str, Any]]:
+        """Every company's SEC SIC code and description (Milestone 5): ``{ticker, sic, sic_description}``, by
+        ticker. [] for a companies table from before the codes."""
+        if not {"sic", "sic_description"} <= {row[1] for row in self._conn.execute("PRAGMA table_info(companies)")}:
+            return []
+        cur = self._conn.execute("SELECT ticker, sic, sic_description FROM companies ORDER BY ticker")
         return [dict(row) for row in cur.fetchall()]
 
     def distinct_sectors(self) -> List[str]:
@@ -358,6 +376,13 @@ class Reader:
         cur = self._conn.execute(sql, params)
         return [dict(row) for row in cur.fetchall()]
 
+    def last_bar_date(self, ticker: str) -> Optional[date]:
+        """The day of *ticker*'s latest ``price_bars`` row (one seek on the table's (ticker, date) key), or None
+        without bars. SQLite's ``date()`` reads the day of a date stored with a time of day, and gives None for one
+        it can't read."""
+        row = self._conn.execute("SELECT date(max(date)) FROM price_bars WHERE ticker = ?", (ticker,)).fetchone()
+        return date.fromisoformat(row[0]) if row[0] else None
+
     def analyst_snapshot(self, ticker: str) -> Optional[Dict[str, Any]]:
         """Newest ``analyst_snapshots`` row by ``collected_at``, or ``None``."""
         cur = self._conn.execute(
@@ -393,6 +418,98 @@ class Reader:
             return None
         row = cur.fetchone()
         return dict(row) if row is not None else None
+
+    def valuation_history(self, ticker: str) -> List[Dict[str, Any]]:
+        """The ``valuation_history`` monthly rows for a ticker, ascending by date.
+
+        Returns [] when the table does not exist yet (DB predates the
+        valuation history), like ``valuations``.
+        """
+        try:
+            cur = self._conn.execute(
+                "SELECT * FROM valuation_history WHERE ticker = ? ORDER BY date", (ticker,)
+            )
+        except sqlite3.OperationalError:
+            return []
+        return [dict(row) for row in cur.fetchall()]
+
+    def valuation_ranges(self, ticker: str) -> List[Dict[str, Any]]:
+        """The ``valuation_ranges`` rows for a ticker: each metric's 10-year range and
+        the historical value ('fair_value'). [] before the table exists."""
+        try:
+            cur = self._conn.execute(
+                "SELECT * FROM valuation_ranges WHERE ticker = ? ORDER BY metric", (ticker,)
+            )
+        except sqlite3.OperationalError:
+            return []
+        return [dict(row) for row in cur.fetchall()]
+
+    def valuation_indicators(self, ticker: str) -> List[Dict[str, Any]]:
+        """The ``valuation_indicators`` rows for a ticker (the display-only reverse DCF, EPV, NCAV, median
+        P/S value and tangible Graham number), by indicator. [] before the table exists."""
+        try:
+            cur = self._conn.execute(
+                "SELECT * FROM valuation_indicators WHERE ticker = ? ORDER BY indicator", (ticker,)
+            )
+        except sqlite3.OperationalError:
+            return []
+        return [dict(row) for row in cur.fetchall()]
+
+    def quality_scores(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """The ticker's ``quality_scores`` row, or None before it's computed (or before the table exists)."""
+        try:
+            cur = self._conn.execute("SELECT * FROM quality_scores WHERE ticker = ?", (ticker,))
+        except sqlite3.OperationalError:
+            return None
+        row = cur.fetchone()
+        return dict(row) if row is not None else None
+
+    def warning_signs(self, ticker: str) -> List[Dict[str, Any]]:
+        """The ticker's ``warning_signs`` rows, the ones that fired. [] before the table exists."""
+        try:
+            cur = self._conn.execute("SELECT * FROM warning_signs WHERE ticker = ?", (ticker,))
+        except sqlite3.OperationalError:
+            return []
+        return [dict(row) for row in cur.fetchall()]
+
+    def per_share_annual(self, ticker: str) -> List[Dict[str, Any]]:
+        """The ticker's ``per_share_annual`` rows, ascending by fiscal year. [] before the table exists."""
+        try:
+            cur = self._conn.execute(
+                "SELECT * FROM per_share_annual WHERE ticker = ? ORDER BY fiscal_year", (ticker,)
+            )
+        except sqlite3.OperationalError:
+            return []
+        return [dict(row) for row in cur.fetchall()]
+
+    def market_series(self, names: Sequence[str]) -> Dict[str, List[Tuple[str, float]]]:
+        """Each of the named ``market_series`` series (the market data, Milestone 4: "fred:GDP", "shiller:cape",
+        "ust:10y", ...) as its (date, value) rows, oldest first; a series without rows is absent. {} before the
+        table exists."""
+        if not names:
+            return {}
+        marks = ", ".join("?" * len(names))
+        try:
+            cur = self._conn.execute(
+                f"SELECT series, date, value FROM market_series WHERE series IN ({marks}) ORDER BY series, date",
+                list(names),
+            )
+        except sqlite3.OperationalError:
+            return {}
+        series: Dict[str, List[Tuple[str, float]]] = {}
+        for name, day, value in cur.fetchall():
+            series.setdefault(name, []).append((day, value))
+        return series
+
+    def market_fetches(self) -> Dict[str, Dict[str, Any]]:
+        """Each market source's latest fetch (``market_fetches``: "fred:NCBEILQ027S", "fred:GDP", "shiller",
+        "treasury"), by source: its url, the rows it stored and when its answer was fetched. {} before the table
+        exists."""
+        try:
+            cur = self._conn.execute("SELECT * FROM market_fetches ORDER BY source")
+        except sqlite3.OperationalError:
+            return {}
+        return {row["source"]: dict(row) for row in cur.fetchall()}
 
     def earnings_history(self, ticker: str) -> List[Dict[str, Any]]:
         """All ``earnings_history`` rows ascending by ``quarter``."""
@@ -437,6 +554,32 @@ class Reader:
             (ticker, holder_type),
         )
         return [dict(row) for row in cur.fetchall()]
+
+    def sec_insider_trades(self, ticker: str) -> List[Dict[str, Any]]:
+        """The ticker's Form 4 trades that no amendment restated (``insider_trades.superseded_by``), each with its
+        filing (form, filed date, 10b5-1 flag) and its first reporting owner (name, role, title, CEO/CFO flag),
+        newest first. [] before the tables exist, or while the trades lack their amendment note (a table from
+        older code, until the next collection)."""
+        try:
+            cur = self._conn.execute(
+                "SELECT t.*, f.form, f.filed_date, f.owner_cik, f.owner_name, f.is_director, f.is_officer, "
+                "f.officer_title, f.is_ten_percent, f.is_ceo_cfo, f.aff10b5one "
+                "FROM insider_trades t JOIN insider_filings f ON f.accession = t.accession "
+                "AND f.owner_cik = (SELECT MIN(owner_cik) FROM insider_filings WHERE accession = t.accession) "
+                "WHERE t.ticker = ? AND t.superseded_by IS NULL "
+                "ORDER BY t.date DESC, f.filed_date DESC, t.accession, t.seq",
+                (ticker,),
+            )
+        except sqlite3.OperationalError:
+            return []
+        return [dict(row) for row in cur.fetchall()]
+
+    def close_on_or_before(self, ticker: str, day: str) -> Optional[float]:
+        """The stock's latest close on or before *day* (``price_bars``), None without one."""
+        row = self._conn.execute(
+            "SELECT close FROM price_bars WHERE ticker = ? AND date <= ? AND close IS NOT NULL "
+            "ORDER BY date DESC LIMIT 1", (ticker, day)).fetchone()
+        return None if row is None else row["close"]
 
     def insider_transactions(self, ticker: str, limit: int = 100) -> List[Dict[str, Any]]:
         """``insider_transactions`` rows for ``ticker``, descending by ``start_date``."""
@@ -507,8 +650,28 @@ class Reader:
         ``spec`` is validated inside ``build_screen_query``; raises
         ``ValueError`` if any field/sort/op is not whitelisted.
         """
-        sql, params = build_screen_query(spec)
-        count_sql, count_params = build_count_query(spec)
+        # The valuation history's, the quality scores', the insiders', the gurus' and the other indicators' fields are
+        # NULL in a database from before their tables.
+        tables = {row[0] for row in self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name IN ('valuation_ranges', 'quality_scores', 'insider_trades', 'insider_filings', "
+            "'guru_quarters', 'guru_positions', 'valuation_indicators')"
+        )}
+        history = "valuation_ranges" in tables
+        # A scores table from older code may lack a column a field reads (debt_to_ebitda): that field is NULL.
+        quality: Union[bool, FrozenSet[str]] = (
+            frozenset(row[1] for row in self._conn.execute("PRAGMA table_info(quality_scores)"))
+            if "quality_scores" in tables else False)
+        # The insiders' fields read each trade's amendment note and price check, which a trades table from older code
+        # lacks.
+        insiders = {"insider_trades", "insider_filings"} <= tables and {"superseded_by", "price_suspect"} <= {
+            row[1] for row in self._conn.execute("PRAGMA table_info(insider_trades)")}
+        gurus = {"guru_quarters", "guru_positions"} <= tables
+        indicators = "valuation_indicators" in tables
+        # A companies table from before the SEC's SIC codes (Milestone 5): no code, and an industry matches nothing.
+        sic = "sic" in {row[1] for row in self._conn.execute("PRAGMA table_info(companies)")}
+        sql, params = build_screen_query(spec, history, quality, insiders, gurus, indicators, sic)
+        count_sql, count_params = build_count_query(spec, history, quality, insiders, gurus, indicators, sic)
 
         cur = self._conn.execute(sql, params)
         items = [dict(row) for row in cur.fetchall()]
@@ -734,8 +897,10 @@ class Reader:
         cur = self._conn.execute(sql, params)
         runs = [dict(row) for row in cur.fetchall()]
         for run in runs:
-            if "warnings" in run:  # absent from databases older than the column
-                run["warnings"] = _warning_list(run["warnings"])
+            # Always a list, [] on a database older than the column (BUG-069); what the SEC read lacked (BUG-251/279)
+            # as an object, not its JSON text (BUG-283), None for a complete run or an older database.
+            run["warnings"] = _warning_list(run.get("warnings"))
+            run["incomplete"] = _json_object(run.get("incomplete"))
         return runs
 
     def latest_collection_runs(self) -> List[Dict[str, Any]]:

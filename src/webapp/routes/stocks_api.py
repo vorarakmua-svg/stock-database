@@ -4,12 +4,15 @@ that back the terminal workstation UI (Task 7+).
 
 Range/interval semantics
 -------------------------
-``range`` resolves to a start date measured back from "today"
-(``_today()``, real UTC date by default — overridable in tests via
-monkeypatching this module's ``_today``):
+``range`` resolves to a start date measured back from the ticker's last
+stored bar, or from "today" when that is earlier or the ticker has no bars
+(``range_anchor``; ``_today()`` is the real UTC date by default, overridable
+in tests via monkeypatching this module's ``_today``). Counted back from
+today, a database not collected for a month read its short ranges empty
+(BUG-151):
 
-- ``1M``/``3M``/``6M``/``1Y``/``5Y`` -> a fixed day count back from today.
-- ``YTD`` -> January 1st of the current year.
+- ``1M``/``3M``/``6M``/``1Y``/``5Y`` -> a fixed day count back from the anchor.
+- ``YTD`` -> January 1st of the anchor's year.
 - ``MAX`` -> no lower bound (``None``).
 
 ``interval`` controls bar granularity for ``/bars`` (and the bars CSV
@@ -29,16 +32,21 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 
+from ...ownership.portfolio import share_classes
 from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
+from ...valuation.history import HISTORICAL_VALUE_CUTOFFS, METRICS, historical_value_label
 from ...valuation.models import ValuationResult
 from ..dependencies import get_job_manager, get_reader, get_settings
+from ..gurus import gurus_holding
 from ..indicators import indicator_bundle, normalize_pct
+from ..insiders import insider_view
 from ..jobs import CollectionJobManager
+from ..quality import quality_view
 from ..repository import Reader
 from ..schemas import (
     AnalystOut,
@@ -53,6 +61,7 @@ from ..schemas import (
     StockSummaryOut,
 )
 from ..settings import WebSettings
+from ..valuation_indicators import indicators_view
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 
@@ -66,7 +75,7 @@ VALID_INTERVALS = frozenset({"auto", "1d", "1wk", "1mo"})
 
 
 def _today() -> date:
-    """The reference "today" used to resolve ``range`` to a start date.
+    """The reference "today" a ``range`` counts back from when the ticker's last bar isn't earlier (``range_anchor``).
 
     A thin, monkeypatchable seam — tests override this function (not
     ``datetime.now`` directly) to pin "today" near fixture data without
@@ -75,8 +84,21 @@ def _today() -> date:
     return datetime.now(timezone.utc).date()
 
 
+def range_anchor(r: Reader, ticker: str) -> date:
+    """The day *ticker*'s ``range`` counts back from: its last stored bar, or today when that is earlier.
+
+    Counted back from today, a database last collected on 2026-08-04 read every 1M range empty on 2026-10-20, "No
+    price history collected." beside AAPL's 11,502 bars (BUG-151). A ticker without bars keeps today (nothing to show
+    either way), and so does a last bar dated today or later.
+    """
+    today = _today()
+    last = r.last_bar_date(ticker)
+    return today if last is None else min(today, last)
+
+
 def resolve_range_start(range_key: str, today: Optional[date] = None) -> Optional[date]:
-    """Resolve a ``range`` key to an inclusive start date, or ``None`` for MAX.
+    """Resolve a ``range`` key to an inclusive start date counted back from *today* (the routes pass the ticker's
+    ``range_anchor``; ``_today()`` when omitted), or ``None`` for MAX.
 
     Raises ``ValueError`` if ``range_key`` is not one of ``VALID_RANGES``.
     """
@@ -237,7 +259,7 @@ def bars(
     400 on an invalid ``range``/``interval`` value.
     """
     try:
-        start = resolve_range_start(range)
+        start = resolve_range_start(range, range_anchor(r, ticker))
         resolved_interval = resolve_interval(interval, range)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -264,7 +286,7 @@ def indicators(
     not restarted from scratch there. 400 on an invalid ``range``.
     """
     try:
-        start = resolve_range_start(range)
+        start = resolve_range_start(range, range_anchor(r, ticker))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     full_bars = r.price_bars(ticker)
@@ -277,6 +299,15 @@ def indicators(
 # ---------------------------------------------------------------------------
 
 
+def _shared_start(series_bars: Iterable[List[Dict[str, Any]]]) -> Optional[str]:
+    """The latest of the series' first dates with a close: the first date on which every series has begun.
+
+    A series without a close (no bars: an unknown "other") doesn't move it; ``None`` when no series has one.
+    """
+    firsts = [next((b["date"] for b in rows if b["close"] is not None), None) for rows in series_bars]
+    return max((d for d in firsts if d is not None), default=None)
+
+
 @router.get("/{ticker}/compare-bars")
 def compare_bars(
     ticker: str,
@@ -284,7 +315,7 @@ def compare_bars(
     range: str = "1Y",  # noqa: A002
     r: Reader = Depends(get_reader),
 ) -> Dict[str, Any]:
-    """Normalized (percent-change) close series for *ticker* plus ``others``.
+    """Percent-change close series for *ticker* plus ``others``, rebased on the first date they share.
 
     ``others`` is a comma-separated ticker list and may include benchmark
     symbols such as ``^GSPC`` (which has price_bars but no ``companies``
@@ -292,24 +323,31 @@ def compare_bars(
     "others" simply contribute an empty series rather than erroring, since
     ``Reader.price_bars`` returns ``[]`` for a ticker with no bars. 400 on
     an invalid ``range``.
+
+    The range counts back from the primary *ticker*'s last bar (``range_anchor``).
+    Every series runs from the shared start (``_shared_start``, within the
+    range), rebased on its first close on or after it (``normalize_pct``): all
+    read 0% there, a series without a close that day (a holiday of its own)
+    from its next close, and a series whose bars all end before it shares no
+    date with the others and is empty. Each series on its own first bar put
+    AAPL's +349,443% at MAX beside an S&P 500 counted from 1927 (BUG-149).
     """
     if r.get_company(ticker) is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
     try:
-        start = resolve_range_start(range)
+        start = resolve_range_start(range, range_anchor(r, ticker))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     start_iso = start.isoformat() if start is not None else None
 
     other_tickers = [t.strip() for t in others.split(",") if t.strip()]
-    all_tickers = [ticker] + other_tickers
+    by_ticker = {t: r.price_bars(t, start=start_iso) for t in [ticker] + other_tickers}
+    shared = _shared_start(by_ticker.values())
 
     series: Dict[str, Any] = {}
-    for t in all_tickers:
-        t_bars = r.price_bars(t, start=start_iso)
-        dates = [b["date"] for b in t_bars]
-        closes = [b["close"] for b in t_bars]
-        series[t] = {"dates": dates, "pct": normalize_pct(closes)}
+    for t, t_bars in by_ticker.items():
+        kept = [b for b in t_bars if shared is None or b["date"] >= shared]
+        series[t] = {"dates": [b["date"] for b in kept], "pct": normalize_pct([b["close"] for b in kept])}
     return {"series": series}
 
 
@@ -386,6 +424,109 @@ def valuation(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
         "owner_earnings_verdict": oe_v,
         "owner_earnings_verdict_label": VERDICT_LABELS[oe_v],
     }
+
+
+def _range_out(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "metric": row["metric"],
+        "applicable": bool(row["applicable"]),
+        "na_reason": row.get("na_reason"),
+        "as_of": row.get("as_of"),
+        "window_start": row.get("window_start"),
+        "n_months": row.get("n_months"),
+        "current": row.get("current_value"),
+        "pct_rank": row.get("pct_rank"),
+        "min": row.get("min"),
+        "p25": row.get("p25"),
+        "median": row.get("median"),
+        "p75": row.get("p75"),
+        "max": row.get("max"),
+        "implied_value": row.get("implied_value"),
+        "in_fair_value": bool(row.get("in_fair_value")),
+    }
+
+
+@router.get("/{ticker}/valuation-history")
+def valuation_history(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
+    """The valuation history: each metric's 10-year range, the historical value against
+    the live price, and the monthly series of closes, historical values and multiples
+    (docs/superpowers/specs/2026-10-21-valuation-history-design.md)."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    quote = r.quote(ticker)
+    price = quote.get("current_price") if quote else None
+    ranges = {row["metric"]: row for row in r.valuation_ranges(ticker)}
+    rows = r.valuation_history(ticker)
+    fv = ranges.get("fair_value") or {}
+    value = fv.get("current_value")
+    return {
+        "ticker": ticker,
+        "price": price,
+        "as_of": fv.get("as_of"),
+        "computed_at": fv.get("computed_at"),
+        "historical_value": {
+            "applicable": bool(fv.get("applicable")),
+            "na_reason": fv.get("na_reason") if fv else "not computed yet",
+            "value": value,
+            "low": fv.get("p25"),
+            "high": fv.get("p75"),
+            "n_metrics": fv.get("n_metrics"),
+            "window_start": fv.get("window_start"),
+            "n_months": fv.get("n_months"),
+            "metrics": [m for m in METRICS if m in ranges and ranges[m].get("in_fair_value")],
+            "label": historical_value_label(price, value),
+            "price_to_value": price / value if price and value else None,
+            "cutoffs": list(HISTORICAL_VALUE_CUTOFFS),
+        },
+        "ranges": [_range_out(ranges[m]) for m in METRICS if m in ranges],
+        "series": {
+            "dates": [row["date"] for row in rows],
+            **{column: [row.get(column) for row in rows] for column in ("close", "fair_value") + METRICS},
+        },
+    }
+
+
+@router.get("/{ticker}/valuation-indicators")
+def valuation_indicators(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
+    """The other valuation indicators, display-only (never in the median, the verdicts or the upside): the reverse
+    DCF, the earnings power value, NCAV with Graham's net-net, the median P/S value and the Graham number on tangible
+    book, each with its base's upside from the live price and its notes, and the reverse DCF solved again at the live
+    price (``valuation_indicators.indicators_view``;
+    docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md). Not at ``/{ticker}/indicators``: that is the
+    price chart's MA/RSI/MACD bundle."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    return indicators_view(r, ticker)
+
+
+@router.get("/{ticker}/form4")
+def form4_insiders(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
+    """Insiders' trades: the SEC's Form 4 filings with their open-market aggregates (3, 6 and 12 months, CEO/CFO
+    buys, cluster buys, planned sales), or Yahoo's rows where no Form 4 was collected
+    (docs/superpowers/specs/2026-10-22-sec-ownership-design.md)."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    return insider_view(r, ticker)
+
+
+@router.get("/{ticker}/gurus")
+def gurus(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
+    """The gurus' positions in the stock or its other share class in each one's latest 13F quarter: the shares held,
+    then the options, then the positions sold out that quarter (``gurus.gurus_holding``;
+    docs/superpowers/specs/2026-10-22-sec-ownership-design.md)."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    return {"ticker": ticker, "classes": list(share_classes(ticker)), "gurus": gurus_holding(r, ticker)}
+
+
+@router.get("/{ticker}/scores")
+def scores(ticker: str, r: Reader = Depends(get_reader)) -> Dict[str, Any]:
+    """The quality scores: Piotroski with its nine tests, Altman, Beneish, Sloan, ROIC vs WACC, predictability,
+    the five ranks and the composite, the growth table and the warning signs, severe first
+    (docs/superpowers/specs/2026-10-21-quality-scores-design.md)."""
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    return quality_view(r, ticker)
 
 
 @router.get("/{ticker}/earnings", response_model=List[EarningsRow])

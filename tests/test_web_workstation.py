@@ -17,6 +17,8 @@ test modules assert exact company counts against it).
 """
 from __future__ import annotations
 
+import html
+import re
 import sqlite3
 from datetime import date, timedelta
 
@@ -431,6 +433,21 @@ def test_hp_fragment_known_ticker_shows_bar_date_and_csv_link(client, monkeypatc
     # row regardless of how much of the 1Y window falls before _AAA_START.
     assert _AAA_LAST.isoformat() in body
     assert "/api/export/stock/AAA/bars.csv" in body
+
+
+@pytest.mark.parametrize("range_key, rows", [("1M", 31), ("1Y", _AAA_BAR_COUNT), ("5Y", _AAA_BAR_COUNT),
+                                             ("MAX", _AAA_BAR_COUNT)])
+def test_hp_fragments_csv_is_the_table_it_sits_under(client, monkeypatch, range_key, rows):
+    # BUG-150: the link took the bars CSV's default interval, which resamples by range (weekly at 5Y, monthly at
+    # MAX), under a table of daily bars; and the CSV is the table's range (1M: the CSV's own default is 1Y).
+    _pin_today(monkeypatch, _AAA_LAST)
+    body = client.get("/ui/stocks/AAA/hp", params={"range": range_key}).text
+    href = html.unescape(re.search(r'href="(/api/export/stock/AAA/bars\.csv[^"]*)"', body).group(1))
+    table_dates = re.findall(r'class="row-label hp-bar-date">([^<]+)<', body)
+    csv_lines = client.get(href).text.strip().splitlines()
+    csv_dates = [line.split(",")[0][:10] for line in csv_lines[1:]]
+    assert len(table_dates) == rows
+    assert sorted(csv_dates) == sorted(d[:10] for d in table_dates)
 
 
 def test_hp_fragment_range_param_changes_row_count(client, monkeypatch):
@@ -980,3 +997,24 @@ def test_the_fa_and_val_tabs_say_when_annual_financials_stop(tmp_path):
     for tab in ("fa", "val"):
         assert str(escape(note)) in client.get(f"/ui/stocks/TSM/{tab}").text, tab
 
+
+def test_the_fa_and_val_tabs_keep_the_stale_note_beside_the_sec_lag_note(tmp_path):
+    # BUG-322 (code review 27): the collection adds the SEC-lag warning before the stale one, and the tabs showed the
+    # first matching warning only, so a run with both lost BUG-066's explanation.
+    from markupsafe import escape
+
+    lag = ("SEC EDGAR: the companyfacts lack TSM's 20-F filed 2026-04-01 (0001046179-26-000001), so this run's "
+           "figures stop before it; the refresh collects TSM again")
+    stale = ("SEC EDGAR: annual financials stop at FY2019 for TSM: later annual reports are in IFRS (20-F), which "
+             "isn't mapped")
+    client = _client_for(_db_after_a_run_with(tmp_path, [lag, stale]))
+    for tab in ("fa", "val"):
+        body = client.get(f"/ui/stocks/TSM/{tab}").text
+        assert [str(escape(note)) in body for note in (lag, stale)] == [True, True], tab
+
+
+def test_ern_fragment_names_yahoos_earnings_growth_for_what_it_is(client):
+    # BUG-312 (Q2's decision): Yahoo's earningsGrowth is the latest quarter against a year before, no forecast.
+    body = client.get("/ui/stocks/AAA/ern").text
+    assert "Quarterly Earnings Growth (YoY)" in body
+    assert ">Earnings Growth<" not in body

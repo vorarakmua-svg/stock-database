@@ -1,5 +1,6 @@
 """Tests for the SQLite store: schema, upserts, and cross-company screening."""
 
+import copy
 import json
 import sqlite3
 from datetime import datetime
@@ -253,6 +254,40 @@ def test_vintages_table_written_and_idempotent(tmp_path):
     assert rows == [("acc-A", "2023-02-15", 100.0), ("acc-B", "2024-02-15", 110.0)]
 
 
+def test_a_vintage_keeps_the_tag_each_figure_was_read_from(tmp_path):
+    # BUG-271: the as-of view ranks a filing's figure by its concept, as the annual record does.
+    s = StockData(ticker="ZZ", cik="9", company_name="Z Co")
+    s.financials_annual_vintages = {"2023": {"acc-A": {
+        "fiscal_year": 2023, "accn": "acc-A", "filed_date": "2025-02-12", "form": "10-K",
+        "long_term_debt": 0.198e9, "total_liabilities": 60.0e9, "revenue": None,
+        "_source_tags": {"long_term_debt": "LongTermNotesPayable", "total_liabilities": "derived",
+                         "revenue": "Revenues", "not_a_field": "X"}}}}
+    db = tmp_path / "v.db"
+    SQLiteStore(db_path=str(db)).export([s])
+    conn = sqlite3.connect(str(db))
+    (tags,) = conn.execute("SELECT source_tags FROM financials_annual_vintages").fetchone()
+    conn.close()
+    assert json.loads(tags) == {"long_term_debt": "LongTermNotesPayable", "total_liabilities": "derived"}
+
+
+def test_a_database_stored_before_the_vintage_tags_gains_them(tmp_path):
+    db = tmp_path / "v.db"
+    s = StockData(ticker="ZZ", cik="9", company_name="Z Co")
+    s.financials_annual_vintages = {"2023": {"acc-A": {"fiscal_year": 2023, "accn": "acc-A",
+                                                       "filed_date": "2025-02-12", "long_term_debt": 1.0}}}
+    SQLiteStore(db_path=str(db)).export([s])
+    conn = sqlite3.connect(str(db))
+    conn.execute("ALTER TABLE financials_annual_vintages DROP COLUMN source_tags")
+    conn.commit()
+    conn.close()
+    s.financials_annual_vintages["2023"]["acc-A"]["_source_tags"] = {"long_term_debt": "LongTermDebt"}
+    SQLiteStore(db_path=str(db)).export([s])
+    conn = sqlite3.connect(str(db))
+    (tags,) = conn.execute("SELECT source_tags FROM financials_annual_vintages").fetchone()
+    conn.close()
+    assert json.loads(tags) == {"long_term_debt": "LongTermDebt"}
+
+
 def test_vintages_do_not_affect_financials_annual(tmp_path):
     import sqlite3
 
@@ -489,3 +524,338 @@ def test_a_collection_run_keeps_its_warnings(tmp_path):
     conn.close()
     assert [(count, json.loads(text)) for count, text in rows] == [(2, stock.warnings)]
 
+
+#: DLR's 10-Q of 2026-07-31, which its submissions listed and its companyfacts of 2026-10-25 had no fact of (BUG-251).
+_DLR_10Q = {"form": "10-Q", "accession": "0001104659-26-089296", "filed": "2026-07-31"}
+
+
+def _run_of(ticker, report=None, predecessor=None, at=datetime(2026, 10, 25, 12, 32, 58)):
+    """A collection of *ticker* with the SEC at *at*, its companyfacts lacking *report* (the latest report its
+    submissions list) and its predecessor's filings unread for *predecessor* (None for neither)."""
+    s = StockData(ticker=ticker, cik="0001297996", collected_at=at)
+    s.add_source("sec_edgar")
+    s.missing_report = report
+    s.predecessor_error = predecessor
+    return s
+
+
+def _incomplete(db):
+    """Each stored run's ``incomplete``, parsed, by (ticker, collected_at): None where it has none, as where the table
+    has no such column."""
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        return {(r["ticker"], r["collected_at"]): json.loads(r["incomplete"]) if dict(r).get("incomplete") else None
+                for r in conn.execute("SELECT * FROM collection_runs")}
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("report, predecessor, expected", [
+    (_DLR_10Q, None, {"report": _DLR_10Q}),  # BUG-251: the SEC's companyfacts lacked the latest report
+    (None, "503 Server Error", {"predecessor": "503 Server Error"}),  # BUG-279: the predecessor couldn't be read
+    (_DLR_10Q, "no XBRL data", {"report": _DLR_10Q, "predecessor": "no XBRL data"}),
+    (None, None, None),  # a complete run
+])
+def test_a_collection_run_keeps_why_its_sec_read_was_incomplete(tmp_path, report, predecessor, expected):
+    # The refresh's SEC step reads it to collect the company again (it took such a run for a complete one).
+    SQLiteStore(tmp_path / "s.db").export([_run_of("DLR", report, predecessor)])
+    assert _incomplete(tmp_path / "s.db") == {("DLR", "2026-10-25T12:32:58"): expected}
+
+
+def test_a_runs_table_from_before_the_incomplete_column_gains_it_and_keeps_its_runs(tmp_path):
+    # Every run of the user's database to 2026-10-25 was stored without it: they stay as they are, read as complete.
+    db = tmp_path / "s.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE collection_runs (ticker TEXT NOT NULL, collected_at TEXT NOT NULL, data_sources TEXT, "
+                 "warning_count INTEGER, error_count INTEGER, quality_score INTEGER, warnings TEXT, "
+                 "PRIMARY KEY (ticker, collected_at))")
+    conn.execute("INSERT INTO collection_runs VALUES ('DLR', '2026-10-25T12:32:58.502761', "
+                 "'yahoo_finance, sec_edgar, fred_treasury_gov, calculated_metrics', 7, 0, 85, '[]')")
+    conn.commit()
+    conn.close()
+    SQLiteStore(db).export([_run_of("DLR", _DLR_10Q, at=datetime(2026, 11, 1, 9, 0))])
+    assert _incomplete(db) == {("DLR", "2026-10-25T12:32:58.502761"): None,
+                               ("DLR", "2026-11-01T09:00:00"): {"report": _DLR_10Q}}
+    conn = sqlite3.connect(db)
+    old = conn.execute("SELECT data_sources, warning_count, error_count, quality_score, warnings FROM collection_runs "
+                       "WHERE collected_at = '2026-10-25T12:32:58.502761'").fetchone()
+    conn.close()
+    assert old == ("yahoo_finance, sec_edgar, fred_treasury_gov, calculated_metrics", 7, 0, 85, "[]")
+
+
+def _filer(annual=None, quarterly=None, ttm=None, vintages=None):
+    """AAA as a collection's SEC parse gives it: the annual record, quarters, trailing years and vintages."""
+    s = StockData(ticker="AAA", cik="000", company_name="AAA Inc.")
+    s.financials_annual = annual or {}
+    s.financials_quarterly = quarterly or {}
+    s.financials_ttm = ttm or {}
+    s.financials_annual_vintages = vintages or {}
+    s.add_source("sec_edgar")
+    return s
+
+
+def _stored(db, table, column):
+    conn = sqlite3.connect(db)
+    try:
+        return [r[0] for r in conn.execute(f"SELECT {column} FROM {table} WHERE ticker = 'AAA'")]
+    finally:
+        conn.close()
+
+
+def test_a_recollection_clears_what_its_parse_leaves_empty(tmp_path):
+    # BUG-029: a re-parse that leaves a field empty (a rule fixed since, BUG-013's dividends or BUG-092's counts)
+    # upserted only the fields it had, so the old figure stayed: the user's update on 2026-10-21 kept about 500,
+    # WFC's 2017-06-30 acquisitions quarter and MSFT's zero impairments among them.
+    db = tmp_path / "stock.db"
+    year = {"fiscal_year": 2024, "period_end": "2024-12-31", "revenue": 1000.0}
+    quarter = {"fiscal_year": 2024, "period_end": "2024-12-31", "revenue": 250.0}
+    SQLiteStore(db).export([_filer(annual={"2024": {**year, "impairment": 0.0}},
+                                   quarterly={"2024-12-31": {**quarter, "capex": 43.0}},
+                                   ttm={"2024-12-31": {**quarter, "capex": 406.0}},
+                                   vintages={"2024": {"0001-25-000001": {**year, "impairment": 0.0}}})])
+    SQLiteStore(db).export([_filer(annual={"2024": year}, quarterly={"2024-12-31": quarter},
+                                   ttm={"2024-12-31": quarter}, vintages={"2024": {"0001-25-000001": year}})])
+    assert _stored(db, "financials_annual", "impairment") == [None]
+    assert _stored(db, "financials_quarterly", "capex") == [None]
+    assert _stored(db, "financials_ttm", "capex") == [None]
+    assert _stored(db, "financials_annual_vintages", "impairment") == [None]
+    assert _stored(db, "financials_annual", "revenue") == [1000.0]
+
+
+def test_a_recollection_with_no_annual_record_only_adds(tmp_path):
+    # XOM's ticker now reads its new holding company, which has filed no 10-K: its 10-Qs give a few figures for
+    # quarters whose full record the predecessor filed, so a run without an annual record clears nothing.
+    db = tmp_path / "stock.db"
+    quarter = {"fiscal_year": 2025, "period_end": "2025-03-31"}
+    SQLiteStore(db).export([_filer(annual={"2024": {"fiscal_year": 2024, "revenue": 1000.0}},
+                                   quarterly={"2025-03-31": {**quarter, "revenue": 83.1e9, "net_income": 7.7e9}})])
+    SQLiteStore(db).export([_filer(quarterly={"2025-03-31": {**quarter, "net_income": 7.7e9}})])
+    assert _stored(db, "financials_quarterly", "revenue") == [83.1e9]
+
+
+# BUG-179: a successor's run whose predecessor's filings couldn't be read (a 503 or a 404 on their companyfacts,
+# sec_handler.PREDECESSOR_CIKS) still parses an annual record, from its own reports, which give the years before them
+# only as their comparatives do. BlackRock, Inc.'s 10-Ks give income statements back to FY2022 and balance sheets
+# from 2023-12-31, and for FY2021-22 the statement of equity's total, with the noncontrolling interests (total
+# equity's second tag; the old BlackRock's balance sheets give the first). Such a run speaks for none of the
+# predecessor's figures: it only fills, a period or a figure not stored yet.
+
+#: BLK's FY2021-22 as a run that read the old BlackRock's filings too gives them, and as BlackRock, Inc.'s alone do.
+_BLK_BOTH = {
+    "2021": {"fiscal_year": 2021, "period_end": "2021-12-31", "filed_date": "2024-02-23", "form": "10-K",
+             "revenue": 19.374e9, "net_income": 5.901e9, "total_assets": 152.648e9, "total_equity": 37.693e9},
+    "2022": {"fiscal_year": 2022, "period_end": "2022-12-31", "filed_date": "2025-02-25", "form": "10-K",
+             "revenue": 17.873e9, "net_income": 5.178e9, "total_assets": 117.628e9, "total_equity": 37.744e9},
+}
+_BLK_ALONE = {
+    "2021": {"fiscal_year": 2021, "period_end": "2021-12-31", "filed_date": "2025-02-25", "form": "10-K",
+             "total_equity": 37.806e9},
+    "2022": {"fiscal_year": 2022, "period_end": "2022-12-31", "filed_date": "2026-02-25", "form": "10-K",
+             "revenue": 17.873e9, "net_income": 5.178e9, "total_equity": 37.876e9},
+}
+#: Its 2022-12-31 quarter and trailing year: without the annual record's year ends, the quarter has no fiscal quarter.
+_BLK_Q4_BOTH = {"fiscal_year": 2022, "fiscal_quarter": 4, "period_end": "2022-12-31", "revenue": 4.337e9,
+                "total_assets": 117.628e9, "total_equity": 37.744e9}
+_BLK_Q4_ALONE = {"period_end": "2022-12-31", "total_equity": 37.876e9}
+_BLK_TTM_BOTH = {"fiscal_year": 2022, "revenue": 17.873e9, "total_assets": 117.628e9, "total_equity": 37.744e9}
+_BLK_TTM_ALONE = {"revenue": 17.873e9, "total_equity": 37.876e9}
+#: Its FY2024 10-K's view of FY2022: a vintage's figures are its filing's, but rules that read the year's other
+#: filings (the share scale, ``normalize_share_scale``, the predecessor's among them) can't be applied without them.
+_BLK_10K = "0000950170-25-026584"
+_BLK_VINTAGE_BOTH = {"2022": {_BLK_10K: {"filed_date": "2025-02-25", "form": "10-K", "revenue": 17.873e9,
+                                         "eps_diluted": 34.34, "weighted_avg_shares_diluted": 150.8e6}}}
+_BLK_VINTAGE_ALONE = {"2022": {_BLK_10K: {"filed_date": "2025-02-25", "form": "10-K", "revenue": 17.873e9,
+                                          "weighted_avg_shares_diluted": 150.8e3}}}
+_AUM = {"tag": "AssetsUnderManagement", "label": "Assets Under Management", "unit": "USD", "form": "10-Q"}
+
+
+def _blk(annual, quarterly=None, ttm=None, vintages=None, unmapped=None, predecessor_error=None):
+    """BLK as a collection gives it (a bank by its SIC code, as stored), its metrics computed from its annual record
+    as the collection does; *predecessor_error* why its predecessor's filings couldn't be read (None: they were)."""
+    s = StockData(ticker="BLK", cik="0002012383", company_name="BlackRock, Inc.", sector_class="bank")
+    s.financials_annual = copy.deepcopy(annual)
+    s.financials_quarterly = copy.deepcopy(quarterly or {})
+    s.financials_ttm = copy.deepcopy(ttm or {})
+    s.financials_annual_vintages = copy.deepcopy(vintages or {})
+    s.unmapped_facts = copy.deepcopy(unmapped or [])
+    s.calculated_metrics = {"historical": CalculatedMetrics().calculate_historical(s.financials_annual, "bank")}
+    s.predecessor_error = predecessor_error
+    s.add_source("sec_edgar")
+    return s
+
+
+def _row(db, table, **key):
+    """*table*'s stored row at *key*, as a dict (None without one)."""
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(f"SELECT * FROM {table} WHERE " + " AND ".join(f"{k} = ?" for k in key),
+                           tuple(key.values())).fetchone()
+        return dict(row) if row is not None else None
+    finally:
+        conn.close()
+
+
+def test_a_run_that_couldnt_read_the_predecessor_keeps_what_only_the_predecessor_filed(tmp_path):
+    # BLK's run with the old BlackRock's companyfacts a 503 rewrote FY2021-22 as complete: FY2021's income statement
+    # and both years' assets were cleared, and the quarter's and the trailing year's, the quarter's fiscal quarter
+    # with them. In the same batch, a filer with no predecessor still clears what its re-parse leaves empty (BUG-029).
+    db = tmp_path / "stock.db"
+    SQLiteStore(db).export([_blk(_BLK_BOTH, {"2022-12-31": _BLK_Q4_BOTH}, {"2022-12-31": _BLK_TTM_BOTH},
+                                 _BLK_VINTAGE_BOTH),
+                            _filer(annual={"2024": {"fiscal_year": 2024, "revenue": 1000.0, "impairment": 0.0}})])
+    SQLiteStore(db).export([_blk(_BLK_ALONE, {"2022-12-31": _BLK_Q4_ALONE}, {"2022-12-31": _BLK_TTM_ALONE},
+                                 _BLK_VINTAGE_ALONE, predecessor_error="503 Server Error"),
+                            _filer(annual={"2024": {"fiscal_year": 2024, "revenue": 1000.0}})])
+    fy2021 = _row(db, "financials_annual", ticker="BLK", fiscal_year=2021)
+    assert (fy2021["revenue"], fy2021["net_income"], fy2021["total_assets"]) == (19.374e9, 5.901e9, 152.648e9)
+    assert _row(db, "financials_annual", ticker="BLK", fiscal_year=2022)["total_assets"] == 117.628e9
+    q4 = _row(db, "financials_quarterly", ticker="BLK", period_end="2022-12-31")
+    assert (q4["revenue"], q4["total_assets"], q4["fiscal_year"], q4["fiscal_quarter"]) == (4.337e9, 117.628e9, 2022, 4)
+    assert _row(db, "financials_ttm", ticker="BLK", period_end="2022-12-31")["total_assets"] == 117.628e9
+    assert _row(db, "financials_annual_vintages", ticker="BLK", fiscal_year=2022, accn=_BLK_10K)["eps_diluted"] == 34.34
+    assert _stored(db, "financials_annual", "impairment") == [None]
+
+
+def test_a_run_that_couldnt_read_the_predecessor_keeps_the_figures_it_reads_otherwise(tmp_path):
+    # Not even BUG-029's "only adds": BLK's own reports give FY2021-22's equity with the noncontrolling interests
+    # (XOM's 10-Qs gave four such quarters and a receivable), a later filing date, a share count the year's other
+    # filings would have scaled, and an older fact for a tag the run doesn't map, each over the stored one.
+    db = tmp_path / "stock.db"
+    SQLiteStore(db).export([_blk(_BLK_BOTH, {"2022-12-31": _BLK_Q4_BOTH}, {"2022-12-31": _BLK_TTM_BOTH},
+                                 _BLK_VINTAGE_BOTH, [{**_AUM, "period_end": "2024-06-30", "value": 10.6e12}])])
+    SQLiteStore(db).export([_blk(_BLK_ALONE, {"2022-12-31": _BLK_Q4_ALONE}, {"2022-12-31": _BLK_TTM_ALONE},
+                                 _BLK_VINTAGE_ALONE, [{**_AUM, "period_end": "2024-03-31", "value": 10.5e12}],
+                                 predecessor_error="no XBRL data")])
+    fy2021 = _row(db, "financials_annual", ticker="BLK", fiscal_year=2021)
+    assert (fy2021["total_equity"], fy2021["filed_date"]) == (37.693e9, "2024-02-23")
+    assert _row(db, "financials_annual", ticker="BLK", fiscal_year=2022)["total_equity"] == 37.744e9
+    assert _row(db, "financials_quarterly", ticker="BLK", period_end="2022-12-31")["total_equity"] == 37.744e9
+    assert _row(db, "financials_ttm", ticker="BLK", period_end="2022-12-31")["total_equity"] == 37.744e9
+    vintage = _row(db, "financials_annual_vintages", ticker="BLK", fiscal_year=2022, accn=_BLK_10K)
+    assert vintage["weighted_avg_shares_diluted"] == 150.8e6
+    aum = _row(db, "unmapped_facts", ticker="BLK", tag="AssetsUnderManagement")
+    assert (aum["period_end"], aum["value"]) == ("2024-06-30", 10.6e12)
+
+
+def test_a_run_that_couldnt_read_the_predecessor_still_adds_what_it_has(tmp_path):
+    # Its own reports' periods and figures not stored yet are stored: a new year with its metrics, quarter, trailing
+    # year, vintage and unmapped tag, and a figure the stored year lacks.
+    db = tmp_path / "stock.db"
+    SQLiteStore(db).export([_blk(_BLK_BOTH)])
+    fy2025 = {"fiscal_year": 2025, "period_end": "2025-12-31", "filed_date": "2026-02-25", "form": "10-K",
+              "revenue": 24.216e9, "net_income": 5.553e9, "total_assets": 169.998e9}
+    q4 = {"fiscal_year": 2025, "fiscal_quarter": 4, "period_end": "2025-12-31", "revenue": 7.008e9}
+    SQLiteStore(db).export([_blk({**_BLK_ALONE, "2022": {**_BLK_ALONE["2022"], "goodwill": 15.3e9}, "2025": fy2025},
+                                 {"2025-12-31": q4}, {"2025-12-31": {"fiscal_year": 2025, "revenue": 24.216e9}},
+                                 {"2025": {"0001193125-26-071966": {"filed_date": "2026-02-25", "revenue": 24.216e9}}},
+                                 [{**_AUM, "tag": "InvestmentAdvisoryFees", "period_end": "2025-12-31",
+                                   "value": 17.9e9}], predecessor_error="503 Server Error")])
+    stored = _row(db, "financials_annual", ticker="BLK", fiscal_year=2025)
+    assert (stored["revenue"], stored["total_assets"], stored["filed_date"]) == (24.216e9, 169.998e9, "2026-02-25")
+    assert _row(db, "metrics_annual", ticker="BLK", fiscal_year=2025)["roa"] == pytest.approx(5.553e9 / 169.998e9)
+    assert _row(db, "financials_annual", ticker="BLK", fiscal_year=2022)["goodwill"] == 15.3e9
+    assert _row(db, "financials_quarterly", ticker="BLK", period_end="2025-12-31")["revenue"] == 7.008e9
+    assert _row(db, "financials_ttm", ticker="BLK", period_end="2025-12-31")["revenue"] == 24.216e9
+    assert _row(db, "financials_annual_vintages", ticker="BLK", fiscal_year=2025,
+                accn="0001193125-26-071966")["revenue"] == 24.216e9
+    assert _row(db, "unmapped_facts", ticker="BLK", tag="InvestmentAdvisoryFees")["value"] == 17.9e9
+
+
+def test_a_run_that_couldnt_read_the_predecessor_computes_each_years_metrics_on_the_year_as_stored(tmp_path):
+    # Its own FY2022 has no balance sheet and the other equity: the run stored that year's return on assets empty and
+    # its return on equity on the equity with the noncontrolling interests, and FY2021's metrics all empty.
+    db = tmp_path / "stock.db"
+    SQLiteStore(db).export([_blk(_BLK_BOTH)])
+    SQLiteStore(db).export([_blk(_BLK_ALONE, predecessor_error="503 Server Error")])
+    fy2022 = _row(db, "metrics_annual", ticker="BLK", fiscal_year=2022)
+    assert fy2022["roa"] == pytest.approx(5.178e9 / 117.628e9)
+    assert fy2022["roe"] == pytest.approx(5.178e9 / 37.744e9)
+    assert fy2022["net_margin"] == pytest.approx(5.178e9 / 17.873e9)
+    assert fy2022["asset_turnover"] is None  # on a bank's terms, as the collection's: a bank has no asset turnover
+    assert _row(db, "metrics_annual", ticker="BLK", fiscal_year=2021)["roa"] == pytest.approx(5.901e9 / 152.648e9)
+
+
+def test_a_run_that_couldnt_read_the_predecessor_or_find_an_annual_record_keeps_the_stored_quarters(tmp_path):
+    # XOM's holding company has filed 10-Qs only: with Exxon Mobil Corp's filings unread, its run gave the stored
+    # quarters' equity with the noncontrolling interests, without their fiscal year and quarter, and BUG-029's "only
+    # adds" wrote both over them (2025-03-31's equity $269.806B for $262.720B, as four quarters and a receivable).
+    db = tmp_path / "stock.db"
+    quarter = {"fiscal_year": 2025, "fiscal_quarter": 1, "period_end": "2025-03-31", "revenue": 83.1e9,
+               "total_equity": 262.720e9}
+    SQLiteStore(db).export([_filer(annual={"2024": {"fiscal_year": 2024, "revenue": 349.585e9}},
+                                   quarterly={"2025-03-31": quarter})])
+    unread = _filer(quarterly={"2025-03-31": {"period_end": "2025-03-31", "total_equity": 269.806e9},
+                               "2026-06-30": {"period_end": "2026-06-30", "revenue": 81.0e9}})
+    unread.predecessor_error = "503 Server Error"
+    SQLiteStore(db).export([unread])
+    stored = {c: _stored(db, "financials_quarterly", c) for c in ("fiscal_year", "fiscal_quarter", "total_equity")}
+    assert stored == {"fiscal_year": [2025, None], "fiscal_quarter": [1, None], "total_equity": [262.720e9, None]}
+    assert _stored(db, "financials_quarterly", "revenue") == [83.1e9, 81.0e9]
+
+
+def test_a_run_that_reads_the_predecessor_again_restates_as_before(tmp_path):
+    # The next good run is BUG-029's: a figure its parse leaves empty is cleared, one the failed run added among them.
+    db = tmp_path / "stock.db"
+    SQLiteStore(db).export([_blk(_BLK_BOTH)])
+    SQLiteStore(db).export([_blk({**_BLK_ALONE, "2022": {**_BLK_ALONE["2022"], "goodwill": 15.3e9}},
+                                 predecessor_error="503 Server Error")])
+    SQLiteStore(db).export([_blk(_BLK_BOTH)])
+    fy2022 = _row(db, "financials_annual", ticker="BLK", fiscal_year=2022)
+    assert (fy2022["goodwill"], fy2022["total_assets"], fy2022["filed_date"]) == (None, 117.628e9, "2025-02-25")
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The SEC's SIC code (Milestone 5): docs/superpowers/specs/2026-10-25-universe-automation-design.md, "SIC codes and
+# industries"
+
+
+def _coded(ticker, submissions):
+    s = _company(ticker, 1000.0, 0.20)
+    s.sec_submissions = submissions
+    return s
+
+
+def _codes(db):
+    conn = sqlite3.connect(db)
+    try:
+        return {t: (sic, d) for t, sic, d in conn.execute("SELECT ticker, sic, sic_description FROM companies")}
+    finally:
+        conn.close()
+
+
+def test_a_collection_stores_the_sic_code(tmp_path):
+    db = tmp_path / "stock.db"
+    SQLiteStore(db).export([
+        _coded("AAA", {"sic": "3571", "sic_description": "Electronic Computers", "fiscal_year_end": "0926"}),
+        _coded("BBB", {"sic": " 2834 ", "sic_description": " Pharmaceutical Preparations "}),
+        _coded("CCC", {"sic": "", "sic_description": ""}),  # the feed has none
+        _coded("DDD", {}),  # no feed
+        _coded("EEE", {"sic": 6021, "sic_description": "National Commercial Banks"}),
+    ])
+    assert _codes(db) == {"AAA": ("3571", "Electronic Computers"), "BBB": ("2834", "Pharmaceutical Preparations"),
+                          "CCC": (None, None), "DDD": (None, None), "EEE": ("6021", "National Commercial Banks")}
+
+
+def test_a_run_without_the_feed_keeps_the_stored_code(tmp_path):
+    db = tmp_path / "stock.db"
+    store = SQLiteStore(db)
+    store.export([_coded("AAA", {"sic": "3571", "sic_description": "Electronic Computers"})])
+    store.export([_coded("AAA", {})])  # the submissions request failed
+    assert _codes(db)["AAA"] == ("3571", "Electronic Computers")
+    store.export([_coded("AAA", {"sic": "3572", "sic_description": "Computer Storage Devices"})])
+    assert _codes(db)["AAA"] == ("3572", "Computer Storage Devices")  # a new code replaces the old
+
+
+def test_an_old_companies_table_gains_the_sic_columns(tmp_path):
+    db = tmp_path / "stock.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE companies (ticker TEXT PRIMARY KEY, cik TEXT, company_name TEXT, sector_class TEXT, "
+                 "sector TEXT, industry TEXT, country TEXT, employees INTEGER, website TEXT, fiscal_year_end TEXT, "
+                 "description TEXT, address TEXT, hq_city TEXT, hq_state TEXT, updated_at TEXT)")
+    conn.execute("INSERT INTO companies (ticker, cik) VALUES ('OLD', '0000000009')")
+    conn.commit()
+    conn.close()
+    SQLiteStore(db).export([_coded("AAA", {"sic": "3571", "sic_description": "Electronic Computers"})])
+    assert _codes(db) == {"OLD": (None, None), "AAA": ("3571", "Electronic Computers")}

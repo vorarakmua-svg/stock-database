@@ -10,7 +10,7 @@ Tables:
 - ``financials_quarterly`` canonical quarterly line items, one row per (ticker, period_end)
 - ``metrics_annual``       calculated ratios per (ticker, fy)
 - ``market_snapshots``     point-in-time market/valuation data per (ticker, collected_at)
-- ``collection_runs``      provenance/quality of each collection
+- ``collection_runs``      provenance/quality of each collection, and what its SEC read lacked
 
 All writes are idempotent upserts on the natural keys.
 """
@@ -18,16 +18,22 @@ All writes are idempotent upserts on the natural keys.
 import json
 import logging
 import sqlite3
+from bisect import bisect_right
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
-if TYPE_CHECKING:  # avoid a runtime exporters -> valuation dependency
+if TYPE_CHECKING:  # avoid a runtime exporters -> valuation (or ownership) dependency
+    from ..ownership.portfolio import Change, GuruQuarters, Position
+    from ..valuation.history import HistoryResult
+    from ..valuation.indicators import IndicatorResult
     from ..valuation.models import ValuationResult
 
 from ..mappings.canonical import CANONICAL_FIELDS
 from ..models.stock_data import StockData
 from ..parsers.calculated_metrics import CalculatedMetrics
+from ..universe.industries import normalize_sic, normalize_sic_description
 from ..valuation.inputs import SPLIT_JUMP_THRESHOLD, _simple_ratio
 
 # Canonical line-item columns shared by the annual/quarterly financial tables.
@@ -124,8 +130,91 @@ def _served_day(stock: StockData, collected_at: str) -> str:
     return (date.fromisoformat(collected_at[:10]) - timedelta(days=1)).isoformat()
 
 
+def _incomplete(stock: StockData) -> Optional[str]:
+    """What a run's SEC read lacked, as ``collection_runs.incomplete`` keeps it (JSON): ``report``, the latest report
+    its submissions listed whose facts its companyfacts lacked, the SEC's lag (BUG-251), unless the run read it and
+    every earlier report they lacked from the filings' own XBRL (``recovered``, Q17); ``predecessor``, why its
+    predecessor's filings couldn't be read (BUG-279). None for a complete run. ``stock-data refresh``'s SEC step
+    collects a company again whose latest collection with the SEC lacked either."""
+    lacked: Dict[str, Any] = {}
+    if stock.missing_report and not stock.missing_report.get("recovered"):
+        lacked["report"] = stock.missing_report
+    if stock.predecessor_error:
+        lacked["predecessor"] = stock.predecessor_error
+    return json.dumps(lacked) if lacked else None
+
+
 def _cols_ddl(columns: Sequence[str], col_type: str = "REAL") -> str:
     return ", ".join(f'"{c}" {col_type}' for c in columns)
+
+
+#: The SEC's SIC code and its description in ``companies`` (Milestone 5): every collection writes them from the
+#: submissions feed, and ``python -m src.universe.sic`` fills them for companies collected before.
+COMPANY_SIC_COLUMNS: Dict[str, str] = {"sic": "TEXT", "sic_description": "TEXT"}
+
+#: The industry columns the rank pass writes (Milestone 5; docs/superpowers/specs/2026-10-25-universe-automation-
+#: design.md, "SIC codes and industries"): the company's SIC industry group, the group's label and member count, and
+#: the five ranks and the composite within it, all NULL without a group.
+INDUSTRY_COLUMNS: Tuple[str, ...] = (
+    "industry_group", "industry_label", "industry_size", "ind_rank_strength", "ind_rank_profitability",
+    "ind_rank_growth", "ind_rank_valuation", "ind_rank_momentum", "ind_composite",
+)
+#: The quality scores' columns (Milestone 2, the industry ones since Milestone 5), in table order. Column names in
+#: the export come only from here.
+QUALITY_COLUMNS: Tuple[str, ...] = (
+    "ticker", "fiscal_year",
+    "rev_ps_cagr_3y", "rev_ps_cagr_5y", "rev_ps_cagr_10y", "eps_cagr_3y", "eps_cagr_5y", "eps_cagr_10y",
+    "ebitda_ps_cagr_3y", "ebitda_ps_cagr_5y", "ebitda_ps_cagr_10y", "fcf_ps_cagr_5y", "book_ps_cagr_5y",
+    "fcf_ps_cagr_3y", "fcf_ps_cagr_10y", "book_ps_cagr_3y", "book_ps_cagr_10y",
+    "piotroski_f", "piotroski_tested", "piotroski_tests", "altman_z", "altman_zone", "beneish_m",
+    "beneish_variables", "sloan_ratio", "roic", "wacc", "roic_minus_wacc", "debt_to_ebitda", "predictability_stars",
+    "predictability_r2", "ncav_per_share", "earnings_yield", "return_on_capital", "momentum",
+    "rank_strength", "rank_profitability", "rank_growth", "rank_valuation", "rank_momentum", "composite_score",
+    "magic_formula_rank", "components", "warning_count", "na_reasons", "computed_at", "ranked_at",
+) + INDUSTRY_COLUMNS
+#: The columns the rank pass writes.
+RANK_COLUMNS: Tuple[str, ...] = ("rank_strength", "rank_profitability", "rank_growth", "rank_valuation",
+                                 "rank_momentum", "composite_score", "magic_formula_rank") + INDUSTRY_COLUMNS
+_QUALITY_TYPES: Dict[str, str] = {
+    "ticker": "TEXT PRIMARY KEY", "fiscal_year": "INTEGER", "piotroski_f": "INTEGER", "piotroski_tested": "INTEGER",
+    "piotroski_tests": "TEXT", "altman_zone": "TEXT", "beneish_variables": "TEXT", "predictability_r2": "TEXT",
+    "rank_strength": "INTEGER", "rank_profitability": "INTEGER", "rank_growth": "INTEGER",
+    "rank_valuation": "INTEGER", "rank_momentum": "INTEGER", "magic_formula_rank": "INTEGER",
+    "components": "TEXT", "warning_count": "INTEGER", "na_reasons": "TEXT", "computed_at": "TEXT NOT NULL",
+    "ranked_at": "TEXT", "industry_group": "TEXT", "industry_label": "TEXT", "industry_size": "INTEGER",
+    "ind_rank_strength": "INTEGER", "ind_rank_profitability": "INTEGER", "ind_rank_growth": "INTEGER",
+    "ind_rank_valuation": "INTEGER", "ind_rank_momentum": "INTEGER",
+}
+#: The columns of ``guru_positions``, in table order.
+_GURU_POSITION_COLUMNS: Tuple[str, ...] = (
+    "guru_cik", "period", "security", "put_call", "ticker", "cusips", "issuer", "title_of_class", "share_type",
+    "shares", "value_usd", "weight", "action", "shares_before", "value_before", "split_factor", "change_pct")
+
+
+def _position_row(guru_cik: str, period: str, held: "Optional[Position]",
+                  change: "Optional[Change]") -> Tuple[Any, ...]:
+    """A ``guru_positions`` row: of a position *held* in the quarter, with its *change* from the quarter before (None
+    without it), or, *held* None, of a position gone (*change* its 'sold_out'), with no shares, value or weight."""
+    source: Any = held if held is not None else change
+    after = (held.shares, held.value_usd, held.weight) if held is not None else (None, None, None)
+    before = ((change.action, change.shares_before, change.value_before, change.split_factor, change.change_pct)
+              if change is not None else (None, None, None, None, None))
+    return ((guru_cik, period, source.security, source.put_call or "", source.ticker, ",".join(source.cusips),
+             source.issuer, source.title_of_class, source.share_type) + after + before)
+
+
+@dataclass
+class StoreResult:
+    """What ``SQLiteStore.write_batch`` did with a batch, in the database at *path*: the tickers *stored* (committed)
+    and those *failed*, each with why. A stock whose write failed was rolled back to its own savepoint and the others
+    were committed, unless *error* says why the whole export failed (the schema couldn't be made or migrated, the
+    database stayed locked, the commit failed, SQLite rolled the transaction back): then none was stored, and every
+    ticker is in *failed*."""
+
+    path: Path
+    stored: List[str] = field(default_factory=list)
+    failed: Dict[str, str] = field(default_factory=dict)
+    error: Optional[str] = None
 
 
 class SQLiteStore:
@@ -161,7 +250,9 @@ class SQLiteStore:
                 address TEXT,
                 hq_city TEXT,
                 hq_state TEXT,
-                updated_at TEXT
+                updated_at TEXT,
+                sic TEXT,
+                sic_description TEXT
             );
 
             CREATE TABLE IF NOT EXISTS financials_annual (
@@ -208,6 +299,7 @@ class SQLiteStore:
                 period_end TEXT,
                 form TEXT,
                 calendar_year INTEGER,
+                source_tags TEXT,
                 {_cols_ddl(_CANONICAL_COLUMNS)},
                 PRIMARY KEY (ticker, fiscal_year, accn)
             );
@@ -296,6 +388,7 @@ class SQLiteStore:
                 error_count INTEGER,
                 quality_score INTEGER,
                 warnings TEXT,
+                incomplete TEXT,
                 PRIMARY KEY (ticker, collected_at)
             );
 
@@ -318,6 +411,58 @@ class SQLiteStore:
                 computed_at TEXT NOT NULL
             );
 
+            -- The valuation history (docs/superpowers/specs/2026-10-21-valuation-history-design.md):
+            -- each month's last close, the multiples on the trailing year known then, and the
+            -- historical value, per share on the price bars' basis.
+            CREATE TABLE IF NOT EXISTS valuation_history (
+                ticker TEXT NOT NULL,
+                date TEXT NOT NULL,
+                close REAL,
+                market_cap REAL,
+                enterprise_value REAL,
+                ttm_period_end TEXT,
+                pe REAL, ps REAL, pb REAL, pfcf REAL, ev_ebitda REAL, pffo REAL, div_yield REAL,
+                fair_value REAL,
+                fair_value_n INTEGER,
+                PRIMARY KEY (ticker, date)
+            );
+
+            -- Each metric's trailing 10-year range at the latest month, and the historical value
+            -- (metric 'fair_value', its current_value, p25 and p75 on the latest quote's basis).
+            CREATE TABLE IF NOT EXISTS valuation_ranges (
+                ticker TEXT NOT NULL,
+                metric TEXT NOT NULL,
+                applicable INTEGER NOT NULL,
+                na_reason TEXT,
+                as_of TEXT,
+                window_start TEXT,
+                n_months INTEGER,
+                current_value REAL,
+                pct_rank REAL,
+                min REAL, p25 REAL, median REAL, p75 REAL, max REAL,
+                implied_value REAL,
+                in_fair_value INTEGER,
+                n_metrics INTEGER,
+                computed_at TEXT NOT NULL,
+                PRIMARY KEY (ticker, metric)
+            );
+
+            -- The other valuation indicators (docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md):
+            -- display-only, like owner earnings, so never in the valuations table, its median or the verdicts.
+            -- unit 'per_share' (per share, on the price's basis) or 'rate' (the reverse DCF's implied growth).
+            CREATE TABLE IF NOT EXISTS valuation_indicators (
+                ticker TEXT NOT NULL,
+                indicator TEXT NOT NULL,
+                applicable INTEGER NOT NULL,
+                na_reason TEXT,
+                value_bear REAL, value_base REAL, value_bull REAL,
+                unit TEXT NOT NULL,
+                assumptions TEXT,
+                basis_fiscal_year INTEGER,
+                computed_at TEXT NOT NULL,
+                PRIMARY KEY (ticker, indicator)
+            );
+
             -- Material us-gaap facts under tags not yet in the canonical registry.
             -- The tag is a row VALUE (not a column), so new taxonomy tags never
             -- require a schema change and material data is never silently lost.
@@ -334,8 +479,218 @@ class SQLiteStore:
             );
 
             CREATE INDEX IF NOT EXISTS idx_unmapped_tag ON unmapped_facts (tag);
+            -- Covers the quality page's top unmapped tags (Reader.unmapped_top: GROUP BY tag, COUNT(DISTINCT ticker),
+            -- MAX(label)), so it reads this index instead of a table row a fact (M5-4, the scale pre-flight).
+            CREATE INDEX IF NOT EXISTS idx_unmapped_tag_cover ON unmapped_facts (tag, ticker, label);
+
+            -- The quality scores (docs/superpowers/specs/2026-10-21-quality-scores-design.md):
+            -- each fiscal year's per-share series on today's split basis, and the warning signs.
+            CREATE TABLE IF NOT EXISTS per_share_annual (
+                ticker TEXT NOT NULL,
+                fiscal_year INTEGER NOT NULL,
+                revenue_ps REAL, eps REAL, ebitda_ps REAL, fcf_ps REAL, book_ps REAL,
+                PRIMARY KEY (ticker, fiscal_year)
+            );
+
+            CREATE TABLE IF NOT EXISTS warning_signs (
+                ticker TEXT NOT NULL,
+                code TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                message TEXT,
+                value REAL,
+                threshold REAL,
+                computed_at TEXT NOT NULL,
+                PRIMARY KEY (ticker, code)
+            );
             """
         )
+        # One row per ticker: every score, the CAGRs, the ranks and the composite (QUALITY_COLUMNS).
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS quality_scores ("
+            + ", ".join(f"{c} {_QUALITY_TYPES.get(c, 'REAL')}" for c in QUALITY_COLUMNS) + ")"
+        )
+        # Insiders' Form 4 filings (Milestone 3): one row per filing and reporting owner, and the filing's
+        # transactions. A filing amended by a 4/A notes its latest amendment (insider_filings.superseded_by), and a
+        # trade a 4/A restates names that amendment (insider_trades.superseded_by): the readers count the others. A
+        # price that lost its decimal point is flagged (insider_trades.price_suspect: 1, 0 when checked, NULL without
+        # a close), kept as filed and left out of the dollar figures.
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS insider_filings (
+                accession TEXT NOT NULL,
+                owner_cik TEXT NOT NULL,
+                ticker TEXT NOT NULL,
+                form TEXT,
+                filed_date TEXT,
+                period_of_report TEXT,
+                original_filed TEXT,
+                owner_name TEXT,
+                is_director INTEGER,
+                is_officer INTEGER,
+                officer_title TEXT,
+                is_ten_percent INTEGER,
+                is_other INTEGER,
+                aff10b5one INTEGER,
+                is_ceo_cfo INTEGER,
+                superseded_by TEXT,
+                collected_at TEXT NOT NULL,
+                PRIMARY KEY (accession, owner_cik)
+            );
+            CREATE INDEX IF NOT EXISTS idx_insider_filings_ticker ON insider_filings (ticker, filed_date);
+            CREATE TABLE IF NOT EXISTS insider_trades (
+                accession TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                ticker TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                security_title TEXT,
+                date TEXT,
+                code TEXT,
+                shares REAL,
+                price REAL,
+                price_footnotes TEXT,
+                acquired_disposed TEXT,
+                owned_after REAL,
+                direct_indirect TEXT,
+                nature_of_ownership TEXT,
+                exercise_price REAL,
+                underlying_title TEXT,
+                underlying_shares REAL,
+                superseded_by TEXT,
+                price_suspect INTEGER,
+                PRIMARY KEY (accession, seq)
+            );
+            CREATE INDEX IF NOT EXISTS idx_insider_trades_ticker ON insider_trades (ticker, date);
+            -- The screener's insider fields seek a company's trades of one code in the year (its purchases, and for the
+            -- net buying its sales) instead of reading all its trades of the year (M5-4, the scale pre-flight).
+            CREATE INDEX IF NOT EXISTS idx_insider_trades_code ON insider_trades (ticker, code, date);
+            """
+        )
+        # The gurus' 13F filings (Milestone 3): the curated filers, one row per filing with the cover's totals
+        # beside the parsed ones, and each filing's entries as filed (one CUSIP may take several rows). Values are
+        # in dollars.
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS guru_filers (
+                filer_cik TEXT PRIMARY KEY,
+                guru_cik TEXT NOT NULL,
+                name TEXT,
+                manager TEXT
+            );
+            CREATE TABLE IF NOT EXISTS guru_filings (
+                accession TEXT PRIMARY KEY,
+                guru_cik TEXT NOT NULL,
+                filer_cik TEXT NOT NULL,
+                form TEXT,
+                period TEXT,
+                filed TEXT,
+                report_type TEXT,
+                amendment_type TEXT,
+                entry_total INTEGER,
+                value_total REAL,
+                rows INTEGER,
+                rows_value REAL,
+                checksum_ok INTEGER,
+                confidential_omitted INTEGER,
+                collected_at TEXT NOT NULL,
+                multiplier INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_guru_filings_guru ON guru_filings (guru_cik, period);
+            CREATE TABLE IF NOT EXISTS guru_holdings (
+                accession TEXT NOT NULL,
+                row INTEGER NOT NULL,
+                guru_cik TEXT NOT NULL,
+                cusip TEXT,
+                issuer TEXT,
+                title_of_class TEXT,
+                value_usd REAL,
+                shares REAL,
+                share_type TEXT,
+                put_call TEXT,
+                discretion TEXT,
+                PRIMARY KEY (accession, row)
+            );
+            CREATE INDEX IF NOT EXISTS idx_guru_holdings_cusip ON guru_holdings (cusip);
+            CREATE INDEX IF NOT EXISTS idx_guru_holdings_guru ON guru_holdings (guru_cik);
+            -- The holdings' CUSIPs and their tickers: our universe's from the curated map ('universe'), the others'
+            -- through OpenFIGI ('openfigi', or 'none' where it found nothing: no ticker, the holdings' issuer).
+            CREATE TABLE IF NOT EXISTS cusip_map (
+                cusip TEXT PRIMARY KEY,
+                ticker TEXT,
+                name TEXT,
+                source TEXT NOT NULL,
+                security_type TEXT,
+                mapped_at TEXT NOT NULL
+            );
+            -- Each guru's quarters as the collector builds them (ownership.portfolio), for the pages, the holders tab
+            -- and the screener: the quarter's total, held positions, completeness, whether the quarter before is
+            -- there (so the changes exist), its filings (a JSON list) and the latest of their filing dates.
+            CREATE TABLE IF NOT EXISTS guru_quarters (
+                guru_cik TEXT NOT NULL,
+                period TEXT NOT NULL,
+                total_value REAL,
+                positions INTEGER,
+                complete INTEGER,
+                has_prior INTEGER,
+                accessions TEXT,
+                filed TEXT,
+                computed_at TEXT NOT NULL,
+                PRIMARY KEY (guru_cik, period)
+            );
+            -- One row per position of the quarter (put_call '' for shares and principal amounts, else 'Put' or
+            -- 'Call') with its change from the quarter before (action NULL without it), and a 'sold_out' row, its
+            -- shares, value and weight NULL, for each position of the quarter before that's gone.
+            CREATE TABLE IF NOT EXISTS guru_positions (
+                guru_cik TEXT NOT NULL,
+                period TEXT NOT NULL,
+                security TEXT,
+                put_call TEXT NOT NULL,
+                ticker TEXT,
+                cusips TEXT,
+                issuer TEXT,
+                title_of_class TEXT,
+                share_type TEXT,
+                shares REAL,
+                value_usd REAL,
+                weight REAL,
+                action TEXT,
+                shares_before REAL,
+                value_before REAL,
+                split_factor REAL,
+                change_pct REAL,
+                PRIMARY KEY (guru_cik, period, security, put_call)
+            );
+            CREATE INDEX IF NOT EXISTS idx_guru_positions_ticker ON guru_positions (ticker);
+            CREATE INDEX IF NOT EXISTS idx_guru_positions_guru ON guru_positions (guru_cik, period);
+            """
+        )
+        # The market data (Milestone 4; docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md, "The
+        # market data"): one row per series and date, the series named by source ("fred:NCBEILQ027S", "fred:GDP",
+        # "shiller:price", "shiller:dividend", "shiller:earnings", "shiller:cpi", "shiller:cape", "ust:1m" ...
+        # "ust:30y"), each replaced when its source is fetched (whole, the Treasury's from the run's first year on);
+        # and each source's latest fetch ("fred:<ID>", "shiller", "treasury"): its url (Shiller's workbook link, the
+        # Treasury's latest year), the rows it stored and when its answer was fetched.
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS market_series (
+                series TEXT NOT NULL,
+                date TEXT NOT NULL,
+                value REAL NOT NULL,
+                PRIMARY KEY (series, date)
+            );
+            CREATE TABLE IF NOT EXISTS market_fetches (
+                source TEXT PRIMARY KEY,
+                url TEXT,
+                rows INTEGER,
+                fetched_at TEXT NOT NULL
+            );
+            """
+        )
+        # ``stock-data refresh``'s log (Milestone 5; docs/superpowers/specs/2026-10-25-universe-automation-design.md,
+        # "stock-data refresh"): one row per step and run, ok 1 or 0 for a step that ran, NULL for one skipped, its
+        # summary as JSON. A step is skipped while it succeeded within its period.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS refresh_log (id INTEGER PRIMARY KEY, step TEXT NOT NULL, "
+            "started_at TEXT NOT NULL, finished_at TEXT NOT NULL, ok INTEGER, summary TEXT)")
 
     @staticmethod
     def _ensure_columns(conn: sqlite3.Connection, table: str, columns: Dict[str, str]) -> None:
@@ -363,6 +718,7 @@ class SQLiteStore:
                 "sector_class": "TEXT", "fiscal_year_end": "TEXT",
                 "description": "TEXT", "address": "TEXT",
                 "hq_city": "TEXT", "hq_state": "TEXT",
+                **COMPANY_SIC_COLUMNS,
             },
             "financials_annual": {"calendar_year": "INTEGER",
                                    **{c: "REAL" for c in _CANONICAL_COLUMNS}},
@@ -373,12 +729,16 @@ class SQLiteStore:
             "financials_ttm": {"fiscal_year": "INTEGER", "calendar_year": "INTEGER",
                                "calendar_quarter": "INTEGER",
                                **{c: "REAL" for c in _CANONICAL_COLUMNS}},
-            "financials_annual_vintages": {"calendar_year": "INTEGER",
+            # Each figure's tag (BUG-271): NULL in a vintage stored before the column, which the as-of view
+            # reads as it did, by filing date alone, until the next collection.
+            "financials_annual_vintages": {"calendar_year": "INTEGER", "source_tags": "TEXT",
                                             **{c: "REAL" for c in _CANONICAL_COLUMNS}},
             "metrics_annual": {c: "REAL" for c in _METRIC_COLUMNS},
             "market_snapshots": {**{c: "REAL" for c in _SNAPSHOT_COLUMNS},
                                  **{c: "TEXT" for c in _SNAPSHOT_TEXT_COLUMNS}},
-            "collection_runs": {"warnings": "TEXT"},
+            # What a run's SEC read lacked (BUG-251, BUG-279): NULL in every run stored before the column, which
+            # reads as complete, as it did.
+            "collection_runs": {"warnings": "TEXT", "incomplete": "TEXT"},
         }
         for table, columns in expected.items():
             self._ensure_columns(conn, table, columns)
@@ -426,17 +786,21 @@ class SQLiteStore:
 
     @staticmethod
     def _upsert(conn: sqlite3.Connection, table: str, keys: Sequence[str],
-                row: Dict[str, Any], keep_existing: bool = False) -> None:
+                row: Dict[str, Any], keep_existing: bool = False, fill_only: bool = False) -> None:
         """Insert or update ``row`` in ``table`` keyed on ``keys``.
 
         With ``keep_existing``, a NULL in ``row`` leaves the stored value as it is: a
-        run that didn't get a field (a failed fetch) mustn't erase it.
+        run that didn't get a field (a failed fetch) mustn't erase it. With ``fill_only``,
+        every stored value stays and ``row`` fills only the NULL ones: a run that can't
+        speak for what's stored (a successor's whose predecessor wasn't read, BUG-179)
+        adds rows and fills gaps.
         """
         columns = list(row.keys())
         placeholders = ", ".join("?" for _ in columns)
         col_list = ", ".join(f'"{c}"' for c in columns)
         updates = ", ".join(
-            f'"{c}"=COALESCE(excluded."{c}", "{c}")' if keep_existing else f'"{c}"=excluded."{c}"'
+            f'"{c}"=COALESCE("{c}", excluded."{c}")' if fill_only
+            else f'"{c}"=COALESCE(excluded."{c}", "{c}")' if keep_existing else f'"{c}"=excluded."{c}"'
             for c in columns if c not in keys
         )
         conflict = ", ".join(f'"{k}"' for k in keys)
@@ -447,9 +811,28 @@ class SQLiteStore:
         conn.execute(sql, [row[c] for c in columns])
 
     @staticmethod
-    def _canonical_values(period: Dict[str, Any]) -> Dict[str, Any]:
-        """Pull only canonical numeric columns from a period dict."""
+    def _canonical_values(period: Dict[str, Any], restated: bool = False) -> Dict[str, Any]:
+        """Pull only canonical numeric columns from a period dict; *restated*, every one of
+        them, those the period lacks as NULL (BUG-029)."""
+        if restated:
+            return {c: period.get(c) for c in _CANONICAL_COLUMNS}
         return {c: period.get(c) for c in _CANONICAL_COLUMNS if c in period}
+
+    @staticmethod
+    def _figure_tags(period: Dict[str, Any]) -> Optional[str]:
+        """The tag each canonical figure of *period* was read from (its ``_source_tags``: a us-gaap tag, "derived",
+        "rescaled x1000"), as JSON; None without any. The as-of view ranks a vintage's figure by it (BUG-271)."""
+        tags = period.get("_source_tags") or {}
+        kept = {c: tags[c] for c in _CANONICAL_COLUMNS if period.get(c) is not None and c in tags}
+        return json.dumps(kept, sort_keys=True) if kept else None
+
+    @staticmethod
+    def _stored_year(conn: sqlite3.Connection, ticker: str, fiscal_year: int) -> Dict[str, Any]:
+        """*ticker*'s stored ``financials_annual`` row for *fiscal_year* (one the run has just written), as a
+        dict of its columns."""
+        cur = conn.execute("SELECT * FROM financials_annual WHERE ticker = ? AND fiscal_year = ?",
+                           (ticker, fiscal_year))
+        return dict(zip([d[0] for d in cur.description], cur.fetchone()))
 
     @staticmethod
     def _first(rec: Dict[str, Any], *keys: str) -> Any:
@@ -468,24 +851,89 @@ class SQLiteStore:
     # ---- public API -------------------------------------------------------
 
     def export(self, data: List[StockData]) -> Optional[Path]:
-        """Write a batch of StockData rows; returns the DB path."""
+        """Write a batch of StockData rows (``write_batch``); returns the DB path when it stored any of them, else
+        None."""
+        result = self.write_batch(data)
+        return result.path if result.stored else None
+
+    def write_batch(self, data: List[StockData]) -> StoreResult:
+        """Write *data* in one transaction, each stock in its own savepoint (code review 19, I-1).
+
+        A stock whose write fails is rolled back to its savepoint alone, logged with its ticker and the error, and
+        recorded on its StockData as an error ("SQLite write failed: ..."); the others are committed. The schema, its
+        migration and the write lock (``BEGIN IMMEDIATE``, held for the batch) come first. When one of them fails (a
+        locked database), the commit fails, or SQLite rolls the whole transaction back (a full disk), none of the batch
+        is stored: that is logged as the export's failure and recorded on each stock, and the result's *error* says
+        why. Anything else raised (Ctrl+C) rolls the batch back and propagates.
+        """
+        result = StoreResult(path=self.db_path)
         if not data:
-            return None
+            return result
         try:
             conn = self._connect()
+        except Exception as e:
+            return self._batch_failed(result, data, e)
+        try:
             try:
                 self._create_schema(conn)
                 self._migrate(conn)
-                for stock in data:
+                if conn.in_transaction:
+                    conn.commit()
+                conn.execute("BEGIN IMMEDIATE")
+            except Exception as e:
+                return self._batch_failed(result, data, e)
+            for stock in data:
+                try:
+                    conn.execute("SAVEPOINT stock")
                     self._write_stock(conn, stock)
+                    conn.execute("RELEASE SAVEPOINT stock")
+                except Exception as e:
+                    if not self._rolled_back_to_savepoint(conn):
+                        return self._batch_failed(result, data, e)
+                    result.failed[stock.ticker] = str(e)
+                    stock.add_error(f"SQLite write failed: {e}")
+                    self.logger.error(f"SQLite write failed for {stock.ticker}: {e} (its rows rolled back; the "
+                                      "batch's others go on)")
+                    continue
+                result.stored.append(stock.ticker)
+            try:
                 conn.commit()
-            finally:
-                conn.close()
-            self.logger.info(f"Wrote {len(data)} tickers to {self.db_path}")
-            return self.db_path
-        except Exception as e:
-            self.logger.error(f"Error writing SQLite store: {e}")
-            return None
+            except Exception as e:
+                return self._batch_failed(result, data, e)
+        finally:
+            conn.close()  # uncommitted, the transaction is rolled back
+        self.logger.info(f"Wrote {len(result.stored)} tickers to {self.db_path}"
+                         + (f"; not stored: {', '.join(result.failed)}" if result.failed else ""))
+        return result
+
+    @staticmethod
+    def _rolled_back_to_savepoint(conn: sqlite3.Connection) -> bool:
+        """Undo a failed stock's writes, back to its savepoint, keeping the batch's others. False when SQLite has
+        rolled the whole transaction back already (a full disk, an I/O error), the batch's earlier stocks with it."""
+        if not conn.in_transaction:
+            return False
+        try:
+            conn.execute("ROLLBACK TO SAVEPOINT stock")
+            conn.execute("RELEASE SAVEPOINT stock")
+        except sqlite3.Error:
+            return False
+        return True
+
+    def _batch_failed(self, result: StoreResult, data: List[StockData], error: Exception) -> StoreResult:
+        """The export of *data* failed as a whole with *error*: none of it is stored. Each stock that hadn't failed on
+        its own records the error, and the result says why."""
+        why = str(error)
+        own = result.failed
+        result.error, result.stored, result.failed = why, [], {}
+        for stock in data:
+            if stock.ticker in own:
+                result.failed[stock.ticker] = own[stock.ticker]
+            else:
+                result.failed[stock.ticker] = why
+                stock.add_error(f"SQLite write failed: {why}")
+        self.logger.error(f"Error writing SQLite store: {why}; none of the {len(data)} tickers was stored "
+                          f"({', '.join(result.failed)})")
+        return result
 
     def _write_stock(self, conn: sqlite3.Connection, stock: StockData) -> None:
         collected_at = (
@@ -495,8 +943,10 @@ class SQLiteStore:
         )
         quality_score = (stock.data_quality or {}).get("score")
         info = stock.company_info or {}
+        submissions = stock.sec_submissions or {}
 
-        # companies
+        # companies: the SEC's SIC code and description from the submissions feed (Milestone 5), NULL where the feed
+        # has none; a run without the feed (a failed request) keeps the stored ones, as every field here.
         self._upsert(conn, "companies", ["ticker"], {
             "ticker": stock.ticker,
             "cik": stock.cik,
@@ -507,13 +957,28 @@ class SQLiteStore:
             "country": info.get("country"),
             "employees": info.get("full_time_employees"),
             "website": info.get("website"),
-            "fiscal_year_end": (stock.sec_submissions or {}).get("fiscal_year_end"),
+            "fiscal_year_end": submissions.get("fiscal_year_end"),
             "description": info.get("description") or info.get("longBusinessSummary"),
             "address": info.get("address") or info.get("address1"),
             "hq_city": info.get("hq_city") or info.get("city"),
             "hq_state": info.get("hq_state") or info.get("state"),
             "updated_at": collected_at,
+            "sic": normalize_sic(submissions.get("sic")),
+            "sic_description": normalize_sic_description(submissions.get("sic_description")),
         }, keep_existing=True)
+
+        # A run that parsed the filer's annual record restates every period it gives: a field its
+        # parse leaves empty is cleared, not kept from an earlier parse (BUG-029). A filer with no
+        # 10-K yet (XOM's new holding company, SPCX) gives a few quarters only, which can't speak
+        # for what a predecessor filed, so its run only adds. A successor's run whose predecessor's
+        # filings couldn't be read (a 503, a 404) speaks for nothing they hold: its own reports give
+        # the years before them as their comparatives do (BLK's balance sheets start at 2023-12-31),
+        # some figures from another tag (BLK's and XOM's equity with the noncontrolling interests)
+        # and quarters without their fiscal quarter. So it only fills, in every table its SEC record
+        # writes: a period or a figure not stored yet, never one stored, until a run reads both
+        # filers again (BUG-179).
+        restated = bool(stock.financials_annual)
+        fill = bool(stock.predecessor_error)
 
         # financials_annual + metrics_annual
         historical = (stock.calculated_metrics or {}).get("historical", {})
@@ -527,10 +992,18 @@ class SQLiteStore:
                 "form": period.get("form"),
                 "quality_score": quality_score,
             }
-            row.update(self._canonical_values(period))
-            self._upsert(conn, "financials_annual", ["ticker", "fiscal_year"], row)
+            row.update(self._canonical_values(period, restated))
+            self._upsert(conn, "financials_annual", ["ticker", "fiscal_year"], row, fill_only=fill)
 
-            year_metrics = historical.get(year) or {}
+            if fill:
+                # A year's metrics are its own figures' (calculate_all reads the one year), so a run
+                # that only fills computes them on the year as stored, the figures it kept beside
+                # those it filled in, not on its own part of the year (BUG-179).
+                year_metrics = CalculatedMetrics(self.logger).calculate_historical(
+                    {year: self._stored_year(conn, stock.ticker, row["fiscal_year"])},
+                    sector=stock.sector_class)[year]
+            else:
+                year_metrics = historical.get(year) or {}
             if year_metrics and "error" not in year_metrics:
                 mrow = {"ticker": stock.ticker,
                         "fiscal_year": row["fiscal_year"]}
@@ -550,8 +1023,8 @@ class SQLiteStore:
                 "filed_date": period.get("filed_date"),
                 "form": period.get("form"),
             }
-            row.update(self._canonical_values(period))
-            self._upsert(conn, "financials_quarterly", ["ticker", "period_end"], row)
+            row.update(self._canonical_values(period, restated))
+            self._upsert(conn, "financials_quarterly", ["ticker", "period_end"], row, fill_only=fill)
 
         # financials_ttm (trailing-twelve-month series)
         for period_end, period in (stock.financials_ttm or {}).items():
@@ -562,8 +1035,8 @@ class SQLiteStore:
                 "calendar_year": period.get("calendar_year"),
                 "calendar_quarter": period.get("calendar_quarter"),
             }
-            row.update(self._canonical_values(period))
-            self._upsert(conn, "financials_ttm", ["ticker", "period_end"], row)
+            row.update(self._canonical_values(period, restated))
+            self._upsert(conn, "financials_ttm", ["ticker", "period_end"], row, fill_only=fill)
 
         # financials_annual_vintages (point-in-time: one row per filing/accession)
         for fy, by_accn in (stock.financials_annual_vintages or {}).items():
@@ -576,10 +1049,11 @@ class SQLiteStore:
                     "period_end": period.get("period_end"),
                     "form": period.get("form"),
                     "calendar_year": period.get("calendar_year"),
+                    "source_tags": self._figure_tags(period),
                 }
-                vrow.update(self._canonical_values(period))
+                vrow.update(self._canonical_values(period, restated))
                 self._upsert(conn, "financials_annual_vintages",
-                             ["ticker", "fiscal_year", "accn"], vrow)
+                             ["ticker", "fiscal_year", "accn"], vrow, fill_only=fill)
 
         # market_snapshots (point-in-time)
         md = stock.market_data or {}
@@ -625,9 +1099,13 @@ class SQLiteStore:
             "quality_score": quality_score,
             # The text too: the web app shows why a record came back empty.
             "warnings": json.dumps(stock.warnings),
+            # What its SEC read lacked, for the refresh to collect the company again (BUG-251, BUG-279).
+            "incomplete": _incomplete(stock),
         })
 
-        # unmapped_facts (tags not yet in the canonical registry; tag is a row value)
+        # unmapped_facts (tags not yet in the canonical registry; tag is a row value): each tag's
+        # latest material fact, which a run without the predecessor's facts can give as an older one
+        # of the successor's, so that run only fills here too (BUG-179)
         for fact in (stock.unmapped_facts or []):
             self._upsert(conn, "unmapped_facts", ["ticker", "tag"], {
                 "ticker": stock.ticker,
@@ -638,7 +1116,7 @@ class SQLiteStore:
                 "value": fact.get("value"),
                 "form": fact.get("form"),
                 "collected_at": collected_at,
-            })
+            }, fill_only=fill)
 
         # holders (replace-per-run: institutional + mutualfund)
         self._write_holders(conn, stock.ticker, collected_at, shareholders)
@@ -819,6 +1297,55 @@ class SQLiteStore:
                 "ratio": rec.get("ratio"),
             })
 
+    def replace_price_bars_from(self, ticker: str, start: str, bars: List[Dict[str, Any]]) -> Tuple[int, int]:
+        """Replace *ticker*'s daily bars dated *start* (ISO) or later with *bars*, each dated *start* or later, in
+        one transaction: a failure changes nothing. The bars are market prices as a collection stores them
+        (``_write_price_bars``: ``dividend_adjusted`` NULL). ``stock-data refresh``'s bars step: the last stored bar
+        may have been partial, so it is replaced with the days since. Returns the rows removed and written; raises
+        ValueError for a bar before *start* (none is written) and sqlite3.Error for a failed write."""
+        early = [str(bar.get("date")) for bar in bars if not bar.get("date") or str(bar["date"])[:10] < start[:10]]
+        if early:
+            raise ValueError(f"{ticker}: bars before {start} can't replace the bars from {start} on: "
+                             f"{', '.join(early)}")
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            removed = conn.execute("DELETE FROM price_bars WHERE ticker = ? AND date >= ?", (ticker, start)).rowcount
+            self._write_price_bars(conn, ticker, bars)
+            conn.commit()
+        finally:
+            conn.close()  # uncommitted, the transaction is rolled back
+        return removed, len(bars)
+
+    def record_refresh_step(self, step: str, started_at: str, finished_at: str, ok: Optional[bool],
+                            summary: Dict[str, Any]) -> None:
+        """Append a ``refresh_log`` row: a ``stock-data refresh`` run's *step*, when it started and finished, *ok*
+        (True or False for a step that ran, None for one skipped) and its *summary* as JSON."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            conn.execute("INSERT INTO refresh_log (step, started_at, finished_at, ok, summary) VALUES (?, ?, ?, ?, ?)",
+                         (step, started_at, finished_at, None if ok is None else int(ok),
+                          json.dumps(summary, default=str)))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def last_refresh_success(self, step: str) -> Optional[str]:
+        """When *step* last finished ok (``refresh_log``'s latest ``finished_at`` with ok 1), read through a
+        read-only connection; None without one, or without the table."""
+        try:
+            conn = sqlite3.connect(read_only_uri(self.db_path), uri=True)
+        except sqlite3.Error:
+            return None  # nothing stored yet
+        try:
+            row = conn.execute("SELECT max(finished_at) FROM refresh_log WHERE step = ? AND ok = 1", (step,)).fetchone()
+        except sqlite3.OperationalError:  # a database from before the refresh's log
+            return None
+        finally:
+            conn.close()
+        return row[0] if row else None
+
     def splits_since_collection(self, ticker: str, splits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Of the factors since the last collection (``factors_since_collection``), those
         a refresh can't put right: a share split (a simple ratio) or a factor of 3:2 or
@@ -881,13 +1408,21 @@ class SQLiteStore:
                 or (str(s["date"])[:10] not in known and str(s["date"])[:10] >= min(starts))]
 
     def upsert_quote(self, ticker: str, quote: Dict[str, Any], collected_at: str,
-                     splits: Optional[List[Dict[str, Any]]] = None) -> None:
+                     splits: Optional[List[Dict[str, Any]]] = None,
+                     dividends: Optional[Dict[str, Any]] = None) -> None:
         """Write ONE ``market_snapshots`` row + ONE ``analyst_snapshots`` row from
         a quote-only fetch (``YahooHandler.fetch_quote``) — nothing else, but for
         *splits*: Yahoo's split history, stored with the price as a collection
         stores it, which the quote job passes when it holds a stock dividend or a
         spin-off factor the stored valuations aren't on (the price is on its basis)
-        and then values the ticker on it (BUG-128).
+        and then values the ticker on it (BUG-128); and *dividends*: Yahoo's
+        payments (``fetch_quote``'s ``dividend_history``), which every saved
+        refresh passes and which are upserted into ``dividend_events`` as a
+        collection's are, served on the collection's rule for a run without bars
+        (``_served_day`` on the quote's split history). DDM's trailing year ends on
+        the latest snapshot's day, this one's, so without them it would miss every
+        payment since the last collection (BUG-160, BUG-258). A failed dividend
+        request carries no payments and writes none.
 
         ``market_snapshots``' primary key is ``(ticker, collected_at)``, so
         this INSERTS a new row rather than overwriting the snapshot from the
@@ -949,6 +1484,12 @@ class SQLiteStore:
                                 snapshot[col] = prev.get(col)
                     self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)
                     self._write_split_events(conn, ticker, splits or [])
+                    # Yahoo's payments, from the same chart request, served on the refresh's day by the
+                    # collection's rule (_served_day: the latest split Yahoo lists, else the day before its own)
+                    # (BUG-160, BUG-258).
+                    if dividends:
+                        self._write_dividend_events(conn, ticker, dividends, _served_day(
+                            StockData(ticker=ticker, splits=list(quote.get("splits") or [])), collected_at))
 
                 self._write_analyst_snapshot(
                     conn, ticker, collected_at, quote.get("analyst_estimates") or {}
@@ -1041,6 +1582,281 @@ class SQLiteStore:
                 "median_bull": summary["median_bull"],
                 "computed_at": computed_at,
             })
+            conn.commit()
+        finally:
+            conn.close()
+
+    def export_quality_scores(self, ticker: str, row: Dict[str, Any], per_share: List[Dict[str, Any]],
+                              signs: Sequence[Any], computed_at: str) -> None:
+        """Replace one ticker's quality scores, per-share rows and warning signs, in one transaction. Its
+        ranks stay empty until the rank pass (``update_quality_ranks``)."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            # A table from before the scores' own debt / EBITDA (BUG-190).
+            self._ensure_columns(conn, "quality_scores", {"debt_to_ebitda": "REAL", "fcf_ps_cagr_3y": "REAL",
+                                                          "fcf_ps_cagr_10y": "REAL", "book_ps_cagr_3y": "REAL",
+                                                          "book_ps_cagr_10y": "REAL"})  # BUG-190, BUG-194
+            for table in ("per_share_annual", "warning_signs", "quality_scores"):
+                conn.execute(f"DELETE FROM {table} WHERE ticker = ?", (ticker,))
+            conn.executemany(
+                "INSERT INTO per_share_annual (ticker, fiscal_year, revenue_ps, eps, ebitda_ps, fcf_ps, book_ps) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(ticker, r["fiscal_year"], r.get("revenue_ps"), r.get("eps"), r.get("ebitda_ps"), r.get("fcf_ps"),
+                  r.get("book_ps")) for r in per_share])
+            values = {**row, "ticker": ticker, "computed_at": computed_at}
+            columns = [c for c in QUALITY_COLUMNS if c in values]
+            conn.execute(
+                f"INSERT INTO quality_scores ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
+                [values[c] for c in columns])
+            conn.executemany(
+                "INSERT INTO warning_signs (ticker, code, severity, message, value, threshold, computed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(ticker, s.code, s.severity, s.message, s.value, s.threshold, computed_at) for s in signs])
+            conn.commit()
+        finally:
+            conn.close()
+
+    def export_insider_filings(self, ticker: str, filings: Sequence[Any], collected_at: str,
+                               left_out: Sequence[str] = ()) -> None:
+        """Store one company's Form 4 filings, ``(FilingRef, Form4)`` pairs, in one transaction.
+
+        Each filing's rows are replaced by accession, so a filing an earlier run stored and this one couldn't
+        fetch stays; the company's rows of the accessions *left_out* (the collector's: another issuer's filings,
+        say) are removed. Then the company's amendments are worked out again from all its stored filings
+        (``insiders.supersessions``): each filing amended notes its latest 4/A (``insider_filings.superseded_by``),
+        and each trade a 4/A restates names it (``insider_trades.superseded_by``). And each of its non-derivative
+        trades' prices is checked against the stock's latest close on or before the trade's date
+        (``insiders.price_suspect``: ``insider_trades.price_suspect``), so a close stored since is used too."""
+        from ..ownership.insiders import ceo_or_cfo, price_suspect, supersessions
+
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            self._ensure_columns(conn, "insider_filings", {"is_ceo_cfo": "INTEGER"})
+            # A table from before a trade had its own amendment note, or its price check.
+            self._ensure_columns(conn, "insider_trades", {"superseded_by": "TEXT", "price_suspect": "INTEGER"})
+            for accession in left_out:
+                conn.execute("DELETE FROM insider_trades WHERE accession = ? AND ticker = ?", (accession, ticker))
+                conn.execute("DELETE FROM insider_filings WHERE accession = ? AND ticker = ?", (accession, ticker))
+            for ref, filing in filings:
+                conn.execute("DELETE FROM insider_trades WHERE accession = ?", (ref.accession,))
+                conn.execute("DELETE FROM insider_filings WHERE accession = ?", (ref.accession,))
+                conn.executemany(
+                    "INSERT INTO insider_filings (accession, owner_cik, ticker, form, filed_date, period_of_report, "
+                    "original_filed, owner_name, is_director, is_officer, officer_title, is_ten_percent, is_other, "
+                    "aff10b5one, is_ceo_cfo, collected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(ref.accession, owner.cik or "", ticker, filing.form or ref.form, ref.filed,
+                      filing.period_of_report, filing.original_filed, owner.name, int(owner.is_director),
+                      int(owner.is_officer), owner.officer_title, int(owner.is_ten_percent), int(owner.is_other),
+                      None if filing.aff10b5one is None else int(filing.aff10b5one),
+                      int(ceo_or_cfo(owner.officer_title)), collected_at)
+                     for owner in filing.owners])
+                conn.executemany(
+                    "INSERT INTO insider_trades (accession, seq, ticker, kind, security_title, date, code, shares, "
+                    "price, price_footnotes, acquired_disposed, owned_after, direct_indirect, nature_of_ownership, "
+                    "exercise_price, underlying_title, underlying_shares) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(ref.accession, t.seq, ticker, t.table, t.security_title, t.date, t.code, t.shares, t.price,
+                      ",".join(t.price_footnotes) or None, t.acquired_disposed, t.owned_after, t.direct_indirect,
+                      t.nature_of_ownership, t.exercise_price, t.underlying_title, t.underlying_shares)
+                     for t in filing.trades])
+            filing_columns = ("accession", "owner_cik", "form", "filed_date", "period_of_report", "original_filed")
+            trade_columns = ("accession", "seq", "kind", "code", "security_title", "date", "shares", "price")
+            amended_by, restated = supersessions(
+                [dict(zip(filing_columns, row)) for row in conn.execute(
+                    f"SELECT {', '.join(filing_columns)} FROM insider_filings WHERE ticker = ?", (ticker,))],
+                [dict(zip(trade_columns, row)) for row in conn.execute(
+                    f"SELECT {', '.join(trade_columns)} FROM insider_trades WHERE ticker = ?", (ticker,))])
+            conn.execute("UPDATE insider_filings SET superseded_by = NULL WHERE ticker = ?", (ticker,))
+            conn.execute("UPDATE insider_trades SET superseded_by = NULL WHERE ticker = ?", (ticker,))
+            conn.executemany("UPDATE insider_filings SET superseded_by = ? WHERE accession = ? AND ticker = ?",
+                             [(amendment, accession, ticker) for accession, amendment in amended_by.items()])
+            conn.executemany(
+                "UPDATE insider_trades SET superseded_by = ? WHERE accession = ? AND seq = ? AND ticker = ?",
+                [(amendment, accession, seq, ticker) for (accession, seq), amendment in restated.items()])
+            # Each of the company's trades' prices against the stock's latest close on or before the trade's date
+            # (insiders.price_suspect). A derivative's price is its own, not the stock's: unchecked (NULL).
+            bars = conn.execute("SELECT date, close FROM price_bars WHERE ticker = ? AND close IS NOT NULL "
+                                "ORDER BY date", (ticker,)).fetchall()
+            days = [day for day, _ in bars]
+            flags = []
+            trades = conn.execute("SELECT accession, seq, kind, date, price FROM insider_trades WHERE ticker = ?",
+                                  (ticker,)).fetchall()
+            for accession, seq, kind, day, price in trades:
+                at = bisect_right(days, day) if day else 0  # the latest close on or before the trade's date
+                suspect = price_suspect(price, bars[at - 1][1] if at else None) if kind == "nonderivative" else None
+                flags.append((None if suspect is None else int(suspect), accession, seq, ticker))
+            conn.executemany(
+                "UPDATE insider_trades SET price_suspect = ? WHERE accession = ? AND seq = ? AND ticker = ?", flags)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def export_guru_filings(self, guru: Any, filings: Sequence[Any], collected_at: str) -> None:
+        """Store one guru's 13F filings, ``(FilingRef, ThirteenF)`` pairs, in one transaction.
+
+        The guru's filers are upserted from the curated list (``ownership.gurus``), one row per filer CIK with
+        that filer's own name. Each
+        filing's row and entries are replaced by accession, so a filing an earlier run stored and this one couldn't
+        fetch stays. The filing's own form, filing date and period are stored, else the feed's; values in dollars by
+        the units the filing was read in (*multiplier*), the cover's totals beside the parsed ones."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            # A table from before the units were read from the holdings' prices.
+            self._ensure_columns(conn, "guru_filings", {"multiplier": "INTEGER"})
+            for cik, name in guru.filers:
+                self._upsert(conn, "guru_filers", ["filer_cik"], {
+                    "filer_cik": cik, "guru_cik": guru.cik, "name": name, "manager": guru.manager})
+            for ref, filing in filings:
+                conn.execute("DELETE FROM guru_holdings WHERE accession = ?", (ref.accession,))
+                conn.execute("DELETE FROM guru_filings WHERE accession = ?", (ref.accession,))
+                conn.execute(
+                    "INSERT INTO guru_filings (accession, guru_cik, filer_cik, form, period, filed, report_type, "
+                    "amendment_type, entry_total, value_total, rows, rows_value, checksum_ok, confidential_omitted, "
+                    "collected_at, multiplier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (ref.accession, guru.cik, ref.cik, filing.form or ref.form, filing.period or ref.report_date,
+                     filing.filed or ref.filed, filing.report_type, filing.amendment_type, filing.entry_total,
+                     filing.dollars(filing.value_total), filing.rows, filing.dollars(filing.rows_value),
+                     int(filing.checksum_ok),
+                     None if filing.confidential_omitted is None else int(filing.confidential_omitted), collected_at,
+                     filing.multiplier))
+                conn.executemany(
+                    "INSERT INTO guru_holdings (accession, row, guru_cik, cusip, issuer, title_of_class, value_usd, "
+                    "shares, share_type, put_call, discretion) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(ref.accession, h.row, guru.cik, h.cusip, h.issuer, h.title_of_class, h.value_usd, h.shares,
+                      h.share_type, h.put_call, h.discretion) for h in filing.holdings])
+            conn.commit()
+        finally:
+            conn.close()
+
+    def export_cusip_map(self, rows: Sequence[Dict[str, Any]]) -> None:
+        """Upsert ``cusip_map`` rows (cusip, ticker, name, source, security_type, mapped_at), in one transaction: a
+        row replaces its CUSIP's earlier one."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            for row in rows:
+                self._upsert(conn, "cusip_map", ["cusip"], {column: row.get(column) for column in (
+                    "cusip", "ticker", "name", "source", "security_type", "mapped_at")})
+            conn.commit()
+        finally:
+            conn.close()
+
+    def export_guru_positions(self, guru: "GuruQuarters", computed_at: str) -> int:
+        """Replace one guru's quarters and positions (``guru_quarters``, ``guru_positions``) with *guru*'s, as
+        ``ownership.portfolio.load_guru`` builds them, in one transaction. Returns the position rows written.
+
+        Each quarter's row: its total value, the positions it holds, whether every filer's report stands, whether the
+        quarter before is there (so its changes exist), its filings as a JSON list and the latest of their filing
+        dates. Each position held, put/call '' for shares and principal amounts, with its change from the quarter
+        before (none without it); then a 'sold_out' row for each position of the quarter before that's gone, without
+        shares, value or weight."""
+        written = 0
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            conn.execute("DELETE FROM guru_positions WHERE guru_cik = ?", (guru.guru_cik,))
+            conn.execute("DELETE FROM guru_quarters WHERE guru_cik = ?", (guru.guru_cik,))
+            for period, quarter in guru.quarters.items():
+                changes = guru.changes.get(period)
+                conn.execute(
+                    "INSERT INTO guru_quarters (guru_cik, period, total_value, positions, complete, has_prior, "
+                    "accessions, filed, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (guru.guru_cik, period, quarter.total_value, len(quarter.positions), int(quarter.complete),
+                     int(changes is not None), json.dumps(list(quarter.accessions)), quarter.filed, computed_at))
+                change_of = {(c.security, c.put_call): c for c in changes or ()}
+                rows = [_position_row(guru.guru_cik, period, held, change_of.get(key))
+                        for key, held in quarter.positions.items()]
+                rows += [_position_row(guru.guru_cik, period, None, c) for c in changes or ()
+                         if c.action == "sold_out"]
+                conn.executemany(
+                    f"INSERT INTO guru_positions ({', '.join(_GURU_POSITION_COLUMNS)}) "
+                    f"VALUES ({', '.join('?' * len(_GURU_POSITION_COLUMNS))})", rows)
+                written += len(rows)
+            conn.commit()
+        finally:
+            conn.close()
+        return written
+
+    def update_quality_ranks(self, ranks: Dict[str, Dict[str, Any]], ranked_at: str) -> None:
+        """Write the rank pass's ranks, composite and Magic Formula rank, and the industry ones (INDUSTRY_COLUMNS,
+        NULL where a ticker's result has none), for every ticker, in one transaction."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            # A table from before the industry ranks (Milestone 5).
+            self._ensure_columns(conn, "quality_scores", {c: _QUALITY_TYPES.get(c, "REAL") for c in INDUSTRY_COLUMNS})
+            assignments = ", ".join(f"{c} = ?" for c in RANK_COLUMNS)
+            conn.executemany(
+                f"UPDATE quality_scores SET {assignments}, ranked_at = ? WHERE ticker = ?",
+                [[result.get(c) for c in RANK_COLUMNS] + [ranked_at, ticker] for ticker, result in ranks.items()])
+            conn.commit()
+        finally:
+            conn.close()
+
+    def export_valuation_history(self, ticker: str, result: "HistoryResult", computed_at: str) -> None:
+        """Replace one ticker's valuation history and ranges, in one transaction."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            conn.execute("DELETE FROM valuation_history WHERE ticker = ?", (ticker,))
+            conn.execute("DELETE FROM valuation_ranges WHERE ticker = ?", (ticker,))
+            conn.executemany(
+                "INSERT INTO valuation_history (ticker, date, close, market_cap, enterprise_value, "
+                "ttm_period_end, pe, ps, pb, pfcf, ev_ebitda, pffo, div_yield, fair_value, fair_value_n) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(ticker, row.date, row.close, row.market_cap, row.enterprise_value, row.ttm_period_end,
+                  *(row.multiples.get(m) for m in ("pe", "ps", "pb", "pfcf", "ev_ebitda", "pffo", "div_yield")),
+                  row.fair_value, row.fair_value_n) for row in result.rows])
+            conn.executemany(
+                "INSERT INTO valuation_ranges (ticker, metric, applicable, na_reason, as_of, window_start, "
+                "n_months, current_value, pct_rank, min, p25, median, p75, max, implied_value, in_fair_value, "
+                "n_metrics, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(ticker, r.metric, 1 if r.applicable else 0, r.na_reason, r.as_of, r.window_start, r.n_months,
+                  r.current, r.pct_rank, r.min, r.p25, r.median, r.p75, r.max, r.implied_value,
+                  1 if r.in_fair_value else 0, r.n_metrics, computed_at) for r in result.ranges])
+            conn.commit()
+        finally:
+            conn.close()
+
+    def export_valuation_indicators(self, ticker: str, results: "List[IndicatorResult]", computed_at: str) -> None:
+        """Replace one ticker's valuation indicators, in one transaction."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            conn.execute("DELETE FROM valuation_indicators WHERE ticker = ?", (ticker,))
+            conn.executemany(
+                "INSERT INTO valuation_indicators (ticker, indicator, applicable, na_reason, value_bear, value_base, "
+                "value_bull, unit, assumptions, basis_fiscal_year, computed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(ticker, r.indicator, 1 if r.applicable else 0, r.na_reason, r.value_bear, r.value_base,
+                  r.value_bull, r.unit, json.dumps(r.assumptions), r.basis_fiscal_year, computed_at)
+                 for r in results])
+            conn.commit()
+        finally:
+            conn.close()
+
+    def export_market_series(self, source: str, series: Dict[str, List[Tuple[str, float]]], url: Optional[str],
+                             fetched_at: str, replace_from: Optional[str] = None) -> None:
+        """Replace each of *series* (its name -> (date, value) rows) whole, or, with *replace_from* (an ISO date), only
+        its rows dated on or after that day, the earlier ones kept (the Treasury's from its first year, BUG-224); and
+        *source*'s ``market_fetches`` row (its url, the rows stored and when its answer was fetched), in one
+        transaction: a store that fails changes nothing. A series not named is left as it is."""
+        conn = self._connect()
+        try:
+            self._create_schema(conn)
+            for name, rows in series.items():
+                if replace_from is None:
+                    conn.execute("DELETE FROM market_series WHERE series = ?", (name,))
+                else:
+                    conn.execute("DELETE FROM market_series WHERE series = ? AND date >= ?", (name, replace_from))
+                conn.executemany("INSERT INTO market_series (series, date, value) VALUES (?, ?, ?)",
+                                 [(name, day, value) for day, value in rows])
+            self._upsert(conn, "market_fetches", ["source"], {
+                "source": source, "url": url, "rows": sum(len(rows) for rows in series.values()),
+                "fetched_at": fetched_at})
             conn.commit()
         finally:
             conn.close()

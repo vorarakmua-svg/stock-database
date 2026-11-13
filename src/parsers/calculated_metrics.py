@@ -247,19 +247,14 @@ class CalculatedMetrics:
 
     def _calculate_levered_fcf(self, financials: Dict[str, Any]) -> Optional[float]:
         """
-        Calculate Levered FCF = FCF - Interest Expense.
+        Calculate Levered FCF, the cash left for equity holders: OCF - CapEx.
 
-        Levered FCF represents cash available to equity holders.
+        US GAAP classifies interest paid as an operating cash flow (ASC 230), so
+        OCF is already after interest and levered FCF equals FCF. Subtracting
+        interest expense again counted it twice (BUG-169). Only us-gaap facts are
+        mapped, so IFRS's choice of a financing classification doesn't arise.
         """
-        fcf = self._calculate_fcf(financials)
-        if fcf is None:
-            return None
-
-        interest = self._get_value(financials, ["interest_expense"])
-
-        if interest is not None:
-            return fcf - abs(interest)
-        return fcf
+        return self._calculate_fcf(financials)
 
     # ========== Capital Structure Metrics ==========
 
@@ -282,7 +277,12 @@ class CalculatedMetrics:
         return None
 
     def _calculate_total_debt(self, financials: Dict[str, Any]) -> Optional[float]:
-        """Calculate Total Debt = Long-term Debt + Short-term Debt."""
+        """Calculate Total Debt = Long-term Debt + Short-term Debt + Commercial Paper.
+
+        ``commercial_paper`` is the paper the short-term debt figure doesn't hold: the parser
+        reads it as 0.0 where the short-term total on its date, DebtCurrent or else
+        ShortTermBorrowings, holds it (``xbrl_parser._current_debt_set_aside``, BUG-143, BUG-256).
+        """
         long_term = self._get_value(financials, ["long_term_debt"])
         short_term = self._get_value(financials, ["short_term_debt"])
         commercial_paper = self._get_value(financials, ["commercial_paper"])

@@ -246,3 +246,50 @@ def test_quality_page_has_canonical_field(client):
     html = r.text.lower()
     # 'revenue' is a canonical field that must appear in the fill-rate table
     assert "revenue" in html
+
+
+def _runs_db(tmp_path, **stock_fields):
+    from datetime import datetime
+
+    from src.exporters.sqlite_store import SQLiteStore
+    from src.models.stock_data import StockData
+    stock = StockData(ticker="NEE", cik="0000753308", collected_at=datetime(2026, 10, 20), **stock_fields)
+    stock.add_warning("SEC EDGAR: the companyfacts lack NEE's 10-Q of 2026-07-24")
+    SQLiteStore(tmp_path / "q.db").export([stock])
+    return tmp_path / "q.db"
+
+
+def _runs(db):
+    from fastapi.testclient import TestClient
+
+    from src.webapp import create_app
+    return TestClient(create_app(db_path=db)).get("/api/quality/runs?ticker=NEE").json()
+
+
+def test_runs_always_carry_warnings_even_on_a_database_without_the_column(tmp_path):
+    # BUG-069: rows from a database older than the column lacked the key.
+    import sqlite3
+    db = _runs_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute("ALTER TABLE collection_runs DROP COLUMN warnings")
+    conn.commit()
+    conn.close()
+    assert [row["warnings"] for row in _runs(db)] == [[]]
+
+
+def test_runs_give_what_the_sec_read_lacked_as_an_object(tmp_path):
+    # BUG-283: collection_runs.incomplete is JSON text; the API passed the text through.
+    report = {"form": "10-Q", "filed": "2026-07-24", "accession": "0000753308-26-000042"}
+    rows = _runs(_runs_db(tmp_path, missing_report=report))
+    assert rows[0]["incomplete"] == {"report": report}
+
+
+def test_the_fa_tab_shows_the_report_the_companyfacts_lack(tmp_path):
+    # BUG-283: the run's SEC-lag warning explains why the figures stop a quarter early; FA showed nothing.
+    from fastapi.testclient import TestClient
+
+    from src.webapp import create_app
+    db = _runs_db(tmp_path)
+    body = TestClient(create_app(db_path=db)).get("/ui/stocks/NEE/fa").text
+    assert "the companyfacts lack NEE&#39;s 10-Q of 2026-07-24" in body or "the companyfacts lack NEE's 10-Q" in body
+

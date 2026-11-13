@@ -1807,3 +1807,1316 @@ Gates: ruff ✓ mypy ✓ pytest 1183 passed, 1 skipped (1 known warning) | CI: p
 Commit: (this commit) chore(qa): record code review 14
 Next: the P2s oldest first: BUG-029, BUG-142, BUG-149, BUG-150, BUG-151, BUG-159, BUG-160, BUG-161. Fixes since review
 14's range (16f3005): 2 (BUG-140, BUG-141); review 15 after three more.
+
+## Iteration 100: 2026-10-21 10:06: fix (the user's request)
+Picked: BUG-029, at the user's request ("fix BUG-029 and re-run the update"), after their database's live update
+earlier today (127 tickers, 0 errors; 84 quarters and 12 fiscal years added; backup taken first) kept 500 cells the
+current parse leaves empty (`qa/evidence/update-20261021.txt`). The loop's own state file was gone by then.
+Did: measured the plain rewrite's risk first: XOM's ticker now reads a new registrant with 10-Qs only, whose parse
+would clear 143 of the predecessor's figures; so a run rewrites every column of the periods it gives only when it
+parsed an annual record, and otherwise only adds. TDD (one test RED, one guard); six mutants, each failing a test.
+A copy of the user's database re-collected offline with the fix: exactly the 500 cleared, nothing else. Then, with a
+second backup, the user's database re-collected live (127 tickers, 0 errors, 804 s): the same 500 cleared, XOM and
+SPCX untouched, none left beside a fresh parse; 8 rows of periods the parse no longer gives stay (BUG-168).
+Evidence: `qa/evidence/bug029-{red,green,mutants,realdata}.txt`, `qa/evidence/update-20261021.txt`
+Result: BUG-029 VERIFIED; BUG-168 OPEN (P3); Q6 noted (decide before XOM's holding company files a 10-K).
+Gates: ruff ✓ mypy ✓ pytest 1185 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) fix(store): a re-collection clears what its parse leaves empty
+Next: the P2s oldest first: BUG-142, BUG-149, BUG-150, BUG-151, BUG-159, BUG-160, BUG-161. Fixes since review 14's
+range (16f3005): 3 (BUG-140, BUG-141, BUG-029).
+
+## Iteration 101: 2026-10-21 10:26: decision (the user's)
+Picked: Q6, which the user decided ("XOM keep Exxon Mobil Corp history"): option (a), an explicit successor map.
+Did: `sec_handler.PREDECESSOR_CIKS` (2115436 to 34088) and `merge_company_facts`; `fetch_all` reads both filers'
+company facts, and the run notes it. TDD (four tests RED, one guard: a filer without a predecessor reads its own
+filings only); six mutants, each failing a test. The real filings merged give Exxon Mobil Corp's 20 years cell for
+cell and 77 quarters to 2026-06-30, with all 143 figures the holding company's quarters lack. A backup, then XOM
+re-collected live (0 errors): the note recorded, its history whole, its rows re-parsed with today's rules for the
+first time since August (long-term debt in 12 years; share counts of 0 corrected), the valuation unchanged.
+Evidence: `qa/evidence/q6-{red,green,mutants,realdata,live}.txt`
+Result: Q6 decided and VERIFIED; MATCH-01's and VALID-01's notes updated.
+Gates: ruff ✓ mypy ✓ pytest 1190 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) feat(sec): XOM reads its predecessor's filings and keeps Exxon Mobil Corp's history
+Next: BLK's predecessor, if the user wants it; the P2s oldest first: BUG-142, BUG-149, BUG-150, BUG-151, BUG-159,
+BUG-160, BUG-161. Fixes since review 14's range (16f3005): 4 (BUG-140, BUG-141, BUG-029, Q6).
+
+## Iteration 102: 2026-10-21 10:40: decision (the user's)
+Picked: BLK's predecessor, at the user's request ("yes add BLK too"), as Q6 decided for XOM.
+Did: SEC's own records first: BLK's predecessor is CIK 1364742 (the old BlackRock, now BlackRock Finance, Inc.),
+whose facts stop at 2024-08-06, before BlackRock, Inc.'s first report; but Exxon Mobil Corp files on as a subsidiary
+(a 10-Q listed on 2026-08-03), so a predecessor's facts now count only up to the successor's first annual or
+quarterly report. TDD (two tests RED, two edges pinned); four mutants, each failing a test. Real filings: BLK's
+record 5 years to 20, the added 15 equal BlackRock Finance's own cell for cell; XOM's unchanged. A backup, then BLK
+and XOM re-collected live (0 errors): BLK's history whole (20 years, 75 quarters), its median unchanged; XOM
+unchanged in every stored cell.
+Evidence: `qa/evidence/blk-{red,green,mutants,realdata,live}.txt`
+Result: Q6 extended to BLK; MATCH-01's note updated.
+Gates: ruff ✓ mypy ✓ pytest 1193 passed, 1 skipped (1 known warning) | CI: pending for this push
+Commit: (this commit) feat(sec): BLK reads the old BlackRock's filings, a predecessor's counted up to the successor's first report
+Next: the P2s oldest first: BUG-142, BUG-149, BUG-150, BUG-151, BUG-159, BUG-160, BUG-161. Fixes since review 14's
+range (16f3005): 5 (BUG-140, BUG-141, BUG-029, Q6, BLK): code review 15 due.
+
+## Iteration 103: 2026-10-21 22:38: review (code review 15, run by the build loop)
+Picked: code review 15, due after five fixes since review 14's range (16f3005). The build loop's milestone close
+M1-9 ran it over 16f3005..a3c8a77: the QA fixes since review 14 (BUG-140, BUG-141, BUG-029, Q6, BLK), with M0 and M1.
+Did: an opus reviewer, read-only, in six passes; its report is `qa/evidence/review15-report.md`. It found one
+Critical issue: C1, split seams more than 120 days before their split never folded (NFLX 10x off, PANW 2x). It found
+three Important ones: I1, stock-paid mergers folded as splits; I2, a price-less latest snapshot switching off the
+share guard; I3, an oracle blind to seams. It also found six Minor ones, M1 to M6. The build loop fixed C1 and I1 to I3,
+each test-first and each checked on real copies: BUG-174 (7189bf7, 61181e7), BUG-176 (0ffde44), BUG-175 (5efe18e),
+BUG-177 (e226b31). Then the user's DB was backed up and backfilled offline (build iteration 20).
+Evidence: `qa/evidence/review15-report.md`, `qa/evidence/review15-*.txt`, `qa/evidence/m1-9-live-*.txt`
+Result: BUG-174 (P1), BUG-175, BUG-176 and BUG-177 VERIFIED. Still open: BUG-179 (P2, from M2); BUG-178 and
+BUG-180 to BUG-183 (P3, from M1 and M3 to M6); BUG-184 (P3, found while fixing I1).
+Gates: ruff ✓ mypy ✓ pytest 1357 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) chore(build): close M1, with the user's DB backed up and backfilled
+Next: the P2s oldest first: BUG-142, BUG-149, BUG-150, BUG-151, BUG-159, BUG-160, BUG-161, BUG-179. Code review 16
+(M2's close) covers the next range.
+
+## Iteration 104: 2026-10-25 21:50: fix (BUG-142, BUG-143), after the build loop
+Picked: after the build loop closed (milestones 0-5, `qa/BUILD.md`), the user asked to clear the scratch folder and
+do what came next. %LOCALAPPDATA%\stockdb-qa (58.9 GB) was deleted. The user's DB was backed up
+(%LOCALAPPDATA%\stockdb-backups\2026-10-25-c) and given its first `stock-data refresh` (`qa/evidence/refresh-live-*`):
+- every step ok, exit 0, in 54 minutes;
+- 502 quotes, every company's bars to 2026-10-23, the 19 companies with a new 10-Q collected in full;
+- 104,255 Form 4 filings and 248 13F filings re-read, the market data, the recomputation.
+Then the oldest open P2s, BUG-142 with its BUG-143.
+Did: an opus investigation (read-only, all 502 companies' cached facts, `qa/evidence/bug142-investigation.txt`):
+- CVX's DebtCurrent is the short-term debt before a refinancing it tags; ShortTermBorrowings is the balance sheet's.
+- The bug's suggested rule would have cut $83.1B of right current debt at 17 other filers.
+- The paper is held by the short-term total the record reads on its date.
+An opus worker built the fix test-first (RED: 11 failed, 8 guards passed; 15 mutants, each killed, re-run by me). On
+two copies of the refreshed DB, re-collected offline from the cache with HEAD's code and with the fix, then
+recomputed:
+- total debt falls in 403 annual years at 84 filers and rises in none;
+- valuations and valuation_summary are identical, as the five models read no debt;
+- debt ratios, scores, ranks, EPV and the history move.
+Evidence: `qa/evidence/bug142-{investigation,red,green,mutants,mutants-mine,gates,gates-mine,realdata,done}.txt`
+Result: BUG-142 and BUG-143 VERIFIED. New: BUG-253 to BUG-255 (P3, residual debt double counts). The user's stored
+figures change at each company's next collection.
+Gates: ruff ✓ mypy ✓ pytest 2412 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): short-term debt before a refinancing, and commercial paper a short-term total holds, counted once (BUG-142, BUG-143)
+Next: BUG-149, BUG-150, BUG-151 (the price chart and history tabs), then BUG-159, oldest first.
+
+## Iteration 105: 2026-10-25 22:27: fix (BUG-149)
+Picked: the oldest open P2 after BUG-142, BUG-149 (the GP compare chart's ^GSPC overlay).
+Did: an opus worker fixed `compare_bars` test-first.
+- Every series is rebased on the first date they all share, from its first bar on or after it (RED: 8 failed, 1 guard
+  passed).
+- One existing test's expectation changed: its fixture's AAA and ^GSPC share no date, so AAA is now empty.
+- Real data on a copy: every point equals the copy's closes over the shared start's (difference 0.0). AAPL at MAX
+  from 1980-12-12 shows ^GSPC +5,799%, where it read +43,069%.
+- 9 mutants, each killed (re-run by me).
+- BUG-239 closed as BUG-158's duplicate.
+Evidence: `qa/evidence/bug149-{red,green,mutants,mutants-mine,mutants-detail,realdata,gates,gates-mine,done}.txt`
+Result: BUG-149 VERIFIED. (A stock-web server, started by the user at 22:17, read the real DB meanwhile; nothing here
+wrote to it.)
+Gates: ruff ✓ mypy ✓ pytest 2420 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(web): the compare chart rebases every line on the first date they share (BUG-149)
+Next: BUG-150 (the HP tab's CSV link), then BUG-151.
+
+## Iteration 106: 2026-10-25 22:38: fix (BUG-150)
+Picked: the oldest open P2, BUG-150 (HP's Download CSV).
+Did, inline (a one-line fix):
+- a test that the CSV the HP tab links has exactly the table's dates at 1M, 1Y, 5Y and MAX. RED on the old link: 5Y
+  and MAX failed on weekly and monthly dates, 1Y passed.
+- the link asks for `interval=1d`. GREEN.
+- 3 mutants killed. The one that drops `range=` first survived, so the 1M case was added: the CSV's own default is 1Y.
+- On a copy of the user's DB, AAPL's table and CSV agree at every range (11,559 rows at MAX).
+Evidence: `qa/evidence/bug150-{red,green,mutants,realdata,gates}.txt`
+Result: BUG-150 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2424 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(web): the HP tab's Download CSV is the daily table it sits under (BUG-150)
+Next: BUG-151 (short ranges anchored on today, not the last bar).
+
+## Iteration 107: 2026-10-25 23:10: fix (BUG-151)
+Picked: the oldest open P2, BUG-151 (short ranges anchored on today).
+Did: an opus worker made every range resolver's caller count back from min(today, the ticker's last bar), test-first.
+- The callers: the bars API, the indicators bundle, compare-bars on the primary's bars, the bars CSV and the HP tab.
+- RED: 43 of 106 new cases failed: empty 1M ranges, short 3M and 6M, next-year YTD, a false "No price history
+  collected.".
+- One BUG-149 guard was re-set so that its last bar is its pinned today, which keeps what it guards.
+- 14 mutants, each killed (re-run by me).
+- On a copy of the user's DB with today two months past the last bar, AAPL's 1M has 23 rows to 2026-10-23 in all
+  five views; it had 0 for every company.
+- BUG-157's repro (an empty compare overlay at 1M) went with it; its own P3 (a message instead of a blank figure)
+  stays open.
+Evidence: `qa/evidence/bug151-{red,green,mutants,mutants-mine,realdata,gates,gates-mine,done}.txt`
+Result: BUG-151 VERIFIED. Five fixes since code review 19 (BUG-142, BUG-143, BUG-149, BUG-150, BUG-151): code review
+20 is due.
+Gates: ruff ✓ mypy ✓ pytest 2530 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(web): ranges count back from the ticker's last bar, not from today (BUG-151)
+Next: code review 20 (4abe6d7..HEAD), then BUG-159 (its investigation is under way).
+
+## Iteration 108: 2026-10-25 23:50: review (code review 20)
+Picked: code review 20, due after five fixes since review 19 (BUG-142, BUG-143, BUG-149, BUG-150, BUG-151:
+4abe6d7..ca027c7).
+Did: an opus reviewer, read-only, in two passes (`qa/evidence/review20.txt`).
+- Its scope: a re-parse of all 502 cached filers with both commits; the as-of view replayed on every filing day; the
+  five price views on a copy at two clocks; boundary mutants.
+- No Critical. One Important, I-1: BUG-143's set-aside judges per-filing vintages by later filings, a point-in-time
+  regression. KO FY2019 as of 2020-06-30 lost 24% of its total debt; 19 vintages at 12 filers are affected, against
+  1,512 as-of windows the fix moved toward their filings' figures. Recorded as BUG-256 (P2), with M-3's untested
+  boundaries in its fix list.
+- The minors: M-1, BUG-159's unmasking is wider (its note extended); M-2, year-end quarterly checkpoints, BUG-257
+  (P3); M-4, BUG-157's repro stale (to update when it is fixed).
+- The web commits (BUG-149, -150, -151) pass as they stand.
+Evidence: `qa/evidence/review20.txt` (scratch: %LOCALAPPDATA%\stockdb-qa\review20\)
+Result: BUG-256 and BUG-257 opened.
+Gates: ruff ✓ mypy ✓ pytest 2530 passed, 1 skipped (the reviewer's run at ca027c7) | CI: no PR (Q10)
+Commit: (this commit) chore(qa): record code review 20
+Next: BUG-256 (a regression of our own, so before BUG-159), then BUG-159 on top of it.
+
+## Iteration 109: 2026-10-26 02:51: fix (BUG-256, BUG-257)
+Picked: BUG-256, a regression of b49ee34 that review 20 found, before the older P2s; BUG-257 shares its cause.
+Did: an opus worker made each record judge a commercial paper fact by the short-term figure it reads, and keep a held
+paper as 0.0, test-first:
+- the annual record by the annual reports, as b49ee34 did;
+- a quarterly checkpoint by its 10-Qs and 10-Ks;
+- a vintage by its own filing, with two rules the as-of carry needs, measured before building.
+RED: 8 failed, 135 passed. 13 new mutants and BUG-142's 15 (reshaped), each killed, re-run by me.
+Real data:
+- all 502 re-parsed, and review 20's as-of replay re-run: the 1,512 improved windows kept, the 25 worsened back;
+- no annual total moved; the 11 checkpoints count their paper once;
+- valuations identical on two DB copies.
+Three vintage rows (BEN FY2011, QCOM FY2015, WEC FY2017) keep 0.0 by design, since the as-of view reads them right.
+The session scratchpad was emptied around 02:00 by the Temp cleanup, mid-run. The worker rebuilt mutants.py, and the
+tools now live in %LOCALAPPDATA%\stockdb-qa\tools.
+Evidence: `qa/evidence/bug256-{red,green,mutants,mutants-mine,gates,gates-mine,realdata,done}.txt`,
+`bug142-mutants-rerun{,-mine}.txt`
+Result: BUG-256 and BUG-257 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2542 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): each record judges commercial paper by the short-term figure it reads (BUG-256, BUG-257)
+Next: BUG-160 measured (a decision for the user, with a daily face of its own), then BUG-159 on top of this change.
+
+## Iteration 110: 2026-10-26 02:55: investigation (BUG-160)
+Picked: BUG-160, the next open P2 outside the parser (BUG-256's worker was editing it). Its fix moves medians, which
+is the user's call, so the investigation measured it rather than applied it.
+Did: an opus investigation (read-only, from a git-archive export; `qa/evidence/bug160-investigation.txt`).
+- The bug is wider than filed: `stock-data refresh`'s recompute revalues every company on a DDM year missing the
+  payments since its last full collection, factor or not.
+- The 2026-10-25 refresh of the user's DB left CVS's and LOW's DDM low already; their verdicts are unchanged.
+- Daily runs would make it drift: 18 medians and 2 verdicts wrong after 17 days, 117 and 18 after 81.
+- Option A' (every saved refresh stores Yahoo's dividends from the request that serves the splits) matches a full
+  collection in every measured case.
+Evidence: `qa/evidence/bug160-investigation.txt` (scratch: %LOCALAPPDATA%\stockdb-qa\bug160\)
+Result: BUG-160 to NEEDS-USER; BUG-258 (P1, the daily face) opened as NEEDS-USER; A' recommended for both.
+Gates: ruff ✓ mypy ✓ pytest 2542 passed, 1 skipped (iteration 109's run; the code is unchanged) | CI: no PR (Q10)
+Commit: (this commit) chore(qa): BUG-160 measured; its daily face is BUG-258, both for the user
+Next: BUG-159 (its fix built on BUG-256's views).
+
+## Iteration 111: 2026-10-26 03:52: fix (BUG-159)
+Picked: BUG-159, the oldest open P2 (current maturities beside short-term borrowings in no debt field), unmasked
+further by BUG-143's fix.
+Did:
+- an opus investigation (read-only, all 502 companies' cached facts, `qa/evidence/bug159-investigation.txt`)
+  measured a rule and each of its parts against the filers' own totals and their balance sheets' line sums;
+- an opus worker built it on BUG-256's views, test-first (RED: 11 failed);
+- the rule: borrowings plus maturities where a filing shows both apart, unless the borrowings hold them (IBM);
+  maturities tagged with leases read; BUG-141 counting them;
+- short_term_debt left out of the integrity check's outlier test, since real maturities come and go;
+- 18 mutants, and the earlier debt fixes' 13 and 16, each killed (re-run by me).
+Real data: total debt changes in 1,353 annual years at 155 filers; 222 move to the filer's own total (VZ FY2023
+$150.67B) and 13 away, each explained; valuations identical on two DB copies.
+Evidence: `qa/evidence/bug159-{investigation,red,green,mutants,gates,gates-mine,realdata,done}.txt`,
+`bug256-mutants-rerun*.txt`, `bug142-mutants-rerun2*.txt`
+Result: BUG-159 VERIFIED; its residuals are BUG-259 (P3). Three fixes since code review 20 (BUG-256, BUG-257,
+BUG-159).
+Gates: ruff ✓ mypy ✓ pytest 2561 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): short-term debt counts the current maturities beside the borrowings (BUG-159)
+Next: the open P2s oldest first: BUG-161 (cash), BUG-170 (D&A), BUG-171 (quarterly long-term debt).
+
+## Iteration 112: 2026-10-26 05:16: fix (BUG-161)
+Picked: BUG-161, the oldest open P2 (a note's cash equivalents outranking the balance sheet's total).
+Did: an opus worker censused every balance-sheet date of the 502's filings against an asset-side decomposition.
+- The entry's one-line reorder is wrong for ICE, whose 10-Ks tag the cash line as the equivalents beside a total
+  with restricted cash and clearing margin deposits.
+- The rule: the total before the equivalents, except where a filing's total is its equivalents plus restricted cash
+  or deposits it tags.
+- Built test-first (RED: PG, BRK-B, AXP; the reorder alone then fails ICE's guards).
+- 9 mutants, and BUG-159's 18, BUG-256's 13 and BUG-142's 16 (reshaped), each killed (re-run by me).
+- Real data: cash changes in 26 years at 6 filers, none away from the balance sheet; ICE unchanged; valuations
+  identical on two DB copies.
+Evidence: `qa/evidence/bug161-{red,green,mutants,gates,gates-mine,realdata,done}.txt`
+Result: BUG-161 VERIFIED; residuals BUG-260 (P2, Cash a component at CF and TGT) and BUG-261 (P3, AXP's tag). Four
+fixes since code review 20 (BUG-256, -257, -159, -161).
+Gates: ruff ✓ mypy ✓ pytest 2570 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): cash reads the balance sheet's total before a note's equivalents (BUG-161)
+Next: BUG-173 (measured: GOOGL FY2020's count, no stored value moves), then code review 21.
+
+## Iteration 113: 2026-10-26 05:32: fix (BUG-173)
+Picked: BUG-173, the next open P2 (a year's cover count on another split basis than its EPS).
+Did: an opus investigation (read-only, from a git-archive export; `qa/evidence/bug173-investigation.txt`) found the
+shape at exactly one year of the 502, GOOGL FY2020, read by no model today. It measured four fixes on DB copies. The
+recommended one moves no stored value: all 36 tables are identical after recomputing. I applied its prepared files,
+checking first that the repo's two files were byte-identical to its base:
+- the test file first, RED: 3 failed for the right reason, 1 guard passed;
+- then the code, GREEN: 187 passed;
+- 9 mutants, each killed;
+- a docstring in scores/fundamentals.py brought up to date.
+Evidence: `qa/evidence/bug173-{investigation,red,green,mutants,gates}.txt`
+Result: BUG-173 VERIFIED. Five fixes since code review 20 (BUG-256, -257, -159, -161, -173): code review 21 is due.
+Gates: ruff ✓ mypy ✓ pytest 2574 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(valuation): a year's cover share count goes onto its EPS's split basis (BUG-173)
+Next: code review 21 (b5d0625..HEAD: BUG-159, -161, -173, with BUG-256/257's bf3dfdd).
+
+## Iteration 114: 2026-10-26 07:44: fix (BUG-247)
+Picked: BUG-247, the next open P2 (the undeclared split rule folding PCG's bankruptcy-exit issuance and KDP's reverse
+merger as splits).
+Did: an opus worker built the fix test-first in a `git archive` export of d5e6ec2, so the checkout stayed untouched
+while code review 21 ran, and measured it on DB copies. I applied its five files after checking they were
+byte-identical to their base:
+- the tests first, RED: 11 failed for the right reason (4 behaviour assertions, 7 imports of the missing helper),
+  with the guards passing;
+- then the code, GREEN: 167 passed;
+- 9 mutants, each killed, and BUG-173's 9 re-run (both by me, from the checkout).
+- Real data: valuation_summary identical and no verdict moved; only KDP's and PCG's Lynch assumptions change, with 8
+  per-share rows and 6 quality-score rows.
+Process: the QA mutant runner hard-coded the checkout as its root, so a worker running it from a scratch tree would
+have patched the checkout. It now takes --root (else the current directory) and prints the tree first. The checkout
+was clean when checked (06:25), and the running workers were told.
+Evidence: `qa/evidence/bug247-{done,red,green,mutants,gates}.txt`, `qa/evidence/bug173-mutants-rerun247.txt`
+Result: BUG-247 VERIFIED; residuals BUG-262 to BUG-266 (P3).
+Gates: ruff ✓ mypy ✓ pytest 2588 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(valuation): an undeclared split folds only where net income held (BUG-247)
+Next: code review 21 (resumed after the usage limit), then BUG-170 and BUG-179 as their workers report.
+
+## Iteration 115: 2026-10-26 08:02: review (code review 21)
+Picked: code review 21, due after five fixes since review 20 (BUG-256, -257, -159, -161, -173: 9f536a4..d5e6ec2).
+Did: an opus reviewer, read-only, on `git archive` exports of d5e6ec2, bf3dfdd and 9f536a4 (`qa/evidence/review21.txt`).
+- Its scope: a re-parse of all 504 cached filers; a look-ahead oracle (each filing's vintage from only the facts filed
+  by its day); the as-of carry replayed; 26 boundary mutants.
+- Holds up: BUG-256's vintage rules are look-ahead free (18 cells at base, none of theirs at head); BUG-161 changes
+  exactly the ledger's 26 years; BUG-173 behaves on every edge tried.
+- No Critical. Five Important, all regressions of 42937f4 (BUG-159), on numbers 9f536a4 or bf3dfdd had right: NEE's
+  checkpoints (undoing BUG-257), ICE's and AMD's one line tagged three ways, a later 10-K's verdict outranked (HWM,
+  ICE, YUM, COO), PEP's quarters on a 2010 verdict, XEL's vintage look-ahead. Recorded as BUG-267 (P2), with M-1's
+  boundary tests and M-5's docs in its fix list.
+- I re-ran its five probes at 3f7abe2: all five fail with its numbers. A read-only query shows none of the wrong
+  cells in the user's DB yet (those companies were last collected before 42937f4).
+- The minors: M-2's ledger corrections made (BUG-159, BUG-257, BUG-259); M-3, BUG-268; M-4, BUG-269; M-6 and the
+  unpinned BUG-173 boundaries, BUG-270.
+- Pre-existing findings recorded: BUG-271 (P2, the as-of view's debt under half the annual record's at 9 filers),
+  BUG-272 (adoption-day period_end), BUG-273 (CHD's stray fact).
+Evidence: `qa/evidence/review21.txt` (scratch: %LOCALAPPDATA%\stockdb-qa\review21\)
+Result: BUG-267 to BUG-273 opened.
+Gates: ruff ✓ mypy ✓ pytest 2574 passed, 1 skipped (the reviewer's run at d5e6ec2); 2588 passed, 1 skipped at
+3f7abe2 | CI: no PR (Q10)
+Commit: (this commit) chore(qa): record code review 21
+Next: BUG-267, test-first from the five probes, before the other P2s (it is a regression of this loop's own fix).
+
+## Iteration 116: 2026-10-26 08:20: investigation (BUG-170) -> NEEDS-USER
+Picked: BUG-170, the next open P2 (D&A missing the amortization a filer tags apart).
+Did: an opus worker, read-only on the checkout, from a `git archive` export of d5e6ec2 (`qa/evidence/bug170-investigation.txt`).
+- Root cause confirmed, and wider than recorded: D&A resolves one tag per period, so separate lines with no total
+  give it the depreciation alone, in all four records. A second shape: a "total" that is the depreciation line, no
+  larger than the amortization beside it.
+- A census over the 502 against the filers' own totals and Yahoo's cash-flow D&A; four variants measured on DB copies.
+- The recommended V3 fix was prepared test-first in the export (21 cases, 13 RED; 17 mutants killed, run with the
+  runner's --root on the fix tree), re-checked on 7c6cc2a, and not applied.
+- It moves no median or median verdict, but 7 owner-earnings verdicts and 2 historical-value labels (listed in
+  BUG-170's entry), so it goes to the user, as the build's rule says.
+Process: five older scratch copies of the mutant runner that still hard-code the checkout were disabled (renamed
+*.checkout-rooted.disabled); bug247's and bug170's own copies refuse the checkout.
+Evidence: `qa/evidence/bug170-investigation.txt` (scratch: %LOCALAPPDATA%\stockdb-qa\bug170\)
+Result: BUG-170 NEEDS-USER (V3 recommended); residuals BUG-274 (P2), BUG-275 and BUG-276 (P3).
+Gates: unchanged code (ledger only) | CI: no PR (Q10)
+Commit: (this commit) chore(qa): BUG-170 measured; its fix moves owner-earnings verdicts, so it is the user's
+Next: BUG-267 (its worker is editing), then BUG-179 (prepared), then the open P2s.
+
+## Iteration 117: 2026-10-26 10:22: fix (BUG-267)
+Picked: BUG-267 before the other P2s: code review 21's five regressions of this loop's own BUG-159 fix.
+Did: an opus worker fixed it test-first in the checkout, starting from the reviewer's five probes.
+- The combinations are now decided first, from the facts as filed, and only applied afterwards. That fixes the
+  paper's verdict at NEE's year ends, ICE's and AMD's one line tagged three ways, the latest filing deciding a date
+  (HWM, ICE, YUM), a quarter taking only its latest annual report's word (PEP), and the vintage view's look-ahead
+  (XEL).
+- New: a current-liabilities bound. It decides COO FY2016, YUM's years and PEP's quarters, and contradicts no oracle.
+- Real data: 184 debt cells at 17 filers change, 157 to what the filings decide and none away. BUG-159's gains are
+  kept, and the look-ahead oracle finds 0 cells.
+- On DB copies the valuations, summaries, indicators and warning signs are identical.
+- My checks:
+  - RED: the new tests against HEAD's code in an export, 12 failed and 184 passed, as the worker had it.
+  - The five probes pass on the fix.
+  - Every mutant spec that quotes the parser re-run, each killed (the runner now reports a mutant whose code moved
+    as STALE and goes on; the stale ones are those the reshaped copies replace).
+  - Code review 21's own 24 mutants: 18 killed, 2 stale (rules replaced), so all 8 that changed real cells are
+    killed or gone. The 6 survivors are the 3 it found equivalent on the data and BUG-173's 3 boundaries (BUG-270).
+  - The gates.
+Evidence: `qa/evidence/bug267-{done,red,realdata,measure,mutants,db,verify-mine}.txt`
+Result: BUG-267 VERIFIED; notes added to BUG-259 (GEHC, BE, YUM 2016-09-03, PEP's FY2010 vintage) and BUG-271 (EXC's
+vintages).
+Gates: ruff ✓ mypy ✓ pytest 2614 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): short-term debt's combinations are decided on the filings as filed (BUG-267)
+Next: BUG-179 (prepared in scratch), then the open P2s.
+
+## Iteration 118: 2026-10-26 10:31: fix (BUG-179)
+Picked: BUG-179, the next open P2 (a run whose predecessor read failed rewriting the successor's years).
+Did: an opus worker built the fix test-first in a `git archive` export of d5e6ec2 and measured it on DB copies. I
+applied its six files after checking they were byte-identical to their base, and merged its one README passage by
+hand (the README has moved since):
+- the tests first, RED: 8 failed by assertion, with the 2 guards passing;
+- then the code, GREEN: 217 passed in the four test files;
+- 14 mutants, each killed (re-run by me, from the checkout).
+- Root cause wider than recorded: even BUG-029's "only adds" damages the data (lower-ranked tags, metadata,
+  metrics). So a failed-predecessor run now only fills, in every table its SEC record writes, and recomputes each
+  year's metrics on the year as stored.
+- Real data, offline on copies: HEAD's failed run cleared 319 of BLK's cells and moved its valuations; the fix's
+  leaves all 36 tables as stored. Good runs are identical over all 502.
+Evidence: `qa/evidence/bug179-{done,red,green,mutants,verify-mine}.txt`
+Result: BUG-179 VERIFIED; residuals BUG-277 (calendar_year by hash order), BUG-278 (the exports), BUG-279 (the
+refresh's re-collection), all P3.
+Gates: ruff ✓ mypy ✓ pytest 2624 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(store): a run that couldn't read the predecessor only fills (BUG-179)
+Next: the open P2s, oldest first (BUG-171).
+
+## Iteration 119: 2026-10-27 03:10: fix (BUG-251, BUG-279)
+Picked: BUG-251, the next P2 the refresh path holds (the SEC's companyfacts lacking a company's latest report, with
+nothing noticing), and BUG-279 (P3), which the same rule covers.
+Did: an opus worker built the fix test-first in a `git archive` export of ca55c1e and checked it offline on a copy of
+the user's DB. I applied its 14 files after checking they were byte-identical to their base:
+- the tests first, RED: 23 failed (21 by assertion, 2 on the missing field and summary key), 246 passed;
+- then the code and docs, GREEN: 269 passed in the six test files;
+- 40 mutants, each killed, and BUG-179's 14 re-run (both by me, from the checkout).
+- The rule: a collection names the latest report its companyfacts lack, and stores that, or a predecessor read that
+  failed, in `collection_runs.incomplete` (migrated; earlier runs read as complete). The refresh collects such a
+  company again, up to 3 times for one gap.
+- Real data: the check names exactly the entry's 58; every financial and valuation table is identical.
+Evidence: `qa/evidence/bug251-{done,red,green,mutants,verify-mine}.txt`
+Result: BUG-251 and BUG-279 VERIFIED; Q17 for the user (recovering what the SEC lacks); residuals BUG-280 to
+BUG-284 (P3).
+Gates: ruff ✓ mypy ✓ pytest 2658 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(refresh): a collection names a report the SEC's facts lack, and the refresh retries it (BUG-251)
+Next: BUG-171 (its worker is preparing it), then the open P2s.
+
+## Iteration 120: 2026-10-27 08:59: review (code review 22)
+Picked: code review 22, due after five fixes since review 21 (BUG-247, -267, -179, -251, -279: d5e6ec2..965df0d).
+Did: an opus reviewer, read-only, on `git archive` exports (`qa/evidence/review22.txt`).
+- Holds up: review 21's five probes pass at head and fail at base; the look-ahead oracle finds 0 cells (base 4); the
+  current-liabilities bound's premise holds on all 120 real dates it fires; BUG-179's fill runs leave BLK's and XOM's
+  tables as stored on a copy of the user's DB; BUG-247 small and pinned. Parse time unchanged.
+- No Critical. One Important, I-1: BUG-251's gap check reads the newest 100 filings, which hold no report at eight
+  large filers (JPM, BAC, WFC, C, GS, MS, STT, DELL). I confirmed it in the cache (JPM, GS, DELL: 0 of 100).
+  Recorded as BUG-285 (P2).
+- The minors: M-1, BUG-286 (the bound's latent overlap); M-2, BUG-287 (a fill run's cell-by-cell mix); M-3 and M-5,
+  BUG-288 (unpinned boundaries, doc points); M-4, BUG-289 (the retry bound).
+Evidence: `qa/evidence/review22.txt` (scratch: %LOCALAPPDATA%\stockdb-qa\review22\)
+Result: BUG-285 to BUG-289 opened.
+Gates: ruff ✓ mypy ✓ pytest 2658 passed, 1 skipped (the reviewer's run at 965df0d) | CI: no PR (Q10)
+Commit: (this commit) chore(qa): record code review 22
+Next: BUG-285 (a regression of this loop's own fix), BUG-171 as its worker reports.
+
+## Iteration 121: 2026-10-27 09:09: investigation (BUG-171) -> NEEDS-USER
+Picked: BUG-171, the oldest open P2 (10-Q quarters lacking the long-term debt the 10-Ks report).
+Did: an opus worker, read-only on the checkout, from a `git archive` export of ca55c1e (`qa/evidence/bug171-investigation.txt`).
+- The recorded root cause was wrong. The 10-Qs tag a concept the 10-Ks don't (ORCL, CVX), or only the filer's own
+  concept, which companyfacts lack (TMUS, CAT: unreadable).
+- The fix was prepared test-first and not applied: a quarter reads the 10-Q's other debt line only where the 10-Q's
+  year-end column matches the annual record's figure exactly. 220 quarters at 35 filers are filled, and no annual or
+  vintage cell moves (26 items, 31 mutants, 0 look-ahead).
+- It moves no median, verdict or model value, but one historical-value label (AXON near to far above), so it goes to
+  the user.
+Evidence: `qa/evidence/bug171-investigation.txt` (scratch: %LOCALAPPDATA%\stockdb-qa\bug171\)
+Result: BUG-171 NEEDS-USER (apply recommended); new BUG-290 (P2, Corpay's maturities twice) and BUG-291 to BUG-294 (P3).
+Gates: unchanged code (ledger only) | CI: no PR (Q10)
+Commit: (this commit) chore(qa): BUG-171 measured; its fix moves one historical-value label, so it is the user's
+Next: BUG-285 (its worker is editing), then BUG-290 and the open P2s.
+
+## Iteration 122: 2026-10-27 09:55: fix (BUG-285)
+Picked: BUG-285, code review 22's Important: BUG-251's gap check blind at eight large filers.
+Did: an opus worker fixed it test-first in the checkout.
+- `get_submissions` keeps the latest report of the feed's whole recent block beside the newest 100, with no new
+  request. The check reads both.
+- My checks:
+  - RED: the new tests against HEAD's code in an export, 7 failed and 23 passed.
+  - 8 mutants killed, BUG-251's 40 re-run (1 reshaped).
+  - The gates.
+- Real data offline: flag lists unchanged; the banks are now checked; Citigroup's companyfacts lack its 2026 10-Qs
+  (BUG-295).
+Evidence: `qa/evidence/bug285-{done,red,green,mutants,realdata,verify-mine}.txt`
+Result: BUG-285 VERIFIED; BUG-295 (P2), BUG-296 (P3).
+Gates: ruff ✓ mypy ✓ pytest 2667 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(sec): the gap check reads the latest report behind a bank's newest 100 filings (BUG-285)
+Next: BUG-290 (its worker is preparing it).
+
+## Iteration 123: 2026-10-27: pause (at the user's request)
+State: HEAD c4effe1, everything committed and pushed; ledger P2 8, P3 159, NEEDS-USER 25, Verified 119.
+In progress, not in the checkout: BUG-290 (Corpay's maturities twice), a worker's fix tree in
+%LOCALAPPDATA%\stockdb-qa\bug290 (no report written yet).
+Prepared and waiting for the user: BUG-170 (%LOCALAPPDATA%\stockdb-qa\bug170) and BUG-171 (...\bug171\out, apply its
+diffs with git apply); BUG-160/258 (option A'; no scheduled task until decided); BUG-245, BUG-246, Q16, Q17.
+Next on resume: the user's decisions, then BUG-290, then the open P2s oldest first.
+
+## Iteration 124: 2026-11-01 23:13: fix (BUG-171, the user's decision)
+Picked: BUG-171: the user said "apply BUG-170 and BUG-171".
+Did: applied the prepared diffs to the checkout, the tests first.
+- RED: 8 failed, 214 passed. GREEN: 222 passed.
+- 31 mutants and the five earlier parser specs re-run by me.
+- As measured in iteration 121: 220 quarters at 35 filers filled, no annual or vintage cell; AXON's label near to far
+  above, at its next collection.
+Evidence: `qa/evidence/bug171-{investigation,red,green,verify-mine}.txt`
+Result: BUG-171 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2693 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): a 10-Q's other debt line stands in where its year end matches the annual record (BUG-171)
+Next: BUG-170 merged onto the new parser, then BUG-290.
+
+## Iteration 125: 2026-11-01 23:41: fix (BUG-170, the user's decision)
+Picked: BUG-170: the user said "apply BUG-170 and BUG-171".
+Did: an opus worker merged V3 onto 4e0f131 in the checkout (BUG-267 and BUG-171 had moved the parser), the rule
+unchanged, and re-measured it on DB copies, since the code had moved since the user saw the list.
+- RED: 13 failed; GREEN: all pass. 105 mutants across the parser specs killed (BUG-170's re-run by me).
+- 0 look-ahead cells, D&A included.
+- The re-measured moves equal the approved list: 7 owner-earnings verdicts, 2 historical-value labels, no median.
+  Not verdicts or labels, but new since iteration 116: ORCL's historical value 161.78 to 158.83 (through BUG-171),
+  and TEL's composite 56 to 54.
+- They reach the user's DB at each company's next collection.
+Evidence: `qa/evidence/bug170-{done,red,green,verify-mine}.txt`; the reshaped specs are `qa/evidence/bug170-rerun-*.json`.
+Result: BUG-170 VERIFIED. Three fixes since code review 22 (BUG-285, -171, -170).
+Gates: ruff ✓ mypy ✓ pytest 2714 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): D&A adds the amortization a filing tags apart from its depreciation (BUG-170)
+Next: BUG-290 (its worker is finishing), checked against the new parser.
+
+## Iteration 126: 2026-11-02 08:04: BUG-290 measured; it moves a label, so it is the user's
+Picked: BUG-290, resumed once memory allowed (the run stopped on low RAM on 2026-11-01).
+Did: confirmed head4 equals 6334d2a and fix4 differs from it only in the fix's four files, then re-collected the six
+changed tickers offline on two DB copies, ran the engine over all 502 and diffed every table.
+- An all-filer cell scan finds the same six filers; 105 records change, no field outside debt.
+- CPAY's label moves below to near, the only label; no median, verdict or model row. Same outcome as on 4e0f131.
+- 0 look-ahead cells. Mutants: 17 of 17 new, and the older specs killed. The 4 stale in
+  `bug267-bug159` and `bug267-bug161-bug142` are stale on head4 as well; their `bug170-rerun-*` versions, 8 of 8, die.
+Evidence: `qa/evidence/bug290-investigation.txt`; the final outputs are %LOCALAPPDATA%\stockdb-qa\bug290\out\h4_*.
+Result: BUG-290 NEEDS-USER. Nothing applied; the fix stays in scratch.
+Gates: ruff ✓ mypy ✓ pytest 2728 passed, 1 skipped (6334d2a plus the fix) | CI: no PR (Q10)
+Next: the user's decision on BUG-290; meanwhile BUG-248.
+
+## Iteration 127: 2026-11-02 08:28: fix (BUG-248)
+Picked: BUG-248, the oldest open P2 that needs no decision.
+Did: an opus worker found the cause and prepared the fix in an export; I reviewed the diff, proved RED on an export
+of HEAD, applied it and re-ran the mutants and gates.
+- Root cause: `_seam_run` gave equal-gap ties to the earliest split and the walk runs newest first, so WRB's 2022
+  seam took the 2022 split and its 2020 seam, at 1.494 under the threshold, had none. Quarters of 2010-19 sat 1.5x low.
+- Fix: ties go to the latest split, as `inputs._declared_run` does; a split after the latest quarter is tried only
+  if none before it fits, so APH's 2026 split still waits for Yahoo's count. No schema change.
+- RED: 2 failed of 4 new tests (the other 2 guard the new tier). 5 of 5 mutants killed, by me.
+- Measured on DB copies, 502 tickers: no median, verdict, owner_earnings_verdict or label moves. WRB's historical value
+  60.11 to 62.63 at 73.33, above stays above; TPL 367.17 to 367.26. 363 valuation_history rows (WRB, ROL, TPL), 10
+  ranges, 2 indicators; no score column.
+- `history_vs_yahoo`: unfolded seams 1 to 0, seam continuity 119/121 to 120/121. Still exits 1 on P/E against Yahoo and
+  the seam gate, as it does without the fix. APH, NFLX and CPRT are unchanged.
+- Not run: lookahead.py, which tests the parser's vintages; this fix touches neither. No web check; no README change.
+- It reaches the user's DB at each company's next computation.
+Evidence: `qa/evidence/bug248-investigation.txt`, `qa/evidence/bug248-mutants.json`.
+Result: BUG-248 VERIFIED. New: BUG-297, BUG-298. Four fixes since code review 22 (BUG-285, -171, -170, -248).
+Gates: ruff ✓ mypy ✓ pytest 2718 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(valuation): equal splits take their seams in order (BUG-248)
+Next: BUG-249, or BUG-290 if the user decides first.
+
+## Iteration 128: 2026-11-02 18:41: fix (BUG-290, the user's decision)
+Picked: BUG-290: the user said "apply BUG-290".
+Did: applied the fix measured in iteration 126 to 91a0633 (BUG-248 touched only the history, not the parser), after
+proving RED on an export of HEAD plus the new tests.
+- Mutants (re-run by me on the checkout): 122 of 122 killed across the 8 parser specs (BUG-290's 17).
+- The moves are iteration 126's: CPAY's historical-value label below to near, no median, verdict or model row.
+- They reach the user's DB at each company's next collection.
+Evidence: `qa/evidence/bug290-{investigation,verify-mine}.txt`, `qa/evidence/bug290-mutants.json`.
+Result: BUG-290 VERIFIED. Five fixes since code review 22 (BUG-285, -171, -170, -248, -290): review 23 is due.
+Gates: ruff ✓ mypy ✓ pytest 2732 passed, 1 skipped, 1 warning | CI: no PR (Q10)
+Commit: (this commit) fix(parsers): an unread debt line stands in for a long-term debt total that holds the
+current maturities (BUG-290)
+Next: code review 23.
+
+## Iteration 129: 2026-11-02 19:01: code review 23
+Picked: code review 23, due after five fixes since review 22 (BUG-285, -171, -170, -248, -290).
+Did: an opus reviewer read `git diff 6c29e5d..7b6931c` read-only, ran the suites on an export, and checked real data
+on its own DB copies and the SEC cache, offline.
+- Critical: none. Important: none.
+- Minor 1, proven (real data and a failing test): BUG-299.
+- Minor 2, not proven which figure is right: BUG-300.
+- Checked clean: BUG-285's cache fallback; BUG-290 and BUG-171 read only their own filings, and BUG-171 runs after
+  BUG-290's step; D&A runs last in `_filer_facts`; the earlier debt suites pass; BUG-248 keeps BUG-174's APH case.
+- Notes, not defects: a placed line's source tag reads LongTermDebtNoncurrent, a concept the filer didn't use;
+  `_noncurrent_concept` treats every LongTerm* concept as noncurrent, with no double count found in real data.
+- Python 3.9: the changed files parse under the 3.9 grammar; no 3.9 interpreter here to run them.
+Also: iteration 128's mutant line said 9 specs; 8 ran.
+Evidence: `qa/evidence/review23.txt`; scripts in %LOCALAPPDATA%\stockdb-qa\review23.
+Result: review 23 closed with no Critical or Important finding. New: BUG-299, BUG-300.
+Gates: no code change | CI: no PR (Q10)
+Next: BUG-249 (its worker is preparing it).
+
+## Iteration 130: 2026-11-02 19:26: BUG-249 measured; it moves 19 labels, so it is the user's
+Picked: BUG-249, the oldest open P2.
+Did: an opus worker found the cause and prepared the fix in an export, and measured it on two DB copies over all 502;
+I read the diff and the label list against its output files.
+- The rule: windows step over a period end with no dollar flow inside a quarter (`ttm._inside_a_quarter`).
+- No median, verdict or owner-earnings verdict moves; 19 historical-value labels do (listed under BUG-249).
+- Not run, for low RAM: history_vs_yahoo on the copies and lookahead.py. To run before applying.
+Evidence: `qa/evidence/bug249-investigation.txt`; outputs in %LOCALAPPDATA%\stockdb-qa\bug249\out.
+Result: BUG-249 NEEDS-USER. Nothing applied.
+Gates: 2736 passed, 1 skipped (the worker's, on its export) | CI: no PR (Q10)
+Next: BUG-252, when memory allows.
+
+## Iteration 131: 2026-11-02 20:04: decisions
+Picked: the 24 NEEDS-USER items: the user said "loop all fix bugs, use your recommendation for questions, loop
+until all bug fixed".
+Did: each item's recorded recommendation (or, where none was recorded, the loop's) is its decision, written beside
+its status. 17 become OPEN work (the 10 questions to implement count as P2); 7 are DECIDED with no code change.
+Where the action would leave the repo (bulk downloads Q12, an install Q14, a scheduled task Q15), the decision is
+the default that doesn't. Writes to the user's DB stay out of the loop: fixes reach it at each next collection.
+Result: NEEDS-USER 0. The loop restarts under `qa/LOOP_ADDENDUM.md`.
+Gates: no code change | CI: no PR yet (Q10 decided: open one)
+Next: BUG-245 (P1, oldest), then BUG-246 and BUG-258 with BUG-160.
+
+## Iteration 132: 2026-11-02 20:06: ops
+Picked: Q10's decision (a draft PR, so CI runs), then BUG-245 (P1, oldest).
+Did: opened draft PR #29 against main. Dispatched BUG-245 to an opus worker under the standard brief
+(%LOCALAPPDATA%\stockdb-qa\tools\WORKER_BRIEF.md); BUG-252's worker is still running.
+Result: CI runs on this branch from this push.
+Gates: no code change | CI: PR #29, first run on this push
+Commit: (this commit) chore(qa): draft PR #29 opened
+Next: review BUG-252 and BUG-245 when their workers report.
+
+## Iteration 133: 2026-11-02 20:16: fix (BUG-246, decided)
+Picked: BUG-246 (P1), done inline while BUG-245's and BUG-252's workers run.
+Did: `value_graham` values the latest fiscal year only: N/A, with the year named, when it lacks EPS or book value per
+share; an older year no longer stands in. The tangible-book indicator follows it. README's model table says so.
+- RED: 2 new tests failed (Graham valued FY2022); GREEN. 3 of 3 mutants killed.
+- Measured on two DB copies, engine over all 502 (head vs fix): Graham N/A at ARES, LEN, VTRS; SKYD's reason only.
+  Medians: ARES base 42.56 to 65.70, LEN 84.13 to 71.55, VTRS 6.93 to 15.49. LEN's verdict fair to expensive, as
+  measured before the decision. No owner-earnings verdict or label moves; graham_tangible N/A at ARES and LEN.
+- It reaches the user's DB at each company's next valuation run.
+Evidence: %LOCALAPPDATA%\stockdb-qa\bug246\out (verdicts.txt, diff.txt, graham.txt); `qa/evidence/bug246-mutants.json`.
+Result: BUG-246 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2734 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(valuation): Graham values the latest fiscal year or none (BUG-246)
+Next: BUG-245 and BUG-252 when their workers report; BUG-258 with BUG-160.
+
+## Iteration 134: 2026-11-02 20:30: fix (BUG-007, decided)
+Picked: BUG-007 (P2, oldest), inline; dispatched BUG-258 with BUG-160 (option A') to a worker first.
+Did: with a loss year among the last 3 fiscal years, Graham's bear is N/A (`bear_na_reason`), not the base case
+again. `intrinsic_summary` takes each case's median over the models that have it, and none when no model does (it
+raised before). The tangible-book indicator's bear follows; the VAL chart starts such a bar at the base and its
+hover says "bear N/A". README's model table and the indicator passage say so. The oracle already gave no bear there.
+- RED: 2 failed (the bear repeated the base; an all-N/A bear median raised StatisticsError); GREEN with 5 new tests.
+  4 of 4 mutants killed; BUG-246's 3 still killed.
+- Measured on two DB copies, engine over all 502: 32 Graham bears become N/A, and 32 bear medians move (none of base
+  or bull). One verdict: SNDK expensive to none (Graham is its only applicable model, so no bear median and no range).
+  No owner-earnings verdict or label.
+Evidence: %LOCALAPPDATA%\stockdb-qa\bug007\out (verdicts.txt, diff.txt); `qa/evidence/bug007-mutants.json`.
+Result: BUG-007 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2739 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(valuation): Graham's bear is N/A with a loss year in its window (BUG-007)
+Next: the workers' fixes (BUG-245, BUG-252, BUG-258/160) as they report; inline BUG-049 or BUG-172.
+
+## Iteration 135: 2026-11-02 20:43: fix (BUG-172, decided)
+Picked: BUG-172 (P2), inline, option (c) as decided.
+Did: the band's fiscal-year-end closes are as traded (`price_factor_after`, now in `inputs` beside
+`is_share_split`, re-exported by `history_inputs`), and the band is the multiples' inclusive quartiles; the min and
+max stay in the assumptions (`band_min`, `band_max`). The oracle follows in its own commit, first; it also reads an N/A
+Graham bear, which BUG-007's commit had made it raise on (not run then: my miss).
+- RED: 3 failed (min/max band; closes on the spin-off basis); GREEN. 4 of 4 mutants killed; BUG-007's and BUG-246's
+  still killed.
+- Measured on two DB copies, engine over all 502: 450 multiples rows and 170 medians move; 20 verdicts change: fair
+  to expensive at ALL, AZO, CAH, CF, DOC, GM, HIG, HST, HSY, MDLZ, MGM, OKE, PFE, PNC, USB, WEC, WFC; fair to cheap at
+  GPN, HBAN, T. GE's bull $8,498.58 to $3,641.28. No owner-earnings verdict or label.
+- The oracle: on the copy valued by head's code, 450 multiples mismatches; with the fix 1 (HOOD, which predates it).
+  Level 1: 0 of 2,013 on both.
+New: BUG-301 (GE's bull still high with 4 years), BUG-302 (HOOD's P/B median against the oracle).
+Evidence: %LOCALAPPDATA%\stockdb-qa\bug172\out (verdicts.txt, diff.txt, oracle_head.txt, oracle_fix.txt);
+`qa/evidence/bug172-mutants.json`.
+Result: BUG-172 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2741 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(valuation): the multiples band prices closes as traded and spans its quartiles (BUG-172)
+Next: apply BUG-245 (worker done), then BUG-252 (worker done), then BUG-258/160.
+
+## Iteration 136: 2026-11-02 20:58: fix (BUG-245, decided)
+Picked: BUG-245 (P1), prepared by an opus worker.
+Did: with both years' filing dates known, the declared share splits dated between them fold the seam whenever it is
+nearer their product than 1.0, whatever the 1.5 threshold and the 1.25x tolerance (`inputs._splits_filed_between`);
+otherwise the old path. Equal splits take their own seams by date (WRB), as BUG-248 does for quarters. README's two
+passages say so. I reviewed the diff, proved RED on an export of HEAD and applied it (`tools/apply_fix.sh`).
+- RED: 6 failed of the new tests; GREEN. Mutants, by me on the checkout: 9 of 9; BUG-173's 9, BUG-247's 9 and
+  BUG-172's 4 still killed.
+- Re-measured on today's code (BUG-172 had moved the band since the worker's run): engine over all 502 on two copies.
+  One median: ODFL bear 47.10 to 58.08, base 56.90 to 72.60, bull 71.42 to 72.60 (expensive either way). Model rows:
+  ODFL and PCAR Lynch, WRB multiples. WRB's bear median no longer moves: BUG-172's quartile band absorbs it. No
+  verdict, owner-earnings verdict or label. The valuation oracle: level 2 4 to 3 beyond 0.5% (ODFL's Lynch agrees).
+  The worker's scores oracle: 87 per-share disagreements at the six companies gone (`qa/evidence/bug245-investigation.txt`).
+Evidence: `qa/evidence/bug245-verify-mine.txt`, %LOCALAPPDATA%\stockdb-qa\bug245m\out, `qa/evidence/bug245-mutants.json`.
+Result: BUG-245 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2754 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(valuation): the splits filed between two years fold their seam at any ratio (BUG-245)
+Next: apply BUG-252, then BUG-258 with BUG-160 (both prepared). Code review 24 after 2 more fixes.
+
+## Iteration 137: 2026-11-02 21:03: fix (BUG-258 with BUG-160, decided: option A')
+Picked: BUG-258 (P1) with BUG-160, prepared by an opus worker from iteration 110's A' prototype, ported onto HEAD.
+Did: `fetch_quote` carries Yahoo's payments from the chart request the splits already use; `refresh_quote` passes them,
+and `upsert_quote` stores them in the snapshot's transaction, served on the collection's rule for a run without bars.
+So DDM's trailing year, which ends on the refresh's day, holds every payment since the last collection, after a price
+factor (BUG-160) and in `stock-data refresh`'s recompute (BUG-258). Docstrings, README, GATHER-13 in
+`qa/LOOP_PROMPT.md` and `qa/MATRIX.md` restated ("writes only the snapshot" is no longer true).
+- RED: 5 of 6 new tests failed (the 6th is a guard); GREEN. Mutants, by me on the checkout: bug258's 7 and refresh
+  m5-3's 5 killed. The prototype's `"error" not in dividends` check is left out: an equivalent mutant.
+- Measured by the worker at ca854ed, end to end against an oracle collecting every company in full: refreshes
+  07-26 to 08-12 49 DDMs and 19 medians move to the full collection's, KMI and OKE expensive to fair; 05-31 to 08-20
+  342 DDMs, 118 medians, 18 verdicts expensive to fair (AMT, BMY, CCI, CLX, DOC, DTE, FIS, HAS, HST, INVH, KMB, KMI,
+  MCD, OKE, UDR, VMRK, VZ, WEC). With the fix the refresh equals the oracle except DD and KLAC (share-split refreshes,
+  refused by design). No owner-earnings verdict or label. Full collections are unchanged.
+- The user's DB moves at its next refresh.
+Evidence: `qa/evidence/bug258-{investigation,verify-mine}.txt`; %LOCALAPPDATA%\stockdb-qa\bug258\out.
+Result: BUG-258 and BUG-160 VERIFIED. Q15's scheduled task is no longer blocked by them (still the user's to install).
+Gates: ruff ✓ mypy ✓ pytest 2760 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(refresh): a saved quote refresh stores Yahoo's payments (BUG-258, BUG-160)
+Next: code review 24 is due (5 fixes since review 23: BUG-246, -007, -172, -245, -258/160); BUG-252 meanwhile.
+
+## Iteration 138: 2026-11-02 21:10: fix (BUG-252)
+Picked: BUG-252 (P2, oldest open that needs no decision), prepared by an opus worker.
+Did: a NetIncomeLossAvailableToCommonStockholdersBasic fact ranks after every other net-income tag where its own
+filing's EPS x weighted count for the period (basic pair first, else diluted; the count on its nearest power of 1000)
+is more than 10% from it, or of the other sign, and within 10% of the same filing's figure under a later tag
+(`xbrl_parser._to_common_set_aside`, through the existing set-aside ranking in the annual record, each vintage and the
+quarterly rungs). EG's FY2016-20 read ProfitLoss and its FY2016-19 counts are rescaled from thousands. The scores
+oracle's units guard no longer uses the code's own net income (its own commit, first, b70773f).
+- RED: 7 of 11 new tests failed (4 guards); GREEN. Mutants, by me on the checkout: 11 of 11; BUG-290's 17, BUG-171's
+  31 and BUG-170's 17 still killed. The worker's look-ahead: 0 cells.
+- The worker's all-filer census: 3 filers change, 143 cells (EG; PNC FY2018-20; an LHX FY2017 vintage). On DB copies
+  (measured at 14b79a4, before BUG-172 and BUG-245, which touch neither net income nor these companies' bases): no
+  median, verdict, owner-earnings verdict or label; EG's scores gain their 10-year CAGRs, predictability (2 stars) and
+  composite (75.0); 146 valuation_history rows. Scores oracle: EG agrees fully.
+- Residual: PNC FY2018-19 read the earlier 10-Ks' to-common figures (EPS-confirmed), not net income to the parent,
+  because the tag order puts to-common first: Q16's territory.
+- It reaches the user's DB at each company's next collection.
+Evidence: `qa/evidence/bug252-{investigation,verify-mine}.txt`, `qa/evidence/bug252-mutants.json`.
+Result: BUG-252 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2771 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(parsers): a to-common figure its own EPS contradicts gives way (BUG-252)
+Next: BUG-249 (decided: apply, after history_vs_yahoo and look-ahead); code review 24 is running.
+
+## Iteration 139: 2026-11-02 21:18: fix (BUG-249, decided)
+Picked: BUG-249 (P2), prepared and measured in iteration 130; the checks skipped then for low RAM run now.
+Did: the trailing-year windows step over a period end that holds no dollar flow and lies between two dollar-flow
+quarter ends one quarter apart (`ttm._inside_a_quarter`); financials_quarterly is untouched.
+- RED: 2 of 4 new tests failed (2 guards); GREEN. 8 of 8 mutants killed, by me on the checkout.
+- history_vs_yahoo on the worker's two copies (head and fix code, all 502 re-collected offline): the seam gate
+  120/121 to 121/121 (GL's 2012 seam, BUG-297, now folds); every other gate the same or better; P/E against Yahoo fails
+  on both (88% gate, 86% and 85%), as before. valuations and valuation_summary identical against the reference.
+- Look-ahead: not applicable. lookahead.py checks the annual vintages' debt and cash fields; compute_ttm writes only
+  financials_ttm, and the worker's diff shows financials_annual and its vintages unchanged.
+- Moves, measured at 7b6931c (iteration 130): no median, verdict or owner-earnings verdict; 19 historical-value labels
+  (listed under BUG-249), as decided. Later fixes (BUG-245/246/007/172/252/258) don't touch the history's inputs.
+- It reaches the user's DB at each company's next collection (financials_ttm is stored at collection).
+Evidence: `qa/evidence/bug249-{investigation,verify-mine}.txt`; %LOCALAPPDATA%\stockdb-qa\bug249\out (hvy_*.txt).
+Result: BUG-249 VERIFIED; BUG-297 VERIFIED with it.
+Gates: ruff ✓ mypy ✓ pytest 2775 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(parsers): trailing years step over an end inside a quarter (BUG-249)
+Next: record code review 24 (1 Important: the band's spin-off factor counted twice in two paths) and fix it.
+
+## Iteration 140: 2026-11-02 21:19: code review 24
+Picked: code review 24, due after five fixes since review 23 (BUG-246, -007, -172, -245, -258/160).
+Did: an opus reviewer read `git diff 100facf..a873067` read-only, ran the suite on an export (exit 0) and probed a DB
+copy and unit tests.
+- Critical: none. Important 1 (proven by unit tests, no case on today's data): BUG-303, the band's spin-off factor.
+- Minor 1 (proven on real data): BUG-304, SNDK's lost verdict; decided by the loop's recommendation.
+- Minor 2-4: BUG-305 (Graham's window), BUG-306 (docs), BUG-307 (a refresh's served day; unproven).
+- Checked clean: BUG-246's guard; every consumer of an N/A bear (32 rows, no crash over 502); the quartiles match the
+  oracle's; BUG-245 moves only ODFL, PCAR, RJF and WRB; BUG-258's failure paths write nothing; no 3.10+ syntax.
+Evidence: `qa/evidence/review24.txt`; %LOCALAPPDATA%\stockdb-qa\review24.
+Result: review 24 open on BUG-303 (Important) until it is fixed.
+Gates: no code change | CI: PR #29
+Next: BUG-303, then BUG-304.
+
+## Iteration 141: 2026-11-02 21:29: fix (BUG-303, code review 24's Important finding)
+Picked: BUG-303 (P2), review 24's Important finding, inline.
+Did: the band's close, once as traded (`price_factor_after`), moves to the price's basis by share splits alone
+(`bars_to_split_basis`); the full bars-to-price factor counted a spin-off between the bars and the price a second time.
+The oracle's `bars_to_price_basis` takes `shares_only` for its FY-end price, in its own commit first.
+- RED: 2 failed (x 1.281 and / 1.281), 1 guard passed; GREEN. Mutants: 2 of 2; BUG-172's 4 and BUG-245's 9 still killed.
+- On two DB copies, engine over all 502: nothing moves (no ticker has a factor between its price and its last bar
+  today), as the review found; the oracle the same on both (level 1: 0 of 2,013; level 2: 3).
+Evidence: %LOCALAPPDATA%\stockdb-qa\bug303\out; `qa/evidence/bug303-mutants.json`.
+Result: BUG-303 VERIFIED; code review 24 closed with no open Critical or Important finding.
+Gates: ruff ✓ mypy ✓ pytest 2778 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(valuation): the band's closes reach the price's basis by share splits alone (BUG-303)
+Next: BUG-304 (decided), then the P2s: BUG-260, -271, -274, -295, and the decided questions.
+
+## Iteration 142: 2026-11-02 21:37: fix (BUG-304, decided)
+Picked: BUG-304 (P2), inline; dispatched BUG-049 and BUG-260 to workers, then stopped both when the usage limit
+neared (their scratch folders hold partial work only; restart them).
+Did: `engine.verdict` reads a price above the bull median as expensive without a bear median; below it, no verdict.
+The screener's SQL filters already did. SNDK reads expensive again.
+- RED: the new test failed (None for expensive); GREEN.
+Result: BUG-304 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2779 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): a price above every bull is expensive without a bear median (BUG-304)
+Next: restart BUG-049 and BUG-260's workers; then BUG-271, -274, -295 and the decided questions.
+
+## Iteration 143: 2026-11-02 23:44: fix (Q1, decided)
+Picked: Q1 (implemented as a P2), inline; first restarted the loop (cancelled at the usage limit) and BUG-049's and
+BUG-260's workers, which had made nothing before they were stopped.
+Did: `screener.js` runs the default, unfiltered screen on load, not only when the URL has a query string.
+- RED: the new test failed (the location.search guard); GREEN. 1 of 1 mutant killed.
+- Not checked in a browser this iteration: the change is the init's one guard, and /ui/screen with no parameters is
+  the unfiltered screen the existing tests cover. The convergence sweep's UI pass will see it.
+Evidence: `qa/evidence/q1-mutants.json`.
+Result: Q1 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2780 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(web): a bare /screener runs the default screen (Q1)
+Next: BUG-049 and BUG-260 as their workers report; inline Q2 with Q5 (growth without the analyst figure).
+
+## Iteration 144: 2026-11-03 00:06: fix (Q2 with Q5, decided)
+Picked: Q2 and Q5 (implemented as P2s), inline.
+Did: `derive_growth` is the historical CAGR alone, clamped (Q2: Yahoo's earningsGrowth, one quarter's year-over-year
+change, takes no part and isn't recorded as a growth input). Where the CAGR can't be measured, it is measured from the
+first positive year when at least 4 fiscal years remain (Q5 option c, `hist_from_first_positive`), else a flat 0%
+(`none`; Lynch N/A). All four callers (DCF, DDM, Lynch, owner earnings). README's DCF row and the valuation spec are
+amended. The oracle follows in its own commit, first.
+- Tests: the growth tests rewritten to the decided rule, 4 new; 3 of 3 mutants killed.
+- Measured on two DB copies, engine over all 502: 166 medians, 74 verdicts (expensive to fair 29, fair to cheap 22,
+  expensive to cheap 16, fair to expensive 4, cheap to fair 2, cheap to expensive 1) and 58 owner-earnings verdicts
+  move; no historical-value label. The oracle: on head's copy 384 level-2 mismatches, with the fix 4 (HLT, RTX, HOOD as
+  before; EXE, now compared, is BUG-308).
+- DDM's growth goes the same way (no analyst term); BUG-049's worker rebuilds DDM's history on top of it.
+New: BUG-308.
+Evidence: %LOCALAPPDATA%\stockdb-qa\q2q5\out (verdicts.txt, diff.txt, oracle_*.txt); `qa/evidence/q2q5-mutants.json`.
+Result: Q2 and Q5 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2783 passed, 1 skipped, 1 warning | CI: PR #29
+Commit: (this commit) fix(valuation): growth is the historical CAGR, from the first profitable year if need be (Q2, Q5)
+Next: BUG-049 and BUG-260 as their workers report; inline Q8 or Q9.
+
+## Iteration 145: 2026-11-03 00:18: fix (Q8, decided)
+Picked: Q8 (implemented as a P2), inline.
+Did: `models.stale_basis_reason`: a model's basis fiscal year more than 2 years before the valuation's day
+(`as_of.year - basis_fy > 2`) makes it N/A, "basis FY2023 is more than 2 fiscal years old"; `run_valuations` applies it
+to every model but DDM (its basis is Yahoo's current trailing year), and the tangible Graham number follows the Graham
+model. README says so.
+- RED: 2 failed (Graham valued FY2023 in 2026; the tangible number likewise), 1 guard passed; GREEN. 4 of 4 mutants.
+- Measured on two DB copies, engine over all 502: nothing moves (no company's basis is that old today); the oracle the
+  same on both (level 2: 4).
+Evidence: %LOCALAPPDATA%\stockdb-qa\q8\out; `qa/evidence/q8-mutants.json`.
+Result: Q8 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2786 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): no per-share value on a basis more than two fiscal years old (Q8)
+Next: BUG-049 and BUG-260 as their workers report; inline Q9.
+
+## Iteration 146: 2026-11-03 00:30: fix (Q9, decided)
+Picked: Q9 (implemented as a P2), inline.
+Did: `classify_submissions` takes the companyfacts: a finance SIC (6020-6299) whose facts tag no deposits (Deposits,
+InterestBearingDepositLiabilities, DepositsTotal) is a general company; SIC 6324 (managed care) leaves the insurers.
+Without the facts the SIC decides, as before. README's sector passage says so.
+- RED: 3 new tests failed; GREEN. 4 of 4 mutants killed.
+- Measured: the 68 bank and insurer tickers re-collected offline with head's code and with the fix on two DB copies,
+  engine over all 502. 19 become general: APO, ARES, BLK, BX, CBOE, CME, COIN, HOOD, IBKR, ICE, IVZ, KKR, NDAQ, TROW
+  (bank) and CI, CNC, ELV, HUM, UNH (insurance). 19 medians, 18 verdicts (most of them first verdicts; CI expensive to
+  fair, CNC fair to cheap, COIN fair to expensive, IVZ expensive to fair), 14 owner-earnings verdicts and 5 labels
+  (CBOE far above to near, CME above to near, HUM above to far above, IVZ far above to above, UNH below to near). The
+  oracle on the fix's copy: level 1 0 of 2,041, level 2 3 (as before).
+- It reaches the user's DB at each company's next collection (the sector is stored then).
+Evidence: %LOCALAPPDATA%\stockdb-qa\q9\out; `qa/evidence/q9-mutants.json`.
+Result: Q9 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2789 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(mappings): a finance SIC without deposits, and managed care, are general companies (Q9)
+Next: apply BUG-260 (its worker is done), BUG-049 when its worker reports.
+
+## Iteration 147: 2026-11-03 00:41: fix (BUG-260)
+Picked: BUG-260 (P2), prepared by an opus worker.
+Did: `xbrl_parser._cash_parts_set_aside`, after BUG-161's step: a filing's Cash is set aside on its dates where, on one
+of them, its restricted-cash total agrees within 0.5% with a cash-and-equivalents figure above Cash that this filing or
+an earlier one tags there (CashAndCashEquivalentsAtCarryingValue, CashCashEquivalentsAndShortTermInvestments,
+CashAndCashEquivalentsFairValueDisclosure, or Cash plus CashEquivalentsAtCarryingValue). The total then holds no
+restricted cash and is the balance sheet's line. README's Cash note says so.
+- RED: 5 failed of the new tests (5 guards pass); GREEN. Mutants, by me on the checkout: BUG-260's 10, the reshaped
+  BUG-161 (1) and BUG-170/267/161/142 (4) specs, BUG-290's 17, BUG-252's 11, BUG-170's 17, BUG-171's 31: all killed.
+  The worker's look-ahead: 0 cells.
+- The worker's census: 120 records at 4 filers (CF, TGT, GEN, KLAC vintages); ES, HIG, PGR, VRT, AIG, PNC, FSLR unchanged.
+  TGT FY2025 cash $0.276B to $4.762B (net debt $11.771B to $7.285B), CF FY2024 $0.168B to $1.614B. On DB copies (at
+  e5c8dad; cash reaches no model's median): no median, verdict, owner-earnings verdict or label; EPV and EV/EBITDA bands
+  at CF, TGT, GEN; composites through ranks.
+- Residual: TGT's FY2018-19 annual and its 2019-02-02 quarter keep $0.337B/$0.359B: the FY2018 10-K tags its line
+  under unmapped tags with no total (as BUG-261).
+- It reaches the user's DB at each company's next collection.
+Evidence: `qa/evidence/bug260-{investigation,verify-mine}.txt`, `qa/evidence/bug260*-mutants.json`.
+Result: BUG-260 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2797 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): Cash a balance sheet's total shows to be a part gives way (BUG-260)
+Next: BUG-049 when its worker reports; inline BUG-271 or Q16.
+
+## Iteration 148: 2026-11-03 00:46: fix (BUG-049, decided: option a)
+Picked: BUG-049 (P2), prepared by an opus worker (rebased twice as HEAD moved).
+Did: DDM's growth history is SEC's dividends_per_share over the valuation's fiscal years, with the EPS's split
+normalisation and divided by the non-split factors after each year end (as Yahoo's payments are); a year SEC lacks, or
+whose figure holds at most one of the year's two or more payments, takes Yahoo's payments summed. Leading years where
+the dividend started or restarted are skipped; fewer than 4 years, no CAGR. The TTM stays Yahoo's. New assumption
+`dividend_growth_years`. README's DDM row and the spec say so. The oracle follows in its own commit first (e210394),
+saying it encodes the fix's two thresholds.
+- Spin-offs: SEC's figures are put on the basis of Yahoo's payments, which keeps today's spin-off treatment (the
+  decision changed the history's source, not the spin-off policy; as declared, every spin-off would read as a cut).
+- RED: 23 failed; GREEN. Mutants, by me on the checkout: BUG-049's 11, and Q8's, BUG-007's, BUG-172's, BUG-245's,
+  BUG-246's, BUG-303's and Q2/Q5's specs: all killed.
+- Measured by the worker on DB copies (at 4492f06; identical on 6027364): 95 DDM rows and 54 medians move; no verdict,
+  owner-earnings verdict or label. Up: CRH, CBOE, GEN, EG, CB... (Yahoo missing payments at CBOE, ALLE, TEL, STE, A, HUM);
+  down: COST, CEG, FERG, APO, ACN... The new oracle: 78 level-2 rows on head's copy, 5 with the fix (EG's truncated
+  history, and the 4 known).
+- Residuals: COST and FERG (a special at a CAGR endpoint: Q3), ACN (Yahoo lacks 2 payments in a year SEC has no figure
+  for: Q4), CEG (its opening year is partial: 3 years, no CAGR), a schedule-change year, slip noise in fallback years.
+Evidence: `qa/evidence/bug049-{investigation,verify-mine}.txt`; %LOCALAPPDATA%\stockdb-qa\bug049\out.
+Result: BUG-049 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2808 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): DDM's growth history comes from SEC's dividends per share (BUG-049)
+Next: Q3 and Q4 (DDM's specials and incomplete histories, now on this history); code review 25 after 1 more fix.
+
+## Iteration 149: 2026-11-03 08:14: fix (BUG-305, BUG-306; P3s)
+Picked: Q3 with Q4, and Q16, to opus workers; inline two related P3s from code review 24 on the Graham model.
+Did: BUG-305: Graham's bear window is the last 3 fiscal years on EPS alone (book value only for the latest year), so
+a loss year without equity still makes the bear N/A. BUG-306: the tangible Graham docstring, USAGE_GUIDE's model table
+and growth line, and renderVAL's JSDoc describe BUG-007, BUG-246, BUG-172, Q2/Q5 and Q8 as they are.
+- RED: BUG-305's test failed (bear 30.0); GREEN. 1 of 1 mutant; BUG-007's spec reshaped for the new line (its
+  "whole history" mutant quoted the old one): 4 of 4; BUG-246's 3 of 3.
+- No case of BUG-305 on today's data (code review 24's probe), so no measurement.
+- The three workers (Q3/Q4, Q16, code review 25) were stopped by the API's usage limit mid-run; resumed after it.
+Evidence: `qa/evidence/bug305-mutants.json`, `qa/evidence/bug007-mutants.json`.
+Result: BUG-305 and BUG-306 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2809 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): Graham's bear window is the last three years on EPS alone; docs (BUG-305, BUG-306)
+Next: code review 25, Q3/Q4 and Q16 as their workers report; BUG-271, -274, -295, Q7, Q17 and the P3s.
+
+## Iteration 150: 2026-11-03 08:22: fix (Q7, decided; BUG-051 with it)
+Picked: Q7 (implemented as a P2), inline.
+Did: `_total_shares` takes market cap / price whenever it is more than SHARE_CLASS_GAP (2%) above Yahoo's count: every
+class and unit counts. The 2-5% tiebreaker on the latest FY's count (SHARE_SOURCE_GAP), which followed that count's
+drift (BUG-051), is gone. The oracle follows in its own commit first.
+- RED: MRVL's case failed (the tiebreaker took Yahoo's count); GREEN, with a 1.5% guard case. 2 of 2 mutants.
+- Measured on two DB copies, engine over all 502: one median, MRVL base 20.94 to 20.62 (expensive either way); no
+  verdict, owner-earnings verdict or label. The oracle: 6 level-2 rows on head's copy (MRVL's DCF new), 5 with the fix.
+Evidence: %LOCALAPPDATA%\stockdb-qa\q7\out; `qa/evidence/q7-mutants.json`.
+Result: Q7 VERIFIED; BUG-051 VERIFIED with it.
+Gates: ruff ✓ mypy ✓ pytest 2810 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): per-share values count every share class and unit (Q7, BUG-051)
+Next: record code review 25 (2 Important) and fix them.
+
+## Iteration 151: 2026-11-03 08:23: code review 25
+Picked: code review 25 (seven fixes since review 24: BUG-304, Q1, Q2/Q5, Q8, Q9, BUG-260, BUG-049, and BUG-305/306).
+Did: an opus reviewer read `git diff b2ef0ff..92ab897` read-only, wrote failing probes on an export and scanned a DB
+copy's DDM rows.
+- Critical: none. Important: BUG-309 (Q9 and a failed companyfacts request), BUG-310 (Q8 and three indicators;
+  decided by the loop's recommendation). Minor: BUG-311..315.
+- Checked clean: BUG-304 matches the screener's SQL; Q1; every growth caller and the displays; Q8's engine path; Q9's
+  deposit tags; BUG-260's look-ahead guard; BUG-049's basis and None paths; BUG-305; 3.9 syntax.
+Evidence: `qa/evidence/review25.txt`; %LOCALAPPDATA%\stockdb-qa\review25.
+Result: review 25 open on BUG-309 and BUG-310 until fixed.
+Gates: no code change | CI: PR #29
+Next: BUG-309, then BUG-310.
+
+## Iteration 152: 2026-11-03 08:31: fix (BUG-309, code review 25's Important 1)
+Picked: BUG-309 (P2), inline.
+Did: after `merge_sec_data`, a bank by SIC alone (no companyfacts: a failed request) keeps the stored sector when it
+isn't bank, with a warning, as a failed submissions request already does; with nothing stored the SIC decides, and
+facts that tag deposits decide over a stored sector.
+- RED: the reviewer's case failed (bank, bank); GREEN with 3 tests. 2 of 2 mutants (the second needed the third test).
+- Nothing moves on today's data: the rule acts only when companyfacts fails.
+Evidence: `qa/evidence/bug309-mutants.json`.
+Result: BUG-309 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2813 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(fetchers): a failed companyfacts request keeps the stored sector (BUG-309)
+Next: BUG-310 (decided).
+
+## Iteration 153: 2026-11-03 08:40: fix (BUG-310, decided; code review 25's Important 2)
+Picked: BUG-310 (P2), inline.
+Did: `compute_indicators` applies `stale_basis_reason` to every indicator's result with a basis fiscal year (reverse
+DCF, EPV, NCAV, the tangible Graham number); the median P/S value's trailing-year basis carries none. README says so.
+- RED: 2 new tests failed (reverse DCF and NCAV applicable in 2029 on FY2025); GREEN. 1 of 1 mutant; Q8's 4 still killed.
+- Nothing moves on today's data (no basis that old, iteration 145).
+Evidence: `qa/evidence/bug310-mutants.json`.
+Result: BUG-310 VERIFIED; code review 25 closed with no open Critical or Important finding.
+Gates: ruff ✓ mypy ✓ pytest 2815 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): every fiscal-year indicator follows the models' age rule (BUG-310)
+Next: Q3/Q4 and Q16 as their workers report; BUG-271, BUG-274, BUG-295, Q17 and the P3s.
+
+## Iteration 154: 2026-11-03 08:51: fix (BUG-312, BUG-313, BUG-314; P3s from code review 25)
+Picked: three related P3s (Q2's and Q9's loose ends), inline; dispatched BUG-271 to a worker first.
+Did: BUG-312: the ERN tab labels Yahoo's earningsGrowth "Quarterly Earnings Growth (YoY)", with a tooltip saying it is
+no forecast. BUG-313: the coverage report classifies with the companyfacts it holds (Q9). BUG-314: the valuation and
+owner-earnings specs state Q2/Q5's growth rule; inputs.py no longer loads analyst_growth (the field stays, unread).
+- RED: the two new tests failed before the change (the label; the coverage report's bank); GREEN. 2 of 2 mutants.
+- Nothing moves in the valuations (analyst_growth was unread since Q2).
+Evidence: `qa/evidence/bug312-313-mutants.json`.
+Result: BUG-312, BUG-313, BUG-314 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2817 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix: Q2's and Q9's loose ends: the ERN label, the coverage report, the specs (BUG-312..314)
+Next: the workers' Q3/Q4, Q16 and BUG-271; inline BUG-274 or the P3s.
+
+## Iteration 155: 2026-11-03 09:04: fix (BUG-137, BUG-138; P3s)
+Picked: two related P3s in the web's number formats, inline.
+Did: `fmt_price` puts a negative's sign before the dollar ("-$10.87"), as `fmt_money` does; `fmt_signed_price` is now
+the same. `_suffixed` reads a trillion or more in T ("$3.68T" for MSFT's market cap, not "$3676.66B").
+- RED: 2 new tests failed; GREEN; the 936 web tests pass. 2 of 2 mutants.
+Evidence: `qa/evidence/bug137-138-mutants.json`.
+Result: BUG-137 and BUG-138 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2819 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(web): a negative price's sign before the dollar, and trillions in T (BUG-137, BUG-138)
+Next: the workers' results; inline P3s.
+
+## Iteration 156: 2026-11-03 09:13: fix (BUG-046, BUG-166; P3s)
+Picked: two CLI P3s, inline.
+Did: BUG-046: `stock-web` parses its arguments: `--help` prints the environment variables it reads and starts nothing,
+an unknown argument is refused (exit 2) rather than ignored. BUG-166: `diagnose.py` prints a canonical share-unit
+field as a count ("14.77B"), money as before ("$391.00B").
+- RED: 3 new tests failed (uvicorn.run patched out: no server started); GREEN. 2 of 2 mutants.
+Evidence: `qa/evidence/bug046-166-mutants.json`.
+Result: BUG-046 and BUG-166 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2822 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(cli): stock-web --help starts nothing; diagnose prints share counts as counts (BUG-046, BUG-166)
+Next: apply Q16 (its worker is done); Q3/Q4 and BUG-271 as their workers report.
+
+## Iteration 157: 2026-11-04 12:43: fix (Q16, decided)
+Picked: Q16 (implemented as a P2), prepared by an opus worker.
+Did: a canonical field `net_income_to_common` (NetIncomeLossAvailableToCommonStockholdersBasic), parsed into the annual,
+vintage, quarterly and TTM records (a new column, migrated into old DBs); a figure more than 10% from its own filing's
+EPS x count is not read (BUG-252's test; no check where |EPS| < 0.10). The history's P/E takes it where the trailing
+year has it, else net income (`TTMPoint.earnings`). net_income's own tag order is unchanged. README and the history
+spec say so.
+- RED: 11 failed of 13 new tests; GREEN. Mutants, by me on the checkout: Q16's 14, BUG-252's 11, BUG-260's 10,
+  BUG-290's 17, BUG-249's 8, BUG-248's 5: all killed. The worker's look-ahead (with the new field): 0 cells.
+- Census: no other field or tag moves; 3,353 annual and 10,052 TTM records gain the figure. On DB copies (303
+  re-collected, at 92ab897): valuations identical (0 medians, verdicts, owner-earnings verdicts); 27 historical values,
+  2 labels (GEHC near to below, SRE above to far above, with a new price_far_above_value). history_vs_yahoo P/E within
+  10%: 389/455 to 397/455 (gate 88%, still 4 short); ALB, MCHP, PSA, VST, KKR nearer Yahoo; ARES farther (its
+  mandatory convertible preferred).
+- Residuals: TDG tags to-common only in its 10-Ks (its TTM keeps net income); a filer tagging it in some quarters only
+  switches basis month to month.
+Evidence: `qa/evidence/q16-{investigation,verify-mine}.txt`; %LOCALAPPDATA%\stockdb-qa\q16\out.
+Result: Q16 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2835 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): the history's P/E on net income to common (Q16)
+Next: Q3/Q4 and BUG-271 (their workers resumed after the usage limit); code review 26 after this (5 fixes since 25).
+
+## Iteration 158: 2026-11-04 12:51: fix (BUG-284, BUG-158; P3s)
+Picked: two related ops P3s, inline.
+Did: `AppConfig.__post_init__` no longer makes data/output/{json,csv} and data/cache: `default_config` is built at
+import, so any import (a test, a scratch tree, a read-only web browser) left them in the working directory. The
+writers make their own folders (the exporters on construction, the SEC cache on write, the database's parent).
+- RED: 2 new tests failed (folders after an import; after a web session); GREEN, with a guard that an exporter still
+  makes its folder. 1 of 1 mutant.
+Evidence: `qa/evidence/bug284-158-mutants.json`.
+Result: BUG-284 and BUG-158 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2838 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(config): importing the configuration makes no folders (BUG-284, BUG-158)
+Next: the workers' results (Q3/Q4, BUG-271, review 26); inline P3s.
+
+## Iteration 159: 2026-11-04 13:01: fix (BUG-069, BUG-283; P3s) and code review 26
+Picked: two P3s on /api/quality/runs, inline; then code review 26's report.
+Did: `Reader.collection_runs` always gives `warnings` (a list, [] on a database without the column: BUG-069) and gives
+`incomplete` as an object, not its JSON text (BUG-283); the FA tab's note now also shows the run's "SEC EDGAR: the
+companyfacts lack ..." warning (BUG-283's second half).
+- RED: the 2 API tests failed (KeyError; a string); GREEN; the FA test written after its fix, proven by its mutant.
+  3 of 3 mutants.
+- Code review 26 (92ab897..95a0ddf: Q7, BUG-309, -310, -312..314, -137/138, -046/166, Q16): no Critical or Important
+  finding. Minors logged: BUG-316 (proven synthetic), BUG-317 (docs), BUG-318 (the indicators oracle). Checked clean:
+  Q16 vs BUG-252, the quarterly differencing, the migration and every reader, BUG-137/138's consumers, Q7's, BUG-310's,
+  BUG-309, BUG-046/166, 3.9 syntax, no new look-ahead. It ran 21 targeted test files (952 passed); RAM kept it off the
+  full suite and real data.
+Evidence: `qa/evidence/bug069-283-mutants.json`, `qa/evidence/review26.txt`.
+Result: BUG-069 and BUG-283 VERIFIED; code review 26 closed with no open Critical or Important finding.
+Gates: ruff ✓ mypy ✓ pytest 2841 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(web): the runs API's warnings and incomplete; FA shows the SEC's lag (BUG-069, BUG-283)
+Next: the workers' Q3/Q4 and BUG-271; inline BUG-316..318 and the P3s.
+
+## Iteration 160: 2026-11-04 13:14: fix (BUG-316; P3 from code review 26)
+Picked: BUG-316, inline.
+Did: `_annual_filings` takes the facts no record reads (`_to_common_contradicted`) and skips them; the restore step
+(`_restore_agreed_figures`) passes them, so a contradicted to-common figure can't be put back as a "sign flip".
+- RED: the reviewer's case failed (+$50M restored); GREEN. Mutants: BUG-316's 1, and Q16's 14, BUG-252's 11, BUG-260's
+  10, BUG-290's 17, BUG-171's 31, BUG-170's 17: all killed.
+- Not searched on real data (code review 26 found the shape rare); the parser reads fewer facts, so no look-ahead risk.
+Evidence: `qa/evidence/bug316-mutants.json`.
+Result: BUG-316 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2842 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): the restore step skips a to-common figure no record reads (BUG-316)
+Next: BUG-317, BUG-318; the workers' Q3/Q4 and BUG-271.
+
+## Iteration 161: 2026-11-04 13:23: fix (BUG-317, BUG-318; P3s from code review 26)
+Picked: the two remaining Minors of code review 26, inline.
+Did: BUG-317: USAGE_GUIDE labels Yahoo's earningsGrowth "Quarterly Earnings Growth (YoY)", no forecast (Q2); its Lynch
+example measures growth as the EPS CAGR of up to 5 fiscal years; EPV's shares_source list adds `market_cap / price`;
+the valuation oracle's comment describes Q7's rule. BUG-318: the indicators oracle applies Q8/BUG-310's age rule to
+the reverse DCF, EPV, NCAV and the tangible Graham number (its own basis years, dated by the latest snapshot).
+- The indicators oracle on a DB copy (q8's fix.db): 12 of 12 gates pass (no basis that old today).
+Result: BUG-317 and BUG-318 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2842 passed, 1 skipped | CI: PR #29
+Commit: (this commit) docs: Q2's and Q7's rules in USAGE_GUIDE and the oracles; the indicators oracle's age rule (BUG-317, BUG-318)
+Next: the workers' Q3/Q4 and BUG-271; the P3s.
+
+## Iteration 162: 2026-11-04 13:36: fix (BUG-197, BUG-199; P3s)
+Picked: two quality-score P3s, inline; dispatched BUG-274 (P2, D&A) to an opus worker first.
+Did: BUG-197: the Sloan ratio is N/A, "not meaningful for banks/insurers", as Beneish M is (accruals leave financials
+out); README says so. BUG-199: the gross-margin-decline sign falls back on revenue less cost of revenue, as the scores'
+gross margin does.
+- RED: 2 new tests failed; GREEN; one existing test that pinned a bank's Sloan ratio now pins its N/A. 2 of 2 mutants.
+- Measured on two DB copies, engine over all 502: 68 banks' and insurers' Sloan ratios become N/A and 7 sloan_high
+  warnings go; no composite, median, verdict or label moves.
+Evidence: %LOCALAPPDATA%\stockdb-qa\bug197\out; `qa/evidence/bug197-199-mutants.json`.
+Result: BUG-197 and BUG-199 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2844 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(scores): no Sloan ratio for banks and insurers; the gross-margin sign's fallback (BUG-197, BUG-199)
+Next: the workers' Q3/Q4, BUG-271, BUG-274; the P3s.
+
+## Iteration 163: 2026-11-04 13:49: fix (BUG-194, BUG-200; P3s)
+Picked: two quality-score P3s, inline.
+Did: BUG-194: FCF/share and book/share get their 3- and 10-year CAGRs, as the plan asks for every series (four new
+quality_scores columns, migrated into old tables; the STAT growth table fills its "—" cells from them). BUG-200: the
+profitability rank's profitable years is a share of the last 5 to 10 years, not a count. README says so.
+- RED: BUG-194's store test and BUG-200's test failed; GREEN. 3 of 3 mutants (the growth list's, written in the same
+  step as its test, proven by its mutant).
+- Measured on two DB copies, engine over all 502: 16 profitability ranks, 18 industry ones, 12 composites and 15
+  industry composites move; no median, verdict or label.
+Evidence: %LOCALAPPDATA%\stockdb-qa\bug194\out; `qa/evidence/bug194-200-mutants.json`.
+Result: BUG-194 and BUG-200 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2846 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(scores): FCF and book CAGRs over 3 and 10 years; profitable years as a share (BUG-194, BUG-200)
+Next: apply Q3/Q4 (its worker is done); BUG-271 and BUG-274 as they report.
+
+## Iteration 164: 2026-11-04 14:05: fix (Q3 with Q4, decided)
+Picked: Q3 and Q4 (implemented as P2s), one unit, prepared by an opus worker on BUG-049's history.
+Did: Q3 option (c): a payment over 3x the median of the payments in the 365 days on each side is a one-off (both sides
+must exist, so the latest payment never is: it could be a raise) unless a payment over 3x its regular level fell
+within 91 days of its anniversary in 2 of the 3 years before (PGR's, PCAR's, WRB's, CME's recurring ones stay); where
+the special took a regular payment's slot only its excess goes (HST). One-offs leave the TTM and the CAGR's endpoints
+(SEC's figure only where it holds them). Q4 option (c): `load_inputs` reruns the completeness check (BUG-012) on the
+stored payments and DDM is N/A, "dividend history incomplete (Yahoo is missing payments in FY...)", where a flagged gap
+reaches the TTM window or a growth year read from Yahoo's payments; a year without its own SEC figure is measured
+against the year before's (ACN). The oracle follows in its own commit first (85bea87), naming the fix's heuristics.
+- Reading of Q4: keyed on the gap, not "for as long as the check fires" (that would keep CB N/A to about FY2030 after
+  its TTM and growth are sound again); both give the same rows today.
+- RED: 16 failed (on the right files: my first RED run named two wrong ones); GREEN. Mutants, by me: Q3/Q4's 25,
+  BUG-049's 11, BUG-007's 4, BUG-173's 9, BUG-245's 9, Q7's 2, Q8's 4: all killed.
+- Measured by the worker on DB copies (at 05d77a4; its files unchanged to here): DDM N/A at ACN, ALLE, AON, CB, CBOE,
+  EG, JCI, STE, TT; values COST +53%, CPT +18%, VMRK +17%, HST -43%; 12 medians; 4 verdicts (ACN, AON, CPT expensive
+  to fair; EG fair to cheap); no owner-earnings verdict or label. The new oracle: 17 level-2 rows on head's copy, the
+  4 known with the fix.
+- BUG-040 (the slip rule) is moot since BUG-049; closed with it.
+- Residuals: FERG's 1.5x special served with an interim payment; a special that is the latest payment stays until one
+  follows; a new variable programme's first years read as one-offs.
+Evidence: `qa/evidence/q3q4-{investigation,verify-mine}.txt`; %LOCALAPPDATA%\stockdb-qa\q3q4\out.
+Result: Q3 and Q4 VERIFIED; BUG-040 VERIFIED (moot).
+Gates: ruff ✓ mypy ✓ pytest 2869 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): DDM leaves one-off specials out and refuses an incomplete history (Q3, Q4)
+Next: BUG-271 and BUG-274 as their workers report; code review 27 (5 units since 26: BUG-316, -317/318, -197/199,
+-194/200, Q3/Q4); BUG-295 with Q17.
+
+## Iteration 165: 2026-11-06 10:30: fix (BUG-180, BUG-181, BUG-182; P3s), then paused
+Picked: three P3s in the VAL tab's history section, inline.
+Did: BUG-180: with no live price the pill reads "No live price", not "Price None historical value". BUG-181: a full
+10-year window with gaps reads "10 years (49 months with a value)", not as a short history. BUG-182: the section says
+the day its history was computed ("Computed 2025-04-01"), so rows a failed computation left stand out.
+- RED: 3 new tests failed; GREEN. 3 of 3 mutants.
+Result: BUG-180, BUG-181, BUG-182 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2872 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(web): the VAL history's no-price state, gapped windows and its computed day (BUG-180..182)
+Paused: the user said "that all for now, save, commit, push". The Ralph loop is stopped. Three agents stopped at the
+API usage limit, their work saved in scratch: BUG-271 (%LOCALAPPDATA%\stockdb-qa\bug271), BUG-274
+(...\bug274) and code review 27 (scope 95a0ddf..1cb9a5d). Left: P2s BUG-271, BUG-274, BUG-295 (with Q17, decided),
+151 P3s, then the convergence sweeps (LOOP_PROMPT section 9).
+
+
+## Iteration 166: 2026-11-12 19:20: code review 27
+Picked: code review 27 (95a0ddf..bf7e23e, 10 commits: BUG-284/158, -069/283, -316, -317/318, -197/199, -194/200,
+Q3/Q4, BUG-180..182), restarted after the usage limit stopped it.
+Did: an opus reviewer read the range (`qa/evidence/review27.txt`); free RAM stayed at 1.1-1.5 GB, so no tests ran:
+findings are by reading, with probe tests written in %LOCALAPPDATA%\stockdb-qa\review27. Important 1 confirmed by the
+orchestrator in the code (scores.py `_NOT_SCORED`, scores_oracle.py `check_sloan`, `same`).
+Result: no Critical; Important 1 -> BUG-321 (P2); Minors -> BUG-322 to BUG-326 (P3).
+Gates: unchanged (qa/ only) | CI: PR #29
+Commit: (this commit) chore(qa): code review 27 recorded; one Important finding (BUG-321)
+Next: BUG-271 (applied, waiting on the full suite for RAM); BUG-274 (worker); BUG-321.
+
+## Iteration 167: 2026-11-12 19:42: fix (BUG-271)
+Picked: the oldest open P2; its worker's fix, saved at the usage limit (`%LOCALAPPDATA%\stockdb-qa\bug271`), resumed.
+Did: the as-of view no longer takes a later 10-K's narrower comparative over the year's own figure: each vintage keeps
+its figures' tags (`source_tags`), a lesser-ranked figure under half the held one is set aside, and the debt is read as
+one filing's view. The worker's exported diff predated its last refactor; the final asof.py and test file were taken
+from its fix2 tree (the mutant spec's form; mypy clean). The full suite caught one test pinning the old view:
+test_the_as_of_view_reads_each_10ks_debt_in_its_window[AEP] read $28.836B after the later 10-K (the paper beside
+the maturities, without $0.728B of borrowings); it now reads the balance sheet's $29.564B, the first 10-K's view
+(the later maturities, $1.599B under a lesser tag, are under half the $4.437B held). Expectation and comment updated.
+- RED: 10 of 95 failed on HEAD's src; GREEN. 22 of 22 mutants (qa/evidence/bug271-mutants.json).
+- Measured by the worker on backup-API copies, offline, all 502: stored tables unchanged but for the new column (and
+  BUG-277's hash order); no valuation reads the as-of view, so no median, verdict, owner-earnings verdict or label
+  moves. As-of reads: 649 figures move, 198 as of today; debt under half the annual record's 23 -> 0. Look-ahead 0.
+- New: BUG-319 (P2, the annual record's narrow concepts: PHM, PSX debt; FITB revenue), BUG-320 (P3).
+Result: BUG-271 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2889 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(asof): a later filing's narrower figure doesn't replace the year's own; debt read from one filing (BUG-271)
+Next: BUG-274 (worker); BUG-321 (the scores oracle's Sloan).
+
+## Iteration 168: 2026-11-12 19:43: fix (BUG-321, with BUG-326)
+Picked: code review 27's Important finding, inline; BUG-326 rides along (the same spec).
+Did: the quality-scores spec gives Sloan BUG-197's exception (N/A for banks and insurers, as Beneish M) and the share
+of profitable years (BUG-200); the scores oracle takes `NO_SLOAN = FINANCIALS` in `check_sloan` and in the severe signs
+it expects. The code was already right (668d28c); this is the oracle catching up, so it is its own commit.
+- On the BUG-194 worker's DB copy (scored by code with BUG-197): HEAD's oracle fails Sloan 434/502 and expects a
+  BRO sloan_high the code doesn't fire; the new oracle passes Sloan 502/502 with no severe-sign mismatch.
+- Both oracles still fail 3 gates on EG alone (per-share rows FY2015-19, 4 CAGRs, predictability): the copy's EG
+  rows predate BUG-252, whose fix reaches the user's DB at EG's next collection (iteration 138: EG agrees fully on a
+  re-collected copy). Not a code disagreement.
+Result: BUG-321 and BUG-326 VERIFIED.
+Gates: ruff ✓ (qa/oracle) | CI: PR #29
+Commit: (this commit) test(qa): the scores oracle and spec leave Sloan out for banks and insurers (BUG-321, BUG-326)
+Next: BUG-274 (worker); BUG-319; the P3s from review 27 (BUG-322..325).
+
+## Iteration 169: 2026-11-12 20:28: fix (BUG-324, BUG-325; P3s from code review 27)
+Picked: two of review 27's Minors, inline, while the BUG-274 worker reworks its fix and the BUG-319 worker
+investigates.
+Did: BUG-324: the BUG-194 store test now reads the four 3- and 10-year FCF and book CAGRs back (0.08 each on the seed),
+not only the columns; the review's mutant (the names out of QUALITY_COLUMNS, stored NULL) fails it, the code passes.
+BUG-325: Q4's entry gains a Reading line: DDM N/A where the gap touches what DDM reads (the TTM or a Yahoo growth
+year), not for as long as the check fires; the same rows today; pinned by an existing test.
+Result: BUG-324 and BUG-325 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2889 passed, 1 skipped | CI: PR #29
+Commit: (this commit) test(scores): the new CAGRs are read back from the store; Q4's reading on its entry (BUG-324, BUG-325)
+Next: BUG-274 (worker, rework); BUG-319 (worker); BUG-322, BUG-323.
+
+## Iteration 170: 2026-11-12 20:38: fix (BUG-322, BUG-323; P3s from code review 27)
+Picked: review 27's two UI Minors, inline.
+Did: BUG-322: FA and VAL show every SEC gap note of the latest run, each on its own line (`_sec_gap_notes`, a list;
+the templates loop), so the SEC-lag note no longer hides BUG-066's stale or no-annual explanation. BUG-323: a window
+shorter than ten years with gaps reads "since 2018-01 (49 of 87 months with a value)", not "(49 months)"; a window
+without gaps reads as before.
+- RED: 2 new tests failed on HEAD (the stale note missing; "(49 months)"); GREEN. Mutants by hand, BUG-323: 3 of 3
+  (n < span, n <= span + 1, the branch off); BUG-322's first-only reading is its RED.
+Result: BUG-322 and BUG-323 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2891 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(web): every SEC gap note on FA and VAL; a gapped short window counts its months (BUG-322, BUG-323)
+Next: BUG-274 (worker, rework); BUG-319 (worker); Q17.
+
+## Iteration 171: 2026-11-13 00:11: fix (BUG-274)
+Picked: the oldest open P2 with a fix ready; its worker resumed after the usage limit, then sent back once.
+Did: a D&A "total" larger than the amortization is read as the depreciation line where the filings show it, and the
+amortization joins it. Round 1 was not applied: it made HLT's Q4 2016 D&A negative (a restated period matched against
+the original by chance) and replaced net add-backs (BMY, PNC) and other bases (IP, CTAS) with gross figures. Round 2
+adds a same-revenue test for an earlier filing's evidence, corroboration for (a)/(c), entry under the line's own tag,
+and a census of negatives and halvings (0 of each).
+- RED: 13 of 310 failed on HEAD's src (14 on round 1's code, the HLT test among them); GREEN. 32 of 32 mutants; BUG-170's
+  spec reshaped for this code (qa/evidence/bug170-mutants.json, 17 of 17). Look-ahead 0.
+- Census and DB copies: D&A only (annual 95 cells at 19 filers); 0 medians, verdicts or labels; one owner-earnings
+  verdict, HUM expensive -> fair; 5 historical values move within their labels; HD composite 42 -> 44.
+- GE FY2022-25, the title's case, is undecidable from the facts: residual, with WELL, VRSK, BKNG, SCHW FY2022-23.
+- New: BUG-327 (P2, UPS's round D&A figures).
+Result: BUG-274 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2916 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): a D&A "total" the filings show to be the depreciation line takes the amortization (BUG-274)
+Next: code review 28 (5 fixes since 27); BUG-319 (its worker's measurement, then apply).
+
+## Iteration 172: 2026-11-13 00:26: fix (BUG-319, long-term debt)
+Picked: the P2 BUG-271's census found; an opus worker, its heavy step held until BUG-274's measurement was done.
+Did: long-term debt reads only figures on the filing's balance-sheet dates and sets aside a part tagged above the line
+beside it (`_debt_on_balance_sheet_dates`, `_debt_parts_set_aside` in `_filer_facts`): PHM FY2021-25 $0.03-0.08B ->
+$1.6-2.0B, PSX FY2015 $1.1B -> $8.843B, ECHO FY2024 $1.98B -> $25.66B, TGT, GNRC, BIIB, PLD and 8 more (20 annual
+cells at 15 filers). The bank revenue and HSY share cases are other causes: BUG-328, BUG-329 (P2).
+- RED: 10 of 327 failed on 5efa1be's src; GREEN. 17 of 17 mutants; two existing specs reshaped for the new chain
+  (qa/evidence/bug260-reshaped-bug319-mutants.json, bug260-bug170-bug267-bug161-bug142-bug319-mutants.json). Look-ahead 0.
+- DB copies (with BUG-274), 55 tickers re-collected offline, the engine over 502: 0 medians, verdicts, owner-earnings
+  verdicts or labels; PHM FY2025 total debt $0.044B -> $1.631B, EV/EBITDA 6.99 -> 7.52, Piotroski 3 -> 4 (its
+  piotroski_low warning gone); 312 valuation_history months at 21 tickers, latest month at PHM and PLD only. The
+  valuation oracle's output identical on both.
+- New: BUG-328, BUG-329 (P2); BUG-330, BUG-331 (P3).
+Result: BUG-319 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2933 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): long-term debt reads the balance sheet's date and sets aside a part tagged above the line (BUG-319)
+Next: code review 28 (running); BUG-327, BUG-328, BUG-329; Q17.
+
+## Iteration 173: 2026-11-13 00:26: code review 28
+Picked: code review 28 (bf7e23e..5efa1be: review 27's record, BUG-271, BUG-321/326, BUG-324/325, BUG-322/323, BUG-274).
+Did: an opus reviewer (`qa/evidence/review28.txt`); 5 probe tests, each failing at HEAD; the six touched test files
+pass (499). Free RAM 4.3 GB; no full suite or DB run.
+Result: no Critical; Important 1 -> BUG-332 (P2, a regression of BUG-274: the year in progress's 10-Qs stay on the old
+D&A basis, so the latest TTM mixes two; SWK $440.1M for $496.3M); Minors -> BUG-333, BUG-334 (P3); Minor 3 joins
+BUG-320. BUG-274's worker prepares BUG-332 and BUG-333.
+Gates: unchanged (qa/ only) | CI: PR #29
+Commit: (this commit) chore(qa): code review 28 recorded; one Important finding (BUG-332)
+Next: BUG-332 (worker); BUG-327, BUG-328, BUG-329; Q17.
+
+## Iteration 174: 2026-11-13 04:57: fix (BUG-332, BUG-333; code review 28's D&A findings)
+Picked: review 28's Important finding, a regression of BUG-274, with its Minor 1; BUG-274's worker.
+Did: a fiscal year with no 10-K yet now reads its 10-Qs as the last earlier 10-K was read (with no earlier 10-K, by
+the 10-Qs' own evidence), so the year in progress and the year before sit on one D&A basis; the LMT guard now runs
+before the 10-Q gate reads the year's 10-K. Only quarterly records move: HUM Q1 2026 163 -> 194; SWK Q1/Q2 2026
+84.4/101.8 -> 113.0/129.4 (TTM to 2026-07-04 $440.1M -> $496.3M); DDOG Q1/Q2 2026. The "own evidence for every year"
+variant was rejected: it re-mixes where the last 10-K kept its line.
+- RED: 2 of 330 failed on 33d60b1; GREEN. 36 of 36 mutants (qa/evidence/bug332-mutants.json supersedes bug274's); bug319
+  17 of 17. Look-ahead 0. Negatives and halvings 0. A new basis-mixing census: 6 latest-year flips -> 3 (HD, DVA, NTAP:
+  BUG-275's Q4 lumps, noted on its entry).
+- DB copies: 0 medians, verdicts, owner-earnings rows or labels; EV/EBITDA SWK 10.85 -> 10.51, HUM 13.31 -> 13.19,
+  DDOG; HUM's historical value 316.62 -> 319.04, still "far above".
+Result: BUG-332 and BUG-333 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2936 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): a year with no 10-K yet reads its 10-Qs' D&A as the last 10-K was read (BUG-332, BUG-333)
+Next: BUG-328 (worker, measuring); BUG-327, BUG-329; Q17.
+
+## Iteration 175: 2026-11-13 05:30: fix (BUG-328)
+Picked: the P2 BUG-319's census found; an opus worker. Its R1 (NTRS's and BNY's 10-Qs read the part at 0.61-0.71)
+decided by the loop: the bound 0.8, the gap in the data being 0.776 (a part) to 0.9015 (a total).
+Did: a bank's revenue no longer reads the ASC 606 contract revenue of a part of its noninterest income: a revenue fact
+under 0.8 of the same filing's net interest income + noninterest income for the period is not read, and the existing
+derivation fills it. FITB FY2022 $0.589B -> $8.375B, RF FY2021 $0.104B -> $6.438B, HBAN FY2025 $1.562B -> $8.166B, MTB
+FY2025 $1.657B -> $9.690B; NTRS's and BNY's quarters.
+- RED: 6 of 342 failed on 55b9bf8's src; GREEN. 17 of 17 mutants; q16's two reshaped (the `_aside` line); bug332 36,
+  bug319 17 killed. Look-ahead unchanged (9 cells at JCI, YUM, ICE from BUG-099's rule, the same at HEAD).
+- DB copies (6 banks re-collected, the engine over 502): 0 medians, verdicts or owner-earnings verdicts; labels FITB near
+  -> far above, HBAN above -> near; quality composites FITB 77.5 -> 55.0, MTB 62.5 -> 80.0, RF 70.0 -> 62.5 and sector
+  peers; MTB's revenue-decline warning gone, FITB gains a price/historical-value one. The three oracles as at HEAD.
+Result: BUG-328 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2948 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): a bank's revenue isn't a part of its noninterest income (BUG-328)
+Next: BUG-327 (worker); BUG-329; Q17 with BUG-295; code review 29 after 2 more fixes.
+
+## Iteration 176: 2026-11-13 09:53: fix (BUG-327)
+Picked: the P2 BUG-274's round 2 found; BUG-274's worker.
+Did: a D&A total a filing tags below another total that repeats an earlier filing's figure for the period is a part
+(UPS's rounded depreciation), and is set aside beside the larger total from then on (`_da_totals_displaced`). Narrowed
+by the all-filer census from 42 filers and 48 negatives/halvings to 23 filers, all moving up, and none negative; the 3
+remaining halvings repair head's broken ladders (ELV, AES). The rule is wider than UPS by design: CRM, MCD, PCAR, TSLA,
+EXC read the same way (their cash-flow add-backs; spot-checked against Yahoo and known statement figures).
+- RED: 6 of 356 failed on 9d476be's src; GREEN. 13 of 13 mutants; bug332 36, bug319 17, bug328 17 killed. Look-ahead 0.
+- DB copies (27 tickers re-collected, the engine over 502): 0 medians, verdicts, owner-earnings verdicts; one label,
+  TSLA far above -> above (its price_far_above_value warning gone); owner-earnings bases CRM $374.96 -> $516.99, PCAR
+  $373.15 -> $268.28, UPS $185.81 -> $187.22, verdicts unchanged; TSLA predictability 1.0 -> 3.0 stars.
+Result: BUG-327 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2962 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): a D&A total a later filing shows to be a part gives way to the full one (BUG-327)
+Next: BUG-329 (worker); Q17 with BUG-295; code review 29 after 2 more fixes.
+
+## Iteration 177: 2026-11-13 11:10: fix (BUG-329)
+Picked: the P2 BUG-319's census found; an opus worker.
+Did: share counts no EPS can check no longer rescale shares outstanding (pass 3 needs a checked count), a new pass 4
+puts an unchecked filed count on its neighbours' power of 1000 under tight agreement rules, and the restore step puts
+back an earlier weighted count a later filing gives in thousands where the year's shares outstanding agree. HSY FY2009
+shares outstanding 227,998 -> 227,998,276, its FY2009-11 weighted counts back to units; BRK-B, CPAY FY2009; quarters at
+FITB, HBAN, REGN, TER, C, BRO, TSCO; vintages at NTRS, AMT, DLR, HST. Wider variants (a x10 band; every neighbour
+agreeing; an unrestricted restore) measured and rejected.
+- RED: 5 of 18 failed on 800bdf3; GREEN. 19 of 19 mutants; bug327, bug252, bug332, bug319, bug328 killed. bug170's 4 and
+  bug260-...-bug319's 3 stale mutants went stale with BUG-327 (not this fix): to reshape. Look-ahead as at HEAD.
+- DB copies (15 tickers re-collected, the engine over 502): only financials tables move; 0 medians, verdicts,
+  owner-earnings verdicts, labels or indicators; EPS unchanged. Three oracles as at HEAD.
+Result: BUG-329 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 2980 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(share-scale): an unchecked count doesn't rescale shares outstanding; a later thousands count gives way (BUG-329)
+Next: Q17 with BUG-295 (worker); code review 29 (due).
+
+## Iteration 178: 2026-11-13 16:15: fix (Q17 with BUG-295)
+Picked: Q17 (decided P2), which unblocks BUG-295; an opus worker on the orchestrator's design.
+Did: a collection now reads the reports the SEC's companyfacts lack from each filing's own XBRL instance (every report
+of the gap, at most 4; one request each for inline filings), with a new stdlib reader, the SEC's frame rule, a cache
+per accession, and the companyfacts winning on any overlap; a failure leaves BUG-251's warning with its reason. One
+change from the design: all the gap's reports, not only the latest (C lacks three; the latest alone gives no Q1/Q2).
+- Oracle on 8 filings the companyfacts carry: 4,084 of 4,084 facts equal. C's three 2026 quarters recovered live
+  (4 requests); 14 of 15 values equal the raw filings (BUG-335).
+- RED: the reader module missing (5 collection errors), then 37 failing with the reader alone; GREEN. 52 of 52
+  mutants; 11 stale old mutants re-quoted (qa/evidence/q17-stale-reruns.json), 11 killed. Look-ahead 0.
+- DB copies (59 gap CIKs' 60 reports; 86 SEC requests in all, through the handler): 62 quarters and TTMs added;
+  CLX's FY2026 annual record; median CLX 77.98 -> 64.29, owner earnings expensive -> fair; 14 labels (C's first band
+  among them); 0 verdicts.
+- New: BUG-335, BUG-336 (P3).
+Result: Q17 and BUG-295 VERIFIED. No P0-P2 open.
+Gates: ruff ✓ mypy ✓ pytest 3053 passed, 1 skipped | CI: PR #29
+Commit: (this commit) feat(sec): a report the companyfacts lack is read from the filing's own XBRL (Q17, BUG-295)
+Paused after this unit at the user's request ("after current bug fixing finish, stop for now"). Next on resume: code
+review 29 (scope a28be26's predecessors since 33d60b1: BUG-332/333, -328, -327, -329, Q17), reshape the bug170 and
+bug260-...-bug319 mutant specs gone stale with BUG-327, then the 157 P3s.

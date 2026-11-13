@@ -369,24 +369,29 @@ function renderDVD(elId, years, amounts) {
 /**
  * Render the VAL fair-value-range chart into the element with the given id.
  * @param {string} elId - The DOM element id to render into.
- * @param {{models: Array<{label: string, bear: number, base: number, bull: number}>, price: (number|null)}} cfg
+ * @param {{models: Array<{label: string, bear: (number|null), base: number, bull: number}>, price: (number|null)}} cfg
+ *   A null bear (Graham with a loss year in its window) draws the bar from the base.
  */
 function renderVAL(elId, cfg) {
   var labels = cfg.models.map(function (m) { return m.label; });
-  var bears = cfg.models.map(function (m) { return m.bear; });
-  var spans = cfg.models.map(function (m) { return m.bull - m.bear; });
+  // A model can have no bear (Graham with a loss year in its window, BUG-007): its bar starts at the base.
+  function low(m) { return (m.bear === null || m.bear === undefined) ? m.base : m.bear; }
+  var bears = cfg.models.map(low);
+  var spans = cfg.models.map(function (m) { return m.bull - low(m); });
   var bases = cfg.models.map(function (m) { return m.base; });
 
   // x is the bar SPAN (bull - bear), not the upper bound, so the hover reads
-  // the real endpoints from customdata instead.
-  var bounds = cfg.models.map(function (m) { return [m.bear, m.bull]; });
+  // the real endpoints from its own text instead.
+  var hover = cfg.models.map(function (m) {
+    var bear = (m.bear === null || m.bear === undefined) ? 'bear N/A' : m.bear.toFixed(2);
+    return m.label + ': ' + bear + ' – ' + m.bull.toFixed(2);
+  });
 
   var range = {
-    y: labels, x: spans, base: bears, customdata: bounds,
+    y: labels, x: spans, base: bears, hovertext: hover,
     type: 'bar', orientation: 'h', name: 'Bear–Bull',
     marker: { color: SLATE.accentFill },
-    hovertemplate:
-      '%{y}: %{customdata[0]:.2f} – %{customdata[1]:.2f}<extra></extra>',
+    hovertemplate: '%{hovertext}<extra></extra>',
   };
   var baseMarks = {
     y: labels, x: bases,
@@ -414,6 +419,240 @@ function renderVAL(elId, cfg) {
   }
   Plotly.newPlot(elId, [range, baseMarks], layout,
                  { displayModeBar: false, responsive: true });
+}
+
+/**
+ * The VAL tab's valuation history: the price against its historical value, with bands at the
+ * label cutoffs, and one multiple against its 10-year low, median and high.
+ * @param {string} chartId - The element for the price chart.
+ * @param {string} metricChartId - The element for the multiple's chart.
+ * @param {string} selectId - The <select> that picks the multiple.
+ * @param {{dates: string[], close: number[], fair_value: Array<number|null>, cutoffs: number[],
+ *   metrics: Array<{key: string, label: string, pct: boolean, values: Array<number|null>,
+ *   min: number, median: number, max: number}>}} cfg
+ */
+function renderValHistory(chartId, metricChartId, selectId, cfg) {
+  if (typeof Plotly === 'undefined' || !cfg.dates || cfg.dates.length === 0) return;
+  var x = cfg.dates;
+  var last = new Date(x[x.length - 1]);
+  var first = new Date(last.getTime());
+  first.setFullYear(first.getFullYear() - 10);
+  var range = [first.toISOString().slice(0, 10), x[x.length - 1]];
+
+  // Bands: between 0.7 and 0.9 of the value (below), 0.9 and 1.1 (near), 1.1 and 1.3 (above).
+  var fills = ['rgba(63, 185, 80, 0.10)', 'rgba(139, 148, 158, 0.12)', 'rgba(210, 153, 34, 0.12)'];
+  var traces = cfg.cutoffs.map(function (c, i) {
+    var band = {
+      x: x, y: cfg.fair_value.map(function (v) { return v === null ? null : v * c; }),
+      type: 'scatter', mode: 'lines', line: { width: 0 }, hoverinfo: 'skip', showlegend: false,
+    };
+    if (i > 0) { band.fill = 'tonexty'; band.fillcolor = fills[i - 1]; }
+    return band;
+  });
+  traces.push({
+    x: x, y: cfg.fair_value, type: 'scatter', mode: 'lines', name: 'Historical value',
+    line: { color: SLATE.warn, width: 2, dash: 'dot' },
+    hovertemplate: '%{x}: value %{y:.2f}<extra></extra>',
+  });
+  traces.push({
+    x: x, y: cfg.close, type: 'scatter', mode: 'lines', name: 'Price',
+    line: { color: SLATE.accent, width: 2 },
+    hovertemplate: '%{x}: price %{y:.2f}<extra></extra>',
+  });
+  Plotly.newPlot(chartId, traces, slateLayout({
+    showlegend: true,
+    legend: { orientation: 'h', x: 0, y: 1.12, font: { color: SLATE.muted } },
+    xaxis: slateAxis({ type: 'date', range: range }),
+    yaxis: slateAxis({ title: 'Per share' }),
+    margin: { t: 32, r: 16, b: 32, l: 56 },
+  }), { displayModeBar: false, responsive: true });
+
+  var select = document.getElementById(selectId);
+  if (!select) return;
+  select.innerHTML = '';
+  cfg.metrics.forEach(function (m) {
+    var option = document.createElement('option');
+    option.value = m.key;
+    option.textContent = m.label;
+    select.appendChild(option);
+  });
+  function draw(key) {
+    var m = cfg.metrics.filter(function (item) { return item.key === key; })[0];
+    if (!m) return;
+    var tick = m.pct ? '.1%' : '.1f';
+    var lines = [['10y low', m.min, SLATE.up], ['Median', m.median, SLATE.muted], ['10y high', m.max, SLATE.down]];
+    Plotly.newPlot(metricChartId, [{
+      x: x, y: m.values, type: 'scatter', mode: 'lines', name: m.label,
+      line: { color: SLATE.purple, width: 2 },
+      hovertemplate: '%{x}: %{y:' + tick + '}<extra></extra>',
+    }], slateLayout({
+      xaxis: slateAxis({ type: 'date', range: range }),
+      yaxis: slateAxis({ title: m.label, tickformat: m.pct ? '.1%' : '' }),
+      margin: { t: 16, r: 16, b: 32, l: 56 },
+      shapes: lines.map(function (l) {
+        return { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: l[1], y1: l[1],
+                 line: { color: l[2], width: 1, dash: 'dash' } };
+      }),
+      annotations: lines.map(function (l) {
+        return { xref: 'paper', x: 1, y: l[1], xanchor: 'right', yanchor: 'bottom', showarrow: false,
+                 text: l[0], font: { color: l[2], size: 10 } };
+      }),
+    }), { displayModeBar: false, responsive: true });
+  }
+  select.onchange = function () { draw(select.value); };
+  if (cfg.metrics.length > 0) {
+    draw(cfg.metrics[0].key);
+  } else {
+    select.parentNode.style.display = 'none';
+  }
+}
+
+/**
+ * The STAT tab's Quality radar: the five ranks (1-10) as one closed Plotly scatterpolar trace.
+ * A rank that isn't available is a gap the polygon skips, not a zero.
+ * @param {string} elId - The DOM element id to render into.
+ * @param {{labels: string[], values: Array<number|null>}} cfg - The ranks, null where not available.
+ */
+function renderQualityRadar(elId, cfg) {
+  if (typeof Plotly === 'undefined' || !cfg.labels || cfg.labels.length === 0) return;
+  var r = cfg.values.concat([cfg.values[0]]);
+  var theta = cfg.labels.concat([cfg.labels[0]]);
+  Plotly.newPlot(elId, [{
+    type: 'scatterpolar', r: r, theta: theta, mode: 'lines+markers', connectgaps: true,
+    fill: 'toself', fillcolor: SLATE.accentFill, line: { color: SLATE.accent, width: 2 }, marker: { size: 6 },
+    text: r.map(function (v) { return v === null ? 'n/a' : String(v); }),
+    hovertemplate: '%{theta}: %{text}<extra></extra>',
+  }], slateLayout({
+    polar: {
+      bgcolor: 'transparent',
+      radialaxis: { range: [0, 10], dtick: 2, gridcolor: SLATE.grid, linecolor: SLATE.grid,
+                    tickfont: { family: SLATE.fontMono, size: 10, color: SLATE.muted } },
+      angularaxis: { gridcolor: SLATE.grid, linecolor: SLATE.grid,
+                     tickfont: { family: SLATE.fontUI, size: 11, color: SLATE.ink } },
+    },
+    margin: { t: 28, r: 104, b: 28, l: 104 },
+  }), { displayModeBar: false, responsive: true });
+}
+
+/**
+ * The market page (/market): the Buffett indicator against its trend and the bands at +-1 and +-2 standard
+ * deviations (a log y axis), Shiller's CAPE with its mean and median, the Treasury curve against the curve a year
+ * earlier (the maturities shortest first), and the 10-year spreads with a zero line, the inverted side shaded.
+ * A section without its data (null) has no chart.
+ * @param {{buffett: ?{dates: string[], ratio: number[], trend: number[], lower_2sd: number[], lower_1sd: number[],
+ *   upper_1sd: number[], upper_2sd: number[]}, cape: ?{dates: string[], values: number[], mean: ?number,
+ *   median: ?number}, curve: ?{labels: string[], today: {date: string, labels: string[], values: number[]},
+ *   year_ago: ?{date: string, labels: string[], values: number[]}},
+ *   spreads: ?Array<{label: string, dates: string[], values: number[]}>}} cfg
+ */
+function renderMarket(cfg) {
+  if (typeof Plotly === 'undefined' || !cfg) return;
+  var opts = { displayModeBar: false, responsive: true };
+  var legend = { orientation: 'h', x: 0, y: 1.12, font: { color: SLATE.muted } };
+  function present(id) { return document.getElementById(id) !== null; }
+
+  var b = cfg.buffett;
+  if (b && present('market-buffett-chart')) {
+    // Each band fills down to the edge before it: green from -2 to -1 sd, grey from -1 to +1, red from +1 to +2.
+    var bands = [['-2 sd', b.lower_2sd, null], ['-1 sd', b.lower_1sd, 'rgba(63, 185, 80, 0.12)'],
+                 ['+1 sd', b.upper_1sd, 'rgba(139, 148, 158, 0.12)'], ['+2 sd', b.upper_2sd, 'rgba(248, 81, 73, 0.12)']];
+    var traces = bands.map(function (band) {
+      var edge = { x: b.dates, y: band[1], type: 'scatter', mode: 'lines', name: band[0], showlegend: false,
+                   line: { width: 0.5, color: 'rgba(139, 148, 158, 0.35)' }, hoverinfo: 'skip' };
+      if (band[2]) { edge.fill = 'tonexty'; edge.fillcolor = band[2]; }
+      return edge;
+    });
+    traces.push({ x: b.dates, y: b.trend, type: 'scatter', mode: 'lines', name: 'Trend',
+                  line: { color: SLATE.warn, width: 1.5, dash: 'dash' }, hovertemplate: '%{x|%Y-%m}: %{y:.1f}%' });
+    traces.push({ x: b.dates, y: b.ratio, type: 'scatter', mode: 'lines', name: 'Equities / GDP',
+                  line: { color: SLATE.accent, width: 2 }, hovertemplate: '%{x|%Y-%m}: %{y:.1f}%' });
+    var last = b.dates.length - 1;
+    // Round percentages as the log axis's ticks (its own label the minor ticks with bare digits: "3" for 300%).
+    var floor = Math.min.apply(null, b.lower_2sd.concat(b.ratio));
+    var ceiling = Math.max.apply(null, b.upper_2sd.concat(b.ratio));
+    var ticks = [5, 10, 15, 20, 30, 40, 50, 75, 100, 150, 200, 250, 300, 400, 500, 750, 1000]
+      .filter(function (v) { return v >= floor && v <= ceiling; });
+    Plotly.newPlot('market-buffett-chart', traces, slateLayout({
+      showlegend: true, legend: legend,
+      xaxis: slateAxis({ type: 'date' }),
+      yaxis: slateAxis({ type: 'log', title: 'Equities / GDP', tickvals: ticks,
+                         ticktext: ticks.map(function (v) { return v + '%'; }) }),
+      margin: { t: 32, r: 52, b: 32, l: 64 },
+      // The bands' labels in the right margin, by the latest quarter's band; a log axis places them by log10.
+      annotations: bands.map(function (band) {
+        return { x: b.dates[last], y: Math.log(band[1][last]) / Math.LN10, xanchor: 'left', yanchor: 'middle',
+                 xshift: 4, showarrow: false, text: band[0], font: { color: SLATE.muted, size: 10 } };
+      }),
+    }), opts);
+  }
+
+  var c = cfg.cape;
+  if (c && present('market-cape-chart')) {
+    var lines = [['Mean', c.mean, SLATE.muted, 0, 'left'], ['Median', c.median, SLATE.warn, 1, 'right']]
+      .filter(function (l) { return l[1] !== null && l[1] !== undefined; });
+    Plotly.newPlot('market-cape-chart', [{
+      x: c.dates, y: c.values, type: 'scatter', mode: 'lines', name: 'CAPE',
+      line: { color: SLATE.purple, width: 1.5 }, hovertemplate: '%{x|%Y-%m}: %{y:.1f}<extra></extra>',
+    }], slateLayout({
+      xaxis: slateAxis({ type: 'date' }),
+      yaxis: slateAxis({ title: 'CAPE' }),
+      margin: { t: 16, r: 16, b: 32, l: 56 },
+      shapes: lines.map(function (l) {
+        return { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: l[1], y1: l[1],
+                 line: { color: l[2], width: 1, dash: 'dash' } };
+      }),
+      annotations: lines.map(function (l) {
+        return { xref: 'paper', x: l[3], xanchor: l[4], y: l[1], yanchor: 'bottom', showarrow: false,
+                 text: l[0] + ' ' + l[1].toFixed(1), font: { color: l[2], size: 10 } };
+      }),
+    }), opts);
+  }
+
+  var cv = cfg.curve;
+  if (cv && present('market-curve-chart')) {
+    var curves = [];
+    if (cv.year_ago) {
+      curves.push({ x: cv.year_ago.labels, y: cv.year_ago.values, type: 'scatter', mode: 'lines+markers',
+                    name: cv.year_ago.date, line: { color: SLATE.muted, width: 1.5, dash: 'dot' }, marker: { size: 5 },
+                    hovertemplate: '%{x}: %{y:.2f}%' });
+    }
+    curves.push({ x: cv.today.labels, y: cv.today.values, type: 'scatter', mode: 'lines+markers',
+                  name: cv.today.date, line: { color: SLATE.accent, width: 2 }, marker: { size: 6 },
+                  hovertemplate: '%{x}: %{y:.2f}%' });
+    Plotly.newPlot('market-curve-chart', curves, slateLayout({
+      showlegend: true, legend: legend,
+      xaxis: slateAxis({ type: 'category', categoryorder: 'array', categoryarray: cv.labels }),
+      yaxis: slateAxis({ title: 'Yield', ticksuffix: '%' }),
+      margin: { t: 32, r: 16, b: 40, l: 56 },
+    }), opts);
+  }
+
+  var sp = cfg.spreads;
+  if (sp && present('market-spreads-chart')) {
+    var low = 0, high = 0;
+    sp.forEach(function (s) {
+      s.values.forEach(function (v) { if (v < low) low = v; if (v > high) high = v; });
+    });
+    var pad = (high - low) * 0.05 || 0.1;
+    var colors = [SLATE.accent, SLATE.warn];
+    Plotly.newPlot('market-spreads-chart', sp.map(function (s, i) {
+      return { x: s.dates, y: s.values, type: 'scatter', mode: 'lines', name: s.label,
+               line: { color: colors[i % colors.length], width: 1.25 }, hovertemplate: '%{x}: %{y:+.2f} pp' };
+    }), slateLayout({
+      showlegend: true, legend: legend,
+      xaxis: slateAxis({ type: 'date' }),
+      yaxis: slateAxis({ title: 'Spread (pp)', range: [low - pad, high + pad], zeroline: false }),
+      margin: { t: 32, r: 16, b: 32, l: 56 },
+      shapes: [
+        { type: 'rect', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: low - pad, y1: 0, layer: 'below',
+          fillcolor: 'rgba(248, 81, 73, 0.08)', line: { width: 0 } },
+        { type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 0, y1: 0,
+          line: { color: SLATE.down, width: 1, dash: 'dash' } },
+      ],
+      annotations: [{ xref: 'paper', x: 0, yref: 'y', y: 0, xanchor: 'left', yanchor: 'top', showarrow: false,
+                      text: 'Inverted below 0', font: { color: SLATE.down, size: 10 } }],
+    }), opts);
+  }
 }
 
 /**

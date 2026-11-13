@@ -2,8 +2,8 @@
 
 Pure-read composition over the existing SQLite schema. ``load_inputs`` gathers
 everything a model needs — annual fundamentals joined with calculated metrics,
-the latest market snapshot (beta / risk-free / shares), the latest analyst
-growth estimate, the full dividend history, and each fiscal year's on-or-before
+the latest market snapshot (beta / risk-free / shares), the full dividend
+history, and each fiscal year's on-or-before
 period-end closing price — so the models themselves never touch the database.
 """
 
@@ -11,14 +11,21 @@ import math
 import sqlite3
 import statistics
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from fractions import Fraction
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from ..validation.integrity import dividend_gaps
+
 _MAX_FY_HISTORY = 10
 
+#: The dividend completeness check reads a company's latest this many fiscal years, as a collection scores them
+#: (``StockDataFetcher._assess``).
+DIVIDEND_CHECK_YEARS = 5
+
 #: A year-over-year rise in the share count of at least this factor is read as a
-#: stock split, not as ordinary issuance.
+#: stock split, not as ordinary issuance. A declared split dated between the two
+#: years' filings needs no threshold (``_normalize_splits``, BUG-245).
 SPLIT_JUMP_THRESHOLD = 1.5
 
 #: The largest ratio still credible as a real split. No listed company has ever
@@ -31,21 +38,33 @@ MAX_SPLIT_RATIO = 50.0
 #: when it is within this factor of it. The jump also carries a year of buybacks
 #: or issuance (AAPL's 2020 4:1 shows up as 20.0B / 5.252B = 3.81), so the
 #: declared ratio is the exact one; a jump nowhere near any declared ratio keeps
-#: the detected value (the only evidence there is).
+#: the detected value (the only evidence there is). A split dated between the
+#: two years' filings needs only to be nearer the jump than 1.0 (BUG-245).
 DECLARED_SPLIT_TOLERANCE = 1.25
+
+#: An undeclared seam folds by its own ratio only on a split's marks: EPS of the same sign on both sides moved
+#: against the count by at least this share of the seam's ratio (in log terms), and revenue didn't move with the
+#: count by as much. A stock-paid merger brings its revenue and earnings with it (DUK's Progress Energy: 1.567x
+#: the shares, revenue 1.88x, EPS 0.99 to 0.86; LIN's Linde AG: 1.88x and revenue 1.89x, though EPS fell), and
+#: an exchange offer's EPS changes sign (Citigroup's 2009, 2.242x): they stay organic (BUG-175, BUG-185). A fiscal
+#: year's net income, which a split leaves alone, must also have kept its sign and moved by less than this share of
+#: the seam's ratio: a shrinking loss or another company's earnings move EPS against the count too (BUG-247).
+SPLIT_EVIDENCE_SHARE = 0.5
+
+#: A fiscal year ending less than this many days after the listing (the first price bar) is the listing's year
+#: or one before it: its weighted count leaves out the preferred stock that converted at the listing (PLTR's
+#: 577M in FY2019 against 1.92B after), so a seam from it into the public count folds, whatever EPS did (BUG-185).
+LISTING_YEAR_DAYS = 366
 
 #: A "dividend" at least this many times the payments around it, on a day the
 #: split history records a spin-off price factor, is the spun-off shares' value.
 SPIN_OFF_DIVIDEND_MULTIPLE = 5.0
 
 #: Market cap / price more than this factor above the snapshot share count means
-#: the count misses a share class (or units) that the market cap includes.
+#: the count misses a share class (or units) that the market cap includes, and
+#: every class and unit counts (Q7, decided: APP 10%, META 15%, SPG's units 17%,
+#: BX 65%). Within it the two figures are Yahoo's rounding.
 SHARE_CLASS_GAP = 1.02
-
-#: Below this factor the gap can also be Yahoo's two figures disagreeing (MRVL,
-#: one class, 2.5%), so the one nearer the latest FY's count is taken. Every
-#: wider gap in the data is a class or units (APP 10%, META 15%, BX 65%).
-SHARE_SOURCE_GAP = 1.05
 
 #: A share count under this share of the latest FY's diluted shares (on today's
 #: basis) is incomplete: buybacks don't shrink a company by a quarter in a year.
@@ -82,10 +101,20 @@ class FYRecord:
     the same convention Yahoo's adjusted price bars use — so that multi-year
     per-share series and price/EPS multiples are comparable across a split.
     ``split_factor`` records the factor that was applied to this year (1.0 =
-    as reported).
+    as reported). ``private_count`` marks a year that ended before the listing
+    and that only a listing's jump put on the public count: the converted
+    preferred that jump stands for can't be told from a merger around the
+    listing (BUG-188).
 
     ``depreciation_amortization`` and ``capex`` are absolute dollar figures, not
     per-share, so they are never split-adjusted.
+
+    ``dividends_per_share`` is SEC's dividends per share for the fiscal year (the
+    10-K's declared series, else its cash-paid one) on the basis of Yahoo's dividends:
+    today's split basis like the EPS (divided by ``split_factor``, after any split
+    between its own filing and the EPS's), then divided by the spin-off and
+    stock-dividend factors after the year, as Yahoo divides its payments
+    (``load_inputs``).
     """
 
     fiscal_year: int
@@ -99,6 +128,8 @@ class FYRecord:
     depreciation_amortization: Optional[float] = None
     capex: Optional[float] = None
     split_factor: float = 1.0
+    private_count: bool = False
+    dividends_per_share: Optional[float] = None
 
     def eps(self) -> Optional[float]:
         """Diluted EPS as reported, else net income / shares."""
@@ -137,6 +168,8 @@ class ValuationInputs:
     #: "estimate"); None for snapshots written before they were recorded.
     risk_free_rate_date: Optional[str] = None
     risk_free_rate_source: Optional[str] = None
+    #: Not loaded or read since Q2 (Yahoo's earningsGrowth is one quarter's change, no forecast); kept so callers
+    #: that still pass it keep working.
     analyst_growth: Optional[float] = None
     dividends: List[Tuple[str, float]] = field(default_factory=list)
     fy_end_prices: Dict[int, float] = field(default_factory=dict)
@@ -144,34 +177,56 @@ class ValuationInputs:
     #: True when a unit/scale discontinuity in the source share counts forced
     #: the older fiscal years to be dropped (see ``_normalize_splits``).
     history_truncated: bool = False
+    #: Each fiscal year the dividend completeness check (BUG-012, ``dividend_gaps``) flags as missing Yahoo payments,
+    #: over the stored payments and the latest DIVIDEND_CHECK_YEARS fiscal years, as ``(fiscal_year, gap_from,
+    #: gap_to)``: the payments either side of the gap in Yahoo's schedule (Q4: DDM is N/A where it reads them).
+    dividend_gaps: List[Tuple[int, str, str]] = field(default_factory=list)
 
 
-def _eps_moved_inversely(ratio: float, eps_older: Optional[float],
-                         eps_newer: Optional[float]) -> bool:
-    """Did EPS move opposite to the share count across this seam?
+def _split_marks(ratio: float, eps_older: Optional[float], eps_newer: Optional[float],
+                 revenue_older: Optional[float], revenue_newer: Optional[float]) -> bool:
+    """Whether an undeclared seam of *ratio* bears a split's marks (SPLIT_EVIDENCE_SHARE).
 
-    A split multiplies the share count and divides as-reported EPS by the same
-    factor, so EPS must fall across a forward split (and rise across a reverse
-    one). An acquisition-scale share issuance — the real hazard near the 1.5
-    threshold, e.g. Realty Income's 1.48x VEREIT merger — brings its own
-    earnings with it and does not invert EPS, so the share jump alone would
-    otherwise be enough to rescale a whole history wrongly. Both figures are
-    as reported, and the test only judges seams no declared split explains:
-    earnings can outgrow a split's ratio in its year (NOW 2023).
+    A split multiplies the share count and divides as-reported EPS by the same factor, so EPS of one sign must
+    move against the count, by magnitude: a loss-making company's per-share loss grows across a reverse split
+    (GE: -2.62 to -4.99 over its 1:8). A seam whose EPS changes sign, or is missing or zero, carries no such mark.
+    Revenue, where both periods have it, must not move with the count by as much: a split leaves it alone, a
+    stock-paid merger brings its own. Both figures are as reported, and the test only judges seams no declared
+    split explains: earnings can outgrow a split's ratio in its year (NOW 2023)."""
+    if not eps_older or not eps_newer or (eps_older > 0) != (eps_newer > 0):
+        return False
+    direction = 1.0 if ratio > 1.0 else -1.0
+    enough = SPLIT_EVIDENCE_SHARE * abs(math.log(ratio))
+    if -direction * math.log(eps_newer / eps_older) < enough:
+        return False
+    if revenue_older and revenue_newer and revenue_older > 0 and revenue_newer > 0:
+        return direction * math.log(revenue_newer / revenue_older) < enough
+    return True
 
-    The comparison is on MAGNITUDE, not signed value: a split rescales EPS
-    multiplicatively whatever its sign, so a loss-making company's per-share
-    loss grows across a reverse split (GE: -2.62 -> -4.99 over its 1:8). A
-    seam whose EPS changes sign carries no directional information, and neither
-    does a missing or zero EPS; those fall back to the share-count signal alone.
-    """
-    if not eps_older or not eps_newer:
+
+def _implied_count_moves(ratio: float, older: "FYRecord", newer: "FYRecord",
+                         eps_older: Optional[float], eps_newer: Optional[float]) -> bool:
+    """Whether the count a year's EPS divides by (net income / diluted EPS) moved with a seam of *ratio*, within
+    DECLARED_SPLIT_TOLERANCE. A split restates the count and EPS together; BX's diluted count takes the Holdings
+    units in and out (1,195M, 666M, 1,207M) while its EPS keeps dividing by about 670M (BUG-185). Unknown when a
+    figure is missing, and then it doesn't decide."""
+    if not (older.net_income and newer.net_income and eps_older and eps_newer):
         return True
-    if (eps_older > 0) != (eps_newer > 0):
+    implied = (newer.net_income / eps_newer) / (older.net_income / eps_older)
+    return implied > 0 and abs(math.log(implied / ratio)) <= math.log(DECLARED_SPLIT_TOLERANCE)
+
+
+def _net_income_held(ratio: float, ni_older: Optional[float], ni_newer: Optional[float]) -> bool:
+    """Whether net income, which a split leaves alone, held across a seam of *ratio*: it kept its sign and moved by
+    less than SPLIT_EVIDENCE_SHARE of the seam's ratio, in log terms. EPS moves against the count when earnings move
+    too: PCG's July 2020 Chapter 11 exit issuance took its count 2.38x while its loss shrank from 7,656M to 1,318M
+    (EPS -14.50 to -1.05), and KDP's FY2017 is Keurig's, the accounting acquirer of the 2018 reverse merger, after
+    Dr Pepper Snapple's FY2016 (4.24x the shares, net income 847M to 378M) (BUG-247). Unknown when a year lacks it,
+    and then it doesn't decide, as for the count EPS implies."""
+    if not (ni_older and ni_newer):
         return True
-    if ratio > 1.0:
-        return abs(eps_newer) < abs(eps_older)
-    return abs(eps_newer) > abs(eps_older)
+    moved = abs(math.log(abs(ni_newer) / abs(ni_older)))
+    return (ni_older > 0) == (ni_newer > 0) and moved < SPLIT_EVIDENCE_SHARE * abs(math.log(ratio))
 
 
 def _filed_between(split: Tuple[str, float], f_old: Optional[str], f_new: Optional[str]) -> bool:
@@ -185,10 +240,47 @@ def _filed_between(split: Tuple[str, float], f_old: Optional[str], f_new: Option
     return f_old[:10] < str(when)[:10] <= f_new[:10]
 
 
+def _splits_filed_between(splits: Sequence[Tuple[str, float]], f_old: Optional[str],
+                          f_new: Optional[str]) -> List[Tuple[str, float]]:
+    """The declared share splits (simple ratios) dated between two years' filings, *f_old* < date <= *f_new*: the
+    newer year's figures are restated for them and the older year's aren't, so the seam between the two is their
+    product times a year of buybacks, issuance or a stock-paid merger. None when either date is unknown."""
+    if not (f_old and f_new):
+        return []
+    return [(when, ratio) for when, ratio in splits
+            if ratio and ratio > 0 and _simple_ratio(ratio) and f_old[:10] < str(when)[:10] <= f_new[:10]]
+
+
+def _restated_between(splits: Sequence[Tuple[str, float]], filed_from: Optional[str],
+                      filed_to: Optional[str]) -> float:
+    """The factor that puts a share count last filed on *filed_from* onto the basis of figures last filed on
+    *filed_to*: the share splits dated between the two filings, divided out when *filed_to* is the earlier. A filing
+    restates its figures for every share split made before it, but a year's cover count is filed once or twice and
+    its EPS three times: GOOGL's FY2020 count of 0.675B was last filed in February 2022, its EPS in February 2023,
+    restated for the 20:1 split between (BUG-173). Only share splits count (simple ratios of 3:2 or more, or 1:2 or
+    less), and unknown dates move nothing."""
+    if not (filed_from and filed_to):
+        return 1.0
+    since, until = str(filed_from)[:10], str(filed_to)[:10]
+    factor = 1.0
+    for when, ratio in splits:
+        day = str(when)[:10]
+        if not (ratio and ratio > 0 and _simple_ratio(ratio)
+                and (ratio >= SPLIT_JUMP_THRESHOLD or ratio <= 1.0 / SPLIT_JUMP_THRESHOLD)):
+            continue
+        if since < day <= until:
+            factor *= ratio
+        elif until < day <= since:
+            factor /= ratio
+    return factor
+
+
 def _normalize_splits(records: List[FYRecord],
                       shares_detect: List[Optional[float]],
                       splits: Sequence[Tuple[str, float]] = (),
                       detect_filed: Optional[Sequence[Optional[str]]] = None,
+                      revenue: Optional[Sequence[Optional[float]]] = None,
+                      first_bar: Optional[str] = None,
                       ) -> Tuple[List[FYRecord], bool]:
     """Restate every year's per-share figures onto the current share basis.
 
@@ -205,6 +297,18 @@ def _normalize_splits(records: List[FYRecord],
     * ``1/50 .. 1/1.5`` -> reverse split; same treatment with a factor < 1,
       which scales the older years' per-share values UP and their share counts
       DOWN — exactly the correction a reverse split needs.
+      Either folds by a declared share split (a simple ratio: a spin-off's price
+      factor changes no share count; those filed between the two years first,
+      at any ratio, below), by its own ratio on a split's marks in EPS
+      and *revenue* (``_split_marks``) when the count EPS implies moved with it
+      (``_implied_count_moves``) and net income held (``_net_income_held``), or
+      by its own ratio when the older year ends before the listing (*first_bar*)
+      or in its year (LISTING_YEAR_DAYS). Otherwise it stays: a merger, an
+      exchange offer, a count that swings alone (BUG-185), an issuance while a
+      loss shrinks, a reverse merger (BUG-247). A year that ended before the
+      first bar and that only a listing's jump folds is marked
+      ``private_count``: a merger around the listing jumps the same way (DELL's
+      EMC, BUG-188).
     * beyond ``+/- 50x`` -> not a credible corporate action. The source data
       mixes units across fiscal years (thousands vs units), so everything older
       than this seam is on an unknown scale and simply CANNOT be compared to the
@@ -216,7 +320,13 @@ def _normalize_splits(records: List[FYRecord],
     when *detect_filed* says when each year's share figure was last filed (the
     vintages), a share split explains a seam only if it lies between the two
     years' filings: one that every stored year already reflects can't have made
-    a seam, though a stock-paid merger's may sit near its ratio.
+    a seam, though a stock-paid merger's may sit near its ratio. And the splits
+    that lie between them made it: with both dates known, they fold whenever
+    the seam is nearer their product than 1.0, whatever the threshold and the
+    tolerance above, as buybacks take a 3:2 seam under 1.5 (ODFL's FY2017-18,
+    1.493) and a stock-paid merger in the same years takes it beyond 1.25x
+    (CNC's FY2015-16, 2.66 for its 2:1; BUG-245). Equal splits are told apart
+    by their dates, so each takes its own seam (WRB's three 3:2s).
 
     Mutates the surviving *records* in place and returns
     ``(surviving_records, history_truncated)``. Per-share values are DIVIDED by
@@ -225,6 +335,10 @@ def _normalize_splits(records: List[FYRecord],
     correct.
     """
     factor = 1.0
+    listed = ((date.fromisoformat(str(first_bar)[:10]) + timedelta(days=LISTING_YEAR_DAYS)).isoformat()
+              if first_bar else None)
+    # From a seam only the listing explains, the years that ended before the first bar have the private count.
+    private = False
     # The walk rescales each year as it goes, so the EPS test reads the figures
     # as reported, on the basis the share counts are.
     reported_eps = [rec.eps_diluted for rec in records]
@@ -240,17 +354,35 @@ def _normalize_splits(records: List[FYRecord],
             if ratio > MAX_SPLIT_RATIO or ratio < 1.0 / MAX_SPLIT_RATIO:
                 # Unit discontinuity: the pre-seam years are uncomparable.
                 return records[i + 1:], True
-            if forward or reverse:
-                f_old, f_new = (detect_filed[i], detect_filed[i + 1]) if detect_filed else (None, None)
-                candidates = [split for split in unused if _filed_between(split, f_old, f_new)]
+            f_old, f_new = (detect_filed[i], detect_filed[i + 1]) if detect_filed else (None, None)
+            between = _splits_filed_between(unused, f_old, f_new)
+            between_ratio = math.prod(split_ratio for _, split_ratio in between)
+            # The splits filed between the two years made this seam, whatever buybacks or a merger did beside them.
+            if between and abs(math.log(ratio / between_ratio)) < abs(math.log(ratio)):
+                unused = [split for split in unused if split not in between]
+                factor *= between_ratio
+            elif forward or reverse:
+                candidates = [split for split in unused
+                              if _simple_ratio(split[1]) and _filed_between(split, f_old, f_new)]
                 run = _declared_run(ratio, records[i].period_end, candidates)
+                listing = (listed is not None and records[i].period_end is not None
+                           and str(records[i].period_end)[:10] < listed)
                 if run:
                     unused = [split for split in unused if split not in run]
                     factor *= math.prod(split_ratio for _, split_ratio in run)
-                elif _eps_moved_inversely(ratio, reported_eps[i], reported_eps[i + 1]):
+                elif (_split_marks(ratio, reported_eps[i], reported_eps[i + 1],
+                                   revenue[i] if revenue else None, revenue[i + 1] if revenue else None)
+                      and _implied_count_moves(ratio, records[i], records[i + 1],
+                                               reported_eps[i], reported_eps[i + 1])
+                      and _net_income_held(ratio, records[i].net_income, records[i + 1].net_income)):
                     factor *= ratio
+                elif listing:
+                    factor *= ratio
+                    private = True
         rec = records[i]
         rec.split_factor = factor
+        rec.private_count = (private and first_bar is not None and rec.period_end is not None
+                             and str(rec.period_end)[:10] < str(first_bar)[:10])
         if factor == 1.0:
             continue
         if rec.eps_diluted is not None:
@@ -268,6 +400,28 @@ def _simple_ratio(ratio: float) -> bool:
     not (ABT's 2.0842 for AbbVie, DELL's 1.806, RTX's 1.589); on the real-data
     copy every simple factor of 3:2 or more is a share split."""
     return any(abs(float(Fraction(r).limit_denominator(4)) - r) <= 1e-9 * r for r in (ratio, 1.0 / ratio))
+
+
+def is_share_split(ratio: Optional[float]) -> bool:
+    """Whether a ratio in Yahoo's split history is a share split (2:1, 3:2, 1:8...).
+
+    The history also holds spin-off price factors and stock dividends (GE's 1.281 for GE HealthCare,
+    1.04). Those move the price but not the filed share counts.
+    """
+    if ratio is None or ratio <= 0 or abs(ratio - 1.0) < 1e-9:
+        return False
+    return _simple_ratio(ratio)
+
+
+def price_factor_after(day: str, events: Sequence[Tuple[str, float]], last_bar: str) -> float:
+    """PF(d): the product of the factors in *events* that aren't share splits, dated in (*day*, *last_bar*].
+
+    Yahoo divides every close before such a factor's day by it, so a bar's close times PF is the price
+    it traded at, on the bars' split basis. A factor after the last bar isn't in the bars yet.
+    """
+    d, last = str(day)[:10], str(last_bar)[:10]
+    return float(math.prod(r for when, r in events
+                           if r and r > 0 and not is_share_split(r) and d < str(when)[:10] <= last))
 
 
 def _apply_later_splits(records: List[FYRecord], splits: Sequence[Tuple[str, float]],
@@ -463,30 +617,49 @@ def _drop_spin_off_dividends(dividends: List[Tuple[str, float]],
     return kept
 
 
+def bars_to_price_factor(splits: Sequence[Tuple[str, float]], priced_on: Optional[str],
+                         last_bar: Optional[str]) -> float:
+    """The factor that puts a price bar onto the basis of the price quoted on *priced_on*.
+
+    The bars are on the basis of every split up to their last day, which their daily
+    history reaches. A split between that day and the price's is in one of them only, as
+    when a later run stored it while its price-history request failed (BUG-094).
+    """
+    factor = 1.0
+    if priced_on and last_bar:
+        last = str(last_bar)[:10]
+        for when, ratio in splits:
+            if ratio and priced_on < str(when)[:10] <= last:
+                factor *= ratio
+            elif ratio and last < str(when)[:10] <= priced_on:
+                factor /= ratio
+    return factor
+
+
 def _total_shares(snapshot: Optional[float], market_cap: Optional[float], price: Optional[float],
                   records: List[FYRecord]) -> Tuple[Optional[float], str]:
     """Shares of every class, for per-share values that are compared with the price.
 
     Yahoo's share count can cover one class of several (GOOGL's class A: 5.87B
     of 12.23B shares), while market cap / price counts them all, the way Yahoo
-    values the company. A count still under MIN_SHARE_COUNT_RATIO of the latest
-    FY's diluted shares on today's basis is incomplete too (HON, whose market cap
-    is halved as well), so that FY count is used instead. A small gap is settled
-    by that FY count: whichever of Yahoo's two figures is nearer it wins.
+    values the company: every class and partnership unit counts whenever market
+    cap / price is more than SHARE_CLASS_GAP above the count (Q7; the FY count no
+    longer settles a 2-5% gap, which followed its drift: BUG-051). A count still
+    under MIN_SHARE_COUNT_RATIO of the latest FY's diluted shares on today's basis
+    is incomplete too (HON, whose market cap is halved as well), so that FY count
+    is used instead.
     """
     latest = next((r.shares for r in reversed(records) if r.shares and r.shares > 0), None)
     count, source = snapshot, "market_snapshot"
     by_value = market_cap / price if market_cap and price else None
-    if snapshot and by_value and by_value > SHARE_CLASS_GAP * snapshot and not (
-            latest and by_value < SHARE_SOURCE_GAP * snapshot
-            and abs(math.log(snapshot / latest)) < abs(math.log(by_value / latest))):
+    if snapshot and by_value and by_value > SHARE_CLASS_GAP * snapshot:
         count, source = by_value, "market_cap / price"
     if count and latest and count < MIN_SHARE_COUNT_RATIO * latest:
         count, source = latest, "financials_annual"
     return count, source
 
 
-def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
+def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_HISTORY) -> ValuationInputs:
     """Build the ValuationInputs bundle for *ticker*.
 
     ``conn.row_factory`` must be ``sqlite3.Row``. Missing rows degrade to
@@ -498,10 +671,10 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     sector = (row["sector_class"] if row is not None else None) or "general"
 
     fy_rows = conn.execute(
-        "SELECT fa.fiscal_year, fa.period_end, fa.filed_date, fa.form, fa.net_income, fa.total_equity, "
+        "SELECT fa.fiscal_year, fa.period_end, fa.filed_date, fa.form, fa.net_income, fa.total_equity, fa.revenue, "
         "fa.eps_diluted, fa.weighted_avg_shares_diluted, fa.shares_outstanding, "
-        "fa.depreciation_amortization, fa.capex, "
-        "ma.levered_fcf, ma.free_cash_flow, ma.ffo_per_share "
+        "fa.depreciation_amortization, fa.capex, fa.dividends_per_share, "
+        "ma.free_cash_flow, ma.ffo_per_share "
         "FROM financials_annual fa "
         "LEFT JOIN metrics_annual ma "
         "  ON ma.ticker = fa.ticker AND ma.fiscal_year = fa.fiscal_year "
@@ -517,21 +690,33 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
             "SELECT fiscal_year, "
             "MAX(CASE WHEN weighted_avg_shares_diluted IS NOT NULL THEN filed_date END), "
             "MAX(CASE WHEN eps_diluted IS NOT NULL THEN filed_date END), "
-            "MAX(CASE WHEN shares_outstanding IS NOT NULL THEN filed_date END) "
+            "MAX(CASE WHEN shares_outstanding IS NOT NULL THEN filed_date END), "
+            "MAX(CASE WHEN dividends_per_share IS NOT NULL THEN filed_date END) "
             "FROM financials_annual_vintages WHERE ticker = ? GROUP BY fiscal_year",
             (ticker,),
         ).fetchall():
-            for field_name, filed_on in zip(("weighted_avg_shares_diluted", "eps_diluted", "shares_outstanding"),
-                                            (v[1], v[2], v[3])):
+            for field_name, filed_on in zip(("weighted_avg_shares_diluted", "eps_diluted", "shares_outstanding",
+                                             "dividends_per_share"), (v[1], v[2], v[3], v[4])):
                 if filed_on:
                     filed_by_field[(int(v[0]), field_name)] = filed_on
     except sqlite3.OperationalError:  # a database from before the vintages were kept
         pass
+    splits = [
+        (s["date"], s["ratio"])
+        for s in conn.execute(
+            "SELECT date, ratio FROM split_events WHERE ticker = ? ORDER BY date", (ticker,)
+        ).fetchall()
+    ]
     records: List[FYRecord] = []
     shares_detect: List[Optional[float]] = []
     detect_filed: List[Optional[str]] = []
-    for r in fy_rows[-_MAX_FY_HISTORY:]:
-        fcf = r["levered_fcf"] if r["levered_fcf"] is not None else r["free_cash_flow"]
+    dps_onto_detect: Dict[int, float] = {}
+    # The valuations read the latest _MAX_FY_HISTORY years; the quality scores ask for one more (a 10-year
+    # CAGR). Splits fold newest first, so an older year never moves a newer one.
+    for r in fy_rows[-max_years:]:
+        # OCF - capex, interest already through OCF. A stored levered_fcf from before
+        # BUG-169's fix took interest off again, so it isn't read.
+        fcf = r["free_cash_flow"]
         shares = (
             r["weighted_avg_shares_diluted"]
             if r["weighted_avg_shares_diluted"] is not None
@@ -545,8 +730,21 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
             detect, detect_field = r["net_income"] / r["eps_diluted"], "eps_diluted"
         if detect is None:
             detect, detect_field = r["shares_outstanding"], "shares_outstanding"
+        if detect_field == "eps_diluted" and shares is not None:
+            # The year's count is the cover's, as filed, while the EPS the detection reads may have been restated
+            # since for a split: the count goes onto its EPS's basis, the one the detection folds (BUG-173).
+            fiscal_year = int(r["fiscal_year"])
+            shares *= _restated_between(splits, filed_by_field.get((fiscal_year, "shares_outstanding")),
+                                        filed_by_field.get((fiscal_year, "eps_diluted")))
         shares_detect.append(detect)
         detect_filed.append(filed_by_field.get((int(r["fiscal_year"]), detect_field)))
+        if r["dividends_per_share"] is not None:
+            # The year's dividends per share go onto the basis of the share figure the split detection reads, which
+            # a later filing may have restated for a split (the count's rule above, BUG-173); split_factor then
+            # takes them to today's, as it takes the EPS.
+            fiscal_year = int(r["fiscal_year"])
+            dps_onto_detect[fiscal_year] = r["dividends_per_share"] / _restated_between(
+                splits, filed_by_field.get((fiscal_year, "dividends_per_share")), detect_filed[-1])
         records.append(
             FYRecord(
                 fiscal_year=int(r["fiscal_year"]),
@@ -561,18 +759,15 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
                 capex=r["capex"],
             )
         )
-    splits = [
-        (s["date"], s["ratio"])
-        for s in conn.execute(
-            "SELECT date, ratio FROM split_events WHERE ticker = ? ORDER BY date", (ticker,)
-        ).fetchall()
-    ]
     filed = fy_rows[-1]["filed_date"] if fy_rows else None
     # A split made after the latest filing restated nothing stored, so it can't
     # explain a seam (an older merger's would take it); _apply_later_splits
     # moves every year by it instead.
     restated = [s for s in splits if not filed or str(s[0])[:10] <= str(filed)[:10]]
-    records, history_truncated = _normalize_splits(records, shares_detect, restated, detect_filed)
+    first_bar = conn.execute("SELECT MIN(date) FROM price_bars WHERE ticker = ?", (ticker,)).fetchone()[0]
+    records, history_truncated = _normalize_splits(records, shares_detect, restated, detect_filed,
+                                                   [r["revenue"] for r in fy_rows[-max_years:]],
+                                                   str(first_bar)[:10] if first_bar else None)
 
     # SELECT *: a database not yet migrated lacks the rate's date and source columns,
     # and the backfill reads it without migrating.
@@ -625,18 +820,19 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
                 rec.ffo_per_share *= ads
             if rec.shares is not None:
                 rec.shares /= ads
-    # The bars are on the basis of every split up to their last day, which their daily
-    # history reaches: a split between that day and the price's is in one of them only,
-    # as when a later run stored it while its price-history request failed (BUG-094).
     served = conn.execute("SELECT max(date) FROM price_bars WHERE ticker = ?", (ticker,)).fetchone()[0]
-    bars_to_price = 1.0
-    if priced_on and served:
-        last_bar = str(served)[:10]
-        for when, ratio in splits:
-            if ratio and priced_on < str(when)[:10] <= last_bar:
-                bars_to_price *= ratio
-            elif ratio and last_bar < str(when)[:10] <= priced_on:
-                bars_to_price /= ratio
+    # Every step above divided the EPS by the factor it multiplied split_factor by. Yahoo also divides each payment
+    # by the spin-off and stock-dividend factors after it, up to the day it served it, as it does the closes (FTV's
+    # $0.08 a quarter in 2024 reads 0.0603 after Ralliant's 1.327 of 2025), so a year's payments compare with the
+    # TTM's across a spin-off. SEC's figure takes the factors after the year, up to the last bar, onto that basis.
+    for rec in records:
+        if rec.fiscal_year in dps_onto_detect:
+            rec.dividends_per_share = dps_onto_detect[rec.fiscal_year] / rec.split_factor / (
+                price_factor_after(str(rec.period_end)[:10], splits, str(served)[:10])
+                if served and rec.period_end else 1.0)
+    # The band's closes, once as traded, differ from the price only by the share splits between them (BUG-303).
+    bars_to_split_basis = bars_to_price_factor([s for s in splits if is_share_split(s[1])], priced_on,
+                                               str(served)[:10] if served else None)
     shares, shares_source = _total_shares(
         snap["shares_outstanding"] if snap else None,
         snap["market_cap"] if snap else None,
@@ -649,11 +845,6 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
             as_of = date.fromisoformat(str(snap["collected_at"])[:10])
         except ValueError:  # unparseable timestamp -> today
             pass
-    analyst = conn.execute(
-        "SELECT earnings_growth FROM analyst_snapshots "
-        "WHERE ticker = ? ORDER BY collected_at DESC LIMIT 1",
-        (ticker,),
-    ).fetchone()
     # Yahoo's dividends come to the price's basis from the day Yahoo served them, as the
     # bars do (BUG-103), whatever the SEC record holds (BUG-078). A database from before
     # the column, read without migrating, keeps every stored split's basis.
@@ -666,6 +857,14 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
     served_on = {r["date"]: r["served_on"] for r in payments}
     dividends = [(day, amount * _dividend_onto(splits, priced_on, served_on.get(day)))
                  for day, amount in _drop_spin_off_dividends([(r["date"], r["amount"]) for r in payments], splits)]
+    # The completeness check as a collection runs it (the latest years, the payments as Yahoo served them, SEC's
+    # figures as filed), on the payments stored now: a refresh stores Yahoo's payments too (BUG-160, BUG-258).
+    gaps = [(int(gap.year), gap.gap_from, gap.gap_to) for gap in dividend_gaps(
+        {str(r["fiscal_year"]): {"period_end": r["period_end"], "dividends_per_share": r["dividends_per_share"]}
+         for r in fy_rows},
+        [{"date": r["date"], "amount": r["amount"]} for r in payments],
+        [{"date": day, "ratio": ratio} for day, ratio in splits],
+        [str(r["fiscal_year"]) for r in fy_rows[-DIVIDEND_CHECK_YEARS:]])]
 
     # A bar from yfinance's default history is Yahoo's dividend-adjusted price,
     # lower by every dividend paid since (BUG-075): one flagged so, or any bar of a
@@ -688,7 +887,12 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
             if factors is None:
                 factors = _yahoo_dividend_factors(conn, ticker, flagged, splits)
             close /= math.prod(f for ex, f in factors if ex > str(bar["date"])[:10])
-        fy_end_prices[rec.fiscal_year] = close * bars_to_price
+        # Yahoo divides closes before a spin-off by its price factor, which the filed EPS never sees: the band
+        # wants the close as traded (BUG-172; the valuation history's PF(d)). That close then moves to the price's
+        # basis by share splits alone: a spin-off between the bars and the price changes no share (BUG-303).
+        if served:
+            close *= price_factor_after(str(bar["date"])[:10], splits, str(served)[:10])
+        fy_end_prices[rec.fiscal_year] = close * bars_to_split_basis
 
     return ValuationInputs(
         ticker=ticker,
@@ -702,9 +906,9 @@ def load_inputs(conn: sqlite3.Connection, ticker: str) -> ValuationInputs:
         risk_free_rate=snap["risk_free_rate"] if snap else None,
         risk_free_rate_date=snap["risk_free_rate_date"] if "risk_free_rate_date" in snap_columns else None,
         risk_free_rate_source=snap["risk_free_rate_source"] if "risk_free_rate_source" in snap_columns else None,
-        analyst_growth=analyst["earnings_growth"] if analyst else None,
         dividends=dividends,
         fy_end_prices=fy_end_prices,
         as_of=as_of,
         history_truncated=history_truncated,
+        dividend_gaps=gaps,
     )

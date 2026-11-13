@@ -135,3 +135,11 @@ def test_disposal_group_fx_variant_resolves():
     facts = _facts(**{fx_tag: _annual_usd(-136)})
     annual = XBRLParser().extract_annual_financials(facts, years_back=1)["2024"]
     assert annual["fx_effect_on_cash"] == -136
+
+
+def test_the_coverage_report_classifies_a_finance_sic_without_deposits_as_general():
+    # BUG-313: analyze() holds the companyfacts, so it classifies as a collection does (Q9).
+    facts = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        {"val": 1.0e9, "start": "2025-01-01", "end": "2025-12-31", "fy": 2025, "fp": "FY", "form": "10-K",
+         "filed": "2026-02-20", "accn": "0000000000-26-000001"}]}}}}}
+    assert analyze("AMG", facts, {"sic": "6282"}).sector == "general"

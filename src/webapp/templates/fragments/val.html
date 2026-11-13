@@ -1,6 +1,6 @@
-{% if gap_note %}
-<p class="text-muted text-sm mb-3" role="note">{{ gap_note }}</p>
-{% endif %}
+{% for note in gap_notes %}
+<p class="text-muted text-sm mb-3" role="note">{{ note }}</p>
+{% endfor %}
 {% if not has_rows %}
 <div class="empty-state">
   No valuations computed yet — click UPDATE DATA above.
@@ -26,6 +26,10 @@
     Ranges are bear/base/bull scenarios from conservative mechanical assumptions —
     not forecasts.</p>
 </section>
+
+<div id="val-history" hx-get="/ui/stocks/{{ ticker }}/val-history" hx-trigger="load" hx-swap="outerHTML">
+  <p class="text-muted">Loading the valuation history…</p>
+</div>
 
 <section class="section">
   <h2 class="section-heading">Models</h2>
@@ -122,6 +126,10 @@
   {% endif %}
 </section>
 {% endif %}
+
+<div id="val-indicators" hx-get="/ui/stocks/{{ ticker }}/val-indicators" hx-trigger="load" hx-swap="outerHTML">
+  <p class="text-muted">Loading the other indicators…</p>
+</div>
 
 {% if sensitivity %}
 <section class="section">

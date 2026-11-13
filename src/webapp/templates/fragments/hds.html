@@ -1,3 +1,44 @@
+{% if gurus is not none %}
+<section class="section">
+  <h2 class="section-heading">Gurus</h2>
+  {% if gurus %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Guru</th>
+          <th>Quarter</th>
+          <th>Class</th>
+          <th class="num">Shares</th>
+          <th class="num">Value</th>
+          <th class="num">% of portfolio</th>
+          <th>Change</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for g in gurus %}
+        <tr>
+          <td class="row-label"><a href="/gurus/{{ g.cik }}">{{ g.manager }}</a></td>
+          <td>{{ g.period }}{% if not g.complete %} <span class="pill down" title="A filer's report for the quarter failed its checksum or wasn't collected">incomplete</span>{% endif %}</td>
+          <td>{{ g.ticker }}{% if g.put_call %} <span class="pill verdict-none">{{ g.put_call }}</span>{% endif %}</td>
+          <td class="num">{{ g.shares }}</td>
+          <td class="num">{{ g.value }}</td>
+          <td class="num">{{ g.weight }}</td>
+          <td>{% if g.change %}<span class="pill {{ g.change.pill }}">{{ g.change.label }}</span>{% else %}<span class="text-muted" title="The quarter before isn't stored">—</span>{% endif %}{% if g.before %} <span class="text-muted">had {{ g.before }}</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="text-muted mt-2">From each guru's latest 13F (long positions at the quarter's end, filed up to 45 days
+    after){% if other_classes %}, {{ other_classes | join(" and ") }} too, the other share class{% endif %}; the change
+    is against the quarter before, by shares. <a href="/gurus">All gurus</a></p>
+  {% else %}
+  <div class="empty-state">No guru's latest 13F holds it.</div>
+  {% endif %}
+</section>
+{% endif %}
+
 <section class="section">
   <h2 class="section-heading">Institutional Holders</h2>
   {% if institutional %}

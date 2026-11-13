@@ -5,7 +5,10 @@ from typing import Optional
 
 
 def _suffixed(abs_x: float) -> str:
-    """A non-negative magnitude with its B/M/K suffix and two decimals, whole below a thousand."""
+    """A non-negative magnitude with its T/B/M/K suffix and two decimals, whole below a thousand (a trillion read as
+    "3676.66B" before: BUG-138)."""
+    if abs_x >= 1_000_000_000_000:
+        return f"{abs_x / 1_000_000_000_000:.2f}T"
     if abs_x >= 1_000_000_000:
         return f"{abs_x / 1_000_000_000:.2f}B"
     if abs_x >= 1_000_000:
@@ -71,11 +74,21 @@ def fmt_raw2(x: Optional[float]) -> str:
 def fmt_price(x: Optional[float]) -> str:
     """Format a share price with $ prefix and 2 decimal places.
 
-    None -> "—"; else "$x,xxx.xx" (cents matter for share prices).
+    None -> "—"; else "$x,xxx.xx" (cents matter for share prices), a negative one "-$x.xx", its sign before the
+    dollar as ``fmt_money`` puts it (BUG-137).
     """
     if x is None:
         return "—"
-    return f"${x:,.2f}"
+    return f"-${-x:,.2f}" if x < 0 else f"${x:,.2f}"
+
+
+def fmt_signed_price(x: Optional[float]) -> str:
+    """Format a per-share figure that may be below zero with its sign before the dollar.
+
+    None -> "—"; -9.17 -> "-$9.17": the VAL tab's other indicators, in the table and in the notes alike. Since
+    BUG-137 ``fmt_price`` writes the same.
+    """
+    return fmt_price(x)
 
 
 def fmt_value(x: Optional[float], kind: str) -> str:
