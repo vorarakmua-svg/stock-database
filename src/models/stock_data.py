@@ -78,10 +78,13 @@ class StockData:
     financials_annual_vintages: Dict[str, Any] = field(default_factory=dict)
 
     # The annual record as known at each filing date (as-of snapshots, ``build_snapshots``'s rows): a row per fiscal
-    # year and day its row changed. SQLite-only (excluded from to_dict/JSON), like the vintages.
-    financials_annual_known: List[Dict[str, Any]] = field(default_factory=list)
+    # year and day its row changed. None when the run didn't build them (its companyfacts request failed, a run
+    # without SEC data, any run that didn't reach ``build_snapshots``): the SQLite store then keeps the stored
+    # snapshots and vintages. A list, even an empty one, is what the run built, and replaces them. SQLite-only
+    # (excluded from to_dict/JSON), like the vintages.
+    financials_annual_known: Optional[List[Dict[str, Any]]] = None
     # The run's years_back (None: the whole history). A run that kept its latest years only speaks for those years'
-    # snapshots, so the SQLite store replaces those alone. SQLite-only.
+    # snapshots and vintages, so the SQLite store replaces those alone. SQLite-only.
     years_back: Optional[int] = None
 
     # SEC submission data

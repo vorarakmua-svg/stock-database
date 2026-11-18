@@ -1062,7 +1062,11 @@ class SQLiteStore:
             row.update(self._canonical_values(period, restated))
             self._upsert(conn, "financials_ttm", ["ticker", "period_end"], row, fill_only=fill)
 
-        # financials_annual_vintages (point-in-time: one row per filing/accession)
+        # financials_annual_vintages (point-in-time: one row per filing/accession). A run that built the as-of
+        # snapshots, which give the vintages too, restates both tables' rows for the years it built.
+        replace = stock.financials_annual_known is not None and not fill
+        if replace:
+            self._clear_snapshots(conn, stock)
         for fy, by_accn in (stock.financials_annual_vintages or {}).items():
             for accn, period in by_accn.items():
                 vrow = {
@@ -1080,7 +1084,8 @@ class SQLiteStore:
                              ["ticker", "fiscal_year", "accn"], vrow, fill_only=fill)
 
         # financials_annual_known (the as-of snapshots)
-        self._write_known(conn, stock, fill)
+        if replace:
+            self._write_known(conn, stock)
 
         # market_snapshots (point-in-time)
         md = stock.market_data or {}
@@ -1167,23 +1172,37 @@ class SQLiteStore:
         self._write_split_events(conn, stock.ticker, stock.splits or [])
 
     @staticmethod
-    def _write_known(conn: sqlite3.Connection, stock: StockData, fill: bool) -> None:
-        """Store *stock*'s as-of snapshots (``financials_annual_known``), in the run's transaction.
+    def _clear_snapshots(conn: sqlite3.Connection, stock: StockData) -> None:
+        """Delete the stored rows a run that built *stock*'s as-of snapshots restates, in ``financials_annual_known``
+        and ``financials_annual_vintages``, before it writes its own (the run's transaction holds both).
 
-        A run that built them restates them: they replace every row of the ticker's, or with a ``years_back`` (the run
-        kept its latest years' rows, replayed on every filing) those of the fiscal years it gives. A run that built
-        none (its companyfacts request failed) and a run that only fills (its predecessor's filings couldn't be read,
-        so its snapshots read part of the facts, BUG-179) leave the stored ones as they are.
+        Whether a run built them is ``stock.financials_annual_known``: None when it didn't (its companyfacts request
+        failed, a run without SEC data, any run that didn't reach ``build_snapshots``), which deletes nothing; a list,
+        empty or not, when it did. A run that built them speaks for every row of the ticker's, so a vintage or a
+        snapshot it no longer gives goes (a view of a year not over on its filing's day, BUG-113), and an empty list
+        deletes them all. With a ``years_back``, the run kept its latest years' rows (replayed on every filing), so
+        it speaks for those fiscal years only. A run that only fills (its predecessor's filings couldn't be read,
+        BUG-179) isn't one to call this for: its snapshots read part of the facts.
         """
-        rows = stock.financials_annual_known or []
-        if fill or not rows:
+        if not stock.years_back:
+            for table in ("financials_annual_known", "financials_annual_vintages"):
+                conn.execute(f"DELETE FROM {table} WHERE ticker = ?", (stock.ticker,))
             return
-        if stock.years_back:
-            years = sorted({int(row["fiscal_year"]) for row in rows})
-            conn.execute(f"DELETE FROM financials_annual_known WHERE ticker = ? AND fiscal_year IN "
-                         f"({', '.join('?' for _ in years)})", [stock.ticker, *years])
-        else:
-            conn.execute("DELETE FROM financials_annual_known WHERE ticker = ?", (stock.ticker,))
+        years = sorted({int(row["fiscal_year"]) for row in stock.financials_annual_known or []}
+                       | {int(fy) for fy in stock.financials_annual_vintages or {} if str(fy).isdigit()})
+        if not years:
+            return
+        marks = ", ".join("?" for _ in years)
+        for table in ("financials_annual_known", "financials_annual_vintages"):
+            conn.execute(f"DELETE FROM {table} WHERE ticker = ? AND fiscal_year IN ({marks})", [stock.ticker, *years])
+
+    @staticmethod
+    def _write_known(conn: sqlite3.Connection, stock: StockData) -> None:
+        """Insert *stock*'s as-of snapshots (``financials_annual_known``), after ``_clear_snapshots`` has deleted the
+        rows they restate."""
+        rows = stock.financials_annual_known or []
+        if not rows:
+            return
         columns = ["ticker", "fiscal_year", "known_from", "known_accn", "present", "accn", "filed_date", "form",
                    "period_end", "calendar_year", "frame", "source_tags", "source_filings", *_CANONICAL_COLUMNS]
 

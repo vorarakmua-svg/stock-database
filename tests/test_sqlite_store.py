@@ -877,15 +877,31 @@ def _snapshot(year, known_from, revenue=None, present=True):
             "accn": filing["accn"], "filed_date": known_from, "form": "10-K"}
 
 
-def _known_run(ticker, rows, years_back=None, predecessor_error=None):
+def _known_run(ticker, rows, vintages=None, years_back=None, predecessor_error=None):
+    """*ticker*'s run: the snapshots it built (*rows*; None when it built none) and its vintages
+    (``{fiscal_year: {accn: revenue}}``)."""
     s = StockData(ticker=ticker, cik="000", company_name=f"{ticker} Inc.")
     s.financials_annual = {str(r["fiscal_year"]): {"fiscal_year": r["fiscal_year"], "revenue": r.get("revenue")}
-                           for r in rows if r["present"]}
+                           for r in rows or [] if r["present"]}
     s.financials_annual_known = copy.deepcopy(rows)
+    s.financials_annual_vintages = {
+        str(fy): {accn: {"fiscal_year": fy, "accn": accn, "filed_date": f"{fy + 1}-02-10", "form": "10-K",
+                         "revenue": revenue} for accn, revenue in views.items()}
+        for fy, views in (vintages or {}).items()}
     s.years_back = years_back
     s.predecessor_error = predecessor_error
     s.add_source("sec_edgar")
     return s
+
+
+def _vintages(db, ticker="AAA"):
+    """*ticker*'s stored vintages: (fiscal_year, accn, revenue), in order."""
+    conn = sqlite3.connect(db)
+    try:
+        return conn.execute("SELECT fiscal_year, accn, revenue FROM financials_annual_vintages WHERE ticker = ? "
+                            "ORDER BY fiscal_year, accn", (ticker,)).fetchall()
+    finally:
+        conn.close()
 
 
 def _known(db, ticker="AAA"):
@@ -920,43 +936,69 @@ def test_a_snapshot_is_stored_with_its_provenance(tmp_path):
     assert (gone["present"], gone["revenue"], gone["source_tags"], gone["source_filings"]) == (0, None, None, None)
 
 
+#: AAA's stored vintages: FY2022's 10-K and FY2023's, and FY2023 as viewed by FY2022's 10-K, a year not over on
+#: its filing's day (BUG-113), which the run no longer gives.
+_STORED_VINTAGES = {2022: {"k22": 100.0}, 2023: {"k22": 1.0, "k23": 110.0}}
+
+
 def test_a_full_run_replaces_a_tickers_snapshots(tmp_path):
     db = tmp_path / "stock.db"
     store = SQLiteStore(db)
-    store.export([_known_run("AAA", [_FY22, _FY22_RESTATED, _FY23]), _known_run("BBB", [_FY22])])
-    store.export([_known_run("AAA", [_FY22, _FY23])])
+    store.export([_known_run("AAA", [_FY22, _FY22_RESTATED, _FY23], _STORED_VINTAGES),
+                  _known_run("BBB", [_FY22], {2022: {"b22": 7.0}})])
+    store.export([_known_run("AAA", [_FY22, _FY23], {2022: {"k22": 100.0}, 2023: {"k23": 110.0}})])
     assert _known(db) == [(2022, "2023-02-10", 1, 100.0), (2023, "2024-02-09", 1, 110.0)]
+    # a vintage the run no longer gives goes with the snapshots it no longer gives
+    assert _vintages(db) == [(2022, "k22", 100.0), (2023, "k23", 110.0)]
     assert _known(db, "BBB") == [(2022, "2023-02-10", 1, 100.0)]  # another ticker's stay
+    assert _vintages(db, "BBB") == [(2022, "b22", 7.0)]
 
 
 def test_a_years_back_run_replaces_only_its_years(tmp_path):
     db = tmp_path / "stock.db"
     store = SQLiteStore(db)
-    store.export([_known_run("AAA", [_FY22, _FY22_RESTATED, _FY23, _snapshot(2023, "2024-05-01", 999.0)])])
+    store.export([_known_run("AAA", [_FY22, _FY22_RESTATED, _FY23, _snapshot(2023, "2024-05-01", 999.0)],
+                             _STORED_VINTAGES)])
     # A years_back=2 run replays every filing but keeps its latest two years' rows: FY2023's and FY2024's.
-    store.export([_known_run("AAA", [_FY23, _FY23_RESTATED, _FY24], years_back=2)])
+    store.export([_known_run("AAA", [_FY23, _FY23_RESTATED, _FY24], {2023: {"k23": 111.0}, 2024: {"k24": 120.0}},
+                             years_back=2)])
     assert _known(db) == [(2022, "2023-02-10", 1, 100.0), (2022, "2024-02-09", 1, 95.0),
                           (2023, "2024-02-09", 1, 110.0), (2023, "2025-02-07", 1, 111.0),
                           (2024, "2025-02-07", 1, 120.0)]
+    assert _vintages(db) == [(2022, "k22", 100.0), (2023, "k23", 111.0), (2024, "k24", 120.0)]
 
 
 def test_a_fill_only_run_leaves_snapshots_alone(tmp_path):
-    # BUG-179: a run whose predecessor's filings couldn't be read builds its snapshots from part of the facts.
+    # BUG-179: a run whose predecessor's filings couldn't be read builds its snapshots from part of the facts. Its
+    # vintages only fill, as ever: a view not stored yet, a figure a stored view lacks.
     db = tmp_path / "stock.db"
     store = SQLiteStore(db)
-    store.export([_known_run("AAA", [_FY22, _FY22_RESTATED])])
+    store.export([_known_run("AAA", [_FY22, _FY22_RESTATED], _STORED_VINTAGES)])
     store.export([_known_run("AAA", [_snapshot(2022, "2025-02-07", 1.0), _FY24],
-                             predecessor_error="503 Server Error")])
+                             {2022: {"k22": 5.0}, 2024: {"k24": 120.0}}, predecessor_error="503 Server Error")])
     assert _known(db) == [(2022, "2023-02-10", 1, 100.0), (2022, "2024-02-09", 1, 95.0)]
+    assert _vintages(db) == [(2022, "k22", 100.0), (2023, "k22", 1.0), (2023, "k23", 110.0), (2024, "k24", 120.0)]
 
 
 def test_a_run_that_built_no_snapshots_leaves_them_alone(tmp_path):
-    # A run whose companyfacts request failed builds none: it can't speak for what the facts were known to say.
+    # A run whose companyfacts request failed builds none (None): it can't speak for what the facts were known to say,
+    # nor for the vintages, which come from the same replay.
     db = tmp_path / "stock.db"
     store = SQLiteStore(db)
-    store.export([_known_run("AAA", [_FY22, _FY23])])
-    store.export([_known_run("AAA", [])])
+    store.export([_known_run("AAA", [_FY22, _FY23], _STORED_VINTAGES)])
+    store.export([_known_run("AAA", None)])
     assert _known(db) == [(2022, "2023-02-10", 1, 100.0), (2023, "2024-02-09", 1, 110.0)]
+    assert _vintages(db) == [(2022, "k22", 100.0), (2023, "k22", 1.0), (2023, "k23", 110.0)]
+
+
+def test_a_run_that_built_no_snapshot_rows_deletes_the_stored_ones(tmp_path):
+    # The run built them, and its facts give none (an empty list): it speaks for the ticker's rows all the same.
+    db = tmp_path / "stock.db"
+    store = SQLiteStore(db)
+    store.export([_known_run("AAA", [_FY22, _FY23], _STORED_VINTAGES), _known_run("BBB", [_FY22])])
+    store.export([_known_run("AAA", [])])
+    assert _known(db) == [] and _vintages(db) == []
+    assert _known(db, "BBB") == [(2022, "2023-02-10", 1, 100.0)]
 
 
 def test_a_database_stored_before_the_snapshots_gains_them(tmp_path):

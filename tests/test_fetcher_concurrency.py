@@ -447,6 +447,18 @@ def test_a_collection_carries_the_annual_record_as_known_at_each_filing(tmp_path
         conn.close()
 
 
+def test_a_collection_that_built_no_snapshots_says_so(tmp_path, monkeypatch):
+    # A failed companyfacts request, or a run without SEC data, builds none: None, which the store reads as a run that
+    # can't speak for the stored snapshots and vintages (an empty list would delete them).
+    failed = _collect_from_sec(tmp_path, monkeypatch, {
+        "cik": "0000000001", "ticker": "SNP", "source": "sec_edgar", "company_facts_error": "403 Client Error",
+        "submissions": {"name": "Snapshot Corp", "filings": []}})
+    assert failed.financials_annual_known is None
+    without_sec = _sec_only_fetcher(tmp_path, monkeypatch, {}).fetch_ticker("SNP", include_yahoo=False,
+                                                                           include_sec=False)
+    assert without_sec.financials_annual_known is None
+
+
 def test_a_successor_registrant_is_noted_with_its_predecessor(tmp_path, monkeypatch):
     # Q6: XOM reads ExxonMobil Holdings Corp with Exxon Mobil Corp's filings; the run says so, where it used to say
     # there were no annual financials.
