@@ -2075,7 +2075,12 @@ period therefore carries two labels:
   year. SEC's `fy` field is deliberately not used — filers mis-stamp it.
 - `calendar_year` (and `calendar_quarter`) — the macro-aligned year taken from SEC's
   XBRL `frame` context flag (e.g. MSFT FY2025, AAPL FY2025, WMT FY2026 and every December
-  filer's FY2025 all map to `calendar_year = 2025`; NVIDIA's January "FY2022" → 2021).
+  filer's FY2025 all map to `calendar_year = 2025`; NVIDIA's January "FY2022" → 2021). A
+  year takes the full-year frame at the end its income and cash-flow figures share (a year's
+  balance-sheet instants and figures of other ends don't decide it); a quarter its quarter's
+  frame. Where no fact carries one, SEC's own rule gives it: the calendar year holding the
+  end less 180 days, the quarter holding the end less 45 days (Seagate's year to 2019-06-28
+  is 2018, a quarter to 2024-10-05 is Q3), which matches every frame in the cached filings.
 
 **Always compare across companies with `calendar_year`, not `fiscal_year`.**
 
@@ -2215,8 +2220,8 @@ numbers SEC filings report:
   the part's tag, and a year's 10-Qs are read so only together.
 - **Balance-sheet checkpoints** at every quarter-end (instant facts), full history.
 - **`fiscal_quarter`** (1–4, company calendar) and **`calendar_quarter`** (1–4, calendar)
-  are both attached; `calendar_quarter` comes from the SEC frame and is the reliable
-  cross-company key.
+  are both attached; `calendar_quarter` comes from the SEC frame (or SEC's rule where no
+  fact carries one, as above) and is the reliable cross-company key.
 - **TTM (`financials_ttm`)** — trailing-twelve-month series (rolling 4 discrete quarters
   for flows, their average for weighted share counts, balance sheet as-of, and per-share
   figures and counts on the latest quarter's split basis) for seasonality-free, up-to-date

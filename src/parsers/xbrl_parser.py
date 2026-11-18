@@ -1708,7 +1708,8 @@ class XBRLParser:
 
         data: Dict[Any, Dict[str, Any]] = {}
         best: Dict[Any, Tuple[int, str]] = {}
-        period_frames: Dict[Any, set] = {}
+        period_frames: Dict[Any, Set[Tuple[str, str]]] = {}
+        flow_ends: Dict[Any, Dict[str, str]] = {}  # period -> {flow field: the end of the figure it holds}
         set_aside = self._aside(us_gaap)
 
         for field in CANONICAL_FIELDS:
@@ -1730,17 +1731,18 @@ class XBRLParser:
                     period = (fy, accn)
                     frame = entry.get("frame")
                     if frame:
-                        period_frames.setdefault(period, set()).add(frame)
+                        period_frames.setdefault(period, set()).add((entry.get("end"), frame))
                     seed = {
                         "fiscal_year": fy, "accn": accn,
                         "filed_date": entry.get("filed"), "period_end": entry.get("end"),
                         "form": entry.get("form"),
                     }
                     rank = priority + len(field.tags) if _ranks_last(set_aside, field, tag, fy, entry) else priority
-                    self._assign_if_better(data, best, period, seed, field,
-                                           rank, tag, entry)
+                    if self._assign_if_better(data, best, period, seed, field,
+                                              rank, tag, entry) and field.kind == DURATION:
+                        flow_ends.setdefault(period, {})[field.key] = entry.get("end")
 
-        self._apply_calendar(data, period_frames, quarterly=False)
+        self._apply_calendar(data, period_frames, flow_ends)
         if not _in_dollars(data.values()):
             return {}
 
@@ -2134,14 +2136,9 @@ class XBRLParser:
     def _apply_quarter_calendar(
         self, periods: Dict[str, Dict[str, Any]], frames: Dict[str, set],
     ) -> None:
-        """Attach calendar_year/calendar_quarter (+frame) to each quarter-end."""
+        """Attach calendar_year/calendar_quarter (+frame) to each quarter-end (see ``_calendar_from_frames``)."""
         for end, pd_ in periods.items():
-            year, quarter, chosen = self._calendar_from_frames(frames.get(end, set()),
-                                                               quarterly=True)
-            if year is None:
-                year = self._calendar_year_from_end(end)
-            if quarter is None:
-                quarter = self._calendar_quarter_from_end(end)
+            year, quarter, chosen = self._calendar_from_frames(frames.get(end, set()), end, quarterly=True)
             pd_["calendar_year"] = year
             pd_["calendar_quarter"] = quarter
             if chosen:
@@ -2153,13 +2150,6 @@ class XBRLParser:
         if cum_span is None:
             return None
         return max(1, min(4, round(cum_span / 91.31)))
-
-    def _calendar_quarter_from_end(self, end: Optional[str]) -> Optional[int]:
-        """Fallback calendar quarter from a period-end month (used when no frame)."""
-        end_date = self._parse_iso_date(end)
-        if end_date is None:
-            return None
-        return (end_date.month - 1) // 3 + 1
 
     def _span(self, start: Optional[str], end: Optional[str]) -> Optional[int]:
         """Day count between two ISO dates, or None."""
@@ -2221,9 +2211,10 @@ class XBRLParser:
         best: Dict[Any, tuple] = {}
         # period -> filed date of the entry that set period-level metadata.
         meta_filed: Dict[Any, str] = {}
-        # period -> set of SEC calendar `frame` strings seen across all of the
-        # period's facts (the authoritative calendar mapping; see _apply_calendar).
-        period_frames: Dict[Any, set] = {}
+        # period -> {(end, SEC calendar `frame`)} seen across all of the period's facts,
+        # and {flow field: the end of the figure it holds} (see _apply_calendar).
+        period_frames: Dict[Any, Set[Tuple[str, str]]] = {}
+        flow_ends: Dict[Any, Dict[str, str]] = {}
 
         for field in CANONICAL_FIELDS:
             unit_key = field.xbrl_unit
@@ -2248,7 +2239,7 @@ class XBRLParser:
                     # present only on a comparative instance, not the one that wins).
                     frame = entry.get("frame")
                     if frame:
-                        period_frames.setdefault(period, set()).add(frame)
+                        period_frames.setdefault(period, set()).add((entry.get("end"), frame))
 
                     seed = self._init_period_meta(period, quarterly)
                     rank = priority + len(field.tags) if _ranks_last(set_aside, field, tag, period, entry) else priority
@@ -2256,6 +2247,8 @@ class XBRLParser:
                         data, best, period, seed, field, rank, tag, entry
                     ):
                         continue
+                    if field.kind == DURATION:
+                        flow_ends.setdefault(period, {})[field.key] = entry.get("end")
 
                     # Period-level metadata follows the latest-filed contributing entry.
                     period_dict = data[period]
@@ -2269,7 +2262,7 @@ class XBRLParser:
                         if quarterly:
                             period_dict["fiscal_year"] = entry.get("fy")
 
-        self._apply_calendar(data, period_frames, quarterly)
+        self._apply_calendar(data, period_frames, flow_ends)
         return data
 
     def _annual_fy(self, entry: Dict[str, Any]) -> Optional[int]:
@@ -2439,24 +2432,29 @@ class XBRLParser:
         return {"fiscal_year": period}
 
     def _apply_calendar(self, data: Dict[Any, Dict[str, Any]],
-                        period_frames: Dict[Any, set], quarterly: bool) -> None:
-        """Set SEC-authoritative ``calendar_year`` (+quarter, +frame) on each period.
+                        period_frames: Dict[Any, Set[Tuple[str, str]]],
+                        flow_ends: Dict[Any, Dict[str, str]]) -> None:
+        """Set SEC-authoritative ``calendar_year`` (+frame) on each annual period.
 
-        Uses the SEC ``frame`` when present (e.g. a June-fiscal-year-end maps to its
-        calendar year, a January FYE to the prior calendar year), falling back to the
-        period-end month rule for the rare period with no frame on any instance.
+        A year's calendar is that of the fiscal year its figures cover: the end most of its
+        full-year flow figures share (*flow_ends*: ``{field: end}``; the later end on a tie),
+        else, with none (a balance sheet can stand on any day: EXE's fresh start of
+        2021-02-09), its ``period_end``. That end, not ``period_end``, which a stray later
+        filed figure can set (LRCX's FY2012 reads 2012-06-30 for its year to 2012-06-24). It
+        takes the SEC's full-year frame on a fact ending there (a January year-end maps to the
+        prior calendar year), else the frame SEC's rule gives that end (``_frame_of_end``);
+        never a frame of another end (a 52-week figure to March in TEL's September year), nor
+        an instant's (a March year-end's balance sheet is CY####Q1I of the year the fiscal
+        year mostly isn't in). BUG-057, BUG-123, BUG-277.
         """
         for period, period_dict in data.items():
-            year, quarter, chosen = self._calendar_from_frames(
-                period_frames.get(period, set()), quarterly
-            )
-            if year is None:
-                year = self._calendar_year_from_end(period_dict.get("period_end"))
+            ends = Counter(e for e in flow_ends.get(period, {}).values() if e)
+            end = max(ends, key=lambda e: (ends[e], e)) if ends else period_dict.get("period_end")
+            year, _, chosen = self._calendar_from_frames(
+                {frame for at, frame in period_frames.get(period, set()) if at == end}, end, quarterly=False)
             period_dict["calendar_year"] = year
             if chosen:
                 period_dict["frame"] = chosen
-            if quarterly:
-                period_dict["calendar_quarter"] = quarter
 
     @staticmethod
     def _parse_frame(frame: str):
@@ -2468,33 +2466,47 @@ class XBRLParser:
         quarter = int(match.group(2)) if match.group(2) else None
         return year, quarter
 
-    def _calendar_from_frames(self, frames: set, quarterly: bool):
-        """Choose the best frame for a period -> (year, quarter, frame_string).
+    def _calendar_from_frames(self, frames: Iterable[str], end: Optional[str], quarterly: bool):
+        """The frame of a period ending *end*, from its facts' SEC *frames* at that end -> (year, quarter, frame).
 
-        For annual periods prefer a full-year frame (``CY2024``); for quarterly prefer
-        a frame carrying a quarter (``CY2024Q4I``). Returns (None, None, None) if no
-        parseable frame is available.
+        A year takes a full-year frame (``CY2024``); a quarter a quarter's (``CY2024Q4``), else
+        its end's (``CY2024Q4I``), never the year's. Several of one kind: the first in sort
+        order, so no run's hash order decides (BUG-057, BUG-123, BUG-277; SEC's frames at one
+        end agree, as all 5.2 million cached ones follow ``_frame_of_end``). None of the kind:
+        the frame SEC's rule gives *end*; (None, None, None) without a date.
         """
-        parsed = []
-        for frame in frames:
-            year, quarter = self._parse_frame(frame)
-            if year is not None:
-                parsed.append((year, quarter, frame))
-        if not parsed:
-            return None, None, None
+        parsed = [(year, quarter, frame) for frame in sorted(frames)
+                  for year, quarter in [self._parse_frame(frame)] if year is not None]
         if quarterly:
-            with_q = [p for p in parsed if p[1] is not None]
-            return (with_q or parsed)[0]
-        full_year = [p for p in parsed if p[1] is None]
-        return (full_year or parsed)[0]
+            kinds = ([p for p in parsed if p[1] is not None and not p[2].endswith("I")],
+                     [p for p in parsed if p[1] is not None and p[2].endswith("I")])
+        else:
+            kinds = ([p for p in parsed if p[1] is None],)
+        for kind in kinds:
+            if kind:
+                return kind[0]
+        own = self._frame_of_end(end, quarterly)
+        return own if own is not None else (None, None, None)
 
-    def _calendar_year_from_end(self, end: Optional[str]):
-        """Fallback calendar-year rule (replicates SEC's convention).
-
-        A period ending in Jun-Dec maps to its end year; Jan-May maps to the prior
-        year (i.e. the calendar year holding most of the 12-month period).
-        """
-        end_date = self._parse_iso_date(end)
-        if end_date is None:
+    def _frame_of_end(self, end: Optional[str], quarterly: bool) -> Optional[Tuple[int, Optional[int], str]]:
+        """The frame SEC's rule gives a period ending *end* (as ``xbrl_instance.frame_of``):
+        a year the calendar year holding its end less 180 days (a year to 2012-01-31 is
+        CY2011, to 2012-03-31 CY2011, to 2025-06-30 CY2025); a quarter the calendar quarter
+        holding its end less 45 days (to 2024-10-05 CY2024Q3, to 2025-03-31 CY2025Q1). It gives
+        every frame of the 504 cached companyfacts (2026-11-18: 1.17 million annual, 1.47 million
+        quarterly, 2.57 million instant); the end-month rule it replaces missed 8,196, 174,321 and
+        329,156 of them (Seagate's year to 2019-06-28 is CY2018, Intel's to 2011-06-25 CY2010)."""
+        day = self._parse_iso_date(end)
+        if day is None:
             return None
-        return end_date.year if end_date.month >= 6 else end_date.year - 1
+        if quarterly:
+            at = day - timedelta(days=45)
+            quarter = (at.month - 1) // 3 + 1
+            return at.year, quarter, f"CY{at.year}Q{quarter}"
+        year = (day - timedelta(days=180)).year
+        return year, None, f"CY{year}"
+
+    def _calendar_year_from_end(self, end: Optional[str]) -> Optional[int]:
+        """The calendar year SEC's rule gives a year ending *end* (``_frame_of_end``)."""
+        own = self._frame_of_end(end, quarterly=False)
+        return own[0] if own is not None else None

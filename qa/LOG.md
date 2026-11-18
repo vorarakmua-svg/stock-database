@@ -3148,3 +3148,22 @@ Result: BUG-337 VERIFIED. No P0-P2 open.
 Gates: ruff ✓ mypy ✓ pytest 3058 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(sec): a gap read from the filings' XBRL is whole only when it reaches a report the companyfacts carry (BUG-337)
 Next: reshape the stale bug170 and bug260-...-bug319 mutant specs; then the 160 P3s.
+
+## Iteration 181: 2026-11-18 19:30: fix (BUG-057, BUG-123, BUG-277)
+Picked: the user's priority #1 of the P3s ("structural first"): calendar labels that followed Python's hash seed, so
+two runs of the same code on the same data disagreed; an opus worker.
+Did: `_calendar_from_frames` and `_apply_calendar` follow SEC's own frame rule (end less 180 days for a year, less 45
+for a quarter); a year's end is the one most of its flow figures share; frames of other ends and instants no longer
+decide a year; ties go to sort order. The end-month fallback (which missed 8,196 annual, 174,321 quarterly and
+329,156 instant frames in the cache) is gone.
+- RED: 5 of 11 failed on 595dac3 (one runs every shape under PYTHONHASHSEED 0-7 in subprocesses); GREEN. 13 of 13
+  mutants; bug252's 11 killed. Look-ahead 0.
+- Census and DB copies (all 502 re-collected offline, engine over 502): only calendar_year / calendar_quarter / frame
+  move (annual 31 stable cells, vintages 620, quarterly 81 + 306, TTM 14 + 13); 0 medians, verdicts, owner-earnings
+  verdicts or labels; valuation oracle identical. The fix is identical under seeds 0 and 4.
+- New: BUG-341 (P2: a fiscal-year key holding two fiscal years mixes them; GPN FY2016, LHX 2019), BUG-342, BUG-343 (P3).
+Result: BUG-057, BUG-123, BUG-277 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3063 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): a period's calendar follows SEC's frame rule, not a set's hash order (BUG-057, BUG-123, BUG-277)
+Next: the design for priority #2 (one rule for the as-of view and the annual record; the user chose backtesting
+semantics); BUG-341.

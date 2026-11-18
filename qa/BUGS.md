@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 160 · NEEDS-USER 0 · Decided: 7 · Verified: 189
+**Open:** P0 0 · P1 0 · P2 1 · P3 159 · NEEDS-USER 0 · Decided: 7 · Verified: 192
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -474,8 +474,8 @@ Repro (`t_bug033/case_check.py`): for a failed AAPL quote job, `/ui/stocks/AAPL/
 Expected: the same answer in either case (or a 404).   Actual: a false success.
 
 ### BUG-057 [P3][VALID] A period without a deciding SEC frame takes its calendar label in hash order
-Status: OPEN
-Found: iteration 40, while measuring BUG-043's impact (`qa/evidence/iter40-bug043-impact.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 181)
+Found: iteration 40, while measuring BUG-043's impact (`qa/evidence/iter40-bug043-impact.txt`) | Fixed: (this commit) | Regression tests: tests/test_fiscal_calendar.py (5 new, one under PYTHONHASHSEED 0-7); 5 failing first
 Repro: `XBRLParser._calendar_from_frames` returns the first entry of a list built from a set of SEC frames, so with no full-year frame (annual) or several quarter frames (quarterly) the choice follows Python's per-process string hashing. Over the 143 cached companyfacts files: 13 of 8,615 vintage periods and 8,192 of 9,789 quarterly periods get a run-dependent `frame` label (the JSON export writes it), and 3 vintage periods a run-dependent stored `calendar_year`: WMT's FY2012 vintage (accession 0001193125-12-134679, in both caches) and TJX's (0001193125-15-114276) come out 2011 or 2012 (candidates CY2011Q4I and CY2012Q4I; SEC's convention gives 2011). Annual records are unaffected (0 of 2,581).
 Expected: the same input gives the same record (prefer the frame matching the period end, then a sorted order).   Actual: re-collecting can change those vintages' `calendar_year` and the exported frame labels.
 
@@ -958,8 +958,8 @@ Repro: code review 11's surviving mutants, re-run on a399dc0 with its runner, th
 Expected: a test each.   Actual: none fails.
 
 ### BUG-123 [P3][STORE] A vintage's calendar year depends on the process's hash seed: TJX's and WMT's FY2012 read 2011 or 2012
-Status: OPEN
-Found: iteration 80 while verifying BUG-111: two offline collections of the same cache stored different calendar years for two vintages (`qa/evidence/iter80-bug111-realdata.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 181)
+Found: iteration 80 while verifying BUG-111: two offline collections of the same cache stored different calendar years for two vintages (`qa/evidence/iter80-bug111-realdata.txt`) | Fixed: (this commit) | Regression tests: tests/test_fiscal_calendar.py (5 new, one under PYTHONHASHSEED 0-7); 5 failing first
 Repro: `extract_annual_vintages` on WMT's (or TJX's) cached company facts under PYTHONHASHSEED 0 to 7: the vintage of WMT's FY2012 10-K (period ended 2012-01-31, filed 2012-03-27) reads calendar year 2011 (frame CY2011Q4I) under six seeds and 2012 (CY2012Q4I) under seeds 4 and 5. A period's frames are a `set`, and with no full-year frame `_calendar_from_frames` takes the first one parsed, in the set's iteration order, which string hashing decides. The annual record's WMT FY2012 reads 2011 under every seed; quarterly periods take the same path.
 Expected: one answer for the same data (2011, the annual record's).   Actual: it follows the seed. Impact: these vintages' `calendar_year`, and two collections of the same data differing (GATHER-08).
 
@@ -2154,6 +2154,24 @@ Found: code review 29 (Minor 3; robustness, suspected) | Fixed: | Regression tes
 Repro: sec_handler.py ~35, ~442, ~459: a change to companyfacts_from_instance (taxonomies, frame or duplicate rule) without a manual bump of _FILING_CACHE_VERSION keeps serving the old shape from every xbrl_CIK*_*.json; no test ties the two.
 Expected: the version follows the reader, or a fixture test fails on a change without a bump.   Actual: neither.
 
+### BUG-341 [P2][VALID] One fiscal-year key can hold two fiscal years, and its record mixes them: GPN FY2016 combines the year to 2016-05-31's cash flows, calendar 2016's income statement and the 2016-12-31 balance sheet
+Status: OPEN
+Found: BUG-277's census (`qa/evidence/bug277-investigation.txt`, residual 1) | Fixed: | Regression test:
+Repro: a fiscal-year change (or a stray 52-week figure) puts two fiscal years' figures under one `_fiscal_year_from_end` key; the record takes each field's best-ranked figure regardless of its end, so FCF, margins and identities mix two periods: GPN FY2016, LHX FY2019 (14 flow figures to 2019-06-28 against 13 to 2020-01-03; since BUG-277 its calendar_year reads 2018 on that near tie), EXE 2021, MOS 2013, LDOS 2015 and others (14 annual records, 9 vintages).
+Expected: one record per fiscal year, each of one period's figures (a transition period kept apart).   Actual: figures from two periods in one row.
+
+### BUG-342 [P3][VALID] A record's period_end isn't always its own end: a stray later-filed fact sets it
+Status: OPEN
+Found: BUG-277's census (residual 2) | Fixed: | Regression test:
+Repro: annual records take period_end from the latest-filed contributing fact, which can be a stray (LRCX FY2012 2012-06-30 for its year to 2012-06-24; TER, LULU); vintages take it from their first fact (LHX's FY2019 vintages say 2019-06-28 but hold the year to 2020-01-03). Since BUG-277 calendar_year no longer follows period_end, so 6 annual records' calendar_year differs from SEC's rule on their own period_end.
+Expected: period_end the end most of the record's flow figures share.   Actual: a stray's.
+
+### BUG-343 [P3][TTM] TTM rows carry no SEC frame label
+Status: OPEN
+Found: BUG-277's census (residual 3) | Fixed: | Regression test:
+Repro: financials_ttm rows get calendar_year / calendar_quarter but no `frame`, unlike the quarters they sum.
+Expected: the frame of the TTM's last quarter, or the docs say none.   Actual: none, undocumented.
+
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: the history's P/E on net income to common, as its P/B already is.
@@ -2345,10 +2363,11 @@ Repro: depreciation-alone filers whose D&A sits on tags whose meaning varies by 
 Expected: the filing's D&A add-back.   Actual: the depreciation alone.
 
 ### BUG-277 [P3][PARSE] `XBRLParser._calendar_from_frames` takes the first frame from a set, so calendar_year follows Python's string-hash order: GPN FY2016, TEL FY2025, LHX FY2019
-Status: OPEN
-Found: iteration 118 (BUG-179's worker; its out\hash_order_check.txt) | Fixed: | Regression test:
+Status: VERIFIED (iteration 181)
+Found: iteration 118 (BUG-179's worker; its out\hash_order_check.txt) | Fixed: (this commit) | Regression tests: tests/test_fiscal_calendar.py (5 new, one under PYTHONHASHSEED 0-7); 5 failing first
 Repro: two parses of the 502 by the same code, in two processes, disagreed on 3 annual rows' and 8 vintages' calendar_year (GPN FY2016, TEL FY2025, LHX FY2019 flip): a frame is picked out of a set, whose order follows the per-process string hash (PYTHONHASHSEED).
 Expected: the same calendar_year on every run.   Actual: it depends on the hash seed; DB-level comparisons need a fixed seed.
+Fix (iteration 181, with BUG-057/123/277, `qa/evidence/bug277-investigation.txt`): a period's calendar follows SEC's own rule (`xbrl_instance.frame_of`: a year is the calendar year holding its end less 180 days, a quarter the quarter holding its end less 45 days; it matches all 5.2 million frames in the 504 cached companyfacts). A year's end is the one most of its full-year flow figures share (the later on a tie; period_end with none); it takes SEC's full-year frame on a fact ending there, else the rule's, never a frame of another end or an instant's. A quarter takes a quarter frame, else its instant frame, else the rule's. Several frames of one kind: the first in sort order. Census (HEAD under seeds 0-7, the fix under 0/4/7): the fix is seed-independent; stable cells it moves: annual calendar_year 31 (Feb-early June year ends HEAD labelled by the instant, e.g. ORCL 2007 -> 2006, BF-B 2008 -> 2007; TEL 2024-25 +1; LHX 2019 -> 2018), vintages 620, quarterly year 81 / quarter 306, TTM 14 / 13, frame labels throughout. DB copies over 502: only calendar_year / calendar_quarter move; every valuation, metrics, quality and warning table identical; valuation oracle identical. Look-ahead 0.
 
 ### BUG-278 [P3][STORE] The JSON export and financial_history.csv take a failed-predecessor run's partial years
 Status: OPEN
