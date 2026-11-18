@@ -177,6 +177,32 @@ def test_a_vintage_is_normalised_as_the_fetcher_does():
     assert vintage["accn"] == "a2" and vintage["filed_date"] == D2
 
 
+def _counts(earlier_checked: bool) -> Dict[str, Any]:
+    # FY2020's diluted count, filed in thousands by both its 10-K (e1) and the next year's (e2); one filing's EPS
+    # checks it (and share scale puts it in units), the other's doesn't.
+    k1, k2 = ("2021-02-12", "e1"), ("2022-02-11", "e2")
+    checked, unchecked = (k1, k2) if earlier_checked else (k2, k1)
+    return _facts(
+        NetIncomeLoss=[_year(10.0e6, 2020, *k1), _year(10.0e6, 2020, *k2)],
+        EarningsPerShareDiluted=[_year(1.0, 2020, *checked)],
+        WeightedAverageNumberOfDilutedSharesOutstanding=[_year(10.0e3, 2020, *k1), _year(10.0e3, 2020, *k2)])
+
+
+def test_a_vintages_unchecked_count_takes_the_scale_of_the_views_filed_by_its_day():
+    # The later 10-K's count, which no EPS of its own checks, takes the scale the earlier 10-K's checked count was
+    # put on, as the run's vintages always have (normalize_share_scale over the year's views).
+    vintages = build_snapshots(XBRLParser(), _counts(earlier_checked=True), ticker="X", years_back=None).vintages
+    assert vintages["2020"]["e1"]["weighted_avg_shares_diluted"] == 10.0e6
+    assert vintages["2020"]["e2"]["weighted_avg_shares_diluted"] == 10.0e6
+
+
+def test_a_vintages_count_takes_no_scale_from_a_later_filing():
+    # Reversed: the later 10-K's EPS checks its count; the earlier 10-K's view can't have known it.
+    vintages = build_snapshots(XBRLParser(), _counts(earlier_checked=False), ticker="X", years_back=None).vintages
+    assert vintages["2020"]["e1"]["weighted_avg_shares_diluted"] == 10.0e3
+    assert vintages["2020"]["e2"]["weighted_avg_shares_diluted"] == 10.0e6
+
+
 def test_years_back_trims_rows_not_history():
     full = build_snapshots(XBRLParser(), _three_10ks(), ticker="X", years_back=None)
     trimmed = build_snapshots(XBRLParser(), _three_10ks(), ticker="X", years_back=2)

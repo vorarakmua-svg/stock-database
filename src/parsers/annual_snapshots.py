@@ -85,20 +85,22 @@ def _filings_by_day(facts: Dict[str, Any]) -> Tuple[Dict[str, str], Set[str]]:
 
 
 def _vintages_of(parser: XBRLParser, known: Dict[str, Any], day: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
-    """The views of the filings of *day*, from the facts *known* that day, normalised as the run does (each
-    filing's share counts on its own EPS, derivations): a view of a year not over on *day* is none."""
+    """The views of the filings of *day*, from the facts *known* that day, normalised as the run does: a year's
+    share counts over all its views filed by *day* (``normalize_share_scale`` without neighbours still gives a count
+    no EPS checks the scale its year's corrected views agree on, so a view takes it from earlier filings' views and
+    its own day's, never a later one's), then derivations. A view of a year not over on *day* is none (BUG-113).
+    The views are this day's extraction's own dicts, so normalising them leaves an earlier day's views as they were."""
     views: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for fy, by_accn in parser.extract_annual_vintages(known, keep_year_end=True).items():
-        kept = {}
-        for accn, period in by_accn.items():
-            end = period.pop("_year_end", None) or period.get("period_end")
-            if period.get("filed_date") == day and (not end or end <= day):
-                kept[accn] = period
-        if kept:
-            normalize_share_scale(kept, neighbours=False)  # no scale from another filing's view (BUG-329)
-            for period in kept.values():
-                apply_derivations(period)
-            views[fy] = kept
+        ends = {accn: period.pop("_year_end", None) or period.get("period_end") for accn, period in by_accn.items()}
+        kept = [accn for accn, period in by_accn.items()
+                if period.get("filed_date") == day and (not ends[accn] or ends[accn] <= day)]
+        if not kept:
+            continue
+        normalize_share_scale(by_accn, neighbours=False)  # no scale from a neighbouring year's view (BUG-329)
+        for accn in kept:
+            apply_derivations(by_accn[accn])
+        views[fy] = {accn: by_accn[accn] for accn in kept}
     return views
 
 
