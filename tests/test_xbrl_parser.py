@@ -4,6 +4,7 @@ import pytest
 
 from src.exporters.sqlite_store import SQLiteStore
 from src.models.stock_data import StockData
+from src.parsers.annual_snapshots import build_snapshots
 from src.parsers.calculated_metrics import CalculatedMetrics
 from src.parsers.derived_fields import apply_derivations
 from src.parsers.share_scale import normalize_share_scale
@@ -892,9 +893,12 @@ def test_a_later_vintage_whose_borrowings_hold_the_paper_reads_none_outside_them
 
 
 def _debt_as_of(tmp_path, facts, *days):
-    """FY2025's total debt as the as-of view reads it on each of *days*, from the vintages a collection stores."""
+    """FY2025's total debt as the as-of view reads it on each of *days*, from the snapshots a collection stores (the
+    annual record replayed on the facts known by each filing date)."""
+    snapshots = build_snapshots(XBRLParser(), facts, ticker="DEBT", years_back=None)
     stock = StockData(ticker="DEBT", cik="1", company_name="Debt Co")
-    stock.financials_annual_vintages = XBRLParser().extract_annual_vintages(facts)
+    stock.financials_annual_known = snapshots.rows
+    stock.financials_annual_vintages = snapshots.vintages
     db = tmp_path / "stock.db"
     SQLiteStore(db_path=str(db)).export([stock])
     with AsOfReader(db) as reader:
