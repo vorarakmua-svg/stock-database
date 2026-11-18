@@ -8,7 +8,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime
 from itertools import islice
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from ..config import DEFAULT_BATCH_SIZE, AppConfig, default_config
 from ..exporters.csv_exporter import CSVExporter
@@ -16,6 +16,7 @@ from ..exporters.json_exporter import JSONExporter
 from ..exporters.sqlite_store import SQLiteStore, StoreResult, read_only_uri
 from ..models.canonical import validate_period
 from ..models.stock_data import StockData
+from ..parsers.annual_record import build_annual_record
 from ..parsers.calculated_metrics import CalculatedMetrics
 from ..parsers.derived_fields import apply_derivations
 from ..parsers.share_scale import normalize_share_scale
@@ -209,6 +210,8 @@ class StockDataFetcher:
         stock = StockData(ticker=ticker)
         # Each quarter's split basis, for the trailing years; not a figure to store (BUG-082).
         split_levels: Dict[str, Dict[str, float]] = {}
+        # The annual record's cleaning warnings (share scale, validation), added where the cleaning's always were.
+        annual_warnings: List[str] = []
 
         # Fetch Yahoo Finance data
         if include_yahoo:
@@ -238,16 +241,12 @@ class StockDataFetcher:
                 if "company_facts" in sec_data and sec_data["company_facts"]:
                     facts = sec_data["company_facts"]
 
-                    annual = self.xbrl_parser.extract_annual_financials(
-                        facts, years_back=years_back
-                    )
-                    # A later filing's tagging error the parser put right (BUG-061).
-                    for fy, period in annual.items():
-                        for r in period.pop("_repairs", []):
-                            stock.add_warning(
-                                f"SEC EDGAR: {ticker} FY{fy} {r['field']} is {r['kept']:.4g}, as earlier "
-                                f"filings report; the filing of {r['filed']} reports {r['dropped']:.4g}, "
-                                f"which looks like a tagging error ({r['kind']})")
+                    record = build_annual_record(self.xbrl_parser, facts, ticker=ticker, years_back=years_back)
+                    annual = record.periods
+                    # The parse's warnings here; the cleaning's where the other statements are cleaned.
+                    for warning in record.warnings[:record.repairs]:
+                        stock.add_warning(warning)
+                    annual_warnings = record.warnings[record.repairs:]
                     quarterly = self.xbrl_parser.extract_quarterly_financials(
                         facts, quarters_back=(years_back * 4 if years_back else None)
                     )
@@ -337,7 +336,7 @@ class StockDataFetcher:
         # Clean, derive identities, and build the TTM series.
         if stock.financials_annual or stock.financials_quarterly:
             try:
-                self._clean_and_derive(stock, split_levels)
+                self._clean_and_derive(stock, split_levels, annual_warnings)
             except Exception as e:
                 self.logger.warning(f"Data cleaning error for {ticker}: {e}")
                 stock.add_warning(f"Data cleaning: {str(e)}")
@@ -409,20 +408,22 @@ class StockDataFetcher:
         stock.merge_calculated_metrics(metrics)
 
     def _clean_and_derive(self, stock: StockData,
-                          split_levels: Optional[Dict[str, Dict[str, float]]] = None) -> None:
-        """Derive identities, validate/coerce each period, and build the TTM series
-        (*split_levels*: each quarter's split basis, the parser's ``_split_levels``)."""
-        for attr in ("financials_annual", "financials_quarterly"):
-            periods = getattr(stock, attr)
-            if not periods:
-                continue
+                          split_levels: Optional[Dict[str, Dict[str, float]]] = None,
+                          annual_warnings: Sequence[str] = ()) -> None:
+        """Derive identities, validate/coerce each quarter, and build the TTM series
+        (*split_levels*: each quarter's split basis, the parser's ``_split_levels``). The annual record comes cleaned
+        (``build_annual_record``); its cleaning's warnings, *annual_warnings*, are added first, as they always were."""
+        for warning in annual_warnings:
+            stock.add_warning(warning)
+        periods = stock.financials_quarterly
+        if periods:
             # Fix share counts filed in thousands/millions BEFORE anything reads
             # them — derivations, validation and every per-share metric downstream
-            # all assume units. Cross-period, so a year with no EPS to anchor on
+            # all assume units. Cross-period, so a quarter with no EPS to anchor on
             # still inherits the scale its siblings agree on.
             for period_key, fields in normalize_share_scale(periods).items():
                 stock.add_warning(
-                    f"share scale {attr} {period_key}: rescaled {', '.join(fields)} "
+                    f"share scale financials_quarterly {period_key}: rescaled {', '.join(fields)} "
                     "(filed in thousands/millions)"
                 )
             cleaned = {}
@@ -431,8 +432,8 @@ class StockDataFetcher:
                 clean, errors = validate_period(period)
                 cleaned[period_key] = clean
                 for err in errors:
-                    stock.add_warning(f"validation {attr} {period_key}: {err}")
-            setattr(stock, attr, cleaned)
+                    stock.add_warning(f"validation financials_quarterly {period_key}: {err}")
+            stock.financials_quarterly = cleaned
 
         # Derive identities within each point-in-time vintage (self-contained snapshots).
         for by_accn in (stock.financials_annual_vintages or {}).values():
