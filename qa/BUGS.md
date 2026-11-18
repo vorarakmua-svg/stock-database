@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 160 · NEEDS-USER 0 · Decided: 7 · Verified: 188
+**Open:** P0 0 · P1 0 · P2 0 · P3 160 · NEEDS-USER 0 · Decided: 7 · Verified: 189
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2130,10 +2130,11 @@ Repro: since Q17 a fully recovered gap is stored complete, so the refresh doesn'
 Expected: the company collected again once the companyfacts carry the report.   Actual: it waits for its next report.
 
 ### BUG-337 [P2][GATHER] Q17 marks a gap recovered, and stores the run complete, without reaching a report the companyfacts carry: a gap over 4 reports, or a pre-Q17 submissions cache, leaves reports missing for good
-Status: OPEN
-Found: code review 29 (`qa/evidence/review29.txt`, Important 1; probes fail at HEAD) | Fixed: | Regression test:
+Status: VERIFIED (iteration 180)
+Found: code review 29 (`qa/evidence/review29.txt`, Important 1; probes fail at HEAD) | Fixed: (this commit) | Regression tests: tests/test_sec_cache.py (3 new, one with 2 cases), tests/test_fetcher_concurrency.py (a warning case); 3 failing first
 Repro: sec_handler.py ~134 (reports_without_facts) stops its walk at XBRL_REPORTS_READ or at the end of its candidates as if it had reached a carried accession; ~424 then sets `recovered` whenever every report listed was read, and sqlite_store.py ~140 leaves `incomplete` empty. README ~1655 and ~2355 say a run is complete only when it read the report and every earlier one the companyfacts lacked. (a) six reports, the companyfacts carry only the oldest: reports 1-4 read, 5 never, stored whole. (b) a bank's submissions without `reports` whose newest 100 filings are 424B2s (BUG-285's shape; C's 2026-10-25 cache): only latest_report is seen, Q1-Q2 stay missing, the TTM breaks, nothing queues the company again (BUG-336). All 504 cached submissions predate Q17 but are past their week, so (b) is closed for the current cache; (a) is not. Probes: %LOCALAPPDATA%\stockdb-qa\review29\head\tests\test_review29.py::test_a_gap_of_more_than_four_reports_isnt_stored_whole, ::test_a_pre_q17_submissions_cache_doesnt_make_a_partial_gap_whole.
 Expected: `recovered` only when the walk stopped at an accession the companyfacts carry; else the run stays incomplete.   Actual: stored whole.
+Fix (iteration 180, `qa/evidence/bug337-investigation.txt`): a new `report_gap(submissions, facts) -> (gap, whole)` walks as before but says whether it stopped at an accession the companyfacts carry (checked before the cap, so four lacked reports whose listed fifth is carried are whole); `reports_without_facts` returns its gap; `_read_gap` sets `recovered` only when every report was read and the gap is whole, else the run stays incomplete and the refresh collects it again. The run's warning adds "it found no earlier report they carry, so reports before those may be missing too". The same reports are read and merged, so no figure moves; the stored DB (2026-10-25) predates Q17 (no `incomplete` column, 0 runs read a filing's XBRL), so no stored row changes. Residuals: a gap whose carried fifth report is listed nowhere stays incomplete (safe side); a filer whose companyfacts carry none of its reports is retried INCOMPLETE_RETRIES times; refresh._lacking's wording ("read no facts of its 10-Q") is unchanged for this case; a gap over four re-reads the same four on each retry (from the per-filing cache). BUG-336 not worsened.
 
 ### BUG-338 [P3][TTM] BUG-332's fallback reads a year whose 10-K tags no amortization as a year with no 10-K yet
 Status: OPEN

@@ -684,6 +684,11 @@ _UNREAD_Q1 = {"form": "10-Q", "accession": "0001104659-26-054255", "filed": "202
     ({"reports_read": [_READ_Q2, _READ_Q1], "reports_unread": [], "recovered": True},
      DLR_READ + ", and those of the earlier reports they lack from theirs: 10-Q filed 2026-05-01 "
                 "(0001104659-26-054255)"),
+    # Every report read, but none before them the companyfacts carry was reached (BUG-337): not whole.
+    ({"reports_read": [_READ_Q2, _READ_Q1], "reports_unread": []},
+     DLR_READ + ", and those of the earlier reports they lack from theirs: 10-Q filed 2026-05-01 "
+                "(0001104659-26-054255); it found no earlier report they carry, so reports before those may be "
+                "missing too; the refresh collects DLR again"),
     ({"reports_read": [], "reports_unread": [_UNREAD_Q2]},
      "SEC EDGAR: the companyfacts lack DLR's 10-Q filed 2026-07-31 (0001104659-26-089296), so this run's figures stop "
      "before it (its own XBRL couldn't be read: HTTP 404 for dlr-20260630x10q_htm.xml; HTTP 404 for the filing's "

@@ -120,6 +120,14 @@ def reports_without_facts(submissions: Optional[Dict[str, Any]],
     run reads from the filings' own XBRL (Q17). Its first is ``report_without_facts``'; empty when that is None. The
     reports are the submissions' ``reports`` (the newest of the feed's "recent" block), else, in a file cached before
     those were kept, the newest 100 filings and the latest report."""
+    return report_gap(submissions, facts)[0]
+
+
+def report_gap(submissions: Optional[Dict[str, Any]],
+               facts: Optional[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], bool]:
+    """``reports_without_facts``' gap, and whether it ends at a report the facts carry (the report after its last,
+    among those listed): only then is the gap known whole. False when it runs past XBRL_REPORTS_READ reports or past
+    the reports listed (a file cached before ``reports`` were kept lists the newest 100 filings alone, BUG-337)."""
     listed = submissions or {}
     candidates = [f for f in [*(listed.get("reports") or []), *(listed.get("filings") or []),
                               listed.get("latest_report") or {}]
@@ -131,10 +139,12 @@ def reports_without_facts(submissions: Optional[Dict[str, Any]],
     carried = {e.get("accn") for e in _entries(facts or {})}
     gap: List[Dict[str, Any]] = []
     for accession, filing in newest.items():
-        if not accession or accession in carried or len(gap) == XBRL_REPORTS_READ:
+        if accession and accession in carried:
+            return gap, True
+        if not accession or len(gap) == XBRL_REPORTS_READ:
             break
         gap.append(filing)
-    return gap
+    return gap, False
 
 
 def merge_report_facts(facts: Dict[str, Any], read: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -402,12 +412,15 @@ class SECHandler:
         it) from their own XBRL (``get_filing_facts``: one request each, two for a filing that isn't inline) into
         ``company_facts`` (``merge_report_facts``). ``reports_read`` names those read and their instance documents,
         ``reports_unread`` those that couldn't be, and why; a failure never fails the collection. When every one was
-        read the run's figures are whole: ``missing_report`` gains ``recovered``, and the run isn't stored as
-        incomplete (it is still named in the run's warning)."""
+        read and the gap ends at a report the companyfacts carry (``report_gap``) the run's figures are whole:
+        ``missing_report`` gains ``recovered``, and the run isn't stored as incomplete (it is still named in the run's
+        warning). A gap whose end wasn't reached (over XBRL_REPORTS_READ reports, or past those the submissions list)
+        leaves the run incomplete, so the refresh collects it again (BUG-337)."""
         read: List[Dict[str, Any]] = []
         unread: List[Dict[str, str]] = []
         pieces: List[Dict[str, Any]] = []
-        for filing in reports_without_facts(data.get("submissions"), data.get("company_facts")):
+        gap, whole = report_gap(data.get("submissions"), data.get("company_facts"))
+        for filing in gap:
             try:
                 instance, facts = self.get_filing_facts(cik, filing)
             except Exception as e:
@@ -420,7 +433,7 @@ class SECHandler:
         if pieces:
             data["company_facts"] = merge_report_facts(data["company_facts"], pieces)
         data["reports_read"], data["reports_unread"] = read, unread
-        if read and not unread:
+        if read and not unread and whole:
             data["missing_report"] = {**data["missing_report"], "recovered": True}
 
     # ---- a filing's own XBRL (Q17) ----------------------------------------

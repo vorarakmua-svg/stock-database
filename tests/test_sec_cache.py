@@ -7,8 +7,10 @@ import time
 import pytest
 import requests
 
+from src.exporters.sqlite_store import _incomplete
 from src.fetchers import sec_handler
 from src.fetchers.sec_handler import SECHandler
+from src.models.stock_data import StockData
 from src.parsers.xbrl_parser import XBRLParser
 from tests.test_xbrl_instance import CONTEXTS, instance
 
@@ -517,6 +519,39 @@ def test_at_most_a_years_reports_are_read(tmp_path, monkeypatch):
     assert [r["accession"] for r in data["reports_unread"]] == [r["accessionNumber"] for r in reports[:4]]
 
 
+def _dlr_reports(count):
+    """*count* 10-Qs of DLR's, newest first, each served with an instance (``_DLR_10Q2_INSTANCE``'s facts), and the
+    companyfacts' revenue carrying only the oldest (BUG-337)."""
+    reports = [{**_DLR_10Q2_INLINE, "accessionNumber": f"0001104659-26-0{n:05d}", "filingDate": f"2026-0{n}-01",
+                "acceptanceDateTime": "", "primaryDocument": f"q{n}.htm"} for n in range(9, 9 - count, -1)]
+    documents = {f"{r['accessionNumber'].replace('-', '')}/q{r['filingDate'][6]}_htm.xml": _DLR_10Q2_INSTANCE
+                 for r in reports}
+    return reports, documents, ({**_DLR_Q1_REVENUE, "accn": reports[-1]["accessionNumber"]},)
+
+
+def test_a_gap_longer_than_a_years_reports_is_no_recovery(tmp_path, monkeypatch):
+    # BUG-337: six reports, the companyfacts carry only the oldest. The run reads the newest four; the fifth, which
+    # they lack too, isn't read, so the run's figures aren't whole and it is stored as incomplete.
+    reports, documents, revenue = _dlr_reports(6)
+    handler, _ = _dlr_reading(tmp_path, monkeypatch, reports, documents, revenue=revenue)
+    data = handler.fetch_all("DLR")
+    assert [r["accession"] for r in data["reports_read"]] == [r["accessionNumber"] for r in reports[:4]]
+    assert data["reports_unread"] == [] and "recovered" not in data["missing_report"]
+    stock = StockData(ticker="DLR")
+    stock.missing_report = data["missing_report"]
+    assert json.loads(_incomplete(stock) or "{}") == {"report": {
+        "form": "10-Q", "accession": reports[0]["accessionNumber"], "filed": reports[0]["filingDate"]}}
+
+
+def test_a_gap_of_a_years_reports_that_ends_at_one_the_facts_carry_is_a_recovery(tmp_path, monkeypatch):
+    # Four reports lacked and the fifth carried: the four read are the whole gap.
+    reports, documents, revenue = _dlr_reports(5)
+    handler, _ = _dlr_reading(tmp_path, monkeypatch, reports, documents, revenue=revenue)
+    data = handler.fetch_all("DLR")
+    assert [r["accession"] for r in data["reports_read"]] == [r["accessionNumber"] for r in reports[:4]]
+    assert data["missing_report"]["recovered"]
+
+
 def test_the_submissions_keep_the_newest_reports(tmp_path, monkeypatch):
     submissions = _dlr(tmp_path, monkeypatch, [*_424B2S, _DLR_10Q2, _DLR_10Q1]).get_submissions("0001297996")
     assert submissions.get("reports") == [_DLR_10Q2, _DLR_10Q1]
@@ -537,6 +572,22 @@ def test_submissions_cached_before_the_reports_were_kept_give_the_latest_report(
         {"name": "DIGITAL REALTY TRUST, INC.", "filings": _424B2S[:100], "latest_report": _DLR_10Q2_INLINE}),
         encoding="utf-8")
     assert [r["accession"] for r in handler.fetch_all("DLR")["reports_read"]] == ["0001104659-26-089296"]
+
+
+@pytest.mark.parametrize("filings, recovered", [
+    (_424B2S[:100], False),  # the reports before the latest unseen: the gap's end isn't known (BUG-337)
+    ([*_424B2S[:98], _DLR_10Q2_INLINE, _DLR_10Q1_INLINE], True),  # the 10-Q the facts carry is among them
+])
+def test_submissions_cached_before_the_reports_were_kept_recover_only_back_to_a_report_the_facts_carry(
+        tmp_path, monkeypatch, filings, recovered):
+    handler, _ = _dlr_reading(tmp_path, monkeypatch, [], {
+        _DLR_10Q2_FOLDER + "dlr-20260630x10q_htm.xml": _DLR_10Q2_INSTANCE})
+    handler._payload_cache_path("submissions", "0001297996").write_text(json.dumps(
+        {"name": "DIGITAL REALTY TRUST, INC.", "filings": filings, "latest_report": _DLR_10Q2_INLINE}),
+        encoding="utf-8")
+    data = handler.fetch_all("DLR")
+    assert [r["accession"] for r in data["reports_read"]] == ["0001104659-26-089296"]
+    assert data["reports_unread"] == [] and bool(data["missing_report"].get("recovered")) is recovered
 
 
 def test_a_report_read_once_is_read_from_the_cache_after(tmp_path, monkeypatch):

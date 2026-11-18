@@ -447,8 +447,8 @@ class StockDataFetcher:
     def _report_without_facts(ticker: str, sec_data: Dict[str, Any]) -> str:
         """The run's warning for the latest report the companyfacts lack (``missing_report``, BUG-251): read from the
         filing's own XBRL with the earlier reports they lack (``reports_read``, Q17), or the run's figures stop before
-        it, with why its XBRL couldn't be read (``reports_unread``); a run that couldn't read every one is collected
-        again by the refresh."""
+        it, with why its XBRL couldn't be read (``reports_unread``); a run that couldn't read every one, or found no
+        earlier report the companyfacts carry (BUG-337), is collected again by the refresh."""
         missing = sec_data["missing_report"]
         lag = f"{REPORT_WITHOUT_FACTS} {ticker}'s {missing['form']} filed {missing['filed']} ({missing['accession']})"
         read = {r["accession"]: r for r in sec_data.get("reports_read") or []}
@@ -475,6 +475,9 @@ class StockDataFetcher:
                                      f"lack too, couldn't be read: {r['why']}" for r in others)
         if missing.get("recovered"):
             return text
+        if latest and not unread:
+            # Every report read, but the gap's end wasn't reached (sec_handler.report_gap, BUG-337).
+            text += "; it found no earlier report they carry, so reports before those may be missing too"
         return f"{text}; the refresh collects {ticker} again"
 
     @staticmethod

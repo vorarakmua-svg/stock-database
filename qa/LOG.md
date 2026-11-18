@@ -3133,3 +3133,18 @@ BUG-340 (P3).
 Gates: unchanged (qa/ only) | CI: PR #29 green at 978b5d4
 Commit: (this commit) chore(qa): code review 29 recorded; one Important finding (BUG-337)
 Next: BUG-337; reshape the stale bug170 and bug260-...-bug319 mutant specs; then the P3s.
+
+## Iteration 180: 2026-11-18 16:05: fix (BUG-337)
+Picked: the P2 code review 29 found; an opus worker.
+Did: Q17's gap walk now says whether it reached a report the companyfacts carry (`report_gap`); only then is a fully
+read gap `recovered`. A gap over four reports, or a pre-Q17 submissions cache that lists no carried report, leaves the
+run incomplete for the refresh; the run's warning says so.
+- RED: 3 of 16 failed on 45f43b5; GREEN. 12 of 12 mutants (9 new, 3 re-quoting q17 mutants this change made stale);
+  q17's other 49 killed; bug251/bug285's 11 stale mutants were already stale at HEAD. Look-ahead not run (nothing
+  parsed or dated changed).
+- No DB measurement: the same reports are read and merged, so no figure, median, verdict or label can move; the stored
+  DB predates Q17 (no `incomplete` column, 0 XBRL-read runs).
+Result: BUG-337 VERIFIED. No P0-P2 open.
+Gates: ruff ✓ mypy ✓ pytest 3058 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(sec): a gap read from the filings' XBRL is whole only when it reaches a report the companyfacts carry (BUG-337)
+Next: reshape the stale bug170 and bug260-...-bug319 mutant specs; then the 160 P3s.

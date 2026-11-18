@@ -1653,7 +1653,9 @@ companies on the **collection list**, each with its reason: `quotes`, `bars` and
     says (`incomplete`): it read no facts of the latest report its submissions listed (its companyfacts lacked them,
     the SEC's lag, BUG-251, and the filing's own XBRL couldn't be read either, or their request failed), or it
     couldn't read its predecessor's filings (BUG-279). A collection that read the report, and every earlier one its
-    companyfacts lacked, from the filings' own XBRL isn't incomplete: its figures are whole. Such a
+    companyfacts lacked, from the filings' own XBRL isn't incomplete: its figures are whole. It knows so only
+    when it reached a report the companyfacts carry, so a gap of more than four reports, or one that runs past the reports its
+    submissions list, stays incomplete (BUG-337). Such a
     collection counted as one that had it all, and the company waited for its next report. On 2026-10-25 the companyfacts of 58 of the 502 companies lacked
     their latest 10-Q or 10-K, most of them filed between 2026-07-28 and 2026-08-07: DLR's 10-Q of 2026-07-31 had no
     fact there 86 days on, though the 424B7 DLR filed on 2026-08-19 had.
@@ -2329,7 +2331,9 @@ stored yet and keeps every stored one, each year's metrics computed on the year 
 run reads both filers again. A run whose companyfacts carry no fact of the latest report its
 submissions list (a 10-K, 10-Q, 20-F or 40-F as filed, with XBRL: an amendment or a 10-KT isn't
 looked for) reads that report, and each report before it back to the latest the companyfacts carry
-(four at most), from the filing's own XBRL instance: EDGAR's extracted instance of an inline filing
+(four at most; a run that reaches no report they carry within those, or within the reports its submissions
+list, reads them but is stored as incomplete, its warning saying `it found no earlier report they carry, so
+reports before those may be missing too; the refresh collects ... again`, BUG-337), from the filing's own XBRL instance: EDGAR's extracted instance of an inline filing
 (`<primary document>_htm.xml`, one more rate-limited request per report), else the instance its
 index names (two). Its facts are read as the companyfacts give a filing's (`parsers/xbrl_instance.py`:
 the non-dimensional numeric facts of us-gaap, ifrs-full, dei, srt and invest; values as filed, at
@@ -2351,7 +2355,8 @@ and its figures are stored as they are. That report is the latest of the feed's 
 kept beside the newest 100 filings the handler keeps (`latest_report`), which a bank's prospectus
 supplements fill in days (BUG-285: JPM's held 94 424B2s of two days and no report); submissions
 cached before it was kept give their newest 100 alone until the cache's week is out (and only the
-latest report is read from its XBRL, the earlier ones the newest 100 list among them). `collection_runs.incomplete` keeps what a run's SEC read lacked
+latest report is read from its XBRL, the earlier ones the newest 100 list among them; unless they reach one the
+companyfacts carry, the run is stored as incomplete). `collection_runs.incomplete` keeps what a run's SEC read lacked
 (JSON: `report`, that report's `form`, `accession` and `filed`, unless the run read it and every
 earlier report the companyfacts lack from their own XBRL; `predecessor`, why the
 predecessor's filings couldn't be read), empty for a complete run, so that `stock-data refresh`
