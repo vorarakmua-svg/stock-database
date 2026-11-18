@@ -71,7 +71,7 @@ path 3, and the look-ahead in path 2, with **replays of path 1**.
 
 ### 1. A replayable annual pipeline
 
-Extract one pure function (name the builder's call), e.g. `build_annual_record(facts, *, sector_class, years_back)
+Extract one pure function (name the builder's call), e.g. `build_annual_record(facts, *, years_back)
 -> (periods, warnings)`, holding everything that today turns companyfacts into `financials_annual`:
 `extract_annual_financials` (resolve, set-asides, restore), `normalize_share_scale(..., neighbours=True)`,
 `apply_derivations`, `validate_period`. The fetcher calls it for today's record; the snapshot builder calls it per
@@ -99,8 +99,8 @@ diff of every table).
   This is the one intended change to the annual record; its moves are measured and any valuation move goes to the
   user first.
 - Same-day: a fact filed on D is known on D (as today: `filed_date <= D`).
-- Inputs other than facts: `sector_class` is the run's current one (treated as a fixed property of the company);
-  documented as the one known exception. Nothing else external enters the pipeline (no Yahoo data).
+- Inputs other than facts: none. The annual steps (`normalize_share_scale`, `apply_derivations`,
+  `validate_period`) take no sector and no Yahoo data, so the pipeline is a pure function of the facts.
 
 ### 3. Storage
 
@@ -161,7 +161,6 @@ migration that creates the table.
 
 ## Calls I made (for the user to check)
 
-- `sector_class` is treated as fixed over time (not replayed).
 - No fallback to the old as-of rules for un-rebuilt tickers.
 - Years not yet ended are dropped, in the shared pipeline, so from today's annual record too (the one intended
   record change; measured).
