@@ -8,6 +8,7 @@ design.md, "Scale"; qa/evidence/scale-m5-4-plans.txt):
 Both are created with the schema (``CREATE INDEX IF NOT EXISTS``), so a new database has them and an older one gains
 them at its next write; the web app, which opens the database read-only, plans with them once they exist.
 """
+import re
 import sqlite3
 from datetime import datetime
 
@@ -148,7 +149,9 @@ def test_the_ins_tabs_trades_keep_the_date_ordered_index(db):
     finally:
         r.close()
     assert "SEARCH t USING INDEX idx_insider_trades_ticker (ticker=?)" in plan
-    assert "USE TEMP B-TREE FOR RIGHT PART OF ORDER BY" in plan
+    # The index gives the ticker; only the trailing ORDER BY terms are sorted. SQLite words that "RIGHT PART OF ORDER
+    # BY" (to 3.4x) or "LAST n TERMS OF ORDER BY" (newer releases).
+    assert any(re.fullmatch(r"USE TEMP B-TREE FOR (RIGHT PART|LAST \d+ TERMS) OF ORDER BY", step) for step in plan)
 
 
 def test_the_quality_pages_top_unmapped_tags_read_the_covering_index(db):
