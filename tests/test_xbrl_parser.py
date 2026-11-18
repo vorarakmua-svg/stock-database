@@ -924,6 +924,15 @@ def test_the_as_of_view_reads_each_10ks_debt_in_its_window(tmp_path, facts, tota
     assert _debt_as_of(tmp_path, facts(), "2026-06-30", "2027-06-30") == [pytest.approx(t) for t in totals]
 
 
+def test_the_as_of_debt_counts_the_maturities_once_beside_a_later_total(tmp_path):
+    # BUG-334 (code review 28): the as-of debt view read a field its filing lacked from an earlier one, a later 10-K's
+    # LongTermDebt total, which holds the maturities, beside the first 10-K's $4B of maturities: $48B for $44B. The
+    # view is now the record as known on the day, which reads the year's debt by its own rules on either day.
+    facts = _with_later_10k(_debt_filing(LongTermDebtNoncurrent=40.0e9, LongTermDebtCurrent=4.0e9), "2027-02-12",
+                            LongTermDebt=44.0e9)
+    assert _debt_as_of(tmp_path, facts, "2026-06-30", "2027-06-30") == [pytest.approx(44.0e9)] * 2
+
+
 def test_a_vintage_reads_no_10qs_figure_beside_its_paper(tmp_path):
     # The as-of view reads annual reports alone: a 10-Q's comparative borrowings on the date are none of its figures.
     facts = _debt_filing(CommercialPaper=1.0e9, LongTermDebtNoncurrent=9.969e9)
