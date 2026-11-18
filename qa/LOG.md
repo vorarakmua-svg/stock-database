@@ -3120,3 +3120,16 @@ Commit: (this commit) feat(sec): a report the companyfacts lack is read from the
 Paused after this unit at the user's request ("after current bug fixing finish, stop for now"). Next on resume: code
 review 29 (scope a28be26's predecessors since 33d60b1: BUG-332/333, -328, -327, -329, Q17), reshape the bug170 and
 bug260-...-bug319 mutant specs gone stale with BUG-327, then the 157 P3s.
+
+## Iteration 179: 2026-11-18 14:40: CI fix and code review 29
+Picked: on resume, PR #29's CI (failing since 2026-11-12), then code review 29 (33d60b1..4724184: BUG-332/333,
+BUG-328, BUG-327, BUG-329, Q17 with BUG-295).
+Did: 978b5d4 pins the runner to ubuntu-24.04 (26.04's setup-python has no 3.9) and lets the INS plan test read
+either SQLite wording of a partial ORDER BY sort (still rejecting a full sort); CI green on 3.9-3.12. An opus reviewer
+(`qa/evidence/review29.txt`); 4 probes (3 fail at HEAD, 1 guard passes); the seven touched test files pass (687).
+Review 28's I1 and M1 probes now pass. Free RAM 2.5 GB; no full suite or DB run.
+Result: no Critical; Important 1 -> BUG-337 (P2, Q17 stores a partial gap as recovered); Minors -> BUG-338, BUG-339,
+BUG-340 (P3).
+Gates: unchanged (qa/ only) | CI: PR #29 green at 978b5d4
+Commit: (this commit) chore(qa): code review 29 recorded; one Important finding (BUG-337)
+Next: BUG-337; reshape the stale bug170 and bug260-...-bug319 mutant specs; then the P3s.

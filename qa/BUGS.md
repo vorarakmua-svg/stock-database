@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 157 · NEEDS-USER 0 · Decided: 7 · Verified: 188
+**Open:** P0 0 · P1 0 · P2 1 · P3 160 · NEEDS-USER 0 · Decided: 7 · Verified: 188
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2128,6 +2128,30 @@ Status: OPEN
 Found: iteration 178 (Q17's residuals) | Fixed: | Regression test:
 Repro: since Q17 a fully recovered gap is stored complete, so the refresh doesn't queue it; the companyfacts' version of the report (which may round or restate differently) is read only at the company's next scheduled collection.
 Expected: the company collected again once the companyfacts carry the report.   Actual: it waits for its next report.
+
+### BUG-337 [P2][GATHER] Q17 marks a gap recovered, and stores the run complete, without reaching a report the companyfacts carry: a gap over 4 reports, or a pre-Q17 submissions cache, leaves reports missing for good
+Status: OPEN
+Found: code review 29 (`qa/evidence/review29.txt`, Important 1; probes fail at HEAD) | Fixed: | Regression test:
+Repro: sec_handler.py ~134 (reports_without_facts) stops its walk at XBRL_REPORTS_READ or at the end of its candidates as if it had reached a carried accession; ~424 then sets `recovered` whenever every report listed was read, and sqlite_store.py ~140 leaves `incomplete` empty. README ~1655 and ~2355 say a run is complete only when it read the report and every earlier one the companyfacts lacked. (a) six reports, the companyfacts carry only the oldest: reports 1-4 read, 5 never, stored whole. (b) a bank's submissions without `reports` whose newest 100 filings are 424B2s (BUG-285's shape; C's 2026-10-25 cache): only latest_report is seen, Q1-Q2 stay missing, the TTM breaks, nothing queues the company again (BUG-336). All 504 cached submissions predate Q17 but are past their week, so (b) is closed for the current cache; (a) is not. Probes: %LOCALAPPDATA%\stockdb-qa\review29\head\tests\test_review29.py::test_a_gap_of_more_than_four_reports_isnt_stored_whole, ::test_a_pre_q17_submissions_cache_doesnt_make_a_partial_gap_whole.
+Expected: `recovered` only when the walk stopped at an accession the companyfacts carry; else the run stays incomplete.   Actual: stored whole.
+
+### BUG-338 [P3][TTM] BUG-332's fallback reads a year whose 10-K tags no amortization as a year with no 10-K yet
+Status: OPEN
+Found: code review 29 (Minor 1; synthetic, a regression against 33d60b1; no real case among 17 candidate filers) | Fixed: | Regression test:
+Repro: xbrl_parser.py ~1179-1189: `latest` holds only annual keys in `final` (periods with an amortization fact), so year_read_so() takes the year before for a year whose 10-K tags DDA alone; its 10-Qs follow the earlier 10-K's basis and Q4 can go negative (synthetic SWK-shaped: Q4 -15.0M for 96.9M at 33d60b1). Candidates (AMAT, WFC, PFE, O, CCL, LMT, NTAP, EBAY, CRM, EXC, CBOE, KKR, PM, XYZ, ETN, ICE, HLT): only CRM and EXC differ, both from BUG-327 and better. Probe: %LOCALAPPDATA%\stockdb-qa\review29\head\tests\test_review29.py::test_a_year_whose_10k_tags_no_amortization_follows_its_own_10k.
+Expected: "has a 10-K" decided from the year's annual D&A facts on a 10-K.   Actual: from `final`.
+
+### BUG-339 [P3][VALID] After BUG-329 a vintage's shares outstanding and weighted counts sit on different scales in one filing's view: NTRS FY2009 241.7M beside 235.5 trillion
+Status: OPEN
+Found: code review 29 (Minor 2; values improve, not a regression) | Fixed: | Regression test:
+Repro: share_scale pass 3 (shares outstanding follow only an EPS-checked count) with pass 4 off for vintages (stock_data_fetcher.py ~439): 10 vintage cells move shares outstanding to units while the weighted counts stay mis-scaled: HST FY2021 714.1M beside 710.3, NTRS FY2009 241.7M beside 235.5T, AMT FY2015 423.9M beside 419,000, DLR FY2022 291.1M beside 286,334, FITB FY2010-11 beside 791/906, HSY FY2009-11. Wider than BUG-329's stated residual (HSY only). Nothing found that reads a vintage's two counts together.
+Expected: one scale per vintage view.   Actual: a 10^3 or 10^6 seam.
+
+### BUG-340 [P3][GATHER] Q17's per-filing XBRL cache never expires and its version isn't tied to the reader's rules
+Status: OPEN
+Found: code review 29 (Minor 3; robustness, suspected) | Fixed: | Regression test:
+Repro: sec_handler.py ~35, ~442, ~459: a change to companyfacts_from_instance (taxonomies, frame or duplicate rule) without a manual bump of _FILING_CACHE_VERSION keeps serving the old shape from every xbrl_CIK*_*.json; no test ties the two.
+Expected: the version follows the reader, or a fixture test fails on a change without a bump.   Actual: neither.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
