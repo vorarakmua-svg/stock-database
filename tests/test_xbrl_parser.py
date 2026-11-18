@@ -2866,6 +2866,26 @@ def test_flipped_cash_flow_sections_go_back_when_the_year_then_adds_up():
     assert (annual["2021"]["investing_cash_flow"], annual["2021"]["financing_cash_flow"]) == (-0.686e9, -1.895e9)
 
 
+def test_the_as_of_view_puts_a_later_filings_flip_right_from_its_day():
+    # BUG-085: the as-of view served the tagging errors the annual record puts right (AMD's FY2021 investing and
+    # financing cash flows read +$0.686B and +$1.895B as of 2026-10-20). It is now the record as known on each day:
+    # put right from the flipping 10-K's own day, the figure kept named as the earlier filing's.
+    def year(tag, by_filing):
+        return _filed_years(tag, "USD", {2021: list(zip(("2022-02-03", "2023-02-27", "2024-01-31"), by_filing))})
+
+    tags = (year("NetCashProvidedByUsedInOperatingActivities", (3.521e9,) * 3),
+            year("NetCashProvidedByUsedInInvestingActivities", (-0.686e9, -0.686e9, 0.686e9)),
+            year("NetCashProvidedByUsedInFinancingActivities", (-1.895e9, -1.895e9, 1.895e9)),
+            year("CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecrease"
+                 "IncludingExchangeRateEffect", (0.940e9,) * 3))
+    facts = {"facts": {"us-gaap": {k: v for tag in tags for k, v in tag.items()}}}
+    rows = [row for row in build_snapshots(XBRLParser(), facts, ticker="AMD", years_back=None).rows
+            if row["fiscal_year"] == 2021]
+    assert [(row["known_from"], row["investing_cash_flow"], row["financing_cash_flow"]) for row in rows] == [
+        ("2022-02-03", -0.686e9, -1.895e9), ("2023-02-27", -0.686e9, -1.895e9), ("2024-01-31", -0.686e9, -1.895e9)]
+    assert rows[-1]["source_filings"]["investing_cash_flow"]["filed"] == "2023-02-27"
+
+
 def test_a_ten_for_one_restatement_is_left_alone():
     # NVDA's 2025 10-K restated FY2023's 2.487B shares for its 10:1 split: a split, not a typo, even where the years
     # before it, counting fewer shares, would side with the earlier filings.

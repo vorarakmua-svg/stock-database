@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import random
 import socket
@@ -59,7 +60,10 @@ def _block_network() -> None:
 
 
 def _handler(cache_dir: Path) -> SECHandler:
-    handler = SECHandler(cache_dir=cache_dir, cache_ttl_seconds=10 ** 12, max_retries=0)
+    # Quiet: a filing's own XBRL the cache lacks goes unread here as in an offline collection, and says so each time.
+    quiet = logging.getLogger("asof_oracle.sec")
+    quiet.setLevel(logging.CRITICAL)
+    handler = SECHandler(cache_dir=cache_dir, cache_ttl_seconds=10 ** 12, max_retries=0, logger=quiet)
     handler._write_payload_cache = lambda path, data: None  # type: ignore[assignment]  # the cache is read-only
     return handler
 
