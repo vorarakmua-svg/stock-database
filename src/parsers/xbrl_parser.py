@@ -1359,6 +1359,11 @@ def _agree(a: float, b: float) -> bool:
     return abs(a - b) <= _AGREE * max(abs(a), abs(b))
 
 
+def _filing_of(entry: Dict[str, Any]) -> Dict[str, str]:
+    """The filing a fact came from, as a period's ``_source_filings`` names it: its accession, filing day and form."""
+    return {"accn": entry.get("accn") or "", "filed": entry.get("filed") or "", "form": entry.get("form") or ""}
+
+
 def _same_period(end: Optional[str], year_end: Optional[str]) -> bool:
     """Whether a figure ending *end* is of the period ending *year_end* (``_SAME_PERIOD_DAYS``); a missing date
     decides nothing."""
@@ -1694,7 +1699,8 @@ class XBRLParser:
 
         Each period dict uses canonical keys (see ``mappings/canonical.py``) so the
         same concept is comparable across companies regardless of which XBRL tag a
-        filer used. A ``_source_tags`` map records the tag each value came from, and
+        filer used. A ``_source_tags`` map records the tag each value came from, a
+        ``_source_filings`` map the filing (``{"accn", "filed", "form"}``), and
         a ``_repairs`` list any later filing's tagging error put right (see
         ``_restore_agreed_figures``).
 
@@ -2204,7 +2210,8 @@ class XBRLParser:
     ) -> bool:
         """Store ``entry``'s value for ``field`` under ``period`` iff it beats the
         current best (higher-priority tag, or the same tag filed at least as late).
-        Seeds a new period dict from ``seed``. Returns True when it won, so the caller
+        Seeds a new period dict from ``seed``, and records the value's tag (``_source_tags``)
+        and filing (``_source_filings``). Returns True when it won, so the caller
         can run any period-level metadata update."""
         filed = entry.get("filed") or ""
         bkey = (period, field.key)
@@ -2220,6 +2227,7 @@ class XBRLParser:
         period_dict = data.setdefault(period, dict(seed))
         period_dict[field.key] = value
         period_dict.setdefault("_source_tags", {})[field.key] = tag
+        period_dict.setdefault("_source_filings", {})[field.key] = _filing_of(entry)
         return True
 
     def _resolve_canonical(
@@ -2365,11 +2373,11 @@ class XBRLParser:
 
     def _annual_filings(self, us_gaap: Dict[str, Any], field: Any, tag: str, period_key_fn,
                         unread: FrozenSet[Tuple[str, str, Any]] = frozenset()
-                        ) -> Dict[Any, List[Tuple[str, float, str]]]:
+                        ) -> Dict[Any, List[Tuple[str, float, str, Dict[str, str]]]]:
         """Each annual report's figure for *field* under *tag*, as ``_resolve_canonical``
-        reads them: ``{period: [(filed, value, end), ...]}`` in filing order, without the facts
-        *unread* names (``_to_common_contradicted``; BUG-316)."""
-        filings: Dict[Any, List[Tuple[str, float, str]]] = defaultdict(list)
+        reads them: ``{period: [(filed, value, end, filing), ...]}`` in filing order (*filing*:
+        ``_filing_of``), without the facts *unread* names (``_to_common_contradicted``; BUG-316)."""
+        filings: Dict[Any, List[Tuple[str, float, str, Dict[str, str]]]] = defaultdict(list)
         for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
             value = entry.get("val")
             if entry.get("form", "") not in _ANNUAL_FORMS or not isinstance(value, (int, float)):
@@ -2382,7 +2390,7 @@ class XBRLParser:
             if period is not None:
                 filings[period].append((entry.get("filed") or "",
                                         float(abs(value) if field.sign == SIGN_ABS else value),
-                                        entry.get("end") or ""))
+                                        entry.get("end") or "", _filing_of(entry)))
         for values in filings.values():
             values.sort(key=lambda filing: filing[0])
         return filings
@@ -2447,7 +2455,8 @@ class XBRLParser:
                                 data: Dict[Any, Dict[str, Any]], period_key_fn) -> None:
         """Put back the figure the earlier filings agree on where a later filing's
         comparative reads as a tagging error of it (see ``_tagging_error``), and record
-        each in the period's ``_repairs``.
+        each in the period's ``_repairs``; its ``_source_filings`` names the latest of
+        those earlier filings.
 
         The latest filing wins otherwise, as a restatement should. A year's own net
         change in cash decides for its cash-flow sections (AMD's 2024 10-K flipped
@@ -2455,7 +2464,7 @@ class XBRLParser:
         the years around it decide the rest, so a later filing that corrects an earlier
         error keeps its figure (BRK-B's FY2010 share count, LLY's FY2008 D&A).
         """
-        conflicts: List[Tuple[Any, str, str, float, float, str, str]] = []
+        conflicts: List[Tuple[Any, str, str, float, float, str, str, Dict[str, str]]] = []
         unread = _to_common_contradicted(us_gaap)  # a figure no record reads can't be put back either (BUG-316)
         for field in CANONICAL_FIELDS:
             years_by_tag: Dict[str, List[Any]] = defaultdict(list)
@@ -2467,16 +2476,17 @@ class XBRLParser:
                 for fy in years:
                     history = filings.get(fy, [])
                     latest = float(data[fy][field.key])
-                    filed, _, end = history[-1] if history else ("", 0.0, "")
-                    earlier = [value for when, value, _ in history if when < filed]
-                    if not earlier or not all(_agree(value, latest) for when, value, _ in history
+                    filed, _, end, _ = history[-1] if history else ("", 0.0, "", {})
+                    before = [filing for filing in history if filing[0] < filed]
+                    earlier = [value for _, value, _, _ in before]
+                    if not earlier or not all(_agree(value, latest) for when, value, _, _ in history
                                               if when == filed):
                         continue
                     if not all(_agree(value, earlier[-1]) for value in earlier):
                         continue  # the earlier filings disagree among themselves
                     kind = _tagging_error(earlier[-1], latest, field.key)
-                    if kind:
-                        conflicts.append((fy, field.key, kind, earlier[-1], latest, filed, end))
+                    if kind:  # the figure put back is the latest earlier filing's
+                        conflicts.append((fy, field.key, kind, earlier[-1], latest, filed, end, before[-1][3]))
 
         agreed_cash: Dict[Any, Dict[str, float]] = defaultdict(dict)
         for fy, key, _, earlier_value, *_ in conflicts:
@@ -2501,8 +2511,9 @@ class XBRLParser:
                           if y != fy and isinstance(data.get(y, {}).get(key), (int, float))]
             if _years_side_with_earlier(kind, earlier_value, latest, neighbours):
                 restored.append(conflict)
-        for fy, key, kind, earlier_value, latest, filed, end in restored:
+        for fy, key, kind, earlier_value, latest, filed, end, kept_from in restored:
             data[fy][key] = earlier_value
+            data[fy].setdefault("_source_filings", {})[key] = kept_from
             data[fy].setdefault("_repairs", []).append({"field": key, "kind": kind, "kept": earlier_value,
                                                         "dropped": latest, "filed": filed, "period_end": end})
 

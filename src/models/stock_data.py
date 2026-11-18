@@ -145,6 +145,11 @@ class StockData:
         data.pop("financials_annual_vintages", None)
         data.pop("predecessor_error", None)
         data.pop("missing_report", None)
+        # Each figure's filing (the parser's ``_source_filings``) is for the as-of record, not the JSON.
+        for attr in ("financials_annual", "financials_quarterly"):
+            for period in (data.get(attr) or {}).values():
+                if isinstance(period, dict):
+                    period.pop("_source_filings", None)
         return data
 
     def to_json(self, indent: int = 2) -> str:

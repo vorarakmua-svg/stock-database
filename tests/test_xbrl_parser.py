@@ -2729,6 +2729,74 @@ def test_a_later_filings_scale_typo_keeps_the_figure_earlier_filings_report():
         ("dividends_per_share", "scale x10^6", 2770000.0)]
 
 
+def test_a_restored_figure_names_the_filing_whose_figure_was_kept():
+    # The 2024 10-K's FY2022 dividend is a scale typo: the figure put back is the 2023 10-K's, the latest that agreed.
+    annual = _annual(_filed_years("CommonStockDividendsPerShareDeclared", "USD/shares", {
+        2021: [("2021-08-06", 2.68)],
+        2022: [("2022-08-05", 2.77), ("2023-08-04", 2.77), ("2024-08-02", 2770000.0)],
+        2023: [("2023-08-04", 2.80), ("2024-08-02", 2.80)]}))
+    assert annual["2022"]["_source_filings"]["dividends_per_share"] == {
+        "accn": "2023-08-04", "filed": "2023-08-04", "form": "10-K"}
+    assert annual["2023"]["_source_filings"]["dividends_per_share"]["accn"] == "2024-08-02"
+
+
+def _filed(entry, accn):
+    return {**entry, "accn": accn}
+
+
+def test_each_annual_figure_names_the_filing_it_came_from():
+    # FY2020's revenue, restated in the FY2021 10-K, names that 10-K; its net income, only in the FY2020 10-K, names it.
+    first, second = "0000001-21-000010", "0000001-22-000020"
+    facts = {"facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": [
+            _filed(usd(100.0, start="2020-01-01", end="2020-12-31", fy=2020, filed="2021-02-15"), first),
+            _filed(usd(105.0, start="2020-01-01", end="2020-12-31", fy=2021, filed="2022-02-15"), second),
+            _filed(usd(120.0, start="2021-01-01", end="2021-12-31", fy=2021, filed="2022-02-15"), second)]}},
+        "NetIncomeLoss": {"units": {"USD": [
+            _filed(usd(10.0, start="2020-01-01", end="2020-12-31", fy=2020, filed="2021-02-15"), first),
+            _filed(usd(12.0, start="2021-01-01", end="2021-12-31", fy=2021, filed="2022-02-15"), second)]}},
+    }}}
+    annual = XBRLParser().extract_annual_financials(facts)
+    assert annual["2020"]["revenue"] == 105.0
+    assert annual["2020"]["_source_filings"]["revenue"] == {"accn": second, "filed": "2022-02-15", "form": "10-K"}
+    assert annual["2020"]["_source_filings"]["net_income"] == {"accn": first, "filed": "2021-02-15", "form": "10-K"}
+    assert annual["2021"]["_source_filings"]["revenue"]["accn"] == second
+    # a derived figure names no filing
+    period = annual["2020"]
+    apply_derivations(period)
+    assert set(period["_source_filings"]) == {"revenue", "net_income"}
+    assert all(period["_source_tags"][k] == "derived" for k in period["_source_tags"]
+               if k not in period["_source_filings"])
+
+
+def test_the_filings_named_reach_neither_the_stored_row_nor_the_json_export(tmp_path):
+    import json
+    import sqlite3
+
+    from src.models.canonical import validate_period
+    facts = {"facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": [usd(100.0, start="2020-01-01", end="2020-12-31", fy=2020, filed="2021-02-15")]}},
+        "NetIncomeLoss": {"units": {"USD": [
+            usd(10.0, start="2020-01-01", end="2020-12-31", fy=2020, filed="2021-02-15")]}}}}}
+    period = XBRLParser().extract_annual_financials(facts)["2020"]
+    apply_derivations(period)
+    clean, errors = validate_period(period)
+    assert errors == [] and clean["_source_filings"] == period["_source_filings"]
+    stock = StockData(ticker="PROV", cik="1", company_name="Prov Co")
+    stock.financials_annual = {"2020": clean}
+    exported = stock.to_dict()
+    assert "_source_filings" not in json.dumps(exported)
+    assert exported["financials_annual"]["2020"]["_source_tags"] == clean["_source_tags"]
+    assert stock.financials_annual["2020"]["_source_filings"]  # the export leaves the record alone
+    db = tmp_path / "stock.db"
+    SQLiteStore(db_path=str(db)).export([stock])
+    with sqlite3.connect(db) as conn:
+        cur = conn.execute("SELECT * FROM financials_annual WHERE ticker = 'PROV'")
+        row = dict(zip([d[0] for d in cur.description], cur.fetchone()))
+    assert row["revenue"] == 100.0
+    assert not [c for c, v in row.items() if "filings" in c or (isinstance(v, str) and '"accn"' in v)]
+
+
 def test_a_later_filing_that_corrects_a_scale_typo_wins():
     # BRK-B's 10-Ks of 2011 and 2012 agreed on 1.6 trillion weighted shares for FY2010; the 2013 one corrected it.
     annual = _annual(_filed_years("WeightedAverageNumberOfSharesOutstandingBasic", "shares", {
