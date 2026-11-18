@@ -17,6 +17,7 @@ from ..exporters.sqlite_store import SQLiteStore, StoreResult, read_only_uri
 from ..models.canonical import validate_period
 from ..models.stock_data import StockData
 from ..parsers.annual_record import build_annual_record
+from ..parsers.annual_snapshots import build_snapshots
 from ..parsers.calculated_metrics import CalculatedMetrics
 from ..parsers.derived_fields import apply_derivations
 from ..parsers.share_scale import normalize_share_scale
@@ -252,10 +253,14 @@ class StockDataFetcher:
                     )
                     split_levels = {end: period.pop("_split_levels") for end, period in quarterly.items()
                                     if "_split_levels" in period}
-                    vintages = self.xbrl_parser.extract_annual_vintages(
-                        facts, years_back=years_back
-                    )
-                    stock.financials_annual_vintages = vintages
+                    # The record as known on each filing day (the as-of snapshots) and each filing's views (its
+                    # vintages, already normalised), replayed on the same facts with the run's years_back.
+                    snapshots = build_snapshots(self.xbrl_parser, facts, ticker=ticker, years_back=years_back)
+                    for warning in snapshots.warnings:
+                        stock.add_warning(warning)
+                    stock.financials_annual_known = snapshots.rows
+                    stock.financials_annual_vintages = snapshots.vintages
+                    stock.years_back = years_back
 
                     stock.merge_parsed_financials(annual, quarterly)
 
@@ -412,7 +417,8 @@ class StockDataFetcher:
                           annual_warnings: Sequence[str] = ()) -> None:
         """Derive identities, validate/coerce each quarter, and build the TTM series
         (*split_levels*: each quarter's split basis, the parser's ``_split_levels``). The annual record comes cleaned
-        (``build_annual_record``); its cleaning's warnings, *annual_warnings*, are added first, as they always were."""
+        (``build_annual_record``), and the vintages normalised (``build_snapshots``); the record's cleaning's warnings,
+        *annual_warnings*, are added first, as they always were."""
         for warning in annual_warnings:
             stock.add_warning(warning)
         periods = stock.financials_quarterly
@@ -434,12 +440,6 @@ class StockDataFetcher:
                 for err in errors:
                     stock.add_warning(f"validation financials_quarterly {period_key}: {err}")
             stock.financials_quarterly = cleaned
-
-        # Derive identities within each point-in-time vintage (self-contained snapshots).
-        for by_accn in (stock.financials_annual_vintages or {}).values():
-            normalize_share_scale(by_accn, neighbours=False)  # no scale from a later filing's view (BUG-329)
-            for period in by_accn.values():
-                apply_derivations(period)
 
         if stock.financials_quarterly:
             stock.financials_ttm = compute_ttm(stock.financials_quarterly, split_levels)

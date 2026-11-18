@@ -304,6 +304,27 @@ class SQLiteStore:
                 PRIMARY KEY (ticker, fiscal_year, accn)
             );
 
+            -- The annual record as known at each filing date (the as-of snapshots): a row per fiscal year and day
+            -- its row changed, known_from the day and known_accn its latest filing; present 0 the day a year left the
+            -- record. source_tags (each field's tag) and source_filings (each field's accn, filed, form) are JSON.
+            CREATE TABLE IF NOT EXISTS financials_annual_known (
+                ticker TEXT NOT NULL,
+                fiscal_year INTEGER NOT NULL,
+                known_from TEXT NOT NULL,
+                known_accn TEXT,
+                present INTEGER NOT NULL,
+                accn TEXT,
+                filed_date TEXT,
+                form TEXT,
+                period_end TEXT,
+                calendar_year INTEGER,
+                frame TEXT,
+                source_tags TEXT,
+                source_filings TEXT,
+                {_cols_ddl(_CANONICAL_COLUMNS)},
+                PRIMARY KEY (ticker, fiscal_year, known_from)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_fa_calendar_year
                 ON financials_annual (calendar_year);
             CREATE INDEX IF NOT EXISTS idx_fq_calendar
@@ -312,6 +333,8 @@ class SQLiteStore:
                 ON financials_ttm (ticker, calendar_year, calendar_quarter);
             CREATE INDEX IF NOT EXISTS idx_fav_asof
                 ON financials_annual_vintages (ticker, fiscal_year, filed_date);
+            CREATE INDEX IF NOT EXISTS idx_fak_asof
+                ON financials_annual_known (ticker, fiscal_year, known_from);
 
             CREATE TABLE IF NOT EXISTS metrics_annual (
                 ticker TEXT NOT NULL,
@@ -733,6 +756,7 @@ class SQLiteStore:
             # reads as it did, by filing date alone, until the next collection.
             "financials_annual_vintages": {"calendar_year": "INTEGER", "source_tags": "TEXT",
                                             **{c: "REAL" for c in _CANONICAL_COLUMNS}},
+            "financials_annual_known": {c: "REAL" for c in _CANONICAL_COLUMNS},
             "metrics_annual": {c: "REAL" for c in _METRIC_COLUMNS},
             "market_snapshots": {**{c: "REAL" for c in _SNAPSHOT_COLUMNS},
                                  **{c: "TEXT" for c in _SNAPSHOT_TEXT_COLUMNS}},
@@ -1055,6 +1079,9 @@ class SQLiteStore:
                 self._upsert(conn, "financials_annual_vintages",
                              ["ticker", "fiscal_year", "accn"], vrow, fill_only=fill)
 
+        # financials_annual_known (the as-of snapshots)
+        self._write_known(conn, stock, fill)
+
         # market_snapshots (point-in-time)
         md = stock.market_data or {}
         val = stock.valuation or {}
@@ -1138,6 +1165,41 @@ class SQLiteStore:
         self._write_price_bars(conn, stock.ticker, stock.price_bars or [])
         self._write_earnings_history(conn, stock.ticker, stock.earnings_history or [])
         self._write_split_events(conn, stock.ticker, stock.splits or [])
+
+    @staticmethod
+    def _write_known(conn: sqlite3.Connection, stock: StockData, fill: bool) -> None:
+        """Store *stock*'s as-of snapshots (``financials_annual_known``), in the run's transaction.
+
+        A run that built them restates them: they replace every row of the ticker's, or with a ``years_back`` (the run
+        kept its latest years' rows, replayed on every filing) those of the fiscal years it gives. A run that built
+        none (its companyfacts request failed) and a run that only fills (its predecessor's filings couldn't be read,
+        so its snapshots read part of the facts, BUG-179) leave the stored ones as they are.
+        """
+        rows = stock.financials_annual_known or []
+        if fill or not rows:
+            return
+        if stock.years_back:
+            years = sorted({int(row["fiscal_year"]) for row in rows})
+            conn.execute(f"DELETE FROM financials_annual_known WHERE ticker = ? AND fiscal_year IN "
+                         f"({', '.join('?' for _ in years)})", [stock.ticker, *years])
+        else:
+            conn.execute("DELETE FROM financials_annual_known WHERE ticker = ?", (stock.ticker,))
+        columns = ["ticker", "fiscal_year", "known_from", "known_accn", "present", "accn", "filed_date", "form",
+                   "period_end", "calendar_year", "frame", "source_tags", "source_filings", *_CANONICAL_COLUMNS]
+
+        def stored(row: Dict[str, Any]) -> List[Any]:
+            present = bool(row.get("present"))
+            tags, filings = row.get("source_tags"), row.get("source_filings")
+            return [stock.ticker, int(row["fiscal_year"]), row["known_from"], row.get("known_accn"), int(present),
+                    row.get("accn"), row.get("filed_date"), row.get("form"), row.get("period_end"),
+                    row.get("calendar_year"), row.get("frame"),
+                    json.dumps(tags, sort_keys=True) if present and tags is not None else None,
+                    json.dumps(filings, sort_keys=True) if present and filings is not None else None,
+                    *(row.get(c) if present else None for c in _CANONICAL_COLUMNS)]
+
+        col_list = ", ".join(f'"{c}"' for c in columns)
+        conn.executemany(f"INSERT INTO financials_annual_known ({col_list}) "
+                         f"VALUES ({', '.join('?' for _ in columns)})", [stored(row) for row in rows])
 
     def _write_holders(self, conn: sqlite3.Connection, ticker: str, collected_at: str,
                         shareholders: Dict[str, Any]) -> None:

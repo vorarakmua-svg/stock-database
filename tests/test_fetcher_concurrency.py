@@ -1,5 +1,6 @@
 """Tests that parallel fetch_multiple preserves order and matches sequential."""
 
+import copy
 import json
 import sqlite3
 import time
@@ -13,6 +14,8 @@ from src.fetchers.stock_data_fetcher import StockDataFetcher
 from src.fetchers.yahoo_handler import YahooHandler
 from src.models.stock_data import StockData
 from src.parsers.annual_record import clean_annual
+from src.parsers.annual_snapshots import build_snapshots
+from src.parsers.xbrl_parser import XBRLParser
 from tests.test_sec_cache import _FakeResp
 from tests.test_xbrl_instance import CONTEXTS, instance
 from tests.test_xbrl_parser import _split_restated_facts
@@ -106,20 +109,6 @@ def test_assess_flags_magnitude_outlier_end_to_end(tmp_path):
     codes = [f["code"] for f in stock.data_quality["findings"]]
     assert "magnitude_outlier" in codes
     assert stock.data_quality["score"] < 100
-
-
-def test_a_filings_vintage_takes_no_count_scale_from_another_filings_view(tmp_path):
-    # BUG-329: HSY's FY2011 10-K tags FY2011's diluted count in thousands (229,919); the 10-Ks of 2013 and 2014 give it
-    # in units. The first filing's vintage is its own view, as filed: no later filing sets its scale.
-    fetcher = _make_fetcher(tmp_path, workers=1)
-    stock = StockData(ticker="HSY", cik="47111", company_name="Hershey")
-    stock.financials_annual = {"2011": {"fiscal_year": 2011, "net_income": 6.29e8}}
-    stock.financials_annual_vintages = {"2011": {
-        accn: {"fiscal_year": 2011, "net_income": 6.29e8, "weighted_avg_shares_diluted": count}
-        for accn, count in (("0001193125-12-067143", 229_919.0), ("0000047111-13-000007", 229_919_000.0),
-                            ("0000047111-14-000006", 229_919_000.0))}}
-    fetcher._clean_and_derive(stock)
-    assert stock.financials_annual_vintages["2011"]["0001193125-12-067143"]["weighted_avg_shares_diluted"] == 229_919.0
 
 
 def test_assess_clean_company_scores_100(tmp_path):
@@ -428,6 +417,34 @@ def test_a_collected_quarterly_record_and_its_trailing_years_sit_on_one_split_ba
     assert stock.financials_ttm["2019-12-31"]["eps_diluted"] == pytest.approx(23.01)
     assert not [end for end, period in stock.financials_quarterly.items() if "_split_levels" in period]
 
+
+
+@pytest.mark.parametrize("years_back", [None, 2])
+def test_a_collection_carries_the_annual_record_as_known_at_each_filing(tmp_path, monkeypatch, years_back):
+    # The as-of snapshots and each filing's views (its vintages) come from one replay of the record over the filing
+    # dates (build_snapshots), on the facts the run parses, with the run's years_back; its warnings are the run's.
+    from tests.test_annual_snapshots import _three_10ks, _year
+
+    facts = _three_10ks()
+    facts["facts"]["us-gaap"]["Revenues"]["units"]["USD"].append(_year(130.0, 2022, None, "a4"))  # no filing date
+    expected = build_snapshots(XBRLParser(), copy.deepcopy(facts), ticker="SNP", years_back=years_back)
+    fetcher = _sec_only_fetcher(tmp_path, monkeypatch, {
+        "cik": "0000000001", "ticker": "SNP", "source": "sec_edgar", "company_facts": facts,
+        "submissions": {"name": "Snapshot Corp", "filings": []}})
+    stock = fetcher.fetch_ticker("SNP", include_yahoo=False, years_back=years_back)
+    assert stock.financials_annual_known == expected.rows
+    assert stock.financials_annual_vintages == expected.vintages
+    assert {row["fiscal_year"] for row in stock.financials_annual_known} == ({2019, 2020, 2021} if years_back is None
+                                                                             else {2020, 2021})
+    assert stock.years_back == years_back
+    assert expected.warnings and all(warning in stock.warnings for warning in expected.warnings)
+    fetcher.sqlite_store.export([stock])
+    conn = sqlite3.connect(fetcher.sqlite_store.db_path)
+    try:
+        assert conn.execute("SELECT count(*) FROM financials_annual_known WHERE ticker = 'SNP'").fetchone() == (
+            len(expected.rows),)
+    finally:
+        conn.close()
 
 
 def test_a_successor_registrant_is_noted_with_its_predecessor(tmp_path, monkeypatch):
