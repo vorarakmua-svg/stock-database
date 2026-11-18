@@ -29,12 +29,51 @@ class AnnualRecord:
     repairs: int = 0
 
 
+def _last_filed(facts: Dict[str, Any]) -> str:
+    """The latest day a fact in *facts* was filed, of every taxonomy's ("" with none)."""
+    return max((entry.get("filed") or "" for concepts in (facts.get("facts") or {}).values()
+                for concept in concepts.values() for entries in (concept.get("units") or {}).values()
+                for entry in entries), default="")
+
+
+def clean_annual(annual: Dict[str, Dict[str, Any]], warnings: List[str]) -> Dict[str, Dict[str, Any]]:
+    """The fiscal years *annual* cleaned as a run keeps them, the cleaning's warnings added to *warnings* as found:
+    their share counts put in units, their identities derived and each validated (a period that fails is kept as it
+    was)."""
+    # Fix share counts filed in thousands/millions BEFORE anything reads
+    # them — derivations, validation and every per-share metric downstream
+    # all assume units. Cross-period, so a year with no EPS to anchor on
+    # still inherits the scale its siblings agree on.
+    for period_key, fields in normalize_share_scale(annual).items():
+        warnings.append(
+            f"share scale {ANNUAL} {period_key}: rescaled {', '.join(fields)} "
+            "(filed in thousands/millions)"
+        )
+    cleaned = {}
+    for period_key, period in annual.items():
+        apply_derivations(period)
+        clean, errors = validate_period(period)
+        cleaned[period_key] = clean
+        for err in errors:
+            warnings.append(f"validation {ANNUAL} {period_key}: {err}")
+    return cleaned
+
+
 def build_annual_record(parser: XBRLParser, facts: Dict[str, Any], *, ticker: str,
                         years_back: Optional[int]) -> AnnualRecord:
-    """*ticker*'s annual record from its companyfacts *facts*: the parser's fiscal years (the latest *years_back*, or
-    all), their share counts put in units, their identities derived and each validated. A cleaning that fails keeps
+    """*ticker*'s annual record from its companyfacts *facts*: the parser's fiscal years that have ended by the latest
+    filing the facts hold (the latest *years_back* of them, or all), cleaned (``clean_annual``). A fiscal year whose
+    period ends after that day isn't in the record: a 10-K tagging a figure of the year ahead (BAC's FY2010 10-K, filed
+    2011-02-25, a dividend for 2011) opens no year that figure alone holds (BUG-113). A cleaning that fails keeps
     the periods as it left them and says why ("Data cleaning: ..."), as the run always has."""
-    annual = parser.extract_annual_financials(facts, years_back=years_back)
+    last = _last_filed(facts)
+    annual: Dict[str, Dict[str, Any]] = {}
+    for fy, period in parser.extract_annual_financials(facts).items():
+        end = period.pop("_year_end", None) or period.get("period_end")
+        if not end or end <= last:
+            annual[fy] = period
+    if years_back:
+        annual = {fy: annual[fy] for fy in list(annual)[:years_back]}
     warnings: List[str] = []
     # A later filing's tagging error the parser put right (BUG-061).
     for fy, period in annual.items():
@@ -47,22 +86,7 @@ def build_annual_record(parser: XBRLParser, facts: Dict[str, Any], *, ticker: st
     if not annual:
         return AnnualRecord(annual, warnings, repairs)
     try:
-        # Fix share counts filed in thousands/millions BEFORE anything reads
-        # them — derivations, validation and every per-share metric downstream
-        # all assume units. Cross-period, so a year with no EPS to anchor on
-        # still inherits the scale its siblings agree on.
-        for period_key, fields in normalize_share_scale(annual).items():
-            warnings.append(
-                f"share scale {ANNUAL} {period_key}: rescaled {', '.join(fields)} "
-                "(filed in thousands/millions)"
-            )
-        cleaned = {}
-        for period_key, period in annual.items():
-            apply_derivations(period)
-            clean, errors = validate_period(period)
-            cleaned[period_key] = clean
-            for err in errors:
-                warnings.append(f"validation {ANNUAL} {period_key}: {err}")
+        cleaned = clean_annual(annual, warnings)
     except Exception as e:
         parser.logger.warning(f"Data cleaning error for {ticker}: {e}")
         warnings.append(f"Data cleaning: {str(e)}")

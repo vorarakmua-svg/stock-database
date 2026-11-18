@@ -1782,6 +1782,8 @@ class XBRLParser:
                         flow_ends.setdefault(period, {})[field.key] = entry.get("end")
 
         self._apply_calendar(data, period_frames, flow_ends)
+        for period_dict in data.values():
+            period_dict.pop("_year_end", None)  # the annual record's alone (build_annual_record)
         if not _in_dollars(data.values()):
             return {}
 
@@ -2538,11 +2540,13 @@ class XBRLParser:
         prior calendar year), else the frame SEC's rule gives that end (``_frame_of_end``);
         never a frame of another end (a 52-week figure to March in TEL's September year), nor
         an instant's (a March year-end's balance sheet is CY####Q1I of the year the fiscal
-        year mostly isn't in). BUG-057, BUG-123, BUG-277.
+        year mostly isn't in). BUG-057, BUG-123, BUG-277. That end is kept as ``_year_end``, the
+        day the year is over (``build_annual_record`` drops a year not yet ended, BUG-113).
         """
         for period, period_dict in data.items():
             ends = Counter(e for e in flow_ends.get(period, {}).values() if e)
             end = max(ends, key=lambda e: (ends[e], e)) if ends else period_dict.get("period_end")
+            period_dict["_year_end"] = end
             year, _, chosen = self._calendar_from_frames(
                 {frame for at, frame in period_frames.get(period, set()) if at == end}, end, quarterly=False)
             period_dict["calendar_year"] = year

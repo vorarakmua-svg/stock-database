@@ -2,6 +2,7 @@
 
 import pytest
 
+from src.models.canonical import validate_period
 from src.parsers.annual_record import AnnualRecord, build_annual_record
 from src.parsers.xbrl_parser import XBRLParser
 from tests.test_fetcher_concurrency import _collect_from_sec
@@ -43,10 +44,12 @@ def _invalid():
     return {"facts": {"us-gaap": {"Revenues": _revenues(), "ResearchAndDevelopmentExpense": {"units": {"USD": rd}}}}}
 
 
-#: Each record's own path, and how its warning begins.
-CASES = [("STX", _repaired, "SEC EDGAR: STX FY2022 dividends_per_share is 2.77"),
-         ("RSC", _rescaled, "share scale financials_annual 2022: rescaled weighted_avg_shares_diluted"),
-         ("BAD", _invalid, "validation financials_annual 2022: rd_expense")]
+#: Each record's own path, how its warning begins, and the FY2022 figure the cleaning leaves: the dividend the
+#: earlier filings agree on, the count in units, the figure that couldn't be validated kept as filed.
+CASES = [("STX", _repaired, "SEC EDGAR: STX FY2022 dividends_per_share is 2.77", "dividends_per_share", 2.77),
+         ("RSC", _rescaled, "share scale financials_annual 2022: rescaled weighted_avg_shares_diluted",
+          "weighted_avg_shares_diluted", 5.0e8),
+         ("BAD", _invalid, "validation financials_annual 2022: rd_expense", "rd_expense", "n/a")]
 
 
 def _annual(warning, ticker):
@@ -54,8 +57,8 @@ def _annual(warning, ticker):
                                "validation financials_annual "))
 
 
-@pytest.mark.parametrize("ticker, facts, expected", CASES)
-def test_the_record_equals_the_fetchers_annual_record(tmp_path, monkeypatch, ticker, facts, expected):
+@pytest.mark.parametrize("ticker, facts, expected, key, value", CASES)
+def test_the_record_equals_the_fetchers_annual_record(tmp_path, monkeypatch, ticker, facts, expected, key, value):
     stock = _collect_from_sec(tmp_path, monkeypatch, {
         "cik": "0001137789", "ticker": ticker, "source": "sec_edgar", "company_facts": facts(),
         "submissions": {"name": f"{ticker} Inc.", "filings": []}})
@@ -65,6 +68,8 @@ def test_the_record_equals_the_fetchers_annual_record(tmp_path, monkeypatch, tic
     assert all("_source_tags" in p and "_source_filings" in p for p in record.periods.values())
     assert record.warnings == [w for w in stock.warnings if _annual(w, ticker)]
     assert any(w.startswith(expected) for w in record.warnings)
+    assert record.periods["2022"][key] == value
+    assert record.periods["2022"]["revenue"] == 1.0e10
 
 
 def test_years_back_keeps_the_latest_years():
@@ -85,3 +90,58 @@ def test_the_fetcher_keeps_the_order_of_its_warnings(tmp_path, monkeypatch):
                 "share scale financials_annual 2022: rescaled"]
     sec = [w for w in stock.warnings if w.startswith(("SEC EDGAR", "share scale"))]
     assert len(sec) == len(expected) and all(w.startswith(e) for w, e in zip(sec, expected))
+
+
+def _bac_fy2010(*later):
+    # BUG-113: BAC's FY2010 10-K, filed 2011-02-25, tags a $0.01 dividend for 2011-01-01..2011-12-31 beside FY2010's
+    # figures; *later* adds facts filed afterwards.
+    k10 = {"form": "10-K", "fy": 2010, "fp": "FY", "filed": "2011-02-25", "accn": "0000070858-11-000135"}
+    revenue = [dict(k10, val=1.1e11, start="2010-01-01", end="2010-12-31")]
+    dps = [dict(k10, val=0.04, start="2010-01-01", end="2010-12-31"),
+           dict(k10, val=0.01, start="2011-01-01", end="2011-12-31")]
+    return {"facts": {"us-gaap": {"Revenues": {"units": {"USD": revenue + list(later)}},
+                                  "CommonStockDividendsPerShareDeclared": {"units": {"USD/shares": dps}}}}}
+
+
+def test_a_forward_dated_dividend_opens_no_year():
+    record = build_annual_record(XBRLParser(), _bac_fy2010(), ticker="BAC", years_back=None)
+    assert sorted(record.periods) == ["2010"]
+    assert record.periods["2010"]["dividends_per_share"] == 0.04
+
+
+def test_a_year_ended_on_its_filing_day_stays():
+    # A 10-Q filed 2011-12-31: the facts reach FY2011's end, so the year is no longer ahead of them.
+    q3 = {"val": 2.0e10, "start": "2011-07-01", "end": "2011-09-30", "fy": 2011, "fp": "Q3", "form": "10-Q",
+          "filed": "2011-12-31", "accn": "0000070858-11-000999"}
+    record = build_annual_record(XBRLParser(), _bac_fy2010(q3), ticker="BAC", years_back=None)
+    assert sorted(record.periods) == ["2010", "2011"]
+    assert record.periods["2011"]["dividends_per_share"] == 0.01
+
+
+def test_any_taxonomys_filing_dates_the_facts():
+    # The latest filing day is every fact's: a dei cover-page fact filed 2012-02-23 says the facts reach FY2011's end.
+    facts = _bac_fy2010()
+    facts["facts"]["dei"] = {"EntityCommonStockSharesOutstanding": {"units": {"shares": [
+        {"val": 1.0e10, "end": "2012-01-31", "fy": 2011, "fp": "FY", "form": "10-K", "filed": "2012-02-23",
+         "accn": "0000070858-12-000089"}]}}}
+    record = build_annual_record(XBRLParser(), facts, ticker="BAC", years_back=None)
+    assert sorted(record.periods) == ["2010", "2011"]
+
+
+def test_years_back_counts_the_years_that_have_ended():
+    record = build_annual_record(XBRLParser(), _bac_fy2010(), ticker="BAC", years_back=1)
+    assert sorted(record.periods) == ["2010"]
+
+
+def test_a_years_end_reaches_neither_the_record_nor_a_vintage():
+    parser = XBRLParser()
+    record = build_annual_record(parser, _repaired(), ticker="STX", years_back=None)
+    vintages = parser.extract_annual_vintages(_repaired())
+    assert record.periods and vintages
+    assert not any("_year_end" in p for p in record.periods.values())
+    assert not any("_year_end" in p for by_accn in vintages.values() for p in by_accn.values())
+
+
+def test_validation_leaves_a_years_end_out():
+    clean, errors = validate_period({"fiscal_year": 2010, "revenue": 1.0e9, "_year_end": "2010-12-31"})
+    assert errors == [] and "_year_end" not in clean

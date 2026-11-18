@@ -12,6 +12,7 @@ from src.fetchers.sec_handler import SECHandler
 from src.fetchers.stock_data_fetcher import StockDataFetcher
 from src.fetchers.yahoo_handler import YahooHandler
 from src.models.stock_data import StockData
+from src.parsers.annual_record import clean_annual
 from tests.test_sec_cache import _FakeResp
 from tests.test_xbrl_instance import CONTEXTS, instance
 from tests.test_xbrl_parser import _split_restated_facts
@@ -98,7 +99,8 @@ def test_assess_flags_magnitude_outlier_end_to_end(tmp_path):
         "2023": {"fiscal_year": 2023, "revenue": 1.1e9, **base},   # reverts
         "2024": {"fiscal_year": 2024, "revenue": 1.2e9, **base},
     }
-    fetcher._clean_and_derive(stock)
+    # Cleaned as the run cleans an annual record (build_annual_record): the outlier survives the cleaning.
+    stock.financials_annual = clean_annual(stock.financials_annual, [])
     fetcher._compute_metrics(stock)
     fetcher._assess(stock)
     codes = [f["code"] for f in stock.data_quality["findings"]]
@@ -130,7 +132,9 @@ def test_assess_clean_company_scores_100(tmp_path):
                  "total_equity": 1.0e9, "operating_cash_flow": 2.0e8}
         for y in (2021, 2022, 2023, 2024)
     }
-    fetcher._clean_and_derive(stock)
+    warnings: list = []
+    stock.financials_annual = clean_annual(stock.financials_annual, warnings)  # as build_annual_record cleans it
+    assert warnings == []
     fetcher._compute_metrics(stock)
     fetcher._assess(stock)
     integrity_codes = {"magnitude_outlier", "cashflow_imbalance",

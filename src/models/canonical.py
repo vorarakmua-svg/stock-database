@@ -38,12 +38,16 @@ CanonicalFinancials = create_model(  # type: ignore[call-overload]
 
 # A period's provenance maps: the tag (``_source_tags``) and the filing (``_source_filings``) each figure came from.
 _PROVENANCE = ("_source_tags", "_source_filings")
+#: The day a fiscal year's period ends (the parser's ``_year_end``): the annual record's to decide whether the year has
+#: ended (``build_annual_record``), no figure of the period's.
+_YEAR_END = "_year_end"
 
 
 def validate_period(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
     """Validate/coerce one period dict against :data:`CanonicalFinancials`.
 
-    The provenance maps (``_source_tags``, ``_source_filings``) are preserved verbatim and not validated.
+    The provenance maps (``_source_tags``, ``_source_filings``) are preserved verbatim and not validated; a year's
+    ``_year_end`` is left out.
 
     Returns:
         ``(clean, errors)`` — ``clean`` is the coerced dict (only present values,
@@ -52,7 +56,7 @@ def validate_period(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
         returned so collection is never lost.
     """
     provenance = {k: raw[k] for k in _PROVENANCE if raw.get(k) is not None}
-    payload = {k: v for k, v in raw.items() if k not in _PROVENANCE}
+    payload = {k: v for k, v in raw.items() if k not in _PROVENANCE and k != _YEAR_END}
 
     try:
         model = CanonicalFinancials.model_validate(payload)
