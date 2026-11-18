@@ -124,16 +124,17 @@ def _tjx_fy2012_vintage():
 
 
 def _gpn_fy2016():
-    # GPN's year key 2016 after its move to December years: the cash flows of its year to 2016-05-31 (CY2015), the
-    # income statement of calendar 2016 (CY2016) and the balance sheet at 2016-12-31. More of its flow figures are
-    # the May year's, so that is the year it is; a balance sheet doesn't count.
+    # GPN's year key 2016 after its move to December years, as its 10-K for 2018 holds it: the cash flows of its year
+    # to 2016-05-31 (CY2015), the income statement of calendar 2016 (CY2016) and the balance sheet at 2016-12-31. More
+    # of its flow figures are the May year's, so that is the year it is (and the record holds it alone, BUG-341).
     filed = "2019-02-21"
     may, dec = ("2015-06-01", "2016-05-31"), ("2016-01-01", "2016-12-31")
     return XBRLParser().extract_annual_financials(_facts({
         "NetCashProvidedByUsedInOperatingActivities": [usd(592, *may, fy=2018, filed=filed, frame="CY2015")],
         "NetCashProvidedByUsedInInvestingActivities": [usd(-2127, *may, fy=2018, filed=filed, frame="CY2015")],
         "PaymentsToAcquirePropertyPlantAndEquipment": [usd(91, *may, fy=2018, filed=filed, frame="CY2015")],
-        "Revenues": [usd(3370, *dec, fy=2018, filed=filed, frame="CY2016")],
+        "Revenues": [usd(3370, *dec, fy=2018, filed=filed, frame="CY2016"),
+                     usd(3366, "2018-01-01", "2018-12-31", fy=2018, filed=filed, frame="CY2018")],
         "NetIncomeLoss": [usd(201, *dec, fy=2018, filed=filed, frame="CY2016")],
         "Assets": [usd(10664, None, "2016-12-31", fy=2018, filed=filed, frame="CY2016Q4I")],
         "Liabilities": [usd(7885, None, "2016-12-31", fy=2018, filed=filed, frame="CY2016Q4I")],
@@ -154,10 +155,12 @@ def _lrcx_fy2012():
 
 def _lhx_fy2019():
     # LHX's year key 2019: its June year to 2019-06-28 (CY2018) as the 10-K of 2019 filed it, and the year to
-    # 2020-01-03 (CY2019), filed later; one flow figure each, so the later end's.
+    # 2020-01-03 (CY2019) its 10-K for the year to 2021-01-01 recasts. The record is the period most of its flow
+    # figures cover (BUG-341; two to one), so the June year's frame.
     return XBRLParser().extract_annual_financials(_facts({
         "Revenues": [usd(6801, "2018-06-30", "2019-06-28", fy=2019, filed="2019-08-22", frame="CY2018"),
-                     usd(12856, "2018-12-29", "2020-01-03", fy=2020, filed="2021-03-01", frame="CY2019")],
+                     usd(12856, "2018-12-29", "2020-01-03", fy=2020, filed="2021-03-01", frame="CY2019"),
+                     usd(17465, "2019-12-28", "2021-01-01", fy=2020, filed="2021-03-01", frame="CY2020")],
         "NetCashProvidedByUsedInOperatingActivities": [
             usd(1185, "2018-06-30", "2019-06-28", fy=2019, filed="2019-08-22", frame="CY2018")],
     }))["2019"]
@@ -208,6 +211,27 @@ def _tel_fy2022_vintage():
     }), "2022")
 
 
+def _near_ends(tie=False, vintage=False):
+    # A year's figures at two ends a day apart, one year (BUG-341 keeps ends more than a week away out of it): a June
+    # 52/53-week year tagged to 2019-06-29 (CY2018 by SEC's rule) and to 2019-06-30 (CY2019), its balance sheet at
+    # 2019-06-29. More flow figures (the later end on a tie) decide; balance sheets don't vote, nor the other end's
+    # frame.
+    filed = "2019-08-20"
+    year29, year30 = ("2018-07-01", "2019-06-29"), ("2018-07-01", "2019-06-30")
+    by_tag = {
+        "Revenues": [usd(100, *year29, fy=2019, filed=filed, frame="CY2018")],
+        "OperatingIncomeLoss": [usd(10, *year30, fy=2019, filed=filed, frame="CY2019")],
+        "Assets": [usd(900, None, "2019-06-29", fy=2019, filed=filed, frame="CY2019Q2I")],
+        "Liabilities": [usd(500, None, "2019-06-29", fy=2019, filed=filed, frame="CY2019Q2I")],
+        "StockholdersEquity": [usd(400, None, "2019-06-29", fy=2019, filed=filed, frame="CY2019Q2I")],
+    }
+    if not tie:
+        by_tag["NetIncomeLoss"] = [usd(8, *year30, fy=2019, filed=filed, frame="CY2019")]
+    if vintage:
+        return _vintage(_facts(by_tag), "2019")
+    return XBRLParser().extract_annual_financials(_facts(by_tag))["2019"]
+
+
 def _clash_fy2016():
     # Two full-year frames at one end (none of the cached files has such a pair): the first in sort order.
     filed = "2016-07-28"
@@ -256,6 +280,7 @@ def _calendars():
     shapes = {"wmt": _wmt_fy2012_vintage(), "tjx": _tjx_fy2012_vintage(), "gpn": _gpn_fy2016(), "tel": _tel_fy2022(),
               "tel_v": _tel_fy2022_vintage(), "lhx": _lhx_fy2019(), "lhx_v": _lhx_fy2019_vintage(),
               "lrcx": _lrcx_fy2012(), "exe": _exe_fy2021(), "clash": _clash_fy2016(),
+              "near": _near_ends(), "near_tie": _near_ends(tie=True), "near_v": _near_ends(vintage=True),
               "march": _march_fy2012(), "june": _june_fy2019(),
               "q_dec": q["2024-12-31"], "q_march_q4": q["2025-03-31"], "q_unframed": q["2024-10-05"]}
     return {name: [p.get("calendar_year"), p.get("calendar_quarter"), p.get("frame")] for name, p in shapes.items()}
@@ -270,12 +295,13 @@ def test_a_year_takes_the_frame_of_the_end_its_flow_figures_share():
     cal = _calendars()
     assert cal["gpn"][::2] == [2015, "CY2015"]
     assert cal["lrcx"][::2] == [2011, "CY2011"]
-    assert cal["lhx"][::2] == [2019, "CY2019"]
+    assert cal["lhx"][::2] == [2018, "CY2018"]
     assert cal["lhx_v"][::2] == [2019, "CY2019"]
     assert cal["exe"][::2] == [2021, "CY2021"]
     assert cal["tel"][::2] == [2022, "CY2022"]
     assert cal["tel_v"][::2] == [2022, "CY2022"]
     assert cal["clash"][::2] == [2015, "CY2015"]
+    assert cal["near"][::2] == cal["near_tie"][::2] == cal["near_v"][::2] == [2019, "CY2019"]
 
 
 def test_a_year_without_a_full_year_frame_takes_secs_rule_not_its_year_end_instants():

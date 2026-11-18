@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 159 · NEEDS-USER 0 · Decided: 7 · Verified: 192
+**Open:** P0 0 · P1 0 · P2 0 · P3 160 · NEEDS-USER 0 · Decided: 7 · Verified: 193
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2155,10 +2155,11 @@ Repro: sec_handler.py ~35, ~442, ~459: a change to companyfacts_from_instance (t
 Expected: the version follows the reader, or a fixture test fails on a change without a bump.   Actual: neither.
 
 ### BUG-341 [P2][VALID] One fiscal-year key can hold two fiscal years, and its record mixes them: GPN FY2016 combines the year to 2016-05-31's cash flows, calendar 2016's income statement and the 2016-12-31 balance sheet
-Status: OPEN
-Found: BUG-277's census (`qa/evidence/bug277-investigation.txt`, residual 1) | Fixed: | Regression test:
+Status: VERIFIED (iteration 182)
+Found: BUG-277's census (`qa/evidence/bug277-investigation.txt`, residual 1) | Fixed: (this commit) | Regression tests: tests/test_fiscal_year_periods.py (12 new), tests/test_fiscal_calendar.py (shapes updated, near-end cases added); 12 failing first
 Repro: a fiscal-year change (or a stray 52-week figure) puts two fiscal years' figures under one `_fiscal_year_from_end` key; the record takes each field's best-ranked figure regardless of its end, so FCF, margins and identities mix two periods: GPN FY2016, LHX FY2019 (14 flow figures to 2019-06-28 against 13 to 2020-01-03; since BUG-277 its calendar_year reads 2018 on that near tie), EXE 2021, MOS 2013, LDOS 2015 and others (14 annual records, 9 vintages).
 Expected: one record per fiscal year, each of one period's figures (a transition period kept apart).   Actual: figures from two periods in one row.
+Fix (iteration 182, `qa/evidence/bug341-investigation.txt`): a fiscal-year key's record holds one period, the end most of its full-year flow fields share (the later on a tie; with no flow figure the latest end); figures more than 7 days (`_SAME_PERIOD_DAYS`) from it are not read for the key. Applied in `_annual_periods` (resolve and restore), `_revenue_set_aside` and `extract_annual_vintages`; a vintage holds the period the record held on its filing day from the reports filed by then (a pure function of the facts). No key renumbering; transition periods still make no record (their balance sheets no longer leak into the old year); README says a transition step spans more than 12 months and CAGRs count it as one year. Decisions (orchestrator): KDP 2017 takes Keurig's year to 2017-09-30 (majority rule; the 'own year' variant broke the oracle on KDP), no transition-period records. Census over 504: annual 69 records moved, vintages 118 moved / 16 no longer produced, quarterly and TTM 0. DB copies over 502: financials_annual 87 rows, vintages 133, metrics 20, per-share 9, quality 5, valuations 5 (DDM TEL base 37.00 -> 37.83; Lynch GPN base 86.70 -> 70.91, FY2016 EPS 1.37 -> 2.04); 0 medians, verdicts, owner-earnings verdicts, historical values or labels; valuation oracle identical to HEAD. Look-ahead 0. Residuals: two companies' balance sheets on one date and ASC 606/842 opening balances within 7 days still mix; some years lose a balance sheet borrowed from another date (MS 2008, NOW 2011, KDP 2017); BUG-342 partly resolved (far strays no longer set period_end); stale vintages stay in an existing DB (BUG-344).
 
 ### BUG-342 [P3][VALID] A record's period_end isn't always its own end: a stray later-filed fact sets it
 Status: OPEN
@@ -2171,6 +2172,12 @@ Status: OPEN
 Found: BUG-277's census (residual 3) | Fixed: | Regression test:
 Repro: financials_ttm rows get calendar_year / calendar_quarter but no `frame`, unlike the quarters they sum.
 Expected: the frame of the TTM's last quarter, or the docs say none.   Actual: none, undocumented.
+
+### BUG-344 [P3][STORE] The store only upserts annual rows, so years and vintages a newer parse no longer produces stay in an existing database
+Status: OPEN
+Found: the as-of snapshots design's builder check and BUG-341's residual R1 | Fixed: | Regression test:
+Repro: sqlite_store._write_stock upserts financials_annual and financials_annual_vintages and never deletes, so an existing DB keeps years an older parse made, years from a `years_back` run, and after BUG-341 16 vintages the parser no longer produces (each 1-2 figures from another period, mostly equity or cash at a transition date). The current as-of reader reads them as the latest-filed view (the as-of snapshots plan replaces that reader).
+Expected: a full run's annual rows and vintages are exactly what it parsed.   Actual: leftovers persist.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)

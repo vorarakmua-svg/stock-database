@@ -2073,6 +2073,22 @@ period therefore carries two labels:
   calendar year, minus one for a 52/53-week year-end that lands in early January (e.g. JNJ's
   year ending 2023-01-01 is FY2022). January-end retailers (e.g. WMT, Jan 31) keep the end
   year. SEC's `fy` field is deliberately not used — filers mis-stamp it.
+  A fiscal year holds one period's figures: the period most of its income and cash-flow
+  figures cover (the later on a tie; with none, its latest balance-sheet date). After a
+  reverse merger that is the period the later reports present (KDP's 2017 is Keurig's year
+  to 2017-09-30, not Dr Pepper Snapple's calendar 2017). Figures of a period ending more
+  than a week from it are another period's and aren't read for it: after a change of
+  fiscal year-end, a later 10-K's recast of the old year onto the new calendar (GPN's
+  calendar 2016 beside its year to 2016-05-31, L3Harris' year to 2020-01-03 beside its year
+  to 2019-06-28) and the transition period's balance sheet (Mosaic's at 2013-12-31 beside
+  its year to 2013-05-31); a balance dated elsewhere in the year (a goodwill impairment
+  test, a merger date, a cover page's share count). Ends within a week are one period (a
+  52/53-week year tagged to its nominal month-end). A filing's view of a year (a vintage)
+  is the period the annual record held on its filing day, from the reports filed by then;
+  a view holding only another period's figures has no row. The transition period itself
+  (GPN's June-December 2016) is no fiscal year and has no annual record, so the step
+  between the last old year and the first new one spans more than twelve months (GPN
+  FY2016 to FY2017: 19), and growth rates count it as one year.
 - `calendar_year` (and `calendar_quarter`) — the macro-aligned year taken from SEC's
   XBRL `frame` context flag (e.g. MSFT FY2025, AAPL FY2025, WMT FY2026 and every December
   filer's FY2025 all map to `calendar_year = 2025`; NVIDIA's January "FY2022" → 2021). A
@@ -2377,7 +2393,9 @@ store a split.
 
 The `financials_annual_vintages` table stores **point-in-time** data: one row per
 (ticker, fiscal_year, filing accession), so you can see every filing's view of a year —
-the original and each later restatement — keyed by `filed_date`. This is sub-project 1 of
+the original and each later restatement — keyed by `filed_date` (a filing whose figures
+for the year are all of another period, such as a recast after a change of fiscal
+year-end, has none; see "Fiscal vs calendar year"). This is sub-project 1 of
 the no-look-ahead point-in-time work (point-in-time metrics follow). Vintages are
 SQLite-only (not in the per-ticker JSON).
 

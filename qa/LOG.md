@@ -3167,3 +3167,19 @@ Gates: ruff ✓ mypy ✓ pytest 3063 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(parsers): a period's calendar follows SEC's frame rule, not a set's hash order (BUG-057, BUG-123, BUG-277)
 Next: the design for priority #2 (one rule for the as-of view and the annual record; the user chose backtesting
 semantics); BUG-341.
+
+## Iteration 182: 2026-11-19 00:10: fix (BUG-341)
+Picked: the P2 BUG-277's census found, the prerequisite of the as-of snapshots plan (docs/superpowers/plans/
+2026-11-18-asof-snapshots.md, whose Task 1 is done on branch feat/asof-snapshots); an opus worker.
+Did: a fiscal-year key's record and vintages hold one period (the end most flow fields share; 7-day tolerance);
+figures of other periods (recast years, transition balance sheets, fresh-start sheets, reverse-merger predecessors,
+strays) are no longer mixed in. KDP 2017 by the majority rule (orchestrator's ruling over the worker's "own year"
+variant, which flagged the oracle); transition periods still make no record.
+- RED: 12 of 23 failed on 5db1fab; GREEN. 9 of 9 mutants; bug277 13, bug252 11, bug316 1 killed. Look-ahead 0.
+- Census and DB copies over 502: 69 annual records, 118 vintages move (16 no longer produced); quarterly/TTM 0;
+  0 medians, verdicts, owner-earnings verdicts or labels; model rows DDM TEL and Lynch GPN move; oracle as at HEAD.
+- New: BUG-344 (P3, the store keeps rows a newer parse no longer produces).
+Result: BUG-341 VERIFIED. No P0-P2 open.
+Gates: ruff ✓ mypy ✓ pytest 3075 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(parsers): a fiscal year's record holds one period's figures (BUG-341)
+Next: as-of snapshots plan Task 0 (baselines) on the rebased feature branch.

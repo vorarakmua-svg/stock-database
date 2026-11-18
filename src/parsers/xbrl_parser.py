@@ -23,6 +23,11 @@ _FULL_YEAR_MIN_DAYS = 350
 _FULL_YEAR_MAX_DAYS = 380
 _QUARTER_MIN_DAYS = 80
 _QUARTER_MAX_DAYS = 120
+#: Two ends this many days apart or fewer are one period's: a 52/53-week year is tagged to its nominal month-end at
+#: times, at most 6 days off (CIEN's 10-K of 2019 ends its year to 2019-11-02 on 2019-10-31). Ends further apart are
+#: two periods, and a fiscal year's record holds one (BUG-341). Over the cached filings no full-year flow end lies 8 to
+#: 90 days from its fiscal-year key's main one (13 lie 1-7 days off, 13 over 90).
+_SAME_PERIOD_DAYS = 7
 
 # Forms that carry quarterly and annual statement facts. A foreign issuer's annual
 # report (20-F, 40-F) counts as annual; its 6-K interim reports aren't read.
@@ -1354,6 +1359,31 @@ def _agree(a: float, b: float) -> bool:
     return abs(a - b) <= _AGREE * max(abs(a), abs(b))
 
 
+def _same_period(end: Optional[str], year_end: Optional[str]) -> bool:
+    """Whether a figure ending *end* is of the period ending *year_end* (``_SAME_PERIOD_DAYS``); a missing date
+    decides nothing."""
+    if not end or not year_end:
+        return True
+    try:
+        return abs((date.fromisoformat(end) - date.fromisoformat(year_end)).days) <= _SAME_PERIOD_DAYS
+    except ValueError:
+        return True
+
+
+def _year_end(ends: Dict[str, Tuple[Set[str], Set[str]]]) -> str:
+    """The end of the one period a fiscal-year key's record holds, from its figures' *ends*
+    (``{end: (flow fields, instant fields)}``): the end most flow fields share, the later on a tie (BUG-341). GPN's key
+    2016 is its year to 2016-05-31 (25 flow fields), not the calendar 2016 its 10-K for 2017 recasts (9, no cash
+    flows), nor its transition period's balance sheet at 2016-12-31; KDP's 2017 is its accounting predecessor's year
+    to 2017-09-30 as its later 10-Ks present it, not Dr Pepper Snapple's calendar 2017. With no flow figure (EXE's 2021
+    after its fresh start), the latest end.
+    """
+    flows = [e for e in ends if ends[e][0]]
+    if not flows:
+        return max(ends)
+    return max(flows, key=lambda e: (len(ends[e][0]), e))
+
+
 def _tagging_error(earlier: float, latest: float, key: str) -> Optional[str]:
     """What a later filing's figure for *key* is of the one the earlier filings agree
     on, when it can be a tagging error: "sign flip", "zero" (of a total) or
@@ -1711,6 +1741,7 @@ class XBRLParser:
         period_frames: Dict[Any, Set[Tuple[str, str]]] = {}
         flow_ends: Dict[Any, Dict[str, str]] = {}  # period -> {flow field: the end of the figure it holds}
         set_aside = self._aside(us_gaap)
+        year_ends = self._year_ends(us_gaap)[1]  # each view holds its year's own period alone (BUG-341)
 
         for field in CANONICAL_FIELDS:
             for priority, tag in enumerate(field.tags):
@@ -1729,6 +1760,8 @@ class XBRLParser:
                     if fy is None or not accn:
                         continue
                     period = (fy, accn)
+                    if not _same_period(entry.get("end"), year_ends.get(period)):
+                        continue
                     frame = entry.get("frame")
                     if frame:
                         period_frames.setdefault(period, set()).add((entry.get("end"), frame))
@@ -2269,18 +2302,65 @@ class XBRLParser:
         """The fiscal year an annual report's fact covers (see ``_fiscal_year_from_end``)."""
         return self._fiscal_year_from_end(entry.get("end")) or self._period_year(entry)
 
+    def _year_ends(self, us_gaap: Dict[str, Any]) -> Tuple[Dict[int, str], Dict[Tuple[int, str], str]]:
+        """The end of the one period each fiscal-year key holds (``_year_end``; BUG-341): ``({fiscal year: end}``
+        for the annual record, from every annual report, ``{(fiscal year, accn): end})`` for each report's view (a
+        vintage): the period the annual record held on its filing day, from the reports filed by then, so a view
+        never reads a later filing and replays as the facts known that day do."""
+        ends: Dict[Tuple[int, str], Dict[str, Tuple[Set[str], Set[str]]]] = defaultdict(dict)
+        filed: Dict[str, str] = {}
+        for field in CANONICAL_FIELDS:
+            for tag in field.tags:
+                for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
+                    end, accn = entry.get("end"), entry.get("accn")
+                    if (entry.get("form", "") not in _ANNUAL_FORMS or not end or not accn
+                            or not self._matches_kind(field, entry) or not self._is_full_year(entry)):
+                        continue
+                    fy = self._annual_fy(entry)
+                    if fy is None:
+                        continue
+                    flow = bool(entry.get("start"))
+                    ends[(fy, accn)].setdefault(end, (set(), set()))[0 if flow else 1].add(field.key)
+                    filed[accn] = entry.get("filed") or ""
+
+        def year_end(fy: int, by: str) -> str:  # the year's end from the reports filed by *by*
+            merged: Dict[str, Tuple[Set[str], Set[str]]] = {}
+            for (year, accn), by_end in ends.items():
+                if year == fy and filed[accn] <= by:
+                    for end, (flows, instants) in by_end.items():
+                        fields = merged.setdefault(end, (set(), set()))
+                        fields[0].update(flows)
+                        fields[1].update(instants)
+            return _year_end(merged)
+
+        views = {(fy, accn): year_end(fy, filed[accn]) for fy, accn in ends}
+        last = max(filed.values(), default="")
+        annual = {fy: year_end(fy, last) for fy in {fy for fy, _ in ends}}
+        return annual, views
+
+    def _annual_key(self, us_gaap: Dict[str, Any]) -> Callable[[Dict[str, Any]], Optional[int]]:
+        """``_annual_fy`` for the figures of each fiscal year's own period (``_year_ends``); None for another's."""
+        year_ends = self._year_ends(us_gaap)[0]
+
+        def key(entry: Dict[str, Any]) -> Optional[int]:
+            fy = self._annual_fy(entry)
+            return fy if fy is None or _same_period(entry.get("end"), year_ends.get(fy)) else None
+        return key
+
     def _annual_periods(self, us_gaap: Dict[str, Any]) -> Dict[Any, Dict[str, Any]]:
         """Every fiscal year's figures from the annual reports, keyed by fiscal year,
-        with a later filing's tagging errors put right."""
+        with a later filing's tagging errors put right. A year holds its own period's
+        figures alone (``_year_ends``, BUG-341)."""
+        key = self._annual_key(us_gaap)
         data = self._resolve_canonical(
             us_gaap,
             form_set=_ANNUAL_FORMS,
             valid_fn=self._is_full_year,
-            period_key_fn=self._annual_fy,
+            period_key_fn=key,
             quarterly=False,
             set_aside=self._aside(us_gaap),
         )
-        self._restore_agreed_figures(us_gaap, data, self._annual_fy)
+        self._restore_agreed_figures(us_gaap, data, key)
         return data
 
     def _annual_filings(self, us_gaap: Dict[str, Any], field: Any, tag: str, period_key_fn,
@@ -2332,10 +2412,12 @@ class XBRLParser:
         sales of $74-82B and a cost of sales of $39-41B). Figures closer than that are a
         restatement or a presentation, which the tag order settles.
         """
+        year_key = self._annual_key(us_gaap)
+
         def year_figures(key: str, tags: Iterable[str]) -> Dict[Any, Dict[str, float]]:
             figures: Dict[Any, Dict[str, float]] = defaultdict(dict)
             for tag in tags:
-                for fy, filings in self._annual_filings(us_gaap, _FIELDS[key], tag, self._annual_fy).items():
+                for fy, filings in self._annual_filings(us_gaap, _FIELDS[key], tag, year_key).items():
                     figures[fy][tag] = filings[-1][1]  # the latest filing's
             return figures
 
