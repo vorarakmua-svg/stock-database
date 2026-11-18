@@ -1729,6 +1729,7 @@ class XBRLParser:
         self,
         facts: Dict[str, Any],
         years_back: Optional[int] = None,
+        keep_year_end: bool = False,
     ) -> Dict[str, Dict[str, Dict[str, Any]]]:
         """Every filing's view of each annual period: ``{fiscal_year: {accn: period}}``.
 
@@ -1737,6 +1738,8 @@ class XBRLParser:
         restated year retains both its original and restated vintages. Reads the
         already-fetched ``companyfacts`` (every historical instance carries its own
         ``accn``/``filed``); no extra network. Annual reports (10-K, 20-F, 40-F) only.
+        With *keep_year_end* each view keeps its year's end (``_year_end``, ``_apply_calendar``), so the snapshot
+        builder can drop a view of a year not yet over on its filing's day (BUG-113).
         """
         us_gaap = _filer_facts(facts, _VINTAGE_VIEW)
         if not us_gaap:
@@ -1782,8 +1785,9 @@ class XBRLParser:
                         flow_ends.setdefault(period, {})[field.key] = entry.get("end")
 
         self._apply_calendar(data, period_frames, flow_ends)
-        for period_dict in data.values():
-            period_dict.pop("_year_end", None)  # the annual record's alone (build_annual_record)
+        if not keep_year_end:
+            for period_dict in data.values():
+                period_dict.pop("_year_end", None)  # the annual record's and the snapshots' alone
         if not _in_dollars(data.values()):
             return {}
 
