@@ -438,6 +438,17 @@ def test_a_collection_carries_the_annual_record_as_known_at_each_filing(tmp_path
                                                                              else {2020, 2021})
     assert stock.years_back == years_back
     assert expected.warnings and all(warning in stock.warnings for warning in expected.warnings)
+    # The agreement rule: each year's latest row is present and holds the run's record of that year, value for value.
+    from src.mappings.canonical import CANONICAL_BY_KEY
+    from tests.test_annual_snapshots import _same
+    latest = {row["fiscal_year"]: row for row in stock.financials_annual_known}
+    assert {str(fy) for fy in latest} == set(stock.financials_annual)
+    for fy, period in stock.financials_annual.items():
+        row = latest[int(fy)]
+        assert row["present"] is True
+        record = {key: value for key, value in period.items() if key in CANONICAL_BY_KEY}
+        assert {key for key in row if key in CANONICAL_BY_KEY} == set(record)
+        assert all(_same(row[key], value) for key, value in record.items()), fy
     fetcher.sqlite_store.export([stock])
     conn = sqlite3.connect(fetcher.sqlite_store.db_path)
     try:

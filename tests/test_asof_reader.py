@@ -198,6 +198,12 @@ def test_history_as_of_newest_first_and_years_back(tmp_path):
         assert list(hist.keys()) == [2020, 2019]  # newest first, trimmed to 2
 
 
+def test_history_as_of_years_back_zero_or_negative_trims_nothing(tmp_path):
+    with AsOfReader(_three_years(tmp_path)) as r:
+        for years_back in (0, -1):
+            assert list(r.history_as_of("PRU", "2021-02-15", years_back=years_back)) == [2020, 2019, 2018]
+
+
 def test_history_as_of_unknown_ticker_empty(tmp_path):
     with AsOfReader(_three_years(tmp_path)) as r:
         assert r.history_as_of("ZZZZ", "2025-01-01") == {}

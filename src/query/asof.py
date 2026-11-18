@@ -111,7 +111,7 @@ class AsOfReader:
     ) -> Dict[int, Dict[str, Any]]:
         """Every fiscal year in the record as of ``as_of_date``, each read as :meth:`as_of_annual` reads it. Keyed
         by fiscal_year, newest first; ``years_back`` trims to the most recent N years the record held then (a year
-        that had left it takes no place).
+        that had left it takes no place). ``years_back`` None, 0 or negative trims nothing.
         """
         if not self._built:
             return {}
@@ -123,7 +123,7 @@ class AsOfReader:
         )]
         result: Dict[int, Dict[str, Any]] = {}
         for fy in years:
-            if years_back and len(result) >= years_back:
+            if years_back is not None and years_back > 0 and len(result) >= years_back:
                 break
             period = self.as_of_annual(ticker, fy, cutoff)
             if period is not None:

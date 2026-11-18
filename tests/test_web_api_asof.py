@@ -329,4 +329,22 @@ def test_a_ticker_with_snapshots_none_by_the_date_says_not_filed_yet(client: Tes
     resp = client.get("/ui/asof/result", params={"ticker": TICKER, "fiscal_year": FY, "date": DATE_BEFORE})
     assert resp.status_code == 200
     assert "had not been filed yet" in resp.text
-    assert "built" not in resp.text
+    assert "isn't built yet" not in resp.text
+
+
+def test_the_annual_api_says_a_ticker_without_snapshots_isnt_built(tmp_path: Path) -> None:
+    vintages = {"2022": {"k22": {"fiscal_year": 2022, "accn": "k22", "filed_date": "2023-02-10",
+                                 "period_end": "2022-12-31", "form": "10-K", "net_income": 80.0}}}
+    db = build_db(tmp_path, None, ticker="OLD", vintages=vintages)
+    resp = TestClient(create_app(db_path=Path(db))).get(
+        "/api/asof/OLD/annual", params={"fiscal_year": 2022, "date": "2026-01-01"})
+    assert resp.status_code == 404
+    assert "isn't built yet" in resp.json()["detail"]
+    assert "had not been filed" not in resp.json()["detail"]
+
+
+def test_the_annual_api_says_a_built_tickers_year_wasnt_filed_yet(client: TestClient) -> None:
+    resp = client.get(f"/api/asof/{TICKER}/annual", params={"fiscal_year": FY, "date": DATE_BEFORE})
+    assert resp.status_code == 404
+    assert "had not been filed" in resp.json()["detail"]
+    assert "isn't built yet" not in resp.json()["detail"]

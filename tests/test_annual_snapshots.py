@@ -106,6 +106,25 @@ def test_a_year_that_leaves_the_record_gets_a_tombstone():
     assert rows[1] == {"fiscal_year": 2019, "known_from": "2019-09-03", "known_accn": "b2", "present": False}
 
 
+def test_a_year_that_leaves_the_record_and_comes_back_gets_a_row_each_time():
+    # The tombstone's year again: it leaves the record with the 10-K/A of 2019-09-03 and comes back with the FY2019
+    # 10-K filed after its end, which reads the year's own figures.
+    facts = _facts(
+        Revenues=[_year(50.0, 2018, "2019-08-15", "b1"), _year(60.0, 2019, "2020-02-14", "b3")],
+        Assets=[_fact(500.0, "2019-06-30", "2019-08-15", "b1"),
+                _fact(520.0, "2019-12-31", "2019-09-03", "b2", form="10-K/A"),
+                _fact(530.0, "2019-12-31", "2020-02-14", "b3")])
+    snapshots = build_snapshots(XBRLParser(), facts, ticker="X", years_back=None)
+    rows = _rows(snapshots, 2019)
+    assert [(row["known_from"], row["present"]) for row in rows] == [
+        ("2019-08-15", True), ("2019-09-03", False), ("2020-02-14", True)]
+    assert rows[1] == {"fiscal_year": 2019, "known_from": "2019-09-03", "known_accn": "b2", "present": False}
+    assert (rows[2]["known_accn"], rows[2]["revenue"], rows[2]["total_assets"]) == ("b3", 60.0, 530.0)
+    # the year back in the record is the record's year
+    record = build_annual_record(XBRLParser(), facts, ticker="X", years_back=None)
+    assert (record.periods["2019"]["revenue"], record.periods["2019"]["total_assets"]) == (60.0, 530.0)
+
+
 def test_same_day_filings_make_one_snapshot():
     # A 10-K and its 10-K/A on one day: both are known that day, in one snapshot.
     facts = _facts(Revenues=[_year(100.0, 2019, D1, "0001-20-000010")],

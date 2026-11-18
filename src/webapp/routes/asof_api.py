@@ -33,6 +33,11 @@ def annual_as_of(
     """
     result = reader.as_of_annual(ticker, fiscal_year, date)
     if result is None:
+        if not reader.has_snapshots(ticker):
+            raise HTTPException(
+                status_code=404,
+                detail=f"The as-of data for {ticker} isn't built yet: re-collecting {ticker} builds it",
+            )
         raise HTTPException(
             status_code=404,
             detail=f"{ticker} FY{fiscal_year} had not been filed as of {date}",
