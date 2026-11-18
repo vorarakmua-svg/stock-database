@@ -2,7 +2,7 @@
 
 Fixtures:
 - ``client``  — TestClient(create_app(db_path=web_db))
-- ``web_db``  — SQLite with AAA having multi-vintage FY2022:
+- ``web_db``  — SQLite with AAA having multi-vintage FY2022, and FY2022 as known from each filing:
     original  accn="0001-10K-2022" filed_date="2023-02-10"
     restated  accn="0002-10KA-2022" filed_date="2023-08-15"
 
@@ -17,11 +17,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from src.exporters.sqlite_store import SQLiteStore
-from src.models.stock_data import StockData
 from src.query.asof import AsOfReader
 from src.query.pit_metrics import PointInTimeMetrics
 from src.webapp import create_app
+from tests.known_rows import build_db, snapshot
 
 # Fixture constants derived from conftest.py web_db
 TICKER = "AAA"
@@ -271,23 +270,18 @@ def test_asof_vintages_fragment_returns_200(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# BUG-110: the figures a later filing leaves out
+# BUG-110: the figures a later filing leaves out (the record's), named by carried_from
 # ---------------------------------------------------------------------------
 
 
 def _partial_refilings_client(tmp_path: Path) -> TestClient:
-    """MSFT FY2016, restated by the FY2018 10-K, then only its opening equity in the FY2019 10-K."""
-    def period(accn: str, filed: str, **figures: float) -> dict:
-        return {"fiscal_year": 2016, "accn": accn, "filed_date": filed, "period_end": "2016-06-30",
-                "form": "10-K", "calendar_year": 2016, **figures}
-    s = StockData(ticker="MSFT", cik="789019", company_name="Microsoft")
-    s.financials_annual_vintages = {"2016": {
-        "k18": period("k18", "2018-08-03", revenue=91.2e9, net_income=20.5e9),
-        "k19": period("k19", "2019-08-01", total_equity=83.1e9),
-    }}
-    db = tmp_path / "stock.db"
-    SQLiteStore(db_path=str(db)).export([s])
-    return TestClient(create_app(db_path=db))
+    """MSFT FY2016 as known from its FY2019 10-K, which holds only the opening equity: the income statement the
+    FY2018 10-K's."""
+    k18 = ("k18", "2018-08-03", "10-K")
+    db = build_db(tmp_path, [snapshot(2016, "2019-08-01", accn="k19", period_end="2016-06-30", revenue=91.2e9,
+                                      net_income=20.5e9, total_equity=83.1e9,
+                                      earlier={"revenue": k18, "net_income": k18})], ticker="MSFT")
+    return TestClient(create_app(db_path=Path(db)))
 
 
 def test_annual_asof_returns_the_figures_a_later_filing_leaves_out(tmp_path: Path) -> None:
@@ -307,3 +301,32 @@ def test_asof_result_fragment_dates_a_figure_last_filed_earlier(tmp_path: Path) 
     html = resp.text
     assert "$91.20B" in html and "$20.50B" in html
     assert "(filed 2018-08-03)" in html
+
+
+# ---------------------------------------------------------------------------
+# A ticker whose as-of data isn't built (collected before the snapshots)
+# ---------------------------------------------------------------------------
+
+
+def test_a_ticker_without_snapshots_reads_none_and_the_page_says_not_built(tmp_path: Path) -> None:
+    # Its vintages are stored, its snapshots not (a run that built none): no fallback to another rule.
+    vintages = {"2022": {"k22": {"fiscal_year": 2022, "accn": "k22", "filed_date": "2023-02-10",
+                                 "period_end": "2022-12-31", "form": "10-K", "net_income": 80.0}}}
+    db = build_db(tmp_path, None, ticker="OLD", vintages=vintages)
+    with AsOfReader(db) as reader:
+        assert reader.has_snapshots("OLD") is False
+        assert reader.as_of_annual("OLD", 2022, "2026-01-01") is None
+        assert reader.history_as_of("OLD", "2026-01-01") == {}
+    resp = TestClient(create_app(db_path=Path(db))).get(
+        "/ui/asof/result", params={"ticker": "OLD", "fiscal_year": 2022, "date": "2026-01-01"})
+    assert resp.status_code == 200
+    assert "The as-of data for <strong>OLD</strong> isn't built yet" in resp.text
+    assert "re-collect" in resp.text.lower()
+    assert "had not been filed" not in resp.text
+
+
+def test_a_ticker_with_snapshots_none_by_the_date_says_not_filed_yet(client: TestClient) -> None:
+    resp = client.get("/ui/asof/result", params={"ticker": TICKER, "fiscal_year": FY, "date": DATE_BEFORE})
+    assert resp.status_code == 200
+    assert "had not been filed yet" in resp.text
+    assert "built" not in resp.text

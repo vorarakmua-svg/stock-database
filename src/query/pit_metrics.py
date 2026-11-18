@@ -1,7 +1,7 @@
 """Point-in-time metrics: the fundamental ratio suite computed on as-of-date financials.
 
 A pure-read composition layer. ``AsOfReader`` (see ``query/asof.py``) supplies each
-annual period as it was known on a date ``D`` (each figure as last filed on or before ``D``);
+annual period as it was known on a date ``D`` (the annual record built from the facts filed by ``D``);
 ``CalculatedMetrics`` (see ``parsers/calculated_metrics.py``) computes the ratios. So the
 metrics for a year as of ``D`` are ``calculate_all(as_of_annual(ticker, fy, D), sector=...)``
 — the same engine the pipeline uses, fed the as-of financials instead of the latest-restated
@@ -88,7 +88,7 @@ class PointInTimeMetrics:
     ) -> Dict[int, Dict[str, Any]]:
         """Fundamental ratios for every fiscal year known as of ``as_of_date``.
 
-        Each year uses its as-of financials (latest vintage filed <= the date). Keyed by
+        Each year uses its as-of financials (the record as known on the date). Keyed by
         fiscal_year, newest first; ``years_back`` trims to the most recent N. A per-year
         calculator failure is captured as ``{"error": ...}`` rather than aborting the batch.
         """

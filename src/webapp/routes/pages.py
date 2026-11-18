@@ -476,6 +476,8 @@ def asof_result_fragment(
 ) -> Any:
     """HTMX fragment: as-of financials + ratios for one (ticker, fiscal_year, date)."""
     filing = asof_reader.as_of_annual(ticker, fiscal_year, date)
+    # A ticker collected before the as-of snapshots has none: its page says so, not "not filed yet".
+    built = filing is not None or asof_reader.has_snapshots(ticker)
     ratios: Optional[Dict[str, Any]] = None
     if filing is not None:
         ratios = pit.metrics_as_of(ticker, fiscal_year, date)
@@ -505,6 +507,7 @@ def asof_result_fragment(
             "fiscal_year": fiscal_year,
             "date": date,
             "filing": filing,
+            "built": built,
             "fin_rows": fin_rows,
             "ratio_rows": ratio_rows,
         },

@@ -189,7 +189,8 @@ def web_db(tmp_path):
 
     Three companies across sectors:
     - AAA (general): 3 fiscal years of financials + metrics, 2 quarterly periods,
-      1 TTM period, multi-vintage FY2022 (original + restatement), 2 snapshots
+      1 TTM period, multi-vintage FY2022 (original + restatement) and FY2022 as
+      known from each of them (the as-of snapshots), 2 snapshots
       (latest has dividend_yield=0.02, short_percent_of_float=0.03 — for
       screener market/valuation-column tests), 1 unmapped fact, 260 daily price
       bars, 1 analyst snapshot, 4 earnings-surprise rows, 6 dividend events + 1
@@ -207,6 +208,7 @@ def web_db(tmp_path):
     from datetime import datetime
 
     from src.exporters.sqlite_store import SQLiteStore
+    from tests.known_rows import snapshot
 
     db_path = tmp_path / "stock.db"
     store = SQLiteStore(db_path)
@@ -304,6 +306,11 @@ def web_db(tmp_path):
             },
         }
     }
+    # FY2022 as known from each filing (the as-of snapshots): the original, then the restatement
+    aaa1.financials_annual_known = [
+        snapshot(2022, "2023-02-10", accn="0001-10K-2022", revenue=800.0, net_income=80.0),
+        snapshot(2022, "2023-08-15", accn="0002-10KA-2022", form="10-K/A", revenue=800.0, net_income=82.0),
+    ]
     aaa1.unmapped_facts = [
         {
             "tag": "SomeCustomTag", "label": "Custom Label",

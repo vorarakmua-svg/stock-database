@@ -26,9 +26,10 @@ def annual_as_of(
 ) -> Dict[str, Any]:
     """Annual period for (ticker, fiscal_year) as known on *date*.
 
-    Each figure as last filed on or before *date*; ``carried_from`` names the
-    earlier filing of each figure the latest one leaves out.
-    **404** if the year had not been filed as of that date.
+    The annual record as known on *date*; ``carried_from`` names the earlier
+    filing of each figure the year's latest filing didn't give.
+    **404** if the year had not been filed as of that date, or the ticker's
+    as-of data isn't built (collected before the snapshots).
     """
     result = reader.as_of_annual(ticker, fiscal_year, date)
     if result is None:
