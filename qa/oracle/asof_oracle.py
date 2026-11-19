@@ -6,7 +6,8 @@ day), this compares what the stored view reads (``AsOfReader.history_as_of``, so
 a fresh ``build_annual_record(facts_known_by(facts, D))``:
 
 - the same fiscal years;
-- every canonical figure (NaN and None are one: SQLite stores NaN as NULL), ``period_end``, ``calendar_year``;
+- every canonical figure (NaN and None are one: SQLite stores NaN as NULL), ``period_end``, ``calendar_year``,
+  and the stored row's ``frame``;
 - the provenance: ``accn``/``filed_date``/``form`` (the latest filing among the year's figures), ``carried_from``,
   and the stored row's ``source_tags`` and ``source_filings``;
 - no stored figure's filing is dated after D (look-ahead).
@@ -18,6 +19,8 @@ is that rule replayed with the look-ahead gate, at any day.
 
 Usage: python qa/oracle/asof_oracle.py DB CACHE_DIR --sample N --seed S [--workers W] [--tickers T ...]
        [--at TICKER:YYYY-MM-DD ...]   (pinned pairs, checked beside the sample: a bug's repro dates)
+Each run prints its coverage: the pairs, the (pair, fiscal year)s compared, and the cells compared (each figure,
+provenance field, ``carried_from``, ``frame``, ``source_tags`` and ``source_filings`` of a year being one).
 Exit code 1 on any difference (each one listed), 0 when all N agree.
 """
 from __future__ import annotations
@@ -106,9 +109,11 @@ def _day_in_span(facts: Dict[str, Any], u: float) -> Optional[str]:
 
 
 def _check(ticker: str, day: str, facts: Dict[str, Any], reader: AsOfReader,
-           parser: XBRLParser) -> List[str]:
-    """Every difference between the stored view of *ticker* on *day* and the record built on the facts known then."""
+           parser: XBRLParser) -> Tuple[List[str], int, int]:
+    """Every difference between the stored view of *ticker* on *day* and the record built on the facts known then,
+    with the fiscal years and the cells compared."""
     diffs: List[str] = []
+    years = cells = 0
     record = build_annual_record(parser, facts_known_by(facts, day), ticker=ticker, years_back=None).periods
     stored = reader.history_as_of(ticker, day)
     want_years = {int(fy) for fy in record}
@@ -117,6 +122,8 @@ def _check(ticker: str, day: str, facts: Dict[str, Any], reader: AsOfReader,
                      f"record {sorted(want_years - set(stored))} not stored")
     for fy in sorted(want_years & set(stored)):
         want, got = _expected(record[str(fy)]), stored[fy]
+        years += 1
+        cells += len(want) + 3  # the period's cells, and the row's frame, source_tags and source_filings
         for key, value in want.items():
             if key == "carried_from":
                 if got.get(key) != value:
@@ -124,9 +131,11 @@ def _check(ticker: str, day: str, facts: Dict[str, Any], reader: AsOfReader,
             elif not _equal(got.get(key), value):
                 diffs.append(f"FY{fy} {key}: stored {got.get(key)!r} record {value!r}")
         row = reader.conn.execute(
-            "SELECT source_tags, source_filings FROM financials_annual_known "
+            "SELECT frame, source_tags, source_filings FROM financials_annual_known "
             "WHERE ticker = ? AND fiscal_year = ? AND known_from <= ? ORDER BY known_from DESC LIMIT 1",
             (ticker, fy, day)).fetchone()
+        if row["frame"] != record[str(fy)].get("frame"):
+            diffs.append(f"FY{fy} frame: stored {row['frame']!r} record {record[str(fy)].get('frame')!r}")
         tags = json.loads(row["source_tags"]) if row["source_tags"] else {}
         filings = json.loads(row["source_filings"]) if row["source_filings"] else {}
         if tags != (record[str(fy)].get("_source_tags") or {}):
@@ -136,18 +145,22 @@ def _check(ticker: str, day: str, facts: Dict[str, Any], reader: AsOfReader,
         late = sorted(f"{k} {f.get('filed')}" for k, f in filings.items() if f and (f.get("filed") or "") > day)
         if late:
             diffs.append(f"FY{fy} look-ahead: figures filed after {day}: {', '.join(late)}")
-    return diffs
+    return diffs, years, cells
 
 
-def _run(args: Tuple[str, str, str, List[Pick]]) -> List[Tuple[int, str, str, List[str], bool]]:
-    """One ticker's picks: ``(index, ticker, day, differences, day is a filing day)`` each."""
+Result = Tuple[int, str, str, List[str], bool, int, int]
+
+
+def _run(args: Tuple[str, str, str, List[Pick]]) -> List[Result]:
+    """One ticker's picks: ``(index, ticker, day, differences, day is a filing day, years compared, cells
+    compared)`` each."""
     db, cache_dir, ticker, picks = args
     _block_network()
     data = _handler(Path(cache_dir)).fetch_all(ticker)
     facts = data.get("company_facts")
     if not facts:
         why = data.get("error") or data.get("company_facts_error")
-        return [(i, ticker, "", [f"no companyfacts in the cache ({why})"], False) for i, _, _ in picks]
+        return [(i, ticker, "", [f"no companyfacts in the cache ({why})"], False, 0, 0) for i, _, _ in picks]
     days = set(filing_dates(facts))
     parser = XBRLParser()
     out = []
@@ -155,9 +168,10 @@ def _run(args: Tuple[str, str, str, List[Pick]]) -> List[Tuple[int, str, str, Li
         for i, _, u in picks:
             day = u if isinstance(u, str) else _day_in_span(facts, u)
             if day is None:
-                out.append((i, ticker, "", ["no dated fact"], False))
+                out.append((i, ticker, "", ["no dated fact"], False, 0, 0))
                 continue
-            out.append((i, ticker, day, _check(ticker, day, facts, reader, parser), day in days))
+            diffs, years, cells = _check(ticker, day, facts, reader, parser)
+            out.append((i, ticker, day, diffs, day in days, years, cells))
     return out
 
 
@@ -201,7 +215,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"asof_oracle: {len(results)} (ticker, day) pairs over {len(by_ticker)} tickers (seed {a.seed}); "
           f"{on_filing_day} on a filing day, {len(results) - on_filing_day} between; "
           f"{len(failed)} with differences")
-    for i, ticker, day, diffs, _ in failed:
+    print(f"coverage: {len(results)} pairs, {sum(r[5] for r in results)} (pair, fiscal year)s compared, "
+          f"{sum(r[6] for r in results)} cells compared")
+    for i, ticker, day, diffs, *_ in failed:
         print(f"  #{i} {ticker} as of {day}:")
         for d in diffs[:20]:
             print(f"    {d}")
