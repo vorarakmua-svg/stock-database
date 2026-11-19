@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 160 · NEEDS-USER 0 · Decided: 7 · Verified: 193
+**Open:** P0 0 · P1 0 · P2 0 · P3 159 · NEEDS-USER 0 · Decided: 7 · Verified: 194
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -706,10 +706,11 @@ Expected: a test with a dividend on the FY-end bar's day.   Actual: none.
 
 Re-run in iteration 63 (code review 9's M6: iteration 59 re-ran the mutant, not these figures): 14 of the user's 1,244 FY-end bars since FY2016 fall on an ex-date, and the mutant would move USB's FY2024-25 +1.05% and +0.97%, BMY's FY2020 +0.80% and O's FY2017-25 about +0.4% (`qa/evidence/iter63-review9-rerun.txt`).
 ### BUG-088 [P3][CODE] The suite's network guard misses curl_cffi, connect_ex, asyncio and name lookups, and refuses 127.0.0.2
-Status: OPEN
-Found: iteration 58 by code review 8 (M4), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 183)
+Found: iteration 58 by code review 8 (M4), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_no_network.py (25: every route refused off the machine, 127.0.0.0/8 and ::1 local); 12 failing + 3 errors first
 Repro: the autouse `no_network` guard (BUG-073) patches only `socket.socket.connect`: under it, a probe whose server listens on 127.0.0.2 sees curl_cffi (yfinance 1.0's transport, so any Yahoo request), `connect_ex` and asyncio connect unnoticed, `getaddrinfo` unpatched, and `create_connection` to 127.0.0.2 refused as off the machine (5 passed). No test today takes those paths.
 Expected: every route off the machine refused, and all of 127.0.0.0/8 local.   Actual: as above.
+Fix (iteration 183, `qa/evidence/bug088-investigation.txt`): the autouse guard checks `socket.connect` and `connect_ex` (AF_INET/AF_INET6), refuses non-local names in `getaddrinfo`, `gethostbyname`, `gethostbyname_ex`, guards the Windows proactor loop's `sock_connect` (ConnectEx bypasses Python's socket methods; the selector loop goes through `socket.connect`), and curl_cffi's `Curl.setopt` URL option (libcurl opens its own sockets; optional import). Local: `localhost`, 127.0.0.0/8, ::1, ::ffff:127.x. Test-only: no src or stored data change. 15 mutants killed (an IPv4-mapped mutant survives on 3.13 only, where `is_loopback` covers it; clause kept for 3.9-3.12). Residuals: UDP sendto / datagram endpoints, libcurl redirects from a local server, other transports; one CurlCffiWarning (proactor loop) in the suite's output. Note: the worker's RED run against the old guard reached the network (DNS lookups, one Yahoo GET) - read-only, nothing stored.
 
 ### BUG-089 [P3][CODE] The oracle's read-only URI is unescaped
 Status: OPEN

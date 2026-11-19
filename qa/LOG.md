@@ -3183,3 +3183,15 @@ Result: BUG-341 VERIFIED. No P0-P2 open.
 Gates: ruff ✓ mypy ✓ pytest 3075 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(parsers): a fiscal year's record holds one period's figures (BUG-341)
 Next: as-of snapshots plan Task 0 (baselines) on the rebased feature branch.
+
+## Iteration 183: 2026-11-19 12:30: fix (BUG-088)
+Picked: a P3 in an area the as-of branch (feat/asof-snapshots, held for the user's decision on MCO) doesn't touch;
+a sonnet worker, run beside the branch's Task 9.
+Did: the suite's network guard refuses every route off the machine (connect, connect_ex, name lookups, the
+proactor loop, curl_cffi) and treats 127.0.0.0/8 and ::1 as local.
+- RED: 12 failed, 3 errors on HEAD's conftest (the run reached the network through the old guard's gaps); GREEN 25.
+  15 of 15 mutants. Test-only; no measurement needed.
+Result: BUG-088 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3099 passed, 1 skipped | CI: PR #29
+Commit: (this commit) test(guard): no route off the machine in the suite, every loopback address local (BUG-088)
+Next: BUG-229/230 (worker); the as-of branch's Task 9 and Task 8 README fix.
