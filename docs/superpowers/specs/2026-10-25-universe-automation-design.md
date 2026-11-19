@@ -65,9 +65,13 @@ current with one command:
   cached submissions; no network.
 - **Industry groups**: a company's group is its 3-digit SIC prefix when at least 10 companies in the DB share it,
   else its 2-digit major group when at least 10 do, else none. The groups and their sizes are computed at rank time
-  from the stored codes. A group's label is data-driven: "SIC 283: " and its members' three most common SEC
+  from the stored codes. A group's members are the companies whose group it is when at least 10: so a 2-digit
+  group's companies left over outside its 3-digit groups are ranked among themselves, not against those groups'
+  companies (BUG-238). A 2-digit group with fewer than 10 left over takes in its 3-digit groups' companies, so it
+  keeps at least 10 members. A group's label is data-driven: "SIC 283: " and its members' three most common SEC
   descriptions, joined with "; " since a description can hold a comma ("Pharmaceutical Preparations; Biological
-  Products"), so no external SIC table is needed.
+  Products"), so no external SIC table is needed; a 2-digit group with 3-digit groups in it names them as it leaves
+  them out or takes them in ("SIC 28 (outside 283): ...", "SIC 38 (with 382, 384): ...").
 - **Industry ranks** (`rank_all`): for each of M2's five ranks, each component's percentile within the company's
   industry group among the members with that component, when at least 10 of them have it (else that component is
   left out of the industry rank); the rank is ceil(10 x the mean percentile) with M2's component minimums, and an

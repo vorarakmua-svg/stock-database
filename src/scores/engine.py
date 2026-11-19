@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple, Union
 
 from ..exporters.sqlite_store import COMPANY_SIC_COLUMNS, SQLiteStore
-from ..universe.industries import group_label, group_members, industry_groups
+from ..universe.industries import group_label, group_scope, industry_groups, industry_members
 from .fundamentals import growth, load_fundamentals, per_share_rows
 from .ranks import components, momentum, rank_industries, rank_universe
 from .scores import Market, compute_scores
@@ -18,6 +18,8 @@ from .signs import HistoryContext, Sign, warning_signs
 
 #: The closes momentum reads: a year back and a little more.
 MOMENTUM_DAYS = 400
+#: The scores a failed run's row gives its reason for (``failed_row``; the STAT tab's and the API's N/A reasons).
+FAILED_SCORES = ("piotroski", "altman", "beneish", "sloan", "roic", "wacc", "predictability", "magic_formula")
 
 
 def _rows(conn: sqlite3.Connection, sql: str, params: Tuple[Any, ...]) -> List[Dict[str, Any]]:
@@ -99,23 +101,39 @@ def store_ticker(conn: sqlite3.Connection, store: SQLiteStore, ticker: str, comp
     store.export_quality_scores(ticker, row, per_share, signs, computed_at)
 
 
+def failed_row(error: BaseException) -> Dict[str, Any]:
+    """The ``quality_scores`` row of a run whose scores failed: no score, and each score's N/A reason saying why
+    (BUG-202), as a company without annual financials says its own."""
+    why = str(error) or type(error).__name__
+    return {"warning_count": 0,
+            "na_reasons": json.dumps({score: f"the scores' computation failed: {why}" for score in FAILED_SCORES})}
+
+
+def store_failure(store: SQLiteStore, ticker: str, error: BaseException, computed_at: str) -> None:
+    """Replace one company's stored scores, per-share rows and warning signs with ``failed_row``, so a failed run
+    never leaves the previous run's figures to read as this one's (BUG-202). Raises when that write fails too."""
+    store.export_quality_scores(ticker, failed_row(error), [], [], computed_at)
+
+
 def industry_columns(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     """Each ranked row's industry columns (``sqlite_store.INDUSTRY_COLUMNS``): its SIC industry group among the
     ranked rows (``industries.industry_groups``), the group's label (``industries.group_label``, from its members'
-    SEC descriptions) and member count, and the five ranks and the composite within it (``ranks.rank_industries``);
+    SEC descriptions, with what a 2-digit group leaves out or takes in: ``industries.group_scope``) and member count
+    (``industries.industry_members``), and the five ranks and the composite within it (``ranks.rank_industries``);
     all None without a group. Each row is a ticker, its SIC code and description ("sic", "sic_description") and its
     components."""
     codes = {row["ticker"]: row.get("sic") for row in rows}
     descriptions = {row["ticker"]: row.get("sic_description") for row in rows}
     groups = industry_groups(codes)
-    members = {group: group_members(codes, group) for group in set(groups.values()) if group is not None}
+    members = industry_members(codes, groups)
     ranked = rank_industries(rows, groups)
     out: Dict[str, Dict[str, Any]] = {}
     for ticker, group in groups.items():
         within = members[group] if group is not None else []
         out[ticker] = {
             "industry_group": group,
-            "industry_label": group_label(group, [descriptions[t] for t in within]) if group is not None else None,
+            "industry_label": (group_label(group, [descriptions[t] for t in within], group_scope(group, groups, within))
+                               if group is not None else None),
             "industry_size": len(within) if group is not None else None,
             **ranked[ticker],
         }

@@ -1376,9 +1376,11 @@ It took about 4 seconds for the 127 companies. The industry ranks follow from th
   industry group:
   - `industry_group`: its 3-digit SIC prefix when at least 10 of the companies ranked share it, else its 2-digit prefix
     when at least 10 share that;
-  - `industry_label`: "SIC 283: " and the group's three most common SEC descriptions, joined with "; ";
-  - `industry_size`: the group's members, every company whose code starts with the group. A 2-digit group takes in
-    its 3-digit groups' companies, so it is larger than the number of companies ranked *in* it;
+  - `industry_label`: "SIC 283: " and the members' three most common SEC descriptions, joined with "; "; a 2-digit
+    group with 3-digit groups formed in it names them: "SIC 28 (outside 283): ..." or "SIC 38 (with 382, 384): ...";
+  - `industry_size`: the group's members: the companies ranked in it when at least 10 (a 2-digit group's left-overs
+    outside its 3-digit groups), else every company whose code starts with the group, a 2-digit group then taking in
+    its 3-digit groups' companies, so it is larger than the number of companies ranked *in* it (BUG-238);
   - `ind_rank_strength`, `ind_rank_profitability`, `ind_rank_growth`, `ind_rank_valuation` and `ind_rank_momentum`
     (1-10, 10 best) and `ind_composite` (out of 100), ranked among the group's members. A component counts only when at
     least 10 members have it, so a rank is NULL where too few components do (two are needed, one for valuation and

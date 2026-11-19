@@ -7,7 +7,7 @@ docs/superpowers/specs/2026-10-21-quality-scores-design.md
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from .fundamentals import Fundamentals, cagr
+from .fundamentals import AnnualRow, Fundamentals, cagr
 from .scores import ALTMAN_DISTRESS, BENEISH_FLAG, Scores
 
 SEVERE, MEDIUM = "severe", "medium"
@@ -50,22 +50,23 @@ class Sign:
 
 
 def _ratio(f: Fundamentals, num: str, den: str, back: int) -> Tuple[Optional[float], Optional[float]]:
-    """num/den now and *back* years before, or Nones."""
-    rows = f.rows
-    if len(rows) <= back:
+    """num/den now and in fiscal year t - *back* (BUG-198), or Nones when that year isn't stored."""
+    then_row = f.back(back)
+    if then_row is None:
         return None, None
 
-    def at(i: int) -> Optional[float]:
-        n, d = rows[i].figures.get(num), rows[i].figures.get(den)
+    def at(row: AnnualRow) -> Optional[float]:
+        n, d = row.figures.get(num), row.figures.get(den)
         return None if n is None or d is None or d == 0 else n / d
 
-    return at(-1), at(-1 - back)
+    return at(f.rows[-1]), at(then_row)
 
 
 def _gross_margin_change(f: Fundamentals, years: int) -> Optional[float]:
-    if len(f.rows) <= years:
+    then = f.back(years)  # fiscal year t - years (BUG-198)
+    if then is None:
         return None
-    now, then = f.rows[-1], f.rows[-1 - years]
+    now = f.rows[-1]
 
     def margin(row_figures: Dict[str, Any]) -> Optional[float]:
         gp, revenue = row_figures.get("gross_profit"), row_figures.get("revenue")
@@ -108,15 +109,18 @@ def warning_signs(f: Fundamentals, s: Scores, history: HistoryContext) -> List[S
         fire("interest_coverage_low", SEVERE if severe else MEDIUM,
              f"operating income covers interest {coverage:.1f} times", coverage,
              COVERAGE_SEVERE if severe else COVERAGE_MEDIUM)
-    revenues = [v for v in (r.figures.get("revenue") for r in rows[-4:]) if v is not None]
-    if len(rows) >= 4 and len(revenues) == 4 and all(b < a for a, b in zip(revenues, revenues[1:])):
+    # The years back are fiscal years: a window with a year missing, or a year back that isn't stored, fires nothing
+    # (BUG-198).
+    revenues = [v for v in (r.figures.get("revenue") for r in f.window(4)) if v is not None]
+    if len(revenues) == 4 and all(b < a for a, b in zip(revenues, revenues[1:])):
         fire("revenue_decline", MEDIUM, "revenue fell in each of the last three years", revenues[-1], revenues[0])
-    if len(rows) > 5:
-        a, b = rows[-1].figures.get("operating_margin"), rows[-6].figures.get("operating_margin")
+    five_back = f.back(5)
+    if five_back is not None:
+        a, b = rows[-1].figures.get("operating_margin"), five_back.figures.get("operating_margin")
         if a is not None and b is not None and a - b < -MARGIN_DROP:
             fire("margin_decline", MEDIUM, f"operating margin down {100 * (b - a):.1f} points over five years",
                  a - b, -MARGIN_DROP)
-    fcfs = [r.figures.get("free_cash_flow") for r in rows[-3:]]
+    fcfs = [r.figures.get("free_cash_flow") for r in f.window(3)]
     if len(fcfs) == 3 and sum(1 for v in fcfs if v is not None and v < 0) >= 2:
         fire("fcf_negative", MEDIUM, "free cash flow was negative in two of the last three years",
              float(sum(1 for v in fcfs if v is not None and v < 0)), 2.0)

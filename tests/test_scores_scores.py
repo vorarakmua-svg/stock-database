@@ -291,3 +291,36 @@ def test_the_sloan_ratio_is_not_scored_for_banks_and_insurers():
         assert s.sloan_ratio is None
         assert s.na_reasons["sloan"] == f"not meaningful for {name}"
     assert compute_scores(_steady(), _market()).sloan_ratio is not None
+
+
+# ---------- t-1 is fiscal year t - 1 (BUG-198) ----------
+
+def test_the_changes_compare_fiscal_year_t_with_t_minus_1_not_the_previous_stored_row():
+    # BUG-198: FY2024 isn't stored, so FY2023 is two years back: Piotroski's and Beneish's changes need t-1 exactly.
+    f = Fundamentals(ticker="AAA", rows=[_row(2023, **PREV), _row(2025, shares=99.0)])
+    s = compute_scores(f, _market())
+    assert s.fiscal_year == 2025
+    assert (s.piotroski_f, s.piotroski_tested, s.piotroski_tests) == (None, None, {})
+    assert (s.beneish_m, s.beneish_variables) == (None, {})
+    assert s.na_reasons["piotroski"] == s.na_reasons["beneish"] == "needs fiscal year 2024, which isn't stored"
+    # The same two years a year apart are compared.
+    s = compute_scores(Fundamentals(ticker="AAA", rows=[_row(2024, **PREV), _row(2025, shares=99.0)]), _market())
+    assert s.piotroski_f == 9 and s.beneish_m is not None
+    assert "piotroski" not in s.na_reasons and "beneish" not in s.na_reasons
+
+
+def test_a_single_year_still_needs_two():
+    s = compute_scores(Fundamentals(ticker="AAA", rows=[_row(2025)]), _market())
+    assert s.na_reasons["piotroski"] == s.na_reasons["beneish"] == "needs two fiscal years"
+
+
+def test_predictability_needs_the_ten_fiscal_years_t_minus_9_to_t():
+    # BUG-198: eleven stored years with FY2021 missing; the last ten rows reach back to FY2015, eleven years.
+    f = _steady(years=11)
+    for i, row in enumerate(f.rows):
+        row.fiscal_year = 2015 + i + (1 if 2015 + i >= 2021 else 0)
+    assert [r.fiscal_year for r in f.rows][-10:] == [2016, 2017, 2018, 2019, 2020, 2022, 2023, 2024, 2025, 2026]
+    assert predictability(f) == (None, {})
+    assert compute_scores(f, _market()).na_reasons["predictability"] == "fewer than 10 fiscal years of data"
+    # Without the gap the same rows are rated.
+    assert predictability(_steady(years=11))[0] == 5.0

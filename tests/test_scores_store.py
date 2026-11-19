@@ -108,7 +108,10 @@ def test_a_scores_failure_never_blocks_the_valuations_or_the_history(tmp_path, m
     conn = sqlite3.connect(db)
     assert conn.execute("SELECT COUNT(*) FROM valuations").fetchone()[0] == 12
     assert conn.execute("SELECT COUNT(*) FROM valuation_ranges").fetchone()[0] == 16
-    assert conn.execute("SELECT COUNT(*) FROM quality_scores").fetchone()[0] == 0
+    # Each ticker's row says why it has no scores (BUG-202).
+    assert conn.execute("SELECT COUNT(*) FROM quality_scores").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM quality_scores WHERE fiscal_year IS NULL AND na_reasons LIKE "
+                        "'%scores broke%'").fetchone()[0] == 2
     assert "scores broke" in caplog.text
 
 
@@ -251,9 +254,11 @@ def test_the_rank_pass_stores_the_industry_ranks(tmp_path):
         assert c["ind_rank_growth"] == i + 1  # the slowest of the ten is 1, the fastest 10
         assert (c["ind_rank_strength"], c["ind_rank_valuation"], c["ind_rank_momentum"]) == (10, 10, 10)
         assert c["ind_composite"] == pytest.approx(10 * (40 + i + 1) / 5)
-    # 35's twelve: Deere at 0.055 is sixth of twelve, at the middle; Caterpillar the fastest.
+    # 35's twelve: Deere at 0.055 is sixth of twelve, at the middle; Caterpillar the fastest. Two left over are too
+    # few to rank among themselves, so 357's ten are in, and the label says so (BUG-238).
     de, cat = rows["DE"], rows["CAT"]
-    assert (de["industry_group"], de["industry_size"], de["industry_label"]) == ("35", 12, f"SIC 35: {LABEL_357}")
+    assert (de["industry_group"], de["industry_size"], de["industry_label"]) == (
+        "35", 12, f"SIC 35 (with 357): {LABEL_357}")
     assert (de["ind_rank_growth"], cat["ind_rank_growth"]) == (5, 10)
     assert de["ind_composite"] == pytest.approx(90.0)
     for ticker in ("JPM", "BAC", "NOC"):
@@ -315,3 +320,102 @@ def test_a_full_run_stores_the_industry_columns(tmp_path):
     rows = _scores(db)
     assert rows["AAA"]["rank_growth"] is not None
     assert all(rows[t][c] is None for t in ("AAA", "BBB") for c in INDUSTRY)
+
+
+def test_a_2_digit_group_s_ten_left_overs_are_its_label_and_size():
+    # BUG-238: ten drug makers form 283; ten chemical makers are left over in 28 and are its members, so its label
+    # names theirs and says what it leaves out.
+    rows = ([{"ticker": f"P{i}", "sic": "2834", "sic_description": "Pharmaceutical Preparations",
+              "components": _components(0.05)} for i in range(10)]
+            + [{"ticker": f"K{i}", "sic": "2821" if i < 5 else "2810",
+                "sic_description": "Plastic Materials, Synth Resins" if i < 5 else "Industrial Inorganic Chemicals",
+                "components": _components((i + 1) / 100)} for i in range(10)])
+    columns = scores_engine.industry_columns(rows)
+    k = columns["K0"]
+    assert (k["industry_group"], k["industry_size"]) == ("28", 10)
+    assert k["industry_label"] == (
+        "SIC 28 (outside 283): Industrial Inorganic Chemicals; Plastic Materials, Synth Resins")
+    assert [columns[f"K{i}"]["ind_rank_growth"] for i in range(10)] == list(range(1, 11))
+    assert columns["P0"]["industry_label"] == "SIC 283: Pharmaceutical Preparations"
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# A failed scores run (BUG-202)
+
+def _signs(db_path, ticker):
+    conn = sqlite3.connect(db_path)
+    try:
+        return conn.execute("SELECT COUNT(*) FROM warning_signs WHERE ticker = ?", (ticker,)).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def _per_share(db_path, ticker):
+    conn = sqlite3.connect(db_path)
+    try:
+        return conn.execute("SELECT COUNT(*) FROM per_share_annual WHERE ticker = ?", (ticker,)).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_a_failed_scores_run_replaces_the_previous_scores_with_why(tmp_path, monkeypatch):
+    db = _seed(tmp_path / "s.db")
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE financials_annual SET total_equity = -100 WHERE ticker = 'AAA' AND fiscal_year = 2025")
+    conn.commit()
+    conn.close()
+    compute_and_store(db)
+    before = _scores(db)["AAA"]
+    assert before["piotroski_f"] is not None and before["rank_growth"] is not None and _signs(db, "AAA") > 0
+
+    def broken(conn, ticker):
+        if ticker == "AAA":
+            raise RuntimeError("scores broke")
+        return real(conn, ticker)
+
+    real = scores_engine.compute_ticker
+    monkeypatch.setattr(scores_engine, "compute_ticker", broken)
+    compute_and_store(db)
+    after = _scores(db)
+    a = after["AAA"]
+    assert a["computed_at"] > before["computed_at"]
+    # Nothing of the previous run's is left to read as current: no score, no rank, no sign, no per-share row.
+    for column in ("fiscal_year", "piotroski_f", "altman_z", "beneish_m", "sloan_ratio", "roic", "wacc",
+                   "predictability_stars", "earnings_yield", "momentum", "components", "rank_growth",
+                   "composite_score", "magic_formula_rank", "rev_ps_cagr_5y"):
+        assert a[column] is None, column
+    assert a["warning_count"] == 0 and _signs(db, "AAA") == 0 and _per_share(db, "AAA") == 0
+    reasons = json.loads(a["na_reasons"])
+    assert set(reasons) == {"piotroski", "altman", "beneish", "sloan", "roic", "wacc", "predictability",
+                            "magic_formula"}
+    assert set(reasons.values()) == {"the scores' computation failed: scores broke"}
+    # BBB's computed as usual, and ranked without AAA.
+    assert after["BBB"]["piotroski_f"] is not None and after["BBB"]["computed_at"] == a["computed_at"]
+
+
+def test_a_failure_without_a_message_names_its_type(tmp_path, monkeypatch):
+    db = _seed(tmp_path / "s.db", tickers=("AAA",))
+
+    def broken(conn, ticker):
+        raise ZeroDivisionError()
+
+    monkeypatch.setattr(scores_engine, "compute_ticker", broken)
+    compute_and_store(db)
+    assert set(json.loads(_scores(db)["AAA"]["na_reasons"]).values()) == {
+        "the scores' computation failed: ZeroDivisionError"}
+
+
+def test_a_failure_that_can_t_be_stored_either_says_the_previous_scores_stay(tmp_path, monkeypatch, caplog):
+    db = _seed(tmp_path / "s.db", tickers=("AAA",))
+    compute_and_store(db)
+    before = _scores(db)["AAA"]
+
+    def locked(self, ticker, row, per_share, signs, computed_at):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(SQLiteStore, "export_quality_scores", locked)
+    compute_and_store(db)
+    after = _scores(db)["AAA"]
+    assert after["computed_at"] == before["computed_at"] and after["piotroski_f"] == before["piotroski_f"]
+    assert "Quality scores failed for AAA: database is locked" in caplog.text
+    assert "AAA's previous scores stay" in caplog.text

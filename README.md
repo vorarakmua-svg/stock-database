@@ -554,7 +554,10 @@ models, their median or the verdicts, and it grades the company, not the collect
 
 Inputs:
 - **Two fiscal years.** Each score is on the latest fiscal year (t) against the one before (t-1), from the
-  latest restated figures. The latest 11 years are read, so a 10-year CAGR has its start year.
+  latest restated figures. The latest 11 years are read, so a 10-year CAGR has its start year. t-1 is fiscal
+  year t - 1 exactly, as the years back of the signs and the ranks are (t-3, t-5, the last 3, 4 or 10 fiscal
+  years): a year that isn't stored leaves Piotroski and Beneish N/A ("needs fiscal year 2024, which isn't
+  stored") and a sign that needs it unfired, never compared with the year stored before it (BUG-198).
 - **Per-share series** (revenue, EPS, EBITDA, FCF and book value per share) on today's split basis. A
   share-count jump of 1.5× or more folds into it only for a declared share split, on a split's marks (EPS
   moved against the count, revenue didn't move with it, the count EPS implies moved with it, net income kept
@@ -611,7 +614,8 @@ The scores. Each is N/A, with its reason stored, where its inputs are missing:
   0-35%, and 21% where pretax income is missing or not positive. Where ROIC is missing, the row says why: no
   operating income, invested capital (equity + debt - cash) of 0 or less, or unknown debt; banks, insurers
   and REITs have none.
-- **Predictability**, 1-5 stars in half steps, from the last 10 fiscal years (fewer is N/A): our own formula,
+- **Predictability**, 1-5 stars in half steps, from the last 10 fiscal years, t-9 to t (any of them missing
+  is N/A): our own formula,
   as GuruFocus's is unpublished. A year with revenue or EBITDA per share at or below zero, or a falling trend
   (a log-linear slope of zero or less in either series), is 1 star. Otherwise
   `stars = 1 + 4 × min(R²_revenue, R²_EBITDA)`, the R² of ln(revenue per share) and ln(EBITDA per share)
@@ -680,6 +684,11 @@ three tables (columns and queries are in the [USAGE_GUIDE](USAGE_GUIDE.md#qualit
   `na_reasons` and the components behind each rank (JSON), and the industry group and ranks of Milestone 5 (see
   [Industry ranks](#industry-ranks));
 - `warning_signs`: one row per sign that fires.
+
+A company whose scores fail to compute (an error in its run) has its row replaced by one with no score, no rank
+and no sign, each score's N/A reason reading "the scores' computation failed: <why>" with the run's
+`computed_at`, so the previous run's scores don't read as current (BUG-202). If even that write fails (a locked
+database), the previous scores stay and the log says so.
 
 Where it shows:
 - **STAT tab**: a Quality section with the composite and a radar of the five ranks, the ranks, each score with
@@ -1531,10 +1540,14 @@ scores), each time the ranks are computed:
 - else its 2-digit prefix (the SIC major group) when at least 10 share that;
 - else none, and the company has no industry ranks.
 
-A group's members are every company whose code starts with it, so a 2-digit group takes in its 3-digit groups'
-companies and always has 10 members or more; a company is ranked in one group only, the 3-digit one when it has one.
-A group's label is drawn from the data, so no SIC table is needed: "SIC 283: " and its members' three most common SEC
-descriptions, by count and then alphabetically, joined with "; " (a description can hold a comma). Each company's
+A group's members are the companies ranked in it when there are at least 10: a 3-digit group's are every company
+whose code starts with it, and a 2-digit group's are its companies left over outside its 3-digit groups, so a
+chemicals maker left in 28 is ranked among 28's other left-overs, not against 283's drug makers (BUG-238). A 2-digit
+group with fewer than 10 left over takes in its 3-digit groups' companies, so a group always has 10 members or more;
+a company is ranked in one group only, the 3-digit one when it has one. A group's label is drawn from the data, so no
+SIC table is needed: "SIC 283: " and its members' three most common SEC descriptions, by count and then
+alphabetically, joined with "; " (a description can hold a comma). A 2-digit group with 3-digit groups formed in it
+names them as it leaves them out or takes them in: "SIC 28 (outside 283): ...", "SIC 38 (with 382, 384): ...". Each company's
 `quality_scores` row stores `industry_group`, `industry_label` and `industry_size` (the members), all empty without a
 group.
 
@@ -1544,7 +1557,7 @@ industries under 10 companies:
 | Group | Members | Ranked in it | Industry |
 |---|---|---|---|
 | 283 | 10 | 10 | drugs |
-| 28 | 12 | 2 (LIN, PG) | its major group, with the 10 of 283 |
+| 28 | 12 | 2 (LIN, PG) | its major group, with the 10 of 283 (two left over are too few on their own) |
 | 357 | 10 | 10 | computers |
 | 35 | 14 | 4 (CAT, DE, ETN, LRCX) | its major group, with the 10 of 357 |
 | 367 | 10 | 10 | semiconductors |
@@ -1566,7 +1579,8 @@ produces it, and any run ranks everyone again:
 - A **rank** is `ceil(10 x mean)` of its components' percentiles, with M2's minimums, counting only the components
   ranked within the industry: two for financial strength, profitability and growth, one for valuation and momentum.
 - The **industry composite** is `10 x` the mean of the industry ranks given, with at least four of them.
-- A company in a 2-digit group is ranked against all that group's members, its 3-digit groups' companies included.
+- A company in a 2-digit group is ranked against that group's members: its fellow left-overs when there are 10 or
+  more, else every company in the major group, its 3-digit groups' included (BUG-238).
 - M2's own ranks, composite and Magic Formula rank are unchanged, and the ranks are stored beside them in
   `quality_scores`: `ind_rank_strength`, `ind_rank_profitability`, `ind_rank_growth`, `ind_rank_valuation`,
   `ind_rank_momentum` and `ind_composite`, empty without a group or the components (columns and queries are in the

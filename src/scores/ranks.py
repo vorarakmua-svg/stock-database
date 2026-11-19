@@ -15,7 +15,7 @@ import statistics
 from datetime import date
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from ..universe.industries import group_members
+from ..universe.industries import industry_members
 from .fundamentals import Fundamentals
 from .scores import Scores
 from .signs import HistoryContext
@@ -64,8 +64,9 @@ def momentum(bars: Sequence[Tuple[str, float]], beta: Optional[float]) -> Option
 
 def components(f: Fundamentals, s: Scores, growth: Dict[str, Optional[float]], history: HistoryContext,
                momentum_value: Optional[float]) -> Dict[str, Dict[str, Optional[float]]]:
-    """Each rank's components for one company, as raw values (oriented later)."""
-    rows = f.rows[-10:]
+    """Each rank's components for one company, as raw values (oriented later). The ten years are fiscal years t-9 to
+    t, and five years back is fiscal year t - 5 (BUG-198)."""
+    rows = f.window(10)
     latest = rows[-1].figures if rows else {}
 
     def div(a: Optional[float], b: Optional[float]) -> Optional[float]:
@@ -78,8 +79,9 @@ def components(f: Fundamentals, s: Scores, growth: Dict[str, Optional[float]], h
     margins = [r.figures.get("operating_margin") for r in rows]
     known = [m for m in margins if m is not None]
     slope = None
-    if len(rows) >= 6:
-        now, then = margins[-1], margins[-6]
+    five_back = f.back(5)
+    if five_back is not None:
+        now, then = margins[-1], five_back.figures.get("operating_margin")
         if now is not None and then is not None:
             slope = (now - then) / 5.0
     roics = [v for v in (r.figures.get("roic") for r in rows) if v is not None]
@@ -178,13 +180,13 @@ def rank_industries(rows: Sequence[Dict[str, Any]], groups: Dict[str, Optional[s
     ticker, its SIC code ("sic") and its components (``components``).
 
     A component's percentile (``percentiles``, LOWER_IS_BETTER's oriented) is the row's among its group's members
-    with that component, every row whose code starts with the group (``industries.group_members``: a 2-digit
-    group's take in its 3-digit groups'), when MIN_INDUSTRY_PEERS of them have it; else the component is left out of
-    the industry rank. A rank is the decile of its components' mean percentile, given REQUIRED of them so ranked;
-    the composite is 10 x the mean of the ranks given, MIN_RANKS of them or more. A row without a group gets none:
-    ``ind_rank_<rank>`` and ``ind_composite`` None."""
+    with that component (``industries.industry_members``: a 2-digit group's are its companies left over outside its
+    3-digit groups when ten or more, else they take in those groups' companies; BUG-238), when MIN_INDUSTRY_PEERS of
+    them have it; else the component is left out of the industry rank. A rank is the decile of its components' mean
+    percentile, given REQUIRED of them so ranked; the composite is 10 x the mean of the ranks given, MIN_RANKS of them
+    or more. A row without a group gets none: ``ind_rank_<rank>`` and ``ind_composite`` None."""
     codes = {row["ticker"]: row.get("sic") for row in rows}
-    members = {group: group_members(codes, group) for group in set(groups.values()) if group is not None}
+    members = industry_members(codes, groups)
     out: Dict[str, Dict[str, Any]] = {row["ticker"]: {} for row in rows}
     for rank in RANKS:
         names = sorted({name for row in rows for name in (row["components"].get(rank) or {})})

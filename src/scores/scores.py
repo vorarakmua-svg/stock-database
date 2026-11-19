@@ -253,11 +253,12 @@ def _trend(points: List[Tuple[int, float]]) -> Tuple[float, float]:
 def predictability(f: Fundamentals) -> Tuple[Optional[float], Dict[str, float]]:
     """1-5 stars in half steps from the last 10 fiscal years: 1 on any loss year or a falling trend; else
     1 + 4·min(R² of the revenue/share and EBITDA/share log-trends), rounded down to the half star. Banks and
-    insurers use EPS for EBITDA/share. (None, {}) with fewer than 10 years."""
+    insurers use EPS for EBITDA/share. (None, {}) without each of the fiscal years t-9 to t (BUG-198)."""
     second = "eps" if f.sector_class in _FINANCIALS else "ebitda_ps"
+    years = {r.fiscal_year for r in f.window(PREDICTABILITY_YEARS)}
     series: Dict[str, List[Tuple[int, float]]] = {}
     for name, key in (("revenue", "revenue_ps"), ("eps" if second == "eps" else "ebitda", second)):
-        raw = f.series(key)[-PREDICTABILITY_YEARS:]
+        raw = [(y, v) for y, v in f.series(key) if y in years]
         points = [(y, v) for y, v in raw if v is not None]
         if len(raw) < PREDICTABILITY_YEARS or len(points) < len(raw):
             return None, {}
@@ -287,7 +288,10 @@ def compute_scores(f: Fundamentals, market: Market) -> Scores:
                                                               "predictability", "magic_formula")}
         return s
     cur = f.rows[-1]
-    prev = f.rows[-2] if len(f.rows) > 1 else None
+    # t-1 is fiscal year t - 1, not the row stored before t (BUG-198).
+    prev = f.back(1)
+    no_prev = ("needs two fiscal years" if len(f.rows) < 2
+               else f"needs fiscal year {cur.fiscal_year - 1}, which isn't stored")
     s.fiscal_year = cur.fiscal_year
     sector = f.sector_class
 
@@ -299,7 +303,7 @@ def compute_scores(f: Fundamentals, market: Market) -> Scores:
 
     if not skipped("piotroski"):
         if prev is None:
-            s.na_reasons["piotroski"] = "needs two fiscal years"
+            s.na_reasons["piotroski"] = no_prev
         else:
             s.piotroski_f, s.piotroski_tested, s.piotroski_tests = piotroski(cur, prev)
     if not skipped("altman"):
@@ -308,7 +312,7 @@ def compute_scores(f: Fundamentals, market: Market) -> Scores:
             s.na_reasons["altman"] = "an input is missing"
     if not skipped("beneish"):
         if prev is None:
-            s.na_reasons["beneish"] = "needs two fiscal years"
+            s.na_reasons["beneish"] = no_prev
         else:
             s.beneish_m, s.beneish_variables = beneish(cur, prev)
             if s.beneish_m is None:

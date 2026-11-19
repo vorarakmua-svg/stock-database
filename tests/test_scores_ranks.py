@@ -233,3 +233,54 @@ def test_profitable_years_is_a_share_of_the_years_available():
     assert share([10.0] * 8 + [-5.0, -5.0]) == pytest.approx(0.8)
     assert share([10.0] * 4) is None  # fewer than 5 years: no figure
 
+
+
+def test_the_ten_years_and_five_back_are_fiscal_years():
+    # BUG-198: eleven stored years from FY2015 with FY2022 missing. The last ten rows reach back to FY2015, eleven
+    # years before FY2025, and the sixth row from the end is FY2019, six years back.
+    from src.scores.fundamentals import AnnualRow, Fundamentals
+    from src.scores.ranks import components
+    from src.scores.scores import Scores
+    from src.scores.signs import HistoryContext
+
+    years = [y for y in range(2015, 2026) if y != 2022]
+    rows = [AnnualRow(fiscal_year=y, period_end=f"{y}-12-31", shares=100.0, eps=1.0,
+                      figures={"net_income": -5.0 if y == 2015 else 10.0, "revenue": 1000.0, "roic": 0.10,
+                               "operating_margin": 0.30 if y <= 2019 else 0.20})
+            for y in years]
+    profitability = components(Fundamentals(ticker="AAA", rows=rows), Scores(), {}, HistoryContext(),
+                               None)["profitability"]
+    # FY2016-FY2025: nine years stored, all profitable; FY2015's loss is outside them.
+    assert profitability["profitable_years"] == pytest.approx(1.0)
+    assert profitability["operating_margin_10y_mean"] == pytest.approx((4 * 0.30 + 5 * 0.20) / 9)
+    # FY2020 to FY2025: level.
+    assert profitability["operating_margin_5y_slope"] == pytest.approx(0.0)
+    # Without FY2020 the slope has no start.
+    rows = [r for r in rows if r.fiscal_year != 2020]
+    profitability = components(Fundamentals(ticker="AAA", rows=rows), Scores(), {}, HistoryContext(),
+                               None)["profitability"]
+    assert profitability["operating_margin_5y_slope"] is None
+
+
+def test_a_2_digit_group_s_left_overs_rank_among_themselves_when_ten_remain():
+    # BUG-238: 283 has ten drug makers; ten chemical makers are left over in 28 (five in 281, five in 282, neither a
+    # group). They rank among the ten of them, not against the drug makers.
+    rows = _ten(sic="2834", prefix="P", growth=lambda i: {"rev_ps_cagr_3y": 1.0 + i, "rev_ps_cagr_5y": 1.0 + i})
+    rows += [_member(f"K{i}", "2810" if i < 5 else "2821",
+                     growth={"rev_ps_cagr_3y": (i + 1) / 100, "rev_ps_cagr_5y": (i + 1) / 100}) for i in range(10)]
+    groups = {row["ticker"]: ("283" if row["sic"].startswith("283") else "28") for row in rows}
+    out = rank_industries(rows, groups)
+    # Against all twenty the drug makers grow faster than every one of them: K9 would be 10th of 20, a 5.
+    assert [out[f"K{i}"]["ind_rank_growth"] for i in range(10)] == list(range(1, 11))
+    assert [out[f"P{i}"]["ind_rank_growth"] for i in range(10)] == list(range(1, 11))
+
+
+def test_fewer_than_ten_left_over_still_rank_against_the_whole_2_digit_group():
+    # Nine left over in 28: too few to rank among themselves, so they rank against all nineteen, as before.
+    rows = _ten(sic="2834", prefix="P", growth=lambda i: {"rev_ps_cagr_3y": 1.0 + i, "rev_ps_cagr_5y": 1.0 + i})
+    rows += [_member(f"K{i}", "2810", growth={"rev_ps_cagr_3y": (i + 1) / 100, "rev_ps_cagr_5y": (i + 1) / 100})
+             for i in range(9)]
+    groups = {row["ticker"]: ("283" if row["sic"].startswith("283") else "28") for row in rows}
+    out = rank_industries(rows, groups)
+    assert out["K8"]["ind_rank_growth"] == 5  # nine of nineteen at or below it: ceil(10 x 9 / 19)
+    assert out["K0"]["ind_rank_growth"] == 1

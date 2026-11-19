@@ -143,3 +143,54 @@ def test_the_options_are_every_2_and_3_digit_prefix_with_a_company():
         {"prefix": "357", "size": 1, "label": "SIC 357: Computers"},
     ]
     assert industry_options([]) == []
+
+
+# ---------- a 2-digit group's left-over companies (BUG-238) ----------
+
+def _drugs_and_chemicals(chemicals):
+    """Ten drug makers (283, a group) and *chemicals* chemical makers left over in 28 (281 and 282, no group)."""
+    codes = {**_many("2834", 10, "P"), **{f"K{i}": "2810" if i % 2 else "2821" for i in range(chemicals)}}
+    return codes, industry_groups(codes)
+
+
+def test_ten_left_over_in_a_2_digit_group_are_its_members():
+    from src.universe.industries import industry_members
+
+    codes, groups = _drugs_and_chemicals(10)
+    assert set(groups.values()) == {"283", "28"}
+    members = industry_members(codes, groups)
+    assert members["28"] == [f"K{i}" for i in range(10)]  # the drug makers are ranked in 283, not here
+    assert members["283"] == [f"P{i}" for i in range(10)]
+
+
+def test_fewer_left_over_take_in_the_3_digit_groups_companies():
+    from src.universe.industries import industry_members
+
+    codes, groups = _drugs_and_chemicals(9)
+    members = industry_members(codes, groups)
+    assert members["28"] == [f"P{i}" for i in range(10)] + [f"K{i}" for i in range(9)]
+    assert members["283"] == [f"P{i}" for i in range(10)]
+    # A 2-digit group with no 3-digit group in it: every company in it.
+    codes = {**_many("3711", 6, "A"), **_many("3721", 6, "B")}
+    assert industry_members(codes, industry_groups(codes)) == {"37": list(codes)}
+
+
+def test_the_label_says_what_a_2_digit_group_leaves_out_or_takes_in():
+    from src.universe.industries import group_scope, industry_members
+
+    codes, groups = _drugs_and_chemicals(10)
+    assert group_scope("28", groups, industry_members(codes, groups)["28"]) == "outside 283"
+    codes, groups = _drugs_and_chemicals(9)
+    assert group_scope("28", groups, industry_members(codes, groups)["28"]) == "with 283"
+    assert group_scope("283", groups, industry_members(codes, groups)["283"]) is None
+    codes = {**_many("3711", 6, "A"), **_many("3721", 6, "B")}
+    groups = industry_groups(codes)
+    assert group_scope("37", groups, industry_members(codes, groups)["37"]) is None
+    # Two 3-digit groups in it, in order.
+    codes = {**_many("3841", 10, "S"), **_many("3826", 10, "L"), **_many("3812", 3, "N")}
+    groups = industry_groups(codes)
+    assert group_scope("38", groups, industry_members(codes, groups)["38"]) == "with 382, 384"
+    assert group_label("38", ["Search & Navigation"], scope="with 382, 384") == (
+        "SIC 38 (with 382, 384): Search & Navigation")
+    assert group_label("28", [], scope="outside 283") == "SIC 28 (outside 283)"
+    assert group_label("28", ["Plastics"]) == "SIC 28: Plastics"

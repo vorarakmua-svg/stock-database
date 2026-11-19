@@ -5,11 +5,14 @@ codes and industries").
   with the feed's ``sic_description`` beside it (``normalize_sic_description``).
 - Its industry group, among the companies given (the ones being ranked; ``industry_groups``): its 3-digit prefix
   when at least MIN_INDUSTRY_SIZE of them share it, else its 2-digit prefix (the SIC major group) when at least that
-  many share it, else none. A group's members are every company given whose code starts with it
-  (``group_members``): a 2-digit group takes in its 3-digit groups' companies, as the major group does, so a group
-  always has MIN_INDUSTRY_SIZE members or more.
+  many share it, else none. A group's members (``industry_members``) are the companies whose group it is when
+  MIN_INDUSTRY_SIZE or more: a 3-digit group's every company whose code starts with it, a 2-digit group's the
+  companies left over outside its 3-digit groups. A 2-digit group with fewer left over takes in its 3-digit groups'
+  companies, as the major group does (``group_members``), so a group always has MIN_INDUSTRY_SIZE members or more
+  (BUG-238).
 - A group's label is drawn from the data (``group_label``): "SIC 283: " and its members' most common SEC
-  descriptions, so no SIC table is needed.
+  descriptions, so no SIC table is needed; a 2-digit group with 3-digit groups in it says which it leaves out or
+  takes in (``group_scope``): "SIC 28 (outside 283): ", "SIC 38 (with 382, 384): ".
 - The screener's industry choices (``industry_options``): every 2- and 3-digit prefix with a company, its size and
   its label.
 """
@@ -63,13 +66,40 @@ def group_members(codes: Dict[str, Optional[str]], group: str) -> List[str]:
             if (normal := normalize_sic(code)) is not None and normal.startswith(group)]
 
 
-def group_label(group: str, descriptions: Iterable[Optional[str]]) -> str:
+def industry_members(codes: Dict[str, Optional[str]], groups: Dict[str, Optional[str]],
+                     min_size: int = MIN_INDUSTRY_SIZE) -> Dict[str, List[str]]:
+    """Each group's members among *codes* (*groups*: ``industry_groups``'), in *codes*' order: the companies whose group
+    it is, when *min_size* or more (a 3-digit group's are every company whose code starts with it; a 2-digit group's,
+    its companies left over outside its 3-digit groups); else every company whose code starts with it, its 3-digit
+    groups' companies included (a 2-digit group with fewer left over), so a group always has *min_size* members or
+    more (BUG-238)."""
+    out: Dict[str, List[str]] = {}
+    for group in sorted({g for g in groups.values() if g is not None}):
+        own = [ticker for ticker in codes if groups.get(ticker) == group]
+        out[group] = own if len(own) >= min_size else group_members(codes, group)
+    return out
+
+
+def group_scope(group: str, groups: Dict[str, Optional[str]], members: Iterable[str]) -> Optional[str]:
+    """What a 2-digit *group*'s *members* (``industry_members``) leave out or take in of the 3-digit groups formed
+    within it: "outside 283" when they are its left-over companies, "with 382, 384" when those groups' companies are
+    among them; None for a 3-digit group or a 2-digit one without a 3-digit group in it (BUG-238)."""
+    within = sorted({g for g in groups.values() if g is not None and len(g) > len(group) and g.startswith(group)})
+    if not within:
+        return None
+    taken_in = any(groups.get(ticker) in within for ticker in members)
+    return ("with " if taken_in else "outside ") + ", ".join(within)
+
+
+def group_label(group: str, descriptions: Iterable[Optional[str]], scope: Optional[str] = None) -> str:
     """"SIC 283: " and the members' most common SEC *descriptions*, up to LABEL_DESCRIPTIONS, by count, then
     alphabetically, joined with "; " (a description can hold a comma: "Biological Products, (No Diagnostic
-    Substances)"); "SIC 283" alone without any."""
+    Substances)"); "SIC 283" alone without any. A *scope* (``group_scope``) follows the code in brackets: "SIC 28
+    (outside 283): ..."."""
     counts = Counter(text for text in (normalize_sic_description(d) for d in descriptions) if text is not None)
     named = sorted(counts, key=lambda text: (-counts[text], text))[:LABEL_DESCRIPTIONS]
-    return f"SIC {group}: {'; '.join(named)}" if named else f"SIC {group}"
+    code = f"SIC {group} ({scope})" if scope else f"SIC {group}"
+    return f"{code}: {'; '.join(named)}" if named else code
 
 
 def sic_label(code: Any, description: Optional[str]) -> Optional[str]:

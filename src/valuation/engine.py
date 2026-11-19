@@ -215,6 +215,13 @@ def compute_and_store(db_path: Union[str, Path],
                 scores_engine.store_ticker(conn, store, ticker, computed_at)
             except Exception as e:
                 log.warning(f"Quality scores failed for {ticker}: {e}")
+                # The failure replaces the previous run's scores, so they aren't read as this run's (BUG-202); when
+                # that write fails too (a locked database), they stay and the log says so.
+                try:
+                    scores_engine.store_failure(store, ticker, e, computed_at)
+                except Exception as e2:
+                    log.error(f"Storing the scores' failure for {ticker} failed too ({e2}): {ticker}'s previous "
+                              "scores stay")
             # The other valuation indicators: display-only like owner earnings (never in MEDIAN_MODELS, the verdicts
             # or the upside), after the scores whose figures they read; likewise isolated
             # (docs/superpowers/specs/2026-10-24-valuation-tools-market-design.md).

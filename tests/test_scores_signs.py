@@ -119,3 +119,51 @@ def test_the_gross_margin_sign_falls_back_on_revenue_less_cost_of_revenue():
     # BUG-199: a filer that tags cost of revenue but no gross profit; the margin falls 1.5 points a year.
     f = _company(gross_profit=None, cost_of_revenue=lambda i, r: (0.60 + 0.015 * i) * r)
     assert "gross_margin_decline" in _codes(f)
+
+
+# ---------- the years back are fiscal years (BUG-198) ----------
+
+def _gap(f, missing):
+    """*f* without fiscal year *missing*: the rows after it keep their own years."""
+    f.rows = [r for r in f.rows if r.fiscal_year != missing]
+    return f
+
+
+def test_three_years_of_declines_need_the_fiscal_years_t_minus_3_to_t():
+    # Revenue falls every row, but FY2022 isn't stored: FY2020 -> FY2021 -> FY2023 -> FY2024 is three falls over
+    # four years, one of them unknown.
+    f = _gap(_company(years=5, revenue=lambda i, r: 1000.0 * 0.95 ** i), 2022)
+    assert [r.fiscal_year for r in f.rows] == [2020, 2021, 2023, 2024]
+    assert "revenue_decline" not in _codes(f=f)
+    assert "revenue_decline" in _codes(f=_company(years=4, revenue=lambda i, r: 1000.0 * 0.95 ** i))
+
+
+def test_five_years_back_is_fiscal_year_t_minus_5():
+    # The operating and gross margins were 10 points higher in FY2020 only. FY2023 isn't stored, so the sixth row
+    # from the end is FY2020, six years before FY2026; FY2021, five back, is level with it.
+    f = _gap(_company(years=7, operating_margin=lambda i, r: 0.30 if i == 0 else 0.20,
+                      gross_profit=lambda i, r: (0.50 if i == 0 else 0.40) * r), 2023)
+    assert [r.fiscal_year for r in f.rows] == [2020, 2021, 2022, 2024, 2025, 2026]
+    codes = _codes(f=f)
+    assert "margin_decline" not in codes and "gross_margin_decline" not in codes
+    # Five years back stored: FY2020 against FY2025 fires both.
+    codes = _codes(f=_company(years=6, operating_margin=lambda i, r: 0.30 if i == 0 else 0.20,
+                              gross_profit=lambda i, r: (0.50 if i == 0 else 0.40) * r))
+    assert {"margin_decline", "gross_margin_decline"} <= codes
+
+
+def test_the_last_three_years_of_cash_flow_are_fiscal_years_t_minus_2_to_t():
+    # Negative free cash flow in FY2021 and FY2024; FY2022 isn't stored, so the last three rows reach back four years.
+    f = _gap(_company(years=5, free_cash_flow=lambda i, r: -10.0 if i in (1, 4) else 0.1 * r), 2022)
+    assert [r.fiscal_year for r in f.rows][-3:] == [2021, 2023, 2024]
+    assert "fcf_negative" not in _codes(f=f)
+
+
+def test_receivables_three_years_back_are_fiscal_year_t_minus_3():
+    # Receivables per dollar of revenue 30% higher from FY2021 on than in FY2020. FY2022 isn't stored, so three rows
+    # back is FY2020, four years back; FY2021, three back, is level with FY2024.
+    f = _gap(_company(years=5, accounts_receivable=lambda i, r: 0.10 * r * (1.0 if i == 0 else 1.3)), 2022)
+    assert "receivables_outgrow_revenue" not in _codes(f=f)
+    # FY2020 stored three years back: the same rise fires.
+    f = _company(years=4, accounts_receivable=lambda i, r: 0.10 * r * (1.0 if i == 0 else 1.3))
+    assert "receivables_outgrow_revenue" in _codes(f=f)

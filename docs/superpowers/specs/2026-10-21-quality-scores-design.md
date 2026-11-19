@@ -49,7 +49,11 @@ the existing models, median and verdicts are untouched. The package is `src/scor
 ## Scores (`src/scores/scores.py`)
 
 All on the latest fiscal year (t) against the one before (t-1), unless said otherwise. Banks and insurers
-are N/A where the sector rules suppress an input (`sector_metrics`), with a reason.
+are N/A where the sector rules suppress an input (`sector_metrics`), with a reason. t-1 is fiscal year t - 1
+exactly, and so are the years back of the signs and the ranks (t-3, t-5, the last 3 or 10 fiscal years): a year
+that isn't stored is never replaced by the row stored before it (BUG-198). Without t-1, Piotroski and Beneish are
+N/A ("needs fiscal year t-1, which isn't stored"; "needs two fiscal years" with one); a sign whose window
+misses a year, or whose year back isn't stored, doesn't fire.
 
 - **Piotroski F**, 0-9. Each of the nine tests is stored with its pass/fail. N/A for banks and insurers
   (the current ratio and gross margin don't exist for them). A test whose inputs are missing counts as a
@@ -102,7 +106,7 @@ are N/A where the sector rules suppress an input (`sector_metrics`), with a reas
   - The spread is ROIC - WACC. N/A for banks and insurers, and WACC is N/A when the debt is unknown.
 - **Predictability**, 1-5 stars in half steps, from the last 10 fiscal years. It's our own published
   formula; GuruFocus's is unpublished.
-  - Fewer than 10 years is N/A. Any year with revenue or EBITDA per share ≤ 0 is 1 star (as GuruFocus
+  - Fewer than 10 years is N/A: each of the fiscal years t-9 to t must be stored with both series (BUG-198). Any year with revenue or EBITDA per share ≤ 0 is 1 star (as GuruFocus
     treats an operating loss).
   - Otherwise, fit ln(series) against the year for revenue/share and EBITDA/share. If either slope is ≤ 0,
     1 star. Else stars = 1 + 4·min(R²_revenue, R²_EBITDA), rounded down to the half star.
@@ -193,7 +197,10 @@ re-ranks everyone.
 ## Engine
 
 `valuation.engine.compute_and_store` gains two hooks, each in its own try/except:
-- after each ticker's history: `scores.engine.compute_ticker(conn, ticker)` and its store;
+- after each ticker's history: `scores.engine.compute_ticker(conn, ticker)` and its store. When that fails,
+  the ticker's stored scores, per-share rows and signs are replaced by a row with no score whose N/A reasons
+  all read "the scores' computation failed: <why>" (`scores.engine.store_failure`, BUG-202), so the previous
+  run's figures never read as this run's; if that write fails too, they stay and the log says so;
 - after the loop: `scores.ranks.rank_universe(db_path)`.
 
 Nothing in the valuations or the history changes. The backfill covers it as before.

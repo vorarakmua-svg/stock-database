@@ -85,6 +85,22 @@ class Fundamentals:
             return [(r.fiscal_year, r.per_share(PER_SHARE[name])) for r in self.rows]
         return [(r.fiscal_year, r.figures.get(name)) for r in self.rows]
 
+    def back(self, years: int) -> Optional[AnnualRow]:
+        """Fiscal year t - *years* (t the latest), or None when that year isn't stored: never the row stored before
+        it, which would compare t with an earlier year (BUG-198)."""
+        if not self.rows:
+            return None
+        year = self.rows[-1].fiscal_year - years
+        return next((r for r in self.rows if r.fiscal_year == year), None)
+
+    def window(self, years: int) -> List[AnnualRow]:
+        """The stored rows of the *years* fiscal years t - years + 1 to t (t the latest), oldest first: *years* rows
+        when none of them is missing (BUG-198)."""
+        if not self.rows:
+            return []
+        first = self.rows[-1].fiscal_year - years + 1
+        return [r for r in self.rows if r.fiscal_year >= first]
+
 
 def cagr(series: Sequence[Tuple[int, Optional[float]]], years: int) -> Optional[float]:
     """(latest / start) ** (1 / years) - 1, the start exactly *years* fiscal years before the latest. Both ends

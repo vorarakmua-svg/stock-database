@@ -61,10 +61,13 @@ Readings of the spec where it leaves a choice (each also noted where it's used):
   order inside an exact tie of the sum is accepted, since the spec names no tie-break.
 - Industries: the groups are formed over the companies with a quality_scores row, a code being four ASCII digits
   as stored (anything else is no code). A company's group is its 3-digit prefix when 10 or more of them share it,
-  else its 2-digit prefix when 10 or more do; a group's members are every one whose code starts with it, so a
-  2-digit group takes in its 3-digit groups' companies and has 10 members or more. Its label is "SIC <group>: " and
-  the members' three most common descriptions as stored, by count, then in string order, joined with "; " ("SIC
-  <group>" without any); its size, the members. A component counts toward a company's industry rank when 10 or more
+  else its 2-digit prefix when 10 or more do. A group's members are the companies whose group it is when 10 or more
+  of them (a 2-digit group's left-overs outside its 3-digit groups), else every one whose code starts with it (a
+  2-digit group with fewer left over takes in its 3-digit groups' companies), so a group has 10 members or more
+  (BUG-238). Its label is "SIC <group>: " and the members' three most common descriptions as stored, by count, then
+  in string order, joined with "; " ("SIC <group>" without any), a 2-digit group with 3-digit groups formed in it
+  saying "SIC <group> (outside <them>)" or "SIC <group> (with <them>)" (in order, ", "-joined) as its members leave
+  them out or take them in; its size, the members. A component counts toward a company's industry rank when 10 or more
   of its group's members have it (the percentile then among them, as above), and a rank needs two such components
   (one for valuation and momentum), so a component left out doesn't count toward that minimum; the industry
   composite is 10 x the mean of four or more industry ranks.
@@ -1103,17 +1106,27 @@ def oracle_industries(d: Data) -> Dict[str, Dict[str, Any]]:
     def sharing(prefix: str) -> List[str]:
         return sorted(t for t, c in code.items() if c is not None and c[:len(prefix)] == prefix)
 
-    out: Dict[str, Dict[str, Any]] = {}
+    group_of: Dict[str, Optional[str]] = {}
     for t in sorted(d.qs):
         c = code[t]
-        group = None if c is None else next((p for p in (c[:3], c[:2]) if len(sharing(p)) >= MIN_INDUSTRY), None)
+        group_of[t] = None if c is None else next((p for p in (c[:3], c[:2]) if len(sharing(p)) >= MIN_INDUSTRY),
+                                                  None)
+    out: Dict[str, Dict[str, Any]] = {}
+    for t in sorted(d.qs):
+        group = group_of[t]
         if group is None:
             out[t] = {col: None for col in INDUSTRY_GROUP_COLUMNS + INDUSTRY_RANK_COLUMNS}
             continue
-        members = sharing(group)
+        # BUG-238: the companies ranked in the group when ten or more, else every one whose code starts with it.
+        own = sorted(m for m, g in group_of.items() if g == group)
+        members = own if len(own) >= MIN_INDUSTRY else sharing(group)
         counts = Counter(d.sic_description.get(m) for m in members if d.sic_description.get(m))
         named = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:LABEL_TOP]
-        label = f"SIC {group}: " + "; ".join(text for text, _ in named) if named else f"SIC {group}"
+        inner = sorted({g for g in group_of.values() if g is not None and len(g) == 3 and g[:2] == group})
+        head = f"SIC {group}"
+        if len(group) == 2 and inner:
+            head += (" (with " if any(group_of[m] in inner for m in members) else " (outside ") + ", ".join(inner) + ")"
+        label = f"{head}: " + "; ".join(text for text, _ in named) if named else head
         mine: Dict[str, Any] = {"industry_group": group, "industry_label": label, "industry_size": len(members),
                                 "detail": {}}
         given = []
@@ -1141,8 +1154,9 @@ def oracle_industries(d: Data) -> Dict[str, Dict[str, Any]]:
 def check_industries(d: Data, failures: List[str]) -> None:
     print("== industry groups and ranks (Milestone 5), from companies.sic and the stored components")
     print(f"    group = the 3-digit SIC prefix when >= {MIN_INDUSTRY} scored companies share it, else the 2-digit one "
-          f"when >= {MIN_INDUSTRY} do; members = every scored company whose code starts with it; a component's "
-          f"percentile within the members with it, when >= {MIN_INDUSTRY} have it; exact fractions")
+          f"when >= {MIN_INDUSTRY} do; members = the companies ranked in it when >= {MIN_INDUSTRY}, else every "
+          f"scored company whose code starts with it; a component's percentile within the members with it, when >= "
+          f"{MIN_INDUSTRY} have it; exact fractions")
     absent = [c for c in INDUSTRY_GROUP_COLUMNS + INDUSTRY_RANK_COLUMNS if c not in d.qs_columns]
     if absent:
         for name in ("industry groups, labels and sizes", "industry ranks and composite",
@@ -1208,7 +1222,7 @@ def check_industries(d: Data, failures: List[str]) -> None:
         first = ours[groups[group][0]]
         members = sorted(t for t in d.qs if (sic4(d.sic.get(t)) or "").startswith(group))
         print(f"    group {group}: {first['industry_size']} members, {len(groups[group])} ranked in it; "
-              f"{first['industry_label']}; members {', '.join(members)}")
+              f"{first['industry_label']}; codes starting with it {', '.join(members)}")
     no_code = sorted(t for t in d.qs if sic4(d.sic.get(t)) is None)
     small = sorted(t for t in d.qs if t not in no_code and ours[t]["industry_group"] is None)
     print(f"    without a group: {len(no_code) + len(small)} ({len(no_code)} without a code"

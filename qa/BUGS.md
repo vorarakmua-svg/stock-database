@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 139 · NEEDS-USER 1 · Decided: 7 · Verified: 218
+**Open:** P0 0 · P1 0 · P2 0 · P3 136 · NEEDS-USER 1 · Decided: 7 · Verified: 221
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1546,10 +1546,11 @@ Repro: JPM 10.6% and WFC 11% fire medium signs; accrual measures conventionally 
 Expected: N/A or a caveat for banks and insurers.   Actual: a sign.
 
 ### BUG-198 [P3][SCORES] t-1 is the previous stored row, not fiscal year t-1
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 196)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression tests: tests/test_scores_*.py, tests/test_industries.py; 17 failing first
 Repro: `scores.py`; signs use `rows[-k]`, while the oracle reads FY t-1. No gaps today, but a gap year would compare t with t-2 silently.
 Expected: FY t-1 exactly, else N/A.   Actual: the previous row.
+Fix (iteration 196, `qa/evidence/bug198-investigation.txt`): `Fundamentals.back(k)` gives fiscal year t-k or None and `window(n)` the stored rows of t-n+1..t; Piotroski and Beneish use FY t-1 (N/A 'needs fiscal year <t-1>, which isn't stored' without it), predictability needs every year t-9..t, signs and rank components read their years by fiscal year. Real data: no company has a fiscal-year gap, so 0 moves (proven by tests and mutants).
 
 ### BUG-199 [P3][SCORES] The gross-margin sign lacks the revenue - cost of revenue fallback
 Status: VERIFIED (iteration 162)
@@ -1570,10 +1571,11 @@ Repro: SPCX shows "fiscal year None" and "No warning signs fired" with no data b
 Expected: clean states and the key columns.   Actual: as described.
 
 ### BUG-202 [P3][SCORES] A failed scores run keeps the previous row
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 196)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression tests: tests/test_scores_*.py, tests/test_industries.py; 17 failing first
 Repro: as BUG-182 for the history; `computed_at` is shown, so it's visible.
 Expected: a failure stored as an N/A reason, or the row marked stale.   Actual: the old row.
+Fix (iteration 196, with BUG-198): a failed scores computation stores a failure row (no score, every N/A reason 'the scores' computation failed: <why>') in place of the previous scores, signs and per-share rows, shown by the existing N/A notes; if that write fails too, the log says the previous scores stay. Residuals: a scores failure isn't reported to callers (the failures dict is valuations-only); a rank-pass failure keeps the old ranks; the failure row's header reads 'fiscal year None'.
 
 ### BUG-203 [P3][DATA] Three tags the mapping doesn't read: lease-inclusive PP&E, the combined debt, and no operating income without a fallback
 Status: OPEN
@@ -1824,11 +1826,12 @@ Expected: the write's failure reported as that company's error.   Actual: counte
 Fix: see BUG-053 (iteration 193).
 
 ### BUG-238 [P3][SCORES] A company left over in a 2-digit industry group is ranked mostly against its 3-digit groups' companies
-Status: OPEN
-Found: code review 19 (m-7, a reading of the spec), build M5-6 | Fixed: | Regression test:
+Status: VERIFIED (iteration 196)
+Found: code review 19 (m-7, a reading of the spec), build M5-6 | Fixed: (this commit) | Regression tests: tests/test_scores_*.py, tests/test_industries.py; 17 failing first
 Repro: the spec's rule makes a 2-digit group's members every company whose code starts with it, its 3-digit groups' included. On review 19's 508-company copy group 28 holds 48 members, 40 of them 283's: a chemicals maker in 28 is ranked against drug makers, under a label led by "Pharmaceutical Preparations". At about 500 real companies this is common (28, 35, 36, 73, 49, 63).
 Expected (a choice): either rank a left-over company among its major group's companies outside the formed 3-digit groups when 10 or more remain, or say in the STAT note that "within SIC 28" includes the 283 group. The README states the rule and its limitation. Revisit with the real S&P 500's groups.
 Notes: the real S&P 500 (build M5-6, 502 companies; `qa/evidence/close-m5-6-live-groups.txt`): 22 groups, 351 companies ranked in one. Left over in a 2-digit group: 28: 17 of 34 (17 in 283), 35: 17 of 33, 36: 11 of 32, 38: 5 of 40 (35 in 382 and 384), 49: 9 of 37, 63: 11 of 23, 73: 7 of 57 (50 in 737 and 738); 20, 37 and 62 have no 3-digit group. Ranking the left-overs among themselves when 10 or more remain would give 28, 35, 36 and 63 a group of their own and leave the left-overs of 38, 49 and 73 without industry ranks.
+Fix (iteration 196, with BUG-198). Decision (orchestrator, the user away; the entry asked for a choice): a 2-digit group's left-over companies are ranked among themselves when 10 or more, else among the whole major group as before, and the label names the case ('SIC 28 (outside 283)', 'SIC 38 (with 382, 384)'). Alternatives not taken: no ranks below 10 left over; documentation only. Real data: 77 quality_scores rows move, industry columns only (56 re-membered in 28/35/36/63, 21 relabelled in 38/49/73); 10 single component ranks lost (36's left-overs' valuation rank, GEV's profitability); no composite lost; universe ranks and every valuation output unchanged. Scores oracle updated for the rule and tells the two rules apart.
 
 ### BUG-239 [P3][CODE] Importing src.config creates data/output/json, data/output/csv and data/cache under the current directory
 Status: WONTFIX (a duplicate of BUG-158, iteration 105)

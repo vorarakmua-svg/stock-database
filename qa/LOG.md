@@ -3336,3 +3336,16 @@ Result: BUG-232, BUG-281, BUG-289 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3429 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(refresh): a run's SEC data dates from when the SEC served it; tries are reads a week apart (BUG-232, BUG-281, BUG-289)
 Next: code review 31 (due); scores batch (worker).
+
+## Iteration 196: 2026-11-20 04:20: fix (BUG-198, BUG-202, BUG-238)
+Picked: three SCORES P3s; an opus worker.
+Did: scores read years by fiscal year, not row position; a failed scores run stores a failure row instead of keeping
+stale scores; a 2-digit group's left-overs rank among themselves when 10 or more (orchestrator's decision for the
+user, who is away; labels say which).
+- RED: 17 failed of 139 on the worker's base; GREEN. 28 of 28 mutants; related specs re-anchored (3).
+- Real-data copies (engine over 502): only 77 quality_scores rows (industry columns) move; 0 medians, verdicts,
+  owner-earnings verdicts, historical values or labels. Scores oracle updated (BUG-238's rule).
+Result: BUG-198, BUG-202, BUG-238 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3446 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(scores): years by fiscal year; a failed run says so; left-over industries rank among themselves (BUG-198, BUG-202, BUG-238)
+Next: code review 31 (running).
