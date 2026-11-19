@@ -4,15 +4,18 @@ data"): FRED's CSV, Shiller's workbook (its Data sheet read by the header labels
 Treasury.gov's yearly CSVs (a file without its yields a failed answer); each answer cached for a day (a past Treasury
 year once it has ended), a failed fetch falling back to the cached copy, listed as stale; each source's series
 replaced (the Treasury's from its first year on) in one transaction, a failing source reported while the others go
-on; the session's own User-Agent and timeout. No test touches the network: the sessions are fakes, and the Shiller
-workbooks are written by the tests' own writer.
+on; the session's own User-Agent and timeout. No test touches the network: the sessions are fakes (but for a server
+on 127.0.0.1 that drops an answer mid-body, BUG-349), and the Shiller workbooks are written by the tests' own writer.
 """
 import io
 import os
+import socket
 import sqlite3
+import threading
 from contextlib import closing
 from datetime import datetime, timezone
 from functools import partial
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import pytest
@@ -1158,3 +1161,75 @@ def test_a_body_failure_that_is_not_transient_is_not_retried(tmp_path):
     with pytest.raises(requests.exceptions.InvalidURL):
         fetcher._download("http://x/")
     assert session.calls == 1 and odd.closed
+
+
+# ---- BUG-349: a connection a real server drops mid-body ----
+
+_BODY = b"observation_date,GDP\n" + b"2024-01-01,1.0\n" * 5
+
+
+class _Drops(BaseHTTPRequestHandler):
+    """Its first *drops* answers declare the whole body's length, send 10 bytes and close the connection; the later
+    ones are whole."""
+
+    drops = 1
+    calls = 0
+
+    def do_GET(self):  # noqa: N802
+        type(self).calls += 1
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(_BODY)))
+        self.end_headers()
+        if type(self).calls <= type(self).drops:
+            self.wfile.write(_BODY[:10])
+            self.wfile.flush()
+            self.close_connection = True
+            self.connection.shutdown(socket.SHUT_RDWR)
+            return
+        self.wfile.write(_BODY)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def dropping_server():
+    """A server on 127.0.0.1 answering as ``_Drops``: its URL."""
+    _Drops.calls, _Drops.drops = 0, 1
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Drops)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/fred.csv"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _real(tmp_path, max_retries=3):
+    """A MarketFetcher with its own requests session (a real transport), no spacing and no backoff."""
+    return MarketFetcher(tmp_path / "cache", limiter=RateLimiter(min_interval=0),
+                         retry=RetryHandler(max_retries=max_retries, base_delay=0))
+
+
+def test_a_connection_dropped_while_the_body_streams_is_retried(tmp_path, dropping_server):
+    # BUG-349: requests raises urllib3's IncompleteRead (10 of 96 bytes) as ChunkedEncodingError, which the retry
+    # didn't count as transient: the fetch failed after one call (BUG-345's test stood in a ConnectionError).
+    assert _real(tmp_path)._download(dropping_server) == _BODY
+    assert _Drops.calls == 2
+
+
+def test_a_body_that_keeps_dropping_is_tried_max_retries_plus_one_times(tmp_path, dropping_server):
+    _Drops.drops = 99
+    with pytest.raises(requests.exceptions.ChunkedEncodingError):
+        _real(tmp_path, max_retries=2)._download(dropping_server)
+    assert _Drops.calls == 3
+
+
+def test_the_sec_handlers_requests_retry_a_dropped_body_too(tmp_path, dropping_server):
+    # The rule is is_transient_error's, which the SEC's and FRED's handlers share: their GET reads the body whole.
+    from src.fetchers.sec_handler import SECHandler
+
+    handler = SECHandler(cache_dir=tmp_path, rate_limit_delay=0, base_delay=0)
+    assert handler._request(dropping_server).content == _BODY
+    assert _Drops.calls == 2

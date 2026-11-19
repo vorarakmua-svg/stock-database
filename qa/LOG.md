@@ -3384,3 +3384,17 @@ Result: BUG-212, BUG-213, BUG-217, BUG-219 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3474 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(ownership): US tickers only; splits inferred across holders; the insiders CLI fails cleanly; footnote text kept (BUG-212, BUG-213, BUG-217, BUG-219)
 Next: BUG-349..352, BUG-193/201/204/216 (workers); code review 32 after 2 more units.
+
+## Iteration 200: 2026-11-20 09:30: fix (BUG-349, BUG-350, BUG-351, BUG-352)
+Picked: code review 31's four findings; an opus worker.
+Did: a dropped body is retried (ChunkedEncodingError transient); a shared New York clock (src/new_york.py) dates the
+refresh's SEC reads and the HP's partial bars; a bar is partial when stored before its session's close; a bracket's
+past mark about another role no longer unseats a sitting chief.
+- RED: 36 failed of 515 on c68ec07; GREEN. 27 of 27 new mutants; bug232/156/347 specs re-quoted (27 stale -> killed);
+  bug229 16, bug206 55.
+- Real-data copy: GE and RTX would each be collected once more (redundant); no HP tag or title reading changes; no
+  valuation reads these.
+Result: BUG-349..352 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3515 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix: dropped bodies retried; New York days for SEC reads and partial bars; a bracket's past role isn't the chief's (BUG-349..352)
+Next: UI 193/201/204/216 (worker); code review 32 after 1 more unit.

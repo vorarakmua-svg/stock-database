@@ -18,10 +18,14 @@ RETRYABLE_STATUS_CODES = frozenset({429, 502, 503, 504})
 def is_transient_error(exc: BaseException) -> bool:
     """Return True if an exception represents a transient, retry-worthy failure.
 
-    Network timeouts and connection errors are always transient. HTTP errors are
+    Network timeouts and connection errors are always transient, and so is a
+    connection dropped while the body is read: urllib3's ProtocolError
+    (IncompleteRead: fewer bytes than the declared length; a broken chunk), which
+    requests raises as ``ChunkedEncodingError`` (BUG-349). HTTP errors are
     transient only for the status codes in :data:`RETRYABLE_STATUS_CODES`.
     """
-    if isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
+    if isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
+                        requests.exceptions.ChunkedEncodingError)):
         return True
     if isinstance(exc, requests.exceptions.HTTPError):
         response = getattr(exc, "response", None)

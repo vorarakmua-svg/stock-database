@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 131 · NEEDS-USER 1 · Decided: 7 · Verified: 230
+**Open:** P0 0 · P1 0 · P2 0 · P3 127 · NEEDS-USER 1 · Decided: 7 · Verified: 234
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2248,28 +2248,32 @@ Repro: SEC gives one of two adjacent years no frame and the rule (end less 180 d
 Expected: distinct calendar years for distinct fiscal years.   Actual: a duplicate.
 
 ### BUG-349 [P3][MARKET] A connection dropped mid-body raises ChunkedEncodingError, which the market retry doesn't treat as transient
-Status: OPEN
-Found: code review 31 (`qa/evidence/review31.txt`, Minor 1; not a regression) | Fixed: | Regression test:
+Status: VERIFIED (iteration 200)
+Found: code review 31 (`qa/evidence/review31.txt`, Minor 1; not a regression) | Fixed: (this commit) | Regression tests: tests/test_rate_limiter.py, test_market_sources.py, test_refresh.py, test_web_bar_flags.py, test_ownership_insiders.py; 36 failing first
 Repro: `_download`'s docstring and README ~1239 say a connection dropped while the body streams is retried; requests raises ChunkedEncodingError for it and `is_transient_error` doesn't retry it (BUG-345's test used ConnectionError as a stand-in). A local server sending 10 of 96 bytes then closing fails after 1 call. Probe: %LOCALAPPDATA%\stockdb-qa\review31\head\tests\test_review31.py.
 Expected: retried as the docs say.   Actual: one call.
+Fix (iteration 200, `qa/evidence/bug349-investigation.txt`): `is_transient_error` treats requests' ChunkedEncodingError (a body cut short) as transient, so the market download, SEC and FRED requests retry a dropped body as their docs say; ContentDecodingError deliberately isn't. Tested with a local server closing mid-body.
 
 ### BUG-350 [P3][REFRESH] The refresh compares a filing's SEC day with the collector's local day of the SEC read
-Status: OPEN
-Found: code review 31 (Minor 2; not a regression) | Fixed: | Regression test:
+Status: VERIFIED (iteration 200)
+Found: code review 31 (Minor 2; not a regression) | Fixed: (this commit) | Regression tests: tests/test_rate_limiter.py, test_market_sources.py, test_refresh.py, test_web_bar_flags.py, test_ownership_insiders.py; 36 failing first
 Repro: refresh.py ~967 `since` takes the local day of sec_read_at; east of New York a read in the local small hours is the SEC's previous day, so a 10-Q accepted later that SEC day (16:00-17:30 ET is common) is never queued: a read at 16:00 EDT 10-23 (10-24 03:00 at UTC+7) misses a 10-Q filed 10-23. Probe: %LOCALAPPDATA%\stockdb-qa\review31\head\tests\test_review31.py.
 Expected: both days in New York (the SEC's).   Actual: local vs SEC day.
+Fix (iteration 200, with BUG-349): a shared New York clock (`src/new_york.py`, BUG-156's DST rule moved out of workstation); offset-less stamps read as local time (`refresh._local`) and `_read_day` gives the New York day for `since` and the gap end. Real-data copy: 108 companies' SEC day moves 10-21 -> 10-20; GE and RTX (10-Qs filed 10-20) would be queued once more (both already store the quarter: one redundant collection each). Residual: naive stamps are read in this machine's zone.
 
 ### BUG-351 [P3][UI] The HP table tags a mid-session bar partial only until 16:00 New York the same day
-Status: OPEN
-Found: code review 31 (Minor 3) | Fixed: | Regression test:
+Status: VERIFIED (iteration 200)
+Found: code review 31 (Minor 3) | Fixed: (this commit) | Regression tests: tests/test_rate_limiter.py, test_market_sources.py, test_refresh.py, test_web_bar_flags.py, test_ownership_insiders.py; 36 failing first
 Repro: BUG-156's rule tags the newest bar partial while New York is before 16:00 when viewed; a bar collected 10:50-12:09 NY and viewed the next morning reads as an ordinary row (only its out-of-range bars are tagged). BUG-156's residual understates it; collection_runs / market_snapshots hold the latest collection time, which could stand in for a bar's collection time. Probe: %LOCALAPPDATA%\stockdb-qa\review31\head\tests\test_review31.py.
 Expected: a bar collected before the close tagged partial until a later collection replaces it.   Actual: untagged from 16:00.
+Fix (iteration 200, with BUG-349): `Reader.bars_stored_at` gives the later of the latest Yahoo collection run and the latest refresh 'bars' step naming the ticker; the HP tags the newest bar partial when that time is before 16:00 New York on the bar's date (no record: the viewing time). 0 tags change on real data. Residual: the step's start time stands in for Yahoo's answer.
 
 ### BUG-352 [P3][OWNERSHIP] Since BUG-347 a bracket's past mark about another role makes a sitting chief read as past
-Status: OPEN
-Found: code review 31 (Minor 4; a regression on made-up titles; all 3,524 real cached titles read as before) | Fixed: | Regression test:
+Status: VERIFIED (iteration 200)
+Found: code review 31 (Minor 4; a regression on made-up titles; all 3,524 real cached titles read as before) | Fixed: (this commit) | Regression tests: tests/test_rate_limiter.py, test_market_sources.py, test_refresh.py, test_web_bar_flags.py, test_ownership_insiders.py; 36 failing first
 Repro: 'President & CEO (former CFO)', 'Chairman & CEO (Former President)', 'Interim CEO (Ex-CFO)' read True at b434d23, False at HEAD (`_PAST_BRACKET`). Also (not a regression): 'President and CEO of the Company and the Bank' reads as a unit's head. Probe: %LOCALAPPDATA%\stockdb-qa\review31\head\tests\test_review31.py.
 Expected: a bracket's past mark applies only to the chief title it follows.   Actual: to any.
+Fix (iteration 200, with BUG-349): a bracket's past mark counts only when, the mark and the chief's own title removed, no other role is left ('CEO (Retired)' past; 'President & CEO (former CFO)' sitting); 'the Company and/& ...' is the company. Census: 0 of 3,556 real titles change.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)

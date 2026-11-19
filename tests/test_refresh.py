@@ -13,7 +13,7 @@ import sqlite3
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -633,7 +633,7 @@ def test_a_report_filed_before_the_last_collection_doesnt(tmp_path):
 
 
 def test_a_report_filed_on_the_last_collections_day_counts(tmp_path):
-    # The collection's day is the collector's own: east of New York it runs ahead, so the same day may be after it.
+    # The collection's day is the SEC's (BUG-350): a report filed later that day came after it.
     db = rf.make_db(tmp_path / "stock.db")
     sec = rf.FakeSEC({rf.cik_of("AAA"): [rf.filing("10-Q", "2026-10-21")]})
     assert list(rf.run(db, rf.services(db, sec=sec), steps=["sec"]).queue) == ["AAA"]
@@ -782,6 +782,12 @@ _AAA_FEED = {rf.cik_of("AAA"): [rf.filing("10-Q", "2026-10-23", "0000000001-26-0
 _LACKED = "read no facts of its 10-Q filed 2026-10-23 (0000000001-26-000003)"
 
 
+def _local(*utc):
+    """The collector's naive local time (as collection_runs keeps it) of a UTC time: the same moment, so the same SEC
+    day (BUG-350), on any machine."""
+    return datetime(*utc, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+
+
 def _collected(db, ticker, at, report=None, predecessor=None, read=None):
     """A collection of *ticker* with Yahoo and the SEC at *at* (naive local, as the collector writes it), stored by the
     store: its companyfacts lacking *report*, the latest report its submissions listed (BUG-251), its predecessor's
@@ -807,11 +813,12 @@ def test_a_company_whose_companyfacts_lacked_its_latest_report_is_collected_agai
     # of it, so its record stops a quarter early. The report was filed before the collection's day, so the SEC step
     # took the run for one that had it, and only AAA's next report would have put it on the list.
     db = rf.make_db(tmp_path / "stock.db")
-    _collected(db, "AAA", datetime(2026, 10, 24, 9, 0), report=AAA_Q3)
+    at = _local(2026, 10, 24, 13, 0)  # 09:00 in New York
+    _collected(db, "AAA", at, report=AAA_Q3)
     report = rf.run(db, rf.services(db, sec=rf.FakeSEC(_AAA_FEED)), steps=["sec"])
-    assert report.queue == {"AAA": [_redo("2026-10-24", _LACKED, 1)]}
+    assert report.queue == {"AAA": [_redo(str(at)[:10], _LACKED, 1)]}
     sec = report.result("sec")
-    assert sec.summary["incomplete"] == {"AAA": {"collected_at": "2026-10-24T09:00:00", "why": _LACKED, "again": 1}}
+    assert sec.summary["incomplete"] == {"AAA": {"collected_at": at.isoformat(), "why": _LACKED, "again": 1}}
     assert (sec.summary["new_filings"], sec.summary["incomplete_left"]) == ({}, {})
     assert sec.headline == ("3 feeds read, 0 new reports at 0 companies, 1 incomplete collections to redo, 0 without a "
                             "CIK, 0 errors")
@@ -887,9 +894,10 @@ def test_another_report_without_facts_starts_its_own_count(tmp_path):
         _collected(db, "AAA", at, report=AAA_Q2)
     sec = rf.run(db, rf.services(db), steps=["sec"]).result("sec")
     assert list(sec.summary["incomplete_left"]) == ["AAA"] and sec.summary["incomplete_left"]["AAA"]["collections"] == 4
-    _collected(db, "AAA", datetime(2026, 10, 24, 9, 0), report=AAA_Q3)
+    at = _local(2026, 10, 24, 13, 0)  # 09:00 in New York, after the 10-Q's day
+    _collected(db, "AAA", at, report=AAA_Q3)
     report = rf.run(db, rf.services(db, sec=rf.FakeSEC(_AAA_FEED)), steps=["sec"])
-    assert report.queue == {"AAA": [_redo("2026-10-24", _LACKED, 1)]}
+    assert report.queue == {"AAA": [_redo(str(at)[:10], _LACKED, 1)]}
 
 
 # ---- which collections are tries, and what ends a gap (BUG-232, BUG-281, BUG-289) ----
@@ -920,9 +928,53 @@ def test_a_report_filed_after_the_sec_data_a_collection_read_puts_the_company_on
 
 
 def test_a_report_filed_before_the_sec_data_a_collection_read_doesnt(tmp_path):
+    # Read at 09:00 New York on 2026-10-24, the 10-Q filed 2026-10-23.
     db = rf.make_db(tmp_path / "stock.db")
-    _collected(db, "AAA", datetime(2026, 10, 24, 9, 0), read=datetime(2026, 10, 24, 8, 0))
+    _collected(db, "AAA", _local(2026, 10, 24, 14, 0), read=_local(2026, 10, 24, 13, 0))
     assert rf.run(db, rf.services(db, sec=rf.FakeSEC(_AAA_FEED)), steps=["sec"]).queue == {}
+
+
+@pytest.mark.parametrize("read", [
+    (2026, 10, 23, 20, 0),   # 16:00 New York (EDT): 2026-10-24 03:00 east of it, at UTC+7
+    (2026, 10, 24, 2, 0),    # 22:00 New York: already 2026-10-24 in UTC
+])
+def test_a_report_filed_on_the_secs_day_of_the_read_puts_the_company_on_the_list(tmp_path, read):
+    # BUG-350: the day compared was the collector's own: east of New York (or in UTC) a read late on the SEC's
+    # 2026-10-23 falls on 2026-10-24, so a 10-Q accepted after it that day (16:00-17:30 New York is common), filed
+    # 2026-10-23, was never queued.
+    db = rf.make_db(tmp_path / "stock.db")
+    _collected(db, "AAA", _local(*read) + timedelta(minutes=5), read=_local(*read))
+    report = rf.run(db, rf.services(db, sec=rf.FakeSEC(_AAA_FEED)), steps=["sec"])
+    assert report.queue == {"AAA": ["sec: 10-Q filed 2026-10-23 (0000000001-26-000003)"]}
+
+
+def test_a_read_after_midnight_in_new_york_is_the_next_sec_day(tmp_path):
+    # 00:30 New York (EDT) on 2026-10-24: a report filed 2026-10-23 came before it.
+    db = rf.make_db(tmp_path / "stock.db")
+    _collected(db, "AAA", _local(2026, 10, 24, 4, 35), read=_local(2026, 10, 24, 4, 30))
+    assert rf.run(db, rf.services(db, sec=rf.FakeSEC(_AAA_FEED)), steps=["sec"]).queue == {}
+
+
+@pytest.mark.parametrize("stamp, day", [
+    ("2026-10-24T03:00:00+07:00", "2026-10-23"),   # an offset is the stamp's own
+    ("2026-10-23T23:30:00-04:00", "2026-10-23"),
+    ("2026-01-15T04:59:00+00:00", "2026-01-14"),   # EST: midnight New York is 05:00 UTC
+    ("2026-01-15T05:00:00+00:00", "2026-01-15"),
+])
+def test_the_sec_day_of_a_read_is_new_yorks(stamp, day):
+    assert src.refresh._read_day((stamp, None, None)) == day
+    assert src.refresh._read_day(("2020-01-01T00:00:00+00:00", None, stamp)) == day   # sec_read_at first
+    naive = datetime.fromisoformat(stamp).astimezone().replace(tzinfo=None).isoformat()   # this machine's local time
+    assert src.refresh._read_day((naive, None, None)) == day
+
+
+def test_a_collection_that_read_the_sec_on_the_day_before_a_report_isnt_in_its_gap():
+    # BUG-350 in incomplete_tries: a collection whose read came on the SEC's day before the gap's report was filed
+    # (22:00 New York on 2026-10-22, 2026-10-23 in UTC and east of New York) can't have seen it: no try at it.
+    runs = _runs((_local(2026, 10, 24, 14, 0), AAA_Q3, None, None),
+                 (_local(2026, 10, 23, 2, 0), AAA_Q3, None, None))
+    tried = src.refresh.incomplete_tries(runs)
+    assert (tried["tries"], tried["collections"]) == (1, 1)
 
 
 def test_a_collection_on_the_sec_cache_isnt_a_try(tmp_path):
@@ -982,10 +1034,11 @@ def test_a_new_reports_lag_after_a_predecessor_left_unread_gets_its_own_tries(tm
                datetime(2026, 10, 16, 9, 0)):
         _collected(db, "AAA", at, predecessor="no XBRL data")
     assert list(rf.run(db, rf.services(db), steps=["sec"]).result("sec").summary["incomplete_left"]) == ["AAA"]
-    _collected(db, "AAA", datetime(2026, 10, 24, 9, 0), report=AAA_Q3, predecessor="no XBRL data")
+    at = _local(2026, 10, 24, 13, 0)  # 09:00 in New York, after the 10-Q's day
+    _collected(db, "AAA", at, report=AAA_Q3, predecessor="no XBRL data")
     report = rf.run(db, rf.services(db, sec=rf.FakeSEC(_AAA_FEED)), steps=["sec"])
     assert report.queue == {"AAA": [_redo(
-        "2026-10-24", f"{_LACKED} and couldn't read its predecessor's filings (no XBRL data)", 1)]}
+        str(at)[:10], f"{_LACKED} and couldn't read its predecessor's filings (no XBRL data)", 1)]}
 
 
 def test_the_tries_of_a_complete_latest_collection_are_none():
@@ -1031,8 +1084,8 @@ def test_a_collection_that_read_the_sec_before_the_report_was_filed_ends_the_gap
                  (datetime(2026, 7, 31, 9, 0), None, "503", datetime(2026, 7, 30, 9, 0)),
                  (datetime(2026, 8, 7), AAA_Q2, "503", None))
     assert src.refresh.incomplete_tries(runs) == {"tries": 1, "collections": 1, "since": "2026-08-07"}
-    # Read on the report's day (the collector's, which east of New York runs ahead of the SEC's), it may have seen it.
-    runs = _runs((datetime(2026, 7, 31, 9, 0), None, "503", None), (datetime(2026, 8, 7), AAA_Q2, "503", None))
+    # Read on the report's day (the SEC's: 09:00 in New York), it may have seen it.
+    runs = _runs((_local(2026, 7, 31, 13, 0), None, "503", None), (datetime(2026, 8, 7), AAA_Q2, "503", None))
     assert src.refresh.incomplete_tries(runs)["collections"] == 2
 
 

@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ...fetchers.stock_data_fetcher import NO_ANNUAL_FINANCIALS, REPORT_WITHOUT_FACTS, STALE_ANNUAL_FINANCIALS
+from ...new_york import taken_before_close
 from ...ownership.portfolio import share_classes
 from ...scores.ranks import MAGIC_EXCLUDED
 from ...universe.industries import sic_label
@@ -632,28 +633,12 @@ BAR_FLAGS = {
     "partial": "Partial: taken before the close or inconsistent (open or close outside the day's range)",
     "placeholder": "Placeholder: no trades recorded (no price, or a flat bar without volume)",
 }
-#: The U.S. market closes at 16:00 New York time.
-_MARKET_CLOSE_HOUR = 16
 
 
 def _now_utc() -> datetime:
-    """The clock ``_new_york_day`` reads: a seam tests pin (as ``stocks_api._today``)."""
+    """The clock the HP table reads when no collection says when its bars were stored: a seam tests pin (as
+    ``stocks_api._today``)."""
     return datetime.now(timezone.utc)
-
-
-def _nth_sunday(year: int, month: int, n: int) -> date:
-    first = date(year, month, 1)
-    return first + timedelta(days=(6 - first.weekday()) % 7 + 7 * (n - 1))
-
-
-def _new_york_clock(now: datetime) -> datetime:
-    """*now* (UTC) as New York wall-clock time: EDT (UTC-4) from the second Sunday of March 2:00 to the first Sunday
-    of November 2:00, EST (UTC-5) otherwise. No tz database (Windows has none without ``tzdata``)."""
-    year = now.year
-    dst_start = datetime(year, 3, _nth_sunday(year, 3, 2).day, 7, tzinfo=timezone.utc)  # 2:00 EST
-    dst_end = datetime(year, 11, _nth_sunday(year, 11, 1).day, 6, tzinfo=timezone.utc)  # 2:00 EDT
-    offset = -4 if dst_start <= now < dst_end else -5
-    return (now + timedelta(hours=offset)).replace(tzinfo=None)
 
 
 def _inconsistent(bar: Dict[str, Any]) -> bool:
@@ -667,13 +652,15 @@ def _inconsistent(bar: Dict[str, Any]) -> bool:
     return any(p > h + slack or p < low - slack for p in (o, c))
 
 
-def bar_flag(bar: Dict[str, Any], newest: bool, now: datetime) -> Optional[str]:
+def bar_flag(bar: Dict[str, Any], newest: bool, taken: datetime) -> Optional[str]:
     """How the HP table marks *bar*: ``"placeholder"`` for a bar without a price (no close, or zero) or a flat bar
     without volume (every price equal, volume 0: a day the feed filled in), ``"partial"`` for the ticker's newest bar
-    when it is dated today in New York before the close, or when its open or close lies outside its range; else None.
+    when it was *taken* (when the latest collection that stored it ran: ``Reader.bars_stored_at``, else now) before
+    its session's close, 16:00 in New York on its date, or when its open or close lies outside its range; else None.
 
     A partial day's volume is a fraction of the day's (112 of 128 last bars of a copy collected at 11:00-12:00 had
-    14-60% of the 20-day median) and CVS's last bar opened above its high (BUG-156).
+    14-60% of the 20-day median) and CVS's last bar opened above its high (BUG-156). Such a bar stays partial after
+    the close, until a later collection stores the day again (BUG-351).
     """
     prices = [bar.get(k) for k in ("open", "high", "low", "close")]
     close = bar.get("close")
@@ -682,8 +669,7 @@ def bar_flag(bar: Dict[str, Any], newest: bool, now: datetime) -> Optional[str]:
     if not bar.get("volume") and len(set(prices)) == 1:
         return "placeholder"
     if newest:
-        ny = _new_york_clock(now)
-        if str(bar.get("date"))[:10] == ny.date().isoformat() and ny.hour < _MARKET_CLOSE_HOUR:
+        if taken_before_close(str(bar.get("date")), taken):
             return "partial"
         if _inconsistent(bar):
             return "partial"
@@ -716,7 +702,10 @@ def hp_fragment(
     # price_bars() is ascending by date; the HP table reads newest-first.
     # Each bar says what it is (BUG-156): a partial or placeholder row is marked, not an ordinary one; the CSV and
     # the chart carry the same bars. A price under $1 has four decimals, a zero price and a zero volume read "—".
-    now = _now_utc()
+    # The newest bar was taken when the latest collection that stored it ran (BUG-351); without one, it was taken
+    # no later than now.
+    stored = r.bars_stored_at(ticker)
+    taken = stored if stored is not None else _now_utc()
     rows = [
         {
             "date": b["date"],
@@ -725,7 +714,7 @@ def hp_fragment(
             "low": fmt_bar_price(b.get("low")),
             "close": fmt_bar_price(b.get("close")),
             "volume": fmt_count(b.get("volume") or None),  # a share count (BUG-136)
-            "flag": bar_flag(b, i == 0, now),
+            "flag": bar_flag(b, i == 0, taken),
         }
         for i, b in enumerate(reversed(bars))
     ]

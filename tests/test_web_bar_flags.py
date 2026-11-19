@@ -4,8 +4,11 @@ BUG-156: the HP table listed every stored bar as an ordinary row. CVS's last bar
 opened at 105.00 above its high of 104.94 (and 112 of 128 last bars carried a part of a day's volume), a split-adjusted
 1970s price read "$0.00" and a flat bar without volume (a day the feed filled in) read like a trading day. Now a
 price under $1 has four decimals, a zero price and a zero volume read "—", a placeholder row (no price, or flat
-with no volume) is marked "placeholder", and the ticker's newest bar is marked "partial" when it is dated today in
-New York before the close or its open or close lies outside its range. The chart and the CSV carry the same bars.
+with no volume) is marked "placeholder", and the ticker's newest bar is marked "partial" when it was taken before its
+session's close (16:00 in New York on its date) or its open or close lies outside its range. The chart and the CSV
+carry the same bars. BUG-351: it was taken when the latest collection that stored it ran (a collection with Yahoo, or
+a `stock-data refresh` bars step that updated it), else no later than now; so a bar collected mid-session stays partial
+after the close, until a later collection stores the day again.
 
 BUG-157: a range without a single bar drew an empty figure with a legend: now the message "No price bars in this
 range." (a node run of app.js, as test_web_screener_units runs screener.js).
@@ -20,7 +23,8 @@ import re
 import shutil
 import sqlite3
 import subprocess
-from datetime import datetime, timezone
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -173,6 +177,100 @@ def test_only_the_newest_bar_can_be_partial_by_the_clock(tmp_path, monkeypatch):
     assert [r["date"] for r in rows if r["class"] == "hp-partial"] == ["2026-07-10"]
 
 
+# ---- BUG-351: a bar taken before the close stays partial until a later collection stores the day again ----------
+
+
+def _collection(tmp_path, utc, sources="yahoo_finance, sec_edgar"):
+    """FLAGS's collection at *utc* (``collection_runs``, the collector's naive local time, as it stores it)."""
+    with closing(sqlite3.connect(tmp_path / "stock.db")) as conn:
+        conn.execute("INSERT INTO collection_runs (ticker, collected_at, data_sources) VALUES ('FLAGS', ?, ?)",
+                     (utc.astimezone().replace(tzinfo=None).isoformat(), sources))
+        conn.commit()
+
+
+def _bars_step(tmp_path, utc, updated=True):
+    """A ``stock-data refresh`` bars step started at *utc* (``refresh_log``, UTC as the refresh stores it): FLAGS's
+    last bar replaced when *updated*, else FLAGS skipped."""
+    summary = {"run": utc.isoformat(), "updated": {}, "skipped": {}, "errors": {}}
+    if updated:
+        summary["updated"]["FLAGS"] = {"from": "2026-07-10", "to": "2026-07-10", "written": 1, "removed": 1}
+    else:
+        summary["skipped"]["FLAGS"] = "on the collection list"
+    with closing(sqlite3.connect(tmp_path / "stock.db")) as conn:
+        conn.execute("INSERT INTO refresh_log (step, started_at, finished_at, ok, summary) VALUES ('bars', ?, ?, 1, ?)",
+                     (utc.isoformat(), (utc + timedelta(minutes=3)).isoformat(), json.dumps(summary)))
+        conn.commit()
+
+
+#: 11:00 and 17:00 in New York (EDT) on the last bar's day, 2026-07-10, and 10:00 the next morning.
+MID_SESSION = datetime(2026, 7, 10, 15, 0, tzinfo=UTC)
+AFTER_CLOSE = datetime(2026, 7, 10, 21, 0, tzinfo=UTC)
+NEXT_MORNING = datetime(2026, 7, 11, 14, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("viewed", [AFTER_CLOSE, NEXT_MORNING])
+def test_a_bar_collected_mid_session_is_still_partial_after_the_close(tmp_path, monkeypatch, viewed):
+    # BUG-351: the rule read the viewing clock, so the bars of a copy collected at 10:50-12:09 New York read as
+    # ordinary rows from 16:00 that day on (the user's next morning), though 112 of 128 carried a part of a day.
+    client = _client(tmp_path, LAST_OK)
+    _collection(tmp_path, MID_SESSION)
+    _pin(monkeypatch, viewed)
+    rows, text = _table(client)
+    assert [r["date"] for r in rows if r["class"] == "hp-partial"] == ["2026-07-10"]
+    assert "Partial: taken before the close" in text.split("hp-flag-key", 1)[1]
+
+
+def test_a_bar_collected_after_the_close_is_complete(tmp_path, monkeypatch):
+    client = _client(tmp_path, LAST_OK)
+    _collection(tmp_path, AFTER_CLOSE)
+    _pin(monkeypatch, AFTER_CLOSE + timedelta(minutes=30))
+    assert _table(client)[0][0]["class"] == ""
+
+
+def test_a_later_bars_step_that_stored_the_day_again_makes_it_complete(tmp_path, monkeypatch):
+    client = _client(tmp_path, LAST_OK)
+    _collection(tmp_path, MID_SESSION)
+    _bars_step(tmp_path, datetime(2026, 7, 11, 1, 0, tzinfo=UTC))   # 21:00 in New York
+    _pin(monkeypatch, NEXT_MORNING)
+    assert _table(client)[0][0]["class"] == ""
+
+
+def test_a_bars_step_that_ran_mid_session_makes_the_bar_partial(tmp_path, monkeypatch):
+    client = _client(tmp_path, LAST_OK)
+    _collection(tmp_path, datetime(2026, 7, 9, 22, 0, tzinfo=UTC))  # the day before, after its close
+    _bars_step(tmp_path, datetime(2026, 7, 10, 18, 0, tzinfo=UTC))  # 14:00 in New York
+    _pin(monkeypatch, NEXT_MORNING)
+    assert _table(client)[0][0]["class"] == "hp-partial"
+
+
+def test_a_collection_after_a_mid_session_bars_step_stored_the_day_again(tmp_path, monkeypatch):
+    client = _client(tmp_path, LAST_OK)
+    _bars_step(tmp_path, MID_SESSION)
+    _collection(tmp_path, AFTER_CLOSE)
+    _pin(monkeypatch, NEXT_MORNING)
+    assert _table(client)[0][0]["class"] == ""
+
+
+def test_a_collection_without_yahoo_or_a_bars_step_that_skipped_the_company_stored_no_bar(tmp_path, monkeypatch):
+    client = _client(tmp_path, LAST_OK)
+    _collection(tmp_path, MID_SESSION)
+    _collection(tmp_path, AFTER_CLOSE, sources="sec_edgar")
+    _bars_step(tmp_path, datetime(2026, 7, 11, 1, 0, tzinfo=UTC), updated=False)
+    _pin(monkeypatch, NEXT_MORNING)
+    assert _table(client)[0][0]["class"] == "hp-partial"
+
+
+def test_without_a_refresh_log_the_collection_decides(tmp_path, monkeypatch):
+    # A database from before `stock-data refresh` has no refresh_log.
+    client = _client(tmp_path, LAST_OK)
+    _collection(tmp_path, MID_SESSION)
+    with closing(sqlite3.connect(tmp_path / "stock.db")) as conn:
+        conn.execute("DROP TABLE refresh_log")
+        conn.commit()
+    _pin(monkeypatch, NEXT_MORNING)
+    assert _table(client)[0][0]["class"] == "hp-partial"
+
+
 @pytest.mark.parametrize("utc, ny", [
     (datetime(2026, 7, 10, 15, 0, tzinfo=UTC), datetime(2026, 7, 10, 11, 0)),      # EDT
     (datetime(2026, 1, 15, 15, 0, tzinfo=UTC), datetime(2026, 1, 15, 10, 0)),      # EST
@@ -183,7 +281,26 @@ def test_only_the_newest_bar_can_be_partial_by_the_clock(tmp_path, monkeypatch):
     (datetime(2026, 11, 1, 7, 0, tzinfo=UTC), datetime(2026, 11, 1, 2, 0)),
 ])
 def test_the_new_york_clock_follows_daylight_saving_time(utc, ny):
-    assert workstation._new_york_clock(utc) == ny
+    from src import new_york  # BUG-350 moved it out of workstation, to share it with the refresh
+
+    assert new_york.new_york_clock(utc) == ny
+    # A naive time is this machine's local time (the collector's stamps), an aware one in another zone its own.
+    assert new_york.new_york_clock(utc.astimezone().replace(tzinfo=None)) == ny
+    assert new_york.new_york_clock(utc.astimezone(timezone(timedelta(hours=7)))) == ny
+    assert new_york.new_york_day(utc) == ny.date()
+
+
+@pytest.mark.parametrize("day, ny, before", [
+    ("2026-07-10", datetime(2026, 7, 10, 15, 59), True),
+    ("2026-07-10", datetime(2026, 7, 10, 16, 0), False),         # the close
+    ("2026-07-10 00:00:00", datetime(2026, 7, 9, 20, 0), True),  # an earlier day; a date stored with a time of day
+    ("2026-07-10", datetime(2026, 7, 11, 9, 0), False),
+])
+def test_taken_before_close_compares_with_16_00_in_new_york_on_the_bars_date(day, ny, before):
+    from src import new_york
+
+    taken = datetime(*ny.timetuple()[:5], tzinfo=timezone(timedelta(hours=-4)))   # EDT
+    assert new_york.taken_before_close(day, taken) is before
 
 
 def test_the_flag_of_a_bar_is_decided_by_bar_flag():

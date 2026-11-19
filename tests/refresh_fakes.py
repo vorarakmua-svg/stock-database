@@ -20,8 +20,9 @@ BENCHMARK = "^GSPC"
 #: The stored daily bars' days, and the days since that Yahoo serves.
 STORED_DAYS = ("2026-10-14", "2026-10-15", "2026-10-16", "2026-10-19", "2026-10-20")
 NEW_DAYS = ("2026-10-21", "2026-10-22", "2026-10-23")
-#: Each company's last collection (Yahoo and the SEC), naive local as the collector writes it.
-COLLECTED = datetime(2026, 10, 21, 9, 30)
+#: Each company's last collection (Yahoo and the SEC), naive local as the collector writes it: 09:30 in New York, so
+#: that its SEC day (BUG-350) is 2026-10-21 on any machine.
+COLLECTED = datetime(2026, 10, 21, 13, 30, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
 #: The run's clock.
 NOW = datetime(2026, 10, 25, 5, 0, tzinfo=timezone.utc)
 

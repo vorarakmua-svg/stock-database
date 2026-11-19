@@ -927,10 +927,12 @@ The aggregates, computed at read time from the trades no amendment restated:
   "Chief Financial Officer" as filers shorten it ("Chief Exec. Officer", "CHIEF EXECUTIVE OFF.", "Chief Fin & Op
   Officer"), in any case. A unit named after it, after a comma, a dash, "of", "at" or a space, makes it the unit's
   head, which doesn't count ("EVP, Pres. & CEO, BGS", "CEO & President - RJA", "CEO of Payments", "CEO Amazon Web
-  Services"), unless it is the company itself, its own ticker or "the Company" ("Pres. & CEO of NCLH", "CEO of the
-  Company"); another role after a comma doesn't ("CEO, Chairman", "CFO, EVP & Treasurer", "CFO, Principal
-  Accounting Officer", "CFO, Corporate Secretary", "CEO, Board Member"; BUG-207, BUG-347). Nor do someone else's or
-  a past chief ("Advisor to the CEO", "Former CEO", "Retired CEO", "Ex-CEO", "CEO (Retired)"), a deputy, an
+  Services"), unless it is the company itself, its own ticker or "the Company", alone or beside another ("Pres. & CEO
+  of NCLH", "CEO of the Company", "President and CEO of the Company and the Bank"); another role after a comma
+  doesn't ("CEO, Chairman", "CFO, EVP & Treasurer", "CFO, Principal Accounting Officer", "CFO, Corporate Secretary",
+  "CEO, Board Member"; BUG-207, BUG-347). Nor do someone else's or a past chief ("Advisor to the CEO", "Former CEO",
+  "Retired CEO", "Ex-CEO", "CEO (Retired)": a bracket's past mark counts when the bracket names no other role, so
+  "President & CEO (former CFO)" is a sitting CEO; BUG-352), a deputy, an
   assistant or a unit's word before it ("Deputy CFO", "Assistant CFO", "Regional CFO", "KFC Division CEO"), or one
   not yet in office ("President & CEO Elect", "CFO - Designate"). The flag is stored per filing and owner
   (`insider_filings.is_ceo_cfo`) when the insiders are collected.
@@ -1730,9 +1732,9 @@ companies on the **collection list**, each with its reason: `quotes`, `bars` and
   collection with SEC data puts it on the collection list. That is the day the collection ran, unless it read the SEC
   handler's 7-day cache (`stock-data`, the web's collect job), whose companyfacts and submissions are as old as the cache
   and lack what was filed since: then the day they were cached (`collection_runs.sec_read_at`, the older of the two;
-  BUG-232). That day is the collector's own, which east of New York runs ahead of the SEC's, so a report filed that day
-  counts; a company never collected with the SEC counts every report in its feed. A company without a CIK is counted and
-  skipped, and a feed that fails is that company's error.
+  BUG-232). That day is the SEC's, New York's, as a filing's date is (not the collector's own, which east of New York
+  runs ahead of it; BUG-350), so a report filed that day counts; a company never collected with the SEC counts every
+  report in its feed. A company without a CIK is counted and skipped, and a feed that fails is that company's error.
   - A company also goes on the list when that latest collection's SEC read was incomplete, as its `collection_runs` row
     says (`incomplete`): it read no facts of the latest report its submissions listed (its companyfacts lacked them,
     the SEC's lag, BUG-251, and the filing's own XBRL couldn't be read either, or their request failed), or it
@@ -2674,7 +2676,7 @@ Per-ticker function codes (`TICKER CODE` → `/stocks/{TICKER}?tab=...`):
 | `FA` | Financial analysis | Annual/quarterly/TTM statements |
 | `ERN` | Earnings | Earnings-surprise history (EPS estimate vs. actual) |
 | `STAT` | Key statistics | Valuation & market snapshot (P/E, market cap, beta, …) and the Quality section (composite, ranks with the industry's beside them, scores, warning signs) |
-| `HP` | Historical prices | Daily OHLCV price table, newest first. A price under $1 has four decimals, a zero price and a zero volume read "—"; a bar with no price, or flat with no volume, is marked *placeholder*, and the newest bar is marked *partial* when it is dated today in New York before the 16:00 close or its open or close lies outside its high-low range (the CSV and the chart carry the same bars) |
+| `HP` | Historical prices | Daily OHLCV price table, newest first. A price under $1 has four decimals, a zero price and a zero volume read "—"; a bar with no price, or flat with no volume, is marked *placeholder*, and the newest bar is marked *partial* when it was taken before its session's 16:00 close in New York (when the latest collection that stored it ran: a collection with Yahoo, or a `stock-data refresh` bars step that updated it; without one, now), so until a later collection stores the day again, or when its open or close lies outside its high-low range (the CSV and the chart carry the same bars) |
 | `DVD` | Dividends | Dividend payments and stock splits |
 | `HDS` | Holders | The gurus' 13F positions in the stock (a Gurus section), then Yahoo's institutional and mutual-fund holders |
 | `INS` | Insiders | The SEC's Form 4 trades with open-market, CEO/CFO and cluster-buy aggregates (Yahoo's rows where none is stored) |

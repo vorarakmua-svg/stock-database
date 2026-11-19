@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import statistics
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple, Union
 
@@ -383,6 +383,35 @@ class Reader:
         it can't read."""
         row = self._conn.execute("SELECT date(max(date)) FROM price_bars WHERE ticker = ?", (ticker,)).fetchone()
         return date.fromisoformat(row[0]) if row[0] else None
+
+    def bars_stored_at(self, ticker: str) -> Optional[datetime]:
+        """When the latest collection that stored *ticker*'s bars began (aware), or None without one (BUG-351): its
+        latest collection with Yahoo (``collection_runs.collected_at``, the collector's local time), or a
+        ``stock-data refresh`` bars step that updated its bars (``refresh_log``: the step's start, UTC), whichever
+        is later. Either asked Yahoo for the bars after it began."""
+        times: List[datetime] = []
+        row = self._conn.execute("SELECT max(collected_at) FROM collection_runs WHERE ticker = ? "
+                                 "AND data_sources LIKE '%yahoo%'", (ticker,)).fetchone()
+        if row[0]:
+            try:
+                times.append(datetime.fromisoformat(str(row[0])).astimezone())  # naive: the collector's local time
+            except ValueError:
+                pass
+        try:
+            steps = self._conn.execute(
+                "SELECT started_at, summary FROM refresh_log WHERE step = 'bars' AND summary LIKE ? "
+                "ORDER BY started_at DESC", (f'%"{ticker}"%',)).fetchall()
+        except sqlite3.OperationalError:  # a database from before the refresh
+            steps = []
+        for started_at, summary in steps:
+            updated = (_json_object(summary) or {}).get("updated")
+            if isinstance(updated, dict) and ticker in updated:
+                try:
+                    times.append(datetime.fromisoformat(str(started_at)).astimezone())
+                except ValueError:
+                    continue
+                break
+        return max(times, default=None)
 
     def analyst_snapshot(self, ticker: str) -> Optional[Dict[str, Any]]:
         """Newest ``analyst_snapshots`` row by ``collected_at``, or ``None``."""

@@ -71,6 +71,7 @@ from .fetchers.stock_data_fetcher import StockDataFetcher
 from .fetchers.yahoo_handler import YahooHandler
 from .market.collect import SOURCES as MARKET_SOURCES
 from .market.collect import collect_market
+from .new_york import new_york_day
 from .ownership.collect import (
     Form4Source,
     ThirteenFSource,
@@ -462,16 +463,28 @@ def _lacking(lacked: Dict[str, Any]) -> str:
     return " and ".join(parts)
 
 
+def _local(text: str) -> datetime:
+    """A ``collection_runs`` time (ISO) as an aware one: without an offset, the collector's local time."""
+    when = datetime.fromisoformat(text)
+    return when if when.tzinfo is not None else when.astimezone()
+
+
 def _read_at(run: Sequence[Any]) -> datetime:
     """When the SEC served a collection's SEC data, *run* being its ``collection_runs`` (collected_at, incomplete,
     sec_read_at): its ``sec_read_at`` (a payload from the SEC handler's 7-day cache is as old as the cache, BUG-232),
     else its collection's time, which read the SEC as it ran (every run stored before the column)."""
     if run[2]:
         try:
-            return _utc(str(run[2]))
+            return _local(str(run[2]))
         except ValueError:
             pass
-    return _utc(str(run[0]))
+    return _local(str(run[0]))
+
+
+def _read_day(run: Sequence[Any]) -> str:
+    """The SEC's day (New York's, by which a filing is dated) of ``_read_at``, ISO: not the collector's own, which east
+    of New York runs ahead of it (BUG-350)."""
+    return new_york_day(_read_at(run)).isoformat()
 
 
 def incomplete_tries(runs: Sequence[Sequence[Any]]) -> Optional[Dict[str, Any]]:
@@ -482,8 +495,8 @@ def incomplete_tries(runs: Sequence[Sequence[Any]]) -> Optional[Dict[str, Any]]:
     The gap's collections are those in a row back from the latest that were incomplete in any way (a report's facts
     unread, the predecessor's filings unread, or both: a predecessor read, or a filing's own XBRL read, that fails and
     succeeds by turns starts no new count, BUG-289). They end at a complete collection, at one that lacked another
-    report, and at one whose SEC data the SEC served before the day the gap's report was filed: a new report's lag gets
-    its own tries. (On that day, the collector's, which east of New York runs ahead of the SEC's, it may have seen it.)
+    report, and at one whose SEC data the SEC served before the day the gap's report was filed (``_read_day``, the SEC's
+    day): a new report's lag gets its own tries. (On that day it may have seen it.)
     The tries are the gap's reads of the SEC (``_read_at``), oldest first, each RETRY_SPACING or more after the last
     try: a collection on the SEC handler's 7-day cache read what the collection that cached it read, and is no try
     (BUG-281), and reads days apart are one (BUG-289).
@@ -499,7 +512,7 @@ def incomplete_tries(runs: Sequence[Sequence[Any]]) -> Optional[Dict[str, Any]]:
         accession, predecessor = _gap(what)
         if (accession, predecessor) == (None, False) or (report is not None and accession not in (None, report)):
             break
-        if filed and _read_at(run).date().isoformat() < filed:
+        if filed and _read_day(run) < filed:
             break
         if report is None and accession is not None:
             listed = what.get("report")
@@ -922,9 +935,9 @@ class _Run:
     def _sec(self, result: StepResult) -> None:
         """Every company's submissions feed: each report (``is_report``) filed on or after the day the SEC served
         the SEC data of its last collection with the SEC puts it on the list (``_read_at``: a collection by hand that
-        read the SEC handler's 7-day cache lacks what was filed since, BUG-232). The day is the collector's own
-        (``collection_runs``), which east of New York runs ahead of the SEC's: a report filed on it may have come after
-        the read, so it counts. That collection itself does when its SEC read was incomplete (``_again``)."""
+        read the SEC handler's 7-day cache lacks what was filed since, BUG-232). The day is the SEC's, New York's
+        (``_read_day``; the collector's own runs ahead of it east of New York, BUG-350): a report filed on it may have
+        come after the read, so it counts. That collection itself does when its SEC read was incomplete (``_again``)."""
         s = result.summary
         s.update({"feeds": 0, "new_filings": {}, "incomplete": {}, "incomplete_left": {}, "no_cik": [], "errors": {}})
         # What the runs say: what their SEC reads lacked and when the SEC served them. A database last written before
@@ -964,7 +977,7 @@ class _Run:
         # (*columns*: NULL where the runs don't say).
         runs = self._rows(f"SELECT collected_at, {columns} FROM collection_runs "
                           "WHERE ticker = ? AND data_sources LIKE '%sec_edgar%' ORDER BY collected_at DESC", ticker)
-        since = _read_at(runs[0]).date().isoformat() if runs else None
+        since = _read_day(runs[0]) if runs else None
         new = [f for f in filings
                if is_report(f.get("form")) and (since is None or str(f.get("filingDate") or "")[:10] >= since)]
         if new:

@@ -112,6 +112,28 @@ def test_another_role_or_the_company_after_the_name_is_the_companys_chief(title)
     assert ceo_or_cfo(title) is True
 
 
+# BUG-352: a bracket's past mark marks the chief past only when it is about the chief itself (made-up titles; the
+# census of the real ones: qa/evidence/bug349-investigation.txt).
+@pytest.mark.parametrize("title", [
+    # A sitting chief's past role in a bracket: the company's chief (BUG-347's bracket rule read them as past).
+    "President & CEO (former CFO)", "Chairman & CEO (Former President)", "Interim CEO (Ex-CFO)",
+    "CFO (Former CEO)", "CEO (Former Board Member)", "Chief Executive Officer (Retired Chairman)",
+    # The company beside another entity: a bank holding company's chief of both.
+    "President and CEO of the Company and the Bank", "CEO of the Company & the Bank", "CFO of the Corporation and Bank",
+])
+def test_a_past_role_in_a_bracket_or_the_company_beside_another_is_still_the_companys_chief(title):
+    assert ceo_or_cfo(title, "XYZ") is True
+
+
+@pytest.mark.parametrize("title", [
+    # The bracket's past mark about the chief itself, alone, with the chief's own name or with a date.
+    "CEO (Retired)", "CEO (former)", "CFO (Former CFO)", "CEO (Ex-CEO)", "Chief Executive Officer (Retired)",
+    "CEO & President (Retired)", "CEO (retired 2023)", "C.F.O. (Former Chief Financial Officer)",
+])
+def test_a_bracket_about_the_chief_itself_still_marks_it_past(title):
+    assert ceo_or_cfo(title, "XYZ") is False
+
+
 @pytest.mark.parametrize("title", [  # such words without a comma, or a unit starting with one, stay units
     "CEO Corporate Banking", "CFO Board Services", "CEO, Corporate Banking", "CEO, Memberworks",
     "CEO, Boarders Inc.", "CEO of the Company's Bank", "CEO of Principal Financial Group",
