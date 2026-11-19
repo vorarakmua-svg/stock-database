@@ -656,7 +656,7 @@ class Reader:
         tables = {row[0] for row in self._conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' "
             "AND name IN ('valuation_ranges', 'quality_scores', 'insider_trades', 'insider_filings', "
-            "'guru_quarters', 'guru_positions', 'valuation_indicators')"
+            "'guru_quarters', 'guru_positions', 'guru_filings', 'valuation_indicators')"
         )}
         history = "valuation_ranges" in tables
         # A scores table from older code may lack a column a field reads (debt_to_ebitda): that field is NULL.
@@ -667,7 +667,8 @@ class Reader:
         # lacks.
         insiders = {"insider_trades", "insider_filings"} <= tables and {"superseded_by", "price_suspect"} <= {
             row[1] for row in self._conn.execute("PRAGMA table_info(insider_trades)")}
-        gurus = {"guru_quarters", "guru_positions"} <= tables
+        # The gurus' fields read the store's clock from the filings (portfolio.CLOCK_SQL).
+        gurus = {"guru_quarters", "guru_positions", "guru_filings"} <= tables
         indicators = "valuation_indicators" in tables
         # A companies table from before the SEC's SIC codes (Milestone 5): no code, and an industry matches nothing.
         sic = "sic" in {row[1] for row in self._conn.execute("PRAGMA table_info(companies)")}

@@ -4,23 +4,24 @@ gurus' names (``guru_filers``), their filings (``guru_filings``) and our compani
 (docs/superpowers/specs/2026-10-22-sec-ownership-design.md). Read-only, and empty (or None) for a database without
 the tables.
 
-A guru's latest quarter is the latest period stored for it. A position's ``put_call`` is None for shares and principal
-amounts (stored as ''), 'Put' or 'Call' for options; ``ours`` says its ticker is one of our companies.
+A guru's latest quarter is its latest complete one (``portfolio.LATEST_QUARTERS_SQL``; its latest, flagged incomplete,
+when none is). A position's ``put_call`` is None for shares and principal amounts (stored as ''), 'Put' or 'Call' for
+options; ``ours`` says its ticker is one of our companies.
 """
 from __future__ import annotations
 
 import json
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..ownership.portfolio import share_classes
+from ..ownership.portfolio import LATEST_QUARTERS_SQL, share_classes
 from .repository import Reader
 
 #: The changes of a quarter, in the order the views group them.
 CHANGE_GROUPS: Tuple[str, ...] = ("new", "added", "reduced", "sold_out")
 #: The tables without which there is nothing to show.
 _TABLES = frozenset({"guru_quarters", "guru_positions"})
-#: Each guru's latest stored quarter, to join on (guru_cik, period).
-_LATEST = "(SELECT guru_cik, MAX(period) AS period FROM guru_quarters GROUP BY guru_cik)"
+#: Each guru's latest quarter, to join on (guru_cik, period).
+_LATEST = LATEST_QUARTERS_SQL
 #: A quarter's positions in the views' order: the shares before the options, the largest first (a position sold
 #: out by what it was worth before).
 _ORDER = "put_call != '', COALESCE(value_usd, value_before) DESC, security, put_call"
@@ -122,16 +123,18 @@ def _filings(r: Reader, tables: Set[str], accessions: List[str]) -> List[Dict[st
 
 def guru_view(r: Reader, cik: str, period: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """One guru's quarter, its latest unless *period* names another: the quarter (filing date, total value, whether
-    complete, whether the quarter before is there, its filings), the periods stored (newest first), the positions
-    held (the shares before the options, the largest first) and the quarter's changes grouped (CHANGE_GROUPS; None
-    without the quarter before). None for a guru or period not stored."""
+    complete, whether its changes exist, its filings), the periods stored (newest first), the positions held (the
+    shares before the options, the largest first) and the quarter's changes grouped (CHANGE_GROUPS; None without the
+    quarter before, or with either incomplete). None for a guru or period not stored."""
     tables = _tables(r)
     if not _TABLES <= tables:
         return None
     cik = _cik(cik)
     periods = [p for (p,) in r.conn.execute(
         "SELECT period FROM guru_quarters WHERE guru_cik = ? ORDER BY period DESC", (cik,))]
-    period = period or (periods[0] if periods else None)
+    if period is None:
+        latest = r.conn.execute(f"SELECT period FROM {_LATEST} WHERE guru_cik = ?", (cik,)).fetchone()
+        period = latest[0] if latest else None
     if period not in periods:
         return None
     quarter = r.conn.execute("SELECT * FROM guru_quarters WHERE guru_cik = ? AND period = ?", (cik, period)).fetchone()

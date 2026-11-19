@@ -914,9 +914,10 @@ filer's CIK, as text without leading zeros.
   so there is no ticker and `name` is the issuer's name from the holdings.
 - **`guru_quarters`**: one row per (`guru_cik`, `period`), a guru's quarter as built from the filings that
   stand: `total_value`, `positions` (held, options too), `complete` (0 when a filer's report for the quarter
-  is missing or fails its checksum: its rows are left out), `has_prior` (1 when the quarter before is stored,
-  so the changes exist), `accessions` (a JSON list of the filings it stands on), `filed` (the latest of their
-  filing days) and `computed_at`.
+  fails its checksum, or a filer of the quarter before hasn't reported it and its filing deadline hasn't passed
+  by the latest 13F filing date stored: their rows are left out), `has_prior` (1 when the changes exist: the
+  quarter before is stored and both are complete), `accessions` (a JSON list of the filings it stands on),
+  `filed` (the latest of their filing days) and `computed_at`.
 - **`guru_positions`**: one row per position of a quarter, (`guru_cik`, `period`, `security`, `put_call`):
   - `security` is the ticker where `cusip_map` has one, else the CUSIP; `ticker` is NULL where there is none;
     `cusips` lists the CUSIPs the position covers, comma-separated; `issuer`, `title_of_class` and
@@ -928,22 +929,25 @@ filer's CIK, as text without leading zeros.
   - the change from the quarter before: `action` (`new`, `added`, `reduced` or `unchanged`), `shares_before`
     and `value_before`, `split_factor` (the share splits between the two quarters, applied to the shares
     before) and `change_pct` (the change in shares against the split-adjusted shares before, as a fraction:
-    0.25 is a quarter more; NULL for a new position). `action` is NULL on every row of a quarter whose quarter
-    before isn't stored (`has_prior = 0`);
+    0.25 is a quarter more; NULL for a new position). `action` is NULL on every row of a quarter without changes
+    (`has_prior = 0`: the quarter before isn't stored, or one of the two is incomplete);
   - a `sold_out` row for each position of the quarter before that is gone: `shares`, `value_usd` and `weight`
     are NULL, and `shares_before` and `value_before` say what the guru held. To leave these out use
     `action IS NOT 'sold_out'`: `<> 'sold_out'` also drops the rows whose `action` is NULL.
 
-Each guru has its own latest quarter (`MAX(period)` in `guru_quarters`): Scion's is Q3 2025, the others'
-Q2 2026. `guru_positions` is derived from `guru_filings`, `guru_holdings`, `cusip_map` and `split_events`, and
-`--positions` rebuilds it.
+Each guru has its own latest quarter, its latest complete one (`MAX(period)` of its `guru_quarters` rows with
+`complete = 1`; the pages fall back to its latest, flagged incomplete, when none is): Scion's is Q3 2025, the
+others' Q2 2026. The screener's `gurus_holding` and `gurus_buying` also leave out a stale guru, one whose next
+quarter's filing deadline (45 days after it, plus 3 for a deadline moved to a business day) is before the latest
+13F filing date stored: Scion, whose Q4 2025 report was due by 2026-02-17. `guru_positions` is derived from
+`guru_filings`, `guru_holdings`, `cusip_map` and `split_events`, and `--positions` rebuilds it.
 
 ```sql
 -- Each guru's latest quarter: when it was filed, what it holds, and whether it stands complete
 SELECT g.manager, q.period, q.filed, q.total_value, q.positions, q.complete, q.has_prior
 FROM guru_quarters q
 JOIN guru_filers g ON g.filer_cik = q.guru_cik
-WHERE q.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = q.guru_cik)
+WHERE q.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = q.guru_cik AND complete = 1)
 ORDER BY q.total_value DESC;
 
 -- Berkshire Hathaway's ten largest positions in its latest quarter
@@ -951,7 +955,7 @@ SELECT p.ticker, p.issuer, p.shares, p.value_usd, ROUND(p.weight * 100, 1) AS we
 FROM guru_positions p
 WHERE p.guru_cik IN (SELECT guru_cik FROM guru_filers WHERE manager = 'Warren Buffett')
   AND p.put_call = '' AND p.action IS NOT 'sold_out'
-  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik)
+  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik AND complete = 1)
 ORDER BY p.weight DESC
 LIMIT 10;
 
@@ -961,22 +965,24 @@ SELECT g.manager, p.ticker, p.period, p.shares, p.value_usd, ROUND(p.weight * 10
 FROM guru_positions p
 JOIN guru_filers g ON g.filer_cik = p.guru_cik
 WHERE p.ticker IN ('GOOGL', 'GOOG') AND p.put_call = '' AND p.action IS NOT 'sold_out'
-  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik)
+  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik AND complete = 1)
 ORDER BY p.value_usd DESC;
 
--- How many gurus hold it (each counted once, as the screener's gurus_holding) and how many are buying it
+-- How many gurus hold it (each counted once, as the screener's gurus_holding) and how many are buying it:
+-- a stale guru left out, its next quarter's deadline (period + 3 months + 48 days) before the latest filing date
 SELECT COUNT(DISTINCT CASE WHEN p.action IS NOT 'sold_out' THEN p.guru_cik END) AS holding,
        COUNT(DISTINCT CASE WHEN p.action IN ('new', 'added') THEN p.guru_cik END) AS buying
 FROM guru_positions p
 WHERE p.ticker IN ('GOOGL', 'GOOG') AND p.put_call = ''
-  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik);
+  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik AND complete = 1)
+  AND date(p.period, '+1 day', '+3 months', '-1 day', '+48 days') >= (SELECT MAX(filed) FROM guru_filings);
 
 -- The gurus that sold GOOGL or GOOG out in their latest quarter, and what they held before
 SELECT g.manager, p.ticker, p.period, p.shares_before, p.value_before
 FROM guru_positions p
 JOIN guru_filers g ON g.filer_cik = p.guru_cik
 WHERE p.ticker IN ('GOOGL', 'GOOG') AND p.put_call = '' AND p.action = 'sold_out'
-  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik);
+  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik AND complete = 1);
 
 -- What the gurus hold together: per security, the gurus holding it, their shares and value summed,
 -- and how many bought (new or added) and sold (reduced or sold out) it in their latest quarter
@@ -986,7 +992,7 @@ SELECT p.security, MIN(p.issuer) AS issuer,
        COUNT(DISTINCT CASE WHEN p.action IN ('new', 'added') THEN p.guru_cik END) AS buyers,
        COUNT(DISTINCT CASE WHEN p.action IN ('reduced', 'sold_out') THEN p.guru_cik END) AS sellers
 FROM guru_positions p
-JOIN (SELECT guru_cik, MAX(period) AS period FROM guru_quarters GROUP BY guru_cik) l
+JOIN (SELECT guru_cik, MAX(period) AS period FROM guru_quarters WHERE complete = 1 GROUP BY guru_cik) l
   ON l.guru_cik = p.guru_cik AND l.period = p.period
 WHERE p.put_call = ''
 GROUP BY p.security
@@ -1000,7 +1006,7 @@ SELECT p.action, p.security, p.issuer, p.shares_before, p.shares,
 FROM guru_positions p
 WHERE p.guru_cik IN (SELECT guru_cik FROM guru_filers WHERE manager = 'Warren Buffett')
   AND p.put_call = '' AND p.action IN ('new', 'added', 'reduced', 'sold_out')
-  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik)
+  AND p.period = (SELECT MAX(period) FROM guru_quarters WHERE guru_cik = p.guru_cik AND complete = 1)
 ORDER BY p.action, MAX(COALESCE(p.value_usd, 0), COALESCE(p.value_before, 0)) DESC;
 
 -- The filings whose values the holdings' prices put in thousands after the SEC's switch to dollars

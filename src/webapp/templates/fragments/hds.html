@@ -30,8 +30,8 @@
       </tbody>
     </table>
   </div>
-  <p class="text-muted mt-2">From each guru's latest 13F (long positions at the quarter's end, filed up to 45 days
-    after){% if other_classes %}, {{ other_classes | join(" and ") }} too, the other share class{% endif %}; the change
+  <p class="text-muted mt-2">From each guru's latest complete 13F quarter (long positions at the quarter's end, filed
+    up to 45 days after){% if other_classes %}, {{ other_classes | join(" and ") }} too, the other share class{% endif %}; the change
     is against the quarter before, by shares. <a href="/gurus">All gurus</a></p>
   {% else %}
   <div class="empty-state">No guru's latest 13F holds it.</div>

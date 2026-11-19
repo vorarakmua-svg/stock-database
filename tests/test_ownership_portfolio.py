@@ -10,6 +10,7 @@ from decimal import Decimal
 import pytest
 
 from src.exporters.sqlite_store import SQLiteStore, read_only_uri
+from src.ownership import portfolio
 from src.ownership.collect import FilingRef
 from src.ownership.gurus import Guru
 from src.ownership.portfolio import (
@@ -206,6 +207,76 @@ def test_a_gurus_quarter_is_the_union_of_its_filers():
     assert _held(q) == {("A", None): (150.0, 1500.0), ("B", None): (10.0, 100.0), ("C", None): (1.0, 10.0)}
 
 
+# ---- completeness: the filing deadline ----------------------------------------------------------------------------
+
+def test_the_period_after():
+    assert [portfolio.next_period(p) for p in ("2025-09-30", "2025-12-31", Q1, Q2)] == [
+        "2025-12-31", Q1, Q2, "2026-09-30"]
+
+
+def test_a_13f_is_due_45_days_after_its_quarter_and_3_more_for_a_deadline_moved_to_a_business_day():
+    # 45 days after 2025-12-31 is Saturday 2026-02-14; Presidents' Day moved the reports to Tuesday 02-17.
+    assert portfolio.filing_deadline("2025-12-31") == "2026-02-17"
+    assert [portfolio.filing_deadline(p) for p in ("2025-09-30", Q1, Q2)] == ["2025-11-17", "2026-05-18",
+                                                                               "2026-08-17"]
+
+
+def test_a_deadline_has_passed_once_a_filing_dated_after_it_is_stored():
+    assert not portfolio.deadline_passed(Q2, "2026-08-17")
+    assert portfolio.deadline_passed(Q2, "2026-08-18")
+    assert not portfolio.deadline_passed(Q2, None)  # nothing stored, no clock
+
+
+def test_the_sqls_next_deadline_is_the_pythons():
+    conn = sqlite3.connect(":memory:")
+    periods = [f"{year}-{end}" for year in range(2019, 2032) for end in ("03-31", "06-30", "09-30", "12-31")]
+    try:
+        got = [conn.execute(f"SELECT {portfolio.next_deadline_sql('?')}", (p,)).fetchone()[0] for p in periods]
+    finally:
+        conn.close()
+    assert got == [portfolio.filing_deadline(portfolio.next_period(p)) for p in periods]
+
+
+def test_a_quarter_is_current_until_the_next_ones_deadline_has_passed_by_the_stores_clock():
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.execute("CREATE TABLE guru_filings (filed TEXT)")
+
+        def current(period):
+            return conn.execute(f"SELECT {portfolio.current_sql('?')}", (period,)).fetchone()[0]
+
+        assert current(Q1) == 1  # no filing stored: no clock
+        conn.execute("INSERT INTO guru_filings VALUES ('2026-08-17')")  # Q2's deadline: Q1 is still current
+        assert (current(Q1), current(Q2)) == (1, 1)
+        conn.execute("INSERT INTO guru_filings VALUES ('2026-08-18')")  # past it: a guru at Q1 is stale
+        assert (current(Q1), current(Q2)) == (0, 1)
+    finally:
+        conn.close()
+
+
+def test_a_filer_that_reported_the_quarter_before_is_awaited_until_the_deadline():
+    # Pershing Square Capital Management reported Q1; for Q2 it filed a 13F-NT, as Pershing Square Inc. took the
+    # portfolio over. Until Q2's deadline has passed it may still report, and its Q1 positions would read sold out.
+    filings = [_filing("PSCM", period=Q1, filed="2026-05-14", filer="1336528"),
+               _filing("PSI-Q1", period=Q1, filed="2026-05-15", filer="2026053"), _filing("PSI", filer="2026053")]
+    entries = _entries("PSCM", ("A", 100, 1000)) + _entries("PSI-Q1", ("B", 1, 10)) + _entries("PSI", ("B", 2, 20))
+    q = build_quarter(Q2, filings, entries)  # by the filings' own dates: the latest is PSI's, 2026-08-14
+    assert (q.complete, q.accessions, _held(q)) == (False, ("PSI",), {("B", None): (2.0, 20.0)})
+    assert build_quarter(Q2, filings, entries, clock="2026-08-17").complete is False
+    assert build_quarter(Q2, filings, entries, clock="2026-08-18").complete is True
+    assert build_quarters(filings, entries, clock="2026-08-18")[Q2].complete is True
+    assert build_quarters(filings, entries)[Q2].complete is False
+    # A filing of the guru's dated after the deadline: by its own dates, the deadline has passed.
+    late = filings + [_new_holdings("PSI-N", "2026-08-18", filer="2026053")]
+    assert build_quarter(Q2, late, entries).complete is True
+    # Both filers reporting Q2 too, nothing is awaited: complete before the deadline.
+    both = filings + [_filing("PSCM-Q2", filer="1336528")]
+    assert build_quarter(Q2, both, entries, clock="2026-08-14").complete is True
+    # A filer of two quarters before, not of the one before, isn't awaited.
+    gap = [_filing("PSCM", period="2025-12-31", filed="2026-02-17", filer="1336528"), _filing("PSI", filer="2026053")]
+    assert build_quarter(Q2, gap, entries).complete is True
+
+
 # ---- positions ----------------------------------------------------------------------------------------------------
 
 def test_options_are_kept_apart_from_the_shares():
@@ -291,6 +362,18 @@ def test_no_changes_without_the_quarter_before():
     now = _quarter(Q2, ("A", 1, 10))
     assert quarter_changes(now, None) is None
     assert quarter_changes(now, _quarter("2025-12-31", ("A", 1, 10))) is None  # not the quarter before
+
+
+def test_no_changes_when_either_quarter_is_incomplete():
+    # A filer's report failing its checksum leaves its positions out: against it, every one of them would read sold
+    # out, or new.
+    held_q1, held_q2 = _quarter(Q1, ("A", 1, 10)), _quarter(Q2, ("A", 1, 10))
+    failed_q1 = build_quarter(Q1, [_filing("X", period=Q1, filed="2026-05-15", ok=False)], [])
+    failed_q2 = build_quarter(Q2, [_filing("Y", ok=False)], [])
+    assert not failed_q1.complete and not failed_q2.complete
+    assert quarter_changes(failed_q2, held_q1) is None
+    assert quarter_changes(held_q2, failed_q1) is None
+    assert [c.action for c in quarter_changes(held_q2, held_q1)] == ["unchanged"]
 
 
 def test_a_position_from_nothing_has_no_percent():
@@ -427,6 +510,22 @@ def test_load_guru_reads_its_quarters_and_their_changes(tmp_path):
     assert [(c.security, c.ticker, c.cusips, c.action, c.split_factor, c.change_pct) for c in guru.changes[Q2]] == [
         ("BKNG", "BKNG", ("09857L108",), "unchanged", 25.0, 0.0), ("HHH", None, ("HHH",), "sold_out", 1.0, None),
         ("NEW", None, ("NEW",), "new", 1.0, None)]
+
+
+def test_load_guru_awaits_a_filer_by_the_stores_clock(tmp_path):
+    # Without the failed restatement of 2026-08-20, the latest filing stored is of 2026-08-14: the store hasn't read
+    # past Q2's deadline, and Pershing Square Capital Management, which reported Q1, may still report Q2.
+    conn = sqlite3.connect(_store_db(tmp_path))
+    try:
+        conn.execute("DELETE FROM guru_filings WHERE accession = 'PSI-Q2-BAD'")
+        waiting = load_guru(conn, "2026053")
+        # Another guru's filing dated after the deadline: every guru's filings are read together, so it has passed.
+        conn.execute("UPDATE guru_filings SET filed = '2026-08-18' WHERE accession = 'H-Q2'")
+        passed = load_guru(conn, "2026053")
+    finally:
+        conn.close()
+    assert (waiting.quarters[Q2].complete, waiting.changes[Q2]) == (False, None)
+    assert passed.quarters[Q2].complete is True and passed.changes[Q2] is not None
 
 
 def test_load_guru_on_a_database_from_before_the_cusip_map(tmp_path):

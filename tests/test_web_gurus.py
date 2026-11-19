@@ -53,9 +53,10 @@ def _seed(db):
     """Three gurus' Q1 and Q2 2026, through the collector's own steps.
 
     Berkshire adds AAA, buys GOOGL, GOOG and AAA calls (worth more than two of its share positions), sells out of BBB
-    and XYZ. Li Lu's Q2 has no quarter before, and holds EEE only in calls.
-    Pershing Square cuts AAA by half, buys an unmapped security, sells out of GOOG; its other filer's Q2 report fails
-    its checksum."""
+    and XYZ. Li Lu's Q2 has no quarter before, and holds EEE only in calls; a later report of its Q2, of 2026-08-20,
+    fails its checksum and is left out, and dates the store past Q2's deadline (2026-08-17).
+    Pershing Square cuts AAA by half, buys an unmapped security, sells out of GOOG: Pershing Square Capital Management
+    reported Q1 and Pershing Square Inc. Q2, as they did in 2026, the deadline past."""
     store = SQLiteStore(db_path=db)
     store.export_guru_filings(BUFFETT, [
         _filing("B-Q1", "1067983", Q1, "2026-05-15", [(AAA, 100, 10000), (BBB, 50, 5000), (XYZ, 10, 1000)]),
@@ -65,17 +66,32 @@ def _seed(db):
     store.export_guru_filings(LI_LU, [
         _filing("H-Q2", "1709323", Q2, "2026-08-13", [(AAA, 30, 3600), (BBB, 10, 1000), (GOOG, 3, 600),
                                                       (EEE, 2, 200, "Call")]),
+        _filing("H-Q2-X", "1709323", Q2, "2026-08-20", [(AAA, 1, 1)], entry_total=9),
     ], NOW)
     store.export_guru_filings(ACKMAN, [
         _filing("P-Q1", "1336528", Q1, "2026-05-14", [(AAA, 40, 4000), (GOOG, 5, 1000)]),
         _filing("P-Q2", "2026053", Q2, "2026-08-12", [(AAA, 20, 2400), (UNM, 10, 5000)]),
-        _filing("P-Q2-X", "1336528", Q2, "2026-08-12", [(AAA, 1, 1)], entry_total=9),
     ], NOW)
     store.export_cusip_map(
         [{"cusip": c, "ticker": t, "name": NAMES[c], "source": "universe", "mapped_at": NOW}
          for c, t in ((AAA, "AAA"), (BBB, "BBB"), (EEE, "EEE"), (GOOGL, "GOOGL"), (GOOG, "GOOG"))]
         + [{"cusip": c, "ticker": None, "name": NAMES[c], "source": "none", "mapped_at": NOW} for c in (UNM, XYZ)])
     store_guru_positions(db, [BUFFETT, LI_LU, ACKMAN])
+
+
+SCION = Guru("1649339", "Scion Asset Management, LLC", "Michael Burry")
+
+
+def _add(db, guru, *filings):
+    """Store more of a guru's filings, then every guru's quarters again."""
+    SQLiteStore(db_path=db).export_guru_filings(guru, list(filings), NOW)
+    store_guru_positions(db, [BUFFETT, LI_LU, ACKMAN, SCION])
+
+
+def _screened(db):
+    with Reader(db) as r:
+        return {row["ticker"]: (row["gurus_holding"], row["gurus_buying"])
+                for row in r.screen(ScreenSpec(filters=[]))["items"]}
 
 
 def _add_alphabet(db):
@@ -112,7 +128,7 @@ def test_the_list_gives_each_gurus_latest_quarter_largest_first(web_db):
         ("1709323", "Li Lu", Q2, "2026-08-13", 5400.0)]
     # Positions held (shares and principal amounts; the calls apart), and the quarter's new and sold-out ones.
     assert [(g["positions"], g["new"], g["sold_out"], g["complete"], g["has_prior"]) for g in gurus] == [
-        (3, 2, 2, True, True), (2, 1, 1, False, True), (3, None, None, True, False)]
+        (3, 2, 2, True, True), (2, 1, 1, True, True), (3, None, None, True, False)]
     assert gurus[1]["filers"] == ["PERSHING SQUARE INC.", "Pershing Square Capital Management, L.P."]
 
 
@@ -150,7 +166,7 @@ def test_another_quarter_of_a_guru_and_one_without_the_quarter_before(web_db):
     assert (q1["period"], q1["has_prior"], q1["changes"]) == (Q1, False, None)
     assert [(p["security"], p["value"], p["action"]) for p in q1["positions"]] == [
         ("AAA", 10000.0, None), ("BBB", 5000.0, None), (XYZ, 1000.0, None)]
-    assert ackman["complete"] is False and [p["security"] for p in ackman["positions"]] == [UNM, "AAA"]
+    assert ackman["complete"] is True and [p["security"] for p in ackman["positions"]] == [UNM, "AAA"]
     assert [p["security"] for p in ackman["changes"]["reduced"]] == ["AAA"]
 
 
@@ -237,7 +253,7 @@ def test_the_gurus_page_lists_them_with_a_note_on_the_data(client, web_db):
     html = response.text
     assert html.index("Warren Buffett") < html.index("Bill Ackman") < html.index("Li Lu")
     assert 'href="/gurus/1067983"' in html and 'href="/gurus/2026053"' in html and 'href="/gurus/portfolio"' in html
-    assert "$27.00K" in html and "Incomplete" in html and "Pershing Square Capital Management, L.P." in html
+    assert "$27.00K" in html and "Incomplete" not in html and "Pershing Square Capital Management, L.P." in html
     assert "13F" in html and "45 days" in html and "long" in html
 
 
@@ -266,7 +282,6 @@ def test_a_gurus_earlier_quarter_and_its_notices(client, web_db):
     _seed(web_db)
     q1 = client.get(f"/gurus/1067983?period={Q1}").text
     assert f'<option value="{Q1}" selected>' in q1 and "No prior quarter" in q1 and "$10.00K" in q1
-    assert "Incomplete" in client.get("/gurus/2026053").text
 
 
 def test_an_unknown_guru_or_quarter_is_404(client, web_db):
@@ -420,3 +435,97 @@ def test_the_screener_offers_the_guru_fields(client, web_db):
     # One column, sorted by the gurus holding, the buyers among them in brackets (AAA's 3, 1 buying).
     assert "sort=gurus_holding" in results and "Gurus (buying)" in results
     assert '3 <span class="text-muted" title="Of them buying' in results and ">(1)</span>" in results
+
+
+# ---- the latest complete quarter, and a stale one (BUG-211, BUG-218) ---------------------------------------------
+
+
+def test_an_incomplete_latest_quarter_gives_way_to_the_latest_complete_one(client, web_db):
+    # Pershing Square Capital Management's Q2 report fails its checksum: Pershing Square's Q2 leaves its positions out,
+    # so against Q1 its GOOG would read sold out. The views and the screener take its Q1, without changes.
+    _seed(web_db)
+    _add_alphabet(web_db)
+    _add(web_db, ACKMAN, _filing("P-Q2-X", "1336528", Q2, "2026-08-12", [(AAA, 1, 1)], entry_total=9))
+    with Reader(web_db) as r:
+        gurus = guru_list(r)
+        latest, q2 = guru_view(r, "2026053"), guru_view(r, "2026053", Q2)
+        aaa, googl = gurus_holding(r, "AAA"), gurus_holding(r, "GOOGL")
+        portfolio = {s["security"]: (s["gurus"], s["buyers"], s["sellers"]) for s in guru_portfolio(r)}
+    assert [(g["cik"], g["period"], g["total_value"], g["positions"], g["new"], g["sold_out"], g["complete"],
+             g["has_prior"]) for g in gurus] == [
+        ("1067983", Q2, 27000.0, 3, 2, 2, True, True), ("1709323", Q2, 5400.0, 3, None, None, True, False),
+        ("2026053", Q1, 5000.0, 2, None, None, True, False)]
+    assert (latest["period"], latest["periods"], latest["complete"], latest["changes"]) == (Q1, [Q2, Q1], True, None)
+    # The incomplete quarter is still there to see, flagged, without changes.
+    assert (q2["complete"], q2["has_prior"], q2["changes"]) == (False, False, None)
+    assert [(p["security"], p["action"]) for p in q2["positions"]] == [(UNM, None), ("AAA", None)]
+    assert [_short(h) for h in aaa] == [
+        ("1067983", "AAA", None, 150.0, 18000.0, "added"), ("2026053", "AAA", None, 40.0, 4000.0, None),
+        ("1709323", "AAA", None, 30.0, 3600.0, None), ("1067983", "AAA", "Call", 5.0, 3000.0, "new")]
+    assert aaa[1]["period"] == Q1
+    assert [_short(h) for h in googl] == [
+        ("1067983", "GOOGL", None, 20.0, 4000.0, "new"), ("1067983", "GOOG", None, 10.0, 2000.0, "new"),
+        ("2026053", "GOOG", None, 5.0, 1000.0, None), ("1709323", "GOOG", None, 3.0, 600.0, None)]
+    assert portfolio["GOOG"] == (3, 1, 0) and UNM not in portfolio
+    # The screener counts its Q1 while Q2's deadline hasn't passed by the store's clock; past it, Pershing Square is
+    # stale, its Q2 report not standing.
+    assert _screened(web_db) == {"AAA": (2, 1), "GOOGL": (2, 1), "EEE": (0, 0)}
+    conn = sqlite3.connect(web_db)
+    conn.execute("UPDATE guru_filings SET filed = '2026-08-17' WHERE accession = 'H-Q2-X'")
+    conn.commit()
+    conn.close()
+    assert _screened(web_db) == {"AAA": (3, 1), "GOOGL": (3, 1), "EEE": (0, 0)}
+    page = client.get("/gurus/2026053").text
+    assert f'<option value="{Q1}" selected>' in page and "Incomplete" not in page
+    q2_page = client.get(f"/gurus/2026053?period={Q2}").text
+    assert "Incomplete" in q2_page and "No prior quarter" in q2_page
+    assert "Changes from the quarter before" not in q2_page
+
+
+def test_a_guru_without_a_complete_quarter_shows_its_latest_flagged_and_isnt_counted(client, web_db):
+    # Both of Pershing Square's quarters miss a filer's report: the pages show its latest, flagged incomplete, and the
+    # screener counts it nowhere.
+    _seed(web_db)
+    _add_alphabet(web_db)
+    _add(web_db, ACKMAN, _filing("P-Q2-X", "1336528", Q2, "2026-08-12", [(AAA, 1, 1)], entry_total=9),
+         _filing("P-Q1-X", "2026053", Q1, "2026-05-15", [(AAA, 1, 1)], entry_total=9))
+    with Reader(web_db) as r:
+        ackman = [g for g in guru_list(r) if g["cik"] == "2026053"]
+        view = guru_view(r, "2026053")
+        aaa = [h for h in gurus_holding(r, "AAA") if h["cik"] == "2026053"]
+    assert [(g["period"], g["complete"], g["has_prior"], g["new"]) for g in ackman] == [(Q2, False, False, None)]
+    assert (view["period"], view["complete"], view["changes"]) == (Q2, False, None)
+    assert [(h["period"], h["complete"], h["shares"], h["action"]) for h in aaa] == [(Q2, False, 20.0, None)]
+    assert _screened(web_db) == {"AAA": (2, 1), "GOOGL": (2, 1), "EEE": (0, 0)}
+    assert "Incomplete" in client.get("/gurus").text
+
+
+def test_a_stale_guru_isnt_counted_in_the_screener(web_db):
+    # Scion's latest quarter is Q1 2026: Q2's deadline (2026-08-17) has passed by the store's latest filing (Li Lu's
+    # of 2026-08-20) without its report, so it's stale. Its pages and the holders tab still show it, at Q1.
+    _seed(web_db)
+    _add_alphabet(web_db)
+    _add(web_db, SCION, _filing("S-Q1", "1649339", Q1, "2026-05-15", [(AAA, 7, 700), (GOOG, 2, 400)]))
+    with Reader(web_db) as r:
+        listed = {g["cik"]: g["period"] for g in guru_list(r)}
+        aaa = [(h["period"], h["shares"]) for h in gurus_holding(r, "AAA") if h["cik"] == "1649339"]
+    assert listed["1649339"] == Q1 and aaa == [(Q1, 7.0)]
+    assert _screened(web_db) == {"AAA": (3, 1), "GOOGL": (2, 1), "EEE": (0, 0)}
+    # The store's clock is its latest 13F filing date: on Q2's deadline Scion is still current, the day after not.
+    conn = sqlite3.connect(web_db)
+    conn.execute("UPDATE guru_filings SET filed = '2026-08-17' WHERE accession = 'H-Q2-X'")
+    conn.commit()
+    assert _screened(web_db) == {"AAA": (4, 1), "GOOGL": (3, 1), "EEE": (0, 0)}
+    conn.execute("UPDATE guru_filings SET filed = '2026-08-18' WHERE accession = 'H-Q2-X'")
+    conn.commit()
+    conn.close()
+    assert _screened(web_db) == {"AAA": (3, 1), "GOOGL": (2, 1), "EEE": (0, 0)}
+
+
+def test_the_screener_without_the_gurus_filings_has_no_guru_fields(web_db):
+    _seed(web_db)
+    conn = sqlite3.connect(web_db)
+    conn.execute("DROP TABLE guru_filings")
+    conn.commit()
+    conn.close()
+    assert set(_screened(web_db).values()) == {(None, None)}

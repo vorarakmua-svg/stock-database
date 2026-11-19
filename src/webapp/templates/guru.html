@@ -41,10 +41,13 @@
 
 {% if not g.complete %}
 <div class="alert alert-danger mt-2">Incomplete: a filer's report for this quarter failed its checksum or wasn't
-  collected, so its holdings are left out of the figures.</div>
+  collected (a filer of the quarter before may report until the deadline, 45 days after the quarter), so its holdings
+  are left out of the figures and the changes aren't shown. The gurus' list and the screener take the latest complete
+  quarter.</div>
 {% endif %}
 {% if not g.has_prior %}
-<div class="alert alert-info mt-2">No prior quarter: the quarter before isn't stored, so the changes aren't known.</div>
+<div class="alert alert-info mt-2">No prior quarter: the quarter before isn't stored, or it or this one is incomplete, so
+  the changes aren't known.</div>
 {% endif %}
 
 {% if changes %}

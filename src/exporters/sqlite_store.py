@@ -622,8 +622,8 @@ class SQLiteStore:
                 mapped_at TEXT NOT NULL
             );
             -- Each guru's quarters as the collector builds them (ownership.portfolio), for the pages, the holders tab
-            -- and the screener: the quarter's total, held positions, completeness, whether the quarter before is
-            -- there (so the changes exist), its filings (a JSON list) and the latest of their filing dates.
+            -- and the screener: the quarter's total, held positions, completeness, whether the changes exist (the
+            -- quarter before is there, both complete), its filings (a JSON list) and the latest of their filing dates.
             CREATE TABLE IF NOT EXISTS guru_quarters (
                 guru_cik TEXT NOT NULL,
                 period TEXT NOT NULL,
@@ -1748,11 +1748,11 @@ class SQLiteStore:
         """Replace one guru's quarters and positions (``guru_quarters``, ``guru_positions``) with *guru*'s, as
         ``ownership.portfolio.load_guru`` builds them, in one transaction. Returns the position rows written.
 
-        Each quarter's row: its total value, the positions it holds, whether every filer's report stands, whether the
-        quarter before is there (so its changes exist), its filings as a JSON list and the latest of their filing
-        dates. Each position held, put/call '' for shares and principal amounts, with its change from the quarter
-        before (none without it); then a 'sold_out' row for each position of the quarter before that's gone, without
-        shares, value or weight."""
+        Each quarter's row: its total value, the positions it holds, whether it is complete (every filer's report
+        stands, ``portfolio.build_quarter``), whether its changes exist (the quarter before is there, both complete),
+        its filings as a JSON list and the latest of their filing dates. Each position held, put/call '' for shares
+        and principal amounts, with its change from the quarter before (none without it); then a 'sold_out' row for
+        each position of the quarter before that's gone, without shares, value or weight."""
         written = 0
         conn = self._connect()
         try:

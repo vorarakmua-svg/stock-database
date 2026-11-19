@@ -38,7 +38,7 @@ from typing import AbstractSet, Any, Dict, FrozenSet, List, Optional, Tuple, Uni
 from ..exporters.sqlite_store import _METRIC_COLUMNS
 from ..ownership.cusips import UNIVERSE_CUSIPS
 from ..ownership.insiders import FILING_OWNER_SQL
-from ..ownership.portfolio import share_classes
+from ..ownership.portfolio import LATEST_QUARTERS_SQL, current_sql, share_classes
 
 # O(1) whitelist lookup
 _METRIC_COL_SET: FrozenSet[str] = frozenset(_METRIC_COLUMNS)
@@ -166,11 +166,16 @@ def _classes_sql(column: str) -> str:
     return ", ".join([column] + cases)
 
 
-# The gurus' 13F holdings (guru_quarters, guru_positions), over each guru's latest quarter, as the spec's Aggregates
-# read them: the gurus holding the company's shares (put/call '') or its other class's, each guru once, and of those
-# the ones whose position is new or added. Correlated subqueries, NULL when the tables don't exist.
-_GURU_POSITIONS = (f"FROM guru_positions gp WHERE gp.ticker IN ({_classes_sql('ma.ticker')}) AND gp.put_call = '' "
-                   "AND gp.period = (SELECT MAX(gq.period) FROM guru_quarters gq WHERE gq.guru_cik = gp.guru_cik) ")
+# The gurus' 13F holdings (guru_quarters, guru_positions), over each guru's latest quarter as the views take it
+# (portfolio.LATEST_QUARTERS_SQL), counted only when complete and current (portfolio.current_sql: a guru past the next
+# quarter's filing deadline without its report, Scion, is stale), as the spec's Aggregates read them: the gurus holding
+# the company's shares (put/call '') or its other class's, each guru once, and of those the ones whose position is new
+# or added. Correlated subqueries, NULL when the tables don't exist.
+_GURU_POSITIONS = (
+    "FROM guru_positions gp JOIN guru_quarters gq ON gq.guru_cik = gp.guru_cik AND gq.period = gp.period "
+    f"WHERE gp.ticker IN ({_classes_sql('ma.ticker')}) AND gp.put_call = '' "
+    f"AND gp.period = (SELECT l.period FROM {LATEST_QUARTERS_SQL} l WHERE l.guru_cik = gp.guru_cik) "
+    f"AND gq.complete = 1 AND {current_sql('gp.period')} ")
 GURU_EXPRS: Dict[str, str] = {
     "gurus_holding": "(SELECT COUNT(DISTINCT gp.guru_cik) " + _GURU_POSITIONS + "AND gp.action IS NOT 'sold_out')",
     "gurus_buying": "(SELECT COUNT(DISTINCT gp.guru_cik) " + _GURU_POSITIONS + "AND gp.action IN ('new', 'added'))",

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 149 · NEEDS-USER 1 · Decided: 7 · Verified: 204
+**Open:** P0 0 · P1 0 · P2 0 · P3 147 · NEEDS-USER 1 · Decided: 7 · Verified: 206
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1637,10 +1637,11 @@ Fix (build iteration 40): a successor company (`PREDECESSOR_CIKS`: XOM, BLK) als
 Evidence: `qa/evidence/review17-fixes-{red,green,mutants,mutants-rerun,realdata}.txt`, `qa/evidence/review17-report.md`
 
 ### BUG-211 [P3][OWNERSHIP] An incomplete quarter drives a guru's changes and its latest quarter
-Status: OPEN
-Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Status: VERIFIED (iteration 189)
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: (this commit) | Regression tests: tests/test_ownership_portfolio.py, tests/test_web_gurus.py; 12 failing first
 Repro: `portfolio.py:257`, the views' latest quarter, `screener.py`: if a guru's latest base failed its checksum, every position reads sold out, the guru drops out of gurus_holding and counts as a seller. None today.
 Expected: no changes when either quarter is incomplete; the views and the screener on the latest complete quarter.   Actual: the incomplete quarter used.
+Fix (iteration 189, `qa/evidence/bug211-investigation.txt`): one rule in src/ownership/portfolio.py. A quarter is complete when every filer with a filing for it has a standing report and every filer that reported the quarter before has reported it too, unless its deadline (period end + 45 days + 3 for a business-day roll) has passed by the clock (the latest stored 13F filing date: filing dates only, no look-ahead). Changes exist only between two complete quarters; a guru's latest quarter (LATEST_QUARTERS_SQL, every view and the screener) is its latest complete one, else its latest flagged incomplete. Measured on a real-data copy: 0 of 235 quarters, 0 GURU/HDS/portfolio views move. Residuals: a brand-new extra filer isn't awaited; the 3-day roll isn't a holiday calendar.
 
 ### BUG-212 [P3][OWNERSHIP] OpenFIGI's fallback ticker comes from a foreign listing
 Status: OPEN
@@ -1680,10 +1681,11 @@ Repro: `collect.py` connects to a `--db` that doesn't exist, creating an empty f
 Expected: a clear error, no file created; a non-zero exit with errors.   Actual: as described.
 
 ### BUG-218 [P3][OWNERSHIP] A stale latest quarter counts in the screener's guru fields
-Status: OPEN
-Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Status: VERIFIED (iteration 189)
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: (this commit) | Regression tests: tests/test_ownership_portfolio.py, tests/test_web_gurus.py; 12 failing first
 Repro: Scion's last quarter (Q3 2025) counts in gurus_holding and gurus_buying with no age limit; the pages show each guru's quarter, the screener doesn't.
 Expected: an age limit, or the quarter shown.   Actual: counted as current.
+Fix (iteration 189, with BUG-211): a guru is current when the deadline of the quarter after its latest hasn't passed by the clock; the screener counts only gurus whose latest quarter is complete and current (pages and HDS still show a stale guru at its own quarter). Measured: LULU's gurus_holding/gurus_buying 3/2 -> 2/1 (Scion's Q3 2025), nothing else; no valuation reads these fields.
 
 ### BUG-219 [P3][OWNERSHIP] Two small ownership items
 Status: OPEN

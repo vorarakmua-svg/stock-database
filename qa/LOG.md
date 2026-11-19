@@ -3254,3 +3254,15 @@ Result: BUG-155, BUG-056, BUG-164 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3285 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(web): unknown tickers 404 on bars; status in any case; % filters take percents (BUG-155, BUG-056, BUG-164)
 Next: BUG-211/218 (ready).
+
+## Iteration 189: 2026-11-19 20:20: fix (BUG-211, BUG-218)
+Picked: two OWNERSHIP P3s on the gurus' quarters; an opus worker.
+Did: one definition of a complete quarter (awaited filers until the 13F deadline passes by the stored filings' clock),
+changes only between complete quarters, the latest complete quarter everywhere, and stale gurus out of the
+screener's counts.
+- RED: 12 failed of 70 on 813a7bb's base; GREEN. 31 of 31 mutants; indicators-m4-2 re-run (1 re-quoted).
+- Real-data copy: only LULU's screener guru fields move (3/2 -> 2/1); no valuation reads them.
+Result: BUG-211, BUG-218 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3297 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(gurus): changes and latest quarters from complete quarters; a stale guru leaves the screener (BUG-211, BUG-218)
+Next: more P3s outside the as-of branch's files; Q18 waits on the user.

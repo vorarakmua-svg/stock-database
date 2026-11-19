@@ -1007,7 +1007,13 @@ The CUSIP map (`cusip_map`) turns each holding's CUSIP into a ticker:
 A guru's quarter (`src/ownership/portfolio.py`) is built from the filings that pass the checksum:
 - per filer and period, the latest original 13F-HR or RESTATEMENT amendment (a 13F-HR/A with no amendment type
   counts as one), plus the NEW HOLDINGS amendments filed after it. A filer with no usable filing leaves the
-  quarter incomplete (`guru_quarters.complete = 0`) and its rows out;
+  quarter incomplete (`guru_quarters.complete = 0`) and its rows out, and so does a filer that reported the
+  quarter before and hasn't reported this one, until the quarter's filing deadline has passed: 45 days after it,
+  plus 3 for a deadline moved to a business day (2026-02-14, a Saturday before Presidents' Day, moved Q4 2025's
+  to 02-17). Past it, the filer has stopped (Pershing Square Capital Management filed a 13F-NT for Q2 2026, when
+  Pershing Square Inc. took over) or is late. The deadline is judged by the latest 13F filing date stored, of any
+  guru, not the day the quarters are built: every guru's feed is read in one run, so a filing dated after the
+  deadline shows the run read past it, and a rebuild from the same filings gives the same quarters;
 - a NEW HOLDINGS amendment's rows that repeat its base's (the same CUSIP, put/call, shares and value), matched
   one for one, are left out: First Eagle's Q2 2026 amendment repeats all 614 rows of its 13F-HR and adds 2, so
   counting it whole would read the quarter as $120.7B, not $60.75B, while Berkshire's Q1 2025 one adds 202
@@ -1018,8 +1024,10 @@ A guru's quarter (`src/ownership/portfolio.py`) is built from the filings that p
   of one key are summed (one CUSIP may take several rows: other managers, discretion), and a position's weight
   is its value over the quarter's total.
 
-The changes compare a quarter with the one before it only (a guru's first quarter in the window, or one after
-a gap, has none): each position is **new**, **added**, **reduced**, **sold out** or **unchanged**, by shares.
+The changes compare a quarter with the one before it only, and only when both are complete (a guru's first
+quarter in the window, one after a gap, an incomplete one and the one after it have none: a filer's positions
+left out would read sold out, or new): each position is **new**, **added**, **reduced**, **sold out** or
+**unchanged**, by shares.
 The earlier quarter's shares are first adjusted for the share splits of our tickers dated between the two
 period ends (simple ratios only: Yahoo's spin-off price factors change no holder's count, and stock dividends
 such as SCCO's 1% read as small additions); other securities have no split data. The change is
@@ -1034,7 +1042,7 @@ per security and put/call, put/call `''` for shares and principal amounts, and a
 position of the quarter before that's gone); `--positions` rebuilds them offline. Each guru's rows are
 replaced in one transaction.
 
-Where it shows:
+Where it shows, each guru at its latest complete quarter (its latest, flagged incomplete, when none is):
 - **Pages**: `/gurus` lists the gurus, each at its latest quarter: the value, the positions held in shares or
   principal amounts, and of them the new and the sold-out ones. `/gurus/{cik}` (`?period=` for an earlier
   quarter) shows a guru's holdings with weights and changes, the changes grouped, and the filings the quarter
@@ -1049,7 +1057,10 @@ Where it shows:
   `GET /api/gurus/{cik}` return the same.
 - **Screener**: filters and sorts by `gurus_holding` (the gurus holding the stock in their latest quarter) and
   `gurus_buying` (of those, the ones whose position is new or added), each guru counted once over the stock's
-  share classes. The results show them as one "Gurus (buying)" column.
+  share classes. The results show them as one "Gurus (buying)" column. A guru counts only when its latest
+  quarter is complete and current: one whose next quarter's filing deadline has passed by the latest 13F filing
+  date stored is stale and left out (Scion, at Q3 2025: on the data of 2026-10-25, LULU's 3 gurus holding
+  and 2 buying are 2 and 1, the only change).
 
 Checked by `qa/oracle/thirteenf_oracle.py`, which imports nothing from `src` and re-reads every cached filing
 with plain patterns. On the first collection (2026-10-22, a scratch copy) all its gates pass on the 248
@@ -1120,7 +1131,8 @@ The columns and queries are in the [USAGE_GUIDE](USAGE_GUIDE.md#sec-ownership).
   reports.
 - A guru's latest quarter can be stale. Scion's last 13F-HR covers Q3 2025 (Michael Burry deregistered it), so
   it stays at that quarter in the aggregated portfolio, which mixes quarters; the list and the holders tab
-  show each guru's quarter.
+  show each guru's quarter, and the screener leaves it out (above). A late filer is stale too until its
+  report is collected (Tweedy, Browne filed its Q3 2025 report on 2025-11-20, after the deadline).
 - OpenFIGI leaves some codes unmapped: 21 of the 1,817 it was asked, 7 of them CINS codes. A position in one
   has no ticker, is keyed by its CUSIP and shows its issuer's name from the filing.
 - Stock dividends aren't adjusted: SCCO's 1% stock dividends read as small additions.
