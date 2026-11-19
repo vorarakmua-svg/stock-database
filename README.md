@@ -895,7 +895,10 @@ Parsed (the SEC's `ownershipDocument`):
   shares owned after, and direct or indirect ownership;
 - each **derivative** transaction too (grants, exercises), with its exercise price and underlying security;
 - only what the filing states: a price given as a footnote alone (an RSU's) stays empty with the footnote's id
-  kept, shares owned after are never derived, and holding rows that record no transaction aren't kept.
+  kept, shares owned after are never derived, and holding rows that record no transaction aren't kept. A price's
+  footnotes keep their text beside their ids (`price_footnote_text`: a weighted average's range of prices, or why
+  there is no price, as an RSU's vesting or a gift; BUG-219), stored as each filing is read, so a database collected
+  before keeps it empty until the next insiders collection.
 
 Amendments: a 4/A amends the same owner's filing made on the day the 4/A names as its original's (a Form 4 or
 an earlier 4/A; the period of report only chooses between several) and replaces only the trades it restates:
@@ -940,7 +943,9 @@ Where it shows:
 - **INS tab**: the last 12 months' open-market buying and selling, the net buying over 3, 6 and 12 months, the
   CEO/CFO buys and the share of sales under a plan, a line for each cluster buy and CEO/CFO buy, then the
   trades newest first (the latest 200): date, insider, role, the code with its meaning, shares, price, value,
-  holding after and plan. A company with no Form 4 stored keeps Yahoo's rows, as before.
+  holding after and plan. A price given as a footnote alone shows the footnote's text. A company with no Form 4
+  stored keeps Yahoo's rows, as before. Its windows count back from today's date in UTC, as the screener's do
+  (SQLite's `date('now')`), so the two agree on any day in any time zone (BUG-219).
 - **API**: `GET /api/stocks/{ticker}/form4` returns `source` (`sec`, `yahoo` with Yahoo's rows where no Form 4
   is stored, or null for neither), the aggregates in `summary` and the `trades`.
   `GET /api/stocks/{ticker}/insiders` still serves Yahoo's rows.
@@ -1013,6 +1018,16 @@ The CUSIP map (`cusip_map`) turns each holding's CUSIP into a ticker:
   digit) are answers, stored as source `none`. Another error fails only its own code, which the next run asks
   again, and three requests failing in a row stop the mapping until the next run. A `none` code has no ticker
   and keeps its issuer's name from the filing.
+- A ticker comes only from a US listing (BUG-212): the US composite, else a listing on a US exchange (Hess on NYSE
+  American once its composite was gone; a note's US trades on TRACE, whose ticker is its description). A code
+  OpenFIGI lists only abroad keeps the listing's name with no ticker, rather than a foreign ticker that may spell
+  one of ours (ONEOK's answer gives "OKEEUR" on Equiduct; CIR's lists "COF" somewhere, Capital One's ticker). Each
+  `openfigi` row is read again from its cached answer on every run, without a request, and rewritten when its
+  ticker differs. On the data of 2026-10-25 that took the ticker from 119 codes (91 stocks on foreign venues, 26
+  notes listed in Frankfurt and 2 OTC quotes): their 615 positions are keyed by CUSIP, with the same shares,
+  values and changes, but for Indivior's old code (G4766E116), whose London "INDV" had bridged it to its new US
+  one: Q1 2026 reads a sale of the old code and a new position in INDV, not a 1.75% reduction. The screener's
+  guru fields didn't move.
 - On 2026-10-22, 1,941 codes: 124 `universe`, 1,796 `openfigi` and 21 `none`.
 
 A guru's quarter (`src/ownership/portfolio.py`) is built from the filings that pass the checksum:
@@ -1041,7 +1056,15 @@ left out would read sold out, or new): each position is **new**, **added**, **re
 **unchanged**, by shares.
 The earlier quarter's shares are first adjusted for the share splits of our tickers dated between the two
 period ends (simple ratios only: Yahoo's spin-off price factors change no holder's count, and stock dividends
-such as SCCO's 1% read as small additions); other securities have no split data. The change is
+such as SCCO's 1% read as small additions). Other securities (no ticker, or one outside our companies) have no split
+data, so a forward split is inferred from every guru's holding of the security across the two quarters (BUG-213):
+of 2-for-1 to 10-for-1 or a multiple of 5 to 100-for-1, when a holder's shares moved by the ratio within 5%, the
+holders' median price per share (value over shares) moved by it within a factor of 1.3, and no holder kept its
+count within 5%. Markel's RLI reads unchanged across its 2-for-1 (+100% before), and HDFC Bank's 1:1 bonus moves
+its five holders' changes (Dodge & Cox's +108% is +4.2%, three others' additions are sales). A reverse split isn't
+inferred: a holder trimming a stock whose price doubled to half its shares looks the same (Unity, ZimVie, Garrett
+and Magnachip in these filings), and a holder that kept its count vetoes (Seadrill's price fell a third in Q1 2025
+as one guru doubled its shares). On the data of 2026-10-25 those 6 changes moved, nothing else. The change is
 `(shares - adjusted shares before) / adjusted shares before`. Dodge & Cox's BKNG, 997,498 shares before the
 25:1 split of 2026-04-06 and 25,536,950 after, reads +2.4%, not +2,460%.
 
@@ -1112,7 +1135,11 @@ python -m src.ownership.collect --positions
 | `--db` | SQLite database path | `data/output/stock.db` |
 | `--cache-dir` | The SEC cache (OpenFIGI's answers go under `openfigi/`) | `data/cache` |
 
-At least one of `--insiders`, `--gurus` and `--positions` is required. A run is incremental: the caches hold
+At least one of `--insiders`, `--gurus` and `--positions` is required. `--insiders` needs a collection's
+database: without one (a `--db` that doesn't exist, or has no `companies`) the run stops with a message on stderr
+and exit code 2, and creates no file (BUG-217). Otherwise the exit code is 0, or 1 when anything was reported as
+an error (a failed feed, fetch, parse or store, a company without a CIK, a CUSIP OpenFIGI refused); a checksum
+failure is stored and flagged, not an error. A run is incremental: the caches hold
 every filing that parsed, a company's or guru's rows are replaced in one transaction, a failed fetch or parse
 is counted and reported, and what an earlier run stored stays. What each one touches and takes (timed on
 2026-10-22, from empty caches):
@@ -1127,7 +1154,7 @@ is counted and reported, and what an earlier run stored stays. What each one tou
   `--no-openfigi`). It writes `guru_filers`, `guru_filings`, `guru_holdings` and `cusip_map`, then
   `guru_quarters` and `guru_positions`. The 248 filings took 1 minute 41 seconds. OpenFIGI answers 10 codes a
   request, 2.5 seconds apart, so the first run's 1,817 codes need 7.5 minutes at least; a later run asks only
-  the codes with no `cusip_map` row.
+  the codes with no `cusip_map` row (and re-reads the `openfigi` ones from the cache).
 - `--positions`: nothing on the network. It reads the stored filings and entries, `cusip_map` and
   `split_events`, and writes `guru_quarters` and `guru_positions`: 3.3 seconds for 235 quarters. The changes
   read `split_events` when they are built, so run it after a collection brings new splits.
@@ -1144,8 +1171,13 @@ The columns and queries are in the [USAGE_GUIDE](USAGE_GUIDE.md#sec-ownership).
   it stays at that quarter in the aggregated portfolio, which mixes quarters; the list and the holders tab
   show each guru's quarter, and the screener leaves it out (above). A late filer is stale too until its
   report is collected (Tweedy, Browne filed its Q3 2025 report on 2025-11-20, after the deadline).
-- OpenFIGI leaves some codes unmapped: 21 of the 1,817 it was asked, 7 of them CINS codes. A position in one
-  has no ticker, is keyed by its CUSIP and shows its issuer's name from the filing.
+- OpenFIGI leaves some codes unmapped: 21 of the 1,817 it was asked, 7 of them CINS codes, and 119 more have
+  no US listing in its answer (above). A position in one has no ticker, is keyed by its CUSIP and shows its
+  issuer's name from the filing. One of them is ours: ONEOK's 682680103 (one guru), listed only on Equiduct in
+  the cached answer, so it doesn't show on OKE's holders tab.
+- A split of a security outside our companies is inferred only forward and only with every holder's count moved
+  (above): a reverse split reads as a sale, and a split the holders traded through by more than 5% reads as the
+  trade it looks like.
 - Stock dividends aren't adjusted: SCCO's 1% stock dividends read as small additions.
 - HON's 2026 reverse split is inside a combined price factor in Yahoo's split history, which isn't a share
   split, so Dodge & Cox's HON reads as a 50% sale (8,019 to 4,010 shares; BUG-184).

@@ -549,6 +549,7 @@ class SQLiteStore:
                 shares REAL,
                 price REAL,
                 price_footnotes TEXT,
+                price_footnote_text TEXT,
                 acquired_disposed TEXT,
                 owned_after REAL,
                 direct_indirect TEXT,
@@ -1668,8 +1669,9 @@ class SQLiteStore:
         try:
             self._create_schema(conn)
             self._ensure_columns(conn, "insider_filings", {"is_ceo_cfo": "INTEGER"})
-            # A table from before a trade had its own amendment note, or its price check.
-            self._ensure_columns(conn, "insider_trades", {"superseded_by": "TEXT", "price_suspect": "INTEGER"})
+            # A table from before a trade had its own amendment note, its price check, or its price footnotes' text.
+            self._ensure_columns(conn, "insider_trades", {"superseded_by": "TEXT", "price_suspect": "INTEGER",
+                                                          "price_footnote_text": "TEXT"})
             for accession in left_out:
                 conn.execute("DELETE FROM insider_trades WHERE accession = ? AND ticker = ?", (accession, ticker))
                 conn.execute("DELETE FROM insider_filings WHERE accession = ? AND ticker = ?", (accession, ticker))
@@ -1688,11 +1690,12 @@ class SQLiteStore:
                      for owner in filing.owners])
                 conn.executemany(
                     "INSERT INTO insider_trades (accession, seq, ticker, kind, security_title, date, code, shares, "
-                    "price, price_footnotes, acquired_disposed, owned_after, direct_indirect, nature_of_ownership, "
-                    "exercise_price, underlying_title, underlying_shares) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "price, price_footnotes, price_footnote_text, acquired_disposed, owned_after, direct_indirect, "
+                    "nature_of_ownership, exercise_price, underlying_title, underlying_shares) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [(ref.accession, t.seq, ticker, t.table, t.security_title, t.date, t.code, t.shares, t.price,
-                      ",".join(t.price_footnotes) or None, t.acquired_disposed, t.owned_after, t.direct_indirect,
+                      ",".join(t.price_footnotes) or None, t.price_footnote_text or None, t.acquired_disposed,
+                      t.owned_after, t.direct_indirect,
                       t.nature_of_ownership, t.exercise_price, t.underlying_title, t.underlying_shares)
                      for t in filing.trades])
             filing_columns = ("accession", "owner_cik", "form", "filed_date", "period_of_report", "original_filed")

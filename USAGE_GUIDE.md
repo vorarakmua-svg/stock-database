@@ -828,7 +828,7 @@ Two tables hold each company's Form 4 and 4/A filings of the last three years:
     transaction code: `P` is an open-market purchase and `S` an open-market sale; the others (`A` grant or
     award, `M` exercise or conversion, `F` shares withheld for tax, `G` gift, ...) are shown but never summed;
   - `shares`, `price` (NULL where the filing states none: a footnote alone, whose ids `price_footnotes`
-    keeps), `acquired_disposed` (`A` or `D`), `owned_after` (NULL where the filing doesn't say),
+    keeps, and their text `price_footnote_text`, empty until the next insiders collection re-reads a filing), `acquired_disposed` (`A` or `D`), `owned_after` (NULL where the filing doesn't say),
     `direct_indirect` (`D` or `I`) and `nature_of_ownership`;
   - a derivative row (an option, an RSU) also has `exercise_price`, `underlying_title` and
     `underlying_shares`;
@@ -910,8 +910,9 @@ filer's CIK, as text without leading zeros.
   - one CUSIP may take several rows of a filing (other managers, discretion).
 - **`cusip_map`**: one row per CUSIP: `ticker` (NULL where there is none), `name`, `security_type`
   (OpenFIGI's), `mapped_at`, and `source`: `universe` for our companies' codes, curated in
-  `src/ownership/cusips.py`; `openfigi` for a listing OpenFIGI gave; `none` where OpenFIGI knows no listing,
-  so there is no ticker and `name` is the issuer's name from the holdings.
+  `src/ownership/cusips.py`; `openfigi` for a listing OpenFIGI gave, with a ticker only from a US listing (the
+  US composite, else a US exchange), so NULL for a code it lists only abroad; `none` where OpenFIGI knows no
+  listing, so there is no ticker and `name` is the issuer's name from the holdings.
 - **`guru_quarters`**: one row per (`guru_cik`, `period`), a guru's quarter as built from the filings that
   stand: `total_value`, `positions` (held, options too), `complete` (0 when a filer's report for the quarter
   fails its checksum, or a filer of the quarter before hasn't reported it and its filing deadline hasn't passed
@@ -928,7 +929,8 @@ filer's CIK, as text without leading zeros.
     total (options included);
   - the change from the quarter before: `action` (`new`, `added`, `reduced` or `unchanged`), `shares_before`
     and `value_before`, `split_factor` (the share splits between the two quarters, applied to the shares
-    before) and `change_pct` (the change in shares against the split-adjusted shares before, as a fraction:
+    before: our tickers' from `split_events`, another security's inferred from the gurus' holdings, as the
+    README describes) and `change_pct` (the change in shares against the split-adjusted shares before, as a fraction:
     0.25 is a quarter more; NULL for a new position). `action` is NULL on every row of a quarter without changes
     (`has_prior = 0`: the quarter before isn't stored, or one of the two is incomplete);
   - a `sold_out` row for each position of the quarter before that is gone: `shares`, `value_usd` and `weight`

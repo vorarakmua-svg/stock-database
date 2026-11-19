@@ -3371,3 +3371,16 @@ Result: BUG-028, BUG-070, BUG-121, BUG-148, BUG-167 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3447 passed, 1 skipped | CI: PR #29
 Commit: (this commit) docs: wording that no longer matched the code; the rate's source shown by what it is (BUG-028, BUG-070, BUG-121, BUG-148, BUG-167)
 Next: BUG-212/213/217/219, BUG-349..352 (workers).
+
+## Iteration 199: 2026-11-20 08:00: fix (BUG-212, BUG-213, BUG-217, BUG-219)
+Picked: four OWNERSHIP P3s; an opus worker.
+Did: US-only OpenFIGI fallback tickers (stored rows re-read from the cache); splits inferred across gurus' holdings
+for securities without split data; the insiders CLI fails cleanly on a missing database with meaningful exit codes;
+INS windows by UTC day; price footnote text kept.
+- RED: 29 failed of 194 on 7658782; GREEN. 40 of 40 mutants; bug206/211/347 re-run (bug211 rebased).
+- Real-data copy: cusip_map 119 tickers NULL; HDB's split-driven changes corrected at 5 gurus; screener guru fields
+  identical; nothing in valuation reads these.
+Result: BUG-212, BUG-213, BUG-217, BUG-219 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3474 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(ownership): US tickers only; splits inferred across holders; the insiders CLI fails cleanly; footnote text kept (BUG-212, BUG-213, BUG-217, BUG-219)
+Next: BUG-349..352, BUG-193/201/204/216 (workers); code review 32 after 2 more units.

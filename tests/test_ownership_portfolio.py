@@ -69,7 +69,7 @@ def test_the_period_before():
     assert previous_period("2025-09-30") == "2025-06-30"
 
 
-# ---- the filings a quarter stands on ------------------------------------------------------------------------------
+# ---- the filings a quarter stands on ---------------------------------------------------------------------------------
 
 def test_a_quarter_from_its_original():
     q = build_quarter(Q2, [_filing("O")], _entries("O", ("A", 100, 1000), ("B", 50, 3000)))
@@ -207,7 +207,7 @@ def test_a_gurus_quarter_is_the_union_of_its_filers():
     assert _held(q) == {("A", None): (150.0, 1500.0), ("B", None): (10.0, 100.0), ("C", None): (1.0, 10.0)}
 
 
-# ---- completeness: the filing deadline ----------------------------------------------------------------------------
+# ---- completeness: the filing deadline -------------------------------------------------------------------------------
 
 def test_the_period_after():
     assert [portfolio.next_period(p) for p in ("2025-09-30", "2025-12-31", Q1, Q2)] == [
@@ -277,7 +277,7 @@ def test_a_filer_that_reported_the_quarter_before_is_awaited_until_the_deadline(
     assert build_quarter(Q2, gap, entries).complete is True
 
 
-# ---- positions ----------------------------------------------------------------------------------------------------
+# ---- positions -------------------------------------------------------------------------------------------------------
 
 def test_options_are_kept_apart_from_the_shares():
     q = build_quarter(Q2, [_filing("O")], _entries("O", ("A", 100, 1000), ("A", 30, 300, "Call"),
@@ -339,7 +339,7 @@ def test_every_period_of_the_gurus_filings():
     assert _held(quarters[Q1]) == {("A", None): (1.0, 10.0)} and quarters[Q2].accessions == ("B",)
 
 
-# ---- changes ------------------------------------------------------------------------------------------------------
+# ---- changes ---------------------------------------------------------------------------------------------------------
 
 def test_the_changes_from_the_quarter_before():
     before = _quarter(Q1, ("A", 100, 1000), ("B", 50, 500), ("C", 10, 100), ("D", 7, 70), ("A", 4, 40, "Put"))
@@ -447,7 +447,7 @@ def test_a_tickers_other_share_classes_are_those_of_its_issuer():
     assert share_classes("D", universe) == ("D",)
 
 
-# ---- the loader ---------------------------------------------------------------------------------------------------
+# ---- the loader ------------------------------------------------------------------------------------------------------
 
 ACKMAN = Guru("2026053", "PERSHING SQUARE INC.", "Bill Ackman",
               former=(("1336528", "Pershing Square Capital Management, L.P."),))
@@ -537,8 +537,10 @@ def test_load_guru_on_a_database_from_before_the_cusip_map(tmp_path):
         changes = load_guru(conn, "2026053").changes[Q2]
     finally:
         conn.close()
+    # Unmapped, the code has no ticker and so no split data: the 25-for-1 its holder shows (100 shares at $5,000, then
+    # 2,500 at $210) is inferred (BUG-213).
     assert [(c.security, c.ticker, c.action, c.split_factor) for c in changes][0] == (
-        "09857L108", None, "added", 1.0)
+        "09857L108", None, "unchanged", 25.0)
 
 
 def test_load_guru_without_filings_or_their_tables(tmp_path):
@@ -551,3 +553,158 @@ def test_load_guru_without_filings_or_their_tables(tmp_path):
     empty = load_guru(conn, BERKSHIRE)
     conn.close()
     assert (fresh.quarters, fresh.changes) == (empty.quarters, empty.changes) == ({}, {})
+
+
+# ---- BUG-213: a split of a security outside our companies, inferred --------------------------------------------------
+
+HDB = "40415F101"  # HDFC Bank's ADR: a 1:1 bonus (2-for-1) in August 2025, no split data (not one of our companies)
+RLI = "749607107"  # RLI Corp: 2-for-1 in January 2025
+
+
+def implied_split(moves):  # read at call time: the RED run's tree lacks it
+    return portfolio.implied_split(moves)
+
+
+def implied_splits(gurus, covered):
+    return portfolio.implied_splits(gurus, covered)
+
+
+def test_a_forward_split_shows_in_the_shares_and_the_price_together():
+    # (shares after / before, implied price before / after) per holder.
+    assert implied_split([(2.0, 2.052)]) == 2.0  # Markel's RLI: 1,197,272 shares, then 2,394,544
+    # HDB's five holders across the bonus, each trading too; one (Dodge & Cox's) within 5% of the ratio.
+    assert implied_split([(2.0838, 2.244), (1.276, 2.244), (2.919, 2.244), (1.472, 2.244), (1.782, 2.244)]) == 2.0
+    assert implied_split([(15.0, 15.9)]) == 15.0  # ORLY's 15-for-1, the price up 6% in the quarter
+    assert implied_split([(25.6, 23.8)]) == 25.0  # BKNG's 25-for-1, 2.4% bought: the nearest ratio, not 26
+    assert implied_split([(3.0, 3.0), (4.0, 3.0)]) == 3.0  # a ratio the price didn't move by isn't one
+    assert implied_split([(3.0, 2.4), (2.0, 2.4)]) == 2.0  # of two the price allows, the one nearer its move
+
+
+def test_what_isnt_a_split():
+    assert implied_split([]) == 1.0
+    assert implied_split([(2.0, 1.0)]) == 1.0  # doubled at a steady price: a purchase
+    assert implied_split([(1.47, 2.244)]) == 1.0  # the price halved, no holder's count doubled
+    assert implied_split([(2.0683, 1.557), (1.0, 1.557)]) == 1.0  # Seadrill, Q1 2025: another holder kept its count
+    assert implied_split([(0.5, 0.5)]) == 1.0  # a reverse split isn't inferred: trimming a winner by half looks alike
+    assert implied_split([(1.5, 1.5)]) == 1.0  # nor a 3-for-2: half again at a falling price is a purchase too
+
+
+def test_the_tolerances_of_an_inferred_split():
+    assert portfolio.SPLIT_SHARES_TOLERANCE == 0.05 and portfolio.SPLIT_PRICE_TOLERANCE == 1.3
+    assert implied_split([(2.09, 2.0)]) == 2.0 and implied_split([(2.11, 2.0)]) == 1.0  # shares within 5%
+    assert implied_split([(1.91, 2.0)]) == 2.0 and implied_split([(1.89, 2.0)]) == 1.0
+    assert implied_split([(2.0, 2.58)]) == 2.0 and implied_split([(2.0, 2.62)]) == 1.0  # the price within 1.3x
+    assert implied_split([(2.0, 1.54)]) == 2.0 and implied_split([(2.0, 1.53)]) == 1.0
+    assert implied_split([(2.0, 2.0), (1.04, 2.0)]) == 1.0  # a count within 5% of before vetoes
+    assert implied_split([(2.0, 2.0), (0.96, 2.0)]) == 1.0
+    assert implied_split([(2.0, 2.0), (1.06, 2.0)]) == 2.0
+    assert implied_split([(2.0, 1.0), (2.0, 2.0), (2.0, 2.4)]) == 2.0  # the holders' median price
+    assert implied_split([(2.0, 1.0), (2.0, 1.0), (2.0, 2.4)]) == 1.0
+    assert implied_split([(2.0, 0.5), (2.0, 2.0), (2.0, 2.0)]) == 2.0  # the median, not the mean
+    assert portfolio.SPLIT_RATIOS == (2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70,
+                                      75, 80, 85, 90, 95, 100)
+    assert implied_split([(12.4, 12.0)]) == 1.0  # no 12-for-1 among the ratios: 10 and 15 are too far
+    assert implied_split([(100.0, 100.0)]) == 100.0 and implied_split([(1.97, 1.95)]) == 2.0
+
+
+def _gurus_quarters(*holders, tickers=None):
+    """Each holder's quarters, Q1 then Q2, from (q1 positions, q2 positions)."""
+    return [{Q1: _quarter(Q1, *q1, tickers=tickers), Q2: _quarter(Q2, *q2, tickers=tickers)} for q1, q2 in holders]
+
+
+def test_the_splits_inferred_read_every_gurus_holding_of_the_security():
+    gurus = _gurus_quarters(
+        [[(HDB, 2982400, 228660608), ("X", 10, 100)], [(HDB, 6214800, 212297568), ("X", 20, 200)]],  # D&C
+        [[(HDB, 1000, 76670)], [(HDB, 1276, 43600)]],  # sold 36% across the bonus
+        [[(RLI, 1197272, 197346344)], [(RLI, 2394544, 192353719)]])
+    assert implied_splits(gurus, covered=set()) == {(HDB, Q2): 2.0, (RLI, Q2): 2.0}  # X doubled at a steady price
+    # A holder that kept its count across the quarter: no split.
+    vetoed = gurus + _gurus_quarters([[(RLI, 500, 82000)], [(RLI, 500, 40000)]])
+    assert implied_splits(vetoed, covered=set()) == {(HDB, Q2): 2.0}
+
+
+def test_no_split_is_inferred_where_the_split_data_covers_the_ticker():
+    tickers = {RLI: "RLI", HDB: "HDB"}
+    gurus = _gurus_quarters([[(RLI, 100, 16000), (HDB, 100, 7600)], [(RLI, 200, 16000), (HDB, 200, 7600)]],
+                            tickers=tickers)
+    assert implied_splits(gurus, covered={"RLI"}) == {("HDB", Q2): 2.0}  # RLI's own history says no split
+
+
+def test_only_shares_held_in_two_complete_quarters_count():
+    options = _gurus_quarters([[(RLI, 100, 16000, "Call")], [(RLI, 200, 16000, "Call")]])
+    assert implied_splits(options, covered=set()) == {}
+    principal = [{Q1: build_quarter(Q1, [_filing("P1", period=Q1)], [portfolio.Entry(
+                      "P1", 0, RLI, "ISSUER", "NOTE", 100000.0, 100000.0, "PRN", None)]),
+                  Q2: build_quarter(Q2, [_filing("P2", period=Q2)], [portfolio.Entry(
+                      "P2", 0, RLI, "ISSUER", "NOTE", 100000.0, 200000.0, "PRN", None)])}]
+    assert implied_splits(principal, covered=set()) == {}
+    gap = [{"2025-12-31": _quarter("2025-12-31", (RLI, 100, 16000)), Q2: _quarter(Q2, (RLI, 200, 16000))}]
+    assert implied_splits(gap, covered=set()) == {}  # not consecutive
+    held = _gurus_quarters([[(RLI, 100, 16000)], [(RLI, 200, 16000)]])[0]
+    incomplete = {Q1: held[Q1], Q2: Quarter(Q2, held[Q2].positions, 16000.0, False, ("A",))}
+    assert implied_splits([incomplete], covered=set()) == {}
+    empty = _gurus_quarters([[(RLI, 100, 0)], [(RLI, 200, 16000)]])  # no value before: no price
+    assert implied_splits(empty, covered=set()) == {}
+
+
+def test_an_inferred_split_adjusts_the_shares_before_and_the_options():
+    before = _quarter(Q1, (RLI, 1197272, 197346344), (RLI, 100, 1000, "Call"), ("X", 10, 100))
+    now = _quarter(Q2, (RLI, 2394544, 192353719), (RLI, 200, 900, "Call"), ("X", 10, 100))
+    changes = quarter_changes(now, before, implied={(RLI, Q2): 2.0, ("X", "2025-12-31"): 3.0})
+    assert [(c.security, c.put_call, c.action, c.split_factor, c.change_pct) for c in changes] == [
+        (RLI, None, "unchanged", 2.0, 0.0), (RLI, "Call", "unchanged", 2.0, 0.0),
+        ("X", None, "unchanged", 1.0, 0.0)]  # another quarter's split doesn't apply
+    unadjusted = quarter_changes(now, before)
+    assert (unadjusted[0].action, unadjusted[0].change_pct) == ("added", 1.0)  # as read before BUG-213
+
+
+def _two_gurus_db(tmp_path, ackman, li_lu):
+    """Two gurus' Q1 and Q2 13F-HRs, each (q1 holdings, q2 holdings) of (cusip, shares, value)."""
+    db = tmp_path / "gurus.db"
+    store = SQLiteStore(db_path=db)
+    for guru, (q1, q2) in ((ACKMAN, ackman), (Guru("1709323", "Himalaya Capital Management LLC", "Li Lu"), li_lu)):
+        store.export_guru_filings(guru, [
+            (FilingRef(f"{guru.cik}-Q1", "13F-HR", "2026-05-15", Q1, "a.txt", guru.cik),
+             _thirteenf(f"{guru.cik}-Q1", Q1, q1)),
+            (FilingRef(f"{guru.cik}-Q2", "13F-HR", "2026-08-14", Q2, "b.txt", guru.cik),
+             _thirteenf(f"{guru.cik}-Q2", Q2, q2))], "2026-10-22T00:00:00+00:00")
+    return db
+
+
+def _changes(db, guru_cik):
+    conn = sqlite3.connect(read_only_uri(db), uri=True)
+    try:
+        return [(c.security, c.action, c.split_factor, c.change_pct) for c in load_guru(conn, guru_cik).changes[Q2]]
+    finally:
+        conn.close()
+
+
+def test_load_guru_infers_a_split_from_every_gurus_holdings(tmp_path):
+    # Li Lu kept nothing of HDB but both sold some across the bonus: Ackman's 36% sale reads -36%, not +28%.
+    db = _two_gurus_db(tmp_path, ([(HDB, 1000, 76670)], [(HDB, 1276, 43600)]),
+                       ([(HDB, 2982400, 228660608)], [(HDB, 6214800, 212297568)]))
+    (ackman,) = _changes(db, "2026053")
+    assert ackman[:3] == (HDB, "reduced", 2.0) and ackman[3] == pytest.approx(-0.362)
+    (li_lu,) = _changes(db, "1709323")
+    assert li_lu[:3] == (HDB, "added", 2.0) and li_lu[3] == pytest.approx(0.0419, abs=1e-4)
+
+
+def test_load_guru_infers_no_split_when_another_guru_kept_its_count(tmp_path):
+    # Seadrill, Q1 2025: one guru doubled down as the price fell by a third, another held: a purchase, not a split.
+    db = _two_gurus_db(tmp_path, ([("SDRL", 768165, 30000000)], [("SDRL", 1588828, 39850000)]),
+                       ([("SDRL", 1000, 39054)], [("SDRL", 1000, 25082)]))
+    assert _changes(db, "2026053") == [("SDRL", "added", 1.0, pytest.approx(1.0683, abs=1e-4))]
+
+
+def test_the_split_of_one_of_our_companies_comes_from_its_split_history_alone(tmp_path):
+    # A ticker of ours with no split stored had none: the same pattern is a purchase.
+    db = _two_gurus_db(tmp_path, ([(RLI, 100, 16000)], [(RLI, 200, 16000)]), ([("X", 1, 1)], [("X", 1, 1)]))
+    store = SQLiteStore(db_path=db)
+    store.export_cusip_map([{"cusip": RLI, "ticker": "RLI", "name": "RLI CORP", "source": "openfigi",
+                             "security_type": "Common Stock", "mapped_at": "2026-10-22T00:00:00+00:00"}])
+    assert _changes(db, "2026053") == [("RLI", "unchanged", 2.0, 0.0)]  # not ours: inferred
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO companies (ticker, cik, sector_class) VALUES ('RLI', '0000084246', 'insurance')")
+    conn.commit()
+    conn.close()
+    assert _changes(db, "2026053") == [("RLI", "added", 1.0, 1.0)]  # ours, with no split in its history

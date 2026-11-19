@@ -267,3 +267,50 @@ def test_a_ceo_whose_title_lists_another_role_or_the_company_is_stored_as_the_ce
         _joint("L-1", [("0000000400", title)], [("P", 100.0, 50.0, _ago(20))], _ago(18)),
     ], "2026-10-22T00:00:00+00:00")
     assert _counts(client, web_db)[2] == (1, 1)
+
+
+# ---- BUG-219: one clock, and the price footnotes' text ---------------------------------------------------------------
+
+def test_the_ins_windows_count_from_the_utc_date_as_the_screener_does(web_db, monkeypatch):
+    # The screener counts from SQLite's date('now'), UTC. At 23:30 UTC on 2026-03-01 the local date may be 03-02 (east
+    # of UTC): a purchase of 2025-03-01, 365 days before the UTC date, is in both 12-month windows.
+    import datetime as real
+
+    from src.webapp import insiders
+
+    class LocalDate(real.date):
+        @classmethod
+        def today(cls):
+            return real.date(2026, 3, 2)
+
+    class Clock(real.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            utc = real.datetime(2026, 3, 1, 23, 30, tzinfo=real.timezone.utc)
+            return utc if tz is not None else real.datetime(2026, 3, 2, 6, 30)
+
+    monkeypatch.setattr(insiders, "date", LocalDate, raising=False)
+    monkeypatch.setattr(insiders, "datetime", Clock, raising=False)
+    SQLiteStore(db_path=web_db).export_insider_filings("AAA", [
+        _filing("U-1", "2025-03-03", "1", None, "P", 100.0, 10.0, "2025-03-01", director=True)],
+        "2026-10-22T00:00:00+00:00")
+    with Reader(web_db) as r:
+        view = insiders.insider_view(r, "AAA")
+    assert view["summary"]["windows"]["12m"]["bought_value"] == 1000.0
+
+
+def test_a_price_given_as_a_footnote_shows_its_text(client, web_db):
+    ref, filing = _filing("F-1", _ago(3), "1", "SVP", "M", 1000.0, None, _ago(5))
+    filing.trades[0].price_footnotes = ["F1"]
+    filing.trades[0].price_footnote_text = "Each restricted stock unit converts into one share."
+    priced_ref, priced = _filing("F-2", _ago(3), "1", "SVP", "S", 10.0, 50.0, _ago(4))
+    priced.trades[0].price_footnotes = ["F2"]
+    priced.trades[0].price_footnote_text = "A weighted average of prices from $49.50 to $50.50."
+    SQLiteStore(db_path=web_db).export_insider_filings("AAA", [(ref, filing), (priced_ref, priced)],
+                                                       "2026-10-22T00:00:00+00:00")
+    trades = {t["accession"]: t for t in client.get("/api/stocks/AAA/form4").json()["trades"]}
+    assert trades["F-1"]["price_footnote"] == "Each restricted stock unit converts into one share."
+    assert trades["F-2"]["price_footnote"] == "A weighted average of prices from $49.50 to $50.50."
+    html = client.get("/ui/stocks/AAA/ins").text
+    assert "Each restricted stock unit converts into one share." in html  # where the price is the footnote
+    assert "A weighted average of prices" not in html  # a price shown: its footnote stays in the API

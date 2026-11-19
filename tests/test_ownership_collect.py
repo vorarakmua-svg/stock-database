@@ -316,7 +316,7 @@ def test_an_insider_trades_table_from_before_the_trades_own_note_gets_its_column
         ("F-1", "F-2", None), ("F-2", None, None)]  # both columns added; no close to check the prices against
 
 
-# ---- only the company's own filings, and a successor's predecessor ------------------------------------------------
+# ---- only the company's own filings, and a successor's predecessor ---------------------------------------------------
 
 CERE = "0000078003-24-000169"  # Pfizer's Form 4 as Cerevel's former 10% owner, in Pfizer's feed
 PFE_PURCHASE = "0001225208-26-006944"  # a director's purchase of Pfizer stock
@@ -476,7 +476,7 @@ def test_a_failed_predecessor_feed_is_reported_and_the_successors_own_filings_st
     assert len(summary["errors"]) == 1 and EXXON in summary["errors"][0] and "HTTP 503" in summary["errors"][0]
 
 
-# ---- one company's failure never ends the run ---------------------------------------------------------------------
+# ---- one company's failure never ends the run ------------------------------------------------------------------------
 
 def test_a_store_failure_is_reported_for_its_company_and_the_run_goes_on(tmp_path):
     db = _db(tmp_path, [("AAA", "0000000011"), ("BBB", "0000000022")])
@@ -534,7 +534,7 @@ def test_a_document_that_isnt_a_form_4_is_reported_not_stored(tmp_path):
     assert not (tmp_path / "cache" / "form4" / "0000080424-26-000150.xml").exists()  # a bad document isn't cached
 
 
-# ---- the gurus' 13F filings ---------------------------------------------------------------------------------------
+# ---- the gurus' 13F filings ------------------------------------------------------------------------------------------
 
 ACKMAN = Guru("2026053", "PERSHING SQUARE INC.", "Bill Ackman",
               former=(("1336528", "Pershing Square Capital Management, L.P."),))
@@ -821,7 +821,7 @@ def test_the_cli_refuses_to_collect_nothing(tmp_path, capsys):
     assert "--gurus" in capsys.readouterr().err
 
 
-# ---- the CUSIP map ------------------------------------------------------------------------------------------------
+# ---- the CUSIP map ---------------------------------------------------------------------------------------------------
 
 APPLE = "037833100"
 AON = "G0403H108"
@@ -834,9 +834,13 @@ class _FIGI:
     error OpenFIGI answers its job with (a str: the lookup raises JobErrors, the others answered). Records each
     lookup's CUSIPs."""
 
-    def __init__(self, answers):
+    def __init__(self, answers, cache=None):
         self.answers = answers
         self.asked = []
+        self.cache = cache or {}
+
+    def cached(self, cusips):
+        return {cusip: self.cache[cusip] for cusip in cusips if cusip in self.cache}
 
     def lookup(self, cusips):
         self.asked.append(list(cusips))
@@ -1047,7 +1051,7 @@ def test_the_cli_maps_the_cusips_after_collecting_the_gurus(tmp_path, monkeypatc
         "universe": 2, "openfigi": 3, "none": 1, "errors": ["X: HTTP 503"]})
     db = tmp_path / "x.db"
     args = ["--gurus", "--db", str(db), "--cache-dir", str(tmp_path / "cache")]
-    assert collect.main(args) == 0
+    assert collect.main(args) == 1  # the mapping reported an error (BUG-217)
     (gurus, (step, mapped_db, client)) = calls
     assert (gurus, step, mapped_db) == ("gurus", "map", db)
     assert isinstance(client, OpenFIGI) and client.cache == tmp_path / "cache" / "openfigi"
@@ -1059,3 +1063,138 @@ def test_the_cli_maps_the_cusips_after_collecting_the_gurus(tmp_path, monkeypatc
     calls.clear()
     collect.main(["--insiders", "--db", str(_db(tmp_path)), "--cache-dir", str(tmp_path / "cache")])
     assert calls == ["insiders"]  # the insiders alone map nothing
+
+
+# ---- BUG-212: a stored foreign ticker is read again from the cache ---------------------------------------------------
+
+ONEOK = "682680103"
+
+
+def test_a_stored_openfigi_ticker_is_read_again_from_the_cache_and_corrected(tmp_path):
+    # Rows mapped before a ticker came only from the US composite keep a foreign listing's ("OKEEUR"): the next run
+    # reads each 'openfigi' row's cached answer again, without a request, and rewrites the ticker it gives now.
+    db = _holdings_db(tmp_path, [(AON, "AON PLC"), (ONEOK, "ONEOK INC"), ("000000000", "GONE CORP")])
+    map_cusips(db, _FIGI({AON: AON_LISTING, ONEOK: Listing("OKEEUR", "ONEOK INC", "Common Stock", "ER", "F1"),
+                          "000000000": None}), universe={})
+    before = dict((cusip, mapped_at) for cusip, mapped_at in _rows(db, "SELECT cusip, mapped_at FROM cusip_map"))
+    figi = _FIGI({}, cache={AON: AON_LISTING, ONEOK: Listing(None, "ONEOK INC", "Common Stock", "ER", "F1")})
+    summary = map_cusips(db, figi, universe={})
+    assert figi.asked == []  # nothing asked of OpenFIGI
+    assert summary == {"universe": 0, "openfigi": 1, "none": 0, "errors": []}
+    assert _rows(db, "SELECT cusip, ticker, name, source FROM cusip_map ORDER BY cusip") == [
+        ("000000000", None, "GONE CORP", "none"), (ONEOK, None, "ONEOK INC", "openfigi"),
+        (AON, "AON", "AON PLC-CLASS A", "openfigi")]
+    after = dict(_rows(db, "SELECT cusip, mapped_at FROM cusip_map"))
+    assert after[AON] == before[AON] and after[ONEOK] != before[ONEOK]  # an unchanged row isn't rewritten
+
+
+def test_the_app_client_rereads_a_foreign_ticker_from_its_cached_answer(tmp_path):
+    db = _holdings_db(tmp_path, [(ONEOK, "ONEOK INC")])
+    SQLiteStore(db_path=db).export_cusip_map([{"cusip": ONEOK, "ticker": "OKEEUR", "name": "ONEOK INC",
+                                               "source": "openfigi", "security_type": "Common Stock",
+                                               "mapped_at": "2026-10-24T00:00:00+00:00"}])
+    cache = tmp_path / "cache" / "openfigi"
+    cache.mkdir(parents=True)
+    (cache / f"{ONEOK}.json").write_text(json.dumps({"data": [
+        {"figi": "F1", "name": "ONEOK INC", "ticker": "OKEEUR", "exchCode": "ER", "securityType": "Common Stock"},
+        {"figi": "F2", "name": "ONEOK INC", "ticker": "OKE", "exchCode": "ER", "securityType": "Common Stock"}]}),
+        encoding="utf-8")
+    server = _NoMatchServer()
+    map_cusips(db, _figi_client(tmp_path, server), universe={})
+    assert server.requests == []
+    assert _rows(db, "SELECT cusip, ticker, source FROM cusip_map") == [(ONEOK, None, "openfigi")]
+
+
+# ---- BUG-217: a missing database, and the exit code ------------------------------------------------------------------
+
+def _no_network(monkeypatch):
+    """Make the CLI's collectors and clients fail the test, should it reach them."""
+    import src.fetchers.sec_handler as sec_handler
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("the CLI went on")
+
+    for module, name in ((sec_handler, "SECHandler"), (collect, "collect_gurus"), (collect, "collect_insiders"),
+                         (collect, "map_cusips"), (collect, "store_guru_positions")):
+        monkeypatch.setattr(module, name, refuse)
+
+
+def test_the_insiders_on_a_missing_database_are_a_clear_error_and_create_nothing(tmp_path, monkeypatch, capsys):
+    _no_network(monkeypatch)
+    missing = tmp_path / "missing.db"
+    for args in (["--insiders"], ["--insiders", "PG"], ["--insiders", "--gurus"]):
+        assert collect.main(args + ["--db", str(missing), "--cache-dir", str(tmp_path / "cache")]) == 2
+        assert not missing.exists()  # no empty file left behind
+        err = capsys.readouterr().err
+        assert f"No database with companies at {missing}" in err and "none is created" in err
+
+
+def test_the_insiders_on_a_database_without_companies_are_a_clear_error(tmp_path, monkeypatch, capsys):
+    _no_network(monkeypatch)
+    db = tmp_path / "bare.db"
+    sqlite3.connect(db).close()
+    assert collect.main(["--insiders", "--db", str(db), "--cache-dir", str(tmp_path / "cache")]) == 2
+    assert "no such table: companies" in capsys.readouterr().err
+
+
+def test_collect_insiders_on_a_missing_database_creates_nothing(tmp_path):
+    missing = tmp_path / "missing.db"
+    with pytest.raises(sqlite3.Error):
+        collect_insiders(missing, ["PG"], 3, Form4Source(_SEC({}), tmp_path / "cache"), today="2026-10-22")
+    assert not missing.exists()
+
+
+@pytest.mark.parametrize("step", ["insiders", "gurus", "map"])
+def test_a_run_with_errors_exits_1(tmp_path, monkeypatch, step):
+    errors = {"insiders": ["0000080424-26-000150: HTTP 503"], "gurus": ["1067983 submissions: HTTP 503"],
+              "map": ["X: HTTP 503"]}
+    clean = {"insiders": [], "gurus": [], "map": []}
+    db = str(_db(tmp_path))
+
+    def run(failing):
+        found = errors if failing else clean
+        monkeypatch.setattr(collect, "collect_insiders", lambda db, tickers, years, source, **kw: {
+            "PG": {"listed": 1, "stored": 0, "other_issuer": 0, "from_predecessor": 0,
+                   "errors": found["insiders"] if step == "insiders" else []}})
+        monkeypatch.setattr(collect, "collect_gurus", lambda db, gurus, quarters, source, **kw: {
+            "1067983": {"listed": 1, "stored": 1, "checksum_failures": ["A-1"],  # a checksum failure isn't an error
+                        "errors": found["gurus"] if step == "gurus" else []}})
+        monkeypatch.setattr(collect, "map_cusips", lambda db, client, **kw: {
+            "universe": 0, "openfigi": 0, "none": 0, "errors": found["map"] if step == "map" else []})
+        monkeypatch.setattr(collect, "store_guru_positions", lambda db, gurus, **kw: {})
+        return collect.main(["--insiders", "--gurus", "--no-openfigi", "--db", db,
+                             "--cache-dir", str(tmp_path / "cache")])
+
+    assert run(failing=True) == 1
+    assert run(failing=False) == 0
+
+
+# ---- BUG-219: a price's footnotes keep their text --------------------------------------------------------------------
+
+def test_a_prices_footnotes_text_is_stored_beside_their_ids(tmp_path):
+    db = tmp_path / "own.db"
+    filing = parse_form4((FIXTURES / "aapl_exercise_sale_gift.xml").read_bytes(), "0001140361-26-000001")
+    SQLiteStore(db_path=db).export_insider_filings("AAPL", [
+        (FilingRef("0001140361-26-000001", "4", "2026-10-03", "2026-10-01", "f.xml"), filing)],
+        "2026-10-22T00:00:00+00:00")
+    rows = _rows(db, "SELECT seq, price, price_footnotes, price_footnote_text FROM insider_trades ORDER BY seq")
+    assert rows[0][:3] == (0, None, "F1") and rows[0][3].startswith("Each restricted stock unit")
+    assert rows[1][2:] == (None, None)  # the withholding: no footnote on its price
+    assert rows[2][2] == "F5" and "weighted average sale price" in rows[2][3]
+
+
+def test_an_insider_trades_table_from_before_the_footnotes_text_gets_its_column(tmp_path):
+    db = tmp_path / "own.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE insider_trades (accession TEXT NOT NULL, seq INTEGER NOT NULL, ticker TEXT NOT NULL, "
+                 "kind TEXT NOT NULL, security_title TEXT, date TEXT, code TEXT, shares REAL, price REAL, "
+                 "price_footnotes TEXT, acquired_disposed TEXT, owned_after REAL, direct_indirect TEXT, "
+                 "nature_of_ownership TEXT, exercise_price REAL, underlying_title TEXT, underlying_shares REAL, "
+                 "superseded_by TEXT, price_suspect INTEGER, PRIMARY KEY (accession, seq))")
+    conn.commit()
+    conn.close()
+    filing = parse_form4((FIXTURES / "aapl_exercise_sale_gift.xml").read_bytes(), "0001140361-26-000001")
+    SQLiteStore(db_path=db).export_insider_filings("AAPL", [
+        (FilingRef("0001140361-26-000001", "4", "2026-10-03", "2026-10-01", "f.xml"), filing)],
+        "2026-10-22T00:00:00+00:00")
+    assert _rows(db, "SELECT COUNT(*) FROM insider_trades WHERE price_footnote_text LIKE 'Each restricted%'") == [(2,)]

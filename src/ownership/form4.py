@@ -2,15 +2,15 @@
 (docs/superpowers/specs/2026-10-22-sec-ownership-design.md).
 
 Only what the filing states is kept. A field given as a footnote alone (an RSU's price) is None, with the
-footnote's id kept, never guessed. Holding rows that record no transaction are left out. The documents come
-from SEC EDGAR; one that isn't a readable ownership document raises ``Form4Error`` for the caller to skip and
-report.
+footnote's id kept, never guessed; a price's footnotes keep their text too (BUG-219). Holding rows that record no
+transaction are left out. The documents come from SEC EDGAR; one that isn't a readable ownership document raises
+``Form4Error`` for the caller to skip and report.
 """
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 #: The schema's booleans: 1/0 in most filers' documents, true/false in others' (AAPL).
 _TRUE = {"1", "true"}
@@ -47,6 +47,8 @@ class Trade:
     shares: Optional[float] = None
     price: Optional[float] = None
     price_footnotes: List[str] = field(default_factory=list)
+    #: The text of the price's footnotes, in their order, each once ("" when the filing gives none of them).
+    price_footnote_text: Optional[str] = None
     acquired_disposed: Optional[str] = None
     owned_after: Optional[float] = None
     direct_indirect: Optional[str] = None
@@ -110,6 +112,19 @@ def _footnotes(node: ET.Element, path: str) -> List[str]:
     return [ref.get("id") or "" for ref in found.findall("footnoteId")]
 
 
+def _footnote_texts(root: ET.Element) -> Dict[str, str]:
+    """Each footnote's text by its id (``<footnotes><footnote id="F1">...``), its whitespace collapsed."""
+    return {note.get("id") or "": " ".join("".join(note.itertext()).split())
+            for note in root.findall("footnotes/footnote")}
+
+
+def _text_of(ids: List[str], texts: Dict[str, str]) -> Optional[str]:
+    """The text of the footnotes *ids* names, in their order, each once; None without ids."""
+    if not ids:
+        return None
+    return " ".join(texts[i] for i in dict.fromkeys(ids) if texts.get(i))
+
+
 def _owner(node: ET.Element) -> Owner:
     relation = node.find("reportingOwnerRelationship")
     return Owner(
@@ -168,4 +183,7 @@ def parse_form4(xml: bytes, accession: str) -> Form4:
     rows = [(node, "nonderivative") for node in root.findall("nonDerivativeTable/nonDerivativeTransaction")]
     rows += [(node, "derivative") for node in root.findall("derivativeTable/derivativeTransaction")]
     filing.trades = [_trade(node, table, seq) for seq, (node, table) in enumerate(rows)]
+    texts = _footnote_texts(root)
+    for trade in filing.trades:
+        trade.price_footnote_text = _text_of(trade.price_footnotes, texts)
     return filing

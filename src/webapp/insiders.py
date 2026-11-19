@@ -3,7 +3,7 @@ Form 4 trades with their open-market aggregates, or Yahoo's rows where no Form 4
 (docs/superpowers/specs/2026-10-22-sec-ownership-design.md)."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from ..ownership.insiders import CODE_MEANINGS, summarize
@@ -42,6 +42,8 @@ def _trade_out(t: Dict[str, Any], close: Optional[float] = None) -> Dict[str, An
         "value": shares * price if shares is not None and price is not None and not suspect else None,
         "price_suspect": None if suspect is None else bool(suspect),
         "price_note": _price_note(price, close) if suspect else None,
+        # The text of the price's footnotes as filed (BUG-219): a weighted average's range, or why there's no price.
+        "price_footnote": t.get("price_footnote_text"),
         "acquired_disposed": t.get("acquired_disposed"), "owned_after": t.get("owned_after"),
         "direct_indirect": t.get("direct_indirect"), "owner_cik": t.get("owner_cik"),
         "owner_name": t.get("owner_name"), "officer_title": t.get("officer_title"), "role": _role(t),
@@ -49,14 +51,20 @@ def _trade_out(t: Dict[str, Any], close: Optional[float] = None) -> Dict[str, An
     }
 
 
+def today_utc() -> str:
+    """Today's date in UTC: the screener's insider fields count from SQLite's ``date('now')``, which is UTC, so the
+    INS tab's windows do too (BUG-219)."""
+    return datetime.now(timezone.utc).date().isoformat()
+
+
 def insider_view(r: Reader, ticker: str, today: Optional[str] = None) -> Dict[str, Any]:
-    """The ticker's insider trades: ``source`` is "sec" with the aggregates as of *today*, "yahoo" with Yahoo's
-    rows when no Form 4 is stored, or None when there are neither. A suspect price (``insiders.price_suspect``) is
-    shown as filed with a note, and left out of the dollar figures."""
+    """The ticker's insider trades: ``source`` is "sec" with the aggregates as of *today* (by default
+    ``today_utc``), "yahoo" with Yahoo's rows when no Form 4 is stored, or None when there are neither. A suspect
+    price (``insiders.price_suspect``) is shown as filed with a note, and left out of the dollar figures."""
     trades = r.sec_insider_trades(ticker)
     if trades:
         return {"ticker": ticker, "source": "sec",
-                "summary": summarize(trades, today or date.today().isoformat()),
+                "summary": summarize(trades, today or today_utc()),
                 "trades": [_trade_out(t, r.close_on_or_before(ticker, t["date"])
                                       if t.get("price_suspect") and t.get("date") else None) for t in trades]}
     yahoo = r.insider_transactions(ticker)

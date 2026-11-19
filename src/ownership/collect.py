@@ -13,7 +13,8 @@ and left out, and what an earlier run stored stays. Then the holdings' CUSIPs ar
 our universe's from ``cusips.UNIVERSE_CUSIPS``, the others through OpenFIGI (``openfigi``), unless --no-openfigi.
 Last, each guru's quarters and positions with their changes are built from its stored filings and stored
 (``store_guru_positions``: ``guru_quarters``, ``guru_positions``), for the web; --positions rebuilds them alone,
-without the network.
+without the network. The exit code is 0, or 1 when anything was reported as an error (a checksum failure is stored
+and flagged, not an error), or 2 when --insiders has no database with companies to read (none is created).
 
     python -m src.ownership.collect --insiders [--years 3] [--db PATH] [TICKERS...]
     python -m src.ownership.collect --gurus [--quarters 8] [--no-openfigi] [--db PATH] [--cache-dir DIR]
@@ -36,8 +37,8 @@ from ..fetchers.sec_handler import PREDECESSOR_CIKS
 from .cusips import UNIVERSE_CUSIPS
 from .form4 import Form4, Form4Error, parse_form4
 from .gurus import Guru
-from .openfigi import BATCH_SIZE, CUSIP, JobErrors, OpenFIGI
-from .portfolio import GuruQuarters, load_guru
+from .openfigi import BATCH_SIZE, CUSIP, JobErrors, Listing, OpenFIGI
+from .portfolio import GuruQuarters, load_gurus
 from .thirteenf import ThirteenF, ThirteenFError, parse_13f
 
 FORM4_FORMS = ("4", "4/A")
@@ -252,10 +253,11 @@ def collect_insiders(db_path: Path, tickers: Sequence[str], years: float, source
     Returns, per ticker, the filings listed (the predecessor's from the successor's first on aren't), stored (of
     them, ``from_predecessor``), the company's own filings as another issuer's owner, left out (``other_issuer``),
     and the errors: a failed feed, fetch, parse or store; a filing naming no issuer; a company without a CIK. One
-    company's failure is reported and the run goes on."""
+    company's failure is reported and the run goes on. Raises sqlite3.Error when the database or its ``companies``
+    table isn't there (a missing database isn't created)."""
     day = date.fromisoformat(today) if today else date.today()
     since = (day - timedelta(days=round(365.25 * years))).isoformat()
-    with sqlite3.connect(str(db_path)) as conn:
+    with closing(sqlite3.connect(read_only_uri(db_path), uri=True)) as conn:  # a missing database isn't created
         ciks = {t: c for t, c in conn.execute("SELECT ticker, cik FROM companies")}
     store = SQLiteStore(db_path=db_path)
     summary: Dict[str, Dict[str, Any]] = {}
@@ -330,6 +332,16 @@ def _issuers(conn: sqlite3.Connection) -> Dict[str, Optional[str]]:
             for cusip, counts in sorted(names.items())}
 
 
+def _figi_row(cusip: str, listing: Optional[Listing], issuers: Mapping[str, Optional[str]],
+              mapped_at: str) -> Dict[str, Any]:
+    """The ``cusip_map`` row of OpenFIGI's answer for *cusip*: 'openfigi' with its listing (no ticker without a US
+    composite, ``openfigi.pick_listing``), or 'none' named by the holdings' issuer when OpenFIGI knows none."""
+    if listing is None:
+        return {"cusip": cusip, "ticker": None, "name": issuers.get(cusip), "source": "none", "mapped_at": mapped_at}
+    return {"cusip": cusip, "ticker": listing.ticker, "name": listing.name, "source": "openfigi",
+            "security_type": listing.security_type, "mapped_at": mapped_at}
+
+
 def _ask_openfigi(client: OpenFIGI, cusips: Sequence[str], issuers: Mapping[str, Optional[str]], mapped_at: str,
                   log: Callable[[str], None]) -> Tuple[List[Dict[str, Any]], List[str]]:
     """The ``cusip_map`` rows OpenFIGI gives *cusips*, asked 10 at a time so a failed request loses only its own,
@@ -364,13 +376,7 @@ def _ask_openfigi(client: OpenFIGI, cusips: Sequence[str], issuers: Mapping[str,
         for cusip in chunk:
             if cusip not in found:  # refused: reported, left for the next run
                 continue
-            listing = found[cusip]
-            if listing is None:
-                rows.append({"cusip": cusip, "ticker": None, "name": issuers.get(cusip), "source": "none",
-                             "mapped_at": mapped_at})
-            else:
-                rows.append({"cusip": cusip, "ticker": listing.ticker, "name": listing.name, "source": "openfigi",
-                             "security_type": listing.security_type, "mapped_at": mapped_at})
+            rows.append(_figi_row(cusip, found[cusip], issuers, mapped_at))
         if (start // BATCH_SIZE + 1) % 20 == 0:
             log(f"OpenFIGI: {start + len(chunk)} of {len(ask)} CUSIPs asked")
     return rows, errors
@@ -383,17 +389,25 @@ def map_cusips(db_path: Path, client: Optional[OpenFIGI], universe: Mapping[str,
     without a row is asked of OpenFIGI (*client*; None asks nothing): a match is written as 'openfigi', no match as
     'none' (no ticker). A 'universe' or 'none' row is named by the holdings' issuer (``_issuers``), an 'openfigi' one
     by OpenFIGI. A request that fails is reported and its CUSIPs are left for the next run, never stored as no match.
+    An 'openfigi' row is read again from OpenFIGI's cached answer, without a request, and rewritten when its ticker
+    differs from what the answer gives now (a row stored before the ticker came only from the US composite: BUG-212).
     Returns the rows written by source, and the errors."""
     with closing(sqlite3.connect(str(db_path))) as conn:
         issuers = _issuers(conn)
-        mapped = set()
+        mapped: Dict[str, Tuple[Optional[str], str]] = {}
         if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cusip_map'").fetchone():
-            mapped = {cusip for (cusip,) in conn.execute("SELECT cusip FROM cusip_map")}
+            mapped = {cusip: (ticker, source) for cusip, ticker, source in conn.execute(
+                "SELECT cusip, ticker, source FROM cusip_map")}
     mapped_at = datetime.now(timezone.utc).isoformat()
     rows = [{"cusip": cusip, "ticker": universe[cusip], "name": name, "source": "universe", "mapped_at": mapped_at}
             for cusip, name in issuers.items() if cusip in universe]
     errors: List[str] = []
     if client is not None:
+        stored = [c for c in issuers if c not in universe and mapped.get(c, (None, ""))[1] == "openfigi"]
+        for cusip, listing in client.cached(stored).items():
+            row = _figi_row(cusip, listing, issuers, mapped_at)
+            if (row["ticker"], row["source"]) != mapped[cusip]:
+                rows.append(row)
         found, errors = _ask_openfigi(client, [c for c in issuers if c not in universe and c not in mapped], issuers,
                                       mapped_at, log)
         rows += found
@@ -406,26 +420,28 @@ def map_cusips(db_path: Path, client: Optional[OpenFIGI], universe: Mapping[str,
     return summary
 
 
-def _load_guru(db_path: Path, guru_cik: str) -> GuruQuarters:
-    """The guru's quarters and changes from its stored filings, read through a read-only connection; none from a
-    database that isn't there yet."""
+def _load_gurus(db_path: Path, guru_ciks: Sequence[str]) -> Dict[str, GuruQuarters]:
+    """Each guru's quarters and changes from its stored filings (``portfolio.load_gurus``), read through a read-only
+    connection; none from a database that isn't there yet."""
     if not Path(db_path).exists():
-        return GuruQuarters(guru_cik)
+        return {cik: GuruQuarters(cik) for cik in guru_ciks}
     with closing(sqlite3.connect(read_only_uri(db_path), uri=True)) as conn:
-        return load_guru(conn, guru_cik)
+        return load_gurus(conn, guru_ciks)
 
 
 def store_guru_positions(db_path: Path, gurus: Sequence[Guru], log: Callable[[str], None] = lambda line: None,
                          ) -> Dict[str, Dict[str, int]]:
     """Store each guru's quarters and positions with their changes (``guru_quarters``, ``guru_positions``), built
-    from its stored 13F filings (``portfolio.load_guru``), without any network: each guru's rows are replaced in one
-    transaction (``SQLiteStore.export_guru_positions``), a guru without filings left with none. Returns, per guru
-    (its CIK), the quarters and the position rows stored."""
+    from its stored 13F filings (``portfolio.load_gurus``, all read at once: a split inferred for a security reads
+    every guru's holdings of it), without any network: each guru's rows are replaced in one transaction
+    (``SQLiteStore.export_guru_positions``), a guru without filings left with none. Returns, per guru (its CIK), the
+    quarters and the position rows stored."""
     store = SQLiteStore(db_path=db_path)
     computed_at = datetime.now(timezone.utc).isoformat()
     summary: Dict[str, Dict[str, int]] = {}
+    every = _load_gurus(db_path, [guru.cik for guru in gurus])
     for guru in gurus:
-        loaded = _load_guru(db_path, guru.cik)
+        loaded = every[guru.cik]
         rows = store.export_guru_positions(loaded, computed_at)
         summary[guru.cik] = {"quarters": len(loaded.quarters), "positions": rows}
         log(f"{guru.manager} ({guru.cik}): {len(loaded.quarters)} quarters, {rows} position rows stored")
@@ -459,10 +475,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                      "quarters offline)")
     db_path = args.db or StorageConfig().database_path
     tickers: List[str] = []
+    failed = 0  # the errors reported: a run with any exits 1
     if args.insiders:
-        with sqlite3.connect(str(db_path)) as conn:
-            tickers = [t.upper() for t in args.tickers] or [t for (t,) in conn.execute(
-                "SELECT ticker FROM companies WHERE cik IS NOT NULL ORDER BY ticker")]
+        # The insiders need the companies' CIKs: a collection's database. A missing one is never created (BUG-217).
+        try:
+            with closing(sqlite3.connect(read_only_uri(db_path), uri=True)) as conn:
+                listed = [t for (t,) in conn.execute(
+                    "SELECT ticker FROM companies WHERE cik IS NOT NULL ORDER BY ticker")]
+        except sqlite3.Error as exc:
+            print(f"No database with companies at {db_path} ({exc}): --insiders needs a collection's database "
+                  f"(none is created).", file=sys.stderr)
+            return 2
+        tickers = [t.upper() for t in args.tickers] or listed
     if args.insiders or args.gurus:
         sec = SECHandler(user_agent=AppConfig().sec.user_agent, cache_dir=args.cache_dir)
         try:
@@ -474,6 +498,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 errors = sum(len(s["errors"]) for s in summary.values())
                 print(f"Form 4 filings stored: {stored} for {len(summary)} tickers; other issuers' filings left out: "
                       f"{other}; errors: {errors}")
+                failed += errors
             if args.gurus:
                 summary = collect_gurus(db_path, GURUS, args.quarters, ThirteenFSource(sec, args.cache_dir),
                                         log=lambda line: print(line, flush=True))
@@ -482,17 +507,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 errors = sum(len(s["errors"]) for s in summary.values())
                 print(f"13F filings stored: {stored} for {len(summary)} gurus; checksum failures: {failures}; "
                       f"errors: {errors}")
+                failed += errors
                 mapped = map_cusips(db_path, None if args.no_openfigi else OpenFIGI(args.cache_dir),
                                     log=lambda line: print(line, flush=True))
                 print(f"CUSIPs mapped: {mapped['universe']} from our universe, {mapped['openfigi']} by OpenFIGI, "
                       f"{mapped['none']} not found; errors: {len(mapped['errors'])}")
+                failed += len(mapped["errors"])
         finally:
             sec.close()
     if args.gurus or args.positions:  # after the mapping, once; offline
         built = store_guru_positions(db_path, GURUS, log=lambda line: print(line, flush=True))
         print(f"Guru quarters stored: {sum(s['quarters'] for s in built.values())} quarters, "
               f"{sum(s['positions'] for s in built.values())} position rows for {len(built)} gurus")
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

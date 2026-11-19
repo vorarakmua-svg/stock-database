@@ -86,13 +86,53 @@ def test_a_match_takes_the_us_composite_of_its_listings(tmp_path):
     assert url == URL and kwargs["json"] == [{"idType": "ID_CUSIP", "idValue": BRK_B_CUSIP}]
 
 
-def test_without_a_us_composite_the_first_listing_with_a_ticker_else_the_first():
+def test_without_a_us_composite_the_first_listing_without_a_ticker():
+    # BUG-212: a ticker comes only from the US composite. Without one, the first listing names the security, and a
+    # foreign listing's ticker (or a delisted stock's last exchange's) isn't taken.
     london = _listing(None, "LN", "F1", name="X PLC")
     frankfurt = _listing("X1", "GR", "F2", name="X PLC")
     paris = _listing("X2", "FP", "F3", name="X PLC")
-    assert pick_listing([london, frankfurt, paris]) == Listing("X1", "X PLC", "Common Stock", "GR", "F2")
+    assert pick_listing([london, frankfurt, paris]) == Listing(None, "X PLC", "Common Stock", "LN", "F1")
+    assert pick_listing([frankfurt, paris]) == Listing(None, "X PLC", "Common Stock", "GR", "F2")
     assert pick_listing([london, dict(london, figi="F4")]) == Listing(None, "X PLC", "Common Stock", "LN", "F1")
     assert pick_listing([]) is None
+
+
+def test_without_a_us_composite_the_first_us_exchanges_listing():
+    # A stock whose composite is gone (Hess on NYSE American after Chevron took it over) keeps its US ticker; an OTC
+    # quote of a foreign ordinary (CIR's CFDZF) isn't a listing.
+    hess = [_listing("HSS", "GR", "F1", name="HESS CORP"), _listing("HES", "UA", "F2", name="HESS CORP"),
+            _listing("HES", "UN", "F3", name="HESS CORP")]
+    assert pick_listing(hess) == Listing("HES", "HESS CORP", "Common Stock", "UA", "F2")
+    assert pick_listing(hess + [_listing("HES", "US", "F4", name="HESS CORP")]).figi == "F4"  # the composite first
+    assert pick_listing([_listing("CFDZF", "UV", "F1", name="CIR SPA")]).ticker is None
+    assert openfigi.US_EXCHANGES == frozenset({"UN", "UA", "UP", "UC", "UM", "UW", "UQ", "UR", "UT", "UB", "UX", "UD",
+                                               "UF", "VF", "VJ", "VK", "VY", "NEW YORK", "NASDAQ/NGS",
+                                               "Texas Stock Exch", "TRACE"})
+    # A note: its US trades' description stays its name; a listing in Frankfurt doesn't.
+    note = _listing("AKAM 0.375 09-01-27", "TRACE", "F1", name="AKAMAI TECHNOLOGIES INC", kind="US DOMESTIC")
+    assert pick_listing([note]).ticker == "AKAM 0.375 09-01-27"
+    assert pick_listing([dict(note, exchCode="FRANKFURT")]).ticker is None
+
+
+def test_oneoks_answer_without_a_us_composite_gives_no_ticker():
+    # ONEOK's cached answer (682680103) lists it on Equiduct only, "OKE" among its tickers there: none is a US listing.
+    oneok = [_listing(t, "ER", f"F{i}", name="ONEOK INC") for i, t in enumerate(("OKEEUR", "OKEGBP", "OKE"))]
+    assert pick_listing(oneok) == Listing(None, "ONEOK INC", "Common Stock", "ER", "F0")
+    # With the composite anywhere in the answer, its ticker.
+    assert pick_listing(oneok + [_listing("OKE", "US", "FUS", name="ONEOK INC")]).ticker == "OKE"
+
+
+def test_the_cached_listings_are_read_without_a_request(tmp_path):
+    client, session, _ = _client(tmp_path, _answers({BRK_B_CUSIP: {"data": BRK_B}, "000000000": NOT_FOUND}))
+    client.lookup([BRK_B_CUSIP, "000000000"])
+    _cache(tmp_path, "111111111").write_text(json.dumps({"data": [_listing("X1", "GR", "F2", name="X PLC")]}),
+                                             encoding="utf-8")
+    again, idle, _ = _client(tmp_path)  # no answers: a request would fail
+    assert again.cached([BRK_B_CUSIP, "000000000", "111111111", "222222222", "bad"]) == {
+        BRK_B_CUSIP: Listing("BRK-B", "BERKSHIRE HATHAWAY INC-CL B", "Common Stock", "US", "BBG000DWG505"),
+        "000000000": None, "111111111": Listing(None, "X PLC", "Common Stock", "GR", "F2")}
+    assert idle.requests == []
 
 
 def test_openfigis_slash_in_a_ticker_becomes_a_dash():

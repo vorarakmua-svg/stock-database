@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 135 · NEEDS-USER 1 · Decided: 7 · Verified: 226
+**Open:** P0 0 · P1 0 · P2 0 · P3 131 · NEEDS-USER 1 · Decided: 7 · Verified: 230
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1656,16 +1656,18 @@ Expected: no changes when either quarter is incomplete; the views and the screen
 Fix (iteration 189, `qa/evidence/bug211-investigation.txt`): one rule in src/ownership/portfolio.py. A quarter is complete when every filer with a filing for it has a standing report and every filer that reported the quarter before has reported it too, unless its deadline (period end + 45 days + 3 for a business-day roll) has passed by the clock (the latest stored 13F filing date: filing dates only, no look-ahead). Changes exist only between two complete quarters; a guru's latest quarter (LATEST_QUARTERS_SQL, every view and the screener) is its latest complete one, else its latest flagged incomplete. Measured on a real-data copy: 0 of 235 quarters, 0 GURU/HDS/portfolio views move. Residuals: a brand-new extra filer isn't awaited; the 3-day roll isn't a holiday calendar.
 
 ### BUG-212 [P3][OWNERSHIP] OpenFIGI's fallback ticker comes from a foreign listing
-Status: OPEN
-Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Status: VERIFIED (iteration 199)
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: (this commit) | Regression tests: tests/test_ownership_*.py, tests/test_web_insiders.py; 29 failing first
 Repro: `openfigi.py:81-82`: about 100 equity CUSIPs have no US composite in the answer and take a foreign listing's ticker: ONEOK "OKEEUR" (with "OKE" in the same answer), AvalonBay "AVBC", the AstraZeneca ADR "AZNN", Webster "WED", Hologic "HO1". No collision with ours today; C, D, O, T and V make one possible.
 Expected: a ticker only from a US listing (or ask with exchCode US).   Actual: a foreign ticker.
+Fix (iteration 199, `qa/evidence/bug212-investigation.txt`; no Decision line: the worker's rule, accepted by the orchestrator): a ticker comes only from a US listing (the composite, else the first listing on a US exchange, `US_EXCHANGES`; OTC doesn't count), else no ticker. `map_cusips` re-reads each stored 'openfigi' row from the OpenFIGI cache (`OpenFIGI.cached()`, no request) and rewrites a changed ticker. Real-data copy: 119 cusip_map tickers become NULL (foreign stocks, Frankfurt notes, OTC); 615 guru_positions rows keep their CUSIP; Indivior's code change now reads as a sale plus a new INDV position. Residual: ONEOK (OKE) lists only abroad, so it stays unlinked unless 682680103 -> OKE is added to UNIVERSE_CUSIPS by hand.
 
 ### BUG-213 [P3][OWNERSHIP] A split of a security outside our universe reads as a large purchase
-Status: OPEN
-Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Status: VERIFIED (iteration 199)
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: (this commit) | Regression tests: tests/test_ownership_*.py, tests/test_web_insiders.py; 29 failing first
 Repro: the changes adjust only our tickers' splits: Akre's ORLY reads "added +989.3%" across its 15:1 split (really -27%), Markel's RLI +100% (2:1), Dodge & Cox's HDB +108% (a 1:1 bonus).
 Expected: the split recognised (an implied-price guard, say).   Actual: an addition of the split's size.
+Fix (iteration 199, with BUG-212): for a security with no split data of its own, a forward split (2-10, then multiples of 5 to 100) is inferred across every guru's holdings over two consecutive complete quarters when some holder's shares moved by the ratio within 5%, the holders' median price per share by it within 1.3x, and no holder kept its count within 5% (veto). ORLY's case was already fixed (its split is stored). Real data: HDB's 2025-09-30 changes at 5 gurus correct (e.g. Dodge & Cox +108.4% -> +4.2%); RLI unchanged. Residual: reverse splits and splits traded through by more than 5% still read as trades.
 
 ### BUG-214 [P3][UI] A guru's confidential omissions aren't shown
 Status: OPEN
@@ -1687,10 +1689,11 @@ Repro: `workstation.py:911`: "yes" on each row of a filing with the flag, its gr
 Expected: the flag where it applies, or labelled as the filing's.   Actual: on every row.
 
 ### BUG-217 [P3][OWNERSHIP] The ownership CLI on a missing database, and its exit code
-Status: OPEN
-Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Status: VERIFIED (iteration 199)
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: (this commit) | Regression tests: tests/test_ownership_*.py, tests/test_web_insiders.py; 29 failing first
 Repro: `collect.py` connects to a `--db` that doesn't exist, creating an empty file before a traceback; a run with errors exits 0.
 Expected: a clear error, no file created; a non-zero exit with errors.   Actual: as described.
+Fix (iteration 199, with BUG-212): `--insiders` reads the companies read-only; a missing database or one without `companies` prints a clear error, exits 2 and creates no file; exit 1 when any error was reported (a checksum failure isn't one). `--gurus`/`--positions` on a missing --db still create one, as an existing test documents.
 
 ### BUG-218 [P3][OWNERSHIP] A stale latest quarter counts in the screener's guru fields
 Status: VERIFIED (iteration 189)
@@ -1700,10 +1703,11 @@ Expected: an age limit, or the quarter shown.   Actual: counted as current.
 Fix (iteration 189, with BUG-211): a guru is current when the deadline of the quarter after its latest hasn't passed by the clock; the screener counts only gurus whose latest quarter is complete and current (pages and HDS still show a stale guru at its own quarter). Measured: LULU's gurus_holding/gurus_buying 3/2 -> 2/1 (Scion's Q3 2025), nothing else; no valuation reads these fields.
 
 ### BUG-219 [P3][OWNERSHIP] Two small ownership items
-Status: OPEN
-Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Status: VERIFIED (iteration 199)
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: (this commit) | Regression tests: tests/test_ownership_*.py, tests/test_web_insiders.py; 29 failing first
 Repro: the INS tab's 12-month window counts from the local date, the screener's from UTC (a day apart at times); price footnotes keep their ids only, not their text.
 Expected: one clock; the text where it matters.   Actual: as described.
+Fix (iteration 199, with BUG-212): the INS tab and the form4 API count their windows from the UTC date, as the screener's date('now'); a price's footnotes keep their text (`insider_trades.price_footnote_text`, added to older tables; API `price_footnote`; shown under an empty price). Stored trades gain the text on the next --insiders collection.
 
 ### BUG-220 [P2][OWNERSHIP] A filer's dropped decimal point makes LLY's insiders sell $78 billion
 Status: VERIFIED (build iteration 40)

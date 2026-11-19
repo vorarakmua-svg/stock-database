@@ -997,6 +997,8 @@ def ins_fragment(
                         "meaning": t["meaning"], "derivative": t["kind"] == "derivative",
                         "shares": fmt_count(t["shares"]), "price": fmt_price(t["price"]),
                         "price_note": t["price_note"],
+                        # A price given as a footnote alone shows the footnote's text (an RSU's, a gift's).
+                        "price_footnote": t["price_footnote"] if t["price"] is None else None,
                         "value": fmt_money(t["value"]), "after": fmt_count(t["owned_after"]),
                         "plan": "yes" if t["plan"] else "", "form": t["form"],
                         "tint_class": "up" if t["code"] == "P" else "down" if t["code"] == "S" else "flat"}

@@ -120,3 +120,30 @@ def test_a_document_that_isnt_a_readable_form_4_is_refused():
         parse_form4(b"<html><body>not an ownership document</body></html>", "x")
     with pytest.raises(Form4Error):
         parse_form4(b"<ownershipDocument><documentType>4", "x")  # cut short
+
+
+def test_a_prices_footnotes_keep_their_text():
+    # BUG-219: the ids alone ("F1") say nothing; the text says why there's no price, or what a price averages.
+    f = _parse("aapl_exercise_sale_gift.xml")
+    exercise, withheld, sale = f.trades[0], f.trades[1], f.trades[2]
+    assert exercise.price is None and exercise.price_footnote_text == (
+        'Each restricted stock unit ("RSU") represents the right to receive, at settlement, one share of common '
+        "stock. This transaction represents the settlement of RSUs in shares of common stock on their scheduled "
+        "vesting date.")
+    assert withheld.price_footnotes == [] and withheld.price_footnote_text is None
+    assert sale.price_footnotes == ["F5"] and sale.price_footnote_text.startswith(
+        "This transaction was executed in multiple trades at prices ranging from $330.66 to $331.655;")
+
+
+def test_a_prices_footnotes_text_in_their_order_each_once():
+    xml = (FIXTURES / "aapl_exercise_sale_gift.xml").read_text(encoding="utf-8")
+    first = xml.index('<footnoteId id="F1"/>')
+    xml = xml[:first] + '<footnoteId id="F3"/><footnoteId id="F1"/><footnoteId id="F3"/><footnoteId id="F99"/>' + \
+        xml[first + len('<footnoteId id="F1"/>'):]
+    xml = xml.replace('<footnote id="F3">Shares withheld', '<footnote id="F3">\n   Shares\n   withheld')
+    f = parse_form4(xml.encode("utf-8"), "0000000000-26-000001")
+    assert f.trades[0].price_footnotes == ["F3", "F1", "F3", "F99"]
+    assert f.trades[0].price_footnote_text == (
+        "Shares withheld by Apple to satisfy tax withholding requirements on vesting of RSUs. Each restricted stock "
+        'unit ("RSU") represents the right to receive, at settlement, one share of common stock. This transaction '
+        "represents the settlement of RSUs in shares of common stock on their scheduled vesting date.")

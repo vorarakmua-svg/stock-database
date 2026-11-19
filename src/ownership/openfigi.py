@@ -44,6 +44,15 @@ _DROPPED = (requests.ConnectionError, requests.Timeout, requests.exceptions.Chun
 #: OpenFIGI's error for a malformed code (a check digit that is wrong: 78462F953, B57FG04CA in the gurus' filings): a
 #: definitive answer, as asking again will never map it, so it is kept and read as "no match".
 MALFORMED = "Invalid idValue format."
+#: The US exchanges' codes (Bloomberg's): NYSE (UN), NYSE American (UA), NYSE Arca (UP), NYSE National (UC), NYSE
+#: Chicago (UM), the Nasdaq tiers and venues (UW, UQ, UR, UT, UB, UX), FINRA's ADF (UD) and Cboe's and IEX's (UF,
+#: VF, VJ, VK, VY). In the 1,941 answers cached on 2026-10-24, 21,066 of the 21,069 listings on them in an answer
+#: with a US composite have its ticker (the other 3 a warrant's, Millrose's MRP-W). A note or preferred share has no
+#: composite: OpenFIGI names its US venue in full ("NEW YORK", "NASDAQ/NGS", "Texas Stock Exch") or gives FINRA's
+#: TRACE, where US bonds trade, with a description for its ticker ("AKAM 0.375 09-01-27"). The OTC markets aren't
+#: listings, and are left out.
+US_EXCHANGES = frozenset({"UN", "UA", "UP", "UC", "UM", "UW", "UQ", "UR", "UT", "UB", "UX", "UD", "UF", "VF", "VJ",
+                          "VK", "VY", "NEW YORK", "NASDAQ/NGS", "Texas Stock Exch", "TRACE"})
 
 
 class JobErrors(OSError):
@@ -74,13 +83,16 @@ class Listing:
 
 
 def pick_listing(data: Sequence[Dict[str, Any]]) -> Optional[Listing]:
-    """One of a CUSIP's listings: the US composite (exchange code "US") if there is one, else the first with a
-    ticker, else the first. None without any."""
+    """One of a CUSIP's listings: the US composite (exchange code "US") if there is one, else the first on a US
+    exchange (US_EXCHANGES: a stock whose composite is gone, as Hess's on NYSE American after its merger), else the
+    first, without its ticker (BUG-212): a ticker comes only from a US listing, never a foreign one (ONEOK's "OKEEUR"
+    on Equiduct, Hologic's "HO1" in Germany), which may spell another company's ticker. None without any listing."""
     if not data:
         return None
-    chosen = (next((d for d in data if d.get("exchCode") == "US"), None)
-              or next((d for d in data if d.get("ticker")), None) or data[0])
-    ticker = chosen.get("ticker")
+    us = (next((d for d in data if d.get("exchCode") == "US"), None)
+          or next((d for d in data if d.get("exchCode") in US_EXCHANGES), None))
+    chosen = us or data[0]
+    ticker = chosen.get("ticker") if us is not None else None
     return Listing(ticker=ticker.replace("/", "-") if ticker else None, name=chosen.get("name"),
                    security_type=chosen.get("securityType"), exch_code=chosen.get("exchCode"),
                    figi=chosen.get("figi"))
@@ -148,6 +160,16 @@ class OpenFIGI:
         found = {cusip: pick_listing(answers[cusip].get("data") or []) for cusip in wanted if cusip in answers}
         if failed:
             raise JobErrors(found, failed)
+        return found
+
+    def cached(self, cusips: Sequence[str]) -> Dict[str, Optional[Listing]]:
+        """The listing (``pick_listing``; None for "no match") of each of *cusips* whose answer is cached, without a
+        request; a code without a cached answer, or that isn't a CUSIP, is left out."""
+        found: Dict[str, Optional[Listing]] = {}
+        for cusip in dict.fromkeys(cusips):
+            answer = self._cached(cusip) if CUSIP.fullmatch(cusip) else None
+            if answer is not None:
+                found[cusip] = pick_listing(answer.get("data") or [])
         return found
 
     def _path(self, cusip: str) -> Path:
