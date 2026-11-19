@@ -602,12 +602,12 @@ def _current_debt_set_aside(us_gaap: Dict[str, Any], view: str,
     for the annual record (a later 10-K can show an earlier one's paper inside its borrowings: KO's
     FY2019 $10.0B), the 10-Qs' and 10-Ks' for a quarter (a 10-Q's comparative DebtCurrent can hold a
     10-K's paper: NEE's 2011-12-31; BUG-257), and a vintage's own filing's, as known then (KO's
-    FY2019 10-K shows its paper apart; BUG-256). The as-of view fills a vintage's gaps from earlier
-    ones (BUG-110), so a vintage that shows no short-term figure on the date reads its paper beside
-    the latest earlier annual report's (QCOM's FY2016 10-K tags as paper the line its FY2015 10-K
-    tags as borrowings), and one that shows a short-term figure but no paper states the latest paper
-    an earlier annual report filed there, against its own figure (HON's FY2015 10-K, whose borrowings
-    hold its FY2014 10-K's paper: 0.0; AEP's FY2021 10-K, which shows only the maturities). A
+    FY2019 10-K shows its paper apart; BUG-256). A vintage that shows no short-term figure on the
+    date reads its paper beside the latest earlier annual report's (QCOM's FY2016 10-K tags as paper
+    the line its FY2015 10-K tags as borrowings), and one that shows a short-term figure but no paper
+    states the latest paper an earlier annual report filed there, against its own figure (HON's
+    FY2015 10-K, whose borrowings hold its FY2014 10-K's paper: 0.0; AEP's FY2021 10-K, which shows
+    only the maturities). A
     DebtCurrent below its filing's current maturities is a part that holds none (IFF's FY2022);
     DebtCurrent is read as filed, before a refinancing sets it aside. The borrowings and maturities
     *combined* into a DebtCurrent for that view's records (``_current_debt_combinations``) are among

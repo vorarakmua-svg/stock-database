@@ -2086,8 +2086,11 @@ period therefore carries two labels:
   52/53-week year tagged to its nominal month-end). A year not yet ended isn't in the record:
   a fiscal year whose end (the end most of its income and cash-flow figures share, else its
   latest balance-sheet date) is after the latest day a fact was filed is dropped, so a 10-K
-  that tags a figure of the year ahead opens no year with it (Bank of America's FY2010 10-K,
-  filed 2011-02-25, tags a $0.01 dividend for 2011; BUG-113). A filing's view of a year (a vintage)
+  that tags a figure of the year ahead opens no year with it until that figure's own date has
+  passed (Bank of America's FY2010 10-K, filed 2011-02-25, tags a $0.01 dividend for all of 2011).
+  A figure dated inside the year ahead opens that year once its date passes, before the year
+  ends (Eli Lilly's FY2013 10-K tags short-term borrowings at 2014-03-31, so FY2014 opens on
+  2014-04-28, its first filing after that date, with that figure alone; BUG-113 open). A filing's view of a year (a vintage)
   is the period the annual record held on its filing day, from the reports filed by then;
   a view holding only another period's figures, or of a year not over on its filing day, has no row. The transition period itself
   (GPN's June-December 2016) is no fiscal year and has no annual record, so the step
@@ -2406,7 +2409,7 @@ the facts filed on or before its filing day, the as-of view's gate, so its set-a
 later filing (BUG-120), and its share counts take a scale only from the year's views filed by
 then: a count no view filed by then checks stays as filed (ConocoPhillips' FY2018-20 diluted
 counts in thousands). A run that builds the as-of snapshots replaces the ticker's vintages with
-them (a full run all, a `years_back` run those years), so a view an older parse made doesn't
+its own (a full run all, a `years_back` run those years), so a view an older parse made doesn't
 stay. The as-of explorer's side-by-side table and the valuation's first-filed dates (a year's
 earliest `filed_date`) read them; the as-of view doesn't. Vintages are SQLite-only (not in the
 per-ticker JSON).
