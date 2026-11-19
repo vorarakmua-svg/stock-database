@@ -51,8 +51,9 @@
               <summary>show</summary>
               <table class="data-table">
                 <tbody>
-                  {% for k, v in m.assumptions.items() %}
-                  <tr><td class="row-label">{{ k }}</td><td class="num">{{ v }}</td></tr>
+                  {#- A rate's date and source a snapshot didn't keep are left out; any other unknown figure is a dash (BUG-067). -#}
+                  {% for k, v in m.assumptions.items() if not (v is none and k in ("risk_free_rate_as_of", "risk_free_rate_source")) %}
+                  <tr><td class="row-label">{{ k }}</td><td class="num">{{ "—" if v is none else v }}</td></tr>
                   {% endfor %}
                 </tbody>
               </table>
@@ -117,8 +118,8 @@
     <summary>Assumptions</summary>
     <table class="data-table">
       <tbody>
-        {% for k, v in oe.assumptions.items() %}
-        <tr><td class="row-label">{{ k }}</td><td class="num">{{ v }}</td></tr>
+        {% for k, v in oe.assumptions.items() if not (v is none and k in ("risk_free_rate_as_of", "risk_free_rate_source")) %}
+        <tr><td class="row-label">{{ k }}</td><td class="num">{{ "—" if v is none else v }}</td></tr>
         {% endfor %}
       </tbody>
     </table>

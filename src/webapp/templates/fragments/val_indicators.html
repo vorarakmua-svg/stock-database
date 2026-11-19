@@ -31,7 +31,7 @@
               <table class="data-table">
                 <tbody>
                   {% for k, v in m.assumptions.items() %}
-                  <tr><td class="row-label">{{ k }}</td><td class="num">{{ v }}</td></tr>
+                  <tr><td class="row-label">{{ k }}</td><td class="num">{{ "—" if v is none else v }}</td></tr>
                   {% endfor %}
                 </tbody>
               </table>

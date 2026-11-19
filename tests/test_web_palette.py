@@ -132,3 +132,54 @@ def test_early_enter_only_acts_on_the_text_it_was_pressed_for() -> None:
     # fire on "AAPL GP", which was never confirmed.
     steps = [["open"], ["type", "AAPL"], ["enter"], ["type", "AAPL GP"]]
     assert outcomes(steps) == [None]
+
+
+THREE = [{"ticker": "AAPL", "company_name": "Apple Inc."}, {"ticker": "AAPB", "company_name": "Second"},
+         {"ticker": "AAPC", "company_name": "Third"}]
+
+
+def test_arrow_keys_on_settled_results_move_the_selection() -> None:
+    steps = [["open"], ["type", "AAP"], ["settle"], ["down"], ["down"], ["up"], ["enter"]]
+    assert outcomes(steps, search_hits={"AAP": THREE}) == ["/stocks/AAPB"]
+
+
+def test_an_arrow_pressed_before_the_results_land_applies_to_them_not_to_the_old_list() -> None:
+    # BUG-003: ArrowDown beat the debounce and the search, so it moved within the list of the text before
+    # (here the empty box's pages); the new results then landed with the first row selected and lost it.
+    steps = [["open"], ["type", "AAP"], ["down"], ["enter"]]
+    assert outcomes(steps, search_hits={"AAP": THREE}) == ["/stocks/AAPB"]
+
+
+def test_several_early_arrows_all_count_and_never_past_the_ends() -> None:
+    down2 = [["open"], ["type", "AAP"], ["down"], ["down"], ["enter"]]
+    down9 = [["open"], ["type", "AAP"]] + [["down"]] * 9 + [["enter"]]
+    up_first = [["open"], ["type", "AAP"], ["up"], ["enter"]]
+    assert outcomes(down2, down9, up_first, search_hits={"AAP": THREE}) == [
+        "/stocks/AAPC", "/stocks/AAPC", "/stocks/AAPL"]
+
+
+def test_an_early_arrow_belongs_to_the_text_it_was_pressed_on() -> None:
+    # The user pressed Down on "AAP", then kept typing: the arrow isn't carried over to "AAPL"'s results.
+    hits = {"AAP": THREE, "AAPL": THREE[:2]}
+    steps = [["open"], ["type", "AAP"], ["down"], ["type", "AAPL"], ["enter"]]
+    assert outcomes(steps, search_hits=hits) == ["/stocks/AAPL"]
+
+
+def test_an_early_enter_opens_the_row_the_arrows_chose_before_it() -> None:
+    # Down, then Enter, both before the results land: Enter opens the second row; a Down after that Enter
+    # (it has already chosen) doesn't change it.
+    chosen = [["open"], ["type", "AAP"], ["down"], ["enter"]]
+    late = [["open"], ["type", "AAP"], ["down"], ["enter"], ["down"]]
+    assert outcomes(chosen, late, search_hits={"AAP": THREE}) == ["/stocks/AAPB", "/stocks/AAPB"]
+
+
+def test_an_early_arrow_doesnt_outlive_the_palette_it_was_pressed_in() -> None:
+    # Down on "AAP"'s stale list, then Escape: the palette opened again starts on its first row.
+    steps = [["open"], ["type", "AAP"], ["down"], ["escape"], ["open"], ["enter"]]
+    assert outcomes(steps, search_hits={"AAP": THREE}) == ["/"]
+
+
+def test_an_early_up_then_down_nets_out_from_the_first_row() -> None:
+    # Up at the top row stays on it, so the Down after it reaches the second.
+    steps = [["open"], ["type", "AAP"], ["up"], ["down"], ["enter"]]
+    assert outcomes(steps, search_hits={"AAP": THREE}) == ["/stocks/AAPB"]

@@ -369,3 +369,39 @@ def test_update_route_disabled_409(web_db: Path) -> None:
     r = client.post("/ui/stocks/AAA/update")
     assert r.status_code == 409
     assert "Collection is disabled." in r.text
+
+
+class _FailingFetcher(FakeFetcher):
+    """AAA's collection ends with errors, BBB's with none."""
+
+    def fetch_ticker(self, ticker: str, include_yahoo: bool = True, include_sec: bool = True,
+                     years_back: Optional[int] = None) -> StockData:
+        stock = StockData(ticker=ticker)
+        if ticker == "AAA":
+            stock.add_error("SEC EDGAR companyfacts: 403 Client Error: Forbidden")
+            stock.add_error("SEC EDGAR submissions: timed out")
+        return stock
+
+
+def test_a_job_names_the_tickers_that_failed_and_why(monkeypatch, web_db: Path) -> None:
+    # BUG-068: the card read "1 with errors" and named no ticker or error.
+    monkeypatch.setattr("src.valuation.engine.compute_and_store", lambda db_path, tickers=None, logger=None: 0)
+    client = _make_client(web_db)
+    client.app.state.job_manager.fetcher_factory = lambda config: _FailingFetcher()
+    job_id = client.post("/api/collection/jobs", json={"tickers": ["AAA", "BBB"]}).json()["job_id"]
+    final = _wait_until_done(client, job_id)
+    assert final["summary"]["with_errors"] == 1
+    assert final["summary"]["errors"] == {
+        "AAA": "SEC EDGAR companyfacts: 403 Client Error: Forbidden; SEC EDGAR submissions: timed out"}
+    card = client.get(f"/ui/collection/jobs/{job_id}").text
+    assert "AAA" in card and "403 Client Error: Forbidden" in card and "submissions: timed out" in card
+    assert "BBB" not in card
+
+
+def test_a_job_without_failures_lists_none(monkeypatch, web_db: Path) -> None:
+    monkeypatch.setattr("src.valuation.engine.compute_and_store", lambda db_path, tickers=None, logger=None: 0)
+    client = _make_client(web_db)
+    job_id = client.post("/api/collection/jobs", json={"tickers": ["AAA"]}).json()["job_id"]
+    final = _wait_until_done(client, job_id)
+    assert final["summary"]["errors"] == {}
+    assert "job-errors" not in client.get(f"/ui/collection/jobs/{job_id}").text

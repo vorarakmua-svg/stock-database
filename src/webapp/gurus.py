@@ -103,12 +103,14 @@ def guru_list(r: Reader) -> List[Dict[str, Any]]:
 
 
 def _filings(r: Reader, tables: Set[str], accessions: List[str]) -> List[Dict[str, Any]]:
-    """A quarter's filings in its order, each with its filer, form, filing date and amendment type where stored."""
+    """A quarter's filings in its order, each with its filer, form, filing date and amendment type where stored, and
+    whether it states that it omits holdings under confidential treatment (``confidential_omitted``: None when the
+    filing doesn't say, BUG-214)."""
     stored: Dict[str, Any] = {}
     if accessions and "guru_filings" in tables:
         marks = ", ".join("?" * len(accessions))
         stored = {row["accession"]: row for row in r.conn.execute(
-            "SELECT accession, filer_cik, form, filed, amendment_type FROM guru_filings "
+            "SELECT accession, filer_cik, form, filed, amendment_type, confidential_omitted FROM guru_filings "
             f"WHERE accession IN ({marks})", accessions)}
     names = ({cik: name for cik, name in r.conn.execute("SELECT filer_cik, name FROM guru_filers")}
              if "guru_filers" in tables else {})
@@ -117,7 +119,9 @@ def _filings(r: Reader, tables: Set[str], accessions: List[str]) -> List[Dict[st
         row = stored.get(accession)
         filer = row["filer_cik"] if row is not None else None
         out.append({"accession": accession, "filer_cik": filer, "filer": names.get(filer),
-                    **{key: row[key] if row is not None else None for key in ("form", "filed", "amendment_type")}})
+                    **{key: row[key] if row is not None else None for key in ("form", "filed", "amendment_type")},
+                    "confidential_omitted": None if row is None or row["confidential_omitted"] is None
+                    else bool(row["confidential_omitted"])})
     return out
 
 
@@ -125,7 +129,9 @@ def guru_view(r: Reader, cik: str, period: Optional[str] = None) -> Optional[Dic
     """One guru's quarter, its latest unless *period* names another: the quarter (filing date, total value, whether
     complete, whether its changes exist, its filings), the periods stored (newest first), the positions held (the
     shares before the options, the largest first) and the quarter's changes grouped (CHANGE_GROUPS; None without the
-    quarter before, or with either incomplete). None for a guru or period not stored."""
+    quarter before, or with either incomplete), and ``confidential_omitted``: whether any of the quarter's filings
+    states omitted holdings, which a position that reads sold out (or absent) may be (BUG-214). None for a guru or
+    period not stored."""
     tables = _tables(r)
     if not _TABLES <= tables:
         return None
@@ -144,11 +150,13 @@ def guru_view(r: Reader, cik: str, period: Optional[str] = None) -> Optional[Dic
     guru = _gurus(r, tables).get(cik, {})
     accessions = json.loads(quarter["accessions"] or "[]")
     prior = bool(quarter["has_prior"])
+    filings = _filings(r, tables, accessions)
     return {
         "cik": cik, "manager": guru.get("manager"), "filers": guru.get("filers", []), "period": period,
         "periods": periods, "filed": quarter["filed"], "total_value": quarter["total_value"],
         "complete": bool(quarter["complete"]), "has_prior": prior, "computed_at": quarter["computed_at"],
-        "accessions": accessions, "filings": _filings(r, tables, accessions),
+        "accessions": accessions, "filings": filings,
+        "confidential_omitted": any(f["confidential_omitted"] for f in filings),
         "positions": [p for p in rows if p["action"] != "sold_out"],
         "changes": {group: [p for p in rows if p["action"] == group] for group in CHANGE_GROUPS} if prior else None,
     }

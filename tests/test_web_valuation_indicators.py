@@ -430,3 +430,12 @@ def test_the_indicators_a_computation_stores_read_back(tmp_path):
     assert bank["reverse_dcf_live"]["na_reason"] == "no DCF: not applicable to sector 'bank'"
     html = client.get("/ui/stocks/AAA/val-indicators").text
     assert all(label.replace("'", "&#39;") in html for label in LABELS)
+
+
+def test_an_unknown_assumption_is_a_dash_not_none(client, web_db):
+    # BUG-067: the NCAV card's short_term_investments is stored null when the filer reports none.
+    _seed(web_db)
+    html = client.get("/ui/stocks/AAA/val-indicators").text
+    assert "short_term_investments" in html
+    assert "None" not in html
+    assert 'short_term_investments</td><td class="num">\u2014</td>' in html

@@ -946,6 +946,7 @@ class Reader:
             # Always a list, [] on a database older than the column (BUG-069); what the SEC read lacked (BUG-251/279)
             # as an object, not its JSON text (BUG-283), None for a complete run or an older database.
             run["warnings"] = _warning_list(run.get("warnings"))
+            run["errors"] = _warning_list(run.get("errors"))  # likewise (BUG-068)
             run["incomplete"] = _json_object(run.get("incomplete"))
         return runs
 
@@ -984,14 +985,17 @@ class Reader:
         Empty when there is no run, or when the database predates the
         ``warnings`` column (the Reader is read-only, so it can't add it).
         """
+        run = self.latest_run(ticker)
+        return _warning_list(run.get("warnings")) if run else []
+
+    def latest_run(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """The ticker's latest ``collection_runs`` row (every column the database has), or None."""
         row = self._conn.execute(
             "SELECT * FROM collection_runs WHERE ticker = ? "
             "ORDER BY collected_at DESC, rowid DESC LIMIT 1",
             (ticker,),
         ).fetchone()
-        if row is None or "warnings" not in row.keys():
-            return []
-        return _warning_list(row["warnings"])
+        return None if row is None else dict(row)
 
     def coverage_by_sector(self) -> List[Dict[str, Any]]:
         """Per-``sector_class`` summary: n_companies and median quality_score.

@@ -1070,7 +1070,9 @@ ORDER BY value_usd DESC;
   - `GET /api/gurus/{cik}?period=2026-03-31` returns one guru's quarter (its latest without `period`):
     `periods` (those stored, newest first), `filed`, `total_value`, `complete`, `has_prior`, `accessions` and
     `filings`, `positions` (the shares before the options, the largest first) and `changes`, the positions
-    grouped as `new`, `added`, `reduced` and `sold_out` (null without the quarter before).
+    grouped as `new`, `added`, `reduced` and `sold_out` (null without the quarter before), and
+    `confidential_omitted` (whether any of the quarter's filings states omitted holdings; each filing carries its
+    own flag, null where it isn't stated).
 - **Screener**: the *Insiders (SEC)* fields `ins_net_buy_12m` (open-market dollars bought less sold),
   `ins_buyers_12m`, `ins_ceo_cfo_buys_12m` (filings with a CEO/CFO purchase) and `ins_cluster_buyers_12m` (the
   most insiders buying within 30 days of one purchase: 3 or more is a cluster), and the *Gurus (13F)* fields

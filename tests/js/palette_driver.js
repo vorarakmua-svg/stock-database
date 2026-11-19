@@ -11,7 +11,8 @@
  *          "searchHits": {"<query>": [{"ticker": ..., "company_name": ...}]},
  *          "allowCollect": true|false}   // the page's data-allow-collect flag
  * Steps:  open | type <text> | settle (let the input debounce and the company
- *         search finish) | enter | escape. Every scenario ends with a settle.
+ *         search finish) | enter | escape | down | up (the arrow keys).
+ *         Every scenario ends with a settle.
  * Prints: a JSON array with one outcome per scenario.
  */
 'use strict';
@@ -92,6 +93,8 @@ async function play(source, steps, spec) {
     settle,
     enter: () => input.fire('keydown', { key: 'Enter' }),
     escape: () => input.fire('keydown', { key: 'Escape' }),
+    down: () => input.fire('keydown', { key: 'ArrowDown' }),
+    up: () => input.fire('keydown', { key: 'ArrowUp' }),
   };
   for (const [name, arg] of steps) await actions[name](arg);
   await settle();

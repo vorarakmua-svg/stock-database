@@ -396,12 +396,35 @@ def gp_fragment(
 # ---------------------------------------------------------------------------
 
 
+def _stored_years_note(note: str, ticker: str, years: List[Dict[str, Any]], collected_at: Optional[str]) -> str:
+    """The collection's "no annual financials" *note*, reworded for a company that has stored years: this collection
+    got none (and why, as the note said it), and the years shown are from earlier ones, dated (BUG-068). *years* are
+    the stored annual rows, newest first."""
+    reason = note.partition("): ")[2]
+    first, last = years[-1]["fiscal_year"], years[0]["fiscal_year"]
+    span = f"FY{first}" if first == last else f"FY{first} to FY{last}"
+    ended = years[0].get("period_end")
+    when = f" ({collected_at[:10]})" if collected_at else ""
+    return (f"SEC EDGAR: this collection{when} got no annual financials for {ticker}"
+            f"{': ' + reason if reason else ''}. The {len(years)} fiscal year{'' if len(years) == 1 else 's'} shown, "
+            f"{span}{f' (the latest ended {ended})' if ended else ''}, {'is' if len(years) == 1 else 'are'} from "
+            f"earlier collections.")
+
+
 def _sec_gap_notes(r: Reader, ticker: str) -> List[str]:
     """Why the latest collection got no annual financials from SEC, why they stop
     years ago (BUG-066), and which report the SEC's companyfacts lack so far (BUG-251, BUG-283), as far as it said:
-    each of them, since one doesn't explain the other (BUG-322)."""
-    return [w for w in r.latest_run_warnings(ticker)
-            if w.startswith((NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS, REPORT_WITHOUT_FACTS))]
+    each of them, since one doesn't explain the other (BUG-322). Where years are stored, the first says the figures
+    are from earlier collections rather than that there are none (BUG-068)."""
+    notes = [w for w in r.latest_run_warnings(ticker)
+             if w.startswith((NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS, REPORT_WITHOUT_FACTS))]
+    if any(n.startswith(NO_ANNUAL_FINANCIALS) for n in notes):
+        years = r.annual_financials(ticker)
+        if years:
+            collected_at = (r.latest_run(ticker) or {}).get("collected_at")
+            notes = [_stored_years_note(n, ticker, years, collected_at) if n.startswith(NO_ANNUAL_FINANCIALS) else n
+                     for n in notes]
+    return notes
 
 
 @router.get("/ui/stocks/{ticker}/fa", response_class=HTMLResponse)

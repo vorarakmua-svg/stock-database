@@ -260,6 +260,8 @@ class CollectionJobManager:
                     "total": len(results),
                     "successful": sum(1 for r in results if not r.errors),
                     "with_errors": sum(1 for r in results if r.errors),
+                    # Each failed ticker's errors, as the quote job names its own (BUG-068).
+                    "errors": {r.ticker: "; ".join(r.errors) for r in results if r.errors},
                     "valuations_computed": valuations_computed,
                 }
 

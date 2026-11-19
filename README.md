@@ -1103,7 +1103,10 @@ Where it shows, each guru at its latest complete quarter (its latest, flagged in
 - **Pages**: `/gurus` lists the gurus, each at its latest quarter: the value, the positions held in shares or
   principal amounts, and of them the new and the sold-out ones. `/gurus/{cik}` (`?period=` for an earlier
   quarter) shows a guru's holdings with weights and changes, the changes grouped, and the filings the quarter
-  stands on, linked to EDGAR. `/gurus/portfolio` aggregates the gurus: per security, the gurus holding it,
+  stands on, linked to EDGAR; a quarter whose filing states that it omits holdings under confidential treatment
+  (the cover's flag; 9 of the 235 quarters stored on 2026-11-20: Icahn's seven, Berkshire's Q1 2025, Pershing's Q4
+  2024) says so above the changes, since a position may read as sold out only because it moved into the
+  confidential part (BUG-214). `/gurus/portfolio` aggregates the gurus: per security, the gurus holding it,
   their summed shares and value, and the buyers (new or added) and sellers (reduced or sold out) of the latest
   quarter. The nav has a Gurus link.
 - **HDS tab**: a Gurus section above Yahoo's holders: each guru's latest quarter, shown on each row (Scion's
@@ -2499,6 +2502,10 @@ companyfacts carry, the run is stored as incomplete). `collection_runs.incomplet
 earlier report the companyfacts lack from their own XBRL; `predecessor`, why the
 predecessor's filings couldn't be read), empty for a complete run, so that `stock-data refresh`
 collects the company again (see [Keeping the data current](#keeping-the-data-current-stock-data-refresh)).
+`collection_runs.errors` keeps the errors' text as `warnings` keeps the warnings' (JSON; NULL in a run stored before
+the column), so the quality API's runs give both and the Collect page's job card names each failed ticker with its
+errors (BUG-068); the FA and VAL tabs of a company with stored years say, when the latest collection got no annual
+financials, that the years shown are from earlier collections (and why, with the date).
 `collection_runs.sec_read_at` keeps when the SEC served the run's companyfacts and submissions (the
 older; a payload from the handler's 7-day cache as of when it was cached), empty in a run stored before
 the column, which reads as of the run: the refresh looks for reports filed since then and counts only

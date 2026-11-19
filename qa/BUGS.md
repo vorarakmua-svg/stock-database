@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 123 · NEEDS-USER 1 · Decided: 7 · Verified: 247
+**Open:** P0 0 · P1 0 · P2 0 · P3 119 · NEEDS-USER 1 · Decided: 7 · Verified: 251
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -29,12 +29,13 @@ Root cause: Starlette 1.3 deprecates its httpx-based TestClient; `fastapi.testcl
 Notes: options are migrating per Starlette's guidance, or a dated `filterwarnings` entry. Must stay green on CI's Python 3.9.
 
 ### BUG-003 [P3][UI] Palette arrow keys may act on a stale list (suspected)
-Status: OPEN (suspected; confirm with `tests/js/palette_driver.js`)
-Found: bootstrap (seeded) via UI-02 | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 205)
+Found: bootstrap (seeded) via UI-02 | Fixed: (this commit) | Regression tests: tests/test_web_palette.py (node), test_web_gurus.py, test_web_api_collection.py, test_web_valuation_indicators.py, test_web_workstation.py; 19 failing first
 Repro: open the palette, type `AAPL`, press ArrowDown before the 150 ms debounce or the company search finishes, then Enter.
 Expected: the selection applies to the current text's results.
 Actual (suspected): ArrowDown moves within the old list; the new results then land with `selected = 0`, losing the keypress.
 Root cause: to confirm. The arrow handlers in `src/webapp/static/palette.js` don't check `itemsQuery === input.value` the way `enter()` does.
+Fix (iteration 205, `qa/evidence/bug003-investigation.txt`; reproduced under node): an arrow press on an out-of-date list is kept as `pendingMove` and applied when the typed text's results land (cleared by input and open()); a waiting Enter keeps its row. Before: AAP, ArrowDown, Enter inside the 150 ms debounce opened the first result.
 
 ### BUG-004 [P1][STORE] summary.csv keeps only the last collection run's tickers, and its columns depend on that run
 Status: VERIFIED
@@ -551,16 +552,18 @@ Expected: a note when ifrs-full holds annual-report facts for periods after the 
 
 Fix: `explain_stale_annual_financials` says why a non-empty record stops: ifrs-full annual-report facts (20-F, 40-F, 10-K) for a period ending after the record's last one ("later annual reports are in IFRS (20-F), which isn't mapped"; comparatives and 6-K interims don't count). The run records it as "SEC EDGAR: annual financials stop at FY2019 for TSM: ...", and the FA and VAL tabs show it, as they show the empty-record note. Whether models go N/A on such a basis stays Q8. No cached filer gets the note: the only one with IFRS facts, TSM, has no US-GAAP record, which is already explained (`qa/evidence/iter55-bug066-impact.txt`). End to end: ARM's real facts with everything filed after its FY2024 20-F moved to ifrs-full keep FY2021-24, the run's note says they stop at FY2024, and both tabs show it (`qa/evidence/iter55-bug066-e2e.txt`; review 6's TSM demo no longer applies, since BUG-065 reads its renamed TWD facts as a TWD reporter). Five mutants each fail a test.
 ### BUG-067 [P3][UI] The VAL tab shows "None" for the rate's date and source after a backfill
-Status: OPEN
-Found: iteration 48 by code review 6 (M1), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 205)
+Found: iteration 48 by code review 6 (M1), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_web_palette.py (node), test_web_gurus.py, test_web_api_collection.py, test_web_valuation_indicators.py, test_web_workstation.py; 19 failing first
 Repro: `val_none_scan.py` on the user's copy: the rate's "as of" and source assumptions read "None" on 122 of 127 VAL tabs (snapshots collected before 8feac32 carry neither); hist_cagr (26 tabs), cagr_years (7) and analyst_growth (5) did before.
 Expected: missing values shown as "—" (UI-11), and the keys left out when unknown.   Actual: "None".
+Fix (iteration 205, with BUG-003): the VAL tab's models, owner-earnings and indicators tables show an em dash for a null and leave out a null rate date/source row (display only; models.py unchanged).
 
 ### BUG-068 [P3][UI] Collection failures read badly in the web app: a failed request's note sits above the stored years, and the job card names no failed ticker
-Status: OPEN
-Found: iteration 48 by code review 6 (M2, M3), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 205)
+Found: iteration 48 by code review 6 (M2, M3), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_web_palette.py (node), test_web_gurus.py, test_web_api_collection.py, test_web_valuation_indicators.py, test_web_workstation.py; 19 failing first
 Repro (`web_job_sec_failure.py`): after a failed companyfacts request AAPL's FA tab shows its 20 stored years under "SEC EDGAR: no annual financials for AAPL … its companyfacts request failed (403 …)", and the failure is recorded twice (an error and a warning). The job card reads "Done: 0 successful, 2 with errors (2 total, 2 valuations refreshed)." without naming either ticker or error; MSFT (submissions timed out) has error_count 1 and no text anywhere: `collection_runs` keeps the warnings' text but not the errors'.
 Expected: with stored years, the note says this collection got no new SEC data and dates the figures shown; the card lists each failed ticker and its error (as the quote job does); an `errors` column like `warnings`.   Actual: as above.
+Fix (iteration 205, with BUG-003): the FA/VAL 'no annual financials' note says the fiscal years shown are from earlier collections when rows are stored; collection_runs gains `errors` (JSON list; older tables migrated; /api/quality/runs carries it); job cards list each failed ticker with its errors.
 
 ### BUG-069 [P3][API] `/api/quality/runs` omits `warnings` on a database without the column
 Status: VERIFIED (iteration 159)
@@ -1677,10 +1680,11 @@ Expected: the split recognised (an implied-price guard, say).   Actual: an addit
 Fix (iteration 199, with BUG-212): for a security with no split data of its own, a forward split (2-10, then multiples of 5 to 100) is inferred across every guru's holdings over two consecutive complete quarters when some holder's shares moved by the ratio within 5%, the holders' median price per share by it within 1.3x, and no holder kept its count within 5% (veto). ORLY's case was already fixed (its split is stored). Real data: HDB's 2025-09-30 changes at 5 gurus correct (e.g. Dodge & Cox +108.4% -> +4.2%); RLI unchanged. Residual: reverse splits and splits traded through by more than 5% still read as trades.
 
 ### BUG-214 [P3][UI] A guru's confidential omissions aren't shown
-Status: OPEN
-Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Status: VERIFIED (iteration 205)
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: (this commit) | Regression tests: tests/test_web_palette.py (node), test_web_gurus.py, test_web_api_collection.py, test_web_valuation_indicators.py, test_web_workstation.py; 19 failing first
 Repro: Icahn's filings omit holdings every quarter, as do Berkshire's Q1 2025 and Pershing's Q4 2024; an omitted position can read "sold out" with no note on the guru's page.
 Expected: a note where a filing states omitted holdings.   Actual: none.
+Fix (iteration 205, with BUG-003): `guru_view` carries each filing's `confidential_omitted` and the quarter's; guru.html notes it and /api/gurus/{cik} returns it. Real data: 9 of 235 quarters at 3 gurus (Icahn 7, Berkshire Q1 2025, Pershing Q4 2024); only Icahn's latest shows the note.
 
 ### BUG-215 [P3][OWNERSHIP] "CEO/CFO buys, 12 months" counts trades on the INS tab and filings in the screener
 Status: VERIFIED (iteration 186)

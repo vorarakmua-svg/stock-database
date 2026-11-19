@@ -388,6 +388,7 @@ class SQLiteStore:
                 error_count INTEGER,
                 quality_score INTEGER,
                 warnings TEXT,
+                errors TEXT,
                 incomplete TEXT,
                 sec_read_at TEXT,
                 PRIMARY KEY (ticker, collected_at)
@@ -741,7 +742,8 @@ class SQLiteStore:
             # What a run's SEC read lacked (BUG-251, BUG-279): NULL in every run stored before the column, which
             # reads as complete, as it did. When the SEC served that read (BUG-232): NULL before the column, which
             # reads as the run's own time, as it did.
-            "collection_runs": {"warnings": "TEXT", "incomplete": "TEXT", "sec_read_at": "TEXT"},
+            # The errors' text (BUG-068): NULL in every run stored before the column, which reads as none kept.
+            "collection_runs": {"warnings": "TEXT", "errors": "TEXT", "incomplete": "TEXT", "sec_read_at": "TEXT"},
         }
         for table, columns in expected.items():
             self._ensure_columns(conn, table, columns)
@@ -1102,6 +1104,8 @@ class SQLiteStore:
             "quality_score": quality_score,
             # The text too: the web app shows why a record came back empty.
             "warnings": json.dumps(stock.warnings),
+            # And the errors' (a failed request's), as the job card and the quality page name them (BUG-068).
+            "errors": json.dumps(stock.errors),
             # What its SEC read lacked, for the refresh to collect the company again (BUG-251, BUG-279).
             "incomplete": _incomplete(stock),
             # When the SEC served that read (a cached payload's time): the refresh looks for reports filed since and

@@ -78,6 +78,7 @@
   var itemsQuery = ''; // the input text `items` were built for
   var enterQuery = null; // Enter beat this text's results; run the top one when they land
   var selected = 0;
+  var pendingMove = 0; // arrow presses made while the list was out of date: applied when the typed text's results land
   var mode = null;     // null | {mode:'add', onPick:fn}
   var debounceTimer = null;
   var reqSeq = 0;
@@ -86,6 +87,7 @@
     mode = opts && opts.mode === 'add' ? opts : null;
     overlay.hidden = false;
     input.value = '';
+    pendingMove = 0;
     input.placeholder = mode ? 'Add ticker to watchlist…' : 'Search tickers, pages, functions…  (try: AAPL GP)';
     build('');
     input.focus();
@@ -140,10 +142,15 @@
     items = list;
     itemsQuery = query;
     selected = 0;
+    if (query === input.value) {
+      // The arrows pressed before these results landed were meant for them (BUG-003).
+      selected = Math.max(Math.min(pendingMove, items.length - 1), 0);
+      pendingMove = 0;
+    }
     render();
     if (enterQuery !== null && enterQuery === query) {
       enterQuery = null;
-      execute(items[0]);
+      execute(items[selected]);
     }
   }
 
@@ -247,14 +254,27 @@
     build(input.value);
   }
 
+  // An arrow key moves the selection of the list on show, which is the typed text's own; while that list is out of
+  // date (the debounce or the company search hasn't finished) the press is kept for the results to come, and an
+  // Enter that is already waiting has chosen, so it keeps its row.
+  function move(delta) {
+    if (itemsQuery === input.value) {
+      selected = Math.max(Math.min(selected + delta, items.length - 1), 0);
+      render();
+    } else if (enterQuery === null) {
+      pendingMove = Math.max(pendingMove + delta, 0);
+    }
+  }
+
   // ---- Events ----
   input.addEventListener('input', function () {
+    pendingMove = 0;
     window.clearTimeout(debounceTimer);
     debounceTimer = window.setTimeout(function () { build(input.value); }, 150);
   });
   input.addEventListener('keydown', function (evt) {
-    if (evt.key === 'ArrowDown') { evt.preventDefault(); selected = Math.min(selected + 1, items.length - 1); render(); }
-    else if (evt.key === 'ArrowUp') { evt.preventDefault(); selected = Math.max(selected - 1, 0); render(); }
+    if (evt.key === 'ArrowDown') { evt.preventDefault(); move(1); }
+    else if (evt.key === 'ArrowUp') { evt.preventDefault(); move(-1); }
     else if (evt.key === 'Enter') { evt.preventDefault(); enter(); }
     else if (evt.key === 'Escape') { close(); }
   });

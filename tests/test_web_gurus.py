@@ -529,3 +529,64 @@ def test_the_screener_without_the_gurus_filings_has_no_guru_fields(web_db):
     conn.commit()
     conn.close()
     assert set(_screened(web_db).values()) == {(None, None)}
+
+
+# BUG-214: a 13F that says it omits holdings under confidential treatment.
+
+
+def _flag_omissions(db, accession, flag=1):
+    conn = sqlite3.connect(str(db))
+    conn.execute("UPDATE guru_filings SET confidential_omitted = ? WHERE accession = ?", (flag, accession))
+    conn.commit()
+    conn.close()
+
+
+def test_a_quarter_whose_filing_states_omissions_says_so(web_db):
+    _seed(web_db)
+    _flag_omissions(web_db, "B-Q2")
+    with Reader(web_db) as r:
+        q2, q1 = guru_view(r, "1067983"), guru_view(r, "1067983", Q1)
+        li_lu = guru_view(r, "1709323")
+    assert q2["confidential_omitted"] is True
+    assert [f["confidential_omitted"] for f in q2["filings"]] == [True]
+    assert q1["confidential_omitted"] is False and li_lu["confidential_omitted"] is False
+
+
+def test_a_quarter_whose_filing_leaves_the_flag_unstated_isnt_flagged(web_db):
+    _seed(web_db)
+    _flag_omissions(web_db, "B-Q2", None)
+    with Reader(web_db) as r:
+        view = guru_view(r, "1067983")
+    assert view["confidential_omitted"] is False and view["filings"][0]["confidential_omitted"] is None
+    _flag_omissions(web_db, "B-Q2", 0)            # stated as none omitted
+    with Reader(web_db) as r:
+        view = guru_view(r, "1067983")
+    assert view["confidential_omitted"] is False and view["filings"][0]["confidential_omitted"] is False
+
+
+def test_the_view_without_the_filings_table_flags_nothing(web_db):
+    _seed(web_db)
+    conn = sqlite3.connect(web_db)
+    conn.execute("DROP TABLE guru_filings")
+    conn.commit()
+    conn.close()
+    with Reader(web_db) as r:
+        assert guru_view(r, "1067983")["confidential_omitted"] is False
+
+
+def test_the_gurus_page_notes_the_omitted_holdings_beside_the_changes(client, web_db):
+    _seed(web_db)
+    _flag_omissions(web_db, "B-Q2")
+    html = client.get("/gurus/1067983").text
+    assert "confidential treatment" in html
+    assert "may read as sold out" in html
+    assert html.index("confidential treatment") < html.index("Changes from the quarter before")
+    assert "confidential treatment" not in client.get(f"/gurus/1067983?period={Q1}").text
+    assert "confidential treatment" not in client.get("/gurus/1709323").text
+
+
+def test_the_api_carries_the_flag(client, web_db):
+    _seed(web_db)
+    _flag_omissions(web_db, "B-Q2")
+    body = client.get("/api/gurus/1067983").json()
+    assert body["confidential_omitted"] is True and body["filings"][0]["confidential_omitted"] is True

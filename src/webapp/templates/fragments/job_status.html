@@ -36,6 +36,13 @@
     ({{ job.summary.total }} total{% if job.summary.valuations_computed is defined %},
     {{ job.summary.valuations_computed }} valuation{{ 's' if job.summary.valuations_computed != 1 }} refreshed{% endif %}).
   </div>
+  {% if job.summary.errors %}
+  <ul class="job-errors">
+    {% for ticker, error in job.summary.errors.items() %}
+    <li><strong>{{ ticker }}</strong>: {{ error }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
   {% endif %}
 
   {% if job.state == "error" %}

@@ -3446,3 +3446,15 @@ Result: BUG-353..357 VERIFIED. No P0-P2 open.
 Gates: ruff ✓ mypy ✓ pytest 3583 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(scores): excluded sectors give the Magic Formula's sector rule everywhere; bars lookup bounded (BUG-353..357)
 Next: UI 003/067/068/214 (worker).
+
+## Iteration 205: 2026-11-20 15:00: fix (BUG-003, BUG-067, BUG-068, BUG-214)
+Picked: four UI P3s; a sonnet worker.
+Did: the palette applies an early arrow press to the results it was meant for; the VAL tab shows dashes, not
+"None"; a collection that got no annual financials says the years shown are older, and job cards name failed
+tickers (collection_runs.errors); guru pages note confidential omissions.
+- RED: 19 failed in the 5 touched test files on b38b730's source; GREEN. 32 of 32 mutants; bug053 21/21.
+- No stored figures or valuations change (one new nullable column).
+Result: BUG-003, BUG-067, BUG-068, BUG-214 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3607 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(web): the palette's early arrow lands; dashes for nulls; failed tickers named; confidential omissions noted (BUG-003, BUG-067, BUG-068, BUG-214)
+Next: GATHER 107/282/340 (worker); code review 33 after this (3 units since review 32).
