@@ -1,13 +1,14 @@
 """Fakes and a small database for ``stock-data refresh``'s tests (``src/refresh.py``): every service a step uses
 (``refresh.Services``) without the network or a sleep, and three companies last collected with Yahoo and the SEC on
 2026-10-21, each with five daily bars to 2026-10-20 and that collection's snapshot."""
+import contextlib
 import copy
 import io
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
 
 from src.exporters.sqlite_store import SQLiteStore
 from src.models.stock_data import StockData
@@ -276,3 +277,24 @@ def succeeded(db: Path, step: str, ago: timedelta, ok: Optional[bool] = True, st
         logged = {"run": (NOW - run).isoformat(), **logged}
     SQLiteStore(db).record_refresh_step(step, (NOW - (ago if started is None else started)).isoformat(),
                                         (NOW - ago).isoformat(), ok, logged)
+
+
+@contextlib.contextmanager
+def locked(db: Path, monkeypatch: Any) -> Iterator[None]:
+    """Another writer holding *db*'s write lock past SQLite's wait, while the block runs: a store's writes fail with
+    SQLite's own "database is locked" (its connections don't wait), and reads go on (WAL)."""
+    holder = sqlite3.connect(str(db), isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+
+    def impatient(store: SQLiteStore) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(store.db_path), timeout=0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
+    with monkeypatch.context() as patched:
+        patched.setattr(SQLiteStore, "_connect", impatient)
+        try:
+            yield
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()

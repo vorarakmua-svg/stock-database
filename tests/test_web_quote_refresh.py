@@ -310,6 +310,23 @@ def test_a_failed_refresh_says_so_on_the_stock_page(web_db: Path, monkeypatch) -
     assert "Quote refreshed" not in body and "/ui/stocks/AAA/des" not in body
 
 
+def test_a_refresh_whose_database_write_fails_says_so_on_the_stock_page(web_db: Path, monkeypatch) -> None:
+    # BUG-053: the store logged and swallowed the write's error, so the job counted a success and the page said
+    # "Quote refreshed." while nothing was stored. Another writer holds the lock past SQLite's wait.
+    from tests.refresh_fakes import locked
+
+    before = _snapshot_count(web_db, "AAA")
+    client = _make_client(web_db)
+    with locked(web_db, monkeypatch):
+        job_id = client.post("/api/stocks/AAA/refresh-quote").json()["job_id"]
+        final = _wait_until_done(client, job_id)
+    assert (final["state"], final["summary"]["successful"], final["summary"]["with_errors"]) == ("done", 0, 1)
+    body = client.get(f"/ui/stocks/AAA/refresh-status/{job_id}").text
+    assert "<strong>Refresh failed:</strong> database is locked" in body
+    assert "Quote refreshed" not in body and "/ui/stocks/AAA/des" not in body
+    assert _snapshot_count(web_db, "AAA") == before
+
+
 def test_the_status_fragment_answers_the_same_in_any_case(web_db: Path, monkeypatch) -> None:
     # BUG-056: the fragment looked the ticker up in the job's errors as typed, so for a failed AAPL-style job the
     # lower-case URL said "Quote refreshed." Tickers are stored upper-case, and the answer is one in either case.
@@ -505,7 +522,7 @@ def _valuation_runs(monkeypatch) -> List[List[str]]:
     """The tickers each valuation run is asked to value (the engine itself stubbed out)."""
     runs: List[List[str]] = []
 
-    def compute_and_store(db_path: Any, tickers: Optional[List[str]] = None, logger: Any = None) -> int:
+    def compute_and_store(db_path: Any, tickers: Optional[List[str]] = None, logger: Any = None, **kwargs: Any) -> int:
         runs.append(list(tickers or []))
         return len(runs[-1])
 
@@ -557,14 +574,18 @@ def test_a_refused_refresh_stores_no_factor(web_db: Path, monkeypatch) -> None:
     assert "2024-07-01" not in _split_events(web_db) and runs == []
 
 
-def test_a_failed_valuation_keeps_the_refresh(web_db: Path, monkeypatch) -> None:
-    def broken(db_path: Any, tickers: Optional[List[str]] = None, logger: Any = None) -> int:
+def test_a_failed_valuation_keeps_the_refresh_and_says_so(web_db: Path, monkeypatch) -> None:
+    # BUG-163: the job counted it a success. AAA has no stored valuations (none on the old basis to value again).
+    def broken(db_path: Any, tickers: Optional[List[str]] = None, logger: Any = None, **kwargs: Any) -> int:
         raise RuntimeError("no inputs")
 
     monkeypatch.setattr("src.valuation.engine.compute_and_store", broken)
     before = _snapshot_count(web_db, "AAA")
     client = _quote_with_splits_client(web_db, [{"date": "2024-07-01", "ratio": 1.253}])
-    assert _refresh_summary(client)["successful"] == 1
+    summary = _refresh_summary(client)
+    assert (summary["successful"], summary["with_errors"]) == (0, 1)
+    assert summary["errors"] == {"AAA": "The price was stored, but valuing AAA on a 1.253 price adjustment (a spin-off "
+                                        "or merger) on 2024-07-01 failed: no inputs."}
     assert _snapshot_count(web_db, "AAA") == before + 1
 
 

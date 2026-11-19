@@ -1407,6 +1407,30 @@ class SQLiteStore:
                 if (priced_on and str(s["date"])[:10] > priced_on)
                 or (str(s["date"])[:10] not in known and str(s["date"])[:10] >= min(starts))]
 
+    def unvalued_factors(self, ticker: str) -> List[Dict[str, Any]]:
+        """The factors stored in ``split_events`` for *ticker* (every ratio but 1.0, as
+        ``factors_since_collection`` counts them) dated after the day its stored
+        valuations were computed (``valuation_summary.computed_at``, UTC: Yahoo lists a
+        factor once its US trading day has begun), in date order. The valuations are on
+        the basis before them: a refresh stored the factor with the price and valuing the
+        ticker on it failed, so the next refresh values it (BUG-163). Empty for a ticker
+        without stored valuations (none on the old basis), or a database that can't be
+        read."""
+        try:
+            conn = sqlite3.connect(read_only_uri(self.db_path), uri=True)
+        except sqlite3.Error:
+            return []  # nothing stored yet
+        try:
+            rows = conn.execute(
+                "SELECT s.date, s.ratio FROM split_events s JOIN valuation_summary v ON v.ticker = s.ticker "
+                "WHERE s.ticker = ? AND s.ratio > 0 AND s.ratio != 1.0 "
+                "AND substr(s.date, 1, 10) > substr(v.computed_at, 1, 10) ORDER BY s.date", (ticker,)).fetchall()
+        except sqlite3.Error:
+            return []
+        finally:
+            conn.close()
+        return [{"date": date, "ratio": ratio} for date, ratio in rows]
+
     def upsert_quote(self, ticker: str, quote: Dict[str, Any], collected_at: str,
                      splits: Optional[List[Dict[str, Any]]] = None,
                      dividends: Optional[Dict[str, Any]] = None) -> None:
@@ -1445,6 +1469,10 @@ class SQLiteStore:
         more than 5% off ours for 47 of 111 companies, about 2x for the banks, and
         a refresh wrote them into the same columns (BUG-126). Without a market cap
         or a stored year, the previous snapshot's carry forward.
+
+        A failed write (a locked database, say) is logged and raised: nothing is
+        stored (the transaction rolls back), and the caller reports it as the
+        company's error rather than count the quote stored (BUG-053, BUG-237).
         """
         try:
             conn = self._connect()
@@ -1500,6 +1528,7 @@ class SQLiteStore:
                 conn.close()
         except Exception as e:
             self.logger.error(f"Error writing quote for {ticker}: {e}")
+            raise
 
     @staticmethod
     def _ev_family(conn: sqlite3.Connection, ticker: str, market_data: Dict[str, Any],

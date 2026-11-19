@@ -165,11 +165,16 @@ def owner_earnings_verdict(result: Optional[ValuationResult],
 
 def compute_and_store(db_path: Union[str, Path],
                       tickers: Optional[List[str]] = None,
-                      logger: Optional[logging.Logger] = None) -> int:
+                      logger: Optional[logging.Logger] = None,
+                      failures: Optional[Dict[str, str]] = None) -> int:
     """Compute and persist valuations for *tickers* (default: every company).
 
     Per-ticker failures are logged and skipped — a bad ticker never aborts
-    the batch. Returns the number of tickers successfully stored.
+    the batch. Returns the number of tickers successfully stored. When
+    *failures* is given, each ticker whose valuations weren't stored (their
+    computation or their write failed) is put in it with why, for a caller
+    that must report it rather than count it valued (BUG-163); the history,
+    scores and indicators after them are isolated and aren't counted.
     """
     log = logger or logging.getLogger(__name__)
     store = SQLiteStore(db_path=Path(db_path), logger=log)
@@ -194,6 +199,8 @@ def compute_and_store(db_path: Union[str, Path],
                 stored += 1
             except Exception as e:
                 log.warning(f"Valuation failed for {ticker}: {e}")
+                if failures is not None:
+                    failures[ticker] = str(e)
             # The valuation history is a separate indicator: its failure never blocks the valuations
             # above, and it touches none of their rows (docs/superpowers/specs/2026-10-21-valuation-
             # history-design.md).

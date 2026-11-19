@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 148 · NEEDS-USER 1 · Decided: 7 · Verified: 209
+**Open:** P0 0 · P1 0 · P2 0 · P3 145 · NEEDS-USER 1 · Decided: 7 · Verified: 212
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -450,10 +450,11 @@ Repro (`t_bug041/check_fallbacks.py`): on 2026-10-20 a 500 from the current-year
 Expected: the prior year only while the current year has no rows; the latest row that has a 10-year yield.   Actual: as above.
 
 ### BUG-053 [P3][UI] A quote refresh whose database write fails reports success
-Status: OPEN
-Found: iteration 39 by code review 5 (M5), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 193)
+Found: iteration 39 by code review 5 (M5), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_quote_refresh_failures.py (new), tests/test_quote_refresh.py, tests/test_web_quote_refresh.py; 19 failing first
 Repro (`t_bug033/write_failure.py`): with `upsert_quote` raising "database is locked", the job summary reads `successful: 1, errors: {}`, the snapshot count stays 1 → 1, and the page says "Quote refreshed.": `sqlite_store.py` logs and swallows the write error, and `jobs.py` counts a success.
 Expected: "Refresh failed: database is locked".   Actual: a success message.
+Fix (iteration 193, BUG-053/237/163 together, `qa/evidence/bug053-investigation.txt`): a failed write reaches its caller and the caller reports it. `SQLiteStore.upsert_quote` logs and re-raises (the transaction rolls back); `refresh_quote` turns it into outcome 'error' with the write's message, counted as that company's error by the web job ('Refresh failed: database is locked') and the CLI quotes step (all failing -> 'every quote failed', no recompute). `compute_and_store(..., failures=)` names each ticker whose valuations weren't stored (reusable, like StoreResult.failed); a rebased refresh whose valuation fails is an error saying the price was stored and the next refresh values it again. Retry: `SQLiteStore.unvalued_factors(T)` lists stored factors dated after the valuation's UTC day, and `refresh_quote` returns 'rebased' while any exists. The CLI headline no longer says 'valued on it' when valuing failed. Real-data copy: unvalued_factors empty for all 502, so no success path changes. Residuals: a factor Yahoo lists late isn't retried by a refresh (the next collection/recompute values it); a ticker never valued gets no refresh retry; a persistent valuation failure is reported at every refresh.
 
 ### BUG-054 [P3][STORE] A priced run without beta writes a NULL beta: the full export carries nothing forward
 Status: OPEN
@@ -1246,10 +1247,11 @@ Repro: four mutants survive the whole suite at f2271db (1,183 passed each) and c
 Expected: an engine test that a stored factor rebases DDM and the band by 1/f; a bank refresh test with an empty EV family; quarterly tests with a date only a cash flow statement has and with BUG-141's debt shape.
 
 ### BUG-163 [P3][WEB] A refresh whose valuation write fails is never retried, and the job reports success
-Status: OPEN
-Found: iteration 98 by code review 14 (M2), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 193)
+Found: iteration 98 by code review 14 (M2), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_quote_refresh_failures.py (new), tests/test_quote_refresh.py, tests/test_web_quote_refresh.py; 19 failing first
 Repro: review 14's `scen14.py locked`: the refresh's valuation write fails with "database is locked" (another writer past SQLite's 5-second wait); the job's summary says 1 successful, 0 with errors, and the ticker reads -34.75%; a second refresh, the factor now stored, finds nothing new and reads -34.81%, against a full collection's -39.21% and -39.26% (`src/webapp/jobs.py`'s never-fail recompute; `sqlite_store.py`'s date rule).
 Expected: the failure in the job's errors, or a revaluation when the valuations predate the price.
+Fix: see BUG-053 (iteration 193).
 
 ### BUG-164 [P3][UI] The screener's "%" filters take a fraction, but Debt / equity (%) a percent: "Insider % > 5" finds no company
 Status: VERIFIED (iteration 188)
@@ -1811,10 +1813,11 @@ Repro: fill the codes (`python -m src.universe.sic`) with no rank pass after it;
 Expected: "industry ranks not computed yet" until the next rank pass (any collection, backfill or refresh).   Actual: the wrong reason, until then.
 
 ### BUG-237 [P3][REFRESH] A quote whose database write failed is counted as stored
-Status: OPEN
-Found: code review 19 (m-4), build M5-6 | Fixed: | Regression test:
+Status: VERIFIED (iteration 193)
+Found: code review 19 (m-4), build M5-6 | Fixed: (this commit) | Regression tests: tests/test_quote_refresh_failures.py (new), tests/test_quote_refresh.py, tests/test_web_quote_refresh.py; 19 failing first
 Repro: SQLiteStore.upsert_quote (src/exporters/sqlite_store.py:1346-1347) swallows write errors; quote_refresh.refresh_quote, the refresh's quotes step and the web job then count the quote as stored (a locked database, say).
 Expected: the write's failure reported as that company's error.   Actual: counted as stored.
+Fix: see BUG-053 (iteration 193).
 
 ### BUG-238 [P3][SCORES] A company left over in a 2-digit industry group is ranked mostly against its 3-digit groups' companies
 Status: OPEN

@@ -8,7 +8,10 @@ dividend, a spin-off) is stored with the price (``SQLiteStore.upsert_quote``), a
 it (BUG-128). Every saved quote stores Yahoo's payments with it, as a collection does: DDM's trailing year ends on the
 latest snapshot's day, the refresh's, so whatever values the ticker after it (the caller after a factor, ``stock-data
 refresh``'s recompute step) reads the payments a full collection that day would (BUG-160, BUG-258). The function
-returns what happened and never raises for Yahoo's failures, which ``fetch_quote`` reports as an ``"error"`` key.
+returns what happened and never raises for Yahoo's failures, which ``fetch_quote`` reports as an ``"error"`` key, nor
+for the write's: a quote whose write failed (a locked database, say) is stored nowhere and is an "error" too (BUG-053,
+BUG-237). A factor stored earlier that the stored valuations predate (a refresh whose valuation on it failed) makes the
+next saved quote "rebased" again, so the caller values the ticker on it then (BUG-163).
 """
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -19,16 +22,17 @@ from ..exporters.sqlite_store import SQLiteStore
 from ..valuation.inputs import _simple_ratio
 
 #: What a refresh did: "stored" (the quote saved), "rebased" (saved with a stock dividend's or a spin-off's factor
-#: since the last collection, which the caller values the ticker on), "split" (refused: a split since the last
-#: collection, for a full collection to bring over) or "error" (Yahoo's fetch failed).
+#: since the last collection, or after a stored one the stored valuations predate, which the caller values the ticker
+#: on), "split" (refused: a split since the last collection, for a full collection to bring over) or "error" (Yahoo's
+#: fetch failed, or the quote's write).
 OUTCOMES = ("stored", "rebased", "split", "error")
 
 
 @dataclass
 class QuoteRefresh:
     """One ticker's refresh: its *outcome* (``OUTCOMES``), why the quote wasn't saved (*message*: Yahoo's error or
-    the split refusal), the *splits* behind a refusal or the factors stored with a rebased price, and the *price*
-    saved."""
+    the split refusal, or the write's error), the *splits* behind a refusal or the factors of a rebased price, and the
+    *price* saved."""
 
     ticker: str
     outcome: str
@@ -63,6 +67,16 @@ def split_refusal(ticker: str, splits: List[Dict[str, Any]]) -> str:
             f"saved. Collect {ticker} in full to update them.")
 
 
+def valuation_failure(store: SQLiteStore, refreshed: QuoteRefresh, why: str) -> str:
+    """The caller's error for a "rebased" refresh whose valuation on its factors failed for *why* (BUG-163): the price
+    is stored, the valuations aren't on it. While the stored valuations predate a stored factor
+    (``SQLiteStore.unvalued_factors``) the ticker's next refresh values it again; a ticker without stored valuations
+    has none on the old basis, and no retry is promised."""
+    again = " Its next refresh values it again." if store.unvalued_factors(refreshed.ticker) else ""
+    return (f"The price was stored, but valuing {refreshed.ticker} on {describe_splits(refreshed.splits)} failed: "
+            f"{why}.{again}")
+
+
 def collected_at_now() -> str:
     """A refresh's ``collected_at``: the full pipeline's naive-local format. The column is TEXT-ordered and mixed
     offsets break latest-row resolution: ``StockData.collected_at`` is ``datetime.now()`` (naive local) serialised
@@ -78,8 +92,10 @@ def refresh_quote(handler: Any, store: SQLiteStore, ticker: str, collected_at: O
     A split the stored valuations don't reflect (``SQLiteStore.splits_since_collection``) leaves everything as it is:
     the price would sit beside them on another basis, which only a full collection brings over (BUG-093, BUG-102).
     Any other factor since (``factors_since_collection``: a stock dividend, a spin-off) is stored with the price, the
-    split history with it, and the outcome is "rebased": the caller values the ticker on it (BUG-128). A saved quote
-    stores Yahoo's payments with it, a factor or not (BUG-160, BUG-258)."""
+    split history with it, and the outcome is "rebased": the caller values the ticker on it (BUG-128). So it is after
+    a factor stored earlier that the stored valuations predate (``unvalued_factors``: valuing the ticker on it failed),
+    with those factors (BUG-163). A saved quote stores Yahoo's payments with it, a factor or not (BUG-160, BUG-258). A
+    failed write stores nothing and is an "error" with the write's message (BUG-053, BUG-237)."""
     quote = handler.fetch_quote(ticker)
     if "error" in quote:
         return QuoteRefresh(ticker, "error", str(quote["error"]))
@@ -88,7 +104,11 @@ def refresh_quote(handler: Any, store: SQLiteStore, ticker: str, collected_at: O
     new_splits = store.splits_since_collection(ticker, splits) if factors else []
     if new_splits:
         return QuoteRefresh(ticker, "split", split_refusal(ticker, new_splits), new_splits)
-    store.upsert_quote(ticker, quote, collected_at or collected_at_now(), splits=splits if factors else None,
-                       dividends=quote.get("dividend_history"))
+    try:
+        store.upsert_quote(ticker, quote, collected_at or collected_at_now(), splits=splits if factors else None,
+                           dividends=quote.get("dividend_history"))
+    except Exception as exc:  # the write failed (a locked database): nothing stored, the company's error
+        return QuoteRefresh(ticker, "error", str(exc) or type(exc).__name__)
+    factors = factors or store.unvalued_factors(ticker)
     return QuoteRefresh(ticker, "rebased" if factors else "stored", splits=factors,
                         price=(quote.get("market_data") or {}).get("current_price"))

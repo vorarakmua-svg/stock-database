@@ -10,9 +10,10 @@ day's run), unless ``--force`` (every step) or named in ``--steps`` (only those 
 success left something undone runs again (code review 19, I-3): ``sec`` after a feed failed, or when a company it put
 on the list wasn't collected in that run; ``insiders`` and ``gurus`` after an item failed.
 
-- ``quotes`` (daily): every company's quote through the web's quote refresh (``fetchers.quote_refresh``). A company
-  with a split since its last collection goes on the collection list instead; one priced after a stock dividend's or
-  a spin-off's factor is stored with it and valued on it, as the web job does (BUG-128).
+- ``quotes`` (daily): every company's quote through the web's quote refresh (``fetchers.quote_refresh``); a quote
+  whose write failed is that company's error (BUG-237). A company with a split since its last collection goes on the
+  collection list instead; one priced after a stock dividend's or a spin-off's factor is stored with it and valued on
+  it, as the web job does (BUG-128), and so is one whose valuations predate a factor stored earlier (BUG-163).
 - ``bars`` (daily): every company's daily bars from its last stored bar (which may have been partial) to today, one
   ``history(start=...)`` request with a collection's parameters, its bars from that day on replaced. Yahoo is asked
   from the latest bar before it with a close above 0 (of the LOOKBACK before it), which is final, so its close shows
@@ -712,8 +713,14 @@ class _Run:
         result.ok = total == 0 or len(s["errors"]) < total
         if not result.ok:
             result.reason = "every quote failed"
+        # A factor's valuation that failed isn't said to be done (BUG-163): the recompute step values every company
+        # again, and the next run's quotes step values the company while its valuations predate the factor.
+        unvalued = len(s["rebased"]) - (s.get("rebased_valued") or 0)
         result.headline = (f"{s['stored']} of {total} quotes stored"
-                           + (f" ({len(s['rebased'])} with a price factor, valued on it: {', '.join(s['rebased'])})"
+                           + ((f" ({len(s['rebased'])} with a price factor, valued on it: {', '.join(s['rebased'])})"
+                               if unvalued <= 0 else
+                               f" ({len(s['rebased'])} with a price factor: {', '.join(s['rebased'])}; valuing "
+                               f"{unvalued} of them on it failed)")
                               if s["rebased"] else "")
                            + f", {len(s['to_collect'])} to collect, {len(s['errors'])} errors")
 

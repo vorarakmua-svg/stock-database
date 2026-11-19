@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ..config import AppConfig, StorageConfig
 from ..exporters.sqlite_store import SQLiteStore
-from ..fetchers.quote_refresh import refresh_quote
+from ..fetchers.quote_refresh import QuoteRefresh, refresh_quote, valuation_failure
 from ..fetchers.stock_data_fetcher import StockDataFetcher
 from ..fetchers.yahoo_handler import YahooHandler
 
@@ -299,7 +299,7 @@ class CollectionJobManager:
             # Each failed ticker's message, so the DES status can say why a refresh failed.
             errors: Dict[str, str] = {}
             # Saved after a stock dividend or a spin-off factor the stored valuations aren't on.
-            rebased: List[str] = []
+            rebased: Dict[str, QuoteRefresh] = {}
             for ticker in tickers:
                 with self._lock:
                     self._jobs[job_id].current_ticker = ticker
@@ -315,20 +315,28 @@ class CollectionJobManager:
                 else:
                     successful += 1
                     if result.outcome == "rebased":
-                        rebased.append(ticker)
+                        rebased[ticker] = result
 
                 with self._lock:
                     self._jobs[job_id].completed += 1
 
             # A ticker priced after a stock dividend or a spin-off factor is valued on it,
-            # as a collection would (BUG-128). Never-fail, as there: the quotes have
-            # landed. Lazy import so tests can monkeypatch the engine.
+            # as a collection would (BUG-128). The quotes have landed, so the job goes on;
+            # a ticker whose valuation failed is its error, not a success, and its next
+            # refresh values it again (BUG-163). Lazy import so tests can monkeypatch the engine.
             if rebased:
+                failures: Dict[str, str] = {}
                 try:
                     from ..valuation import engine as valuation_engine
-                    valuation_engine.compute_and_store(self.db_path, tickers=rebased, logger=logger)
-                except Exception as exc:  # noqa: BLE001 — job must still succeed
+                    valuation_engine.compute_and_store(self.db_path, tickers=list(rebased), logger=logger,
+                                                       failures=failures)
+                except Exception as exc:  # noqa: BLE001 — job must still finish
                     logger.warning(f"Valuation after a quote refresh failed: {exc}")
+                    failures = dict.fromkeys(rebased, str(exc))
+                for ticker, why in failures.items():
+                    successful -= 1
+                    with_errors += 1
+                    errors[ticker] = valuation_failure(store, rebased[ticker], why)
 
             with self._lock:
                 done_job = self._jobs[job_id]

@@ -3300,3 +3300,16 @@ Result: BUG-347 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3357 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(insiders): a retired, assistant or regional chief isn't the CEO; a chief's other roles are (BUG-347)
 Next: BUG-232/281/289, BUG-053/237/163 (workers).
+
+## Iteration 193: 2026-11-20 01:10: fix (BUG-053, BUG-237, BUG-163)
+Picked: structural item #4 (a failure reported as success), its quote-refresh paths first; an opus worker.
+Did: a failed quote write raises to its caller; the web job, the stock page and the CLI quotes step report it as an
+error; a refresh whose valuation on a new factor fails says so and the next refresh values it again
+(unvalued_factors). compute_and_store reports its failures (a reusable pattern for BUG-202/098).
+- RED: 19 failed of 82 on 5ac2b58 (real SQLite locks, temp DBs); GREEN. 21 of 21 mutants; 3 related mutants re-anchored.
+- Real-data copy: no company would be valued differently on the success path.
+Result: BUG-053, BUG-237, BUG-163 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3376 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(refresh): a quote or valuation write that failed is reported, and the valuation retried (BUG-053, BUG-237, BUG-163)
+Next: more of structural #4 (BUG-202, 098, 030, 038, 054, 145, 278, 027, 107, 282 - several touch sqlite_store/fetcher
+sections the as-of branch rewrites: wait for Q18); BUG-232/281/289 and BUG-156/157/222 (workers).

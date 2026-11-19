@@ -138,7 +138,7 @@ def test_the_web_quote_job_reports_the_shared_refreshs_outcomes(web_db, monkeypa
                         outcomes[ticker])
     valued = []
     monkeypatch.setattr("src.valuation.engine.compute_and_store",
-                        lambda db_path, tickers=None, logger=None: valued.append(list(tickers or [])) or 1)
+                        lambda db_path, tickers=None, logger=None, **kwargs: valued.append(list(tickers or [])) or 1)
     manager = CollectionJobManager(web_db, quote_fetcher_factory=lambda config: _Handler({}))
     try:
         job = _wait(manager, manager.submit(["AAA", "BBB", "CCC"], mode="quote"))
