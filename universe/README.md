@@ -16,7 +16,8 @@ universe").
     stock-data --tickers-file universe/sp500-2026-10-25.csv --skip-existing
 
 `--skip-existing` leaves out the tickers already in the database the run writes to (`--db`, else
-`<output-dir>/output/stock.db`): on 2026-10-25, 125 of the list's 500 were, so it collects the other 375.
+`<output-dir>/output/stock.db`), and a ticker whose CIK (this CSV's `cik` column) is a stored company's under another
+ticker: on 2026-10-25, 125 of the list's 500 were, so it collects the other 375.
 
 ## The S&P 500 list's source and license
 
@@ -37,7 +38,9 @@ universe").
 
 writes `universe/sp500-<today>.csv` (`--out PATH` names another file; an existing file is never overwritten, and the
 page isn't fetched then) with one request to Wikipedia, its User-Agent naming the app without an email, and prints the
-rows read, kept and dropped. A page that changed fails loudly and writes nothing: no table with those header cells, a
+rows read, kept and dropped (of a CIK's rows the "(Class A)" one is kept, else the first). An answer other than 200,
+one over 20 MiB or one that isn't UTF-8 text is `Fetching the S&P 500 list failed: ...`, exit 1. A page that changed
+fails loudly and writes nothing: no table with those header cells, a
 column missing, a ticker or a CIK that doesn't read, or a row count outside 480 to 520. Then update this README's
 date and counts, keep the earlier file (it records the index on its day), and collect the new members with
 `--skip-existing`.

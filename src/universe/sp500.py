@@ -4,7 +4,9 @@
     python -m src.universe.sp500 [--out PATH]
 
 - The page (SP500_URL) is read with one request, without retries, its User-Agent naming the app without an email
-  (never the SEC's, which carries one); an answer other than 200 (a 403 or a 429 refusing it) fails the run.
+  (never the SEC's, which carries one), streamed with a cap (MAX_BYTES); an answer other than 200 (a 403 or a 429
+  refusing it), one over the cap, or a body that isn't UTF-8 text fails the run with "Fetching the S&P 500 list
+  failed: ..." and exit 1 (the page is UTF-8; one that isn't changed, so it isn't guessed at).
 - Its members' table is the page's first table whose header row has the cells COLUMNS names (in any order, without
   case; the other columns ignored), read with the standard library's ``html.parser``: each cell's text without its
   tags, its superscripts (the footnote markers, "[3]", and the "[citation needed]"s), a marker left as text, the CSS
@@ -15,9 +17,10 @@
 - A page that changed fails loudly, with ValueError: no such table (or one without a column, named), a ticker that
   isn't one, a CIK that isn't 1 to 10 digits, a row without the header's cells, or a count of rows outside
   SP500_MIN_ROWS to SP500_MAX_ROWS.
-- One company a CIK (``one_per_cik``): a second share class after the first of its CIK in the page's order (GOOG
-  after GOOGL, FOX after FOXA, NWS after NWSA, the page listing them by name) is dropped, as the database keeps one
-  (GOOGL).
+- One company a CIK (``one_per_cik``): of a CIK's rows the one whose name ends "(Class A)" is kept (the first such),
+  else the first in the page's order; the others (GOOG beside GOOGL, FOX beside FOXA, NWS beside NWSA) are dropped,
+  as the database keeps one (GOOGL). The rule doesn't depend on the page's sort (by name or by symbol). The kept rows
+  stay in the page's order.
 - The CLI writes ``universe/sp500-<today>.csv`` (CSV_FIELDS; --out names another file), never over an existing file
   (it refuses before fetching), and prints the rows read, kept and dropped (their tickers) and the file. Exit 0 when
   it wrote the file, 1 otherwise.
@@ -42,6 +45,10 @@ SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 USER_AGENT = "StockDataCollector/1.0 (personal research tool)"
 #: The request's timeout, in seconds.
 TIMEOUT = 30
+#: The most bytes of the page read (it is about 0.5 MB): an answer declaring more, or streaming more, is refused.
+MAX_BYTES = 20 * 1024 * 1024
+#: The page is read in chunks of this many bytes, so one that overruns MAX_BYTES is dropped within a chunk of it.
+CHUNK_BYTES = 64 * 1024
 #: The members' table's rows (before ``one_per_cik``), inclusive: fewer or more and the page changed.
 SP500_MIN_ROWS = 480
 SP500_MAX_ROWS = 520
@@ -54,6 +61,8 @@ CSV_FIELDS: Tuple[str, ...] = ("ticker", "name", "cik", "gics_sector", "gics_sub
 UNIVERSE_DIR = Path("universe")
 #: A CIK as the page may write it: 1 to 10 digits (ASCII), zero-padded to 10 when read.
 CIK_PATTERN = re.compile(r"[0-9]{1,10}")
+#: A security name that is its company's Class A share, as the page writes it: "Alphabet Inc. (Class A)".
+CLASS_A_PATTERN = re.compile(r"\(Class A\)\s*$", re.IGNORECASE)
 #: A footnote marker left as text in a cell: "[3]", "[a]", "[note 1]".
 MARKER_PATTERN = re.compile(r"\[(?:[0-9]{1,3}|[a-z]{1,2}|note [0-9]{1,3})\]")
 #: Elements whose text isn't a cell's: superscripts (on this page, footnote markers), a template's CSS, scripts.
@@ -228,14 +237,16 @@ def parse_sp500(html: str) -> List[Member]:
 
 
 def one_per_cik(members: Sequence[Member]) -> Tuple[List[Member], List[Member]]:
-    """*members* with one company a CIK: the first of each CIK, in order, and the others dropped (a company's second
-    share class: GOOG after GOOGL), in order."""
-    kept: List[Member] = []
-    dropped: List[Member] = []
-    ciks = set()
-    for member in members:
-        (dropped if member.cik in ciks else kept).append(member)
-        ciks.add(member.cik)
+    """*members* with one company a CIK: of each CIK's rows the first whose name ends "(Class A)" (CLASS_A_PATTERN),
+    else its first, kept, and the others dropped (a company's other share classes: GOOG beside GOOGL), each in the
+    page's order."""
+    chosen: Dict[str, int] = {}
+    for i, member in enumerate(members):
+        held = chosen.get(member.cik)
+        if held is None or (CLASS_A_PATTERN.search(member.name) and not CLASS_A_PATTERN.search(members[held].name)):
+            chosen[member.cik] = i
+    kept = [member for i, member in enumerate(members) if chosen[member.cik] == i]
+    dropped = [member for i, member in enumerate(members) if chosen[member.cik] != i]
     return kept, dropped
 
 
@@ -251,12 +262,33 @@ def write_csv(members: Iterable[Member], path: Union[str, Path]) -> None:
 
 def fetch_page(get: Callable[..., Any] = requests.get) -> str:
     """Wikipedia's page (SP500_URL) with one request through *get* (``requests.get``), its User-Agent USER_AGENT and
-    TIMEOUT, as text (UTF-8). Raises OSError for an answer other than 200 (``requests``' own errors are OSErrors
+    TIMEOUT, streamed, as text (UTF-8). Raises OSError for an answer other than 200, one of more than MAX_BYTES (its
+    declared length, else the bytes streamed), or a body that isn't UTF-8 (``requests``' own errors are OSErrors
     too)."""
-    response = get(SP500_URL, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
-    if response.status_code != 200:
-        raise OSError(f"{SP500_URL} answered HTTP {response.status_code}")
-    return bytes(response.content).decode("utf-8")
+    response = get(SP500_URL, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT, stream=True)
+    try:
+        if response.status_code != 200:
+            raise OSError(f"{SP500_URL} answered HTTP {response.status_code}")
+        too_big = OSError(f"{SP500_URL} answered a page larger than {MAX_BYTES} bytes")
+        try:
+            declared = int(response.headers.get("Content-Length", ""))
+        except ValueError:
+            declared = 0  # no length, or one that isn't a number: the bytes streamed decide
+        if declared > MAX_BYTES:
+            raise too_big
+        chunks: List[bytes] = []
+        size = 0
+        for chunk in response.iter_content(chunk_size=CHUNK_BYTES):
+            size += len(chunk)
+            if size > MAX_BYTES:
+                raise too_big
+            chunks.append(chunk)
+    finally:
+        response.close()
+    try:
+        return b"".join(chunks).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise OSError(f"{SP500_URL} answered a page that isn't UTF-8 text ({exc})") from None
 
 
 def default_out(today: Optional[date] = None) -> Path:

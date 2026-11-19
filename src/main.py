@@ -13,7 +13,8 @@ Usage:
 The tickers are the positional ones, then each --tickers-file's (a .txt, a ticker a line, or a .csv's ticker or
 Symbol column; ``src/universe/tickers.py``), in Yahoo's form (BRK.B as BRK-B), each once, in order.
 --skip-existing leaves out the tickers already in the database the run writes to (--db, else
-<output-dir>/output/stock.db). Exit 1 when no ticker remains to collect
+<output-dir>/output/stock.db), and a ticker whose company is stored under another ticker (a .csv's ``cik`` column
+against the database's CIKs: GOOG beside the stored GOOGL). Exit 1 when no ticker remains to collect
 (docs/superpowers/specs/2026-10-25-universe-automation-design.md, "The universe").
 
 The companies are exported, stored and valued --batch-size at a time as they arrive (code review 19, I-1). Exit 1 when
@@ -35,7 +36,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 from .config import DEFAULT_BATCH_SIZE, AppConfig, SECConfig, StorageConfig, YahooConfig
 from .exporters.sqlite_store import read_only_uri
 from .fetchers.stock_data_fetcher import CollectionInterrupted, StockDataFetcher
-from .universe.tickers import read_tickers_file, unique_tickers
+from .universe.tickers import CIK_PATTERN, read_ciks_file, read_tickers_file, unique_tickers
 
 
 def setup_logging(verbose: bool = False) -> logging.Logger:
@@ -70,6 +71,33 @@ def stored_tickers(db_path: Path) -> Set[str]:
         if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'companies'").fetchone() is None:
             return set()
         return {row[0] for row in conn.execute("SELECT ticker FROM companies")}
+
+
+def resolve_ciks(files: Sequence[Path] = ()) -> Dict[str, str]:
+    """The CIK each ticker of *files* (``read_ciks_file``) is listed with, the first file's for a ticker in two. Raises
+    ValueError for a CIK that isn't one, OSError for a file that can't be read."""
+    ciks: Dict[str, str] = {}
+    for path in files:
+        for ticker, cik in read_ciks_file(path).items():
+            ciks.setdefault(ticker, cik)
+    return ciks
+
+
+def stored_ciks(db_path: Path) -> Dict[str, str]:
+    """The CIKs in the database's companies table (ten digits, zero-padded), each with the ticker it is stored under,
+    read through a read-only connection: none without a database, or one without a companies table. A company
+    without a CIK (or one that isn't digits) is left out."""
+    if not Path(db_path).is_file():
+        return {}
+    with closing(sqlite3.connect(read_only_uri(db_path), uri=True)) as conn:
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'companies'").fetchone() is None:
+            return {}
+        rows = conn.execute("SELECT cik, ticker FROM companies ORDER BY ticker").fetchall()
+    held: Dict[str, str] = {}
+    for cik, ticker in rows:
+        if CIK_PATTERN.fullmatch(str(cik).strip()):
+            held.setdefault(str(cik).strip().zfill(10), ticker)
+    return held
 
 
 def _store_failures(summary: Dict[str, Any], logger: logging.Logger) -> bool:
@@ -253,13 +281,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.skip_existing:
         db_path = storage.database_path
         try:
+            listed = resolve_ciks(args.tickers_file or [])
+        except (OSError, ValueError) as e:
+            logger.error(f"Cannot read the tickers: {e}")
+            return 1
+        try:
             existing = stored_tickers(db_path)
+            held = stored_ciks(db_path)
         except sqlite3.Error as e:
             logger.error(f"Cannot read the companies in {db_path}: {e}")
             return 1
-        new = [t for t in tickers if t not in existing]
+        new = []
+        under_other = []
+        for t in tickers:
+            if t in existing:
+                continue
+            other = held.get(listed.get(t, ""))
+            if other is not None:
+                under_other.append(f"{t} (stored as {other})")
+            else:
+                new.append(t)
         logger.info(f"--skip-existing: {len(tickers) - len(new)} of {len(tickers)} tickers already in {db_path} "
                     f"left out, {len(new)} to collect")
+        if under_other:
+            logger.info(f"--skip-existing: {len(under_other)} of those are companies stored under another ticker "
+                        f"(same CIK): {', '.join(under_other)}")
         if not new:
             logger.error(f"All {len(tickers)} tickers given are already in the database ({db_path}): nothing to "
                          "collect (--skip-existing)")

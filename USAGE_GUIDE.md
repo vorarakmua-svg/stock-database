@@ -1292,7 +1292,9 @@ msft
 A `.csv` file's tickers are its `ticker` column, else its `Symbol` column (the header read without case or spaces), so
 `universe/sp500-2026-10-25.csv` works as it is. The tickers collected are the positional ones, then each file's in
 order, each once, upper-cased, with a class share's dot as a dash. `--skip-existing` leaves out the tickers already in
-the database's `companies` table (`--db`, else `data/output/stock.db`) and says how many:
+the database's `companies` table (`--db`, else `data/output/stock.db`), and a ticker whose company is stored under
+another ticker (a `.csv` with a `cik` column, as the S&P 500 files have, gives each ticker's CIK: GOOG beside the stored
+GOOGL), and says how many:
 `--skip-existing: 125 of 500 tickers already in data\output\stock.db left out, 375 to collect`.
 
 A ticker is letters and digits with at most one dash or dot between them. A list with anything else, a file that can't

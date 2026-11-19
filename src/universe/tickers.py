@@ -8,16 +8,22 @@ specs/2026-10-25-universe-automation-design.md, "The universe").
   ignored. A ``.csv`` file's tickers are its ``ticker`` column, else its ``Symbol`` column (its header read without
   case or spaces); its blank rows are skipped. Either's tickers are normalized and each kept once, in the file's
   order (``unique_tickers``). The files are read as UTF-8, a byte-order mark aside.
+- A ``.csv`` file with a ``cik`` column besides its ticker column also gives each ticker's CIK (``read_ciks_file``:
+  ten digits, zero-padded; a blank cell gives none), which ``stock-data --skip-existing`` uses to recognise a company
+  stored under another ticker (GOOG beside the database's GOOGL).
 """
 import csv
 import re
 from pathlib import Path
-from typing import Iterable, List, Tuple, Union
+from typing import Dict, Iterable, List, Tuple, Union
 
 #: A ticker as written: letters and digits (ASCII), with at most one dash or dot between them.
 TICKER_PATTERN = re.compile(r"[A-Za-z0-9]+(?:[-.][A-Za-z0-9]+)?")
 #: A CSV file's ticker column, by its header (without case or spaces), in the order they are looked for.
 CSV_COLUMNS = ("ticker", "symbol")
+#: A CSV file's CIK column, by its header (without case or spaces), and a CIK as written: 1 to 10 ASCII digits.
+CIK_COLUMN = "cik"
+CIK_PATTERN = re.compile(r"[0-9]{1,10}")
 #: A comment in a .txt file starts at this character and runs to the line's end.
 COMMENT = "#"
 #: The tickers files' extensions (without case).
@@ -69,6 +75,39 @@ def _csv_lines(path: Path) -> List[Tuple[int, str]]:
             if any(cell.strip() for cell in row):
                 lines.append((reader.line_num, row[column] if column < len(row) else ""))
     return lines
+
+
+def read_ciks_file(path: Union[str, Path]) -> Dict[str, str]:
+    """The CIKs a ``.csv`` tickers file gives: each ticker's (normalized), its ``cik`` column's cell zero-padded to ten
+    digits, the first for a ticker listed twice; a blank cell, a file without a ``cik`` column or a ticker column, and
+    a ``.txt`` file give none. Raises ValueError for a cell that isn't 1 to 10 digits (naming the file and the line),
+    OSError for a file that can't be read."""
+    path = Path(path)
+    if path.suffix.lower() != CSV:
+        return {}
+    ciks: Dict[str, str] = {}
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        reader = csv.reader(f)
+        header = next((row for row in reader if any(cell.strip() for cell in row)), [])
+        names = [cell.strip().casefold() for cell in header]
+        ticker_column = next((names.index(name) for name in CSV_COLUMNS if name in names), None)
+        if ticker_column is None or CIK_COLUMN not in names:
+            return {}
+        cik_column = names.index(CIK_COLUMN)
+        for row in reader:
+            if not any(cell.strip() for cell in row):
+                continue
+            cik = row[cik_column].strip() if cik_column < len(row) else ""
+            if not cik:
+                continue
+            if not CIK_PATTERN.fullmatch(cik):
+                raise ValueError(f"{path}, line {reader.line_num}: not a CIK: {ascii(cik)} (1 to 10 digits)")
+            try:
+                ticker = normalize_ticker(row[ticker_column] if ticker_column < len(row) else "")
+            except ValueError as exc:
+                raise ValueError(f"{path}, line {reader.line_num}: {exc}") from None
+            ciks.setdefault(ticker, cik.zfill(10))
+    return ciks
 
 
 def read_tickers_file(path: Union[str, Path]) -> List[str]:

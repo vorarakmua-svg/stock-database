@@ -1377,7 +1377,7 @@ companies collected before (see [SIC codes](#sic-codes)).
 | File | What it is |
 |---|---|
 | `universe/core.txt` | The 127 companies in the database on 2026-10-25, collected by hand before Milestone 5: a ticker a line, sorted, `#` comments. A company that leaves the S&P 500 stays here: the list isn't the index (SCCO and SPCX aren't members). |
-| `universe/sp500-2026-10-25.csv` | The S&P 500's members on 2026-10-25, one company a CIK: `ticker,name,cik,gics_sector,gics_sub_industry,date_added` (the CIK 10 digits, the date added an ISO date). 500 rows: the page's 503 less GOOG, FOX and NWS, the second share classes of Alphabet, Fox and News Corp (GOOGL, FOXA and NWSA are kept). |
+| `universe/sp500-2026-10-25.csv` | The S&P 500's members on 2026-10-25, one company a CIK: `ticker,name,cik,gics_sector,gics_sub_industry,date_added` (the CIK 10 digits, the date added an ISO date). 500 rows: the page's 503 less GOOG, FOX and NWS, the second share classes of Alphabet, Fox and News Corp (the "(Class A)" rows, GOOGL, FOXA and NWSA, are kept). |
 | `universe/README.md` | The list's source and license, and how to refresh it. |
 
 The S&P 500 list comes from Wikipedia's "List of S&P 500 companies" (its first table), read on 2026-10-25 (revision
@@ -1402,8 +1402,12 @@ python -m src.universe.sp500 --out universe/sp500-test.csv
 
 It makes one request to Wikipedia, without retries, its User-Agent naming the app and carrying no email address, reads
 the table with the standard library's `html.parser`, and prints the rows read, the ones dropped and the file written.
-One company a CIK: a second share class after the first of its CIK in the page's order (GOOG after GOOGL, FOX after
-FOXA, NWS after NWSA) is dropped, as the database keeps one (GOOGL). It never overwrites a file (an existing one is
+The page is streamed with a 20 MiB cap, and an answer other than 200, one over the cap or a body that isn't UTF-8 text
+is `Fetching the S&P 500 list failed: ...`, exit 1, nothing written (Wikipedia's page is UTF-8, so another encoding
+means it changed and isn't guessed at).
+One company a CIK: of a CIK's rows the one named "(Class A)" is kept, else the first in the page's order, and the
+others (GOOG beside GOOGL, FOX beside FOXA, NWS beside NWSA) are dropped, as the database keeps one (GOOGL); the rule
+doesn't depend on whether the page is sorted by name or by symbol. It never overwrites a file (an existing one is
 refused before the page is fetched), and a page that changed fails loudly and writes nothing: no table with the
 expected header cells (Symbol, Security, GICS Sector, GICS Sub-Industry, Date added, CIK), a ticker or a CIK that
 doesn't read, a row of another width than the header, or a count of rows outside 480 to 520. Exit 0 when it wrote the
@@ -1431,11 +1435,15 @@ stock-data NVDA --tickers-file my-watchlist.txt --tickers-file universe/core.txt
   collected.
 - **`--skip-existing`**: leaves out the tickers already in the `companies` table of the database the run writes to
   (`--db`, else `<output-dir>/output/stock.db`; it is read without writing, and a database that doesn't exist yet counts
-  as holding none), to collect the new ones only. It says how many it left out, for example
-  `--skip-existing: 125 of 500 tickers already in data\output\stock.db left out, 375 to collect`.
+  as holding none), to collect the new ones only. It also leaves out a ticker whose company is stored under another
+  ticker: a `.csv` list with a `cik` column (the S&P 500 files have one) gives each ticker's CIK, and one equal to a
+  stored company's CIK (GOOG beside the stored GOOGL) is left out, named in a second line (`GOOG (stored as GOOGL)`).
+  A `.txt` list, a positional ticker or a ticker without a CIK is compared by ticker only. It says how many it left
+  out, for example `--skip-existing: 125 of 500 tickers already in data\output\stock.db left out, 375 to collect`.
 - The errors, each logged as an error with exit 1 and nothing collected:
   - `Cannot read the tickers: ...` for a file that can't be read, one that isn't a `.txt` or a `.csv`, a CSV with no
-    `ticker` or `Symbol` column, or a ticker that isn't one (a file's line is named, as in
+    `ticker` or `Symbol` column, a `cik` cell that isn't 1 to 10 digits (with `--skip-existing`), or a ticker that isn't
+    one (a file's line is named, as in
     `x.txt, line 3: not a ticker: 'AAPL,MSFT' (letters and digits, with at most one dash or dot between them)`);
   - `No tickers given: name some, or a --tickers-file that lists some`;
   - `All 127 tickers given are already in the database (PATH): nothing to collect (--skip-existing)`;
@@ -1601,10 +1609,10 @@ pass on the 127 companies (`qa/evidence/industries-m5-2-oracle-joiner.txt`).
   company in the database shares, so it is in no group.
 - Ranks are percentiles among the companies the database holds, so they move when the universe changes: as companies
   are added, more prefixes reach 10.
-- BUG-231: "one company a CIK" keeps the first row of each CIK in the page's order. Wikipedia sorts by company name, so
-  "(Class A)" comes first and GOOGL, FOXA and NWSA are kept. A page sorted by symbol would keep GOOG, FOX and NWS, and
-  `--skip-existing`, which compares tickers, not CIKs, would then collect a second Alphabet beside the database's
-  GOOGL. The saved file is right, and none of its 375 new tickers is a stored company under another ticker.
+- "One company a CIK" keeps a CIK's "(Class A)" row, else its first in the page's order, so a page sorted by name or by
+  symbol keeps GOOGL, FOXA and NWSA; and `--skip-existing` compares a list's CIKs with the database's, so a list that
+  names GOOG (an older file, a hand-made one) doesn't collect a second Alphabet beside the stored GOOGL. A list without
+  a `cik` column is compared by ticker only.
 - A list is a snapshot: a company that leaves the index stays in the database, and `stock-data refresh` works on the
   companies already there, so new members are added by collecting the list again with `--skip-existing`.
 

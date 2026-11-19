@@ -3229,3 +3229,17 @@ Result: BUG-206, BUG-207, BUG-215 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3220 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(insiders): one buyer per filing and one CEO/CFO buy per filing, on both views (BUG-206, BUG-207, BUG-215)
 Next: BUG-231/234 (worker); Q18 waits on the user.
+
+## Iteration 187: 2026-11-19 19:30: fix (BUG-231, BUG-234)
+Picked: the two UNIVERSE P3s; a sonnet worker.
+Did: one company per CIK keeps its Class A row whatever the page's order; --skip-existing compares CIKs too;
+the S&P 500 page download is capped and a non-UTF-8 page is a clean error, not a traceback.
+- RED: 34 of 128 failed on 52c86a5 (stubs for the new functions); GREEN. 32 of 32 mutants; universe-m5-1 adapted
+  (qa/evidence/universe-m5-1-mutants-adapted.json, 93 of 93 on the worker's tree), review19-i1 30, industries-m5-2 81.
+- No stored data moves; the saved 500-row list is reproduced row for row.
+- Process note: a refresh-m5-3 mutants run on the checkout was stopped after ~45 min and its mutated src/refresh.py
+  restored from git (long specs belong in scratch exports).
+Result: BUG-231, BUG-234 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3255 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(universe): a company's Class A row whatever the page's order; skip by CIK; a clean error for a non-UTF-8 page (BUG-231, BUG-234)
+Next: BUG-155/056/164, BUG-211/218 (ready).

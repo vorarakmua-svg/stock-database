@@ -29,7 +29,7 @@ from src.universe.sp500 import (
     parse_sp500,
     write_csv,
 )
-from src.universe.tickers import normalize_ticker, read_tickers_file, unique_tickers
+from src.universe.tickers import normalize_ticker, read_ciks_file, read_tickers_file, unique_tickers
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -394,9 +394,59 @@ def test_one_company_a_cik_keeps_the_first_of_each():
     kept, dropped = one_per_cik(EXPECTED)
     assert [m.ticker for m in kept] == ["MMM", "T", "BRK-B", "BF-B", "GOOGL", "ABT", "XYZ", "FOXA", "NWSA", "ZTS"]
     assert [m.ticker for m in dropped] == ["GOOG", "FOX", "NWS"]
-    flipped, gone = one_per_cik([EXPECTED[5], EXPECTED[4]])
-    assert ([m.ticker for m in flipped], [m.ticker for m in gone]) == (["GOOG"], ["GOOGL"])
     assert one_per_cik([]) == ([], [])
+
+
+def test_one_company_a_cik_keeps_its_class_a_row_whatever_the_pages_order():
+    """BUG-231: a page sorted by symbol lists GOOG before GOOGL, FOX before FOXA, NWS before NWSA."""
+    by_symbol = sorted(EXPECTED, key=lambda m: m.ticker)
+    assert [m.ticker for m in by_symbol if m.ticker in ("GOOG", "GOOGL")] == ["GOOG", "GOOGL"]
+    kept, dropped = one_per_cik(by_symbol)
+    assert {"GOOGL", "FOXA", "NWSA"} <= {m.ticker for m in kept}
+    assert not {"GOOG", "FOX", "NWS"} & {m.ticker for m in kept}
+    assert [m.ticker for m in dropped] == ["FOX", "GOOG", "NWS"]
+    assert len(kept) == 10 and len(kept) + len(dropped) == len(EXPECTED)
+    flipped, gone = one_per_cik([EXPECTED[5], EXPECTED[4]])
+    assert ([m.ticker for m in flipped], [m.ticker for m in gone]) == (["GOOGL"], ["GOOG"])
+
+
+def test_the_class_a_row_is_read_without_its_case_or_trailing_spaces_and_only_as_a_class_a():
+    a = Member("AAA", "Acme Corp (class a) ", "0000000001", "S", "I", "")
+    b = Member("AAB", "Acme Corp (Class B)", "0000000001", "S", "I", "")
+    assert one_per_cik([b, a]) == ([a], [b])
+    # no Class A row among a CIK's rows: the first, as before
+    c = Member("AAC", "Acme Corp (Class C)", "0000000001", "S", "I", "")
+    assert one_per_cik([c, b]) == ([c], [b])
+    # a name that only mentions a class isn't a Class A row
+    d = Member("BBB", "Class A Holdings", "0000000002", "S", "I", "")
+    e = Member("BBC", "Class A Holdings II", "0000000002", "S", "I", "")
+    assert one_per_cik([d, e]) == ([d], [e])
+    h = Member("DDB", "Acme (Class B)", "0000000004", "S", "I", "")
+    i = Member("DDA", "Class A Acme II", "0000000004", "S", "I", "")
+    assert one_per_cik([h, i]) == ([h], [i])
+    # two Class A rows: the first
+    f = Member("CCA", "Foo (Class A)", "0000000003", "S", "I", "")
+    g = Member("CCB", "Foo (Class A)", "0000000003", "S", "I", "")
+    assert one_per_cik([g, f]) == ([g], [f])
+
+
+def test_the_kept_rows_stay_in_the_pages_order():
+    b = Member("AAB", "Z (Class B)", "0000000009", "S", "I", "")
+    x = Member("ZZZ", "X", "0000000008", "S", "I", "")
+    a = Member("AAA", "Z (Class A)", "0000000009", "S", "I", "")
+    kept, dropped = one_per_cik([b, x, a])
+    assert kept == [x, a] and dropped == [b]
+
+
+def test_the_cli_keeps_the_class_a_row_of_a_page_sorted_by_symbol(tmp_path, monkeypatch, capsys):
+    by_symbol = sorted(SPECIAL, key=lambda cells: cells["Symbol"])
+    _fake_fetch(monkeypatch, _page(by_symbol, rows=503))
+    out = tmp_path / "list.csv"
+    assert sp500.main(["--out", str(out)]) == 0
+    tickers = read_tickers_file(out)
+    assert {"GOOGL", "FOXA", "NWSA"} <= set(tickers) and not {"GOOG", "FOX", "NWS"} & set(tickers)
+    assert len(tickers) == 500
+    assert "FOX (CIK 0001754301, beside FOXA)" in capsys.readouterr().out
 
 
 def test_the_csv_has_its_header_and_a_row_a_member(tmp_path):
@@ -427,19 +477,26 @@ def test_the_csv_is_never_written_over_an_existing_file(tmp_path):
 class _Get:
     """A fake ``requests.get``: records each call and answers *status* with *content*."""
 
-    def __init__(self, status=200, content=b"<html></html>"):
-        self.status, self.content, self.calls = status, content, []
+    def __init__(self, status=200, content=b"<html></html>", headers=None):
+        self.status, self.content, self.headers, self.calls, self.closed = status, content, headers or {}, [], []
 
     def __call__(self, url, **kwargs):
         self.calls.append((url, kwargs))
-        return SimpleNamespace(status_code=self.status, content=self.content)
+        content = self.content
+
+        def iter_content(chunk_size=1):
+            for i in range(0, len(content), chunk_size):
+                yield content[i:i + chunk_size]
+
+        return SimpleNamespace(status_code=self.status, headers=self.headers, iter_content=iter_content,
+                               close=lambda: self.closed.append(1))
 
 
 def test_the_page_is_fetched_with_one_request_and_the_apps_user_agent_without_an_email():
     get = _Get(content="<p>Brown\u2013Forman</p>".encode("utf-8"))
     assert fetch_page(get) == "<p>Brown\u2013Forman</p>"
     assert get.calls == [("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
-                          {"headers": {"User-Agent": USER_AGENT}, "timeout": 30})]
+                          {"headers": {"User-Agent": USER_AGENT}, "timeout": 30, "stream": True})]
     assert SP500_URL == get.calls[0][0] and TIMEOUT == 30
     assert "StockDataCollector" in USER_AGENT and "@" not in USER_AGENT
 
@@ -449,7 +506,46 @@ def test_an_answer_other_than_200_raises_after_its_one_request(status):
     get = _Get(status=status)
     with pytest.raises(OSError, match=f"HTTP {status}"):
         fetch_page(get)
-    assert len(get.calls) == 1
+    assert len(get.calls) == 1 and get.closed == [1]
+
+
+@pytest.mark.parametrize("body", [b"<p>caf\xe9</p>", "<p>caf\u00e9</p>".encode("utf-16"), b"<p>\xff\xfe</p>", b"\xc3"])
+def test_a_page_that_isnt_utf8_raises_oserror_naming_it(body):
+    """BUG-234: a UnicodeDecodeError is a ValueError, which the CLI's fetch step doesn't catch."""
+    get = _Get(content=body)
+    with pytest.raises(OSError, match="isn't UTF-8"):
+        fetch_page(get)
+    assert len(get.calls) == 1 and get.closed == [1]
+
+
+def test_a_utf8_page_with_non_ascii_text_reads_whole_across_chunks(monkeypatch):
+    monkeypatch.setattr(sp500, "CHUNK_BYTES", 3)  # a character split between two chunks
+    page = "<p>caf\u00e9 \u2013 \u5e02</p>"
+    assert fetch_page(_Get(content=page.encode("utf-8"))) == page
+
+
+def test_a_page_over_the_cap_raises_by_its_declared_length_before_reading_it(monkeypatch):
+    monkeypatch.setattr(sp500, "MAX_BYTES", 100)
+    get = _Get(content=b"x" * 50, headers={"Content-Length": "101"})
+    with pytest.raises(OSError, match="larger than 100 bytes"):
+        fetch_page(get)
+    assert get.closed == [1]
+
+
+def test_a_page_over_the_cap_raises_by_the_bytes_streamed_when_no_length_is_declared(monkeypatch):
+    monkeypatch.setattr(sp500, "MAX_BYTES", 100)
+    monkeypatch.setattr(sp500, "CHUNK_BYTES", 16)
+    for headers in ({}, {"Content-Length": "oops"}, {"Content-Length": "10"}):
+        get = _Get(content=b"x" * 101, headers=headers)
+        with pytest.raises(OSError, match="larger than 100 bytes"):
+            fetch_page(get)
+        assert get.closed == [1]
+    exact = _Get(content=b"x" * 100, headers={"Content-Length": "100"})
+    assert fetch_page(exact) == "x" * 100
+
+
+def test_the_cap_leaves_room_for_the_real_page():
+    assert 5 * 1024 * 1024 <= sp500.MAX_BYTES <= 100 * 1024 * 1024
 
 
 def _fake_fetch(monkeypatch, page):
@@ -507,8 +603,67 @@ def test_the_cli_reports_a_refused_fetch_and_writes_nothing(tmp_path, monkeypatc
     assert not out.exists() and "HTTP 403" in capsys.readouterr().err
 
 
+def test_the_cli_reports_a_page_that_isnt_utf8_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    """BUG-234: a clear message and exit 1, not a UnicodeDecodeError traceback."""
+    monkeypatch.setattr(sp500, "fetch_page", lambda: fetch_page(_Get(content=b"<td>Br\xfcgge</td>")))
+    out = tmp_path / "sp500.csv"
+    assert sp500.main(["--out", str(out)]) == 1
+    err = capsys.readouterr().err
+    assert not out.exists() and err.startswith("Fetching the S&P 500 list failed: ") and "isn't UTF-8" in err
+    assert "Traceback" not in err
+
+
+def test_the_cli_reports_a_page_over_the_cap_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sp500, "MAX_BYTES", 10)
+    monkeypatch.setattr(sp500, "fetch_page", lambda: fetch_page(_Get(content=b"x" * 11)))
+    out = tmp_path / "sp500.csv"
+    assert sp500.main(["--out", str(out)]) == 1
+    assert not out.exists() and "Fetching the S&P 500 list failed: " in capsys.readouterr().err
+
+
 def test_the_cli_reports_a_page_that_changed_and_writes_nothing(tmp_path, monkeypatch, capsys):
     _fake_fetch(monkeypatch, _page(SPECIAL, rows=300))
     out = tmp_path / "sp500.csv"
     assert sp500.main(["--out", str(out)]) == 1
     assert not out.exists() and "300 rows" in capsys.readouterr().err
+
+
+# ---- the CIKs a tickers file gives (BUG-231: --skip-existing compares companies, not tickers) ----------------------
+
+
+def test_a_csv_files_cik_column_gives_each_tickers_cik_zero_padded(tmp_path):
+    path = _write(tmp_path / "sp.csv", "Ticker,Name,CIK\nGOOGL,Alphabet,0001652044\nbrk.b,Berkshire,1067983\n"
+                                       "T,AT&T, 732717 \nNOCIK,Blank,\n")
+    assert read_ciks_file(path) == {"GOOGL": "0001652044", "BRK-B": "0001067983", "T": "0000732717"}
+
+
+def test_the_cik_column_is_found_beside_a_symbol_column_in_any_case_with_its_blank_rows_skipped(tmp_path):
+    path = _write(tmp_path / "sp.csv", " symbol , Cik \nAAPL,320193\n,\nMSFT,789019\n")
+    assert read_ciks_file(path) == {"AAPL": "0000320193", "MSFT": "0000789019"}
+
+
+def test_a_file_without_ciks_gives_none(tmp_path):
+    assert read_ciks_file(_write(tmp_path / "a.txt", "AAPL\nMSFT\n")) == {}
+    assert read_ciks_file(_write(tmp_path / "d.txt", "ticker,cik\nAAPL,320193\n")) == {}
+    assert read_ciks_file(_write(tmp_path / "a.csv", "ticker,name\nAAPL,Apple\n")) == {}
+    assert read_ciks_file(_write(tmp_path / "b.csv", "name,cik\nApple,320193\n")) == {}
+    assert read_ciks_file(_write(tmp_path / "c.csv", "")) == {}
+
+
+def test_a_ticker_listed_twice_keeps_its_first_cik(tmp_path):
+    path = _write(tmp_path / "sp.csv", "ticker,cik\nAAPL,1\nAAPL,2\n")
+    assert read_ciks_file(path) == {"AAPL": "0000000001"}
+
+
+@pytest.mark.parametrize("cik", ["12345678901", "12a", "-5", "1.5", "\u0661\u0662"])
+def test_a_cik_that_isnt_1_to_10_digits_raises_naming_the_file_and_its_line(tmp_path, cik):
+    path = _write(tmp_path / "sp.csv", f"ticker,cik\nAAPL,1\nMSFT,{cik}\n")
+    with pytest.raises(ValueError, match=r"sp\.csv, line 3: not a CIK"):
+        read_ciks_file(path)
+
+
+def test_the_repos_sp500_lists_give_a_cik_to_each_ticker():
+    for path in sorted((REPO / "universe").glob("sp500-*.csv")):
+        ciks = read_ciks_file(path)
+        assert list(ciks) == read_tickers_file(path)
+        assert ciks["GOOGL"] == "0001652044" and ciks["BRK-B"] == "0001067983"

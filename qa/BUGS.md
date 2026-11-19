@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 154 · NEEDS-USER 1 · Decided: 7 · Verified: 199
+**Open:** P0 0 · P1 0 · P2 0 · P3 152 · NEEDS-USER 1 · Decided: 7 · Verified: 201
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1768,10 +1768,11 @@ Expected: like BUG-225's Treasury rule, an answer without rows is a failed fetch
 Fix (iteration 184, with BUG-229): `fetch_fred` parses through `_fred_rows`, which raises for an answer with no rows (a header only, or rows without values), so it is a failed fetch that keeps the cached copy; a cached copy without rows is fetched again. `parse_fred_csv` unchanged. A collect-level test now pins collect's own no-rows guard (Treasury's header-only year).
 
 ### BUG-231 [P3][UNIVERSE] One company a CIK keeps the page's first row, and `--skip-existing` compares tickers
-Status: OPEN
-Found: build iteration 51 (M5-1) | Fixed: | Regression test:
+Status: VERIFIED (iteration 187)
+Found: build iteration 51 (M5-1) | Fixed: (this commit) | Regression tests: tests/test_universe.py, tests/test_main_tickers.py; 34 failing first (with stubs)
 Repro: `src/universe/sp500.py` `one_per_cik` keeps the first row of each CIK in the page's order. Wikipedia sorts by company name, so "(Class A)" comes first and GOOGL, FOXA and NWSA are kept. A page sorted by symbol would keep GOOG, FOX and NWS, and `stock-data --skip-existing`, which compares tickers, not CIKs, would then collect a second Alphabet beside the DB's GOOGL.
 Expected: the class the DB already holds, or the "(Class A)" row, kept; a company already stored under another ticker left out.   Actual: page order and tickers only. The saved `universe/sp500-2026-10-25.csv` is right (GOOGL, FOXA, NWSA), and none of its 375 new tickers is a stored company under another ticker.
+Fix (iteration 187, `qa/evidence/bug231-investigation.txt`): of a CIK's rows the first whose name ends '(Class A)' represents the company, else the first row (independent of the page's sort); `--skip-existing` also leaves out a ticker whose list CIK (zero-padded) equals a stored company's under another ticker (logged 'GOOG (stored as GOOGL)'); .txt lists and blank cik cells compare by ticker; a malformed cik is 'Cannot read the tickers', exit 1. The stored 500-row list is unchanged on the name-sorted page; a symbol-sorted page no longer swaps GOOGL/FOXA/NWSA for their class B/C rows.
 
 ### BUG-232 [P3][REFRESH] A collection outside the refresh can store a company without a report just filed, and the refresh won't queue it again
 Status: OPEN
@@ -1786,10 +1787,11 @@ Repro: `stock-data` with many tickers. fetch_and_export fetched every ticker int
 Expected: a long run keeps what it stored, one company's failure stays its own, and the exit code says when the database didn't take a company.   Fix: the companies are exported, stored and valued 25 at a time as they arrive (`--batch-size`, config.DEFAULT_BATCH_SIZE), at most the batch and two tickers a worker in memory; each stock is written in its own SAVEPOINT (SQLiteStore.write_batch, BEGIN IMMEDIATE first); `stock-data` prints "Stored in the database: N of M" and exits 1 naming each company not stored; Ctrl+C cancels the queued tickers within half a second and exits 130, keeping the stored batches; the refresh's collect step fails when it didn't store a company of its list. Offline end to end: 30 companies in 5 batches stored, the CSVs byte-identical to one export; memory +127 MB for 127 companies against +832 MB before.
 
 ### BUG-234 [P3][UNIVERSE] A Wikipedia page that isn't UTF-8 ends `python -m src.universe.sp500` in a traceback
-Status: OPEN
-Found: code review 19 (m-1), build M5-6 | Fixed: | Regression test:
+Status: VERIFIED (iteration 187)
+Found: code review 19 (m-1), build M5-6 | Fixed: (this commit) | Regression tests: tests/test_universe.py, tests/test_main_tickers.py; 34 failing first (with stubs)
 Repro: src/universe/sp500.py decodes the page as UTF-8 (:259, :300); a body that isn't raises UnicodeDecodeError, a ValueError, and main catches only OSError there. The download also has no size cap (BUG-229's kind).
 Expected: "Fetching the S&P 500 list failed: ..." and exit 1.   Actual: a traceback.
+Fix (iteration 187, with BUG-231): `fetch_page` streams with a 20 MiB cap (as BUG-229), always closes the response, and a non-UTF-8 body is an OSError the CLI reports as 'Fetching the S&P 500 list failed: ...' with exit 1 (the page is UTF-8, so another encoding means it changed).
 
 ### BUG-235 [P3][SEC] The SEC's ticker map is cached with no expiry, so a future index member with a newer ticker is collected without SEC data
 Status: OPEN

@@ -13,7 +13,7 @@ import pytest
 
 import src.main
 from src.exporters.sqlite_store import SQLiteStore
-from src.main import main, resolve_tickers, stored_tickers
+from src.main import main, resolve_tickers, stored_ciks, stored_tickers
 from src.models.stock_data import StockData
 
 
@@ -182,4 +182,105 @@ def test_stored_tickers_opens_the_database_read_only(tmp_path, monkeypatch):
 
     monkeypatch.setattr(src.main.sqlite3, "connect", recording)
     assert stored_tickers(db) == {"AAPL"}
+    assert len(opened) == 1 and opened[0][0].endswith("?mode=ro") and opened[0][1] is True
+
+
+# ---- --skip-existing compares companies (their CIKs), not tickers only (BUG-231) ------------------------------------
+
+
+def test_skip_existing_leaves_out_a_company_stored_under_another_ticker_by_its_cik(runs, tmp_path, caplog):
+    """A page sorted by symbol would list GOOG, not GOOGL: the file's CIK says it is the stored Alphabet."""
+    caplog.set_level(logging.INFO)
+    _db(tmp_path / "output" / "stock.db", "GOOGL", "AAPL")  # CIKs 0000000001 and 0000000002
+    listed = _write(tmp_path / "sp.csv", "ticker,name,cik\nGOOG,Alphabet C,0000000001\nNVDA,NVIDIA,0000000099\n"
+                                         "AAPL,Apple,0000000002\nFOX,Fox B,0000000077\n")
+    assert main(["--tickers-file", str(listed), "--skip-existing", "--output-dir", str(tmp_path)]) == 0
+    assert runs[0]["tickers"] == ["NVDA", "FOX"]
+    assert "2 of 4 tickers" in caplog.text and "2 to collect" in caplog.text
+    assert "GOOG (stored as GOOGL)" in caplog.text
+
+
+def test_skip_existing_reads_a_cik_without_its_zeros_and_a_stored_one_alike(runs, tmp_path):
+    _db(tmp_path / "output" / "stock.db", "GOOGL")
+    listed = _write(tmp_path / "sp.csv", "ticker,cik\nGOOG,1\nNVDA,99\n")
+    assert main(["--tickers-file", str(listed), "--skip-existing", "--output-dir", str(tmp_path)]) == 0
+    assert runs[0]["tickers"] == ["NVDA"]
+
+
+def test_skip_existing_with_a_stored_cik_stored_without_zeros_matches_too(runs, tmp_path):
+    db = _db(tmp_path / "output" / "stock.db", "GOOGL")
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE companies SET cik = '1' WHERE ticker = 'GOOGL'")
+    listed = _write(tmp_path / "sp.csv", "ticker,cik\nGOOG,0000000001\nNVDA,0000000099\n")
+    assert main(["--tickers-file", str(listed), "--skip-existing", "--output-dir", str(tmp_path)]) == 0
+    assert runs[0]["tickers"] == ["NVDA"]
+
+
+def test_skip_existing_keeps_a_ticker_whose_cik_is_not_stored_or_not_given(runs, tmp_path):
+    _db(tmp_path / "output" / "stock.db", "GOOGL")
+    listed = _write(tmp_path / "sp.csv", "ticker,cik\nGOOG,\nFOO,0000000042\n")
+    assert main(["GOOG", "BAR", "--tickers-file", str(listed), "--skip-existing", "--output-dir", str(tmp_path)]) == 0
+    assert runs[0]["tickers"] == ["GOOG", "BAR", "FOO"]
+
+
+def test_skip_existing_with_every_company_stored_under_another_ticker_is_an_error(runs, tmp_path, caplog):
+    _db(tmp_path / "output" / "stock.db", "GOOGL")
+    listed = _write(tmp_path / "sp.csv", "ticker,cik\nGOOG,0000000001\n")
+    assert main(["--tickers-file", str(listed), "--skip-existing", "--output-dir", str(tmp_path)]) == 1
+    assert runs == [] and "All 1 tickers given are already in the database" in caplog.text
+
+
+def test_without_skip_existing_a_stored_companys_other_ticker_is_collected(runs, tmp_path):
+    _db(tmp_path / "output" / "stock.db", "GOOGL")
+    listed = _write(tmp_path / "sp.csv", "ticker,cik\nGOOG,0000000001\n")
+    assert main(["--tickers-file", str(listed), "--output-dir", str(tmp_path)]) == 0
+    assert runs[0]["tickers"] == ["GOOG"]
+
+
+def test_skip_existing_with_a_cik_that_isnt_one_is_an_error_naming_the_line(runs, tmp_path, caplog):
+    _db(tmp_path / "output" / "stock.db", "GOOGL")
+    listed = _write(tmp_path / "sp.csv", "ticker,cik\nGOOG,1\nNVDA,12x\n")
+    assert main(["--tickers-file", str(listed), "--skip-existing", "--output-dir", str(tmp_path)]) == 1
+    assert runs == [] and "Cannot read the tickers" in caplog.text and "line 3" in caplog.text
+
+
+def test_stored_ciks_are_the_databases_companies_ciks_padded_to_ten_digits(tmp_path):
+    db = _db(tmp_path / "stock.db", "AAA", "BBB", "CCC")
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE companies SET cik = '7' WHERE ticker = 'BBB'")
+        conn.execute("UPDATE companies SET cik = NULL WHERE ticker = 'CCC'")
+    assert stored_ciks(db) == {"0000000001": "AAA", "0000000007": "BBB"}
+    assert stored_ciks(tmp_path / "none.db") == {}
+
+
+def test_skip_existing_takes_a_tickers_cik_from_the_first_file_that_lists_it(runs, tmp_path):
+    _db(tmp_path / "output" / "stock.db", "GOOGL")  # CIK 0000000001
+    first = _write(tmp_path / "a.csv", "ticker,cik\nGOOG,0000000001\n")
+    second = _write(tmp_path / "b.csv", "ticker,cik\nGOOG,0000000050\nNVDA,0000000051\n")
+    argv = ["--tickers-file", str(first), "--tickers-file", str(second), "--skip-existing",
+            "--output-dir", str(tmp_path)]
+    assert main(argv) == 0
+    assert runs[0]["tickers"] == ["NVDA"]
+
+
+def test_stored_ciks_without_a_companies_table_is_none(tmp_path):
+    bare = tmp_path / "bare.db"
+    conn = sqlite3.connect(bare)
+    conn.execute("CREATE TABLE other (x TEXT)")
+    conn.commit()
+    conn.close()
+    assert stored_ciks(bare) == {}
+
+
+def test_stored_ciks_opens_the_database_read_only(tmp_path, monkeypatch):
+    db = _db(tmp_path / "stock.db", "AAPL")
+    opened = []
+    connect = sqlite3.connect
+
+    def recording(target, *args, **kwargs):
+        opened.append((str(target), kwargs.get("uri")))
+        return connect(target, *args, **kwargs)
+
+    monkeypatch.setattr(src.main.sqlite3, "connect", recording)
+    assert stored_ciks(db) == {"0000000001": "AAPL"}
     assert len(opened) == 1 and opened[0][0].endswith("?mode=ro") and opened[0][1] is True
