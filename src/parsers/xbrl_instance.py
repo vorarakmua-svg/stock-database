@@ -33,6 +33,13 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 _XBRLI = "{http://www.xbrl.org/2003/instance}"
 
+#: The version of what ``companyfacts_from_instance`` reads from an instance: bump it with any change to its output for
+#: a document (the taxonomies, the contexts or units kept, the values, the fiscal focus, the frames, the duplicate
+#: rule). The SEC handler's per-filing cache keys on it (``SECHandler.get_filing_facts``), which never expires
+#: otherwise, so a reader with other rules reads every filing again (BUG-340); tests/test_xbrl_instance.py pins it to
+#: the reader's output for an instance meeting every rule, and fails on a change without a bump.
+READER_VERSION = 1
+
 #: The standard taxonomies companyfacts carry, by their namespaces' stems (any year's release).
 _TAXONOMIES: Tuple[Tuple["re.Pattern[str]", str], ...] = (
     (re.compile(r"^http://(fasb\.org|xbrl\.us)/us-gaap/"), "us-gaap"),

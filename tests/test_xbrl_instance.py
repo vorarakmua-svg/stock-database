@@ -1,8 +1,11 @@
 """Q17: a filing's own XBRL instance read as the SEC's companyfacts carry its facts (src/parsers/xbrl_instance.py)."""
 
+import hashlib
+import json
+
 import pytest
 
-from src.parsers.xbrl_instance import InstanceError, companyfacts_from_instance, frame_of
+from src.parsers.xbrl_instance import READER_VERSION, InstanceError, companyfacts_from_instance, frame_of
 
 _CIK = "0001297996"
 _ACCN = "0001104659-26-089296"
@@ -234,3 +237,87 @@ def test_an_instance_without_a_fact_the_companyfacts_would_keep_is_an_error():
         read(instance([("dlr:ColocationRevenue", "q2", "usd", "1000000000"),
                        ("us-gaap:Revenues", "seg", "usd", "1000000000")],
                       contexts={**CONTEXTS, "seg": CONTEXTS["q2"]}, segments=("seg",)))
+
+
+# ---- BUG-340: READER_VERSION follows what the reader reads ----
+
+#: An instance that meets every rule of the reader: the standard taxonomies and others, a segment, a scenario and
+#: another entity (each in a period of its own, so that a rule keeping their facts would show), an instant, a span of
+#: no days, a month, a half year, ``forever``, each kind of unit, values with a sign, a scale, trailing zeros, seven
+#: and eight decimal places, a nil and a text fact, a fact given twice, two values of one fact of other precisions
+#: (INF among them), and the fiscal focus given in a dimensional context and a plain one.
+_EVERY_RULE = instance(
+    [("us-gaap:Revenues", "q2", "usd", "1712345000"),
+     ("us-gaap:Revenues", "q2b", "usd", "1712345000"),
+     ("us-gaap:Revenues", "h1", "usd", "3347000000", {"decimals": "-6"}),
+     ("us-gaap:Revenues", "h1b", "usd", "3347518000", {"decimals": "INF"}),
+     ("us-gaap:Revenues", "q2_2025", "usd", "1492955000.00"),
+     ("us-gaap:Revenues", "seg", "usd", "1000000000"),
+     ("us-gaap:Revenues", "scen", "usd", "900000000"),
+     ("us-gaap:Revenues", "other", "usd", "5"),
+     ("us-gaap:Revenues", "ever", "usd", "7"),
+     ("us-gaap:NetIncomeLoss", "q2", "usd", "-48000000"),
+     ("us-gaap:Assets", "jun", "usd", "48601234000"),
+     ("us-gaap:Assets", "dec", "usd", "48731000000"),
+     ("us-gaap:PaymentsToAcquireBusinessesGross", "day", "usd", "609000000"),
+     ("us-gaap:CommonStockParOrStatedValuePerShare", "jun", "usdPerShare", "0.00000625"),
+     ("us-gaap:IncomeLossFromContinuingOperationsPerDilutedShare", "q2", "usdPerShare", "0.7123456"),
+     ("us-gaap:InterestPaidNet", "month", "usd", "12000000"),
+     ("us-gaap:EarningsPerShareDiluted", "q2", "usdPerShare", "0.71"),
+     ("us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding", "q2", "shares", "343456789"),
+     ("us-gaap:EffectiveIncomeTaxRateContinuingOperations", "q2", "pure", "0.125"),
+     ("us-gaap:OtherNonoperatingIncomeExpense", "q2", "usd", "", {"xsi:nil": "true"}),
+     ("us-gaap:RevenueRecognitionPolicyTextBlock", "q2", None, "Revenue is recognized ..."),
+     ("us-gaap:InterestExpense", "q2", "usd", "n/a"),
+     ("dei:EntityCentralIndexKey", "q2", None, "0001297996"),
+     ("dei:EntityCommonStockSharesOutstanding", "cover", "shares", "341234567"),
+     ("dlr:ColocationRevenue", "q2", "usd", "1000000000"),
+     ("srt:RevenueFromRelatedParties", "q2", "usd", "1000"),
+     ("ifrs-full:Revenue", "h1", "usd", "3347518000"),
+     ("invest:InvestmentOwnedBalancePrincipalAmount", "jun", "usd", "250000")],
+    contexts={**CONTEXTS, "q2b": CONTEXTS["q2"], "h1b": CONTEXTS["h1"],
+              "seg": "<period><startDate>2025-01-01</startDate><endDate>2025-03-31</endDate></period>",
+              "scen": "<period><startDate>2025-07-01</startDate><endDate>2025-09-30</endDate></period>",
+              "other": "<period><startDate>2025-10-01</startDate><endDate>2025-12-31</endDate></period>",
+              "ever": "<period><forever/></period>",
+              "month": "<period><startDate>2026-06-01</startDate><endDate>2026-06-30</endDate></period>",
+              "day": "<period><startDate>2025-01-31</startDate><endDate>2025-01-31</endDate></period>"},
+    segments=("seg",), scenarios=("scen",), entities={"other": "0001234567"}, focus=("2025", "FY"),
+    focus_context="seg").replace(b' decimals="-3" decimals=', b" decimals=").replace(
+    b'xmlns:dlr=', b'xmlns:invest="http://xbrl.sec.gov/invest/2026" xmlns:dlr=').replace(
+    b"<context id=", b'<dei:DocumentFiscalYearFocus contextRef="q2">2026</dei:DocumentFiscalYearFocus>'
+                     b'<dei:DocumentFiscalPeriodFocus contextRef="q2">Q2</dei:DocumentFiscalPeriodFocus>'
+                     b'<context id=', 1)
+
+#: What the reader reads from _EVERY_RULE at each READER_VERSION, as a digest of its output (``_digest``). A change to
+#: the reader's output changes the digest: bump READER_VERSION and add its digest here, so the SEC handler's
+#: per-filing cache, which keys on the version, reads every filing again (BUG-340). Never edit a digest in place.
+_READ_AT = {
+    1: "1f88e94d99a7efe73f7ca8a761078c0d9e32f8be480a455f3bac74e7f58d24ef",
+}
+
+
+def _digest(facts):
+    return hashlib.sha256(json.dumps(facts, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def test_every_rule_of_the_reader_is_met_by_the_pinned_instance():
+    # The instance is worth pinning only if it gives each rule something to read or leave out.
+    facts = read(_EVERY_RULE)
+    assert set(facts) == {"us-gaap", "dei", "srt", "ifrs-full", "invest"}
+    assert [e["val"] for e in entries(facts, "Revenues")] == [1492955000, 3347518000, 1712345000]
+    assert entries(facts, "CommonStockParOrStatedValuePerShare", "USD/shares")[0]["val"] == 6e-06
+    assert entries(facts, "IncomeLossFromContinuingOperationsPerDilutedShare", "USD/shares")[0]["val"] == 0.712346
+    assert entries(facts, "InterestPaidNet")[0]["frame"] == "CY2026Q2I"
+    assert {(e["fy"], e["fp"]) for e in entries(facts, "Assets")} == {(2026, "Q2")}
+    assert "start" not in entries(facts, "PaymentsToAcquireBusinessesGross")[0]
+    assert not {"OtherNonoperatingIncomeExpense", "RevenueRecognitionPolicyTextBlock", "InterestExpense"} & set(
+        facts["us-gaap"])
+
+
+def test_the_readers_version_follows_what_it_reads():
+    assert sorted(_READ_AT) == list(range(1, READER_VERSION + 1)), "a version without its digest, or a gap"
+    assert _digest(read(_EVERY_RULE)) == _READ_AT[READER_VERSION], (
+        "companyfacts_from_instance reads the pinned instance otherwise than at READER_VERSION: bump READER_VERSION "
+        "(src/parsers/xbrl_instance.py) and add the new digest to _READ_AT, so cached filings are read again")
+    assert len(set(_READ_AT.values())) == len(_READ_AT), "two versions that read alike"

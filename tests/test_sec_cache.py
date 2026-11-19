@@ -12,6 +12,7 @@ from src.exporters.sqlite_store import _incomplete
 from src.fetchers import sec_handler
 from src.fetchers.sec_handler import SECHandler
 from src.models.stock_data import StockData
+from src.parsers import xbrl_instance
 from src.parsers.xbrl_parser import XBRLParser
 from tests.test_xbrl_instance import CONTEXTS, instance
 
@@ -764,3 +765,69 @@ def test_reports_without_facts_go_back_to_the_first_the_facts_carry():
     assert sec_handler.reports_without_facts(listed, {"facts": {}}) == [q3, _DLR_10Q2, _DLR_10Q1, old]
     amended = {"filings": [_DLR_424B7, {**_DLR_10Q2, "form": "10-Q/A"}, _DLR_10Q1]}
     assert sec_handler.reports_without_facts(amended, facts) == []
+
+
+# ---- BUG-282: a run whose submissions request failed couldn't look for the SEC's lag ----
+
+def test_a_run_whose_submissions_request_failed_is_stored_as_unchecked(tmp_path, monkeypatch):
+    # Without the submissions the run can't know whether its companyfacts lack the latest report (BUG-251): it read
+    # as complete, so the refresh never collected it again for that reason. The failed request is an error whose
+    # message may be empty (an HTTPError without one): the error says what it was.
+    data = _dlr(tmp_path, monkeypatch, [_DLR_424B7, _DLR_10Q2, _DLR_10Q1], fail=("submissions",)).fetch_all("DLR")
+    assert "missing_report" not in data and data["submissions_error"] == "HTTPError"
+    stock = StockData(ticker="DLR")
+    stock.merge_sec_data(data)
+    assert "SEC EDGAR submissions: HTTPError" in stock.errors
+    assert json.loads(_incomplete(stock) or "{}") == {"submissions": "HTTPError"}
+
+
+def test_a_run_whose_submissions_were_read_isnt_unchecked(tmp_path, monkeypatch):
+    data = _dlr(tmp_path, monkeypatch, [_DLR_424B7, _DLR_10Q2, _DLR_10Q1],
+                revenue=(_DLR_Q1_REVENUE, _DLR_Q2_REVENUE)).fetch_all("DLR")
+    stock = StockData(ticker="DLR")
+    stock.merge_sec_data(data)
+    assert "submissions_error" not in data and _incomplete(stock) is None
+
+
+def test_a_run_whose_companyfacts_and_submissions_failed_is_unchecked_too(tmp_path, monkeypatch):
+    data = _dlr(tmp_path, monkeypatch, [_DLR_424B7, _DLR_10Q2, _DLR_10Q1],
+                fail=("companyfacts", "submissions")).fetch_all("DLR")
+    stock = StockData(ticker="DLR")
+    stock.merge_sec_data(data)
+    assert json.loads(_incomplete(stock) or "{}") == {"submissions": "HTTPError"}
+
+
+def test_an_unchecked_run_isnt_in_the_json():
+    stock = StockData(ticker="DLR")
+    stock.submissions_error = "503 Server Error"
+    assert "submissions_error" not in stock.to_dict()
+
+
+# ---- BUG-340: the per-filing cache follows the instance reader's version ----
+
+def test_a_filings_facts_are_cached_with_the_readers_version(tmp_path, monkeypatch):
+    handler, _ = _dlr_reading(tmp_path, monkeypatch, [_DLR_424B7, _DLR_10Q2_INLINE, _DLR_10Q1_INLINE],
+                              {_DLR_10Q2_FOLDER + "dlr-20260630x10q_htm.xml": _DLR_10Q2_INSTANCE})
+    handler.fetch_all("DLR")
+    cached = json.loads(handler._filing_cache_path("0001297996", "0001104659-26-089296").read_text(encoding="utf-8"))
+    assert cached["version"] == xbrl_instance.READER_VERSION
+
+
+def test_a_reader_with_other_rules_reads_every_cached_filing_again(tmp_path, monkeypatch):
+    # A change to what companyfacts_from_instance reads bumps READER_VERSION: the facts an earlier reader cached are
+    # read again, and cached with the new version.
+    documents = {_DLR_10Q2_FOLDER + "dlr-20260630x10q_htm.xml": _DLR_10Q2_INSTANCE}
+    handler, requested = _dlr_reading(tmp_path, monkeypatch, [_DLR_424B7, _DLR_10Q2_INLINE, _DLR_10Q1_INLINE],
+                                      documents)
+    handler.fetch_all("DLR")
+    assert len(requested) == 1
+    monkeypatch.setattr(xbrl_instance, "READER_VERSION", xbrl_instance.READER_VERSION + 1)
+    again, requested = _dlr_reading(tmp_path, monkeypatch, [_DLR_424B7, _DLR_10Q2_INLINE, _DLR_10Q1_INLINE],
+                                    documents)
+    again.fetch_all("DLR")
+    assert len(requested) == 1
+    cached = json.loads(again._filing_cache_path("0001297996", "0001104659-26-089296").read_text(encoding="utf-8"))
+    assert cached["version"] == xbrl_instance.READER_VERSION
+    again, requested = _dlr_reading(tmp_path, monkeypatch, [_DLR_424B7, _DLR_10Q2_INLINE, _DLR_10Q1_INLINE], {})
+    assert again.fetch_all("DLR")["reports_read"][0]["instance"] == "dlr-20260630x10q_htm.xml"
+    assert requested == []  # and the reader's own version is kept across runs, at any age

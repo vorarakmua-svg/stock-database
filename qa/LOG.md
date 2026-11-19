@@ -3495,3 +3495,16 @@ Result: BUG-183, BUG-308 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3635 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(valuation): the history stores the EV its EV/EBITDA divides; the oracle truncates at a share seam (BUG-183, BUG-308)
 Next: GATHER 107/282/340 (worker).
+
+## Iteration 209: 2026-11-20 19:40: fix (BUG-107, BUG-282, BUG-340)
+Picked: three GATHER P3s of structural #4 (a failure read as success); an opus worker.
+Did: yfinance's empty answer to a failed request is told from a served empty history (dividends, splits, bars warn;
+a quote refresh with an unserved split history fails - orchestrator's call); a failed submissions request leaves the
+run incomplete for the refresh; the per-filing XBRL cache's version is pinned to the reader's output.
+- RED: 21 failed of 431 (worker, with an import stub; here 4 collection errors on the missing READER_VERSION); GREEN.
+  38 of 38 mutants; 7 stale old mutants re-expressed.
+- Real data: 0 queueing or cache-validity changes; no figure-writing code changed.
+Result: BUG-107, BUG-282, BUG-340 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3662 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(gather): a failed Yahoo or SEC request isn't read as an empty answer; the XBRL cache follows its reader (BUG-107, BUG-282, BUG-340)
+Next: DATA 364/203/221 (worker, expected NEEDS-USER); code review 34 due.

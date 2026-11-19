@@ -95,6 +95,12 @@ class StockData:
     # names the report either way.
     missing_report: Optional[Dict[str, Any]] = None
 
+    # Why the run's submissions request failed (sec_handler.fetch_all's submissions_error), None when it
+    # didn't: without the submissions the run couldn't look for the latest report its companyfacts lack
+    # (the SEC's lag). SQLite-only, like the report without facts: collection_runs.incomplete keeps it,
+    # so that `stock-data refresh` collects the company again (BUG-282); the run's errors name it.
+    submissions_error: Optional[str] = None
+
     # When the SEC served the run's SEC data (sec_handler.fetch_all's sec_read_at, ISO, naive local): a
     # payload from the handler's 7-day cache is as old as the cache. collection_runs.sec_read_at keeps it,
     # so that `stock-data refresh` looks for reports filed since then and counts as tries only reads of
@@ -151,6 +157,7 @@ class StockData:
         data.pop("financials_annual_vintages", None)
         data.pop("predecessor_error", None)
         data.pop("missing_report", None)
+        data.pop("submissions_error", None)
         data.pop("sec_read_at", None)  # SQLite-only too (collection_runs.sec_read_at)
         return data
 
@@ -384,6 +391,8 @@ class StockData:
         # The latest report the submissions list whose facts the companyfacts lacked (BUG-251): a
         # warning, as the fetcher words it, and the store keeps it for the refresh.
         self.missing_report = sec_data.get("missing_report")
+        # A failed submissions request: the run couldn't look for that report (BUG-282).
+        self.submissions_error = sec_data.get("submissions_error")
         # When the SEC served what the run read: the refresh compares a filing with it (BUG-232).
         self.sec_read_at = sec_data.get("sec_read_at")
 

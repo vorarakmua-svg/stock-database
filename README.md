@@ -1736,7 +1736,8 @@ companies on the **collection list**, each with its reason: `quotes`, `bars` and
   payments a full collection that day would have (BUG-258). A company with a split since its last collection (a share split, or any price factor
   of 3:2 or more) isn't saved: only a full collection restates its per-share figures, so it goes on the collection
   list. A stock dividend's or a smaller spin-off's factor is stored with the price and the company is valued on it
-  right away.
+  right away. A quote whose split history Yahoo didn't serve can't be checked for a split, so it isn't saved either:
+  that company's error (BUG-107).
 - **`bars`** (daily): every company's daily bars since its last stored bar, one `history(start=...)` request a company
   with a collection's parameters (unadjusted closes, as a collection stores them).
   - Yahoo is asked from the latest stored bar before the last one with a close above 0 (the bar before the last, unless
@@ -1772,8 +1773,9 @@ companies on the **collection list**, each with its reason: `quotes`, `bars` and
   report in its feed. A company without a CIK is counted and skipped, and a feed that fails is that company's error.
   - A company also goes on the list when that latest collection's SEC read was incomplete, as its `collection_runs` row
     says (`incomplete`): it read no facts of the latest report its submissions listed (its companyfacts lacked them,
-    the SEC's lag, BUG-251, and the filing's own XBRL couldn't be read either, or their request failed), or it
-    couldn't read its predecessor's filings (BUG-279). A collection that read the report, and every earlier one its
+    the SEC's lag, BUG-251, and the filing's own XBRL couldn't be read either, or their request failed), it
+    couldn't read its predecessor's filings (BUG-279), or its submissions request failed, so it couldn't look for such
+    a report (`couldn't check for the SEC's lag: its submissions request failed (...)`, BUG-282). A collection that read the report, and every earlier one its
     companyfacts lacked, from the filings' own XBRL isn't incomplete: its figures are whole. It knows so only
     when it reached a report the companyfacts carry, so a gap of more than four reports, or one that runs past the reports its
     submissions list, stays incomplete (BUG-337). Such a
@@ -1783,8 +1785,9 @@ companies on the **collection list**, each with its reason: `quotes`, `bars` and
   - The reason names the collection and the report: `DLR (sec: its collection of 2026-10-25 read no facts of its 10-Q
     filed 2026-07-31 (0001104659-26-089296); collected again (1 of 3))`. The SEC usually fills a lag in days, so a gap
     gets three more tries at most, each a read of the SEC at least six days after the last: when the collections in a
-    row since the gap was found (incomplete in any way: the report's facts unread, the predecessor's filings unread, or
-    both, so a read that fails and succeeds by turns starts no new count) hold four such reads, the gap is the source's,
+    row since the gap was found (incomplete in any way: the report's facts unread, the predecessor's filings or the
+    submissions unread, or more than one, so a read that fails and succeeds by turns starts no new count) hold four
+    such reads, the gap is the source's,
     and the company waits for its next report. A collection on the 7-day cache read what the collection that cached it
     read, so it is no try, and reads of the SEC hours or days apart (by hand, a forced run) are one (BUG-281, BUG-289).
     A complete collection ends the gap, and so does one that lacked another report or read the SEC before the gap's
@@ -2492,7 +2495,10 @@ on eight filings the companyfacts carry (2012 to 2026, inline and not, a bank, a
 10-Q, 10-Ks and 10-Qs): all 4,084 of their facts found with the same value, period, fiscal year and
 period, form and filing date. Each filing's facts are cached (`xbrl_CIK<cik>_<accession>.json`
 beside the companyfacts; a filing never changes, so the cache doesn't expire), so a re-collection
-from the cache reads them again. The run says so, naming the report: `SEC EDGAR: the companyfacts
+from the cache reads them again. A cached file carries the instance reader's version
+(`xbrl_instance.READER_VERSION`), and a reader that reads an instance otherwise, with a new version,
+reads every filing again; a test pins the version to the reader's output for an instance meeting
+each of its rules, so a change to the reader without a new version fails it (BUG-340). The run says so, naming the report: `SEC EDGAR: the companyfacts
 lack C's 10-Q filed 2026-11-05 (0000831001-26-000056), so this run read its figures from the
 filing's own XBRL (c-20260930_htm.xml), and those of the earlier reports they lack from theirs: ...`
 (BUG-295: Citigroup's companyfacts carried none of its 2026 10-Qs). A report whose XBRL can't be
@@ -2507,7 +2513,8 @@ latest report is read from its XBRL, the earlier ones the newest 100 list among 
 companyfacts carry, the run is stored as incomplete). `collection_runs.incomplete` keeps what a run's SEC read lacked
 (JSON: `report`, that report's `form`, `accession` and `filed`, unless the run read it and every
 earlier report the companyfacts lack from their own XBRL; `predecessor`, why the
-predecessor's filings couldn't be read), empty for a complete run, so that `stock-data refresh`
+predecessor's filings couldn't be read; `submissions`, why the submissions request failed, so the
+run couldn't look for such a report), empty for a complete run, so that `stock-data refresh`
 collects the company again (see [Keeping the data current](#keeping-the-data-current-stock-data-refresh)).
 `collection_runs.errors` keeps the errors' text as `warnings` keeps the warnings' (JSON; NULL in a run stored before
 the column), so the quality API's runs give both and the Collect page's job card names each failed ticker with its
@@ -2524,7 +2531,12 @@ can run a day ahead of New York's). A saved quote refresh stores them too, by th
 rule for a run without bars: the latest split Yahoo lists, else the day before the
 refresh's own (BUG-160, BUG-258). The valuation takes each payment to its price's
 split basis by the splits in between, so a run whose dividend request failed can still
-store a split.
+store a split. A request fails however yfinance reports it: yfinance 1.0 answers a chart request
+that failed (no timezone found, an error or empty answer) with an empty history rather than an
+error, and a run reads one without the chart's dividend and split columns as unavailable (a warning,
+`dividend history unavailable (yfinance returned no history, its answer to a failed request)`, and
+the same for the split history and the daily bars; the stored ones stay), never as a stock without
+dividends (BUG-107).
 
 The `financials_annual_vintages` table stores **point-in-time** data: one row per
 (ticker, fiscal_year, filing accession), so you can see every filing's view of a year —
@@ -2699,7 +2711,7 @@ The server binds to `127.0.0.1` by default (localhost only).
 - **Cross-company screener** — filter by any fundamental metric (ROIC, net margin, debt/EBITDA, …) *or* market/valuation column (P/E, dividend yield, PEG, short interest, …) *or* the valuation layer's Upside % / verdict *or* the quality scores (Piotroski F, Altman Z, the ranks and composite, …, with five preset screens) *or* the other valuation indicators (the reverse DCF's implied growth, the upsides to the EPV, the median P/S value and the tangible Graham number, price / net-net working capital) *or* the insiders' open-market trades and the gurus' holdings (`ins_*`, `gurus_holding`, `gurus_buying`) *or* the SEC's industry (a SIC prefix filter) and the ranks within it (`ind_*`), sort, paginate, compare selected companies side-by-side, and download results as CSV.
 - **Screener units** — a value typed in the filter box is in the unit the field is shown in: a percent for every field shown as a % (`insider_percent`, `short_percent_of_float`, `roic`, the margins, the upsides, the percentiles, … stored as fractions, so *Insider % > 5* is `insider_percent_gt=0.05`) and for Debt / equity (%), which is Yahoo's percent as stored (100 is 1x); a plain number for the rest. The script converts when a filter is added and shows a chip in the typed unit; the URL (`/screener?insider_percent_gt=0.05`), the saved screens (browser storage), the presets and `GET /api/screen` stay in the stored unit, so none of them changes meaning.
 - **Point-in-time (as-of) explorer** — look up what financials and ratios looked like as of any historical date (before later restatements), and browse vintage side-by-side tables.
-- **On-demand quote refresh** — re-fetch a single ticker's live price/market snapshot from the workstation without running a full collection (see `STOCK_WEB_ALLOW_QUOTE_REFRESH` below). After a stock split the stored valuations don't reflect (one dated after the stored price, as after a collection whose Yahoo quote failed, or one not yet stored since the ticker's last collection with Yahoo), the refresh isn't saved, because those valuations are on the pre-split basis; its status asks for a full collection of the ticker instead. A split here is a share split (a simple ratio such as 2:1, 5:4 or 1:10) or any price factor of 3:2 or more. The stock dividends and smaller spin-off factors Yahoo also lists don't stop a refresh: it stores them with the price and values the ticker again, so its DDM and multiples band move onto the new price's basis, as a full collection would put them. Every saved refresh also stores Yahoo's dividend payments, from the request that serves its split history, as a collection stores them, so a valuation after it counts DDM's trailing year, which ends on the refresh's day, on the payments a full collection would have (BUG-160). A saved refresh recomputes the snapshot's enterprise value, EV/EBITDA, EV/FCF and FCF yield as a full collection does (its new market cap with the latest year's net debt, EBITDA and FCF), so the columns keep one definition; Yahoo's own enterprise value stays in the JSON's `valuation` section.
+- **On-demand quote refresh** — re-fetch a single ticker's live price/market snapshot from the workstation without running a full collection (see `STOCK_WEB_ALLOW_QUOTE_REFRESH` below). After a stock split the stored valuations don't reflect (one dated after the stored price, as after a collection whose Yahoo quote failed, or one not yet stored since the ticker's last collection with Yahoo), the refresh isn't saved, because those valuations are on the pre-split basis; its status asks for a full collection of the ticker instead. Nor is a refresh whose split history Yahoo didn't serve (yfinance's empty answer to a failed request): it can't tell a split, so its status says so (BUG-107). A split here is a share split (a simple ratio such as 2:1, 5:4 or 1:10) or any price factor of 3:2 or more. The stock dividends and smaller spin-off factors Yahoo also lists don't stop a refresh: it stores them with the price and values the ticker again, so its DDM and multiples band move onto the new price's basis, as a full collection would put them. Every saved refresh also stores Yahoo's dividend payments, from the request that serves its split history, as a collection stores them, so a valuation after it counts DDM's trailing year, which ends on the refresh's day, on the payments a full collection would have (BUG-160). A saved refresh recomputes the snapshot's enterprise value, EV/EBITDA, EV/FCF and FCF yield as a full collection does (its new market cap with the latest year's net debt, EBITDA and FCF), so the columns keep one definition; Yahoo's own enterprise value stays in the JSON's `valuation` section.
 - **CSV export** — download annual financials, annual metrics, or screener results as CSV from any company page or screener view.
 
 ### Terminal command bar

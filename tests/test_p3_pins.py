@@ -132,15 +132,18 @@ def test_the_current_liabilities_bound_decides_beyond_half_a_percent(current_lia
 
 
 @pytest.mark.parametrize("lacked, gap", [
-    ({}, (None, False)),                                                   # a complete collection
-    ({"report": {"accession": "0001-26-000001"}}, ("0001-26-000001", False)),
-    ({"predecessor": "503 Server Error"}, (None, True)),
-    ({"report": {"accession": "0001-26-000001"}, "predecessor": "no XBRL data"}, ("0001-26-000001", True)),
+    ({}, (None, False, False)),                                            # a complete collection
+    ({"report": {"accession": "0001-26-000001"}}, ("0001-26-000001", False, False)),
+    ({"predecessor": "503 Server Error"}, (None, True, False)),
+    ({"report": {"accession": "0001-26-000001"}, "predecessor": "no XBRL data"}, ("0001-26-000001", True, False)),
+    ({"submissions": "503 Server Error"}, (None, False, True)),          # BUG-282: no report could be looked for
+    ({"predecessor": "no XBRL data", "submissions": "HTTPError"}, (None, True, True)),
 ])
 def test_a_gap_is_its_report_and_whether_its_predecessor_went_unread(lacked, gap):
     # BUG-288 (r22_gap_ignores_predecessor, "report and predecessor" against "report alone"): two collections are the
-    # same gap when both halves agree. A report's gap alone has no predecessor flag (reducing it to "anything lacked"
-    # marks it as one whose predecessor failed too), and a predecessor's alone has no report.
+    # same gap when every part agrees. A report's gap alone has no predecessor flag (reducing it to "anything lacked"
+    # marks it as one whose predecessor failed too), and a predecessor's alone has no report. BUG-282 adds whether the
+    # submissions went unread.
     assert src.refresh._gap(lacked) == gap
 
 

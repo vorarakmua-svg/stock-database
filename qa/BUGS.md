@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 118 · NEEDS-USER 2 · Decided: 7 · Verified: 257
+**Open:** P0 0 · P1 0 · P2 0 · P3 115 · NEEDS-USER 2 · Decided: 7 · Verified: 260
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -859,11 +859,12 @@ Impact today: SCCO's refreshes refused once its next stock dividend is out, near
 Fix: only a factor that moves the stored per-share figures stops a refresh, as the valuation reads them (`sqlite_store._moves_per_share`): a share split, which is a simple ratio (`inputs._simple_ratio`, 5:4 and 1:10 too), or any factor of 3:2 or more (`SPLIT_JUMP_THRESHOLD`; ABT's 2.084 for AbbVie). The stock dividends and smaller spin-off factors Yahoo also lists are saved beside, and the next full collection brings their price history and dividends over; for the filed figures a full collection moves nothing for them either. The refusal names a split by its ratio ("a 5-for-4 split", "a 1-for-10 split") and any other factor as a price adjustment ("a 2.0842 price adjustment (a spin-off or merger)"). Five tests RED on a3e9e27 (the three small factors refused; a 5:4 split named "1.25-for-1", ABT's factor a "2.0842-for-1 split"), one guard (a reverse split); five mutants, each failing a test (`qa/evidence/iter76-bug106-{red,green,mutants}.txt`). Code review 10's script on a fresh copy of the user's data with the real job manager: SCCO's, HON's and SPGI's refreshes saved (3 of 3, none refused); the 10:1 refusals of BUG-093 and BUG-102 hold, through the app's own route (`iter76-bug106-e2e.txt`).
 Correction (iteration 89, BUG-128): "for the filed figures a full collection moves nothing for them" holds, but a full collection does move the DDM and the multiples band, which are built on Yahoo's prices and dividends, rebased by every factor; a saved refresh now stores such a factor and the ticker is valued on it.
 ### BUG-107 [P3][GATHER] yfinance 1.0's failures read as empty histories: an outage says "No dividend history (non-dividend paying stock)" without a warning
-Status: OPEN
-Found: iteration 70 by code review 10 (M3), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 209)
+Found: iteration 70 by code review 10 (M3), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: (this commit) | Regression tests: 8 test files (fetcher, refresh, sec cache, xbrl instance, yahoo); 21 failing first
 Repro: `review10/scripts/yf_silent_failure.py <root> <cache> cold|warm`, the installed yfinance with every request failing: with a cold timezone cache KO gets the price-history warning and JNJ and PG only "quote unavailable", and all three read "No dividend history (non-dividend paying stock)" with no dividend warning; with a warm cache all three warnings fire.
 Expected: a failed request is a warning however yfinance reports it (for instance an empty history for a ticker with stored bars or dividends).   Actual: as above.
 Root cause: `_get_dividend_history` (`src/fetchers/yahoo_handler.py:697`) and `_price_bars_and_error` (`:818`) read an empty frame as no history.
+Fix (iteration 209, `qa/evidence/bug107-investigation.txt`): yfinance 1.0 answers a failed chart request with an empty history lacking the event columns; `_served(answer, column)` tells it from a served empty one. Unserved dividends become an error with a warning that the stored dividends weren't refreshed; an unserved or raising split history warns likewise; unserved bars get the existing warning. Orchestrator's call: in `fetch_quote` an unserved split history is that refresh's error (the quote can't be checked for a split since the last collection), so a refresh that used to be saved now fails. Residual: the refresh's bars step still reads an empty answer as no bars (already the company's error per README).
 
 ### BUG-108 [P3][GATHER] A quote refresh downloads the whole daily price history to read the splits
 Status: OPEN
@@ -2196,10 +2197,11 @@ Repro: share_scale pass 3 (shares outstanding follow only an EPS-checked count) 
 Expected: one scale per vintage view.   Actual: a 10^3 or 10^6 seam.
 
 ### BUG-340 [P3][GATHER] Q17's per-filing XBRL cache never expires and its version isn't tied to the reader's rules
-Status: OPEN
-Found: code review 29 (Minor 3; robustness, suspected) | Fixed: | Regression test:
+Status: VERIFIED (iteration 209)
+Found: code review 29 (Minor 3; robustness, suspected) | Fixed: (this commit) | Regression tests: 8 test files (fetcher, refresh, sec cache, xbrl instance, yahoo); 21 failing first
 Repro: sec_handler.py ~35, ~442, ~459: a change to companyfacts_from_instance (taxonomies, frame or duplicate rule) without a manual bump of _FILING_CACHE_VERSION keeps serving the old shape from every xbrl_CIK*_*.json; no test ties the two.
 Expected: the version follows the reader, or a fixture test fails on a change without a bump.   Actual: neither.
+Fix (iteration 209, with BUG-107): `xbrl_instance.READER_VERSION` sits next to the reader and keys the per-filing cache; a pin test hashes the reader's output for an instance exercising every rule, one digest per version, and fails on a change without a bump. Version stays 1 (reader unchanged since Q17).
 
 ### BUG-341 [P2][VALID] One fiscal-year key can hold two fiscal years, and its record mixes them: GPN FY2016 combines the year to 2016-05-31's cash flows, calendar 2016's income statement and the 2016-12-31 balance sheet
 Status: VERIFIED (iteration 182)
@@ -2599,10 +2601,11 @@ Expected: only a collection that read the SEC fresh counts.   Actual: every coll
 Fix: see BUG-232 (iteration 195).
 
 ### BUG-282 [P3][GATHER] A run whose submissions request failed can't be checked for the SEC's lag, so it reads as complete
-Status: OPEN
-Found: iteration 119 (BUG-251's worker, residuals) | Fixed: | Regression test:
+Status: VERIFIED (iteration 209)
+Found: iteration 119 (BUG-251's worker, residuals) | Fixed: (this commit) | Regression tests: 8 test files (fetcher, refresh, sec cache, xbrl instance, yahoo); 21 failing first
 Repro: `report_without_facts` needs the submissions' list; with that request failed (its error recorded) the run stores no gap, so the refresh doesn't collect it again for that reason.
 Expected: an unchecked run marked so that the refresh tries again.   Actual: complete.
+Fix (iteration 209, with BUG-107): a failed submissions request stores the run incomplete ({'submissions': why}; `_why` so never empty); the refresh treats an unchecked run as incomplete without ending or starting a report's gap and says it couldn't check for the SEC's lag; the 3-tries rule applies. Real data: 0 queueing changes. Residual: a submissions 404 still reads as complete.
 
 ### BUG-283 [P3][WEB] /api/quality/runs returns `incomplete` as raw JSON text, and the FA tab doesn't show the SEC-lag warning
 Status: VERIFIED (iteration 159)

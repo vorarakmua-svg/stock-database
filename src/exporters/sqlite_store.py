@@ -134,13 +134,16 @@ def _incomplete(stock: StockData) -> Optional[str]:
     """What a run's SEC read lacked, as ``collection_runs.incomplete`` keeps it (JSON): ``report``, the latest report
     its submissions listed whose facts its companyfacts lacked, the SEC's lag (BUG-251), unless the run read it and
     every earlier report they lacked from the filings' own XBRL (``recovered``, Q17); ``predecessor``, why its
-    predecessor's filings couldn't be read (BUG-279). None for a complete run. ``stock-data refresh``'s SEC step
-    collects a company again whose latest collection with the SEC lacked either."""
+    predecessor's filings couldn't be read (BUG-279); ``submissions``, why its submissions request failed, so that it
+    couldn't look for such a report (BUG-282). None for a complete run. ``stock-data refresh``'s SEC step collects a
+    company again whose latest collection with the SEC lacked any."""
     lacked: Dict[str, Any] = {}
     if stock.missing_report and not stock.missing_report.get("recovered"):
         lacked["report"] = stock.missing_report
     if stock.predecessor_error:
         lacked["predecessor"] = stock.predecessor_error
+    if stock.submissions_error:
+        lacked["submissions"] = stock.submissions_error
     return json.dumps(lacked) if lacked else None
 
 

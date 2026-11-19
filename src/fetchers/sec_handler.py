@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import requests
 
+from ..parsers import xbrl_instance
 from ..parsers.xbrl_instance import companyfacts_from_instance
 from .rate_limiter import RateLimiter, RetryHandler, is_transient_error
 
@@ -30,9 +31,6 @@ _REPORT_FORMS = ("10-K", "10-Q", "20-F", "40-F")
 #: The most reports a collection reads from their own XBRL when the companyfacts lack them (Q17): a year's, the
 #: latest and the three before it; the submissions keep as many (``reports``).
 XBRL_REPORTS_READ = 4
-
-#: The shape of a filing's facts as the handler caches them (``get_filing_facts``): a file of another is read again.
-_FILING_CACHE_VERSION = 1
 
 #: A filing's linkbases and the EDGAR documents beside its instance, none of them an instance.
 _NOT_INSTANCES = ("_cal.xml", "_def.xml", "_lab.xml", "_pre.xml", "filingsummary.xml")
@@ -411,7 +409,8 @@ class SECHandler:
                 data["submissions"] = submissions
         except Exception as e:
             self.logger.error(f"Error fetching submissions: {e}")
-            data["submissions_error"] = str(e)
+            # Never empty: without the submissions the run can't look for a report its companyfacts lack (BUG-282).
+            data["submissions_error"] = _why(e)
 
         # The latest report the submissions list whose facts the companyfacts lack (BUG-251), and those reports' facts
         # read from their own XBRL (Q17).
@@ -465,7 +464,8 @@ class SECHandler:
 
     def _read_filing_cache(self, path: Path) -> Optional[Dict[str, Any]]:
         """A filing's cached facts (``get_filing_facts``), at any age, as a filing's documents never change; None when
-        the cache is off (a TTL of 0 or less), or the file is missing, unreadable or of another shape."""
+        the cache is off (a TTL of 0 or less), or the file is missing, unreadable or of another version: the instance
+        reader's (``xbrl_instance.READER_VERSION``), as the facts are what it read (BUG-340)."""
         if self.cache_ttl_seconds <= 0 or not path.exists():
             return None
         try:
@@ -474,7 +474,7 @@ class SECHandler:
         except Exception as e:
             self.logger.debug(f"Cache read failed for {path}: {e}")
             return None
-        if not isinstance(cached, dict) or cached.get("version") != _FILING_CACHE_VERSION:
+        if not isinstance(cached, dict) or cached.get("version") != xbrl_instance.READER_VERSION:
             return None
         return cached
 
@@ -491,7 +491,7 @@ class SECHandler:
         instance, content = self._instance(cik, filing)
         facts = companyfacts_from_instance(content, cik, accession, str(filing.get("form")),
                                            str(filing.get("filingDate") or "")[:10])
-        self._write_payload_cache(path, {"version": _FILING_CACHE_VERSION, "accession": accession,
+        self._write_payload_cache(path, {"version": xbrl_instance.READER_VERSION, "accession": accession,
                                          "instance": instance, "facts": facts})
         return instance, facts
 

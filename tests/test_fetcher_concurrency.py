@@ -586,9 +586,11 @@ def _dlr_sec(lagging, instance=False):
     }
 
 
-def serve_dlr(monkeypatch, lagging=True, instance=False):
-    """The SEC answers as for DLR on 2026-10-25 (``_dlr_sec``, ``_serve``)."""
-    _serve(monkeypatch, _dlr_sec(lagging, instance))
+def serve_dlr(monkeypatch, lagging=True, instance=False, submissions=200):
+    """The SEC answers as for DLR on 2026-10-25 (``_dlr_sec``, ``_serve``), its submissions with *submissions*: 200, or
+    503 for a request that failed (BUG-282)."""
+    _serve(monkeypatch, _dlr_sec(lagging, instance), lambda suffix: submissions if suffix.startswith("submissions/")
+           else 200)
 
 
 def stored_run(db, ticker):
@@ -728,3 +730,15 @@ def test_a_collection_that_read_the_report_from_its_own_xbrl_stores_its_figures_
     finally:
         conn.close()
     assert quarters == [("2026-03-31", 1635173000.0), ("2026-06-30", 1712345000.0)]
+
+
+def test_a_collection_whose_submissions_request_failed_is_stored_as_incomplete(tmp_path, monkeypatch):
+    # BUG-282: without the submissions the run couldn't look for a report its companyfacts lack (the SEC's lag), and
+    # its row read as complete. It now says why it couldn't, and a run that reads them again is complete.
+    db = tmp_path / "stock.db"
+    config = AppConfig(storage=StorageConfig(base_dir=tmp_path, db_path=db))
+    for submissions, expected in ((503, {"submissions": "HTTPError"}), (200, None)):
+        serve_dlr(monkeypatch, lagging=False, submissions=submissions)
+        with StockDataFetcher(config=config) as fetcher:
+            assert fetcher.fetch_and_export(["DLR"], formats=["sqlite"])["stored"] == 1
+        assert stored_run(db, "DLR")[1] == expected

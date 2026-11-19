@@ -29,9 +29,10 @@ on the list wasn't collected in that run; ``insiders`` and ``gurus`` after an it
   the SEC data of the company's last collection with the SEC (``collection_runs.sec_read_at``: a collection by hand
   reads the SEC handler's 7-day cache, BUG-232) puts it on the list. So does that collection when its SEC read was
   incomplete (``collection_runs.incomplete``): it read no facts of the latest report its submissions listed (its
-  companyfacts lacked them, the SEC's lag, BUG-251, or their request failed), or it couldn't read its predecessor's
-  filings (BUG-279). Up to INCOMPLETE_RETRIES tries at one gap, each a read of the SEC a week after the last
-  (``incomplete_tries``); then the company waits for its next report.
+  companyfacts lacked them, the SEC's lag, BUG-251, or their request failed), it couldn't read its predecessor's
+  filings (BUG-279), or its submissions request failed, so that it couldn't look for such a report (BUG-282). Up to
+  INCOMPLETE_RETRIES tries at one gap, each a read of the SEC a week after the last (``incomplete_tries``); then the
+  company waits for its next report.
 - ``collect`` (whenever the list isn't empty): a full collection of the list as ``stock-data`` runs one (json, csv
   and sqlite, stored and valued a batch at a time), its SEC payloads read fresh; a company it didn't store fails it.
 - ``insiders`` and ``gurus`` (weekly): M3's collectors, the insiders' last three years for every company with a CIK
@@ -443,23 +444,28 @@ def _named(items: Any, limit: int = 10) -> str:
     return ", ".join(names[:limit]) + (f" and {len(names) - limit} more" if len(names) > limit else "")
 
 
-def _gap(lacked: Dict[str, Any]) -> Tuple[Optional[str], bool]:
+def _gap(lacked: Dict[str, Any]) -> Tuple[Optional[str], bool, bool]:
     """What a collection's SEC read lacked (``collection_runs.incomplete``, parsed), as two collections incomplete the
-    same way share it: the accession of the report its companyfacts had no fact of, and whether its predecessor's
-    filings went unread. (None, False) for a complete collection."""
+    same way share it: the accession of the report its companyfacts had no fact of, whether its predecessor's
+    filings went unread, and whether its submissions did (it couldn't look for such a report, BUG-282).
+    (None, False, False) for a complete collection."""
     report = lacked.get("report")
-    return (report.get("accession") if isinstance(report, dict) else None), bool(lacked.get("predecessor"))
+    return ((report.get("accession") if isinstance(report, dict) else None), bool(lacked.get("predecessor")),
+            bool(lacked.get("submissions")))
 
 
 def _lacking(lacked: Dict[str, Any]) -> str:
     """What a collection's SEC read lacked, as what it did, for a line: it read no facts of the latest report (its
-    companyfacts lacked them, or their request failed), it couldn't read its predecessor's filings, or both."""
+    companyfacts lacked them, or their request failed), it couldn't read its predecessor's filings, it couldn't look
+    for such a report (its submissions request failed), or more than one."""
     report = lacked.get("report")
     parts: List[str] = []
     if isinstance(report, dict) and report.get("accession"):
         parts.append(f"read no facts of its {report.get('form')} filed {report.get('filed')} ({report['accession']})")
     if lacked.get("predecessor"):
         parts.append(f"couldn't read its predecessor's filings ({lacked['predecessor']})")
+    if lacked.get("submissions"):
+        parts.append(f"couldn't check for the SEC's lag: its submissions request failed ({lacked['submissions']})")
     return " and ".join(parts)
 
 
@@ -493,24 +499,26 @@ def incomplete_tries(runs: Sequence[Sequence[Any]]) -> Optional[Dict[str, Any]]:
     when the latest was complete, or there is none.
 
     The gap's collections are those in a row back from the latest that were incomplete in any way (a report's facts
-    unread, the predecessor's filings unread, or both: a predecessor read, or a filing's own XBRL read, that fails and
-    succeeds by turns starts no new count, BUG-289). They end at a complete collection, at one that lacked another
-    report, and at one whose SEC data the SEC served before the day the gap's report was filed (``_read_day``, the SEC's
-    day): a new report's lag gets its own tries. (On that day it may have seen it.)
+    unread, the predecessor's filings unread, the submissions unread, or more than one: a predecessor read, a
+    submissions read, or a filing's own XBRL read, that fails and succeeds by turns starts no new count, BUG-289).
+    They end at a complete collection, at one that lacked another report, and at one whose SEC data the SEC served
+    before the day the gap's report was filed (``_read_day``, the SEC's day): a new report's lag gets its own tries.
+    (On that day it may have seen it.)
     The tries are the gap's reads of the SEC (``_read_at``), oldest first, each RETRY_SPACING or more after the last
     try: a collection on the SEC handler's 7-day cache read what the collection that cached it read, and is no try
     (BUG-281), and reads days apart are one (BUG-289).
 
     Returns the gap's ``tries``, its ``collections`` and the day the first of them ran (``since``)."""
     lacked = [_parsed(run[1]) for run in runs]
-    if not runs or _gap(lacked[0]) == (None, False):
+    if not runs or _gap(lacked[0]) == (None, False, False):
         return None
     report: Optional[str] = None
     filed = ""
     count = 0
     for run, what in zip(runs, lacked):
-        accession, predecessor = _gap(what)
-        if (accession, predecessor) == (None, False) or (report is not None and accession not in (None, report)):
+        accession, predecessor, unchecked = _gap(what)
+        if (accession, predecessor, unchecked) == (None, False, False) or (
+                report is not None and accession not in (None, report)):
             break
         if filed and _read_day(run) < filed:
             break
@@ -991,8 +999,9 @@ class _Run:
 
     def _again(self, ticker: str, runs: List[Tuple[Any, ...]], s: Dict[str, Any]) -> None:
         """Put *ticker* on the list again when its latest collection with the SEC (*runs*, newest first: when each
-        ran, what its SEC read lacked and when the SEC served it) was incomplete (BUG-251, BUG-279): its companyfacts
-        lacked the latest report its submissions listed (the SEC's lag), or its predecessor's filings couldn't be read.
+        ran, what its SEC read lacked and when the SEC served it) was incomplete (BUG-251, BUG-279, BUG-282): its
+        companyfacts lacked the latest report its submissions listed (the SEC's lag), its predecessor's filings
+        couldn't be read, or its submissions couldn't, so that it couldn't look for such a report.
         Its tries at that gap count (``incomplete_tries``: reads of the SEC a week apart): after INCOMPLETE_RETRIES
         more, the gap is the source's, and the company is left to its next report (``incomplete_left``)."""
         tried = incomplete_tries(runs)

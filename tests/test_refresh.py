@@ -788,16 +788,17 @@ def _local(*utc):
     return datetime(*utc, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
 
 
-def _collected(db, ticker, at, report=None, predecessor=None, read=None):
+def _collected(db, ticker, at, report=None, predecessor=None, read=None, submissions=None):
     """A collection of *ticker* with Yahoo and the SEC at *at* (naive local, as the collector writes it), stored by the
     store: its companyfacts lacking *report*, the latest report its submissions listed (BUG-251), its predecessor's
-    filings unread for *predecessor* (BUG-279); a complete one without either. Its SEC data read from the SEC at
-    *read* (a cached payload's time, BUG-232), else as it ran."""
+    filings unread for *predecessor* (BUG-279), its submissions unread for *submissions* (BUG-282); a complete one
+    without any. Its SEC data read from the SEC at *read* (a cached payload's time, BUG-232), else as it ran."""
     stock = StockData(ticker=ticker, cik=rf.cik_of(ticker), collected_at=at)
     stock.add_source("yahoo_finance")
     stock.add_source("sec_edgar")
     stock.missing_report = report
     stock.predecessor_error = predecessor
+    stock.submissions_error = submissions
     stock.sec_read_at = (read or at).isoformat()
     SQLiteStore(db).export([stock])
 
@@ -1766,3 +1767,72 @@ def test_a_collection_that_read_the_report_from_its_own_xbrl_isnt_collected_agai
     assert stored_run(db, "DLR")[1] is None
     feed = rf.FakeSEC({"0001297996": [rf.filing("10-Q", "2026-07-31", "0001104659-26-089296")]})
     assert rf.run(db, rf.services(db, sec=feed), steps=["sec"]).queue == {}
+
+
+# ---- BUG-282: a collection whose submissions request failed couldn't look for the SEC's lag ----
+
+_UNCHECKED = "couldn't check for the SEC's lag: its submissions request failed (503 Server Error)"
+
+
+def test_a_company_whose_submissions_couldnt_be_read_is_collected_again(tmp_path):
+    # Its companyfacts may lack the latest report (BUG-251), and nothing would say so: the run read as complete.
+    db = rf.make_db(tmp_path / "stock.db")
+    _collected(db, "BBB", datetime(2026, 10, 24, 9, 0), submissions="503 Server Error")
+    report = rf.run(db, rf.services(db), steps=["sec"])
+    assert report.queue == {"BBB": [_redo("2026-10-24", _UNCHECKED, 1)]}
+    assert report.result("sec").summary["incomplete"]["BBB"]["why"] == _UNCHECKED
+
+
+def test_a_company_whose_submissions_and_predecessor_couldnt_be_read_says_both(tmp_path):
+    db = rf.make_db(tmp_path / "stock.db")
+    _collected(db, "BBB", datetime(2026, 10, 24, 9, 0), predecessor="no XBRL data", submissions="503 Server Error")
+    assert rf.run(db, rf.services(db), steps=["sec"]).queue == {"BBB": [_redo(
+        "2026-10-24", f"couldn't read its predecessor's filings (no XBRL data) and {_UNCHECKED}", 1)]}
+
+
+def test_unchecked_collections_get_three_tries_then_wait_for_the_next_report(tmp_path):
+    # A submissions request that keeps failing (the feed gone, the CIK's filer changed) is the source's: three more
+    # reads of the SEC a week apart, as for a lag.
+    db = _aaa_never_collected(tmp_path)
+    for at in (datetime(2026, 9, 27, 9, 0), datetime(2026, 10, 4, 9, 0), datetime(2026, 10, 11, 9, 0),
+               datetime(2026, 10, 18, 9, 0)):
+        _collected(db, "AAA", at, submissions="503 Server Error")
+    sec = rf.run(db, rf.services(db), steps=["sec"]).result("sec")
+    assert sec.summary["incomplete"] == {}
+    assert sec.summary["incomplete_left"] == {"AAA": {"collected_at": "2026-10-18T09:00:00", "why": _UNCHECKED,
+                                                      "collections": 4, "tries": 4, "since": "2026-09-27"}}
+
+
+def test_an_unchecked_collection_inside_a_reports_gap_starts_no_new_count(tmp_path):
+    # BUG-289's kind: a collection whose submissions failed between two that lacked the 10-Q's facts couldn't tell
+    # whether they still lacked them; it neither ends the gap nor starts a new one.
+    db = _aaa_never_collected(tmp_path)
+    for i, at in enumerate((datetime(2026, 9, 27, 9, 0), datetime(2026, 10, 4, 9, 0), datetime(2026, 10, 11, 9, 0),
+                            datetime(2026, 10, 18, 9, 0))):
+        _collected(db, "AAA", at, report=None if i == 2 else AAA_Q2, submissions="503 Server Error" if i == 2 else None)
+    sec = rf.run(db, rf.services(db), steps=["sec"]).result("sec")
+    assert (sec.summary["incomplete"], list(sec.summary["incomplete_left"])) == ({}, ["AAA"])
+    assert sec.summary["incomplete_left"]["AAA"]["tries"] == 4
+
+
+def test_the_tries_of_an_unchecked_latest_collection():
+    runs = [("2026-10-18T09:00:00", json.dumps({"submissions": "HTTPError"}), None),
+            ("2026-10-11T09:00:00", None, None)]
+    assert src.refresh.incomplete_tries(runs) == {"tries": 1, "collections": 1, "since": "2026-10-18"}
+
+
+def test_the_real_collection_stores_a_failed_submissions_read_and_the_sec_step_collects_it_again(tmp_path,
+                                                                                                 monkeypatch):
+    # BUG-282 through the collect step's collection: DLR's run whose submissions request failed goes on the list
+    # again at the next SEC step; once a run reads them, DLR is off it.
+    db = tmp_path / "stock.db"
+    quiet = rf.FakeSEC()  # DLR's feed lists no report since
+    serve_dlr(monkeypatch, lagging=False, submissions=503)
+    assert collect_tickers(db, tmp_path / "out", tmp_path / "cache", ["DLR"], lambda line: None)["stored"] == 1
+    queue = rf.run(db, rf.services(db, sec=quiet), steps=["sec"]).queue
+    assert list(queue) == ["DLR"] and queue["DLR"][0].startswith("sec: its collection of ")
+    assert queue["DLR"][0].endswith(" couldn't check for the SEC's lag: its submissions request failed (HTTPError); "
+                                    "collected again (1 of 3)")
+    serve_dlr(monkeypatch, lagging=False)
+    assert collect_tickers(db, tmp_path / "out", tmp_path / "cache", ["DLR"], lambda line: None)["stored"] == 1
+    assert rf.run(db, rf.services(db, sec=quiet), steps=["sec"]).queue == {}
