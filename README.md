@@ -675,7 +675,8 @@ any run re-ranks everyone.
   assets - cash - (current liabilities - short-term debt), counted as 0 when negative: a business its
   customers fund, as MA's, V's or BKNG's, ties up only its PP&E). It ranks the companies with both, 61 of the
   94 outside banks, insurers, utilities and REITs; 1 is best, and a tie goes to the higher earnings yield. The
-  STAT tab says why the others have no rank (BUG-191): 17 file no `PropertyPlantAndEquipmentNet` (UNP, HD and
+  STAT tab says why the others have no rank (BUG-191): for those four sectors the sector rule, whatever input a
+  REIT or a utility misses (BUG-353), and for the rest the missing input: 17 file no `PropertyPlantAndEquipmentNet` (UNP, HD and
   TSLA tag a lease-inclusive PP&E instead; META, GOOGL, LOW and T are among them) and 15 no operating income
   (JNJ, LLY, MRK, PFE, XOM, CVX, IBM, GE, DE, KLAC and others), gaps in the tag mapping open as BUG-203.
 
@@ -703,7 +704,8 @@ Where it shows:
   the card says so under its "—" (BUG-204).
 - **API**: `GET /api/stocks/{ticker}/scores` returns the same as JSON, with the Beneish variables, the
   predictability fit's R² and the per-share series, and `ncav_na_reason` and `momentum_na_reason` where those two
-  are empty (`magic_formula.na_reason` also names the sectors the Magic Formula leaves out). It answers 404 for an unknown ticker and
+  are empty (`magic_formula.na_reason` gives a bank's, an insurer's, a utility's or a REIT's sector rule, whatever
+  input it misses: BUG-353). It answers 404 for an unknown ticker and
   `"computed": false` before its scores exist.
 - **Screener**: filters and sorts by `piotroski_f`, `altman_z`, `beneish_m`, `sloan_ratio`,
   `predictability_stars`, `rev_ps_cagr_5y`, `eps_cagr_5y`, `roic_minus_wacc`, the five `rank_*`,
@@ -946,7 +948,8 @@ The aggregates, computed at read time from the trades no amendment restated:
   doesn't ("CEO, Chairman", "CFO, EVP & Treasurer", "CFO, Principal Accounting Officer", "CFO, Corporate Secretary",
   "CEO, Board Member"; BUG-207, BUG-347). Nor do someone else's or a past chief ("Advisor to the CEO", "Former CEO",
   "Retired CEO", "Ex-CEO", "CEO (Retired)": a bracket's past mark counts when the bracket names no other role, so
-  "President & CEO (former CFO)" is a sitting CEO; BUG-352), a deputy, an
+  "President & CEO (former CFO)" is a sitting CEO; BUG-352; "ex-officio", by virtue of office, is no past mark:
+  "CEO (Ex-Officio)" is a sitting CEO, BUG-356), a deputy, an
   assistant or a unit's word before it ("Deputy CFO", "Assistant CFO", "Regional CFO", "KFC Division CEO"), or one
   not yet in office ("President & CEO Elect", "CFO - Designate"). The flag is stored per filing and owner
   (`insider_filings.is_ceo_cfo`) when the insiders are collected.
@@ -966,7 +969,8 @@ Where it shows:
   before. Its windows count back from today's date in UTC, as the screener's do (SQLite's `date('now')`), so the
   two agree on any day in any time zone (BUG-219).
 - **API**: `GET /api/stocks/{ticker}/form4` returns `source` (`sec`, `yahoo` with Yahoo's rows where no Form 4
-  is stored, or null for neither), the aggregates in `summary` and the `trades`.
+  is stored, or null for neither), the aggregates in `summary` and the `trades`, each trade with its price's
+  footnote text as filed in `price_footnote` (null without one).
   `GET /api/stocks/{ticker}/insiders` still serves Yahoo's rows.
 - **Screener**: filters and sorts by `ins_net_buy_12m` (open-market dollars bought less sold),
   `ins_buyers_12m` (insiders buying), `ins_ceo_cfo_buys_12m` (filings with a CEO/CFO purchase) and
@@ -1196,7 +1200,11 @@ The columns and queries are in the [USAGE_GUIDE](USAGE_GUIDE.md#sec-ownership).
   the cached answer, so it doesn't show on OKE's holders tab.
 - A split of a security outside our companies is inferred only forward and only with every holder's count moved
   (above): a reverse split reads as a sale, and a split the holders traded through by more than 5% reads as the
-  trade it looks like.
+  trade it looks like. The other way, a lone holder doubling its shares (within 5%) as the price halves (within a
+  factor of 1.3) reads as a 2-for-1 split, "unchanged" (BUG-354): a 13F can't tell the two apart, and no second
+  holder is there to veto. Requiring two holders at the ratio would lose both real cases (Markel is RLI's only
+  holder here; of HDFC Bank's five only Dodge & Cox traded within 5% of the bonus); on the data of 2026-10-25
+  3,735 of the 4,745 security-quarters read have one holder, and RLI's is the only one inferred.
 - Stock dividends aren't adjusted: SCCO's 1% stock dividends read as small additions.
 - HON's 2026 reverse split is inside a combined price factor in Yahoo's split history, which isn't a share
   split, so Dodge & Cox's HON reads as a 50% sale (8,019 to 4,010 shares; BUG-184).

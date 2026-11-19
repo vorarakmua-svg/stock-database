@@ -388,7 +388,12 @@ class Reader:
         """When the latest collection that stored *ticker*'s bars began (aware), or None without one (BUG-351): its
         latest collection with Yahoo (``collection_runs.collected_at``, the collector's local time), or a
         ``stock-data refresh`` bars step that updated its bars (``refresh_log``: the step's start, UTC), whichever
-        is later. Either asked Yahoo for the bars after it began."""
+        is later. Either asked Yahoo for the bars after it began.
+        The log is walked newest first (its starts are UTC, so their text's order is their time's) and stops at the
+        first step that updated it, or at one that began no later than the collection; a step's summary is read only
+        when it holds *ticker* as a key with an object value, as ``json.dumps`` writes an 'updated' entry (a step that
+        names it in its errors or skipped has a string). A summary of every company is ~70 KB: a year of daily steps
+        isn't read and parsed on each HP view (BUG-355)."""
         times: List[datetime] = []
         row = self._conn.execute("SELECT max(collected_at) FROM collection_runs WHERE ticker = ? "
                                  "AND data_sources LIKE '%yahoo%'", (ticker,)).fetchone()
@@ -397,20 +402,30 @@ class Reader:
                 times.append(datetime.fromisoformat(str(row[0])).astimezone())  # naive: the collector's local time
             except ValueError:
                 pass
+        collected = times[0] if times else None
+        key = json.dumps(ticker)
         try:
             steps = self._conn.execute(
-                "SELECT started_at, summary FROM refresh_log WHERE step = 'bars' AND summary LIKE ? "
-                "ORDER BY started_at DESC", (f'%"{ticker}"%',)).fetchall()
+                "SELECT id, started_at FROM refresh_log WHERE step = 'bars' ORDER BY started_at DESC")
         except sqlite3.OperationalError:  # a database from before the refresh
-            steps = []
-        for started_at, summary in steps:
-            updated = (_json_object(summary) or {}).get("updated")
-            if isinstance(updated, dict) and ticker in updated:
+            return max(times, default=None)
+        try:
+            for row_id, started_at in steps:  # read one at a time: the first that updated it is the latest
                 try:
-                    times.append(datetime.fromisoformat(str(started_at)).astimezone())
+                    started = datetime.fromisoformat(str(started_at)).astimezone()
                 except ValueError:
                     continue
-                break
+                if collected is not None and started <= collected:
+                    break  # neither this step nor an earlier one is later than the collection
+                found = self._conn.execute(
+                    "SELECT summary FROM refresh_log WHERE id = ? AND (instr(summary, ?) > 0 OR instr(summary, ?) > 0)",
+                    (row_id, f"{key}: {{", f"{key}:{{")).fetchone()
+                updated = (_json_object(found[0]) or {}).get("updated") if found else None
+                if isinstance(updated, dict) and ticker in updated:
+                    times.append(started)
+                    break
+        finally:
+            steps.close()
         return max(times, default=None)
 
     def analyst_snapshot(self, ticker: str) -> Optional[Dict[str, Any]]:

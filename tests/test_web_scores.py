@@ -134,3 +134,22 @@ def test_a_bank_has_no_magic_formula_rank_and_the_api_says_why(client, web_db):
     assert f"not ranked: {reason}" in client.get("/ui/stocks/BBB/scores").text
     _seed(web_db, ticker="AAA", row=_row(na_reasons=json.dumps({})), ranks={"magic_formula_rank": None})
     assert client.get("/api/stocks/AAA/scores").json()["magic_formula"]["na_reason"] is None  # a general company
+
+
+def test_a_reits_or_a_banks_stored_input_reason_gives_way_to_the_sector_rule(client, web_db):
+    # BUG-353: a REIT's row stored before the fix carries its missing input; the STAT note and the API said "not
+    # ranked: no current assets or liabilities" for CCC, a REIT, as if a filed figure would rank it.
+    rule = "the Magic Formula leaves out banks, insurers, utilities and REITs"
+    stored = json.dumps({"magic_formula": "no current assets or liabilities"})
+    for ticker in ("CCC", "BBB"):  # a REIT and a bank
+        _seed(web_db, ticker=ticker, row=_row(return_on_capital=None, earnings_yield=None, na_reasons=stored),
+              ranks={"magic_formula_rank": None})
+        assert client.get(f"/api/stocks/{ticker}/scores").json()["magic_formula"]["na_reason"] == rule, ticker
+        html = client.get(f"/ui/stocks/{ticker}/scores").text
+        assert f"not ranked: {rule}" in html and "no current assets or liabilities" not in html, ticker
+    # A general company keeps its input's reason.
+    _seed(web_db, ticker="AAA", row=_row(return_on_capital=None,
+                                         na_reasons=json.dumps({"magic_formula": "no net PP&E figure"})),
+          ranks={"magic_formula_rank": None})
+    assert client.get("/api/stocks/AAA/scores").json()["magic_formula"]["na_reason"] == "no net PP&E figure"
+    assert "not ranked: no net PP&amp;E figure" in client.get("/ui/stocks/AAA/scores").text

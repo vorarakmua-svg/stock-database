@@ -708,3 +708,12 @@ def test_the_split_of_one_of_our_companies_comes_from_its_split_history_alone(tm
     conn.commit()
     conn.close()
     assert _changes(db, "2026053") == [("RLI", "added", 1.0, 1.0)]  # ours, with no split in its history
+
+
+def test_a_lone_holder_doubling_down_on_a_halved_price_reads_as_a_split_as_the_readme_says():
+    # BUG-354 (a limitation, documented): one holder's 13F can't tell a 2-for-1 from doubling the shares as the price
+    # halves, and no other holder is there to veto. Requiring two holders at the ratio would lose RLI's real 2-for-1
+    # (one holder) and HDB's bonus (one of five at the ratio, above), so the lone holder's reads as the split.
+    gurus = _gurus_quarters([[("SMALLCO", 100000, 4000000)], [("SMALLCO", 200000, 4000000)]])
+    assert implied_splits(gurus, covered=set()) == {("SMALLCO", Q2): 2.0}
+    assert implied_split([(1.95, 1.0 / 0.6)]) == 2.0  # 95% more as the price fell 40%: within both tolerances

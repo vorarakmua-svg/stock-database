@@ -8,8 +8,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Optional, Tuple
 
-from ..scores.ranks import MAGIC_EXCLUDED, RANKS
-from ..scores.scores import BENEISH_FLAG, PIOTROSKI_TESTS
+from ..scores.ranks import RANKS
+from ..scores.scores import BENEISH_FLAG, MAGIC_EXCLUDED, MAGIC_EXCLUDED_REASON, PIOTROSKI_TESTS
 from ..scores.signs import SEVERE, SIGN_CODES, SLOAN_MEDIUM, SLOAN_SEVERE
 from ..universe.industries import MIN_INDUSTRY_SIZE, normalize_sic
 from .repository import Reader
@@ -33,8 +33,6 @@ GROWTH_ROWS: Tuple[Tuple[str, str], ...] = (("rev_ps", "Revenue / share"), ("eps
                                             ("ebitda_ps", "EBITDA / share"), ("fcf_ps", "FCF / share"),
                                             ("book_ps", "Book / share"))
 GROWTH_SPANS: Tuple[str, ...] = ("3y", "5y", "10y")
-#: Why a company of a sector the Magic Formula leaves out has no rank (BUG-193).
-MAGIC_EXCLUDED_REASON = "the Magic Formula leaves out banks, insurers, utilities and REITs"
 
 
 def sloan_zone(ratio: Optional[float]) -> Optional[str]:
@@ -89,10 +87,10 @@ def quality_view(r: Reader, ticker: str) -> Dict[str, Any]:
     tests = _json(row.get("piotroski_tests"))
     m = row.get("beneish_m")
     company = r.get_company(ticker) or {}
-    magic_reason = na.get("magic_formula")
-    if (magic_reason is None and row.get("magic_formula_rank") is None
-            and company.get("sector_class") in MAGIC_EXCLUDED):
-        magic_reason = MAGIC_EXCLUDED_REASON
+    # The sector rule for a sector the rank leaves out, whatever reason its row stores: a REIT's or a utility's run
+    # stored a missing input's before BUG-353, and a filed figure wouldn't rank it.
+    magic_reason = (MAGIC_EXCLUDED_REASON if company.get("sector_class") in MAGIC_EXCLUDED
+                    else na.get("magic_formula"))
     return {
         "ticker": ticker,
         "computed": True,

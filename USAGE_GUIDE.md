@@ -1054,7 +1054,9 @@ ORDER BY value_usd DESC;
     `planned_sale_share_12m`.
     Each trade has its `date`, `code` and `meaning`, `kind`, `shares`, `price`, `value`, `owned_after`, the
     owner's `owner_name`, `role` and `is_ceo_cfo`, and `plan` (the filing's 10b5-1 box, true, false or null, on every
-    row of the filing; the INS tab marks only its open-market purchases and sales), among others;
+    row of the filing; the INS tab marks only its open-market purchases and sales), and `price_footnote` (the
+    text of the price's footnotes as filed, `price_footnote_text`: a weighted average's range of prices, or why
+    there's no price; null without one), among others;
   - `GET /api/stocks/{ticker}/gurus` returns `{ticker, classes, gurus}`: the ticker and its other share
     classes (`GOOGL` with `GOOG`), and each guru's positions in them in its latest quarter (the guru's `cik`,
     `manager`, `period`, `filed` and `complete`, and the position's `put_call` (null for shares), `shares`,

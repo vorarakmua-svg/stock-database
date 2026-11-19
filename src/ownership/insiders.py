@@ -49,13 +49,14 @@ _CHIEF = re.compile(
     r"\s*(?:officer|office|offr|off\.?|ofcr|ofc\.?)(?!\w)", re.IGNORECASE)
 #: Before the name, in its part of the title (back to a comma or a semicolon): someone else's chief ("Advisor to the
 #: CEO", "COS to the Chairman & CEO", "Office of the CEO") or a past one ("Former Senior VP & CFO", "Retired CEO",
-#: "Ex-CEO").
-_NOT_THEIRS = re.compile(r"(?:\b(?:to|former|retired|office\s+of)\b|(?<!\w)ex-)[^,;]*$", re.IGNORECASE)
+#: "Ex-CEO"); "ex-officio", by virtue of office, isn't past (BUG-356).
+_NOT_THEIRS = re.compile(r"(?:\b(?:to|former|retired|office\s+of)\b|(?<!\w)ex-(?!officio))[^,;]*$", re.IGNORECASE)
 #: Right before the name: a deputy or an assistant, or a unit ("KFC Division CEO", "Regional CFO", "BU and Ops CFO").
 _UNDER = re.compile(r"\b(?:deputy|assistant|asst\.?|division|divisional|regional|ops)\s*$", re.IGNORECASE)
 #: A past mark in a bracket after the name: "CEO (Retired)", "CFO (Former)", "CEO (Ex-CEO)". It marks the chief past
 #: only when the bracket names no other role (``_past_bracket``): "President & CEO (former CFO)" is a sitting CEO.
-_PAST_MARK = re.compile(r"\b(?:retired|former)\b|(?<!\w)ex-", re.IGNORECASE)
+#: "Ex-officio" (by virtue of office) isn't a past mark: "CEO (Ex-Officio)" is a sitting CEO (BUG-356).
+_PAST_MARK = re.compile(r"\b(?:retired|former)\b|(?<!\w)ex-(?!officio)", re.IGNORECASE)
 #: The roles joined to the name ("& President", "and Treasurer", "/Chairman"), each up to a comma, a semicolon, a
 #: colon, a dash or a bracket; and a bracket's words ("Chief Executive Officer (CEO)").
 _JOINED = re.compile(r"(?:\s*(?:&|\band\b|/)[^,;:\-–(]*|\s*\([^)]*\))*", re.IGNORECASE)

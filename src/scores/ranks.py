@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..universe.industries import industry_members
 from .fundamentals import Fundamentals
-from .scores import Scores
+from .scores import MAGIC_EXCLUDED, Scores
 from .signs import HistoryContext
 
 RANKS: Tuple[str, ...] = ("strength", "profitability", "growth", "valuation", "momentum")
@@ -29,7 +29,6 @@ MIN_SECTOR_PEERS = 10
 #: the component is left out of the group's industry ranks.
 MIN_INDUSTRY_PEERS = 10
 MIN_RANKS = 4
-MAGIC_EXCLUDED = ("bank", "insurance", "utility", "reit")
 COVERAGE_CAP = 100.0
 CASH_TO_DEBT_CAP = 10.0
 BETA_FLOOR = 0.5

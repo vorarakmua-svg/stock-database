@@ -376,3 +376,31 @@ def test_predictability_with_ten_years_but_a_missing_per_share_figure_says_which
     f.rows[3].eps = None
     assert compute_scores(f, _market()).na_reasons["predictability"] == (
         "no EPS in some of the last 10 fiscal years")
+
+
+def test_the_magic_formula_gives_the_sector_rule_for_the_sectors_it_leaves_out():
+    # BUG-353: a REIT's or a utility's run stored its missing input as the reason (PLD, SPG 'no current assets or
+    # liabilities'; O, PSA, WELL 'no operating income (EBIT)'), which implied a filed figure would rank it.
+    rule = "the Magic Formula leaves out banks, insurers, utilities and REITs"
+    for sector in ("reit", "utility"):
+        f = _steady(sector=sector)
+        f.rows[-1].figures.update(current_assets=None, current_liabilities=None)
+        s = compute_scores(f, _market())
+        assert s.na_reasons["magic_formula"] == rule, sector
+        assert s.earnings_yield == pytest.approx(150.0 / 2220.0) and s.return_on_capital is None  # inputs as before
+        f = _steady(sector=sector, operating_income=None, ebit=None)
+        assert compute_scores(f, _market()).na_reasons["magic_formula"] == rule
+        s = compute_scores(_steady(sector=sector), _market())  # every input there: still not ranked
+        assert s.na_reasons["magic_formula"] == rule and s.return_on_capital is not None
+    for sector in ("bank", "insurance"):  # their inputs aren't read: the same reason, stored
+        s = compute_scores(_steady(sector=sector), _market())
+        assert s.na_reasons["magic_formula"] == rule and s.earnings_yield is None
+        assert compute_scores(Fundamentals(ticker="BK", sector_class=sector), _market()).na_reasons[
+            "magic_formula"] == rule
+    assert compute_scores(Fundamentals(ticker="PLD", sector_class="reit"), _market()).na_reasons[
+        "magic_formula"] == rule  # no annual financials either: the sector rule first
+    # Other sectors keep their input's reason.
+    for sector in ("general", "energy"):
+        f = _steady(sector=sector)
+        f.rows[-1].figures.update(current_assets=None)
+        assert compute_scores(f, _market()).na_reasons["magic_formula"] == "no current assets or liabilities"

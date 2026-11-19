@@ -3432,3 +3432,17 @@ Result: BUG-087, BUG-147, BUG-162, BUG-288 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3567 passed, 1 skipped | CI: PR #29
 Commit: (this commit) test: pin four behaviours no test held (BUG-087, BUG-147, BUG-162, BUG-288)
 Next: BUG-353..357 (worker).
+
+## Iteration 204: 2026-11-20 13:50: fix (BUG-353, BUG-354, BUG-355, BUG-356, BUG-357)
+Picked: code review 32's findings (BUG-353 the P2 first); an opus worker.
+Did: the Magic Formula's excluded sectors give the sector rule everywhere (writer and reader); the single-holder
+split-inference case documented (requiring two holders would lose RLI and HDB); bars_stored_at bounded; 'Ex-Officio'
+isn't a past mark; price_footnote documented.
+- RED: 10 failed of 369 on 6942b63; GREEN. 20 of 20 mutants; bug193/206/347/349 specs re-quoted (one bug349 mutant
+  needed a new test).
+- Real-data copy: 35 shown reasons change (REITs, utilities); 132 stored na_reasons at the next scores run; no valuation
+  or other table moves.
+Result: BUG-353..357 VERIFIED. No P0-P2 open.
+Gates: ruff ✓ mypy ✓ pytest 3583 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(scores): excluded sectors give the Magic Formula's sector rule everywhere; bars lookup bounded (BUG-353..357)
+Next: UI 003/067/068/214 (worker).

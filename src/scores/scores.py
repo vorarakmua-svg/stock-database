@@ -39,6 +39,10 @@ _NOT_SCORED = {
     "wacc": _FINANCIALS,
 }
 _SECTOR_NAMES = {"bank": "banks", "insurance": "insurers", "reit": "REITs", "utility": "utilities"}
+#: The sectors the Magic Formula leaves out (``ranks.rank_universe``), and the reason their row gives for its missing
+#: rank, whatever their inputs (BUG-353): a REIT's or a utility's missing input isn't why it has none.
+MAGIC_EXCLUDED = _FINANCIALS + ("utility", "reit")
+MAGIC_EXCLUDED_REASON = "the Magic Formula leaves out banks, insurers, utilities and REITs"
 
 PIOTROSKI_TESTS = ("roa_positive", "cfo_positive", "roa_up", "cfo_above_ni", "leverage_down",
                    "current_ratio_up", "no_new_shares", "gross_margin_up", "asset_turnover_up")
@@ -329,6 +333,8 @@ def compute_scores(f: Fundamentals, market: Market) -> Scores:
     if not f.rows:
         s.na_reasons = {k: "no annual financials" for k in ("piotroski", "altman", "beneish", "sloan", "wacc",
                                                               "predictability", "magic_formula", "ncav")}
+        if f.sector_class in MAGIC_EXCLUDED:
+            s.na_reasons["magic_formula"] = MAGIC_EXCLUDED_REASON
         return s
     cur = f.rows[-1]
     # t-1 is fiscal year t - 1, not the row stored before t (BUG-198).
@@ -391,10 +397,13 @@ def compute_scores(f: Fundamentals, market: Market) -> Scores:
     ebit = c.get("ebit") if c.get("ebit") is not None else c.get("operating_income")
     debt, ebitda = _total_debt(cur), c.get("ebitda")
     s.debt_to_ebitda = debt / ebitda if debt is not None and ebitda is not None and ebitda > 0 else None
+    reason: Optional[str] = None
     if sector not in _FINANCIALS:
         s.earnings_yield, s.return_on_capital, reason = _magic_inputs(cur, ebit, market)
-        if reason:
-            s.na_reasons["magic_formula"] = reason
+    if sector in MAGIC_EXCLUDED:
+        reason = MAGIC_EXCLUDED_REASON
+    if reason:
+        s.na_reasons["magic_formula"] = reason
     return s
 
 

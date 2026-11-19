@@ -368,3 +368,18 @@ def test_an_amendment_filed_the_day_of_its_original_amends_it():
     filings = [_filing_row("Z-0", "2026-08-24"), _filing_row("A-0", "2026-08-24", form="4/A", original="2026-08-24")]
     assert supersessions(filings, [_trade_row("Z-0"), _trade_row("A-0", shares=90.0)]) == (
         {"Z-0": "A-0"}, {("Z-0", 0): "A-0"})
+
+
+# BUG-356: "ex-officio" means by virtue of office, not former (made-up titles; the census of the real ones:
+# qa/evidence/bug353-investigation.txt).
+@pytest.mark.parametrize("title", [
+    "CEO (Ex-Officio)", "President, CEO & Director (Ex-Officio Trustee)", "Chief Financial Officer (ex-officio)",
+    "Ex-Officio Director & CEO", "Ex-officio Trustee and CFO",
+])
+def test_an_ex_officio_chief_is_a_sitting_chief(title):
+    assert ceo_or_cfo(title, "XYZ") is True
+
+
+@pytest.mark.parametrize("title", ["Ex-CEO", "CEO (Ex-CEO)", "Ex-Officer & CEO", "CEO (Ex-Office)"])
+def test_ex_before_anything_else_is_still_past(title):
+    assert ceo_or_cfo(title, "XYZ") is False

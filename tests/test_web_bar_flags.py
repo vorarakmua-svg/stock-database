@@ -380,3 +380,99 @@ def test_the_results_table_carries_that_class_and_ends_with_the_verdict(client):
     assert 'class="table table-sm table-hover screen-table"' in html
     head = html.split("<thead>", 1)[1].split("</thead>", 1)[0]
     assert re.findall(r"<th[^>]*>(.*?)</th>", head, re.S)[-1].strip() == "Valuation"
+
+
+# ---- BUG-355: the bars step's log is read newest first, and only its rows that updated the company --------------
+
+
+def _log_db(tmp_path, steps):
+    """A database with FLAGS's collection on 2024-01-02 and *steps*: (UTC start, summary) bars rows."""
+    path = tmp_path / "stock.db"
+    _client(tmp_path, LAST_OK)
+    _collection(tmp_path, datetime(2024, 1, 2, 10, 0, tzinfo=UTC))
+    with closing(sqlite3.connect(path)) as conn:
+        conn.executemany("INSERT INTO refresh_log (step, started_at, finished_at, ok, summary) VALUES "
+                         "('bars', ?, 'x', 1, ?)", [(utc.isoformat(), text) for utc, text in steps])
+        conn.commit()
+    return path
+
+
+def _parses(monkeypatch):
+    from src.webapp import repository
+    parsed = []
+    real = repository._json_object
+
+    def counting(text):
+        parsed.append(text)
+        return real(text)
+    monkeypatch.setattr(repository, "_json_object", counting)
+    return parsed
+
+
+def test_a_bars_step_that_only_names_the_company_isnt_parsed(tmp_path, monkeypatch):
+    # BUG-355: every bars row naming the ticker anywhere (a daily failure) was read and parsed on each HP view, and a
+    # step's summary of ~500 companies is ~70 KB.
+    from src.webapp.repository import Reader
+    others = {f"T{i:03d}": {"from": "2026-01-01", "to": "2026-01-02", "written": 2, "removed": 2} for i in range(20)}
+    day = datetime(2026, 1, 1, 22, 0, tzinfo=UTC)
+    steps = [(day + timedelta(days=i), json.dumps({"updated": others, "errors": {"FLAGS": "Yahoo gave no bars"},
+                                                    "skipped": {"FLAGS": "on the collection list"}}))
+             for i in range(30)]
+    path = _log_db(tmp_path, steps)
+    parsed = _parses(monkeypatch)
+    with Reader(path) as r:
+        got = r.bars_stored_at("FLAGS")
+    assert got == datetime(2024, 1, 2, 10, 0, tzinfo=UTC).astimezone() and parsed == []
+
+
+def test_a_step_holding_the_company_outside_its_updated_entries_didnt_store_its_bars(tmp_path):
+    # The text a step's summary is picked by can stand elsewhere than in "updated": its parsed entries decide.
+    from src.webapp.repository import Reader
+    day = datetime(2026, 1, 1, 22, 0, tzinfo=UTC)
+    path = _log_db(tmp_path, [(day, json.dumps({"updated": {"T000": {"from": "2026-01-01"}},
+                                                 "checked": {"FLAGS": {"day": "2026-01-01"}}})),
+                              (day + timedelta(days=1), json.dumps({"updated": ["FLAGS"],
+                                                                    "checked": {"FLAGS": {"day": "2026-01-02"}}}))])
+    with Reader(path) as r:
+        assert r.bars_stored_at("FLAGS") == datetime(2024, 1, 2, 10, 0, tzinfo=UTC).astimezone()
+
+
+def test_the_latest_bars_step_that_updated_the_company_is_the_only_one_parsed(tmp_path, monkeypatch):
+    from src.webapp.repository import Reader
+    mine = {"FLAGS": {"from": "2026-01-01", "to": "2026-01-02", "written": 1, "removed": 1}}
+    day = datetime(2026, 1, 1, 22, 0, tzinfo=UTC)
+    steps = [(day + timedelta(days=i), json.dumps({"updated": mine, "errors": {}})) for i in range(30)]
+    steps.append((day + timedelta(days=40), json.dumps({"updated": {}, "errors": {"FLAGS": "Yahoo gave no bars"}})))
+    # json.dumps' compact separators, as another writer might store them: still read.
+    steps.append((day + timedelta(days=35), json.dumps({"updated": mine}, separators=(",", ":"))))
+    path = _log_db(tmp_path, steps)
+    parsed = _parses(monkeypatch)
+    with Reader(path) as r:
+        assert r.bars_stored_at("FLAGS") == (day + timedelta(days=35)).astimezone()
+    assert len(parsed) == 1
+    # A ticker that is a prefix of another's isn't mistaken for it: FLAG has no step and no collection.
+    with Reader(path) as r:
+        assert r.bars_stored_at("FLAG") is None and r.bars_stored_at("LAGS") is None
+
+
+def test_the_steps_before_the_latest_collection_arent_read(tmp_path, monkeypatch):
+    # The collection is later than any of them, so none can be the answer.
+    from src.webapp.repository import Reader
+    mine = {"FLAGS": {"from": "2026-01-01", "to": "2026-01-02", "written": 1, "removed": 1}}
+    day = datetime(2026, 1, 1, 22, 0, tzinfo=UTC)
+    path = _log_db(tmp_path, [(day + timedelta(days=i), json.dumps({"updated": mine})) for i in range(30)])
+    _collection(tmp_path, day + timedelta(days=29))  # at the latest step's start: the collection's time
+    _collection(tmp_path, day + timedelta(days=29, hours=-1))
+    parsed = _parses(monkeypatch)
+    with Reader(path) as r:
+        assert r.bars_stored_at("FLAGS") == (day + timedelta(days=29)).astimezone()
+    assert parsed == []
+    _collection(tmp_path, day + timedelta(days=28, hours=1))  # an earlier one changes nothing
+    with closing(sqlite3.connect(path)) as conn:  # a step after the latest collection is read
+        conn.execute("INSERT INTO refresh_log (step, started_at, finished_at, ok, summary) "
+                     "VALUES ('bars', ?, 'x', 1, ?)",
+                     ((day + timedelta(days=29, seconds=1)).isoformat(), json.dumps({"updated": mine})))
+        conn.commit()
+    with Reader(path) as r:
+        assert r.bars_stored_at("FLAGS") == (day + timedelta(days=29, seconds=1)).astimezone()
+    assert len(parsed) == 1

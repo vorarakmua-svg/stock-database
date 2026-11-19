@@ -334,7 +334,10 @@ def implied_split(moves: Sequence[Tuple[float, float]]) -> float:
     (``nearest_split_ratio``) when some holder's shares moved by r within SPLIT_SHARES_TOLERANCE, the holders' median
     price moved by r within SPLIT_PRICE_TOLERANCE, and no holder's shares stayed within SPLIT_SHARES_TOLERANCE of
     before (a holder that kept its count saw no split: Seadrill's halving price in Q1 2025, one guru doubling down).
-    Of two ratios that qualify, the one nearer the price's move."""
+    Of two ratios that qualify, the one nearer the price's move.
+    A lone holder buying the ratio's worth more as the price falls by it reads as the split, which its 13F can't be
+    told from (BUG-354): with no other holder to veto, doubling down on a halved price is a 2-for-1. Two holders at
+    the ratio aren't required: RLI's 2-for-1 has one holder here, and HDFC Bank's bonus one of five at it."""
     if not moves or any(abs(shares - 1.0) <= SPLIT_SHARES_TOLERANCE for shares, _ in moves):
         return 1.0
     price = statistics.median(p for _, p in moves)
