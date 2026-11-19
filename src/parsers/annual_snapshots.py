@@ -30,6 +30,8 @@ _COMPARED = ("source_tags", "source_filings", "period_end", "calendar_year", "fr
 #: Whether ``build_snapshots`` skips the days ``_record_unchanged`` proves change nothing (False: the record is built
 #: on every filing day, the replay the tests compare the skipping one with).
 _SKIP_UNCHANGED_DAYS = True
+#: How ``build_annual_record`` says a cleaning failed (the record kept uncleaned).
+_CLEANING_FAILED = "Data cleaning: "
 
 
 @dataclass
@@ -140,6 +142,9 @@ def build_snapshots(parser: XBRLParser, facts: Dict[str, Any], *, ticker: str,
     figures. A year gets a row on a day its row differs from the one before (a float equal under ``==``, or NaN
     beside NaN, is the same), and a ``present`` False row the day it leaves the record. With *years_back*, the rows
     and views of the latest *years_back* years of the last snapshot, replayed on every filing all the same.
+
+    A day whose record's cleaning failed (``build_annual_record`` keeps it uncleaned and says "Data cleaning: ...")
+    is stored uncleaned; the set's warnings say so once, with the count of such days and the first failure.
     """
     out = SnapshotSet()
     undated = undated_facts(facts)
@@ -153,6 +158,7 @@ def build_snapshots(parser: XBRLParser, facts: Dict[str, Any], *, ticker: str,
     last: Dict[int, Dict[str, Any]] = {}  # fiscal year -> its latest state (None: left the record)
     present: Dict[int, bool] = {}
     vintages: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    uncleaned: List[Tuple[str, str]] = []  # (day, error) of each day whose record's cleaning failed
     for day in filing_dates(facts):
         build = not (_SKIP_UNCHANGED_DAYS and unended is not None and _record_unchanged(day, parsed_days, unended))
         if not build and day not in annual_days:
@@ -161,6 +167,9 @@ def build_snapshots(parser: XBRLParser, facts: Dict[str, Any], *, ticker: str,
         if build:
             record = build_annual_record(parser, known, ticker=ticker, years_back=None)
             unended = record.unended
+            failed = [w for w in record.warnings[record.repairs:] if w.startswith(_CLEANING_FAILED)]
+            if failed:
+                uncleaned.append((day, failed[0][len(_CLEANING_FAILED):]))
             now = {int(fy): _state(period) for fy, period in record.periods.items()}
             for fy in sorted(set(now) | {fy for fy, held in present.items() if held}):
                 head = {"fiscal_year": fy, "known_from": day, "known_accn": accns.get(day) or None}
@@ -176,6 +185,10 @@ def build_snapshots(parser: XBRLParser, facts: Dict[str, Any], *, ticker: str,
         if day in annual_days:
             for fy, views in _vintages_of(parser, known, day).items():
                 vintages.setdefault(fy, {}).update(views)
+    if uncleaned:
+        out.warnings.append(
+            f"SEC EDGAR: {ticker}'s as-of snapshots hold the record uncleaned on {len(uncleaned)} filing day(s), its "
+            f"cleaning having failed (first on {uncleaned[0][0]}: {uncleaned[0][1]})")
     out.vintages = {fy: vintages[fy] for fy in sorted(vintages, reverse=True)}
     if years_back:
         kept = sorted((fy for fy, held in present.items() if held), reverse=True)[:years_back]

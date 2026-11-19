@@ -313,3 +313,30 @@ def test_the_record_reads_no_taxonomy_but_its_own():
     assert PARSED_TAXONOMY == "us-gaap"
     assert (build_annual_record(XBRLParser(), facts, ticker="X", years_back=None)
             == build_annual_record(XBRLParser(), alone, ticker="X", years_back=None))
+
+
+def test_days_whose_cleaning_failed_make_one_warning(monkeypatch):
+    # A day whose cleaning failed keeps its record uncleaned (build_annual_record's "Data cleaning: ..."): the run
+    # says so once, with the count and the first failure, not once a day.
+    from src.parsers import annual_record
+
+    calls = []
+
+    def clean(annual, warnings):
+        calls.append(1)
+        if len(calls) >= 2:
+            raise ValueError(f"bad {len(calls)}")
+        return real(annual, warnings)
+
+    real = annual_record.clean_annual
+    monkeypatch.setattr(annual_record, "clean_annual", clean)
+    snapshots = build_snapshots(XBRLParser(), _three_10ks(), ticker="X", years_back=None)
+    assert len(calls) == 3
+    assert snapshots.warnings == [
+        f"SEC EDGAR: X's as-of snapshots hold the record uncleaned on 2 filing day(s), its cleaning having failed "
+        f"(first on {D2}: bad 2)"]
+
+
+def test_no_failed_cleaning_no_warning():
+    snapshots = build_snapshots(XBRLParser(), _three_10ks(), ticker="X", years_back=None)
+    assert not [w for w in snapshots.warnings if "uncleaned" in w]
