@@ -3349,3 +3349,15 @@ Result: BUG-198, BUG-202, BUG-238 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3446 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(scores): years by fiscal year; a failed run says so; left-over industries rank among themselves (BUG-198, BUG-202, BUG-238)
 Next: code review 31 (running).
+
+## Iteration 197: 2026-11-20 05:30: code review 31
+Picked: code review 31 (b434d23..ac12e3b: BUG-345/346, -347, -053/237/163, -156/157/222, -232/281/289); an opus
+reviewer.
+Did: `qa/evidence/review31.txt`; 7 probe cases failing at HEAD (3 regressions on made-up titles); the 10 touched test
+files pass (698).
+Result: no Critical or Important. Minors -> BUG-349, BUG-350, BUG-351, BUG-352 (P3). BUG-053's unvalued_factors can't
+loop; BUG-345's retried body isn't joined to the first attempt's; BUG-232's per-thread notes and migration hold;
+BUG-156's New York clock matches the tz database 2007-2040.
+Gates: unchanged (qa/ only) | CI: PR #29
+Commit: (this commit) chore(qa): code review 31 recorded; four Minor findings (BUG-349..352)
+Next: BUG-349..352; DOCS and OWNERSHIP batches (workers).
