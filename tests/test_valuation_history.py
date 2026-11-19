@@ -40,6 +40,29 @@ def test_missing_debt_gives_no_enterprise_value_multiple():
     assert multiples_at(2000.0, 20.0, p, 0.0)["pe"] == pytest.approx(20.0)  # the rest stand
 
 
+def test_the_stored_enterprise_value_is_the_one_ev_ebitda_divides():
+    # BUG-183: an unknown net debt (no debt line in a debt-free company's quarter) counts as 0 for EV/EBITDA,
+    # as calculated_metrics defines EV, so the month's stored enterprise value is the market cap, not empty.
+    x = _inputs(net_debt=None)
+    latest = compute_history(x).rows[-1]
+    assert latest.enterprise_value == pytest.approx(2000.0)
+    assert latest.multiples["ev_ebitda"] == pytest.approx(latest.enterprise_value / 200.0)
+    known = compute_history(_inputs()).rows[-1]
+    assert known.enterprise_value == pytest.approx(2300.0)  # 2000 market cap + 300 net debt
+    assert known.multiples["ev_ebitda"] == pytest.approx(known.enterprise_value / 200.0)
+    # A quarter whose debt can't be read has neither (BUG-171).
+    missing = compute_history(_inputs(net_debt=None, debt_missing=True)).rows[-1]
+    assert missing.enterprise_value is None and missing.multiples["ev_ebitda"] is None
+    assert missing.market_cap == pytest.approx(2000.0)
+    # A bank's EV family is suppressed with its net debt (its metrics and snapshots store none either).
+    bank = compute_history(_inputs(sector="bank", net_debt=None)).rows[-1]
+    assert bank.enterprise_value is None and bank.multiples["ev_ebitda"] is None
+    assert bank.market_cap == pytest.approx(2000.0)
+    # An insurer's EV stands, though its EV/EBITDA is suppressed (sector_metrics keeps its EV).
+    assert compute_history(_inputs(sector="insurance", net_debt=None)).rows[-1].enterprise_value == \
+        pytest.approx(2000.0)
+
+
 def test_a_denominator_of_zero_or_less_gives_none():
     m = multiples_at(2000.0, 20.0, _point(net_income=-5.0, revenue=0.0, common_equity=-1.0, fcf=None,
                                           ebitda=0.0), 0.0)

@@ -475,7 +475,10 @@ How it's built:
 - **Multiples on totals.** Market cap = the close × the spin-off factors after that day × the quarter's
   share count, put on the price bars' split basis. Dividing a price by a filed EPS would cross split
   bases. Zero or negative earnings, book, FCF or EBITDA give no multiple, and the sector rules apply: no
-  P/FCF or EV/EBITDA for banks, and P/FFO in place of P/E for REITs.
+  P/FCF or EV/EBITDA for banks, and P/FFO in place of P/E for REITs. Each month stores the enterprise value
+  EV/EBITDA divides: market cap + net debt, an unknown net debt (no debt line) as 0, as the snapshots define
+  EV; none for banks, whose EV family is suppressed, or for a quarter whose long-term debt can't be read
+  (BUG-183).
 - **P/E on net income to common**, as P/B is on common equity (book less preferred) and Yahoo's price /
   EPS is: the trailing year's `net_income_to_common` (`NetIncomeLossAvailableToCommonStockholdersBasic`, net
   income less preferred dividends and what participating securities take), else its net income. ALB's

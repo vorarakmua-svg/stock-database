@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from ..parsers.sector_metrics import SUPPRESSED_BY_SECTOR
 from .history_inputs import STALE_DAYS, HistoryInputs, TTMPoint, price_factor_after
 
 METRICS: Tuple[str, ...] = ("pe", "ps", "pb", "pfcf", "ev_ebitda", "pffo", "div_yield")
@@ -103,6 +104,17 @@ def fair_value_metrics(sector: str) -> Tuple[str, ...]:
     return _FAIR_VALUE_METRICS.get(sector, _GENERAL)
 
 
+def enterprise_value(market_cap: float, point: TTMPoint) -> Optional[float]:
+    """The market cap plus net debt, an unknown net debt as 0 (as ``calculated_metrics`` defines EV).
+
+    None when the quarter lacks the long-term debt its company's 10-Ks report (BUG-171). The month stores
+    the value EV/EBITDA divides, so the two agree (BUG-183).
+    """
+    if point.debt_missing:
+        return None
+    return market_cap + (point.net_debt or 0.0)
+
+
 def multiples_at(market_cap: float, close: float, point: TTMPoint, ttm_dps: float) -> Dict[str, Optional[float]]:
     """Every multiple on one day's market cap and trailing year. A zero or negative total gives None."""
     m: Dict[str, Optional[float]] = {k: None for k in METRICS}
@@ -111,8 +123,8 @@ def multiples_at(market_cap: float, close: float, point: TTMPoint, ttm_dps: floa
             base = getattr(point, _FUNDAMENTAL[metric])
             if base is not None and base > 0:
                 m[metric] = market_cap / base
-        ev = market_cap + (point.net_debt or 0.0)
-        if point.ebitda is not None and point.ebitda > 0 and ev > 0 and not point.debt_missing:
+        ev = enterprise_value(market_cap, point)
+        if point.ebitda is not None and point.ebitda > 0 and ev is not None and ev > 0:
             m["ev_ebitda"] = ev / point.ebitda
     if ttm_dps and ttm_dps > 0 and close > 0:
         m["div_yield"] = ttm_dps / close
@@ -192,6 +204,8 @@ def compute_history(inputs: HistoryInputs) -> HistoryResult:
     sector = inputs.sector_class or "general"
     combined = fair_value_metrics(sector)
     off = set(_NOT_MEANINGFUL.get(sector, ())) | ({"pffo"} if sector != "reit" else set())
+    # A bank's EV family is suppressed with its net debt, as in its metrics and snapshots (BUG-134).
+    ev_off = "enterprise_value" in SUPPRESSED_BY_SECTOR.get(sector, frozenset())
     points = sorted(inputs.points, key=lambda p: p.period_end)
     dividends = sorted((str(d)[:10], a) for d, a in inputs.dividends)
     last_bar = inputs.last_bar or inputs.months[-1][0]
@@ -220,8 +234,7 @@ def compute_history(inputs: HistoryInputs) -> HistoryResult:
             count = point.shares * price_factor_after(row.date, inputs.price_factors, last_bar)
             row.market_cap = close * count
             row.ttm_period_end = point.period_end
-            if point.net_debt is not None:
-                row.enterprise_value = row.market_cap + point.net_debt
+            row.enterprise_value = None if ev_off else enterprise_value(row.market_cap, point)
             row.multiples = multiples_at(row.market_cap, close, point, dps)
             for k in off:
                 row.multiples[k] = None

@@ -133,6 +133,9 @@ Constants:
 - P/FCF = mc / FCF.
 - P/FFO = mc / FFO.
 - EV/EBITDA = (mc + (net debt or 0)) / EBITDA, as `calculated_metrics.py:491-511` defines EV.
+  The month's stored `enterprise_value` is that numerator, so the two agree (BUG-183): none for a
+  bank (its EV family is suppressed, `sector_metrics.SUPPRESSED_BY_SECTOR`) or for a quarter whose
+  long-term debt can't be read (BUG-171).
 - A denominator of zero or less gives None.
 - Dividend yield = trailing 365-day dividends / close. It is None when no dividends were paid.
 

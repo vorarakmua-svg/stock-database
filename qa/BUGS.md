@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 119 · NEEDS-USER 1 · Decided: 7 · Verified: 255
+**Open:** P0 0 · P1 0 · P2 0 · P3 118 · NEEDS-USER 2 · Decided: 7 · Verified: 257
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1433,10 +1433,11 @@ Repro: `valuation/engine.compute_and_store` logs a history failure and moves on;
 Expected: the section shows when its history was computed, or a failure is stored as an N/A reason.
 
 ### BUG-183 [P3][VAL] The valuation history can store an EV/EBITDA without its enterprise value
-Status: OPEN
-Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 208)
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: (this commit) | Regression tests: tests/test_valuation_history.py, tests/test_valuation_oracle_seam.py; 6 failing first
 Repro: `history.py`: `enterprise_value` is stored only when net debt is known, while `multiples_at` takes an unknown net debt as 0 for EV/EBITDA.
 Expected: the stored EV and EV/EBITDA agree (both on the same net debt, or both empty).
+Fix (iteration 208, `qa/evidence/bug183-investigation.txt`): `enterprise_value(market_cap, point)` (history.py) is None when debt is missing, else mc + (net_debt or 0), as the history spec defines EV; EV/EBITDA divides exactly that, and each month stores it, except banks (their EV family is suppressed, as their snapshots). Real data: 2,989 history rows at 19 tickers gain EV = market cap (no existing EV changes); rows with an EV/EBITDA but no EV 2,446 -> 0; 0 medians, verdicts, labels or indicators move.
 
 ### BUG-184 [P3][VAL] A share split that Yahoo lists only inside a combined factor can't fold its seam, so a month between the restated quarter and the split reads half
 Status: OPEN
@@ -2016,10 +2017,11 @@ Repro: sqlite_store.py ~1476-1478 serves a refresh's payments on `_served_day` w
 Expected: served on the refresh's own day, as a collection's last bar would be (max(latest listed split, collected_at - 1 day)).   Actual: possibly years earlier.
 
 ### BUG-308 [P3][QA] The valuation oracle reads the whole FCF history where the code's is truncated at a share seam: EXE's DCF growth 18.4% against 0.9%
-Status: OPEN
-Found: iteration 144 (Q2/Q5's oracle run) | Fixed: | Regression test:
+Status: VERIFIED (iteration 208)
+Found: iteration 144 (Q2/Q5's oracle run) | Fixed: (this commit) | Regression tests: tests/test_valuation_history.py, tests/test_valuation_oracle_seam.py; 6 failing first
 Repro: `qa/oracle/valuation_oracle.py` level 2, EXE dcf: the oracle's window is metrics_annual's last 10 FYs (FY2016's loss first, so from FY2017: 475M to 1,839M), the code's starts at FY2018 (`history_truncated`, a share-count seam). Exposed by Q2: EXE's growth came from the analyst figure before, which the oracle skipped.
 Expected: the oracle models the truncation (or flags it as such).   Actual: a 124% mismatch on the base.
+Fix (iteration 208, with BUG-183; oracle only): the spec is silent on seams, so the code's documented rule wins: the oracle's `unit_seam()` drops the years up to the newest share-count seam beyond 50x (latest 10 FY rows, adjacent counted rows), as `inputs._normalize_splits`. EXE's DCF level-2 mismatch closes; EG and EXE are the truncated tickers. EXE's seam is in fact a 1:200 reverse split: Q19.
 
 ### BUG-309 [P2][GATHER] A failed companyfacts request turns a stored general company back into a bank (since Q9)
 Status: VERIFIED (iteration 152)
@@ -2361,6 +2363,18 @@ Found: code review 33 (Minor 4) | Fixed: (this commit) | Regression tests: tests
 Repro: an any->all mutant and a 'latest filing only' mutant both survive tests/test_web_gurus.py: every flagged quarter in the tests has one filing.
 Expected: a two-filing quarter test.   Actual: none.
 Fix (iteration 207, with BUG-360): tests/test_web_gurus.py adds two-filing quarters; the any->all and latest-filing-only mutants are killed.
+
+### BUG-364 [P3][DATA] GM, AES, TXT and PCAR read no debt line in any year, so their EV/EBITDA counts net debt as 0 and reads low
+Status: OPEN
+Found: BUG-183's worker (iteration 208) | Fixed: | Regression test:
+Repro: no annual or TTM row of GM, AES, TXT or PCAR holds a debt figure (a mapping gap, not debt-free companies); the spec counts unknown net debt as 0, so EV/EBITDA reads low: GM 4.88 vs Yahoo 8.96, AES 8.26 vs 12.21. Find the tags they file debt under (likely BUG-203/259 territory).
+Expected: their debt read.   Actual: none.
+
+### Q19 [VAL] NEEDS-USER: should a share-count seam that is a real reverse split be folded instead of truncating the history?
+Status: OPEN (NEEDS-USER)
+Found: BUG-308's worker (iteration 208) | Fixed: | Regression test:
+Context: `inputs._normalize_splits` drops every year older than a share-count seam beyond 50x, calling it a unit/scale break ('no company splits 1:50'). EXE's FY2017->FY2018 seam (906M -> 4.546M diluted) is a real 1:200 reverse split. Truncating leaves EXE's DCF growth at 0.9%; folding the split would make it ~15% (a valuation change). Recommendation: fold a seam when a stored split (or the implied-count test) explains it, keep truncating true unit breaks; measure over the 502 before deciding. EG is the other truncated ticker.
+Decision: 
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)

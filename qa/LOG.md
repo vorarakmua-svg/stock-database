@@ -3482,3 +3482,16 @@ Result: BUG-360..363 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3629 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(web): typing cancels a waiting Enter; early arrows replay; a guru's omissions per filer (BUG-360..363)
 Next: GATHER 107/282/340 (worker).
+
+## Iteration 208: 2026-11-20 18:20: fix (BUG-183, BUG-308)
+Picked: two VAL/QA P3s under the stop rule; an opus worker.
+Did: the valuation history stores the EV its EV/EBITDA divides (banks excepted); the valuation oracle truncates at a
+share-count seam as the code does.
+- RED: 6 failed (1 history, 5 oracle) on 725a571; GREEN. 13 of 13 mutants.
+- DB copies (engine over 502): only valuation_history.enterprise_value fills in (2,989 rows, 19 tickers); 0 medians,
+  verdicts, labels or indicators; the oracle's EXE/dcf mismatch closes (3 pre-existing remain: HLT, RTX, HOOD).
+- New: BUG-364 (P3, GM/AES/TXT/PCAR read no debt), Q19 (NEEDS-USER: fold EXE's real 1:200 reverse split?).
+Result: BUG-183, BUG-308 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3635 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): the history stores the EV its EV/EBITDA divides; the oracle truncates at a share seam (BUG-183, BUG-308)
+Next: GATHER 107/282/340 (worker).

@@ -11,9 +11,11 @@ matches is reported, so an ambiguity shows up as a note rather than a false alar
 
 Level 2 ("inputs"): re-derive the inputs from the raw tables per the spec (≤10-FY CAGR windows,
 median 3-yr FCF, CAPM discount, TTM dividends, reported diluted EPS on today's split basis via
-declared split ratios, FY-end prices) and value each model with them. Rows whose spec inputs are
-undefined are listed, never skipped silently. Known limitation: per-share history around reverse
-splits, spin-offs and stock dividends (GE, WDC, SCCO) is not modelled, so those need adjudication.
+declared split ratios, FY-end prices) and value each model with them. Where the spec is silent, the
+code's documented rule stands in: the years before a share-count seam beyond 50x are dropped
+(`unit_seam`, BUG-308). Rows whose spec inputs are undefined are listed, never skipped silently.
+Known limitation: per-share history around reverse splits, spin-offs and stock dividends (GE, WDC,
+SCCO) is not modelled, so those need adjudication.
 
 Usage: python qa/oracle/valuation_oracle.py --db PATH [TICKERS...] [--tol 0.005]
 Exit code 1 if any applicable value disagrees with every reading beyond the tolerance.
@@ -32,6 +34,8 @@ ERP = 0.045
 TERMINAL = 0.025
 DISCOUNT_CLAMP = (0.08, 0.14)
 SPREAD_G, SPREAD_R = 0.03, 0.01
+MAX_FY_ROWS = 10  # the fiscal years a valuation reads
+UNIT_SEAM_RATIO = 50.0  # a share-count seam beyond this is a unit break, not a split (BUG-308)
 
 Triple = Tuple[Optional[float], Optional[float], Optional[float]]
 
@@ -174,6 +178,23 @@ def median(xs: List[float]) -> float:
     return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
 
 
+def unit_seam(rows: List[Tuple]) -> Optional[int]:
+    """The fiscal year before the newest share-count seam beyond UNIT_SEAM_RATIO among *rows* (financials_annual
+    rows, oldest first), or None.
+
+    The code's documented rule (`inputs._normalize_splits`; the spec is silent): no company splits 50:1 or 1:50 in
+    one step, so such a seam is a unit or scale break and every year before it is dropped, for every model, FCF
+    totals included (BUG-308: EXE's 1:200 FY2017-18 seam, EG's thousands FY2019-20). Each year's count is the one its
+    EPS divides by: diluted weighted shares, else net income / EPS, else the period-end count. Only neighbouring rows
+    that both have one are compared, as the code compares them."""
+    counts = [r[5] or (r[2] / r[6] if r[2] is not None and r[6] else None) or r[4] for r in rows]
+    for i in range(len(rows) - 2, -1, -1):
+        older, newer = counts[i], counts[i + 1]
+        if older and newer and older > 0 and newer > 0 and not 1 / UNIT_SEAM_RATIO <= newer / older <= UNIT_SEAM_RATIO:
+            return rows[i][0]
+    return None
+
+
 def ads_ratio(ratio: float) -> Optional[float]:
     """The ADS ratio a filed-to-market share-count ratio shows, or None when it can't be read (BUG-065, BUG-076).
 
@@ -208,6 +229,11 @@ class Inputs:
         self.annual = db.execute("select fiscal_year, period_end, net_income, total_equity, shares_outstanding, "
                                  "weighted_avg_shares_diluted, eps_diluted from financials_annual where ticker=? "
                                  "order by fiscal_year", (ticker,)).fetchall()
+        # BUG-308: the years before a share-count seam beyond 50x are dropped, as the code drops them
+        # (`inputs._normalize_splits`: a unit/scale break, its documented rule; the spec is silent).
+        self.truncated_at = unit_seam([r for r in self.annual if r[0] is not None][-MAX_FY_ROWS:])
+        if self.truncated_at is not None:
+            self.annual = [r for r in self.annual if r[0] is not None and r[0] > self.truncated_at]
         row = db.execute("select filed_date, form from financials_annual where ticker=? and fiscal_year is not null "
                          "order by fiscal_year desc limit 1", (ticker,)).fetchone()
         self.last_filed = row[0] if row and row[0] else None
@@ -338,9 +364,12 @@ class Inputs:
     def last_10_fys(self, series: List[Tuple[int, float]]) -> List[Tuple[int, float]]:
         """The spec's "<= 10-FY CAGR windows": the values of the last 10 fiscal years the filings cover. A year
         without a value leaves a gap; the window doesn't reach further back for it (SCCO has no EPS for FY2013-18,
-        so 10 values went back to FY2010)."""
+        so 10 values went back to FY2010), nor before a unit seam (`unit_seam`)."""
         latest = self.annual[-1][0] if self.annual else None
-        return [(fy, v) for fy, v in series if latest is not None and latest - 10 < fy <= latest]
+        if latest is None:
+            return []
+        first = latest - 10 if self.truncated_at is None else max(latest - 10, self.truncated_at)
+        return [(fy, v) for fy, v in series if first < fy <= latest]
 
     def eps_series(self) -> List[Tuple[int, float]]:
         """Reported diluted EPS (it nets out preferred dividends) moved to today's split basis;
