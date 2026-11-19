@@ -301,38 +301,37 @@ class MarketFetcher:
         self.retry = retry if retry is not None else RetryHandler(max_retries=MAX_RETRIES, base_delay=RETRY_DELAY)
 
     def _download(self, url: str) -> bytes:
-        """The answer's bytes: a timeout, a dropped connection or a 429/50x retried; another status, or an answer of
-        more than MAX_BYTES (its declared length, else the bytes streamed), raises OSError."""
-        def attempt() -> Any:
+        """The answer's bytes: a timeout or a dropped connection (while connecting or while the body streams) or a
+        429/50x retried; another status, or an answer of more than MAX_BYTES (its declared length, else the bytes
+        streamed), raises OSError, not retried."""
+        def attempt() -> bytes:
             self.limiter.wait()
             response = self.session.get(url, timeout=TIMEOUT, stream=True)
-            if response.status_code in RETRYABLE_STATUS_CODES:
-                response.close()
-                raise requests.HTTPError(f"HTTP {response.status_code}", response=response)
-            return response
-
-        response = self.retry.run(attempt, retryable_exceptions=(requests.RequestException,),
-                                  should_retry=is_transient_error)
-        try:
-            if response.status_code != 200:
-                raise OSError(f"HTTP {response.status_code}")
-            too_big = OSError(f"the answer is larger than {MAX_BYTES} bytes")
             try:
-                declared = int(response.headers.get("Content-Length", ""))
-            except ValueError:
-                declared = 0  # no length, or one that isn't a number: the bytes streamed decide
-            if declared > MAX_BYTES:
-                raise too_big
-            chunks: List[bytes] = []
-            size = 0
-            for chunk in response.iter_content(chunk_size=CHUNK_BYTES):
-                size += len(chunk)
-                if size > MAX_BYTES:
+                if response.status_code in RETRYABLE_STATUS_CODES:
+                    raise requests.HTTPError(f"HTTP {response.status_code}", response=response)
+                if response.status_code != 200:
+                    raise OSError(f"HTTP {response.status_code}")
+                too_big = OSError(f"the answer is larger than {MAX_BYTES} bytes")
+                try:
+                    declared = int(response.headers.get("Content-Length", ""))
+                except ValueError:
+                    declared = 0  # no length, or one that isn't a number: the bytes streamed decide
+                if declared > MAX_BYTES:
                     raise too_big
-                chunks.append(chunk)
-            return b"".join(chunks)
-        finally:
-            response.close()
+                chunks: List[bytes] = []
+                size = 0
+                for chunk in response.iter_content(chunk_size=CHUNK_BYTES):
+                    size += len(chunk)
+                    if size > MAX_BYTES:
+                        raise too_big
+                    chunks.append(chunk)
+                return b"".join(chunks)
+            finally:
+                response.close()
+
+        return self.retry.run(attempt, retryable_exceptions=(requests.RequestException,),
+                              should_retry=is_transient_error)
 
     def cached(self, name: str, parse: Callable[[bytes], T]) -> Optional[T]:
         """*parse* of the cached copy of *name*: None without one, or for one that doesn't parse."""

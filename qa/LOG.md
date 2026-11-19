@@ -3277,3 +3277,15 @@ matches 444,538 SEC frames; BUG-211/218's SQL and Python deadlines agree.
 Gates: unchanged (qa/ only) | CI: PR #29
 Commit: (this commit) chore(qa): code review 30 recorded; four Minor findings (BUG-345..348)
 Next: BUG-345 (regression) and BUG-232/281/289 (worker).
+
+## Iteration 191: 2026-11-19 22:50: fix (BUG-345, BUG-346)
+Picked: review 30's regression (BUG-345) and the guard gap beside it; a sonnet worker.
+Did: market downloads retry a timeout during the body read again (the whole exchange is one attempt); the suite's
+guard refuses reverse lookups of non-local addresses.
+- RED: 17 failed of 23 selected on b434d23 (stubbed resolver, no network); GREEN. 12 of 12 mutants on the worker's
+  tree (the reverse-lookup mutants query DNS when run, so not re-run on the checkout); bug229's spec adapted (4 stale
+  re-quoted; 16 of 16 on the checkout); bug088 15 of 15.
+Result: BUG-345, BUG-346 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3316 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(market): a timeout while the body streams is retried again; the guard refuses reverse lookups (BUG-345, BUG-346)
+Next: BUG-232/281/289 (worker); more P3s outside the as-of branch.

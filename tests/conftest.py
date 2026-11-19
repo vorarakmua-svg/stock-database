@@ -49,9 +49,11 @@ def no_network(monkeypatch):
     """Refuse every route off this machine, and fail the test that tried one: a fetcher test once made a live SEC
     request that the code under test swallowed (BUG-073). The routes: ``socket.connect`` and ``connect_ex`` (so
     ``create_connection``, urllib3 and requests), name lookups of anything but ``localhost`` (``getaddrinfo``,
-    ``gethostbyname``, ``gethostbyname_ex``), asyncio's proactor ``sock_connect`` (Windows connects without a
-    Python socket call) and curl_cffi (libcurl, yfinance 1.0's transport, opens its own sockets). All of
-    127.0.0.0/8 and ``::1`` stay allowed, for the tests that start a local server. Yields the refused addresses."""
+    ``gethostbyname``, ``gethostbyname_ex``) and reverse lookups of anything but a local address
+    (``gethostbyaddr``, ``getnameinfo``, ``getfqdn`` through ``gethostbyaddr``), asyncio's proactor ``sock_connect``
+    (Windows connects without a Python socket call) and curl_cffi (libcurl, yfinance 1.0's transport, opens its own
+    sockets). All of 127.0.0.0/8 and ``::1`` stay allowed, for the tests that start a local server. Yields the
+    refused addresses."""
     refused = []
 
     def refuse(address):
@@ -91,6 +93,23 @@ def no_network(monkeypatch):
 
     for lookup in ("getaddrinfo", "gethostbyname", "gethostbyname_ex"):
         guard_lookup(lookup)
+
+    def guard_reverse(name):
+        # gethostbyaddr(address or name) and getnameinfo((address, port, ...), flags): the resolver is asked either
+        # way, so anything but a local address (or ``localhost``) is refused. getfqdn reaches it by gethostbyaddr.
+        original = getattr(socket, name)
+
+        @wraps(original)
+        def guarded(target, *args, **kwargs):
+            host = target[0] if name == "getnameinfo" and isinstance(target, (tuple, list)) and target else target
+            if not _is_local(host):
+                refuse((host, None))
+            return original(target, *args, **kwargs)
+
+        monkeypatch.setattr(socket, name, guarded)
+
+    for lookup in ("gethostbyaddr", "getnameinfo"):
+        guard_reverse(lookup)
 
     # The selector loop connects through ``socket.connect``, guarded above; the Windows proactor loop connects
     # with ConnectEx and never calls it.

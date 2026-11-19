@@ -180,3 +180,44 @@ def test_an_ipv6_loopback_connect_is_not_refused(no_network, host):
         s.settimeout(0.2)
         s.connect_ex((host, 9))  # nothing listens on port 9: the answer doesn't matter, only that it isn't refused
     assert no_network == []
+
+
+def _unrefused(call, *args):
+    """*call* (a lookup of a local address) answers or fails on its own terms, but is not refused by the guard."""
+    try:
+        call(*args)
+    except OSError as exc:
+        assert "doesn't use the network" not in str(exc)
+
+
+@pytest.mark.parametrize("address", ["192.0.2.1", "2001:db8::1", "example.com", "8.8.8.8"])
+def test_a_reverse_lookup_of_gethostbyaddr_off_this_machine_is_refused(no_network, address):
+    # BUG-346: the guard refused forward lookups only; the resolver was still asked for an address's name.
+    with pytest.raises(OSError, match="doesn't use the network"):
+        socket.gethostbyaddr(address)
+    assert [r[0] for r in no_network] == [address]
+    no_network.clear()
+
+
+@pytest.mark.parametrize("address", ["192.0.2.1", "2001:db8::1", "8.8.8.8"])
+def test_getnameinfo_off_this_machine_is_refused(no_network, address):
+    sockaddr = (address, 80, 0, 0) if ":" in address else (address, 80)
+    with pytest.raises(OSError, match="doesn't use the network"):
+        socket.getnameinfo(sockaddr, 0)
+    assert [r[0] for r in no_network] == [address]
+    no_network.clear()
+
+
+def test_getfqdn_of_an_address_off_this_machine_is_refused_through_gethostbyaddr(no_network):
+    assert socket.getfqdn("192.0.2.1") == "192.0.2.1"  # getfqdn swallows the lookup's OSError, as for a failed lookup
+    assert [r[0] for r in no_network] == ["192.0.2.1"]
+    no_network.clear()
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "127.0.0.2", "::1", "::ffff:127.0.0.1", "localhost", "LOCALHOST"])
+def test_reverse_lookups_of_local_addresses_are_not_refused(no_network, host):
+    sockaddr = (host, 80, 0, 0) if ":" in host else (host, 80)
+    flags = socket.NI_NUMERICHOST | socket.NI_NUMERICSERV
+    _unrefused(socket.getnameinfo, sockaddr, flags)
+    _unrefused(socket.gethostbyaddr, host)
+    assert no_network == []

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 151 · NEEDS-USER 1 · Decided: 7 · Verified: 206
+**Open:** P0 0 · P1 0 · P2 0 · P3 149 · NEEDS-USER 1 · Decided: 7 · Verified: 208
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2201,16 +2201,18 @@ Recommendation: merge (the old values used information not yet filed). After mer
 Decision: 
 
 ### BUG-345 [P3][MARKET] Since BUG-229 a read timeout during a market download's body isn't retried
-Status: OPEN
-Found: code review 30 (`qa/evidence/review30.txt`, Minor 1; a regression of BUG-229; probe fails at HEAD, passes at 45f43b5) | Fixed: | Regression test:
+Status: VERIFIED (iteration 191)
+Found: code review 30 (`qa/evidence/review30.txt`, Minor 1; a regression of BUG-229; probe fails at HEAD, passes at 45f43b5) | Fixed: (this commit) | Regression tests: tests/test_market_sources.py, tests/test_no_network.py; 17 failing first
 Repro: src/market/sources.py ~303-335: streaming moved the body read outside the retry loop, so a timeout while the body streams fails the fetch (cached copy kept, or an error without one); the docstring still says timeouts are retried. Probe: %LOCALAPPDATA%\stockdb-qa\review30\head\tests\test_review30.py.
 Expected: a body-read timeout retried like a connect timeout.   Actual: not retried.
+Fix (iteration 191, `qa/evidence/bug345-investigation.txt`): `_download`'s whole exchange (get, status checks, both caps, the streamed read) runs inside the retry's attempt, so a body-read timeout or connection error retries like a connect timeout (same attempts and backoff); the size-cap and non-200 errors (plain OSError) still aren't retried; each attempt closes its response in a finally.
 
 ### BUG-346 [P3][CODE] The suite's network guard lets reverse name lookups through
-Status: OPEN
-Found: code review 30 (Minor 2; no test reaches it today) | Fixed: | Regression test:
+Status: VERIFIED (iteration 191)
+Found: code review 30 (Minor 2; no test reaches it today) | Fixed: (this commit) | Regression tests: tests/test_market_sources.py, tests/test_no_network.py; 17 failing first
 Repro: tests/conftest.py ~92 (BUG-088's guard) patches getaddrinfo/gethostbyname(_ex) but not gethostbyaddr, getnameinfo (nor getfqdn via gethostbyaddr); BUG-088's residuals don't list them. Probe: %LOCALAPPDATA%\stockdb-qa\review30\head\tests\test_review30.py.
 Expected: reverse lookups of non-local addresses refused.   Actual: they go out.
+Fix (iteration 191, with BUG-345): the guard also refuses `gethostbyaddr` and `getnameinfo` for a non-local address (getfqdn through gethostbyaddr). Note: the mutants that remove these guards make real reverse lookups when run; the RED run used a stub resolver.
 
 ### BUG-347 [P3][OWNERSHIP] ceo_or_cfo misreads some plausible titles the README's rules cover
 Status: OPEN

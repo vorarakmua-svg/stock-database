@@ -1090,3 +1090,71 @@ def test_a_source_without_any_row_fails_and_leaves_its_stored_series(tmp_path):
     db, summary, _ = _collect(tmp_path, answers, wanted=["treasury"], treasury_from=2026)
     assert summary["treasury"]["ok"] is False and "no rows" in summary["treasury"]["error"]
     assert _yields(db) == stored
+
+
+class _Flaky(_Response):
+    """An answer whose body fails with *error* after its first chunk (a read timeout, a dropped connection)."""
+
+    def __init__(self, error, content=b"x" * 10):
+        super().__init__(200, content)
+        self.error = error
+
+    def iter_content(self, chunk_size=1):
+        yield self.content[:3]
+        raise self.error
+
+
+class _Sequence:
+    """A session answering its GETs from *answers* in turn (the last one repeats); counts them."""
+
+    def __init__(self, answers):
+        self.answers, self.calls = list(answers), 0
+
+    def get(self, url, **kwargs):
+        answer = self.answers[min(self.calls, len(self.answers) - 1)]
+        self.calls += 1
+        return answer
+
+
+def _sequenced(tmp_path, answers, max_retries=2):
+    session = _Sequence(answers)
+    return MarketFetcher(tmp_path / "cache", session=session, clock=lambda: NOW, limiter=RateLimiter(min_interval=0),
+                         retry=RetryHandler(max_retries=max_retries, base_delay=0)), session
+
+
+@pytest.mark.parametrize("error", [requests.exceptions.ReadTimeout("read timed out"),
+                                   requests.exceptions.ConnectionError("connection broken")])
+def test_a_timeout_or_dropped_connection_while_the_body_streams_is_retried(tmp_path, error):
+    # BUG-345: since the body was streamed outside the retry (BUG-229), only a connect-time failure was retried.
+    broken, good = _Flaky(error), _Response(200, b"the whole body")
+    fetcher, session = _sequenced(tmp_path, [broken, good])
+    assert fetcher._download("http://x/") == b"the whole body"
+    assert session.calls == 2 and broken.closed and good.closed
+
+
+def test_a_body_that_keeps_timing_out_is_tried_max_retries_plus_one_times_with_the_backoff(tmp_path, monkeypatch):
+    slept = []
+    monkeypatch.setattr("src.fetchers.rate_limiter.time.sleep", slept.append)
+    answers = [_Flaky(requests.exceptions.ReadTimeout("read timed out")) for _ in range(3)]
+    fetcher, session = _sequenced(tmp_path, answers, max_retries=2)
+    fetcher.retry.base_delay = 1.5
+    with pytest.raises(requests.exceptions.ReadTimeout):
+        fetcher._download("http://x/")
+    assert session.calls == 3 and slept == [1.5, 3.0] and all(a.closed for a in answers)
+
+
+def test_the_size_cap_hit_while_streaming_is_not_retried_and_the_answer_is_closed(tmp_path, monkeypatch):
+    monkeypatch.setattr(sources, "MAX_BYTES", 5)
+    big = _Response(200, b"0123456789")
+    fetcher, session = _sequenced(tmp_path, [big])
+    with pytest.raises(OSError, match="larger than"):
+        fetcher._download("http://x/")
+    assert session.calls == 1 and big.closed
+
+
+def test_a_body_failure_that_is_not_transient_is_not_retried(tmp_path):
+    odd = _Flaky(requests.exceptions.InvalidURL("bad"))
+    fetcher, session = _sequenced(tmp_path, [odd])
+    with pytest.raises(requests.exceptions.InvalidURL):
+        fetcher._download("http://x/")
+    assert session.calls == 1 and odd.closed
