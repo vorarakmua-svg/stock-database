@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 123 · NEEDS-USER 1 · Decided: 7 · Verified: 238
+**Open:** P0 0 · P1 0 · P2 1 · P3 127 · NEEDS-USER 1 · Decided: 7 · Verified: 238
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2278,6 +2278,36 @@ Found: code review 31 (Minor 4; a regression on made-up titles; all 3,524 real c
 Repro: 'President & CEO (former CFO)', 'Chairman & CEO (Former President)', 'Interim CEO (Ex-CFO)' read True at b434d23, False at HEAD (`_PAST_BRACKET`). Also (not a regression): 'President and CEO of the Company and the Bank' reads as a unit's head. Probe: %LOCALAPPDATA%\stockdb-qa\review31\head\tests\test_review31.py.
 Expected: a bracket's past mark applies only to the chief title it follows.   Actual: to any.
 Fix (iteration 200, with BUG-349): a bracket's past mark counts only when, the mark and the chief's own title removed, no other role is left ('CEO (Retired)' past; 'President & CEO (former CFO)' sitting); 'the Company and/& ...' is the company. Census: 0 of 3,556 real titles change.
+
+### BUG-353 [P2][UI] Since BUG-193 a REIT's or utility's Magic Formula note gives a stored input as the reason, not the sector rule
+Status: OPEN
+Found: code review 32 (`qa/evidence/review32.txt`, Important 1; a regression of 23b0145; probe fails at HEAD, passes at ac12e3b) | Fixed: | Regression test:
+Repro: `_magic_inputs` runs for every sector but banks and insurers; quality_view (src/webapp/quality.py ~92-95) uses the sector text only when no reason is stored, and scores_fragment (workstation.py ~1278) no longer checks the sector first, so PLD, SPG, O, PSA, WELL, AMT, SO-like rows read 'not ranked: no current assets or liabilities' on the STAT tab and in the API's magic_formula.na_reason. Probe: %LOCALAPPDATA%\stockdb-qa\review32\head\tests\test_review32.py.
+Expected: the sector rule ('the Magic Formula leaves out banks, insurers, utilities and REITs') for those sectors.   Actual: a stored input's reason.
+
+### BUG-354 [P3][OWNERSHIP] BUG-213's split inference reads one holder doubling into a falling price as a 2-for-1 split
+Status: OPEN
+Found: code review 32 (Minor 1; made-up data; 0 real cases) | Fixed: | Regression test:
+Repro: a single holder doubling its shares while the price falls 35-62% passes the inference (the veto needs a second holder), so the change reads 'unchanged 0%' for 'added +100%'; a 13F can't tell the two apart and the README lists only the splits it misses. Probe: %LOCALAPPDATA%\stockdb-qa\review32\head\tests\test_review32.py.
+Expected: a single-holder case not inferred, or the README says it can be.   Actual: inferred, undocumented.
+
+### BUG-355 [P3][UI] bars_stored_at scans every refresh_log bars row on each HP view
+Status: OPEN
+Found: code review 32 (Minor 2; correct results) | Fixed: | Regression test:
+Repro: a LIKE over the summary JSON and a fetchall per HP view: 0.17 s (updated ticker) / 0.43 s (named, never updated) on a synthetic year of daily runs, growing with the log. Probe: %LOCALAPPDATA%\stockdb-qa\review32\head\tests\test_review32.py.
+Expected: a bounded query (latest rows first, or an index/column).   Actual: a full scan.
+
+### BUG-356 [P3][OWNERSHIP] The bracket rule reads 'Ex-Officio' as a past mark
+Status: OPEN
+Found: code review 32 (Minor 3; made-up titles; base the same) | Fixed: | Regression test:
+Repro: 'CEO (Ex-Officio)' reads as no sitting chief. Probe: %LOCALAPPDATA%\stockdb-qa\review32\head\tests\test_review32.py.
+Expected: a sitting chief.   Actual: past.
+
+### BUG-357 [P3][DOCS] The form4 API's new `price_footnote` field isn't documented
+Status: OPEN
+Found: code review 32 (Minor 4) | Fixed: | Regression test:
+Repro: BUG-219 added `price_footnote` to the form4 API's trades; README and USAGE_GUIDE don't name it.
+Expected: documented beside the other trade fields.   Actual: missing.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)

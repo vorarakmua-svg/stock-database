@@ -3409,3 +3409,15 @@ Result: BUG-193, BUG-201, BUG-204, BUG-216 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3539 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(web): N/A notes name their inputs; unscored rows say so; cards explain debt-free reads; 10b5-1 on the trades it covers (BUG-193, BUG-201, BUG-204, BUG-216)
 Next: code review 32 (scope c68ec07..HEAD).
+
+## Iteration 202: 2026-11-20 11:50: code review 32
+Picked: code review 32 (ac12e3b..23b0145: BUG-198/202/238, the docs batch, BUG-212/213/217/219, BUG-349..352,
+BUG-193/201/204/216); an opus reviewer.
+Did: `qa/evidence/review32.txt`; 4 probes failing at HEAD; the touched test files pass (1033).
+Result: Important 1 -> BUG-353 (P2, a display regression of BUG-193: REIT/utility Magic Formula notes give a stored
+input, not the sector rule); Minors -> BUG-354..357 (P3). Checked right: no row-position year reads left in scores;
+BUG-238 matches the oracle; BUG-212 never re-reads hand-curated codes; every collected_at writer stores local time
+(BUG-350 sound); the screener's extra columns are whitelisted.
+Gates: unchanged (qa/ only) | CI: PR #29
+Commit: (this commit) chore(qa): code review 32 recorded; one Important finding (BUG-353)
+Next: BUG-353 first, with BUG-354..357; the test-gap batch (worker).
