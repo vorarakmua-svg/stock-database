@@ -3207,3 +3207,13 @@ Result: BUG-229, BUG-230 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3112 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(market): downloads stream with a cap; a FRED answer without rows keeps the cache (BUG-229, BUG-230)
 Next: the as-of branch's final review; then more P3s outside its files.
+
+## Iteration 185: 2026-11-19 16:40: as-of snapshots branch complete, held for the user (Q18)
+Picked: structural item #2 (one rule for the as-of view; the user chose backtesting semantics and approach A).
+Did: plan Tasks 0-9 on feat/asof-snapshots (subagent-driven; each task reviewed, fix rounds on 5, 6, 7, 8; a final
+whole-branch review and one fix wave). Snapshot builder, store, lookup reader, any-day oracle, exact cache.
+Result: branch ready at ce4ff10 (pushed, not merged). Merge held: it moves MCO's historical-value label (removed
+look-ahead) - Q18 NEEDS-USER with the recommendation to merge.
+Gates: on the branch ruff ✓ mypy ✓ pytest 3141 passed, 1 skipped | CI: not on PR #29 until merged
+Commit: (this commit) chore(qa): the as-of snapshots branch waits on the user (Q18)
+Next: P3s outside the branch's files (BUG-206/207/215, BUG-231/234 workers running).

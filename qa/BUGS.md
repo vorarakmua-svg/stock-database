@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 157 · NEEDS-USER 0 · Decided: 7 · Verified: 196
+**Open:** P0 0 · P1 0 · P2 0 · P3 157 · NEEDS-USER 1 · Decided: 7 · Verified: 196
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2181,6 +2181,14 @@ Status: OPEN
 Found: the as-of snapshots design's builder check and BUG-341's residual R1 | Fixed: | Regression test:
 Repro: sqlite_store._write_stock upserts financials_annual and financials_annual_vintages and never deletes, so an existing DB keeps years an older parse made, years from a `years_back` run, and after BUG-341 16 vintages the parser no longer produces (each 1-2 figures from another period, mostly equity or cash at a transition date). The current as-of reader reads them as the latest-filed view (the as-of snapshots plan replaces that reader).
 Expected: a full run's annual rows and vintages are exactly what it parsed.   Actual: leftovers persist.
+
+### Q18 [ASOF] NEEDS-USER: merge the as-of snapshots branch? It moves one historical-value label (MCO below -> near) by removing look-ahead
+Status: OPEN (NEEDS-USER)
+Found: as-of snapshots plan (docs/superpowers/specs/2026-11-18-asof-snapshots-design.md, plan docs/superpowers/plans/2026-11-18-asof-snapshots.md), Task 8's downstream diff | Fixed: | Regression test:
+Branch: feat/asof-snapshots at ce4ff10 (pushed, not merged), 23 commits on ef349cc, every task and the whole branch reviewed; full suite 3141 passed. The as-of view is the annual record replayed on the facts filed by each date (table financials_annual_known; lookup-only reader). Verified on a real-data copy: latest snapshots equal the record over 711,079 cells; any-day oracle 0 of 2,017; look-ahead 0; identical under two hash seeds; collection ~3.2x the old cost (~22 min for 502); DB +216 MB.
+The decision: the branch replaces each ticker's vintages on a run, removing views the parser no longer makes (BUG-344 leftovers) and views of a year not yet ended (BUG-113). Valuation reads MIN(filed_date) from the vintages, so 14 first-filed dates at 12 tickers move LATER (all were look-ahead): 191 valuation-history rows; MCO's historical value $543.04 -> $531.37 and its label below -> near (FY2017 first filed 2017-02-24 -> 2018-02-27). No median, verdict or owner-earnings verdict moves.
+Recommendation: merge (the old values used information not yet filed). After merge: re-collect the 502 once (the as-of page reads 'isn't built yet' until then), run the engine and verdicts on the live DB (it may hold other leftovers), and record: VERIFIED BUG-116, 120, 085, 334, 320 and BUG-344's vintage half; still open 268, 113 (narrowed: LLY FY2014, TEL FY2025), 132, 287, 339; new bugs: COP FY2018-20 vintages' diluted count in thousands, BAC FY2011 / FAST dividend per share from the prior 10-K's forward-dated fact (2 cells). Details: the branch's .superpowers/sdd/2026-11-18-asof-snapshots/task-8-report.md.
+Decision: 
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
