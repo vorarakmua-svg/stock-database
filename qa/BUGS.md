@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 147 · NEEDS-USER 1 · Decided: 7 · Verified: 206
+**Open:** P0 0 · P1 0 · P2 0 · P3 151 · NEEDS-USER 1 · Decided: 7 · Verified: 206
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2199,6 +2199,30 @@ Branch: feat/asof-snapshots at ce4ff10 (pushed, not merged), 23 commits on ef349
 The decision: the branch replaces each ticker's vintages on a run, removing views the parser no longer makes (BUG-344 leftovers) and views of a year not yet ended (BUG-113). Valuation reads MIN(filed_date) from the vintages, so 14 first-filed dates at 12 tickers move LATER (all were look-ahead): 191 valuation-history rows; MCO's historical value $543.04 -> $531.37 and its label below -> near (FY2017 first filed 2017-02-24 -> 2018-02-27). No median, verdict or owner-earnings verdict moves.
 Recommendation: merge (the old values used information not yet filed). After merge: re-collect the 502 once (the as-of page reads 'isn't built yet' until then), run the engine and verdicts on the live DB (it may hold other leftovers), and record: VERIFIED BUG-116, 120, 085, 334, 320 and BUG-344's vintage half; still open 268, 113 (narrowed: LLY FY2014, TEL FY2025), 132, 287, 339; new bugs: COP FY2018-20 vintages' diluted count in thousands, BAC FY2011 / FAST dividend per share from the prior 10-K's forward-dated fact (2 cells). Details: the branch's .superpowers/sdd/2026-11-18-asof-snapshots/task-8-report.md.
 Decision: 
+
+### BUG-345 [P3][MARKET] Since BUG-229 a read timeout during a market download's body isn't retried
+Status: OPEN
+Found: code review 30 (`qa/evidence/review30.txt`, Minor 1; a regression of BUG-229; probe fails at HEAD, passes at 45f43b5) | Fixed: | Regression test:
+Repro: src/market/sources.py ~303-335: streaming moved the body read outside the retry loop, so a timeout while the body streams fails the fetch (cached copy kept, or an error without one); the docstring still says timeouts are retried. Probe: %LOCALAPPDATA%\stockdb-qa\review30\head\tests\test_review30.py.
+Expected: a body-read timeout retried like a connect timeout.   Actual: not retried.
+
+### BUG-346 [P3][CODE] The suite's network guard lets reverse name lookups through
+Status: OPEN
+Found: code review 30 (Minor 2; no test reaches it today) | Fixed: | Regression test:
+Repro: tests/conftest.py ~92 (BUG-088's guard) patches getaddrinfo/gethostbyname(_ex) but not gethostbyaddr, getnameinfo (nor getfqdn via gethostbyaddr); BUG-088's residuals don't list them. Probe: %LOCALAPPDATA%\stockdb-qa\review30\head\tests\test_review30.py.
+Expected: reverse lookups of non-local addresses refused.   Actual: they go out.
+
+### BUG-347 [P3][OWNERSHIP] ceo_or_cfo misreads some plausible titles the README's rules cover
+Status: OPEN
+Found: code review 30 (Minor 3; made-up titles; all 555 chief titles in the cached Form 4s read right) | Fixed: | Regression test:
+Repro: counted as the company's chief: 'Assistant CFO', 'Retired CEO', 'Ex-CEO', 'CEO (Retired)', 'Regional CFO', 'Divisional CFO'; read as a unit's head: 'CFO, Principal Accounting Officer', 'CFO, Corporate Secretary', 'CEO, Board Member', 'CEO of the Company'. A real 'FORMER RETIRED CEO' exists. Probe: %LOCALAPPDATA%\stockdb-qa\review30\head\tests\test_review30.py.
+Expected: as the README's rules say.   Actual: as listed.
+
+### BUG-348 [P3][PARSE] Two fiscal years can share a calendar_year at the 52/53-week boundary around June 30
+Status: OPEN
+Found: code review 30 (Minor 4; not a regression: 45f43b5 gives the same at LRCX and STX) | Fixed: | Regression test:
+Repro: SEC gives one of two adjacent years no frame and the rule (end less 180 days) hands it its neighbour's year: LRCX FY2024/FY2025 both 2024; STX, WDC FY2023/FY2024 both 2023. README ~2130 calls the fallback 'SEC's own rule'. Only coverage.py and the DB indexes read calendar_year. Probe: %LOCALAPPDATA%\stockdb-qa\review30\head\tests\test_review30.py.
+Expected: distinct calendar years for distinct fiscal years.   Actual: a duplicate.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)

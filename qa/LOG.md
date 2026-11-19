@@ -3266,3 +3266,14 @@ Result: BUG-211, BUG-218 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3297 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(gurus): changes and latest quarters from complete quarters; a stale guru leaves the screener (BUG-211, BUG-218)
 Next: more P3s outside the as-of branch's files; Q18 waits on the user.
+
+## Iteration 190: 2026-11-19 22:10: code review 30
+Picked: code review 30 (45f43b5..218645a: BUG-337, -057/123/277, -341, -088, -229/230, -206/207/215, -231/234,
+-155/056/164, -211/218); an opus reviewer.
+Did: `qa/evidence/review30.txt`; 15 probe cases, each failing at HEAD; the 16 touched test files pass (823).
+Result: no Critical or Important. Minors -> BUG-345 (a regression of BUG-229: body-read timeouts not retried),
+BUG-346, BUG-347, BUG-348 (P3). BUG-341's vintages re-parsed by their own day match (505 at 8 filers); BUG-277's rule
+matches 444,538 SEC frames; BUG-211/218's SQL and Python deadlines agree.
+Gates: unchanged (qa/ only) | CI: PR #29
+Commit: (this commit) chore(qa): code review 30 recorded; four Minor findings (BUG-345..348)
+Next: BUG-345 (regression) and BUG-232/281/289 (worker).
