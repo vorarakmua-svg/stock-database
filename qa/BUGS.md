@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 157 · NEEDS-USER 1 · Decided: 7 · Verified: 196
+**Open:** P0 0 · P1 0 · P2 0 · P3 154 · NEEDS-USER 1 · Decided: 7 · Verified: 199
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1594,17 +1594,19 @@ Expected: the stale row re-asked; the quarter marked incomplete when any filing 
 Notes: none of the four shows in today's data (0 checksum failures, no double amendments).
 
 ### BUG-206 [P3][OWNERSHIP] A joint Form 4 counts one buyer on the INS tab and every owner in the screener
-Status: OPEN
-Found: build iteration 39 (M3-7's docs worker), build M3-7 | Fixed: | Regression test:
+Status: VERIFIED (iteration 186)
+Found: build iteration 39 (M3-7's docs worker), build M3-7 | Fixed: (this commit) | Regression tests: tests/test_ownership_insiders.py, tests/test_web_insiders.py; 78 failing first
 Repro: a Form 4 with two reporting owners buying. `Reader.sec_insider_trades` joins each trade to its filing's first owner (`MIN(owner_cik)`), so the INS tab, `/api/stocks/{t}/form4` and `summarize` count 1 buyer. The screener's `ins_buyers_12m` and `ins_cluster_buyers_12m` count each owner (2). A temporary database showed 1 against 2; no joint filing is in the data collected so far.
 Expected: one rule for both, chosen and documented.   Actual: two, documented as a limitation in the README and the usage guide.
+Fix (iteration 186, BUG-206/207/215 together, `qa/evidence/bug206-investigation.txt`): one definition for the INS tab and the screener. A CEO/CFO buy is one filing (as the README already defined `ins_ceo_cfo_buys_12m`; `summarize` gives one entry per accession with first/last date and summed shares and value). A filing's buyer is set once (`insiders.FILING_OWNER_SQL`): the owner flagged CEO/CFO, else the lowest CIK, so a joint Form 4 (affiliated groups: ValueAct's 8 entities, JAB's 10) is one buyer and never a cluster alone. Titles: `ceo_or_cfo(title, ticker)`, a pure function over the stored spellings ('CEO, Chairman', 'C.E.O.', 'CHIEF EXECUTIVE OFF.' count; a unit after of/at/comma/dash that isn't a role, another person's chief, Former/Deputy/Elect/Designate/Emeritus don't; a unit equal to the ticker is the company). Orchestrator's call: a CEO-elect isn't a CEO yet (TSN 2026-09-04 1 -> 0). Measured: INS/screener disagreements buyers 6 -> 0, CEO/CFO buys 13 -> 0, clusters 1 -> 0; screener moves at 20 tickers (CRM buyers 10 -> 3, cluster 9 -> 2; LEN, NDAQ, RSG, TPL, WRB; INS CEO/CFO counts become filings: MSCI 30 -> 3, KKR 9 -> 4); no valuation, score or analysis reads these fields. Stored flags change on the next insiders collection. Residuals: 'Taco Bell, CEO', 'CEO & Brand Pres. Kate Spade' still count; 'CEO, UHG' (UNH), 'Group CEO PMI' (PM) don't; 'See Remarks' (1,740 filings) unreadable.
 
 ### BUG-207 [P3][OWNERSHIP] A CEO or CFO title written "CEO, Chairman" isn't counted as a CEO/CFO buy
-Status: OPEN
-Found: build iteration 39 (M3-7's docs worker), build M3-7 | Fixed: | Regression test:
+Status: VERIFIED (iteration 186)
+Found: build iteration 39 (M3-7's docs worker), build M3-7 | Fixed: (this commit) | Regression tests: tests/test_ownership_insiders.py, tests/test_web_insiders.py; 78 failing first
 Repro: `src/ownership/insiders.py` `ceo_or_cfo("CEO, Chairman")` is False. The rule that makes "EVP, Pres. & CEO, BGS" a unit's head (a comma right after the name) catches a real CEO whose title lists the role first.
 Expected: True.   Actual: False; the real titles collected so far all classify correctly.
 Notes: documented as a limitation in the README.
+Fix: see BUG-206 (iteration 186).
 
 ### BUG-208 [P1][OWNERSHIP] A company's own Form 4s as another issuer's owner are stored as its insider trades
 Status: VERIFIED (build iteration 40)
@@ -1656,10 +1658,11 @@ Repro: Icahn's filings omit holdings every quarter, as do Berkshire's Q1 2025 an
 Expected: a note where a filing states omitted holdings.   Actual: none.
 
 ### BUG-215 [P3][OWNERSHIP] "CEO/CFO buys, 12 months" counts trades on the INS tab and filings in the screener
-Status: OPEN
-Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Status: VERIFIED (iteration 186)
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: (this commit) | Regression tests: tests/test_ownership_insiders.py, tests/test_web_insiders.py; 78 failing first
 Repro: `ins.html:13` counts trade rows, `screener.py` `ins_ceo_cfo_buys_12m` filings.
 Expected: one unit.   Actual: two.
+Fix: see BUG-206 (iteration 186).
 
 ### BUG-216 [P3][UI] The 10b5-1 flag is a filing's but shows on every row of it
 Status: OPEN

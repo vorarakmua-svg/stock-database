@@ -895,7 +895,10 @@ same date, shares and price under another code (a code correction), matched one 
 other trades stand, as a 4/A often adds a trade its original omitted (both of PFE's do). A restated trade stays,
 marked `superseded_by` the 4/A's accession in `insider_trades`, and the aggregates, the INS tab and the
 screener leave it out; `insider_filings.superseded_by` notes the amending 4/A. A filing with several reporting
-owners has a row for each in `insider_filings` and its trades once in `insider_trades`.
+owners has a row for each in `insider_filings` and its trades once in `insider_trades`. Its owners report the same
+trades (Berkshire with Buffett, Cascade with Gates, ValueAct's eight entities), so the INS tab, the API and the
+screener all read it as one buyer (BUG-206): the owner that is the company's CEO or CFO, else the one with the lowest
+CIK, whose name the trades show.
 
 The aggregates, computed at read time from the trades no amendment restated:
 - **Open-market buying and selling** over 3, 6 and 12 months (91, 182 and 365 days back from today): the
@@ -906,13 +909,19 @@ The aggregates, computed at read time from the trades no amendment restated:
   dollars) and the distinct
   buyers and sellers. Grants (A), exercises (M), tax withholding (F), gifts (G) and the other codes are stored
   and shown with their meaning, never summed.
-- **CEO and CFO buys**: a purchase in the last 12 months by an officer whose title names the chief executive
-  or financial officer ("CEO", "CFO", "Chief Executive Officer" or "Chief Financial Officer", in any case). A
-  comma, "of" or a dash right after the name makes it a unit's head ("EVP, Pres. & CEO, BGS", "CEO of
-  Payments", "CEO - Americas"), which doesn't count. The flag is stored per filing
-  (`insider_filings.is_ceo_cfo`).
+- **CEO and CFO buys**: the filings with a purchase in the last 12 months by an officer whose title names the
+  chief executive or financial officer, one buy per filing however many purchases it lists (BUG-215; the INS tab's
+  line for it sums them). The title names it as "CEO", "CFO", "C.E.O.", a co-CEO, or "Chief Executive Officer" or
+  "Chief Financial Officer" as filers shorten it ("Chief Exec. Officer", "CHIEF EXECUTIVE OFF.", "Chief Fin & Op
+  Officer"), in any case. A unit named after it, after a comma, a dash, "of", "at" or a space, makes it the unit's
+  head, which doesn't count ("EVP, Pres. & CEO, BGS", "CEO & President - RJA", "CEO of Payments", "CEO Amazon Web
+  Services"), unless it is the company's own ticker ("Pres. & CEO of NCLH"); another role after a comma doesn't
+  ("CEO, Chairman", "CFO, EVP & Treasurer"; BUG-207). Nor do someone else's or a past chief ("Advisor to the CEO",
+  "Former CEO"), a deputy or a unit's word before it ("Deputy CFO", "KFC Division CEO"), or one not yet in office
+  ("President & CEO Elect", "CFO - Designate"). The flag is stored per filing and owner
+  (`insider_filings.is_ceo_cfo`) when the insiders are collected.
 - **Cluster buys**: 3 or more distinct insiders buying (code P) within 30 days of the first of them, over the
-  last 12 months. A purchase belongs to one cluster at most.
+  last 12 months, a joint filing being one insider. A purchase belongs to one cluster at most.
 - **Sales under a 10b5-1 plan**: of the shares sold in the last 12 months in filings that state the flag, the
   share sold under a plan; empty where no filing states it.
 
@@ -1120,11 +1129,13 @@ The columns and queries are in the [USAGE_GUIDE](USAGE_GUIDE.md#sec-ownership).
 - Form 4 history is the last 3 years and the 13F history the last 8 quarters (`--years`, `--quarters`); the
   SEC's bulk data sets would reach further and aren't used. A quarter whose previous one isn't stored has no
   changes.
-- A title that puts the CEO or CFO before a comma ("CEO, Chairman") reads as a unit's head and isn't counted
-  as a CEO/CFO buy.
-- A joint Form 4 (several reporting owners) is read two ways: the INS tab, the API and their aggregates name
-  its first owner (the lowest CIK) and count one buyer, while the screener's `ins_buyers_12m` and
-  `ins_cluster_buyers_12m` count every owner.
+- An officer title is free text, read by rules (above). A unit named before the role ("Taco Bell, CEO") or after
+  a role joined to it without a separator ("CEO & Brand Pres. Kate Spade") still counts, and a company named by
+  its initials rather than its ticker ("CEO, UHG" at UNH) reads as a unit. A title "See Remarks" (in the
+  filing's remarks, which aren't stored) isn't counted. Stored flags follow the rules of the collection that
+  stored them: the next insiders collection re-reads every filing of its window.
+- A joint filer that also files alone counts as a second buyer when its joint filing is read under another owner
+  (one with a lower CIK); none did in the 12 months to 2026-11-19.
 - Four edge cases of the CUSIP map and the quarters are open as BUG-205; none shows in the data collected so
   far.
 

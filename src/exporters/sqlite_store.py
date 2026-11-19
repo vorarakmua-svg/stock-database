@@ -1650,7 +1650,7 @@ class SQLiteStore:
                       filing.period_of_report, filing.original_filed, owner.name, int(owner.is_director),
                       int(owner.is_officer), owner.officer_title, int(owner.is_ten_percent), int(owner.is_other),
                       None if filing.aff10b5one is None else int(filing.aff10b5one),
-                      int(ceo_or_cfo(owner.officer_title)), collected_at)
+                      int(ceo_or_cfo(owner.officer_title, ticker)), collected_at)
                      for owner in filing.owners])
                 conn.executemany(
                     "INSERT INTO insider_trades (accession, seq, ticker, kind, security_title, date, code, shares, "

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple, Union
 
 from ..exporters.sqlite_store import _CANONICAL_COLUMNS, _METRIC_COLUMNS, _SNAPSHOT_COLUMNS, read_only_uri
+from ..ownership.insiders import FILING_OWNER_SQL
 from .screener import SCREEN_COLUMNS, ScreenSpec, build_count_query, build_screen_query
 
 # O(1) whitelist sets — used for column-name validation before interpolation.
@@ -557,15 +558,15 @@ class Reader:
 
     def sec_insider_trades(self, ticker: str) -> List[Dict[str, Any]]:
         """The ticker's Form 4 trades that no amendment restated (``insider_trades.superseded_by``), each with its
-        filing (form, filed date, 10b5-1 flag) and its first reporting owner (name, role, title, CEO/CFO flag),
-        newest first. [] before the tables exist, or while the trades lack their amendment note (a table from
-        older code, until the next collection)."""
+        filing (form, filed date, 10b5-1 flag) and its buyer, the one reporting owner the screener counts too
+        (``insiders.FILING_OWNER_SQL``: name, role, title, CEO/CFO flag), newest first. [] before the tables exist,
+        or while the trades lack their amendment note (a table from older code, until the next collection)."""
         try:
             cur = self._conn.execute(
                 "SELECT t.*, f.form, f.filed_date, f.owner_cik, f.owner_name, f.is_director, f.is_officer, "
                 "f.officer_title, f.is_ten_percent, f.is_ceo_cfo, f.aff10b5one "
                 "FROM insider_trades t JOIN insider_filings f ON f.accession = t.accession "
-                "AND f.owner_cik = (SELECT MIN(owner_cik) FROM insider_filings WHERE accession = t.accession) "
+                "AND f.owner_cik = " + FILING_OWNER_SQL.format(accession="t.accession") + " "
                 "WHERE t.ticker = ? AND t.superseded_by IS NULL "
                 "ORDER BY t.date DESC, f.filed_date DESC, t.accession, t.seq",
                 (ticker,),

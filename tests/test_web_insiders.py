@@ -195,3 +195,75 @@ def test_a_database_without_the_insider_tables_still_screens(web_db):
     with Reader(web_db) as r:
         result = r.screen(ScreenSpec(filters=[], sort="ins_net_buy_12m"))
         assert all(row["ins_net_buy_12m"] is None for row in result["items"])
+
+
+def _joint(accession, owners, trades, when):
+    """A Form 4 of several reporting owners, (cik, title) each, and its trades, (code, shares, price, day) each."""
+    filing = Form4(accession=accession, form="4", period_of_report=when, issuer_ticker="AAA",
+                   owners=[Owner(cik=cik, name=f"INSIDER {cik}", is_director=title is None,
+                                 is_officer=title is not None, officer_title=title) for cik, title in owners],
+                   trades=[Trade(table="nonderivative", seq=i, security_title="Common Stock", date=day, code=code,
+                                 shares=shares, price=price, acquired_disposed="A" if code == "P" else "D",
+                                 owned_after=10000.0, direct_indirect="I")
+                           for i, (code, shares, price, day) in enumerate(trades)])
+    return FilingRef(accession, "4", when, when, "doc.xml"), filing
+
+
+def _counts(client, web_db):
+    """The INS tab's (the API's) and the screener's buyers, cluster buyers and CEO/CFO buys of AAA, side by side."""
+    s = client.get("/api/stocks/AAA/form4").json()["summary"]
+    with Reader(web_db) as r:
+        aaa = {row["ticker"]: row for row in r.screen(ScreenSpec(filters=[]))["items"]}["AAA"]
+    clusters = max([c["buyers"] for c in s["clusters_12m"]], default=None)
+    return ((s["windows"]["12m"]["buyers"], aaa["ins_buyers_12m"]), (clusters, aaa["ins_cluster_buyers_12m"]),
+            (len(s["ceo_cfo_buys_12m"]), aaa["ins_ceo_cfo_buys_12m"]))
+
+
+def test_a_joint_filing_is_one_buyer_on_the_ins_tab_and_in_the_screener(client, web_db):
+    # BUG-206: a joint Form 4's owners report the same purchase (Berkshire and Buffett; ValueAct's eight entities):
+    # one buyer, and no cluster by itself.
+    SQLiteStore(db_path=web_db).export_insider_filings("AAA", [
+        _joint("J-1", [("0001067983", None), ("0000315090", None), ("0001418812", None)],
+               [("P", 1000.0, 50.0, _ago(20)), ("P", 500.0, 51.0, _ago(19))], _ago(18)),
+    ], "2026-10-22T00:00:00+00:00")
+    (buyers, screener_buyers), (cluster, screener_cluster), _ = _counts(client, web_db)
+    assert (buyers, screener_buyers) == (1, 1)
+    assert (cluster, screener_cluster) == (None, 1)  # the screener's most buyers within 30 days: one, no cluster
+    trades = client.get("/api/stocks/AAA/form4").json()["trades"]
+    assert {t["owner_cik"] for t in trades} == {"0000315090"}  # named by its lowest CIK
+
+
+def test_a_joint_filing_with_the_ceo_is_the_ceos_buy_on_both(client, web_db):
+    # A CEO filing with his trust, whose CIK is lower (as Coinbase's and EchoStar's chiefs file): the CEO's buy, one
+    # buyer, on the INS tab as in the screener.
+    SQLiteStore(db_path=web_db).export_insider_filings("AAA", [
+        _joint("J-2", [("0000000200", "Chairman and CEO"), ("0000000100", None)],
+               [("P", 1000.0, 50.0, _ago(20))], _ago(18)),
+    ], "2026-10-22T00:00:00+00:00")
+    assert _counts(client, web_db) == ((1, 1), (None, 1), (1, 1))
+    (buy,) = client.get("/api/stocks/AAA/form4").json()["summary"]["ceo_cfo_buys_12m"]
+    assert (buy["owner_name"], buy["officer_title"]) == ("INSIDER 0000000200", "Chairman and CEO")
+
+
+def test_a_ceo_filing_of_several_purchases_is_one_ceo_buy_on_both(client, web_db):
+    # BUG-215: the INS tab counted the rows (3), the screener the filings (1).
+    SQLiteStore(db_path=web_db).export_insider_filings("AAA", [
+        _joint("K-1", [("0000000300", "CEO")],
+               [("P", 100.0, 50.0, _ago(22)), ("P", 200.0, 51.0, _ago(21)), ("P", 300.0, 52.0, _ago(20))], _ago(18)),
+    ], "2026-10-22T00:00:00+00:00")
+    assert _counts(client, web_db)[2] == (1, 1)
+    (buy,) = client.get("/api/stocks/AAA/form4").json()["summary"]["ceo_cfo_buys_12m"]
+    assert (buy["date"], buy["last_date"], buy["shares"]) == (_ago(22), _ago(20), 600.0)
+    assert buy["value"] == pytest.approx(100 * 50.0 + 200 * 51.0 + 300 * 52.0)
+    html = " ".join(client.get("/ui/stocks/AAA/ins").text.split())
+    assert ('CEO/CFO buys, 12 months</span><span class="summary-value">1</span>' in html)
+    assert f"bought 600 shares ({fmt_money(buy['value'])}) between {_ago(22)} and {_ago(20)}" in html
+
+
+@pytest.mark.parametrize("title", ["CEO, Chairman", "Pres. & CEO of AAA"])
+def test_a_ceo_whose_title_lists_another_role_or_the_company_is_stored_as_the_ceo(client, web_db, title):
+    # BUG-207: the flag stored with the filing, which the INS tab and the screener read; "of AAA" is the company.
+    SQLiteStore(db_path=web_db).export_insider_filings("AAA", [
+        _joint("L-1", [("0000000400", title)], [("P", 100.0, 50.0, _ago(20))], _ago(18)),
+    ], "2026-10-22T00:00:00+00:00")
+    assert _counts(client, web_db)[2] == (1, 1)

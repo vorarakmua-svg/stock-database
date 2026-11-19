@@ -37,6 +37,7 @@ from typing import AbstractSet, Any, Dict, FrozenSet, List, Optional, Tuple, Uni
 
 from ..exporters.sqlite_store import _METRIC_COLUMNS
 from ..ownership.cusips import UNIVERSE_CUSIPS
+from ..ownership.insiders import FILING_OWNER_SQL
 from ..ownership.portfolio import share_classes
 
 # O(1) whitelist lookup
@@ -116,9 +117,11 @@ QualityColumns = Union[bool, AbstractSet[str]]
 
 # Insiders' open-market trades from the SEC's Form 4 filings (insider_trades, insider_filings), over the last 365
 # days, those no amendment restated (insider_trades.superseded_by): correlated subqueries, NULL when the tables or
-# their newer columns don't exist (docs/superpowers/specs/2026-10-22-sec-ownership-design.md). A joint filing counts
-# each of its owners. A price that lost its decimal point (insider_trades.price_suspect) adds no dollars.
+# their newer columns don't exist (docs/superpowers/specs/2026-10-22-sec-ownership-design.md). Each trade joins its
+# filing's buyer, the one owner the INS tab reads (insiders.FILING_OWNER_SQL): a joint filing is one buyer (BUG-206).
+# A price that lost its decimal point (insider_trades.price_suspect) adds no dollars.
 _LIVE_TRADES = ("FROM insider_trades {t} JOIN insider_filings {f} ON {f}.accession = {t}.accession "
+                "AND {f}.owner_cik = " + FILING_OWNER_SQL.format(accession="{t}.accession") + " "
                 "WHERE {t}.ticker = ma.ticker AND {t}.kind = 'nonderivative' AND {t}.superseded_by IS NULL ")
 INSIDER_EXPRS: Dict[str, str] = {
     # Open-market dollars bought less sold (code P less S), each trade once.
@@ -131,7 +134,7 @@ INSIDER_EXPRS: Dict[str, str] = {
     "ins_buyers_12m":
         "(SELECT COUNT(DISTINCT f.owner_cik) " + _LIVE_TRADES.format(t="t", f="f")
         + "AND t.code = 'P' AND t.date >= date('now', '-365 days'))",
-    # Open-market purchases by the company's CEO or CFO (filings).
+    # Open-market purchases by the company's CEO or CFO: the filings, as the INS tab counts them (BUG-215).
     "ins_ceo_cfo_buys_12m":
         "(SELECT COUNT(DISTINCT t.accession) " + _LIVE_TRADES.format(t="t", f="f")
         + "AND t.code = 'P' AND f.is_ceo_cfo = 1 AND t.date >= date('now', '-365 days'))",

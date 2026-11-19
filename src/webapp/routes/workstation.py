@@ -904,8 +904,8 @@ def ins_fragment(
             "sold": fmt_money(year["sold_value"]), "sellers": year["sellers"],
             "windows": [{"label": label, "net": fmt_money(s["windows"][key]["net_value"])}
                         for key, label in (("3m", "3 months"), ("6m", "6 months"), ("12m", "12 months"))],
-            "ceo_cfo": [{"date": b["date"], "name": b["owner_name"], "title": b["officer_title"],
-                         "shares": fmt_count(b["shares"]), "value": fmt_money(b["value"])}
+            "ceo_cfo": [{"date": b["date"], "last_date": b["last_date"], "name": b["owner_name"],
+                         "title": b["officer_title"], "shares": fmt_count(b["shares"]), "value": fmt_money(b["value"])}
                         for b in s["ceo_cfo_buys_12m"]],
             "clusters": [{"start": c["start"], "end": c["end"], "buyers": c["buyers"],
                           "names": ", ".join(c["names"]), "value": fmt_money(c["value"])}

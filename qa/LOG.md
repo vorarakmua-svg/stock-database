@@ -3217,3 +3217,15 @@ look-ahead) - Q18 NEEDS-USER with the recommendation to merge.
 Gates: on the branch ruff ✓ mypy ✓ pytest 3141 passed, 1 skipped | CI: not on PR #29 until merged
 Commit: (this commit) chore(qa): the as-of snapshots branch waits on the user (Q18)
 Next: P3s outside the branch's files (BUG-206/207/215, BUG-231/234 workers running).
+
+## Iteration 186: 2026-11-19 18:10: fix (BUG-206, BUG-207, BUG-215)
+Picked: three OWNERSHIP P3s on one theme (insider buyers and CEO/CFO buys counted two ways); an opus worker.
+Did: one definition of a filing's buyer and of a CEO/CFO buy (a filing), shared by the INS tab and the screener;
+a pure title rule over the stored spellings. CEO-elects don't count (orchestrator's call; TSN 1 -> 0).
+- RED: 78 of 170 failed on 52c86a5; GREEN. 55 of 55 mutants; scale-m5-4, bug151, industries-m5-2, market-m4-4,
+  bug069-283, indicators-m4-2 re-run (2 stale mutants already stale at HEAD).
+- DB copies: INS/screener disagreements 20 -> 0; screener moves at 20 tickers; no valuation reads them.
+Result: BUG-206, BUG-207, BUG-215 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3220 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(insiders): one buyer per filing and one CEO/CFO buy per filing, on both views (BUG-206, BUG-207, BUG-215)
+Next: BUG-231/234 (worker); Q18 waits on the user.

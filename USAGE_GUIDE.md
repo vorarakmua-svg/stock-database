@@ -816,7 +816,8 @@ Two tables hold each company's Form 4 and 4/A filings of the last three years:
   - `ticker` (our company, the issuer), `form` (`4` or `4/A`), `filed_date`, `period_of_report` (the date the
     report covers) and `original_filed` (for a 4/A, the day its original was filed);
   - the owner: `owner_name`, `is_director`, `is_officer`, `officer_title`, `is_ten_percent` and `is_other` (1
-    or 0), and `is_ceo_cfo` (1 when the title names the chief executive or financial officer);
+    or 0), and `is_ceo_cfo` (1 when the title names the company's chief executive or financial officer, not a
+    unit's: the README's rules);
   - `aff10b5one`: 1 when the filing says its trades were made under a Rule 10b5-1 plan, 0 when it says they
     weren't, NULL when it doesn't say;
   - `superseded_by`: the accession of the 4/A that amended this filing, NULL otherwise; the trades the 4/A
@@ -840,9 +841,10 @@ Two tables hold each company's Form 4 and 4/A filings of the last three years:
     as filed and every dollar figure treats it as missing, so add `AND t.price_suspect IS NOT 1` to a dollar sum.
 
 A filing with several reporting owners has a row in `insider_filings` for each, so a join on `accession`
-repeats its trades once per owner: add dollars from `insider_trades` alone, as the first query does. The INS
-tab and the API name the first owner (the lowest `owner_cik`) and count one buyer; the screener's
-`ins_buyers_12m` and `ins_cluster_buyers_12m` count every owner.
+repeats its trades once per owner: add dollars from `insider_trades` alone, as the first query does. Its owners
+report the same trades, so the INS tab, the API and the screener read it as one buyer: the owner flagged
+`is_ceo_cfo`, else the lowest `owner_cik` (join on `f.owner_cik = (SELECT o.owner_cik FROM insider_filings o
+WHERE o.accession = t.accession ORDER BY o.is_ceo_cfo DESC, o.owner_cik LIMIT 1)` to do the same).
 
 ```sql
 -- Open-market dollars bought and sold over the last 12 months, per company, the biggest net buyers first
@@ -1039,7 +1041,9 @@ ORDER BY value_usd DESC;
   - `GET /api/stocks/{ticker}/form4` returns `{ticker, source, summary, trades}`. `source` is `sec`, `yahoo`
     (no Form 4 stored: `summary` is null and `trades` are Yahoo's rows) or null. `summary` holds `windows`
     (`3m`, `6m` and `12m`, each with `bought_shares`, `bought_value`, `sold_shares`, `sold_value`,
-    `net_value`, `buyers` and `sellers`), `ceo_cfo_buys_12m`, `clusters_12m` and `planned_sale_share_12m`.
+    `net_value`, `buyers` and `sellers`), `ceo_cfo_buys_12m` (a filing each: its `accession`, its purchases'
+    first `date` and `last_date`, `owner_name`, `officer_title`, summed `shares` and `value`), `clusters_12m` and
+    `planned_sale_share_12m`.
     Each trade has its `date`, `code` and `meaning`, `kind`, `shares`, `price`, `value`, `owned_after`, the
     owner's `owner_name`, `role` and `is_ceo_cfo`, and `plan` (true, false or null), among others;
   - `GET /api/stocks/{ticker}/gurus` returns `{ticker, classes, gurus}`: the ticker and its other share

@@ -26,6 +26,12 @@ WINDOWS = (("3m", 91), ("6m", 182), ("12m", 365))
 #: A cluster buy: at least CLUSTER_BUYERS distinct insiders buying within CLUSTER_DAYS of the first.
 CLUSTER_BUYERS = 3
 CLUSTER_DAYS = 30
+#: A filing's buyer (BUG-206), the one owner the INS tab, the API and the screener read: of its reporting owners, the
+#: company's CEO or CFO if one is among them, else the lowest CIK. A joint filing's owners report the same trades
+#: (Berkshire with Buffett; ValueAct's eight entities), so it is one buyer, and a CEO's buy when the CEO files with
+#: their trust. SQL for the owner_cik of the filing whose accession is {accession}.
+FILING_OWNER_SQL = ("(SELECT fo.owner_cik FROM insider_filings fo WHERE fo.accession = {accession} "
+                    "ORDER BY fo.is_ceo_cfo DESC, fo.owner_cik LIMIT 1)")
 
 #: A price that lost its decimal point (BUG-220: the Lilly Endowment's "$1,031,414" a share for a $1,025.28 close) is
 #: DECIMAL_SHIFT times, or a DECIMAL_SHIFT-th of, a price within PRICE_TOLERANCE of the stock's close that day.
@@ -33,17 +39,66 @@ CLUSTER_DAYS = 30
 DECIMAL_SHIFT = 1000.0
 PRICE_TOLERANCE = 0.10
 
-_CHIEF = re.compile(r"\b(CEO|CFO|Chief\s+(Executive|Financial)\s+Officer)\b", re.IGNORECASE)
-#: A unit named right after the title: "CEO, BGS", "CEO of Payments", "CEO - Americas".
-_UNIT_AFTER = re.compile(r"^\s*(,|of\b|-|–)\s*\S", re.IGNORECASE)
+#: The chief executive or financial officer in a title (BUG-207): "CEO" or "CFO" (a co-CEO; "C.E.O."), or "Chief
+#: Executive Officer" or "Chief Financial Officer" as filers shorten or misspell it ("Chief Exec. Officer", "CHIEF
+#: EXECUTIVE OFF.", "Chief Fin Ofc", "Chief Financal Officer", "Chief Financial Office") or join a second role into it
+#: ("Chief Fin & Op Officer", "Chief Finance/Strat Ofcr").
+_CHIEF = re.compile(
+    r"(?<![\w.])(?:ceo|cfo|c\.e\.o\.?|c\.f\.o\.?)(?!\w)"
+    r"|\bchief\s+(?:exec(?:utive)?|fin(?:ancial|ancal|ance)?)\b\.?(?:\s*(?:&|and|/)\s*[a-z]+\.?)?"
+    r"\s*(?:officer|office|offr|off\.?|ofcr|ofc\.?)(?!\w)", re.IGNORECASE)
+#: Before the name, in its part of the title (back to a comma or a semicolon): someone else's chief ("Advisor to the
+#: CEO", "COS to the Chairman & CEO", "Office of the CEO") or a past one ("Former Senior VP & CFO").
+_NOT_THEIRS = re.compile(r"\b(?:to|former|office\s+of)\b[^,;]*$", re.IGNORECASE)
+#: Right before the name: a deputy, or a unit ("KFC Division CEO", "BU and Ops CFO").
+_UNDER = re.compile(r"\b(?:deputy|division|ops)\s*$", re.IGNORECASE)
+#: The roles joined to the name ("& President", "and Treasurer", "/Chairman"), each up to a comma, a semicolon, a
+#: colon, a dash or a bracket; and a bracket's words ("Chief Executive Officer (CEO)").
+_JOINED = re.compile(r"(?:\s*(?:&|\band\b|/)[^,;:\-–(]*|\s*\([^)]*\))*", re.IGNORECASE)
+#: A word that starts another of the person's roles rather than a unit's name: "CEO, Chairman", "CFO, EVP & Treasurer",
+#: "CFO, President International".
+_ROLE = re.compile(
+    r"(?:chair\w*|vice|pres\w*|director|c[a-z]?[a-z]o|chief|exec\w*|evp|svp|vp|sr|senior|treas\w*|secretary|"
+    r"controller|ctrl|general\s+counsel|founder|head|interim|acting)\b", re.IGNORECASE)
 
 
-def ceo_or_cfo(title: Optional[str]) -> bool:
-    """Whether an officer title names the company's chief executive or financial officer. A title naming a unit
-    after it ("EVP, Pres. & CEO, BGS"; "CEO of Payments") belongs to that unit's head."""
+def _a_unit(rest: str, ticker: Optional[str]) -> bool:
+    """Whether *rest*, a title after a chief's name and the roles joined to it, names a unit the chief heads: "of" or
+    "at" one ("CEO of Payments"), or one after a comma, a dash or a space ("CEO, BGS"; "CEO-The Americas"; "CEO Amazon
+    Web Services"), unless it is another role (``_ROLE``: "CEO, Chairman") or the company's own *ticker* ("Pres. & CEO
+    of NCLH" at NCLH)."""
+    named = re.match(r"\s*(?:of|at)\b(.*)", rest, re.IGNORECASE | re.DOTALL)
+    words = (named.group(1) if named else re.sub(r"^\s*[,;:\-–]?\s*(?:(?:and|&)\s+)?", "", rest)).strip(" .")
+    if not words or (not named and _ROLE.match(words)):
+        return False
+    unit = re.sub(r"[,;:(].*", "", words, flags=re.DOTALL).strip(" .")
+    return not (ticker and unit.casefold() == ticker.casefold())
+
+
+def ceo_or_cfo(title: Optional[str], ticker: Optional[str] = None) -> bool:
+    """Whether an officer title names the chief executive or financial officer (``_CHIEF``) of the company, *ticker*.
+
+    Not when the name follows someone else's or a past chief's mark (``_NOT_THEIRS``) or a deputy's or a unit's word
+    (``_UNDER``); nor when a unit follows it (``_a_unit``), right after it or after the roles joined to it
+    (``_JOINED``) by a dash or a space ("CEO & President - RJA"), or within them ("CEO and EVP at PG&E Company"). After
+    a joined role, a comma's unit is that role's ("CFO and SVP, Business Ops"). So "EVP, Pres. & CEO, BGS" and "CEO of
+    Payments" head units, and "CEO-Elect", "CFO - Designate" and "CFO Emeritus" read as no chief in office, while "CEO,
+    Chairman" and "CFO, EVP & Treasurer" are the company's."""
     if not title:
         return False
-    return any(not _UNIT_AFTER.match(title[m.end():]) for m in _CHIEF.finditer(title))
+    for m in _CHIEF.finditer(title):
+        before, after = title[:m.start()], title[m.end():]
+        if _NOT_THEIRS.search(before) or _UNDER.search(before):
+            continue
+        joined = _JOINED.match(after).group()  # type: ignore[union-attr]  # (it matches the empty string too)
+        rest = after[len(joined):]
+        if re.search(r"\bat\b", joined, re.IGNORECASE):
+            continue
+        if joined.strip() and re.match(r"\s*[,;]", rest):
+            return True
+        if not _a_unit(rest, ticker):
+            return True
+    return False
 
 
 def price_suspect(price: Optional[float], close: Optional[float]) -> Optional[bool]:
@@ -200,10 +255,10 @@ def supersessions(filings: Iterable[_Row], trades: Iterable[_Row]
 
 
 def summarize(trades: Sequence[Mapping[str, Any]], today: str) -> Dict[str, Any]:
-    """The aggregates of one company's trades (each with its filing's owner, title, CEO/CFO flag and 10b5-1 flag)
-    as of *today*: per window, the open-market shares and dollars bought and sold, the net and the distinct
-    buyers and sellers; over 12 months, the CEO and CFO purchases, the cluster buys and the share of sales made
-    under a 10b5-1 plan, where the filings say."""
+    """The aggregates of one company's trades (each with its filing's accession, its buyer's (``FILING_OWNER_SQL``)
+    CIK, name, title and CEO/CFO flag, and its 10b5-1 flag) as of *today*: per window, the open-market shares and
+    dollars bought and sold, the net and the distinct buyers and sellers; over 12 months, the CEO and CFO buys (a
+    filing each), the cluster buys and the share of sales made under a 10b5-1 plan, where the filings say."""
     day = date.fromisoformat(today[:10])
     market = [t for t in trades if t.get("kind", "nonderivative") == "nonderivative" and t.get("date")]
     out: Dict[str, Any] = {"windows": {}}
@@ -220,9 +275,16 @@ def summarize(trades: Sequence[Mapping[str, Any]], today: str) -> Dict[str, Any]
     year = (day - timedelta(days=365)).isoformat()
     buys = [t for t in market if t["code"] == "P" and t["date"] >= year]
     sells = [t for t in market if t["code"] == "S" and t["date"] >= year]
-    out["ceo_cfo_buys_12m"] = [{"date": t["date"], "owner_name": t.get("owner_name"),
-                                "officer_title": t.get("officer_title"), "shares": t.get("shares"),
-                                "value": _value([t])} for t in buys if t.get("is_ceo_cfo")]
+    # A CEO or CFO buy is a filing (BUG-215), as the screener's ins_ceo_cfo_buys_12m counts them: its purchases in
+    # the year summed, from the first one's date to the last's.
+    filings: Dict[Any, List[Mapping[str, Any]]] = {}
+    for t in buys:
+        if t.get("is_ceo_cfo"):
+            filings.setdefault(t.get("accession"), []).append(t)
+    out["ceo_cfo_buys_12m"] = [{"accession": accession, "date": min(t["date"] for t in rows),
+                                "last_date": max(t["date"] for t in rows), "owner_name": rows[0].get("owner_name"),
+                                "officer_title": rows[0].get("officer_title"), "shares": _shares(rows),
+                                "value": _value(rows)} for accession, rows in filings.items()]
     out["clusters_12m"] = _clusters(buys)
     known = [t for t in sells if t.get("aff10b5one") is not None]
     total = _shares(known)

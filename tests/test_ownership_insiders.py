@@ -8,10 +8,11 @@ from src.ownership.insiders import CODE_MEANINGS, ceo_or_cfo, price_suspect, sum
 TODAY = "2026-10-22"
 
 
-def _trade(date, code, shares, price, owner="A", title=None, plan=None, kind="nonderivative", suspect=None):
+def _trade(date, code, shares, price, owner="A", title=None, plan=None, kind="nonderivative", suspect=None,
+           accession=None):
     return {"date": date, "code": code, "shares": shares, "price": price, "owner_cik": owner, "owner_name": owner,
             "officer_title": title, "is_ceo_cfo": ceo_or_cfo(title), "aff10b5one": plan, "kind": kind,
-            "price_suspect": suspect}
+            "price_suspect": suspect, "accession": accession or f"{owner}-{date}"}
 
 
 @pytest.mark.parametrize("title, expected", [
@@ -22,6 +23,82 @@ def _trade(date, code, shares, price, owner="A", title=None, plan=None, kind="no
 ])
 def test_ceo_or_cfo_names_the_companys_chief_not_a_units(title, expected):
     assert ceo_or_cfo(title) is expected
+
+
+# BUG-207: spellings of the stored officer titles (insider_filings, 2026-10-25), each as filed.
+@pytest.mark.parametrize("title", [
+    # Another role after the comma, not a unit: the company's chief.
+    "CEO, Chairman", "CEO, Chairman of Board", "CEO, Chair of Board", "CEO, President and Director",
+    "CEO, President, and Director", "President, CEO, and Director", "CEO, Pres. & Chair", "CEO, CTO & Chairman",
+    "Chairman, CEO, President", "Exec. Chairman, CEO, President", "CFO, EVP & Treasurer", "CFO, Executive VP",
+    "CFO, Treasurer and EVP", "CFO, President International", "Chief Financial Officer, EVP",
+    "Chief Exec Officer, President", "SVP, CFO, Chief Acct. Officer", "SVP, Interim CFO, CAO & Cntrlr",
+    "SVP, Interim CFO, Ctrl & CAO", "VP, ACTING CFO, TREASURER",
+    "Interim Co-CEO, CEO Intel Prod", "Interim Co-CEO, EVP, CFO", "Chief Executive Officer (CEO)",
+    "CFO and Head of Business Techn", "EVP, CFO & Transformation Off", "Pres, CCO & Interim Co-CEO",
+    "CFO and SVP, Business Ops",  # a comma after a joined role: that role's unit
+    # The short forms filers write.
+    "Chief Exec. Officer & Director", "CHIEF EXECUTIVE OFF.", "PRESIDENT/CHIEF EXECUTIVE OFF.",
+    "PRES. & CHIEF EXEC. OFFICER", "Pres.&Chief Exec. Officer", "EVP CHIEF FINANCIAL OFF", "Exec VP & Chief Fin Ofc",
+    "EVP, Chief Financal Officer", "EVP and Chief Financial Office", "Chief Fin & Op Officer",
+    "Chief Financial & Admn Officer", "EVP, Chief Finance/Strat Ofcr", "Sr VP, Chief Fin & Ops Off",
+    "President & C.E.O.", "Sr MD Chief Financial Officer", "Co-CEO", "Retiring Sr. VP and CFO",
+])
+def test_a_title_naming_the_chief_among_other_roles_counts(title):
+    assert ceo_or_cfo(title) is True
+
+
+@pytest.mark.parametrize("title", [  # made up: the other roles a title may list after the chief's
+    "CFO, Vice President", "CFO, SVP", "CFO, VP", "CFO, Sr. VP", "CFO, Senior Vice President", "CFO, Secretary",
+    "CEO, General Counsel", "CEO, Founder", "CFO, Head of Strategy", "CEO, Interim COO", "CFO, Acting COO",
+    "CFO, Controller", "CEO, Chief Strategy Officer", "CFO, Executive Vice President",
+])
+def test_another_role_after_a_comma_is_no_unit(title):
+    assert ceo_or_cfo(title) is True
+
+
+@pytest.mark.parametrize("title", [
+    # A unit's chief: after a comma, a dash, "of", "at" or a space, or a word before it.
+    "CEO, Citibank, N.A.", "CEO, UnitedHealthcare", "ceo, International", "CEO, BOE & CCO",
+    "Chairman, President & CEO, APC", "Chief Executive Officer, Optum", "Chief Executive Officer - KFC",
+    "CEO-The Americas", "SVP, CFO, Aflac U.S.", "EVP, CFO, DISH", "CEO & President - RJA",
+    "CEO and EVP at PG&E Company", "CEO Amazon Web Services",
+    "President & CEO CET", "EVP,  Pres/CEO Insurance Div", "Co-CEO CIB", "President & COO, CEO CIB",
+    "KFC Division CEO", "Corp. VP, BU and Ops CFO", "Taco Bell, CEO, YUM CCO",
+    "CEO of Presidio Bank",  # made up: a unit after "of" whose name starts like a role ("Pres")
+    # Someone else's chief, a past or a future one, a deputy.
+    "Advisor to the CEO", "SVP, COS to the Chairman & CEO", "Office of the CEO", "Former CEO", "FORMER RETIRED CEO",
+    "Former Senior VP & CFO", "Deputy CFO & CAO", "Deputy Chief Financial Officer", "FSVP, Deputy CFO, Aflac Japan",
+    "CFO Emeritus", "President & CEO Elect", "President and CEO-Elect", "CEO - ELECT", "EVP and CFO - Designate",
+    # No chief at all.
+    "Chief Accounting Officer", "Chief Operating Officer", "See Remarks", "",
+])
+def test_a_title_naming_a_units_or_someone_elses_chief_doesnt_count(title):
+    assert ceo_or_cfo(title) is False
+
+
+@pytest.mark.parametrize("title, ticker, expected", [
+    ("Pres. & CEO of NCLH", "NCLH", True), ("Pres. & CEO of NCLH", None, False), ("Pres. & CEO of NCLH", "RCL", False),
+    ("CEO, AAA", "aaa", True), ("Taco Bell, CEO, YUM CCO", "YUM", False),
+])
+def test_a_unit_named_as_the_companys_own_ticker_is_the_company(title, ticker, expected):
+    assert ceo_or_cfo(title, ticker) is expected
+
+
+def test_a_ceo_or_cfo_buy_is_a_filing_its_purchases_summed():
+    # BUG-215: one buy per filing with a CEO's or CFO's purchase in the year, however many rows it has.
+    s = summarize([
+        _trade("2026-08-13", "P", 300, 11.0, owner="TAN", title="CEO", accession="F-1"),
+        _trade("2026-08-12", "P", 200, 10.0, owner="TAN", title="CEO", accession="F-1"),
+        _trade("2026-08-11", "S", 999, 10.0, owner="TAN", title="CEO", accession="F-1"),  # a sale: no buy
+        _trade("2025-08-11", "P", 999, 10.0, owner="TAN", title="CEO", accession="F-1"),  # older than a year
+        _trade("2026-06-01", "P", 100, 9.0, owner="TAN", title="CEO", accession="F-2"),
+        _trade("2026-06-01", "P", 100, 9.0, owner="DIR", accession="F-3"),
+    ], TODAY)
+    assert [(b["accession"], b["date"], b["last_date"], b["owner_name"], b["shares"], b["value"])
+            for b in s["ceo_cfo_buys_12m"]] == [
+        ("F-1", "2026-08-12", "2026-08-13", "TAN", 500, 300 * 11.0 + 200 * 10.0),
+        ("F-2", "2026-06-01", "2026-06-01", "TAN", 100, 900.0)]
 
 
 def test_the_windows_count_open_market_purchases_and_sales_only():

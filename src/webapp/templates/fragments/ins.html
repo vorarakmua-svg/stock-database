@@ -19,7 +19,7 @@
   {% endfor %}
   {% for b in sec.ceo_cfo %}
   <p class="mt-2"><span class="pill up">CEO/CFO buy</span> {{ b.name }} ({{ b.title }}) bought {{ b.shares }} shares
-    ({{ b.value }}) on {{ b.date }}</p>
+    ({{ b.value }}) {% if b.last_date != b.date %}between {{ b.date }} and {{ b.last_date }}{% else %}on {{ b.date }}{% endif %}</p>
   {% endfor %}
   <div class="table-wrap mt-2">
     <table class="data-table">
