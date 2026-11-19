@@ -2431,7 +2431,9 @@ read from the filings' own XBRL) and stores a year's row in `financials_annual_k
 changed: one row per (ticker, fiscal_year, `known_from`), with `known_accn` (the latest
 accession filed that day), the canonical figures, `source_tags` and `source_filings` (JSON: each
 figure's tag, and its filing's `accn`, `filed` and `form`), `period_end`, `calendar_year` and
-`frame` (by SEC's rule: the `frame` SEC attaches to the latest-filed fact would be look-ahead),
+`frame` (the `frame` SEC attaches to the year's facts known that day, else the frame SEC's rule
+gives its end: SEC attaches a frame to the latest-filed fact only, so an earlier day's facts may
+lack one, and the two agree on all 5.2 million cached frames, BUG-277),
 and `accn`, `filed_date` and `form`, the latest filing among the year's figures. A year that
 leaves the record on a day (a later filing moves its only figure to another period) gets a
 row with `present` 0, a tombstone: the view holds no such year until a later row brings it back.
@@ -2439,10 +2441,16 @@ The view on D is each year's row with the latest `known_from` on or before D, a 
 year's latest row is the annual record the same run built, cell for cell. A full run replaces
 all of a ticker's rows, a `years_back` run the rows of the years it built (replayed on all the
 facts); a fill-only run (its predecessor's filings couldn't be read, BUG-179) and a run that
-read no companyfacts leave them as they were. The cost is the collection's snapshot step, one
-record build per filing day: measured offline on 100 companies, 9.1 s a company against 0.8 s
-before (about 11 times; some 75 minutes for the 502), and 28,565 rows over 499 companies, 216 MB
-of the database (7.6 KB a row).
+read no companyfacts leave them as they were. A `years_back` run (`--years N`) trims its record
+to the N latest years before cleaning it, but builds each snapshot on all the years and trims
+after; the share scale reads a year's neighbours, so such a run's record can differ from its
+latest snapshot of a year at the window's edge (a full run's agree, and the refresh collects
+full runs). The cost is the collection's snapshot step, one record build per filing day, but a
+day none of whose facts the record reads (no fact of its parsed taxonomy filed that day, and no
+year left out as not yet ended reached by it) is skipped exactly, its snapshot the day before's,
+and each date string is parsed once a build: measured offline on 100 companies, 2.62 s a company
+against 0.81 s before (about 3.2 times; roughly 22 minutes for the 502), and 28,565 rows over 499
+companies, 216 MB of the database (7.6 KB a row).
 
 A database collected before the snapshots, or a ticker not collected since, has no rows: its
 as-of data **isn't built**. `AsOfReader` then reads `None` (and `{}` for a history), with no

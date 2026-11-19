@@ -292,7 +292,7 @@ def _on_balance_sheet_dates(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     dates. Cash reads the restricted-cash total last, for balance sheets that tag nothing else
     (GE's FY2025; BUG-139); read from a cash flow statement's opening balances too, it made
     cash-only years (DIS's FY2016) and, in the vintages, replaced a balance sheet's own cash in
-    the as-of view (PH's FY2022: $0.536B, its 2024 10-K's $6.648B with the Meggitt escrow)."""
+    a filing's view (PH's FY2022: $0.536B, its 2024 10-K's $6.648B with the Meggitt escrow)."""
     if not any(tag in us_gaap for tag in _BALANCE_SHEET_ONLY):
         return us_gaap
     dates: Dict[str, Set[str]] = defaultdict(set)
@@ -655,7 +655,7 @@ def _current_debt_set_aside(us_gaap: Dict[str, Any], view: str,
         forms = _ANNUAL_FORMS if view == _ANNUAL_VIEW else _QUARTERLY_FORMS
         held = {key for key, paper in papers.items() if holds(latest(key[1], forms), paper)}
     else:
-        # each annual report in filing order (the as-of view's), on each date it shows a paper or a short-term figure
+        # each annual report in filing order, on each date it shows a paper or a short-term figure
         shows = {key for tag in short_term for key in _by_filing(us_gaap, tag)}
         dates: Dict[str, Set[str]] = defaultdict(set)
         for accn, end in set(papers) | shows:
@@ -663,7 +663,7 @@ def _current_debt_set_aside(us_gaap: Dict[str, Any], view: str,
                 dates[end].add(accn)
         for end in sorted(dates):
             paper: Optional[float] = None  # the latest paper filed on the date
-            source: Optional[Tuple[str, str]] = None  # and short-term figure, the as-of view's
+            source: Optional[Tuple[str, str]] = None  # and the latest short-term figure filed by then
             for accn in sorted(dates[end], key=lambda a: (filings[a][1], a)):
                 key = (accn, end)
                 source = key if key in shows else source

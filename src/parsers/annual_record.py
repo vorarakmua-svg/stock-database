@@ -72,7 +72,11 @@ def build_annual_record(parser: XBRLParser, facts: Dict[str, Any], *, ticker: st
     filing the facts hold (the latest *years_back* of them, or all), cleaned (``clean_annual``). A fiscal year whose
     period ends after that day isn't in the record: a 10-K tagging a figure of the year ahead (BAC's FY2010 10-K, filed
     2011-02-25, a dividend for 2011) opens no year that figure alone holds (BUG-113). A cleaning that fails keeps
-    the periods as it left them and says why ("Data cleaning: ..."), as the run always has."""
+    the periods as it left them and says why ("Data cleaning: ..."), as the run always has.
+
+    *years_back* trims the years BEFORE the cleaning, so the share scale (which reads a year's neighbours) sees only
+    the kept years; ``build_snapshots`` cleans every year and trims after. A *years_back* run's record can so differ
+    from its latest snapshot at the window's edge; a full run's (and the refresh's, which collects full runs) agree."""
     last = _last_filed(facts)
     annual: Dict[str, Dict[str, Any]] = {}
     unended: List[str] = []

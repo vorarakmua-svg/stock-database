@@ -124,7 +124,8 @@ def _vintages_of(parser: XBRLParser, known: Dict[str, Any], day: str) -> Dict[st
                 if period.get("filed_date") == day and (not ends[accn] or ends[accn] <= day)]
         if not kept:
             continue
-        normalize_share_scale(by_accn, neighbours=False)  # no scale from a neighbouring year's view (BUG-329)
+        # No neighbouring year's views: a vintage's view takes no scale from a later filing (the gate).
+        normalize_share_scale(by_accn, neighbours=False)
         for accn in kept:
             apply_derivations(by_accn[accn])
         views[fy] = {accn: by_accn[accn] for accn in kept}
@@ -141,7 +142,10 @@ def build_snapshots(parser: XBRLParser, facts: Dict[str, Any], *, ticker: str,
     ``period_end``, ``calendar_year``, ``frame``, and ``accn``/``filed_date``/``form`` of the latest filing among its
     figures. A year gets a row on a day its row differs from the one before (a float equal under ``==``, or NaN
     beside NaN, is the same), and a ``present`` False row the day it leaves the record. With *years_back*, the rows
-    and views of the latest *years_back* years of the last snapshot, replayed on every filing all the same.
+    and views of the latest *years_back* years of the last snapshot, replayed on every filing all the same. Each
+    day's record is built on all its years and trimmed after, where ``build_annual_record`` trims a *years_back*
+    record before cleaning it: share scale reads a year's neighbours, so a *years_back* run's record can differ from
+    its latest snapshot of a year at the window's edge (a full run's agree, and the refresh collects full runs).
 
     A day whose record's cleaning failed (``build_annual_record`` keeps it uncleaned and says "Data cleaning: ...")
     is stored uncleaned; the set's warnings say so once, with the count of such days and the first failure.

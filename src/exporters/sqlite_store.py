@@ -752,8 +752,8 @@ class SQLiteStore:
             "financials_ttm": {"fiscal_year": "INTEGER", "calendar_year": "INTEGER",
                                "calendar_quarter": "INTEGER",
                                **{c: "REAL" for c in _CANONICAL_COLUMNS}},
-            # Each figure's tag (BUG-271): NULL in a vintage stored before the column, which the as-of view
-            # reads as it did, by filing date alone, until the next collection.
+            # Each figure's tag (BUG-271): NULL in a vintage stored before the column, until the next
+            # collection restates the ticker's vintages.
             "financials_annual_vintages": {"calendar_year": "INTEGER", "source_tags": "TEXT",
                                             **{c: "REAL" for c in _CANONICAL_COLUMNS}},
             "financials_annual_known": {c: "REAL" for c in _CANONICAL_COLUMNS},
@@ -845,7 +845,8 @@ class SQLiteStore:
     @staticmethod
     def _figure_tags(period: Dict[str, Any]) -> Optional[str]:
         """The tag each canonical figure of *period* was read from (its ``_source_tags``: a us-gaap tag, "derived",
-        "rescaled x1000"), as JSON; None without any. The as-of view ranks a vintage's figure by it (BUG-271)."""
+        "rescaled x1000"), as JSON; None without any. Stored with each vintage (BUG-271); the as-of view reads its
+        snapshots' own ``source_tags``, not this."""
         tags = period.get("_source_tags") or {}
         kept = {c: tags[c] for c in _CANONICAL_COLUMNS if period.get(c) is not None and c in tags}
         return json.dumps(kept, sort_keys=True) if kept else None
