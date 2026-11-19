@@ -560,33 +560,36 @@ def screener_page(
     metric_options = SCREENER_METRIC_OPTIONS
     snapshot_options = SCREENER_SNAPSHOT_OPTIONS
     metric_json = json.dumps(
-        [{"key": key, "label": label, "group": "Metrics"} for label, key in metric_options]
+        [
+            {"key": key, "label": label, "group": "Metrics", "kind": METRIC_KINDS.get(key, "raw")}
+            for label, key in metric_options
+        ]
         + [
-            {"key": key, "label": label, "group": "Market / Valuation"}
+            {"key": key, "label": label, "group": "Market / Valuation", "kind": METRIC_KINDS.get(key, "raw")}
             for label, key in snapshot_options
         ]
         + [
-            {"key": key, "label": label, "group": "Historical value"}
+            {"key": key, "label": label, "group": "Historical value", "kind": METRIC_KINDS.get(key, "raw")}
             for label, key in SCREENER_HISTORY_OPTIONS
         ]
         + [
-            {"key": key, "label": label, "group": "Valuation models"}
+            {"key": key, "label": label, "group": "Valuation models", "kind": METRIC_KINDS.get(key, "raw")}
             for label, key in SCREENER_VALUATION_OPTIONS
         ]
         + [
-            {"key": key, "label": label, "group": "Other indicators"}
+            {"key": key, "label": label, "group": "Other indicators", "kind": METRIC_KINDS.get(key, "raw")}
             for label, key in SCREENER_INDICATOR_OPTIONS
         ]
         + [
-            {"key": key, "label": label, "group": "Quality scores"}
+            {"key": key, "label": label, "group": "Quality scores", "kind": METRIC_KINDS.get(key, "raw")}
             for label, key in SCREENER_QUALITY_OPTIONS
         ]
         + [
-            {"key": key, "label": label, "group": "Insiders (SEC)"}
+            {"key": key, "label": label, "group": "Insiders (SEC)", "kind": METRIC_KINDS.get(key, "raw")}
             for label, key in SCREENER_INSIDER_OPTIONS
         ]
         + [
-            {"key": key, "label": label, "group": "Gurus (13F)"}
+            {"key": key, "label": label, "group": "Gurus (13F)", "kind": METRIC_KINDS.get(key, "raw")}
             for label, key in SCREENER_GURU_OPTIONS
         ]
     )

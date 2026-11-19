@@ -282,6 +282,8 @@ def refresh_status_fragment(
             '<div id="refresh-status">Refresh job not found.</div>', status_code=404
         )
     terminal = job.state in ("done", "error")
+    # The job's tickers and its errors are keyed by the stored upper-case form, so the lookup is too (BUG-056).
+    ticker = ticker.strip().upper()
     return templates.TemplateResponse(
         request,
         "fragments/refresh_status.html",

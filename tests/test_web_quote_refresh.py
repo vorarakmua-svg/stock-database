@@ -310,6 +310,20 @@ def test_a_failed_refresh_says_so_on_the_stock_page(web_db: Path, monkeypatch) -
     assert "Quote refreshed" not in body and "/ui/stocks/AAA/des" not in body
 
 
+def test_the_status_fragment_answers_the_same_in_any_case(web_db: Path, monkeypatch) -> None:
+    # BUG-056: the fragment looked the ticker up in the job's errors as typed, so for a failed AAPL-style job the
+    # lower-case URL said "Quote refreshed." Tickers are stored upper-case, and the answer is one in either case.
+    client = _rate_limited_client(web_db, monkeypatch)
+    job_id = client.post("/api/stocks/AAA/refresh-quote").json()["job_id"]
+    _wait_until_done(client, job_id)
+    upper = client.get(f"/ui/stocks/AAA/refresh-status/{job_id}").text
+    for typed in ("aaa", "Aaa", "%20aaa%20"):
+        body = client.get(f"/ui/stocks/{typed}/refresh-status/{job_id}").text
+        assert "Refresh failed" in body and "Yahoo returned no price" in body, typed
+        assert "Quote refreshed" not in body and "/des" not in body, typed
+        assert body == upper
+
+
 def _quote_with_splits_client(web_db: Path, splits: List[Dict[str, Any]],
                               stored: List[Dict[str, Any]] = ()) -> TestClient:  # type: ignore[assignment]
     """AAA last collected with Yahoo on 2024-06-15 (its bars end 2023-09-17, its stored split is 2:1 on

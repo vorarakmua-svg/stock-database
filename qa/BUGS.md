@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 152 · NEEDS-USER 1 · Decided: 7 · Verified: 201
+**Open:** P0 0 · P1 0 · P2 0 · P3 149 · NEEDS-USER 1 · Decided: 7 · Verified: 204
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -468,10 +468,11 @@ Repro (`t_bug034/check_empty_string.py`): a run with `website` = "" stores '' in
 Expected: the three stores agree.   Actual: as above.
 
 ### BUG-056 [P3][UI] The refresh-status fragment matches the ticker case-sensitively
-Status: OPEN
-Found: iteration 39 by code review 5 (M8), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 188)
+Found: iteration 39 by code review 5 (M8), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_web_api_stocks.py, tests/test_web_quote_refresh.py, tests/test_web_range_anchor.py, tests/test_web_screener_units.py (node); 28 failing first
 Repro (`t_bug033/case_check.py`): for a failed AAPL quote job, `/ui/stocks/AAPL/refresh-status/<job>` says "Refresh failed" but `/ui/stocks/aapl/refresh-status/<job>` says "Quote refreshed". Not reachable from the UI: the lowercase stock page, DES and refresh-quote routes return 404.
 Expected: the same answer in either case (or a 404).   Actual: a false success.
+Fix (iteration 188, with BUG-155): the refresh-status fragment looks the ticker up as `ticker.strip().upper()`, as jobs store it.
 
 ### BUG-057 [P3][VALID] A period without a deciding SEC frame takes its calendar label in hash order
 Status: VERIFIED (iteration 181)
@@ -1186,10 +1187,11 @@ Repro: `SELECT date, amount FROM dividend_events WHERE ticker='KO' AND date LIKE
 Expected: one payment.   Actual: Yahoo's duplicate kept. 4 tickers, historic years.
 
 ### BUG-155 [P3][API] An unknown or lower-case ticker gets `200 []` from the bars API and 404 everywhere else
-Status: OPEN
-Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 188)
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_web_api_stocks.py, tests/test_web_quote_refresh.py, tests/test_web_range_anchor.py, tests/test_web_screener_units.py (node); 28 failing first
 Repro: `/api/stocks/QQQQ/bars` and `/api/stocks/aapl/bars` return 200 with `[]`, while the CSV, HP and compare-bars return 404.
 Expected: 404 for an unknown ticker throughout (and one rule for case).   Actual: two.
+Fix (iteration 188, `qa/evidence/bug155-investigation.txt`): `/api/stocks/{t}/bars` and `/indicators` check the ticker first, like every other route: unknown (and lower-case, as everywhere) is 404 'Unknown ticker' (^GSPC too: no companies row; compare-bars unchanged). Residual: earnings, dividends, splits, holders, insiders still answer 200 [] for an unknown ticker.
 
 ### BUG-156 [P3][UI] The HP table shows partial and placeholder bars as ordinary rows: CVS's last bar opens above its high, old prices read "$0.00"
 Status: OPEN
@@ -1250,10 +1252,11 @@ Repro: review 14's `scen14.py locked`: the refresh's valuation write fails with 
 Expected: the failure in the job's errors, or a revaluation when the valuations predate the price.
 
 ### BUG-164 [P3][UI] The screener's "%" filters take a fraction, but Debt / equity (%) a percent: "Insider % > 5" finds no company
-Status: OPEN
-Found: iteration 98 by code review 14 (M3), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 188)
+Found: iteration 98 by code review 14 (M3), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_web_api_stocks.py, tests/test_web_quote_refresh.py, tests/test_web_range_anchor.py, tests/test_web_screener_units.py (node); 28 failing first
 Repro: on a copy of the user's data, "Insider % > 5" finds 0 companies and "> 0.05" 23; "Debt / equity (%) < 100" finds 70 and "< 1" none (BUG-135 kept Yahoo's percent; the other "%" fields are stored as fractions, and `screener.js` doesn't convert what's typed).
 Expected: one unit for every "%" filter (typed percents converted by kind), or a unit hint per filter.
+Fix (iteration 188, with BUG-155): every field the screener shows as a percent (37 stored as a fraction, kind `pct`) takes a typed percent; screener.js converts at the filter boundary (typedToStored/storedToTyped), chips and saved-screen names show the typed unit, the popover says 'in %, e.g. 5 for 5%'. URLs, saved screens, presets and GET /api/screen keep the stored unit, so existing screens keep their meaning. debt_to_equity (Yahoo's percent) is typed as stored. Residual: a fraction typed by habit into a % field reads 100x too small (the hint is the only warning).
 
 ### BUG-165 [P3][STORE] A tag the registry now maps stays in `unmapped_facts` after a re-collection: AAPL's restricted-cash total still listed on the Quality page
 Status: OPEN

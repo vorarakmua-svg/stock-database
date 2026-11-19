@@ -256,8 +256,11 @@ def bars(
 ) -> List[Dict[str, Any]]:
     """OHLCV bars for *ticker* over ``range``, at ``interval`` granularity.
 
-    400 on an invalid ``range``/``interval`` value.
+    404 if the ticker is unknown (no ``companies`` row, as the stored upper-case form: ``aapl`` is unknown, as on
+    every other route, BUG-155); 400 on an invalid ``range``/``interval`` value.
     """
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
     try:
         start = resolve_range_start(range, range_anchor(r, ticker))
         resolved_interval = resolve_interval(interval, range)
@@ -283,8 +286,10 @@ def indicators(
 
     Computed on the ticker's FULL price history, then sliced to ``range`` —
     so long-window indicators (MA200) are correct at the start of the slice,
-    not restarted from scratch there. 400 on an invalid ``range``.
+    not restarted from scratch there. 404 if the ticker is unknown (BUG-155); 400 on an invalid ``range``.
     """
+    if r.get_company(ticker) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
     try:
         start = resolve_range_start(range, range_anchor(r, ticker))
     except ValueError as exc:

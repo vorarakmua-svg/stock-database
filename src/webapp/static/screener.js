@@ -8,6 +8,26 @@
 (function () {
   'use strict';
 
+  // ---- Units (BUG-164) ----
+  // What a user types after a "%" field's label is a percent. The URL, the saved screens, the presets and
+  // /api/screen hold the stored unit: a fraction for the "pct" kinds (0.05 is 5%), Yahoo's percent for the "percent"
+  // kind (debt / equity, 100 is 1x), the figure itself for the rest. The conversion is made where a value is typed
+  // (typedToStored) and where a stored one is shown (storedToTyped), never in parseQS or buildQS.
+  function cleanNumber(x) { return Number(x.toPrecision(12)).toString(); }
+  function typedToStored(kind, text) {
+    var x = Number(text);
+    if (kind !== 'pct' || text === '' || !isFinite(x)) return text;
+    return cleanNumber(x / 100);
+  }
+  function storedToTyped(kind, text) {
+    var x = Number(text);
+    if (kind !== 'pct' || text === '' || !isFinite(x)) return text;
+    return cleanNumber(x * 100);
+  }
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { typedToStored: typedToStored, storedToTyped: storedToTyped };
+  }
+
   var metricsEl = document.getElementById('screener-metrics');
   var chipsEl = document.getElementById('chips');
   if (!metricsEl || !chipsEl) return;
@@ -29,6 +49,7 @@
   var popList = document.getElementById('popover-list');
   var popEditor = document.getElementById('popover-editor');
   var popLabel = document.getElementById('popover-metric-label');
+  var popUnit = document.getElementById('popover-unit');
   var popOp = document.getElementById('popover-op');
   var popValue = document.getElementById('popover-value');
   var note = document.getElementById('scr-note');
@@ -84,7 +105,8 @@
       var m = BY_KEY[f.field];
       var chip = document.createElement('span');
       chip.className = 'filter-chip';
-      chip.appendChild(document.createTextNode((m ? m.label : f.field) + ' ' + OPS[f.op] + ' ' + f.value));
+      chip.appendChild(document.createTextNode(
+        (m ? m.label : f.field) + ' ' + OPS[f.op] + ' ' + storedToTyped(m ? m.kind : 'raw', f.value)));
       var x = document.createElement('button');
       x.className = 'filter-chip-x';
       x.type = 'button';
@@ -165,6 +187,11 @@
   });
 
   // ---- Popover ----
+  function unitHint(kind) {
+    if (kind === 'pct' || kind === 'percent') return 'in %, e.g. 5 for 5%';
+    if (kind === 'money') return 'in dollars';
+    return 'a plain number';
+  }
   function renderPopList(query) {
     popList.textContent = '';
     var lastGroup = null;
@@ -183,6 +210,8 @@
       item.addEventListener('click', function () {
         pendingKey = m.key;
         popLabel.textContent = m.label;
+        popUnit.textContent = unitHint(m.kind);
+        popValue.placeholder = m.kind === 'pct' || m.kind === 'percent' ? 'value (%)' : 'value';
         popEditor.hidden = false;
         popValue.focus();
       });
@@ -202,7 +231,7 @@
   popSearch.addEventListener('input', function () { renderPopList(popSearch.value); });
   document.getElementById('popover-apply').addEventListener('click', function () {
     if (!pendingKey || popValue.value === '') return;
-    state.filters.push({ field: pendingKey, op: popOp.value, value: popValue.value });
+    state.filters.push({ field: pendingKey, op: popOp.value, value: typedToStored(BY_KEY[pendingKey].kind, popValue.value) });
     popover.hidden = true;
     popValue.value = '';
     sync();
@@ -247,7 +276,7 @@
     var name = '';
     var existing = state.filters.map(function (f) {
       var m = BY_KEY[f.field];
-      return (m ? m.label : f.field) + OPS[f.op] + f.value;
+      return (m ? m.label : f.field) + OPS[f.op] + storedToTyped(m ? m.kind : 'raw', f.value);
     });
     var prefix = [state.sector, state.industry ? 'SIC ' + state.industry : '', state.verdict, state.oeVerdict]
       .filter(Boolean).join(' · ');

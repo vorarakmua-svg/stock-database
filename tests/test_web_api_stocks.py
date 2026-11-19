@@ -94,12 +94,22 @@ def test_bars_bad_interval_400(client):
     assert resp.status_code == 400
 
 
-def test_bars_unknown_ticker_returns_empty_list_not_error(client):
-    # Bars/indicators/compare don't existence-check the ticker (unlike
-    # quote/profile) — Reader.price_bars just returns [] for an unknown one.
-    resp = client.get("/api/stocks/ZZZ/bars", params={"range": "MAX"})
-    assert resp.status_code == 200
-    assert resp.json() == []
+def test_bars_and_indicators_of_an_unknown_ticker_are_404_like_the_csv(client):
+    # BUG-155: an unknown ticker got 200 [] here while the CSV, the compare-bars and the pages answered 404.
+    # ^GSPC has bars but no companies row, so it is unknown too; a lower-case ticker is not a stored one.
+    for ticker in ("ZZZ", "QQQQ", "^GSPC", "aaa"):
+        for path in ("bars", "indicators"):
+            resp = client.get(f"/api/stocks/{ticker}/{path}", params={"range": "MAX"})
+            assert resp.status_code == 404, (ticker, path)
+            assert "Unknown ticker" in resp.json()["detail"]
+        assert client.get(f"/api/export/stock/{ticker}/bars.csv").status_code == 404
+    assert client.get("/api/stocks/AAA/bars", params={"range": "MAX"}).status_code == 200
+    assert client.get("/api/stocks/AAA/indicators", params={"range": "MAX"}).status_code == 200
+
+
+def test_bars_checks_the_ticker_before_the_range(client):
+    # As the CSV export: the 404 comes before the 400 for a bad range.
+    assert client.get("/api/stocks/ZZZ/bars", params={"range": "BOGUS"}).status_code == 404
 
 
 # ---------------------------------------------------------------------------

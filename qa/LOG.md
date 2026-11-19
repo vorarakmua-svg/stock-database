@@ -3243,3 +3243,14 @@ Result: BUG-231, BUG-234 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3255 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(universe): a company's Class A row whatever the page's order; skip by CIK; a clean error for a non-UTF-8 page (BUG-231, BUG-234)
 Next: BUG-155/056/164, BUG-211/218 (ready).
+
+## Iteration 188: 2026-11-19 19:55: fix (BUG-155, BUG-056, BUG-164)
+Picked: three web-input P3s outside the as-of branch's sections; a sonnet worker.
+Did: bars/indicators 404 an unknown ticker like every route; the refresh-status fragment matches the ticker in any
+case; every % field in the screener takes a typed percent (converted at the filter boundary, stored unit unchanged).
+- RED: 28 failed of 113 on da8ec9a; GREEN. 18 of 18 mutants; bug149, bug150, bug151, q1 re-run killed.
+- No stored data moves; URLs and saved screens keep the stored unit.
+Result: BUG-155, BUG-056, BUG-164 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3285 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(web): unknown tickers 404 on bars; status in any case; % filters take percents (BUG-155, BUG-056, BUG-164)
+Next: BUG-211/218 (ready).

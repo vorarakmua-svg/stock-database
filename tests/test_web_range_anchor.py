@@ -170,10 +170,11 @@ def test_the_hp_tab_of_a_company_without_bars_says_none_were_collected(stale_cli
     assert dates == [] and "No price history collected." in body
 
 
-def test_an_unknown_ticker_gets_no_bars_and_no_indicators(stale_client, monkeypatch):
+def test_an_unknown_ticker_is_404_for_bars_and_indicators(stale_client, monkeypatch):
+    # BUG-155: it was 200 with no bars; the CSV, compare-bars and the pages answer 404.
     _pin_today(monkeypatch, date(2026, 10, 20))
-    assert _dates(stale_client, "bars", "NOPE", "1M") == []
-    assert _dates(stale_client, "indicators", "NOPE", "1M") == []
+    for path in ("bars", "indicators"):
+        assert stale_client.get(f"/api/stocks/NOPE/{path}", params={"range": "1M"}).status_code == 404
 
 
 def test_compare_bars_for_a_primary_without_bars_count_back_from_today(stale_client, monkeypatch):
