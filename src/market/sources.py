@@ -20,7 +20,8 @@ rate limiter (a request a second) and retries of the transient failures. Each an
 ``<cache-dir>/market/`` once it parses, and a cached copy is reused while it is fresh: FRED's series, Shiller's page
 and workbook and the current Treasury year for a day; a past Treasury year once it was cached after that year ended in
 New York (a copy fetched during the year is incomplete) and has rows. A failed fetch, or an answer that doesn't parse,
-falls back to the cached copy and says so; without one, the source fails.
+falls back to the cached copy and says so; without one, the source fails. An answer is streamed and capped
+(MAX_BYTES), and a FRED series without a row is a failed answer, like a Treasury file without rows.
 """
 import csv
 import html
@@ -73,6 +74,13 @@ MIN_INTERVAL = 1.0
 MAX_RETRIES = 3
 RETRY_DELAY = 2.0
 TIMEOUT = 60.0
+#: The most bytes an answer may have (50 MiB): a larger one is a failed fetch, so a server decides no more than that
+#: of the memory a collection takes (review 18's m-4). The largest legitimate answer is Shiller's workbook, 1.6 MB; a
+#: FRED series is about 10 KB, a Treasury year about 150 KB and Shiller's page a few KB. 50 MiB is over 30 times the
+#: workbook, so it never refuses a real answer, however much the data grows.
+MAX_BYTES = 50 * 1024 * 1024
+#: An answer is read in chunks of this many bytes, so one that overruns MAX_BYTES is dropped within a chunk of it.
+CHUNK_BYTES = 64 * 1024
 #: A cached copy fetched a day ago or less is fresh.
 DAY = 86400.0
 #: New York's year ends at midnight EST, 05:00 UTC: a Treasury year cached from then on is whole.
@@ -293,19 +301,38 @@ class MarketFetcher:
         self.retry = retry if retry is not None else RetryHandler(max_retries=MAX_RETRIES, base_delay=RETRY_DELAY)
 
     def _download(self, url: str) -> bytes:
-        """The answer's bytes: a timeout, a dropped connection or a 429/50x retried; another status raises OSError."""
+        """The answer's bytes: a timeout, a dropped connection or a 429/50x retried; another status, or an answer of
+        more than MAX_BYTES (its declared length, else the bytes streamed), raises OSError."""
         def attempt() -> Any:
             self.limiter.wait()
-            response = self.session.get(url, timeout=TIMEOUT)
+            response = self.session.get(url, timeout=TIMEOUT, stream=True)
             if response.status_code in RETRYABLE_STATUS_CODES:
+                response.close()
                 raise requests.HTTPError(f"HTTP {response.status_code}", response=response)
             return response
 
         response = self.retry.run(attempt, retryable_exceptions=(requests.RequestException,),
                                   should_retry=is_transient_error)
-        if response.status_code != 200:
-            raise OSError(f"HTTP {response.status_code}")
-        return bytes(response.content)
+        try:
+            if response.status_code != 200:
+                raise OSError(f"HTTP {response.status_code}")
+            too_big = OSError(f"the answer is larger than {MAX_BYTES} bytes")
+            try:
+                declared = int(response.headers.get("Content-Length", ""))
+            except ValueError:
+                declared = 0  # no length, or one that isn't a number: the bytes streamed decide
+            if declared > MAX_BYTES:
+                raise too_big
+            chunks: List[bytes] = []
+            size = 0
+            for chunk in response.iter_content(chunk_size=CHUNK_BYTES):
+                size += len(chunk)
+                if size > MAX_BYTES:
+                    raise too_big
+                chunks.append(chunk)
+            return b"".join(chunks)
+        finally:
+            response.close()
 
     def cached(self, name: str, parse: Callable[[bytes], T]) -> Optional[T]:
         """*parse* of the cached copy of *name*: None without one, or for one that doesn't parse."""
@@ -362,9 +389,19 @@ def _source(series: Dict[str, List[Tuple[str, float]]], answers: Sequence[Answer
                       cached=sum(not a.fetched for a in answers), notes=[a.note for a in answers if a.note])
 
 
+def _fred_rows(text: str) -> List[Tuple[str, float]]:
+    """``parse_fred_csv`` of a series' text. A series without a row (the header alone, or every cell without a value)
+    raises ValueError: a failed answer that keeps the cached copy, as a Treasury file without rows does (BUG-230)."""
+    rows = parse_fred_csv(text)
+    if not rows:
+        raise ValueError("FRED's CSV has no rows")
+    return rows
+
+
 def fetch_fred(fetcher: MarketFetcher, series_id: str) -> SourceData:
-    """FRED's *series_id* (``parse_fred_csv``), its cached copy refreshed when over a day old."""
-    rows, answer = fetcher.get(fred_url(series_id), f"fred_{series_id}.csv", _text(parse_fred_csv),
+    """FRED's *series_id* (``_fred_rows``), its cached copy refreshed when over a day old (a cached copy without rows
+    is fetched again)."""
+    rows, answer = fetcher.get(fred_url(series_id), f"fred_{series_id}.csv", _text(_fred_rows),
                                fetcher.clock() - DAY)
     return _source({series_id: rows}, [answer])
 

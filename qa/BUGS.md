@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 159 · NEEDS-USER 0 · Decided: 7 · Verified: 194
+**Open:** P0 0 · P1 0 · P2 0 · P3 157 · NEEDS-USER 0 · Decided: 7 · Verified: 196
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1751,16 +1751,18 @@ Repro: m-1, a Shiller layout change after a cached copy existed fell back to it 
 Fix: a "Stale:" summary line listing each fallback (the exit code stays 0) and corrected docs; `formatting.fmt_signed_price` shared by the notes and the cells; the two session tests; the comment and docs reworded.
 
 ### BUG-229 [P3][MARKET] The market sources' downloads have no size cap
-Status: OPEN
-Found: code review 18 (m-4), build M4-7 | Fixed: | Regression test:
+Status: VERIFIED (iteration 184)
+Found: code review 18 (m-4), build M4-7 | Fixed: (this commit) | Regression tests: tests/test_market_sources.py (12 new, 2 updated); 14 failing first
 Repro: `MarketFetcher._download` reads `response.content` whole (src/market/sources.py), so a server decides how much memory a collection takes. Shiller's workbook is 1.6 MB.
 Expected: answers streamed with a cap (e.g. 50 MB), larger ones failing.   Actual: no limit. BUG-226's https-only link narrows who can serve the workbook.
+Fix (iteration 184, `qa/evidence/bug229-investigation.txt`): `_download` streams (`stream=True`), refuses a declared Content-Length over `MAX_BYTES` (50 MiB, 30x Shiller's 1.6 MB workbook, the largest real answer) before reading, else reads 64 KiB chunks and stops past the cap; the oversize error isn't retried and is a failed fetch that keeps the cached copy; every response is closed. Residual: the cap is per answer, not per run.
 
 ### BUG-230 [P3][MARKET] A FRED answer with only its header replaces the cached copy
-Status: OPEN
-Found: build iteration 48 (code review 18's fixes) | Fixed: | Regression test:
+Status: VERIFIED (iteration 184)
+Found: build iteration 48 (code review 18's fixes) | Fixed: (this commit) | Regression tests: tests/test_market_sources.py (12 new, 2 updated); 14 failing first
 Repro: FRED answering `observation_date,GDP` with no rows: `parse_fred_csv` gives [], which parses, so the fetcher caches it over the good copy; the source then fails with "no rows" and its stored series stay. The next day's fetch recovers.
 Expected: like BUG-225's Treasury rule, an answer without rows is a failed fetch that keeps the cached copy.   Actual: the cached copy is lost for a day, and FRED's source fails meanwhile.
+Fix (iteration 184, with BUG-229): `fetch_fred` parses through `_fred_rows`, which raises for an answer with no rows (a header only, or rows without values), so it is a failed fetch that keeps the cached copy; a cached copy without rows is fetched again. `parse_fred_csv` unchanged. A collect-level test now pins collect's own no-rows guard (Treasury's header-only year).
 
 ### BUG-231 [P3][UNIVERSE] One company a CIK keeps the page's first row, and `--skip-existing` compares tickers
 Status: OPEN

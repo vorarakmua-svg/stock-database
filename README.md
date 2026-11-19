@@ -1206,7 +1206,9 @@ A fetch that fails, or an answer that doesn't parse, falls back to the cached co
 (...); using the cached copy of ..."), as it happens and on the summary's `Stale:` line; without a copy, the source
 fails. An answer that doesn't parse is never cached. A Treasury file without rows counts as one that doesn't parse: a
 past year's always, and the current year's once its cached copy has rows, so only the current year's first days,
-before its first trading day, may have none.
+before its first trading day, may have none. A FRED series without a row (the header alone) is one too. An answer is
+streamed and capped at 50 MiB (`MAX_BYTES`, over 30 times Shiller's 1.6 MB workbook, the largest real answer); a larger
+one, by its declared length or its streamed bytes, is a failed fetch and falls back to the cached copy like any other.
 
 The three sites are asked through one `requests` session with requests' own User-Agent (never the SEC's, which may carry
 an email address), a request a second, and up to 3 retries (after 2 seconds, then doubling) of a timeout, a dropped

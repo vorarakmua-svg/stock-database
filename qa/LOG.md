@@ -3195,3 +3195,15 @@ Result: BUG-088 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3099 passed, 1 skipped | CI: PR #29
 Commit: (this commit) test(guard): no route off the machine in the suite, every loopback address local (BUG-088)
 Next: BUG-229/230 (worker); the as-of branch's Task 9 and Task 8 README fix.
+
+## Iteration 184: 2026-11-19 14:20: fix (BUG-229, BUG-230)
+Picked: two MARKET P3s outside the as-of branch's files; a sonnet worker.
+Did: market downloads stream with a 50 MiB cap (declared length refused before reading; streamed reads stop past
+it; oversize isn't retried, keeps the cache); a FRED answer without rows is a failed fetch that keeps the cached copy.
+- RED: 14 failed of 70 on HEAD's src; GREEN. 17 of 17 mutants. Stale since this fix: market-m4-3's "FRED's copy fresh
+  forever" and "a non-200 answer taken", review18-fixes' "m-3 no timeout" (adapted versions live in
+  bug229-mutants.json). No network; no stored series can move on a successful fetch (same bytes, same parsers).
+Result: BUG-229, BUG-230 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3112 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(market): downloads stream with a cap; a FRED answer without rows keeps the cache (BUG-229, BUG-230)
+Next: the as-of branch's final review; then more P3s outside its files.

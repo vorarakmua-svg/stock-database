@@ -7,6 +7,7 @@ replaced (the Treasury's from its first year on) in one transaction, a failing s
 on; the session's own User-Agent and timeout. No test touches the network: the sessions are fakes, and the Shiller
 workbooks are written by the tests' own writer.
 """
+import io
 import os
 import sqlite3
 from contextlib import closing
@@ -56,13 +57,45 @@ def _no_waits(monkeypatch):
 
 
 class _Response:
-    def __init__(self, status=200, content=b""):
+    def __init__(self, status=200, content=b"", headers=None):
         self.status_code = status
         self.content = content
+        self.headers = dict(headers or {})
+        self.closed = False
 
     @property
     def text(self):
         return self.content.decode("utf-8")
+
+    def iter_content(self, chunk_size=1):
+        for start in range(0, len(self.content), chunk_size):
+            yield self.content[start:start + chunk_size]
+
+    def close(self):
+        self.closed = True
+
+
+class _Stream(_Response):
+    """An answer that is only streamed: reading it whole (``.content``) fails the test, and every byte handed out is
+    counted. *chunks* yields the chunks (an endless one, for a server that never stops)."""
+
+    def __init__(self, chunks, headers=None):
+        super().__init__(200, b"", headers)
+        self.chunks = chunks
+        self.pulled = 0
+
+    @property
+    def content(self):
+        raise AssertionError("the answer was read whole")
+
+    @content.setter
+    def content(self, value):
+        pass
+
+    def iter_content(self, chunk_size=1):
+        for chunk in self.chunks:
+            self.pulled += len(chunk)
+            yield chunk
 
 
 class _Session:
@@ -380,7 +413,8 @@ class _Adapter(requests.adapters.BaseAdapter):
     def send(self, request, **kwargs):
         self.sent.append((request, kwargs))
         response = requests.Response()
-        response.status_code, response._content = 200, self.content
+        response.status_code, response.raw = 200, io.BytesIO(self.content)  # streamed, as a real answer is
+        response.headers["Content-Length"] = str(len(self.content))
         response.request, response.url = request, request.url
         return response
 
@@ -403,11 +437,11 @@ def test_the_default_session_sends_requests_own_user_agent_and_the_timeout(tmp_p
     assert request.headers["User-Agent"] == requests.utils.default_user_agent()
     assert request.headers["User-Agent"] != src.config.SECConfig().user_agent
     assert not any("@" in value for value in request.headers.values())
-    assert kwargs["timeout"] == sources.TIMEOUT == 60.0
+    assert kwargs["timeout"] == sources.TIMEOUT == 60.0 and kwargs["stream"] is True
 
 
 def test_every_request_is_given_the_timeout(tmp_path):
-    # Each source's requests, a retried one's every attempt among them, pass the timeout and nothing else.
+    # Each source's requests, a retried one's every attempt among them, pass the timeout and stream (the size cap).
     answers = _answers()
     answers[fred_url("GDP")] = _Response(503)
     session = _Session(answers)
@@ -415,7 +449,7 @@ def test_every_request_is_given_the_timeout(tmp_path):
                                      session=session, log=lambda line: None, treasury_from=2025, today="2026-10-24")
     assert summary["fred:GDP"]["ok"] is False and session.asked.count(fred_url("GDP")) == sources.MAX_RETRIES + 1
     assert len(session.kwargs) == len(session.asked) == 6 + sources.MAX_RETRIES
-    assert all(kwargs == {"timeout": sources.TIMEOUT} for kwargs in session.kwargs)
+    assert all(kwargs == {"timeout": sources.TIMEOUT, "stream": True} for kwargs in session.kwargs)
 
 
 def test_new_yorks_year_ends_at_five_utc():
@@ -900,3 +934,159 @@ def test_the_cli_end_to_end_prints_each_source_and_a_summary(tmp_path, monkeypat
                  "4 of 4"):
         assert text in out
     assert _rows(db, "fred:GDP") == [("2026-01-01", 32000.0), ("2026-04-01", 32560.0)]
+
+
+# ---- the size cap (BUG-229) and a FRED answer without rows (BUG-230) -----------------------------------------------
+
+OLD_GDP = b"observation_date,GDP\n2025-10-01,31000.0\n"
+HEADER_ONLY = (b"observation_date,GDP\n", b"observation_date,GDP", b"\xef\xbb\xbfobservation_date,GDP\r\n",
+               b"observation_date,GDP\n2026-07-01,.\n2026-10-01,\n")
+
+
+def test_the_size_cap_is_50_mib_far_above_the_largest_source_and_far_below_a_memory_problem():
+    # Shiller's workbook is 1.6 MB, a FRED series about 10 KB, a Treasury year about 150 KB, Shiller's page a few KB.
+    assert sources.MAX_BYTES == 50 * 1024 * 1024 >= 30 * 1_600_000
+
+
+def test_an_answer_over_the_cap_fails_the_fetch_and_keeps_the_cached_copy(tmp_path, monkeypatch):
+    monkeypatch.setattr(sources, "MAX_BYTES", len(FRED_GDP) - 1)
+    for answer in (FRED_GDP, _Response(200, FRED_GDP, {"Content-Length": str(len(FRED_GDP))})):
+        path = _cache(tmp_path, "fred_GDP.csv", OLD_GDP, NOW - 3 * DAY)
+        fetcher, session, lines = _fetcher(tmp_path, {fred_url("GDP"): answer})
+        data = fetch_fred(fetcher, "GDP")
+        assert data.series == {"GDP": [("2025-10-01", 31000.0)]} and (data.fetched, data.cached) == (0, 1)
+        assert len(data.notes) == 1 and "the fetch failed" in data.notes[0] and "larger than" in data.notes[0]
+        assert "cached copy" in data.notes[0] and lines == data.notes
+        assert path.read_bytes() == OLD_GDP and path.stat().st_mtime == NOW - 3 * DAY
+        assert session.asked == [fred_url("GDP")]  # not retried: a bigger answer isn't a transient failure
+    path.unlink()
+    fetcher, _, _ = _fetcher(tmp_path, {fred_url("GDP"): FRED_GDP})
+    with pytest.raises(MarketFetchError, match="larger than"):
+        fetch_fred(fetcher, "GDP")
+    assert not path.exists()
+
+
+def test_an_answer_exactly_at_the_cap_is_taken(tmp_path, monkeypatch):
+    monkeypatch.setattr(sources, "MAX_BYTES", len(FRED_GDP))
+    for answer in (FRED_GDP, _Response(200, FRED_GDP, {"Content-Length": str(len(FRED_GDP))})):
+        fetcher, session, _ = _fetcher(tmp_path, {fred_url("GDP"): answer})
+        assert fetch_fred(fetcher, "GDP").series["GDP"][-1] == ("2026-04-01", 32560.0) and session.asked
+        (tmp_path / "cache" / "market" / "fred_GDP.csv").unlink()
+
+
+def test_a_server_that_never_stops_is_cut_off_at_the_cap_without_reading_it_whole(tmp_path, monkeypatch):
+    monkeypatch.setattr(sources, "MAX_BYTES", 1000)
+    endless = _Stream(iter(lambda: b"x" * 100, None))  # no Content-Length, chunks forever
+    fetcher, _, _ = _fetcher(tmp_path, {fred_url("GDP"): endless})
+    with pytest.raises(MarketFetchError, match="larger than"):
+        fetch_fred(fetcher, "GDP")
+    assert 1000 < endless.pulled <= 1000 + sources.CHUNK_BYTES + 100 and endless.closed
+
+
+def test_a_declared_length_over_the_cap_is_refused_before_any_of_the_body_is_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(sources, "MAX_BYTES", 1000)
+    declared = _Stream(iter([b"x"]), {"Content-Length": "1001"})
+    fetcher, _, _ = _fetcher(tmp_path, {fred_url("GDP"): declared})
+    with pytest.raises(MarketFetchError, match="larger than"):
+        fetch_fred(fetcher, "GDP")
+    assert declared.pulled == 0 and declared.closed
+    # A length that isn't a number is no declaration: the stream's own count decides.
+    odd = _Response(200, FRED_GDP, {"Content-Length": "lots"})
+    fetcher, _, _ = _fetcher(tmp_path, {fred_url("GDP"): odd})
+    assert fetch_fred(fetcher, "GDP").series["GDP"][-1] == ("2026-04-01", 32560.0)
+
+
+def test_every_download_is_closed_whatever_it_answered(tmp_path):
+    answers = {fred_url("GDP"): _Response(200, FRED_GDP), fred_url("NCBEILQ027S"): _Response(404),
+               SHILLER_PAGE_URL: _Response(503)}  # a 503 is retried, and each attempt's answer is let go
+    fetcher, _, _ = _fetcher(tmp_path, answers)
+    fetch_fred(fetcher, "GDP")
+    for url in (fred_url("NCBEILQ027S"), SHILLER_PAGE_URL):
+        with pytest.raises(MarketFetchError):
+            fetcher.get(url, "x", bytes, 0)
+    assert all(response.closed for response in answers.values())
+
+
+def test_shillers_page_and_workbook_and_a_treasury_year_have_the_cap_too(tmp_path, monkeypatch):
+    # The cap is the downloader's: every source goes through it.
+    workbook = _shiller_workbook()
+    _cache(tmp_path, "shiller.html", PAGE.encode(), NOW - 3 * DAY)
+    _cache(tmp_path, "ie_data.xls", workbook, NOW - 3 * DAY)
+    monkeypatch.setattr(sources, "MAX_BYTES", len(workbook) - 1)
+    fetcher, _, _ = _fetcher(tmp_path, {SHILLER_PAGE_URL: PAGE.encode(), LINK + "&x=1": workbook})
+    data = fetch_shiller(fetcher)
+    assert (data.fetched, data.cached) == (1, 1) and len(data.notes) == 1 and "larger than" in data.notes[0]
+    assert (tmp_path / "cache" / "market" / "ie_data.xls").read_bytes() == workbook
+    big_year = TREASURY_2025.encode()
+    monkeypatch.setattr(sources, "MAX_BYTES", len(big_year) - 1)
+    fetcher, _, _ = _fetcher(tmp_path, {treasury_url(2025): big_year})
+    with pytest.raises(MarketFetchError, match="larger than"):
+        fetch_treasury(fetcher, 2025, 2025)
+
+
+def test_an_oversized_answer_after_a_good_run_keeps_the_stored_series(tmp_path, monkeypatch):
+    answers = _answers()
+    db, _, _ = _collect(tmp_path, answers, wanted=["fred"])
+    stored = _rows(db, "fred:GDP")
+    _age(tmp_path, "fred_GDP.csv", 2 * DAY)
+    monkeypatch.setattr(sources, "MAX_BYTES", len(FRED_GDP))
+    answers[fred_url("GDP")] = FRED_GDP + b"2026-10-01,.\n"
+    db, summary, lines = _collect(tmp_path, answers, wanted=["fred"])
+    s = summary["fred:GDP"]
+    assert (s["ok"], s["error"]) == (True, None) and _rows(db, "fred:GDP") == stored
+    assert len(s["notes"]) == 1 and "larger than" in s["notes"][0] and s["notes"][0] in lines
+
+
+def test_a_fred_answer_without_rows_is_a_failed_fetch_that_keeps_the_cached_copy(tmp_path):
+    for answer in HEADER_ONLY:
+        path = _cache(tmp_path, "fred_GDP.csv", OLD_GDP, NOW - 3 * DAY)
+        fetcher, _, lines = _fetcher(tmp_path, {fred_url("GDP"): answer})
+        data = fetch_fred(fetcher, "GDP")
+        assert data.series == {"GDP": [("2025-10-01", 31000.0)]} and (data.fetched, data.cached) == (0, 1)
+        assert len(data.notes) == 1 and "the fetch failed" in data.notes[0] and "no rows" in data.notes[0]
+        assert lines == data.notes
+        assert path.read_bytes() == OLD_GDP and path.stat().st_mtime == NOW - 3 * DAY
+
+
+def test_a_fred_answer_without_rows_and_without_a_cached_copy_fails_the_source_and_caches_nothing(tmp_path):
+    fetcher, _, _ = _fetcher(tmp_path, {fred_url("GDP"): HEADER_ONLY[0]})
+    with pytest.raises(MarketFetchError, match="no rows"):
+        fetch_fred(fetcher, "GDP")
+    assert not (tmp_path / "cache" / "market" / "fred_GDP.csv").exists()
+
+
+def test_a_cached_fred_copy_without_rows_is_fetched_again(tmp_path):
+    _cache(tmp_path, "fred_GDP.csv", HEADER_ONLY[0], NOW - 60)
+    fetcher, session, _ = _fetcher(tmp_path, {fred_url("GDP"): FRED_GDP})
+    assert fetch_fred(fetcher, "GDP").series["GDP"][-1] == ("2026-04-01", 32560.0)
+    assert session.asked == [fred_url("GDP")]
+
+
+def test_a_fred_answer_with_only_its_header_after_a_good_run_keeps_its_stored_series(tmp_path):
+    answers = _answers()
+    db, _, _ = _collect(tmp_path, answers, wanted=["fred"])
+    stored = _rows(db, "fred:GDP")
+    assert stored == [("2026-01-01", 32000.0), ("2026-04-01", 32560.0)]
+    path = _age(tmp_path, "fred_GDP.csv", 2 * DAY)
+    answers[fred_url("GDP")] = b"observation_date,GDP\n"
+    db, summary, lines = _collect(tmp_path, answers, wanted=["fred"])
+    s = summary["fred:GDP"]
+    assert (s["ok"], s["error"]) == (True, None) and _rows(db, "fred:GDP") == stored
+    assert path.read_bytes() == FRED_GDP
+    assert len(s["notes"]) == 1 and s["notes"][0].startswith("fred_GDP.csv: the fetch failed")
+    assert "no rows" in s["notes"][0] and "using the cached copy" in s["notes"][0] and s["notes"][0] in lines
+
+
+def test_a_source_without_any_row_fails_and_leaves_its_stored_series(tmp_path):
+    # collect_market's own guard, for a source that parses without rows: the Treasury's current year in its first days,
+    # with no earlier year asked (a FRED series without rows now fails in the fetcher, BUG-230).
+    answers = _answers()
+    db, _, _ = _collect(tmp_path, answers, wanted=["treasury"], treasury_from=2026)
+    stored = _yields(db)
+    assert stored["10y"]
+    answers[treasury_url(2026)] = TREASURY_HEADER.encode() + b"\n"
+    _age(tmp_path, "treasury_2026.csv", 2 * DAY)
+    (tmp_path / "cache" / "market" / "treasury_2026.csv").write_bytes(TREASURY_HEADER.encode() + b"\n")
+    db, summary, _ = _collect(tmp_path, answers, wanted=["treasury"], treasury_from=2026)
+    assert summary["treasury"]["ok"] is False and "no rows" in summary["treasury"]["error"]
+    assert _yields(db) == stored
