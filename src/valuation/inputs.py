@@ -433,7 +433,8 @@ def _apply_later_splits(records: List[FYRecord], splits: Sequence[Tuple[str, flo
     issued, so ``_normalize_splits`` reaches the latest FY's basis and no
     further. KLAC's FY2025 10-K (filed 2025-08-08) predates its 10:1 split of
     2026-06-12: every stored EPS is pre-split while the price is post-split.
-    Only share splits count (at least 3-for-2 or 1-for-2): Yahoo's split
+    Only share splits count (a ratio of 3-for-2 or more, or its reverse down to
+    2-for-3, within MAX_SPLIT_RATIO): Yahoo's split
     history also holds spin-off price factors and stock dividends (HON 0.9535).
     Without a filing date nothing moves, because a split between the year end
     and the filing is already restated in it. Spin-off and merger factors of
@@ -500,8 +501,8 @@ def _undo_splits_after_price(records: List[FYRecord], splits: Sequence[Tuple[str
     ``_normalize_splits`` brings the older ones onto that basis; but a price
     quoted before the split isn't on it. That happens when a later run's quote
     failed, keeping a snapshot older than a split the latest 10-K already
-    reflects (BUG-060). Only share splits count (simple ratios of at least
-    3-for-2 or 1-for-2): no filing restates for a spin-off's price factor.
+    reflects (BUG-060). Only share splits count (simple ratios of 3-for-2 or
+    more, or their reverses down to 2-for-3): no filing restates for a spin-off's price factor.
     """
     if not (filed and priced_on):
         return

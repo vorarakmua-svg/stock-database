@@ -601,7 +601,9 @@ def refresh_quote(
     manager: CollectionJobManager = Depends(get_job_manager),
     r: Reader = Depends(get_reader),
 ) -> Dict[str, Any]:
-    """Submit a lightweight quote-only refresh job for *ticker*.
+    """Submit a quote refresh job for *ticker*: Yahoo's quote with its split history and dividend payments,
+    saved unless a split since the last collection came in (a full collection brings that over); a quote saved
+    after a stock dividend's or a spin-off's factor revalues the ticker (BUG-128).
 
     409 if quote refresh is disabled (``settings.allow_quote_refresh``); 404
     if *ticker* is unknown; else 202 with ``{"job_id": ...}`` — poll via the

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 140 · NEEDS-USER 1 · Decided: 7 · Verified: 221
+**Open:** P0 0 · P1 0 · P2 0 · P3 135 · NEEDS-USER 1 · Decided: 7 · Verified: 226
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -253,9 +253,10 @@ Repro: the moved-aside name `<name>.unreadable-<YYYYmmdd-HHMMSS>.csv` has 1-seco
 Expected: every kept copy survives.
 
 ### BUG-028 [P3][DOCS] Two wordings no longer match the code
-Status: OPEN
-Found: iteration 17 by code review 2 | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 198)
+Found: iteration 17 by code review 2 | Fixed: (this commit) | Regression test: tests/test_web_formatting.py (BUG-070's display); docs otherwise
 Repro: `src/valuation/inputs.py` (`_apply_later_splits`) and c5f6e72's message say "1-for-2", but the code and the oracle accept reverse ratios up to 2-for-3; README's integrity section says "clean filings keep a score of 100", but the dividend completeness check depends on Yahoo data, so a company with clean filings can score 90 (CB).
+Fix (iteration 198, `qa/evidence/bug028-investigation.txt`): the split-factor wording says 3-for-2 or more, or the reverse down to 2-for-3 (inputs.py docstrings, the valuation oracle's comment); the README's integrity line says the Yahoo-based dividend check can still take 10 points.
 
 ### BUG-029 [P2][STORE] Values a re-parse empties stay in SQLite (upgraded from P3 in iteration 98)
 Status: VERIFIED (iteration 100)
@@ -568,10 +569,11 @@ Repro (`web_probe.py` on the user's copy): the rows' keys lack `warnings`; on a 
 Expected: the field always present, [] when the column is missing.   Actual: absent.
 
 ### BUG-070 [P3][DOCS] Labels and docs lag the code: "fred_treasury_gov" without FRED, the README's rate example, "annual (10-K)"
-Status: OPEN
-Found: iteration 48 by code review 6 (M5, M7), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 198)
+Found: iteration 48 by code review 6 (M5, M7), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: (this commit) | Regression test: tests/test_web_formatting.py (BUG-070's display); docs otherwise
 Repro (`quality_sources.py`): the data-sources label reads "fred_treasury_gov" (or "fred_estimate") on /quality although FRED wasn't consulted; README.md's rate JSON example (around line 204) has no `date` and shows a `series` key nothing writes; README.md (around line 270) says "Official financial statements (10-K, 10-Q)" and an `xbrl_parser.py` docstring "annual (10-K)" after 20-F and 40-F were added.
 Expected: labels and docs that match what runs.   Actual: as above.
+Fix (iteration 198, with BUG-028): stored `data_sources` values unchanged (queries read them); a display-only `formatting.fmt_sources` shows fred_treasury_gov as 'treasury_gov (rate)', fred_estimate/fred_fallback as static, fred_fred as 'fred' on /quality; the README's rate example drops 'series' and gains 'date'; 'annual (10-K)' reads '10-K, 20-F or 40-F'.
 
 ### BUG-071 [P3][VALID] A non-USD 10-K/10-Q filer keeps quarterly rows holding only share counts
 Status: VERIFIED (iteration 50)
@@ -948,12 +950,14 @@ Repro: code review 11's `bug099_vintage_lookahead.py` on a399dc0: a FY2016 10-K 
 Expected: each vintage's set-aside decided from that filing's own figures.   Actual: a later filing's. Impact: none in the cached filers.
 
 ### BUG-121 [P3][DOCS] Three comments still describe the old behavior
-Status: OPEN
-Found: iteration 78 by code review 11 (M4, M7), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 198)
+Found: iteration 78 by code review 11 (M4, M7), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: (this commit) | Regression test: tests/test_web_formatting.py (BUG-070's display); docs otherwise
 Repro: README.md:438 still gives `total_liabilities = total_assets - total_equity` (since BUG-100 the non-controlling interest is taken out too), `src/validation/quality.py:146` still says "(A - E)", and `YahooHandler.fetch_quote`'s docstring (`yahoo_handler.py:122-125`) still says the quote job tells "a split since the last full collection" (since BUG-102, a split after the stored price's day).
 Expected: comments that match the code.   Actual: as above.
 
 Code review 12 (M6), re-run in iteration 85: two more after BUG-110's fix, `AsOfReader.history_as_of`'s docstring (`asof.py:104-105`, "each resolved to its latest vintage filed <= that date") and `PointInTimeMetrics.metrics_history_as_of`'s (`pit_metrics.py:91`); and README.md:625 gives BUG-117's rule without its fallback (a run with neither bars nor a listed split: the day before the collector's).
+Fix (iteration 198, with BUG-028): README total_liabilities includes minus minority_interest; quality.py says (A - E - NCI); fetch_quote's and metrics_history_as_of's docstrings say what the code does. The as-of docstring item is the as-of branch's (Q18).
+
 ### BUG-122 [P3][CODE] Four behaviors no test pins: a 17-week quarter, revenue's 25% gap, a split on the served day, the migration's re-check
 Status: OPEN
 Found: iteration 78 by code review 11 (M5), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: — | Regression test: —
@@ -999,7 +1003,7 @@ Impact: about 30 quarters of acquisitions after the next collection (Financials 
 
 Scope (iteration 88): the annual record and the vintages read acquisitions by size too, so a year that brought cash in was stored as an outflow: 36 years at 23 filers and 90 vintages (WFC's FY2008 -$11.203B, the cash acquired with Wachovia, read +$11.203B; ADI's FY2021 -$2.451B with Maxim; COF's FY2025 -$16.465B with Discover; USB's FY2008-14). Over the cached companyfacts, 126 of the 130 acquisitions rungs below zero that the parser reads sit in filings that tag their gross outflows positive, 86 of them reported at the same sign by another filing (`qa/evidence/iter88-bug127-realdata.txt` sections 1-2).
 Decision (iteration 88, revising Expected): a net inflow is stored below zero, not left empty. Acquisitions are a net figure, so a quarter or a year that brought cash in reads as filed and a year's quarters add up to its figure; an empty inflow quarter would have left COP's FY2021 Q4 at $8.672B beside a year of $8.290B, with no trailing year over it.
-Fix: `acquisitions` has its own sign rule, `SIGN_NET` (stored as paid: positive pays, negative brings cash in), in place of `SIGN_ABS`. `_net_outflows_as_paid` keeps each filing's acquisitions as filed, except in a filing whose gross outflows (capex, dividends, buybacks, debt repaid) are mostly below zero, where they're turned back (LLY's and TXN's 2008 10-Qs); a tie isn't a convention (GE's 2015-17 10-Ks tag capex positive and buybacks negative, and its 2016-17 ones report acquisitions paid). It runs once per extraction, so the annual record, the vintages, the ladders and the lone first quarters read the same figures, and a later filing's flip of a year (GE's 2015 10-K: FY2012 -$1.456B where two earlier 10-Ks agree on +$1.456B) is put right by BUG-061's repair, which now reports it. Four tests RED on 4c74cbf, three guards (the negative convention for quarters and for a 10-K and its vintage; GE's flip and tie); ten mutants, each failing a test (`qa/evidence/iter88-bug127-{red,green,mutants}.txt`). Offline over 128 cached filers, before and after: only acquisitions change, in 36 years (each now below zero), 180 quarters (41 turned below zero, 117 filled where none was stored, 97 of them below zero, 22 changed, none emptied), 361 trailing years and 90 vintages, plus GE's repair warning; valuations, metrics and every other table identical. Years with four quarters stored that add up to their figure: 662 of 662 before, 744 of 744 after. Code review 12's cases read signed: GE's 2013 quarters -$6.383B, $0.196B, $7.804B; COP's Q4 2021 $8.672B (its trailing year $8.290B, the year's); TSLA's Q3 2019 $76M; CVS's Q3 2008 $55.4M; ETN's Q2 2013 $19M; CB's Q3 2023 -$468M and Q4 $250M; LLY's Q4 2008 $6,038.6M and TXN's $0 unchanged. stock-web on that collection serves WFC's FY2008 -$11.203B through the API and the CSV export, and GE's and COP's quarters as above (`iter88-bug127-e2e.txt`). The as-of view now serves GE's 2015 flip as filed: BUG-085.
+Fix: `acquisitions` has its own sign rule, `SIGN_NET` (stored as paid: positive pays, negative brings cash in), in place of `SIGN_ABS`. `_net_outflows_as_paid` keeps each filing's acquisitions as filed, except in a filing whose gross outflows (capex, dividends, buybacks, debt repaid) are mostly below zero, where they're turned back (the 2008 comparatives in LLY's 10-Q filed 2009-10-30 and TXN's filed 2009-07-29 and 2009-10-30); a tie isn't a convention (GE's 2015-17 10-Ks tag capex positive and buybacks negative, and its 2016-17 ones report acquisitions paid). It runs once per extraction, so the annual record, the vintages, the ladders and the lone first quarters read the same figures, and a later filing's flip of a year (GE's 2015 10-K: FY2012 -$1.456B where two earlier 10-Ks agree on +$1.456B) is put right by BUG-061's repair, which now reports it. Four tests RED on 4c74cbf, three guards (the negative convention for quarters and for a 10-K and its vintage; GE's flip and tie); ten mutants, each failing a test (`qa/evidence/iter88-bug127-{red,green,mutants}.txt`). Offline over 128 cached filers, before and after: only acquisitions change, in 36 years (each now below zero), 180 quarters (41 turned below zero, 117 filled where none was stored, 97 of them below zero, 22 changed, none emptied), 361 trailing years and 90 vintages, plus GE's repair warning; valuations, metrics and every other table identical. Years with four quarters stored that add up to their figure: 662 of 662 before, 744 of 744 after. Code review 12's cases read signed: GE's 2013 quarters -$6.383B, $0.196B, $7.804B; COP's Q4 2021 $8.672B (its trailing year $8.290B, the year's); TSLA's Q3 2019 $76M; CVS's Q3 2008 $55.4M; ETN's Q2 2013 $19M; CB's Q3 2023 -$468M and Q4 $250M; LLY's Q4 2008 $6,038.6M and TXN's $0 unchanged. stock-web on that collection serves WFC's FY2008 -$11.203B through the API and the CSV export, and GE's and COP's quarters as above (`iter88-bug127-e2e.txt`). The as-of view now serves GE's 2015 flip as filed: BUG-085.
 ### BUG-128 [P2][WEB] A quote refresh is saved after a spin-off factor under 3:2, beside a DDM and multiples band still on the old basis: upside -34.8% where a full collection reads -39.2%
 Status: VERIFIED (iteration 89)
 Found: iteration 84 by code review 12 (I2), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: iteration 89 (see LOG) | Regression tests: `tests/test_web_quote_refresh.py::test_a_refresh_after_a_price_factor_stores_it_and_values_the_ticker_on_it` (three cases), `::test_a_refresh_after_a_stored_factor_its_price_predates_values_the_ticker_on_it`; guards `::test_a_refresh_without_a_new_factor_writes_only_the_snapshot`, `::test_a_refused_refresh_stores_no_factor`, `::test_a_failed_valuation_keeps_the_refresh`
@@ -1142,10 +1146,11 @@ Repro: mutants surviving at HEAD (re-run against `tests/test_xbrl_parser.py`, an
 Expected: a test for each.   Actual: none.
 
 ### BUG-148 [P3][DOCS] BUG-127's docstring and fix note name "LLY's and TXN's 2008 10-Qs", which are their 2009 10-Qs' 2008 comparatives
-Status: OPEN
-Found: iteration 92 by code review 13 (M6), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 198)
+Found: iteration 92 by code review 13 (M6), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: (this commit) | Regression test: tests/test_web_formatting.py (BUG-070's display); docs otherwise
 Repro: `xbrl_parser.py:100` (`_net_outflows_as_paid`) and BUG-127's Fix paragraph; the filings turned back are LLY's 10-Q filed 2009-10-30 and TXN's filed 2009-07-29 and 2009-10-30.
 Expected: the filings named as they are.   Actual: "2008 10-Qs".
+Fix (iteration 198, with BUG-028): the `_net_outflows_as_paid` docstring and BUG-127's fix note name LLY's 10-Q filed 2009-10-30 and TXN's filed 2009-07-29 and 2009-10-30.
 
 ### BUG-149 [P2][UI] The ^GSPC overlay rebases each line to its own first bar: at MAX, AAPL's +349,443% beside an S&P from 1927 (+5,859% from AAPL's first day, shown +43,509%)
 Status: VERIFIED (iteration 105)
@@ -1275,10 +1280,11 @@ Repro: `show_available_fields` on AAPL's latest stored year (a copy of the user'
 Expected: counts without "$".
 
 ### BUG-167 [P3][DOCS] The quote-refresh route's docstring still calls it "lightweight quote-only"
-Status: OPEN
-Found: iteration 98 by code review 14 (M6), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 198)
+Found: iteration 98 by code review 14 (M6), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: (this commit) | Regression test: tests/test_web_formatting.py (BUG-070's display); docs otherwise
 Repro: `src/webapp/routes/stocks_api.py:458`: "Submit a lightweight quote-only refresh job", where since BUG-128 a refresh also stores Yahoo's split history and revalues the ticker.
 Expected: the docstring says what the job does.
+Fix (iteration 198, with BUG-028): the quote-refresh route's, the job submit's and settings' docstrings say what the job does (no 'lightweight quote-only').
 
 ### BUG-168 [P3][STORE] A period a re-parse no longer gives keeps its row: ADI's 2011-04-30 and 2011-07-30 trailing years, six vintages
 Status: OPEN

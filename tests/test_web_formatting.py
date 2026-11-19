@@ -1,5 +1,5 @@
 """The web UI's number formats (BUG-137, BUG-138)."""
-from src.webapp.formatting import fmt_count, fmt_money, fmt_price, fmt_signed_price
+from src.webapp.formatting import fmt_count, fmt_money, fmt_price, fmt_signed_price, fmt_sources
 
 
 def test_a_negative_price_puts_its_sign_before_the_dollar():
@@ -16,3 +16,13 @@ def test_a_trillion_or_more_reads_in_trillions():
     assert fmt_money(-1.2e12) == "-$1.20T"
     assert fmt_money(999.99e9) == "$999.99B"
     assert fmt_count(14_590_000_000) == "14.59B"
+
+
+def test_the_quality_page_names_where_the_rate_came_from():
+    # BUG-070: "fred_treasury_gov" read as if FRED had been consulted; the stored value stays, the display
+    # says Treasury.gov.
+    assert fmt_sources("yahoo_finance, sec_edgar, fred_treasury_gov, calculated_metrics") == (
+        "yahoo_finance, sec_edgar, treasury_gov (rate), calculated_metrics")
+    assert fmt_sources("fred_estimate") == "rate_estimate (static)"
+    assert fmt_sources("fred_fred") == "fred"
+    assert fmt_sources("") == "—" and fmt_sources(None) == "—"

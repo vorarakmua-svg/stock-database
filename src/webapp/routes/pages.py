@@ -19,7 +19,7 @@ from ...query.asof import AsOfReader
 from ...query.pit_metrics import PointInTimeMetrics
 from ...universe.industries import industry_options
 from ..dependencies import get_asof_reader, get_pit_metrics, get_reader
-from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
+from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_sources, fmt_value
 from ..repository import Reader
 from ..screener import (
     DEFAULT_COMPARE_METRICS,
@@ -40,6 +40,7 @@ templates.env.globals.update(
     fmt_mult=fmt_mult,
     fmt_pct=fmt_pct,
     fmt_price=fmt_price,
+    fmt_sources=fmt_sources,
 )
 
 # ---------------------------------------------------------------------------

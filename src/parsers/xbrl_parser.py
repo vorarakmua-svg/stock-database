@@ -242,7 +242,8 @@ def _net_outflows_as_paid(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     """*us_gaap* with its net outflows (``SIGN_NET``: acquisitions, net of the cash acquired)
     as paid: positive a payment, negative cash brought in, as the taxonomy has them. A filing
     whose gross outflows (capex, dividends, buybacks, debt repaid) are mostly below zero signs
-    its outflows negative (LLY's and TXN's 2008 10-Qs), and its net outflows are turned back.
+    its outflows negative (LLY's 10-Q filed 2009-10-30, TXN's filed 2009-07-29 and 2009-10-30), and its
+    net outflows are turned back.
     Read by size, a net inflow was an outflow: WFC's FY2008 -$11.2B with Wachovia (BUG-127)."""
     votes: Dict[str, int] = defaultdict(int)
     for field in CANONICAL_FIELDS:
@@ -1690,7 +1691,7 @@ class XBRLParser:
         years_back: Optional[int] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
-        Extract standardized annual (10-K) financials, keyed by fiscal year.
+        Extract standardized annual (10-K, 20-F or 40-F) financials, keyed by fiscal year.
 
         Each period dict uses canonical keys (see ``mappings/canonical.py``) so the
         same concept is comparable across companies regardless of which XBRL tag a

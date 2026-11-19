@@ -143,7 +143,7 @@ def assess_annual(annual: Dict[str, Dict[str, Any]],
         # Accounting identity: Assets == Liabilities + Equity + Non-controlling
         # interest. NCI matters for REITs (operating partnerships) and any group with
         # minority interests, since total_equity is parent-only. Only meaningful when
-        # liabilities is *reported* — when derived (A - E) it balances by construction.
+        # liabilities is *reported* — when derived (A - E - NCI) it balances by construction.
         assets = _num(period, "total_assets")
         liabilities = _num(period, "total_liabilities")
         equity = _num(period, "total_equity")

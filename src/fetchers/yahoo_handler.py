@@ -121,7 +121,7 @@ class YahooHandler:
         valuation, and analyst estimates, plus the SCALAR shareholder stats
         only (no holder-list DataFrame calls, no bars), the split history
         (``_get_splits``, Yahoo's chart request), so the quote job can tell a
-        split since the last full collection, which would put this price on
+        split after the stored price's day, which would put this price on
         another basis than everything stored (BUG-093), and the dividend
         payments (``_get_dividend_history``, from the same cached chart
         request), which a saved refresh stores as a collection does, so DDM's

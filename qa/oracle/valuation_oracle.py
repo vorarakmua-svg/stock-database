@@ -306,7 +306,7 @@ class Inputs:
         for date, ratio in self.splits:
             if self.after_price(date):
                 continue
-            # Share splits are at least 3-for-2 (or 1-for-2 reversed). Smaller ratios in Yahoo's split
+            # Share splits are at least 3-for-2 (or a reverse down to 2-for-3). Smaller ratios in Yahoo's split
             # history are spin-off price factors or stock dividends (HON 0.9535, SPGI 1.057; lead L12),
             # which don't change the share count.
             if date > period_end and ratio and (ratio >= 1.5 or ratio <= 1 / 1.5):

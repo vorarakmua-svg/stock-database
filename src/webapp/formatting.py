@@ -18,6 +18,24 @@ def _suffixed(abs_x: float) -> str:
     return f"{abs_x:.0f}"
 
 
+#: The risk-free rate's source is stored as ``fred_<source>`` in a run's ``data_sources`` ("fred_treasury_gov" when the
+#: rate came from Treasury.gov and FRED wasn't read), so the quality page names what the rate came from.
+_RATE_SOURCE_LABELS = {
+    "fred_fred": "fred",
+    "fred_treasury_gov": "treasury_gov (rate)",
+    "fred_estimate": "rate_estimate (static)",
+    "fred_fallback": "rate_fallback (static)",
+}
+
+
+def fmt_sources(stored: Optional[str]) -> str:
+    """A run's stored ``data_sources`` ("yahoo_finance, sec_edgar, fred_treasury_gov, ...") for display: the
+    risk-free rate's entries say where the rate came from, not that FRED was consulted. None or empty -> "—"."""
+    if not stored:
+        return "—"
+    return ", ".join(_RATE_SOURCE_LABELS.get(s.strip(), s.strip()) for s in str(stored).split(","))
+
+
 def fmt_money(x: Optional[float]) -> str:
     """Format a monetary value with B/M/K suffix.
 

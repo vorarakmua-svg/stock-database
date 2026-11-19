@@ -269,7 +269,7 @@ Each ticker JSON file contains:
   "risk_free_rate": {
     "risk_free_rate": 0.0417,
     "source": "fred",
-    "series": "DGS10"
+    "date": "2026-08-01"
   },
 
   "price_history": {
@@ -332,7 +332,7 @@ python diagnose.py AAPL MSFT GOOGL
 
 ### SEC EDGAR
 
-- Official financial statements (10-K, 10-Q)
+- Official financial statements (10-K, 10-Q, 20-F, 40-F)
 - Complete XBRL data (all US-GAAP tags)
 - Company submissions and filings
 - Insider transactions (Form 4): each filing's XML for the last 3 years, parsed (see
@@ -2054,7 +2054,7 @@ care (SIC 6324: UNH, ELV, CI, HUM, CNC). The dedicated items: banks (`net_intere
 `provision_for_credit_losses`, `total_deposits`), insurers (`premiums_earned`, `claims_reserve`), REITs
 (`real_estate_net`) — on top of the universal core. Fields that aren't directly tagged
 are filled by accounting identities (`src/parsers/derived_fields.py`): e.g.
-`total_liabilities = total_assets − total_equity`, and bank revenue from net interest +
+`total_liabilities = total_assets − total_equity − minority_interest`, and bank revenue from net interest +
 noninterest income (captured when reported; broker-dealers classified as banks may report
 fee/trading components without the aggregate, so `noninterest_income` is not required).
 
@@ -2117,7 +2117,8 @@ never alter data):
 | Dividend completeness | Yahoo's dividend history missing payments that SEC filings declare: a gap in the payment schedule that begins near the fiscal year, and Yahoo's payments for that year well short of the SEC-declared dividends per share, or of the year before's when the year's 10-K gives none and Yahoo shows a payment in it (a December declaration paid in January, a suspension SEC confirms, a first dividend paid after the year ends, and years before a split are not flagged); the valuation reruns it on the stored payments, and DDM is N/A where it flags payments DDM reads | interval > 1.7× the usual one and payments < 80% of declared | −10 |
 
 Thresholds are deliberately wide (a $1M materiality floor; the most recent 5 fiscal years are
-scored), so clean filings keep a score of 100. Findings appear in `data_quality.findings` and,
+scored), so clean filings keep a score of 100, unless the dividend-completeness check, which reads Yahoo's dividend
+history, flags a year (-10 even for a company with clean filings). Findings appear in `data_quality.findings` and,
 for medium+ severity, in `warnings`.
 
 ### Fiscal vs calendar year

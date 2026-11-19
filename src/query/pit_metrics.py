@@ -88,7 +88,7 @@ class PointInTimeMetrics:
     ) -> Dict[int, Dict[str, Any]]:
         """Fundamental ratios for every fiscal year known as of ``as_of_date``.
 
-        Each year uses its as-of financials (latest vintage filed <= the date). Keyed by
+        Each year uses its as-of financials (each figure the latest filed on or before the date). Keyed by
         fiscal_year, newest first; ``years_back`` trims to the most recent N. A per-year
         calculator failure is captured as ``{"error": ...}`` rather than aborting the batch.
         """

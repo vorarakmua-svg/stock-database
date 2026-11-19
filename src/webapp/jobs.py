@@ -145,8 +145,8 @@ class CollectionJobManager:
         """Enqueue a job and return the ``job_id``.
 
         ``mode="full"`` (default) runs the existing full collection path
-        (``_run``, unchanged). ``mode="quote"`` runs the lightweight
-        quote-only refresh path (``_run_quote``) instead — both are submitted
+        (``_run``, unchanged). ``mode="quote"`` runs the quote
+        refresh path (``_run_quote``: ``quote_refresh.refresh_quote`` per ticker) instead — both are submitted
         to the SAME ``ThreadPoolExecutor(max_workers=1)``, so a quote job and
         a full job never run concurrently regardless of submission order.
         """

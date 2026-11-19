@@ -3361,3 +3361,13 @@ BUG-156's New York clock matches the tz database 2007-2040.
 Gates: unchanged (qa/ only) | CI: PR #29
 Commit: (this commit) chore(qa): code review 31 recorded; four Minor findings (BUG-349..352)
 Next: BUG-349..352; DOCS and OWNERSHIP batches (workers).
+
+## Iteration 198: 2026-11-20 06:30: fix (BUG-028, BUG-070, BUG-121, BUG-148, BUG-167)
+Picked: five DOCS P3s (wording that no longer matched the code), outside the as-of branch's sections; a sonnet worker.
+Did: docstrings, comments and README lines corrected after re-checking each claim against HEAD; BUG-070's labels are
+display-only (fmt_sources), stored values unchanged.
+- RED: ImportError (fmt_sources) on HEAD; GREEN. 3 of 3 mutants. No stored data moves.
+Result: BUG-028, BUG-070, BUG-121, BUG-148, BUG-167 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3447 passed, 1 skipped | CI: PR #29
+Commit: (this commit) docs: wording that no longer matched the code; the rate's source shown by what it is (BUG-028, BUG-070, BUG-121, BUG-148, BUG-167)
+Next: BUG-212/213/217/219, BUG-349..352 (workers).
