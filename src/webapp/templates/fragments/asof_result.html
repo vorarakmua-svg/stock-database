@@ -11,6 +11,9 @@
         <tr><th class="row-label">Filed</th><td>{{ filing.get("filed_date", "—") }}</td></tr>
         <tr><th class="row-label">Period end</th><td>{{ filing.get("period_end", "—") }}</td></tr>
         <tr><th class="row-label">Accession</th><td class="accn">{{ filing.get("accn", "—") }}</td></tr>
+        {% if filing.get("known_from") %}
+        <tr><th class="row-label">In the record</th><td>as known from {{ filing.get("known_from") }}{% if filing.get("known_accn") %} <span class="muted accn">({{ filing.get("known_accn") }})</span>{% endif %}</td></tr>
+        {% endif %}
       </tbody>
     </table>
   </div>

@@ -2478,9 +2478,12 @@ with AsOfReader("data/output/stock.db") as r:
 as of that date (not yet filed, not yet ended, or a tombstone) resolves to `None` and is absent
 from `history_as_of`, whose `years_back` keeps the N latest years the record held then (none, 0
 or less keeps all). A period carries `accn`, `filed_date` and `form` of the latest filing among
-its figures, its `period_end` and `calendar_year`, and `carried_from` names the filing of each
-figure from an earlier one (`{"revenue": {"accn": ..., "filed_date": ..., "form": ...}}`), from
-`source_filings`.
+its figures, its `period_end` and `calendar_year`, `known_from` and `known_accn` (the snapshot
+row it was read from: the day the record took it and that day's latest accession; the as-of page
+shows it as "as known from <date>"), and `carried_from` names the filing of each figure from an
+earlier one (`{"revenue": {"accn": ..., "filed_date": ..., "form": ...}}`), from
+`source_filings`. A canonical column the stored table lacks (a database not reopened for writing
+since the column was added; the reader is read-only) reads `None`.
 
 For point-in-time **ratios** (computed on the as-of financials), use `PointInTimeMetrics`:
 

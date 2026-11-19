@@ -83,8 +83,39 @@ def test_the_period_keeps_its_shape(tmp_path):
     with AsOfReader(_pru(tmp_path)) as r:
         row = r.as_of_annual("PRU", 2019, "2025-01-01")
     assert set(row) == {"ticker", "fiscal_year", "accn", "filed_date", "period_end", "form", "calendar_year",
-                        "carried_from", *_CANONICAL_COLUMNS}
+                        "known_from", "known_accn", "carried_from", *_CANONICAL_COLUMNS}
     assert row["total_assets"] is None  # a figure the year doesn't hold
+
+
+def test_the_period_says_since_when_it_was_known(tmp_path):
+    # The row the view read: the day it was known from and that day's latest accession.
+    with AsOfReader(_pru(tmp_path)) as r:
+        row = r.as_of_annual("PRU", 2019, "2020-06-30")
+        assert (row["known_from"], row["known_accn"]) == ("2020-02-15", "a-orig")
+        row = r.as_of_annual("PRU", 2019, "2025-01-01")
+        assert (row["known_from"], row["known_accn"]) == ("2021-02-15", "b-restate")
+
+
+def test_a_table_without_a_canonical_column_reads_it_as_none(tmp_path):
+    # A database whose table predates a canonical column (the reader opens it read-only, so nothing adds it).
+    missing = _CANONICAL_COLUMNS[-1]
+    kept = [c for c in _CANONICAL_COLUMNS if c != missing]
+    db = tmp_path / "older.db"
+    conn = sqlite3.connect(db)
+    head = ["ticker", "fiscal_year", "known_from", "known_accn", "present", "accn", "filed_date", "form",
+            "period_end", "calendar_year", "frame", "source_tags", "source_filings"]
+    columns = ", ".join('"' + c + '"' for c in head + kept)
+    conn.execute(f"CREATE TABLE financials_annual_known ({columns})")
+    values = ["PRU", 2019, "2020-02-15", "a-orig", 1, "a-orig", "2020-02-15", "10-K", "2019-12-31", 2019, "CY2019",
+              None, None] + [None] * len(kept)
+    values[13 + kept.index("net_income")] = 100.0
+    conn.execute(f"INSERT INTO financials_annual_known VALUES ({', '.join('?' for _ in values)})", values)
+    conn.commit()
+    conn.close()
+    with AsOfReader(db) as r:
+        row = r.as_of_annual("PRU", 2019, "2025-01-01")
+    assert row[missing] is None and row["net_income"] == 100.0
+    assert set(row) >= set(_CANONICAL_COLUMNS)
 
 
 def test_accepts_date_object(tmp_path):

@@ -24,8 +24,10 @@ from ..exporters.sqlite_store import _CANONICAL_COLUMNS, read_only_uri
 # Accepts an ISO ``YYYY-MM-DD`` string or a date/datetime (normalized before querying).
 AsOfDate = Union[str, date]
 
-#: A period's provenance, as the vintages gave it: its latest contributing filing's.
-_PROVENANCE = ("ticker", "fiscal_year", "accn", "filed_date", "period_end", "form", "calendar_year")
+#: A period's provenance: its latest contributing filing's (as the vintages gave it), and the snapshot's own
+#: ``known_from`` (the day the record took the row) and ``known_accn`` (that day's latest accession).
+_PROVENANCE = ("ticker", "fiscal_year", "accn", "filed_date", "period_end", "form", "calendar_year", "known_from",
+               "known_accn")
 #: The figures a ``carried_from`` entry may name.
 _FIGURES = frozenset(_CANONICAL_COLUMNS)
 
@@ -93,7 +95,8 @@ class AsOfReader:
         Returns a plain dict (all canonical line items + provenance metadata), or ``None`` if the year wasn't in the
         record as of that date: not filed yet, left the record that day (a ``present`` 0 row), or no snapshots built
         for the ticker. The provenance (``accn``, ``filed_date``, ``form``) is the year's latest contributing
-        filing's; ``period_end`` and ``calendar_year`` are the row's, and ``carried_from`` names the filing of each
+        filing's; ``period_end``, ``calendar_year``, ``known_from`` (the day the record took this row) and
+        ``known_accn`` (that day's latest accession) are the row's, and ``carried_from`` names the filing of each
         figure read from an earlier one: ``{field: {"accn", "filed_date", "form"}}``.
         """
         if not self._built:
@@ -142,9 +145,11 @@ class AsOfReader:
 
 def _period(row: sqlite3.Row) -> Dict[str, Any]:
     """A stored snapshot row as the as-of period: its provenance, the canonical figures and ``carried_from`` (each
-    figure whose filing, in the row's ``source_filings``, isn't the row's latest one)."""
+    figure whose filing, in the row's ``source_filings``, isn't the row's latest one). A canonical column the table
+    lacks (a database stored before it, which the read-only reader can't migrate) reads None."""
+    columns = set(row.keys())
     period: Dict[str, Any] = {key: row[key] for key in _PROVENANCE}
-    period.update({key: row[key] for key in _CANONICAL_COLUMNS})
+    period.update({key: row[key] if key in columns else None for key in _CANONICAL_COLUMNS})
     filings = json.loads(row["source_filings"]) if row["source_filings"] else {}
     period["carried_from"] = {
         key: {"accn": filing.get("accn"), "filed_date": filing.get("filed"), "form": filing.get("form")}

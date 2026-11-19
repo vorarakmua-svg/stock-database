@@ -447,3 +447,15 @@ def test_the_page_says_an_unknown_ticker_is_unknown(client: TestClient) -> None:
     assert resp.status_code == 200
     assert "<strong>ZZZZ</strong> is unknown" in resp.text
     assert "isn't built yet" not in resp.text and "had not been filed" not in resp.text
+
+
+def test_the_page_says_since_when_the_period_was_known(client: TestClient) -> None:
+    resp = client.get("/ui/asof/result", params={"ticker": TICKER, "fiscal_year": FY, "date": DATE_ORIG})
+    assert "as known from 2023-02-10" in resp.text
+    resp = client.get("/ui/asof/result", params={"ticker": TICKER, "fiscal_year": FY, "date": DATE_RESTATE})
+    assert "as known from 2023-08-15" in resp.text
+
+
+def test_the_annual_api_says_since_when_the_period_was_known(client: TestClient) -> None:
+    data = client.get(f"/api/asof/{TICKER}/annual", params={"fiscal_year": FY, "date": DATE_RESTATE}).json()
+    assert (data["known_from"], data["known_accn"]) == ("2023-08-15", "0002-10KA-2022")
