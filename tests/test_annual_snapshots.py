@@ -4,7 +4,8 @@ import math
 from typing import Any, Dict, List, Optional
 
 from src.mappings.canonical import CANONICAL_BY_KEY
-from src.parsers.annual_record import build_annual_record
+from src.parsers import annual_snapshots
+from src.parsers.annual_record import PARSED_TAXONOMY, build_annual_record
 from src.parsers.annual_snapshots import SnapshotSet, build_snapshots
 from src.parsers.xbrl_parser import XBRLParser
 
@@ -228,3 +229,87 @@ def test_years_back_trims_rows_not_history():
     assert {row["fiscal_year"] for row in trimmed.rows} == {2020, 2021}
     assert trimmed.rows == [row for row in full.rows if row["fiscal_year"] in (2020, 2021)]
     assert sorted(trimmed.vintages) == ["2020", "2021"]
+
+
+#: The days of ``_unread_days``'s companyfacts: the parse's days (a 10-K, a 10-Q, the next 10-K), and days whose only
+#: facts are in taxonomies the record's parse never reads (dei share counts, srt, ifrs-full).
+K19, DEI1, Q1, K20, DEI2, SRT, ENDED, DEI3 = ("2020-02-14", "2020-03-01", "2020-05-01", "2021-02-12", "2021-06-01",
+                                              "2021-08-01", "2022-01-20", "2022-03-01")
+
+
+def _unread_days() -> Dict[str, Any]:
+    # The FY2020 10-K also tags a dividend for 2021, a year not over on its day (BAC's shape, BUG-113): FY2021 opens
+    # the first filing day after 2021-12-31, here a day with only a dei share count (ENDED).
+    facts = _facts(
+        Revenues=[_year(100.0, 2019, K19, "a1"), _fact(30.0, "2020-03-31", Q1, "q1", start="2020-01-01", form="10-Q"),
+                  _year(110.0, 2020, K20, "a2"), _year(100.0, 2019, K20, "a2")],
+        NetIncomeLoss=[_year(10.0, 2019, K19, "a1"), _year(11.0, 2020, K20, "a2")],
+        CommonStockDividendsPerShareDeclared=[_year(0.5, 2021, K20, "a2")])
+
+    def instant(val: float, day: str, accn: str, form: str) -> Dict[str, Any]:
+        return {"val": val, "end": day, "accn": accn, "fy": int(day[:4]), "fp": "Q1", "form": form, "filed": day}
+
+    facts["facts"]["dei"] = {"EntityCommonStockSharesOutstanding": {"label": "shares", "units": {"shares": [
+        instant(9.0e6, K19, "a1", "10-K"), instant(9.1e6, DEI1, "d1", "10-K"),  # a 10-K form, no us-gaap fact
+        instant(9.2e6, DEI2, "d2", "10-Q"), instant(9.3e6, ENDED, "d3", "10-Q"), instant(9.4e6, DEI3, "d4", "10-Q")]}}}
+    # the same concepts as the us-gaap ones, other figures: a parse that read them would differ
+    facts["facts"]["srt"] = {"Revenues": {"label": "r", "units": {"USD": [_year(999.0, 2020, SRT, "s1")]}}}
+    facts["facts"]["ifrs-full"] = {"Revenues": {"label": "r", "units": {"USD": [_year(888.0, 2019, SRT, "s1")]}}}
+    return facts
+
+
+def _built_days(monkeypatch, facts: Dict[str, Any]) -> List[str]:
+    """The days ``build_snapshots`` builds the record on (each build's facts' latest filed day)."""
+    built: List[str] = []
+
+    def spy(parser, known, **kwargs):
+        built.append(max(e["filed"] for taxonomy in known["facts"].values() for node in taxonomy.values()
+                         for entries in node["units"].values() for e in entries))
+        return build_annual_record(parser, known, **kwargs)
+
+    monkeypatch.setattr(annual_snapshots, "build_annual_record", spy)
+    build_snapshots(XBRLParser(), facts, ticker="X", years_back=None)
+    return built
+
+
+def test_the_cached_builder_gives_the_uncached_rows(monkeypatch):
+    facts = _unread_days()
+    cached = build_snapshots(XBRLParser(), facts, ticker="X", years_back=None)
+    monkeypatch.setattr(annual_snapshots, "_SKIP_UNCHANGED_DAYS", False)
+    uncached = build_snapshots(XBRLParser(), facts, ticker="X", years_back=None)
+    # the fixture holds the cases: FY2021 opens on a day with a dei fact alone, its year now over
+    assert [(row["known_from"], row["present"]) for row in _rows(uncached, 2021)] == [(ENDED, True)]
+    assert _rows(uncached, 2021)[0]["dividends_per_share"] == 0.5
+    assert sorted(uncached.vintages) == ["2019", "2020"]
+    assert cached == uncached
+    # with years_back, and with an undated fact (its warning)
+    facts["facts"]["dei"]["EntityCommonStockSharesOutstanding"]["units"]["shares"].append(
+        {"val": 1.0, "end": "2020-12-31", "accn": "d9", "form": "10-Q"})
+    for years_back in (None, 1, 2):
+        uncached = build_snapshots(XBRLParser(), facts, ticker="X", years_back=years_back)
+        monkeypatch.setattr(annual_snapshots, "_SKIP_UNCHANGED_DAYS", True)
+        assert build_snapshots(XBRLParser(), facts, ticker="X", years_back=years_back) == uncached
+        monkeypatch.setattr(annual_snapshots, "_SKIP_UNCHANGED_DAYS", False)
+    assert len(uncached.warnings) == 1
+
+
+def test_a_day_whose_facts_the_record_cant_read_isnt_built(monkeypatch):
+    # Built: the first day, each day the parse's taxonomy filed on (the 10-Q's too) and the day FY2021's end has
+    # passed; not built: the dei-only days (the 10-K-form one too) and the srt/ifrs-full day.
+    assert _built_days(monkeypatch, _unread_days()) == [K19, Q1, K20, ENDED]
+
+
+def test_the_uncached_builder_builds_every_day(monkeypatch):
+    monkeypatch.setattr(annual_snapshots, "_SKIP_UNCHANGED_DAYS", False)
+    assert _built_days(monkeypatch, _unread_days()) == [K19, DEI1, Q1, K20, DEI2, SRT, ENDED, DEI3]
+
+
+def test_the_record_reads_no_taxonomy_but_its_own():
+    # The skip's premise (PARSED_TAXONOMY): the record of facts with dei, srt and ifrs-full beside us-gaap is that of
+    # us-gaap alone, given the same latest filed day.
+    facts = _unread_days()
+    alone = {**facts, "facts": {"us-gaap": facts["facts"]["us-gaap"],
+                                "dei": {"X": {"units": {"shares": [{"val": 1.0, "end": DEI3, "filed": DEI3}]}}}}}
+    assert PARSED_TAXONOMY == "us-gaap"
+    assert (build_annual_record(XBRLParser(), facts, ticker="X", years_back=None)
+            == build_annual_record(XBRLParser(), alone, ticker="X", years_back=None))

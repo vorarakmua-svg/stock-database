@@ -5,11 +5,13 @@ day D when its ``filed`` date is on or before D; a fact with no ``filed`` date
 is never known (it cannot be shown to have been public).
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
-def _entries(facts: Dict[str, Any]):
-    for tags in (facts.get("facts") or {}).values():
+def _entries(facts: Dict[str, Any], taxonomy: Optional[str] = None):
+    for name, tags in (facts.get("facts") or {}).items():
+        if taxonomy is not None and name != taxonomy:
+            continue
         for node in tags.values():
             for entries in (node.get("units") or {}).values():
                 for entry in entries:
@@ -43,9 +45,9 @@ def facts_known_by(facts: Dict[str, Any], day: str) -> Dict[str, Any]:
     return out
 
 
-def filing_dates(facts: Dict[str, Any]) -> List[str]:
-    """Distinct ``filed`` dates of every entry of every taxonomy, ascending."""
-    return sorted({e["filed"] for e in _entries(facts) if e.get("filed")})
+def filing_dates(facts: Dict[str, Any], taxonomy: Optional[str] = None) -> List[str]:
+    """Distinct ``filed`` dates of every entry of every taxonomy (or of *taxonomy* alone), ascending."""
+    return sorted({e["filed"] for e in _entries(facts, taxonomy) if e.get("filed")})
 
 
 def undated_facts(facts: Dict[str, Any]) -> int:

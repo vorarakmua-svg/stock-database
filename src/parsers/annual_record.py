@@ -14,6 +14,10 @@ from .xbrl_parser import XBRLParser
 
 #: The statement the record's share-scale and validation warnings name.
 ANNUAL = "financials_annual"
+#: The one taxonomy the record's parse reads. ``extract_annual_financials`` reads its facts only through
+#: ``_filer_facts``, which takes ``facts["facts"]["us-gaap"]``: no other taxonomy (dei's share counts, srt, ifrs-full,
+#: ...) and no top-level key. The record reads the other taxonomies only for their latest filed day (``_last_filed``).
+PARSED_TAXONOMY = "us-gaap"
 
 
 @dataclass
@@ -27,6 +31,9 @@ class AnnualRecord:
     #: How many of *warnings* lead them as the parse's (the repairs); the rest are the cleaning's. A run adds the
     #: parse's where it reads the facts and the cleaning's where it cleans its other statements.
     repairs: int = 0
+    #: The ends of the parse's fiscal years left out as not yet ended on the latest filed day (BUG-113), in the
+    #: parse's order: a later day opens those it has reached, with no new fact.
+    unended: List[str] = field(default_factory=list)
 
 
 def _last_filed(facts: Dict[str, Any]) -> str:
@@ -68,10 +75,13 @@ def build_annual_record(parser: XBRLParser, facts: Dict[str, Any], *, ticker: st
     the periods as it left them and says why ("Data cleaning: ..."), as the run always has."""
     last = _last_filed(facts)
     annual: Dict[str, Dict[str, Any]] = {}
+    unended: List[str] = []
     for fy, period in parser.extract_annual_financials(facts).items():
         end = period.pop("_year_end", None) or period.get("period_end")
         if not end or end <= last:
             annual[fy] = period
+        else:
+            unended.append(end)
     if years_back:
         annual = {fy: annual[fy] for fy in list(annual)[:years_back]}
     warnings: List[str] = []
@@ -84,11 +94,11 @@ def build_annual_record(parser: XBRLParser, facts: Dict[str, Any], *, ticker: st
                 f"which looks like a tagging error ({r['kind']})")
     repairs = len(warnings)
     if not annual:
-        return AnnualRecord(annual, warnings, repairs)
+        return AnnualRecord(annual, warnings, repairs, unended)
     try:
         cleaned = clean_annual(annual, warnings)
     except Exception as e:
         parser.logger.warning(f"Data cleaning error for {ticker}: {e}")
         warnings.append(f"Data cleaning: {str(e)}")
-        return AnnualRecord(annual, warnings, repairs)
-    return AnnualRecord(cleaned, warnings, repairs)
+        return AnnualRecord(annual, warnings, repairs, unended)
+    return AnnualRecord(cleaned, warnings, repairs, unended)

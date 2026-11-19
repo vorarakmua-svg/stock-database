@@ -9,6 +9,9 @@ kept only when it differs from its previous one, and a year that leaves the reco
 Each filing's own view of its years (its vintage, "as filed") is read from the facts known on its day too, so no
 vintage's set-asides read a later filing (BUG-120), and a view of a year not over on its filing's day is dropped as
 the record drops such a year (BUG-113).
+
+A day whose record is provably the day before's (``_record_unchanged``: no fact the record's parse reads was filed
+on it, and no year left out as not yet ended has ended by it) isn't built: it would add no row.
 """
 
 import math
@@ -16,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..mappings.canonical import CANONICAL_BY_KEY
-from .annual_record import build_annual_record
+from .annual_record import PARSED_TAXONOMY, build_annual_record
 from .derived_fields import apply_derivations
 from .known_facts import facts_known_by, filing_dates, undated_facts
 from .share_scale import normalize_share_scale
@@ -24,6 +27,9 @@ from .xbrl_parser import _ANNUAL_FORMS, XBRLParser
 
 #: What makes a year's row differ from its previous one, beside its canonical values.
 _COMPARED = ("source_tags", "source_filings", "period_end", "calendar_year", "frame")
+#: Whether ``build_snapshots`` skips the days ``_record_unchanged`` proves change nothing (False: the record is built
+#: on every filing day, the replay the tests compare the skipping one with).
+_SKIP_UNCHANGED_DAYS = True
 
 
 @dataclass
@@ -84,6 +90,25 @@ def _filings_by_day(facts: Dict[str, Any]) -> Tuple[Dict[str, str], Set[str]]:
     return accns, annual
 
 
+def _record_unchanged(day: str, parsed_days: Set[str], unended: List[str]) -> bool:
+    """Whether the record known on filing day *day* is, unbuilt, the one last built (on day b), so building it would
+    add no row.
+
+    ``build_annual_record`` on ``facts_known_by(facts, day)`` is a function of two things of those facts (the parser
+    holds no state):
+
+    1. The entries of the parse's taxonomy (``PARSED_TAXONOMY``: ``extract_annual_financials`` reads only them, through
+       ``_filer_facts``). None was filed on *day* (``parsed_days``: that taxonomy's filing days) nor, each having passed
+       this test, on a filing day since b, so they are b's, in b's order (``facts_known_by`` keeps it): the parse gives
+       b's years.
+    2. The latest filed day of every taxonomy (``_last_filed``), which is *day*: a filing day of the facts, all known
+       on it. It only decides which of the parse's years have ended (end on or before it): a year with no end or one
+       kept on b is kept on *day*, and a year b left out (``unended``: its end after b) is kept iff its end is by *day*.
+
+    With neither moved, the kept years are b's and the cleaning, a function of them alone, gives b's record."""
+    return day not in parsed_days and all(end > day for end in unended)
+
+
 def _vintages_of(parser: XBRLParser, known: Dict[str, Any], day: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """The views of the filings of *day*, from the facts *known* that day, normalised as the run does: a year's
     share counts over all its views filed by *day* (``normalize_share_scale`` without neighbours still gives a count
@@ -123,24 +148,31 @@ def build_snapshots(parser: XBRLParser, facts: Dict[str, Any], *, ticker: str,
             f"SEC EDGAR: {ticker}'s companyfacts hold {undated} fact(s) with no filing date: no as-of snapshot "
             "reads them, as none can be shown to have been public on any day")
     accns, annual_days = _filings_by_day(facts)
+    parsed_days = set(filing_dates(facts, PARSED_TAXONOMY))
+    unended: Optional[List[str]] = None  # the last built record's (None: none built yet)
     last: Dict[int, Dict[str, Any]] = {}  # fiscal year -> its latest state (None: left the record)
     present: Dict[int, bool] = {}
     vintages: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for day in filing_dates(facts):
+        build = not (_SKIP_UNCHANGED_DAYS and unended is not None and _record_unchanged(day, parsed_days, unended))
+        if not build and day not in annual_days:
+            continue
         known = facts_known_by(facts, day)
-        periods = build_annual_record(parser, known, ticker=ticker, years_back=None).periods
-        now = {int(fy): _state(period) for fy, period in periods.items()}
-        for fy in sorted(set(now) | {fy for fy, held in present.items() if held}):
-            head = {"fiscal_year": fy, "known_from": day, "known_accn": accns.get(day) or None}
-            if fy not in now:
-                out.rows.append({**head, "present": False})
-                present[fy] = False
-                continue
-            state = now[fy]
-            if present.get(fy) and _same(state, last[fy]):
-                continue
-            out.rows.append({**head, "present": True, **state, **_latest_filing(state["source_filings"])})
-            last[fy], present[fy] = state, True
+        if build:
+            record = build_annual_record(parser, known, ticker=ticker, years_back=None)
+            unended = record.unended
+            now = {int(fy): _state(period) for fy, period in record.periods.items()}
+            for fy in sorted(set(now) | {fy for fy, held in present.items() if held}):
+                head = {"fiscal_year": fy, "known_from": day, "known_accn": accns.get(day) or None}
+                if fy not in now:
+                    out.rows.append({**head, "present": False})
+                    present[fy] = False
+                    continue
+                state = now[fy]
+                if present.get(fy) and _same(state, last[fy]):
+                    continue
+                out.rows.append({**head, "present": True, **state, **_latest_filing(state["source_filings"])})
+                last[fy], present[fy] = state, True
         if day in annual_days:
             for fy, views in _vintages_of(parser, known, day).items():
                 vintages.setdefault(fy, {}).update(views)
