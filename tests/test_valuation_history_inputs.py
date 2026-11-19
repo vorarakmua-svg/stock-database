@@ -250,6 +250,19 @@ def test_load_history_inputs_puts_every_quarter_on_the_bars_basis(tmp_path):
     assert [d for d, _ in x.dividends] == ["2025-03-01", "2025-09-01"]
 
 
+def test_a_month_end_bar_on_an_ex_date_keeps_its_own_dividend(tmp_path):
+    # BUG-087's boundary in the valuation history: a bar Yahoo served on an ex-date already carries that day's
+    # dividend, so only the dividends after the day are undone (``ex > day``). With a March month end on the 2025-03-01
+    # ex-date and a 0.10 dividend on 2025-09-01 over a 12.00 close before it, the adjusted 12.00 comes back to
+    # 12.00 x (1 + 0.10 / 12.00) = 12.10, not further by the 03-01 dividend's own factor (12.196).
+    conn = _db(tmp_path)
+    conn.execute("INSERT INTO price_bars (ticker, date, close) VALUES ('AAA', '2025-03-01', 12.0)")
+    conn.execute("UPDATE price_bars SET dividend_adjusted = 1")
+    conn.commit()
+    x = load_history_inputs(conn, "AAA")
+    assert dict(x.months)["2025-03-01"] == pytest.approx(12.1)
+
+
 def test_a_bank_has_no_fcf_ebitda_or_net_debt(tmp_path):
     conn = _db(tmp_path, sector="bank")
     p = load_history_inputs(conn, "AAA").points[-1]

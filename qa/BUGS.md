@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 127 · NEEDS-USER 1 · Decided: 7 · Verified: 238
+**Open:** P0 0 · P1 0 · P2 1 · P3 127 · NEEDS-USER 1 · Decided: 7 · Verified: 242
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -703,12 +703,14 @@ Expected: a figure the years around side with is kept against a later value howe
 
 Iteration 66: BUG-092's fix puts BRK-B's quarters right (Q4 2009's basic count 1,551,730, was 6.1e12); the annual FY2009 figure still stands at 1,551,174,000,000.
 ### BUG-087 [P3][CODE] No test holds the market-close rebuild's ex-date boundary
-Status: OPEN
-Found: iteration 58 by code review 8 (M3), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 203)
+Found: iteration 58 by code review 8 (M3), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: (this commit, tests only) | Regression tests: tests/test_p3_pins.py and the valuation input tests
 Repro: `load_inputs` undoes a dividend's factor only for bars before its ex-date (`ex > day`); the mutant `ex >= day` passes the whole suite (1026 passed on 0b061c0). Broken, 14 of the user's FY-end bars that fall on an ex-date would move (USB FY2024-25 +1.05% and +0.97%, BMY FY2020 +0.80%, O FY2017-25 about +0.4%).
 Expected: a test with a dividend on the FY-end bar's day.   Actual: none.
 
 Re-run in iteration 63 (code review 9's M6: iteration 59 re-ran the mutant, not these figures): 14 of the user's 1,244 FY-end bars since FY2016 fall on an ex-date, and the mutant would move USB's FY2024-25 +1.05% and +0.97%, BMY's FY2020 +0.80% and O's FY2017-25 about +0.4% (`qa/evidence/iter63-review9-rerun.txt`).
+Fix (iteration 203, `qa/evidence/bug087-investigation.txt`; tests only): each named behaviour re-checked against HEAD and pinned by a test that kills a mutant of it (tests/test_p3_pins.py, test_valuation_inputs.py, test_valuation_history_inputs.py; qa/evidence/bug087-mutants.json, 17 of 17, 4 killed before the tests). BUG-087's inputs.py half was already pinned (BUG-084's test); BUG-162's bars half changed with BUG-303 (only share splits rebase bars), pinned as it is now with 5:4 splits both ways. After feat/asof-snapshots merges, re-run the spec (its xbrl_parser mutants may go stale).
+
 ### BUG-088 [P3][CODE] The suite's network guard misses curl_cffi, connect_ex, asyncio and name lookups, and refuses 127.0.0.2
 Status: VERIFIED (iteration 183)
 Found: iteration 58 by code review 8 (M4), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_no_network.py (25: every route refused off the machine, 127.0.0.0/8 and ::1 local); 12 failing + 3 errors first
@@ -1140,10 +1142,11 @@ Repro: `year_spans` takes any 350-380-day span from any form (`xbrl_parser.py:83
 Expected: `year_of_start` from the years a 10-K closes.   Actual: from any year-long span.
 
 ### BUG-147 [P3][CODE] Two branches no test pins: a lone first quarter's 80-day floor and a refresh's Yahoo-EBITDA fallback
-Status: OPEN
-Found: iteration 92 by code review 13 (M5), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 203)
+Found: iteration 92 by code review 13 (M5), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: (this commit, tests only) | Regression tests: tests/test_p3_pins.py and the valuation input tests
 Repro: mutants surviving at HEAD (re-run against `tests/test_xbrl_parser.py`, and `test_sqlite_store.py` with `test_web_quote_refresh.py`): `m124_lone_no_span_floor` (without the floor MS's 2008-12-31 and GS's 2008-12-26 one-month transition periods become first quarters with flows: MS OCF -$14.17B, debt issued $13.59B; GS OCF -$13.91B); `m126_no_yahoo_ebitda` (CB's and CRWD's refreshed EV/EBITDA would be None, not 10.13 and 3,541). Review 13's other two meaningful survivors are BUG-140's and BUG-141's.
 Expected: a test for each.   Actual: none.
+Fix: see BUG-087 (iteration 203).
 
 ### BUG-148 [P3][DOCS] BUG-127's docstring and fix note name "LLY's and TXN's 2008 10-Qs", which are their 2009 10-Qs' 2008 comparatives
 Status: VERIFIED (iteration 198)
@@ -1248,10 +1251,11 @@ Notes: AXP's FY2009-16 cash are components too; its balance-sheet tag, CashCashE
 Fix (iteration 112, `qa/evidence/bug161-done.txt`): the restricted-cash total now reads before CashEquivalentsAtCarryingValue (canonical.py), except where a filing's total is its equivalents plus restricted cash or asset deposits it tags on that date (`xbrl_parser._cash_totals_set_aside`): ICE's FY2018-22 10-Ks tag their balance sheet's cash line as the equivalents, and their total adds restricted cash and up to $146B of clearing margin deposits, so the plain reorder (the Expected line, review 14's mutant) would have read ICE's FY2021 cash $147.98B for $0.61B. Over the 502 (an asset-side balance-sheet oracle on 61,899 filing-dates): cash changes in 26 annual years at 6 filers (PG FY2025 $9.556B, BRK-B FY2022 $36.399B, AXP FY2017 $33.263B, BIIB, CPRT, MTD), none away from the balance sheet; ICE unchanged; valuations identical; net debt, ROIC, EPV, the EV/EBITDA history and ranks move. Residuals: BUG-260 (Cash a component), BUG-261 (AXP's tag unmapped).
 
 ### BUG-162 [P3][CODE] Three fixes rest on paths no test pins: BUG-128's rebasing under 3:2, BUG-134's refresh sector, the quarterly record's fact filters
-Status: OPEN
-Found: iteration 98 by code review 14 (M1), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 203)
+Found: iteration 98 by code review 14 (M1), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: (this commit, tests only) | Regression tests: tests/test_p3_pins.py and the valuation input tests
 Repro: four mutants survive the whole suite at f2271db (1,183 passed each) and change real output: `m128_dividends_skip_small_factors` (`src/valuation/inputs.py`, the payments not rebased under 3:2): GE-like 1.253's refresh reads DDM 418.38 and upside -34.75%, BUG-128's original symptom; `m128_bars_skip_small_factors` (the bars not rebased): the multiples band 983.37 for 784.81; `m134_refresh_unsectored` (`sqlite_store.py`, the refresh's EV family without the sector): the cells BUG-134 empties come back (review 14: 65, JPM's EV $1,027.5B); `m139_quarterly_unfiltered` (the quarterly extraction on the raw facts): DIS gains a cash-only quarter at 2016-10-01, 65 quarterly and 39 TTM cash cells fill from cash flow statements, WDC's calendar quarter moves, and since BUG-141 155 quarterly and 153 TTM long-term debt cells at 20 filers lose its set-aside. BUG-128's tests stub the engine, so nothing ties the recompute to its result.
 Expected: an engine test that a stored factor rebases DDM and the band by 1/f; a bank refresh test with an empty EV family; quarterly tests with a date only a cash flow statement has and with BUG-141's debt shape.
+Fix: see BUG-087 (iteration 203).
 
 ### BUG-163 [P3][WEB] A refresh whose valuation write fails is never retried, and the job reports success
 Status: VERIFIED (iteration 193)
@@ -2309,6 +2313,18 @@ Found: code review 32 (Minor 4) | Fixed: | Regression test:
 Repro: BUG-219 added `price_footnote` to the form4 API's trades; README and USAGE_GUIDE don't name it.
 Expected: documented beside the other trade fields.   Actual: missing.
 
+### BUG-358 [P3][DOCS] The quarterly current-debt rule's docstring says 'its latest annual report's word'; the code takes any annual report's 'held' on that date
+Status: OPEN
+Found: BUG-288's test-gap worker (iteration 203, `qa/evidence/bug087-investigation.txt`) | Fixed: | Regression test:
+Repro: src/parsers/xbrl_parser.py, the quarter rule BUG-267/288 cover. (Wait for feat/asof-snapshots: that branch rewrites xbrl_parser.py.)
+Expected: the docstring says what the code does.   Actual: it doesn't.
+
+### BUG-359 [P3][PARSE] An annual-form balance-sheet instant dated the day after a year end (an adoption day) shifts the year end a later quarter consults, so its maturities count twice
+Status: OPEN
+Found: BUG-288's test-gap worker (iteration 203; synthetic, not measured on real filers) | Fixed: | Regression test:
+Repro: BE-shaped facts: a FY2024 10-K plus a Q3 2025 10-Q with $1.4M borrowings against $1.424M maturities give short_term_debt 1,400,000; adding a 10-K LiabilitiesAndStockholdersEquity instant at 2025-01-01 gives 2,824,000. The code takes any annual-form L&SE instant as a year end (cf. BUG-272's adoption-day instants). (Wait for feat/asof-snapshots: it rewrites xbrl_parser.py.)
+Expected: 1,400,000.   Actual: 2,824,000.
+
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: the history's P/E on net income to common, as its P/B already is.
@@ -2569,10 +2585,11 @@ Repro: a stored LongTermDebt total that already holds the maturities, beside sho
 Expected: a row from one parse.   Actual: a cell-by-cell mix, until the next good run.
 
 ### BUG-288 [P3][QA] Boundaries of the last five fixes no test pins (code review 22's surviving mutants), and small doc points
-Status: OPEN
-Found: code review 22 (M-3, M-5) | Fixed: | Regression test:
+Status: VERIFIED (iteration 203)
+Found: code review 22 (M-3, M-5) | Fixed: (this commit, tests only) | Regression tests: tests/test_p3_pins.py and the valuation input tests
 Repro: 5 of the reviewer's 11 boundary mutants survive: BUG-267's exact `b != m` for one line tagged three ways (NI's 600 against 597.7 has no test), the 2% upper side of the quarter guard, the bound's tolerance (equivalent on today's data); BUG-247's zero net income (the mutant would crash on it); `refresh._gap`'s predecessor part. Also: the quarter rule's docstring says "its latest annual report" where the code takes any annual report's "held"; an adoption-day instant (BUG-272) could become a quarter's year end; the refresh's runs query has no LIMIT.
 Expected: tests at each boundary and true docstrings.   Actual: as listed.
+Fix: see BUG-087 (iteration 203).
 
 ### BUG-289 [P3][REFRESH] BUG-251's retry bound counts collections, not time, and a flipping predecessor flag resets it
 Status: VERIFIED (iteration 195)

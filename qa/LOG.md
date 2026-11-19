@@ -3421,3 +3421,14 @@ BUG-238 matches the oracle; BUG-212 never re-reads hand-curated codes; every col
 Gates: unchanged (qa/ only) | CI: PR #29
 Commit: (this commit) chore(qa): code review 32 recorded; one Important finding (BUG-353)
 Next: BUG-353 first, with BUG-354..357; the test-gap batch (worker).
+
+## Iteration 203: 2026-11-20 12:50: tests (BUG-087, BUG-147, BUG-162, BUG-288)
+Picked: four CODE P3s (behaviours no test pinned); a sonnet worker.
+Did: each behaviour re-checked against HEAD and pinned by a test that kills its mutant; no src change.
+- 17 of 17 mutants (4 killed before the new tests). Two items had changed or were already pinned (noted).
+- New: BUG-358 (P3, a false docstring), BUG-359 (P3, an adoption-day instant double-counts a quarter's maturities;
+  synthetic) - both in xbrl_parser.py, so after the as-of branch merges.
+Result: BUG-087, BUG-147, BUG-162, BUG-288 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3567 passed, 1 skipped | CI: PR #29
+Commit: (this commit) test: pin four behaviours no test held (BUG-087, BUG-147, BUG-162, BUG-288)
+Next: BUG-353..357 (worker).

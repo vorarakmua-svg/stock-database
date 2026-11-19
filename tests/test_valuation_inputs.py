@@ -679,6 +679,9 @@ def test_net_income_may_move_less_than_half_the_seams_ratio(tmp_path, net_income
     (-7656.0, -1318.0, False),  # PCG's loss shrinking
     (-100.0, 100.0, False),     # a sign change, though the size held
     (None, 100.0, True),        # unknown: it doesn't decide, as for the count EPS implies
+    (0.0, 100.0, True),         # a net income of exactly zero is as unknown (BUG-288: no log of a zero, no division)
+    (100.0, 0.0, True),
+    (0.0, 0.0, True),
 ])
 def test_net_income_holds_with_its_sign_and_within_half_the_seams_ratio(older, newer, held):
     from src.valuation.inputs import _net_income_held
@@ -1585,6 +1588,57 @@ def test_dividends_served_before_a_split_go_onto_the_basis_of_bars_served_after_
 def test_dividends_on_the_bars_basis_stay_as_they_are(tmp_path):
     # Served with the bars, before a later split: nothing to move.
     assert _payer_after_a_split(tmp_path, "2023-02-01", "2022-12-30") == {2021: 100.0, 2022: 100.0}
+
+
+def _payer_with_a_factor(tmp_path, ratio, factor_day, served_on, halve=False, bars_before=None):
+    """The dividend payer with a price factor (a stock dividend's or a spin-off's, under 3:2: BUG-162) of *ratio* on
+    *factor_day*, its payments as served on *served_on* (halved: on the new basis), and with *bars_before* its adjusted
+    bars before that day restated for it, as Yahoo serves them after it. FY-end prices as load_inputs reads them."""
+    db_path = _dividend_payer_db(tmp_path, "flagged")
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('PAY', ?, ?)", (factor_day, ratio))
+    conn.execute("UPDATE dividend_events SET amount = amount / ?, served_on = ?", (ratio if halve else 1.0, served_on))
+    if bars_before:
+        conn.execute("UPDATE price_bars SET close = close / ? WHERE date < ?", (ratio, bars_before))
+    conn.commit()
+    conn.close()
+    conn = _connect(db_path)
+    inputs = load_inputs(conn, "PAY")
+    conn.close()
+    return {fy: round(price, 6) for fy, price in inputs.fy_end_prices.items()}
+
+
+@pytest.mark.parametrize("ratio", [1.253, 1.04, 0.9535])  # GE's spin-off factor, a stock dividend's, HON's
+def test_dividends_restated_for_a_small_factor_after_the_bars_go_onto_their_basis(tmp_path, ratio):
+    # BUG-162 (code review 14): BUG-128 rebases Yahoo's payments for a stock dividend's or a spin-off's factor like a
+    # split's, though it is under 3:2 (GE-like 1.253's refresh read DDM 418.38). A later run stored the factor and its
+    # payments on the new basis (halved here) while its bar request failed: the payments go back onto the bars'
+    # basis from the day they were served, and the FY-end prices rebuild to 100.
+    assert _payer_with_a_factor(tmp_path, ratio, "2023-02-01", "2023-03-01", halve=True) == {2021: 100.0, 2022: 100.0}
+
+
+@pytest.mark.parametrize("ratio", [1.253, 1.04, 0.9535])
+def test_dividends_served_before_a_small_factor_go_onto_the_basis_of_bars_served_after_it(tmp_path, ratio):
+    # The other way (BUG-162): the bars Yahoo served after the factor (before 2022-12-01) are restated for it, the
+    # payments served before it aren't. The bars come back to the closes as traded, FY2021's by its 1.253 too (BUG-172).
+    assert _payer_with_a_factor(tmp_path, ratio, "2022-12-01", "2022-11-01",
+                                bars_before="2022-12-01") == {2021: 100.0, 2022: 100.0}
+
+
+def test_a_share_split_of_five_for_four_between_the_bars_and_the_price_still_moves_the_closes(tmp_path):
+    # BUG-162, BUG-128's rebasing for a factor under 3:2: 5:4 is a share split (a simple ratio) that the band's closes
+    # follow like a 2:1: a split after the last bar, with the price after it, puts the bars on the price's basis.
+    bars = [("2021-12-31", 70.0), ("2022-12-30", 78.0)]
+    db = _spin_db(tmp_path, bars, "2023-01-10", splits=(("2023-01-04", 1.25),))
+    assert _fy_prices(db) == {2021: 56.0, 2022: 62.4, 2023: 62.4}
+
+
+def test_a_share_split_of_five_for_four_in_the_bars_but_not_in_the_price_is_put_back(tmp_path):
+    # The other way (BUG-094's, under 3:2): the bars served through the split are restated for it, the latest price is
+    # from before it: the closes go back onto the price's basis.
+    bars = [("2021-12-31", 56.0), ("2022-12-30", 62.4), ("2023-01-10", 70.0)]
+    db = _spin_db(tmp_path, bars, "2022-12-20", splits=(("2023-01-04", 1.25),))
+    assert _fy_prices(db) == {2021: 70.0, 2022: 78.0, 2023: 87.5}
 
 
 def test_an_ads_ratio_is_read_against_every_class(tmp_path):
