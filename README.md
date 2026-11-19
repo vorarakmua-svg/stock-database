@@ -1103,10 +1103,14 @@ Where it shows, each guru at its latest complete quarter (its latest, flagged in
 - **Pages**: `/gurus` lists the gurus, each at its latest quarter: the value, the positions held in shares or
   principal amounts, and of them the new and the sold-out ones. `/gurus/{cik}` (`?period=` for an earlier
   quarter) shows a guru's holdings with weights and changes, the changes grouped, and the filings the quarter
-  stands on, linked to EDGAR; a quarter whose filing states that it omits holdings under confidential treatment
-  (the cover's flag; 9 of the 235 quarters stored on 2026-11-20: Icahn's seven, Berkshire's Q1 2025, Pershing's Q4
-  2024) says so above the changes, since a position may read as sold out only because it moved into the
-  confidential part (BUG-214). `/gurus/portfolio` aggregates the gurus: per security, the gurus holding it,
+  stands on, linked to EDGAR; a quarter that still omits holdings under confidential treatment says so above the
+  changes, since a position may read as sold out only because it moved into the confidential part (BUG-214), and
+  the quarter after one that omitted says so too, since a position may read as new only because it moved out of it
+  (BUG-362). A quarter omits when some filer's latest filing that states the cover's flag says so: a later
+  13F-HR/A whose cover states none omitted discloses what the report left out and clears it, while one that leaves
+  the flag out (it is optional) changes nothing. Stored on 2026-11-20 (235 quarters): Icahn's seven and Pershing's
+  Q4 2024 omit (Berkshire's Q1 2025, flagged by its report, was disclosed by its August 2025 amendment), and the
+  notes about "new" cover Icahn's six later quarters and Pershing's Q1 2025. `/gurus/portfolio` aggregates the gurus: per security, the gurus holding it,
   their summed shares and value, and the buyers (new or added) and sellers (reduced or sold out) of the latest
   quarter. The nav has a Gurus link.
 - **HDS tab**: a Gurus section above Yahoo's holders: each guru's latest quarter, shown on each row (Scion's

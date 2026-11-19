@@ -3469,3 +3469,16 @@ their mutant alone.
 Gates: unchanged (qa/ only) | CI: PR #29
 Commit: (this commit) chore(qa): code review 33 recorded; four Minor findings (BUG-360..363)
 Next: BUG-360..363; GATHER 107/282/340 (worker).
+
+## Iteration 207: 2026-11-20 17:00: fix (BUG-360, BUG-361, BUG-362, BUG-363)
+Picked: code review 33's findings; a sonnet worker.
+Did: the palette cancels a waiting Enter on typing and replays early arrows per press; the guru omission flag is
+decided per filer by the latest filing stating it (an amendment stating none clears it) and the following quarter
+says its new rows may be omitted holdings; a two-filing test.
+- RED: 14 failed (palette 6, gurus 8) on ce49a04; GREEN. 20 of 20 mutants; bug003's spec re-quoted (11 entries,
+  qa/evidence/bug003-mutants-requoted.json); bug211 31 of 31.
+- Display only; real data: Berkshire 2025-03-31's note clears, Pershing 2025-03-31 gains one.
+Result: BUG-360..363 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3629 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(web): typing cancels a waiting Enter; early arrows replay; a guru's omissions per filer (BUG-360..363)
+Next: GATHER 107/282/340 (worker).

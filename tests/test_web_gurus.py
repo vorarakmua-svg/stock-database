@@ -590,3 +590,153 @@ def test_the_api_carries_the_flag(client, web_db):
     _flag_omissions(web_db, "B-Q2")
     body = client.get("/api/gurus/1067983").json()
     assert body["confidential_omitted"] is True and body["filings"][0]["confidential_omitted"] is True
+
+
+# BUG-362 / BUG-363 (code review 33): the note for the quarter after one with omissions, a disclosing amendment, and
+# quarters of several filings. These add filing rows by SQL: the view reads guru_filings and guru_quarters as stored.
+
+
+def _add_filing_row(db, accession, like, *, filer=None, form="13F-HR", filed="2026-08-20", amendment=None, flag=None):
+    """A guru_filings row copied from *like* (the same guru and quarter), with its own filer, form, filing date,
+    amendment type and flag, appended to that quarter's accessions."""
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO guru_filings (accession, guru_cik, filer_cik, form, period, filed, report_type, amendment_type, "
+        "entry_total, value_total, rows, rows_value, checksum_ok, confidential_omitted, collected_at, multiplier) "
+        "SELECT ?, guru_cik, COALESCE(?, filer_cik), ?, period, ?, report_type, ?, entry_total, value_total, rows, "
+        "rows_value, checksum_ok, ?, collected_at, multiplier FROM guru_filings WHERE accession = ?",
+        (accession, filer, form, filed, amendment, flag, like))
+    guru_cik, period = conn.execute("SELECT guru_cik, period FROM guru_filings WHERE accession = ?", (like,)).fetchone()
+    stored = json.loads(conn.execute("SELECT accessions FROM guru_quarters WHERE guru_cik = ? AND period = ?",
+                                     (guru_cik, period)).fetchone()[0])
+    conn.execute("UPDATE guru_quarters SET accessions = ? WHERE guru_cik = ? AND period = ?",
+                 (json.dumps(stored + [accession]), guru_cik, period))
+    conn.commit()
+    conn.close()
+
+
+def _view(db, period=None):
+    with Reader(db) as r:
+        return guru_view(r, "1067983", period)
+
+
+def test_the_quarter_is_flagged_when_any_one_of_its_filings_states_omissions(web_db):
+    # BUG-363: two filers report the quarter; the flagged filing is first, or last, or between two clear ones.
+    _seed(web_db)
+    _add_filing_row(web_db, "B-Q2-F2", "B-Q2", filer="2222222", flag=0)
+    _flag_omissions(web_db, "B-Q2")                    # the first of two filers' filings
+    assert _view(web_db)["confidential_omitted"] is True
+    _flag_omissions(web_db, "B-Q2", 0)
+    _flag_omissions(web_db, "B-Q2-F2")                 # the last of them
+    assert _view(web_db)["confidential_omitted"] is True
+    _add_filing_row(web_db, "B-Q2-F3", "B-Q2", filer="3333333", flag=0, filed="2026-08-21")
+    assert _view(web_db)["confidential_omitted"] is True     # last of three clear but one before it flagged
+    _flag_omissions(web_db, "B-Q2-F2", 0)
+    assert _view(web_db)["confidential_omitted"] is False
+
+
+def test_a_later_amendment_that_states_no_omissions_clears_the_quarter(web_db):
+    # BUG-362: Berkshire's 2025-03-31 report omitted holdings, and a 13F-HR/A (NEW HOLDINGS) filed in August 2025 that
+    # states none are omitted discloses them: the quarter carries no note, though each filing still says its own.
+    _seed(web_db)
+    _flag_omissions(web_db, "B-Q2")
+    _add_filing_row(web_db, "B-Q2-A", "B-Q2", form="13F-HR/A", amendment="NEW HOLDINGS", flag=0, filed="2026-09-01")
+    view = _view(web_db)
+    assert view["confidential_omitted"] is False
+    assert [f["confidential_omitted"] for f in view["filings"]] == [True, False]
+
+
+def test_an_amendment_that_still_states_omissions_or_says_nothing_leaves_the_quarter_flagged(web_db):
+    # The data can't tell a disclosing amendment from one that doesn't say (the cover's flag is optional; Pershing's
+    # 2024-12-31 amendment leaves it out), so only an explicit "none omitted" clears the quarter.
+    _seed(web_db)
+    _flag_omissions(web_db, "B-Q2")
+    _add_filing_row(web_db, "B-Q2-A", "B-Q2", form="13F-HR/A", amendment="NEW HOLDINGS", flag=None, filed="2026-09-01")
+    assert _view(web_db)["confidential_omitted"] is True
+    _flag_omissions(web_db, "B-Q2-A")
+    assert _view(web_db)["confidential_omitted"] is True
+
+
+def test_an_amendment_clears_only_its_own_filers_omissions(web_db):
+    # Two filers: the amendment of one that discloses doesn't clear the other's omissions.
+    _seed(web_db)
+    _add_filing_row(web_db, "B-Q2-F2", "B-Q2", filer="2222222", flag=1)
+    _flag_omissions(web_db, "B-Q2")
+    _add_filing_row(web_db, "B-Q2-A", "B-Q2", form="13F-HR/A", amendment="NEW HOLDINGS", flag=0, filed="2026-09-01")
+    assert _view(web_db)["confidential_omitted"] is True
+    _flag_omissions(web_db, "B-Q2-F2", 0)
+    assert _view(web_db)["confidential_omitted"] is False
+
+
+def test_a_quarter_after_one_with_omissions_carries_the_flag_for_its_new_rows(web_db):
+    # BUG-362: Q1's filing omitted holdings, Q2's doesn't: Q2's changes from Q1 can read GOOGL as new only because Q1
+    # left it out, which the page's note names.
+    _seed(web_db)
+    _flag_omissions(web_db, "B-Q1")
+    q2, q1 = _view(web_db), _view(web_db, Q1)
+    assert (q2["confidential_omitted"], q2["prior_confidential_omitted"]) == (False, True)
+    assert (q1["confidential_omitted"], q1["prior_confidential_omitted"]) == (True, False)
+
+
+def test_the_quarter_after_isnt_flagged_when_the_omitting_quarter_was_disclosed_by_an_amendment(web_db):
+    _seed(web_db)
+    _flag_omissions(web_db, "B-Q1")
+    _add_filing_row(web_db, "B-Q1-A", "B-Q1", form="13F-HR/A", amendment="NEW HOLDINGS", flag=0, filed="2026-06-01")
+    assert _view(web_db)["prior_confidential_omitted"] is False
+
+
+def test_the_prior_quarters_flag_counts_only_where_the_changes_exist(web_db):
+    # Li Lu's Q2 has no quarter before, so no changes to be misread; with the filings table gone nothing is flagged.
+    _seed(web_db)
+    _flag_omissions(web_db, "B-Q1")
+    with Reader(web_db) as r:
+        assert guru_view(r, "1709323")["prior_confidential_omitted"] is False
+    conn = sqlite3.connect(web_db)
+    conn.execute("DROP TABLE guru_filings")
+    conn.commit()
+    conn.close()
+    assert _view(web_db)["prior_confidential_omitted"] is False
+
+
+def test_the_quarter_after_isnt_flagged_while_its_own_changes_are_unknown(web_db):
+    # The quarter before is incomplete in Pershing's case below (a filer's report failed): no changes, no note.
+    _seed(web_db)
+    _flag_omissions(web_db, "P-Q1")
+    _add(web_db, ACKMAN, _filing("P-Q2-X", "1336528", Q2, "2026-08-12", [(AAA, 1, 1)], entry_total=9))
+    with Reader(web_db) as r:
+        view = guru_view(r, "2026053", Q1)
+        later = guru_view(r, "2026053", Q2)
+    assert view["confidential_omitted"] is True and view["prior_confidential_omitted"] is False
+    assert later["changes"] is None and later["prior_confidential_omitted"] is False
+
+
+def test_the_page_notes_the_omission_a_quarter_before_beside_the_changes(client, web_db):
+    _seed(web_db)
+    _flag_omissions(web_db, "B-Q1")
+    html = client.get("/gurus/1067983").text                       # Q2: its changes from the flagged Q1
+    assert "Changes from the quarter before" in html and "confidential treatment" in html
+    assert "quarter before states" in html and "may read as new" in html
+    assert "may read as sold out" not in html
+    assert html.index("confidential treatment") < html.index("Changes from the quarter before")
+    q1 = client.get(f"/gurus/1067983?period={Q1}").text            # Q1: its own filing is the flagged one
+    assert "may read as sold out" in q1 and "may read as new" not in q1
+    _flag_omissions(web_db, "B-Q2")                                # both quarters flagged: one note, both effects
+    both = client.get("/gurus/1067983").text
+    assert "may read as sold out" in both and "may read as new" in both
+    assert "confidential treatment" not in client.get("/gurus/1709323").text
+    assert client.get("/api/gurus/1067983").json()["prior_confidential_omitted"] is True
+
+
+def test_the_page_drops_the_note_once_an_amendment_discloses_the_omissions(client, web_db):
+    _seed(web_db)
+    _flag_omissions(web_db, "B-Q2")
+    _add_filing_row(web_db, "B-Q2-A", "B-Q2", form="13F-HR/A", amendment="NEW HOLDINGS", flag=0, filed="2026-09-01")
+    assert "confidential treatment" not in client.get("/gurus/1067983").text
+
+
+def test_a_quarter_with_no_omissions_shows_no_note_box_at_all(client, web_db):
+    _seed(web_db)
+    html = client.get("/gurus/1067983").text           # Q2 with its prior, complete and not flagged
+    assert "alert-info" not in html and "alert-danger" not in html
+    _flag_omissions(web_db, "B-Q1")
+    assert "alert-info" in client.get("/gurus/1067983").text

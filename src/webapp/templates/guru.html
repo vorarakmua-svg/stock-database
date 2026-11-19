@@ -45,11 +45,13 @@
   are left out of the figures and the changes aren't shown. The gurus' list and the screener take the latest complete
   quarter.</div>
 {% endif %}
-{% if g.confidential_omitted %}
-<div class="alert alert-info mt-2">A filing of this quarter states that it omits holdings for which the manager asked
+{% if g.confidential_omitted or g.prior_confidential_omitted %}
+<div class="alert alert-info mt-2">
+  {%- if g.confidential_omitted %}A filing of this quarter states that it omits holdings for which the manager asked
   the SEC for confidential treatment, so the holdings below are not all of the portfolio: a position
-  may read as sold out (or as new, if the quarter before omitted it) only because it moved in or out of the
-  confidential part.</div>
+  may read as sold out only because it moved into the confidential part.{% endif %}
+  {%- if g.prior_confidential_omitted %} A filing of the quarter before states that it omitted holdings under
+  confidential treatment, so a position may read as new only because it moved out of the confidential part.{% endif %}</div>
 {% endif %}
 {% if not g.has_prior %}
 <div class="alert alert-info mt-2">No prior quarter: the quarter before isn't stored, or it or this one is incomplete, so
