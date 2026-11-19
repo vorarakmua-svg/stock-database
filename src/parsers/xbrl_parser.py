@@ -7,6 +7,7 @@ import statistics
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from fractions import Fraction
+from functools import lru_cache
 from itertools import combinations
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
@@ -1227,6 +1228,16 @@ def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+@lru_cache(maxsize=None)
+def _iso_date(value: str) -> Optional[date]:
+    """``value`` (``YYYY-MM-DD``) as a date, or None if it doesn't parse: strptime's answer, kept per string. A
+    filer's entries repeat a few thousand days, and the as-of snapshots parse them again on every filing day."""
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
 def _filer_facts(facts: Dict[str, Any], view: str) -> Dict[str, Any]:
     """A filer's us-gaap facts as the extractions of *view* read them, in this order: its dollar filings', the
     balance-sheet-only tags on their balance sheets' dates, and long-term debt's on its filing's (where it tags its
@@ -1606,6 +1617,8 @@ class XBRLParser:
         """Parse an ISO ``YYYY-MM-DD`` string into a date, or None."""
         if not value:
             return None
+        if isinstance(value, str):
+            return _iso_date(value)
         try:
             return datetime.strptime(value, "%Y-%m-%d").date()
         except (ValueError, TypeError):

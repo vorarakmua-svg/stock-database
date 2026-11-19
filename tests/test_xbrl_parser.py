@@ -3894,3 +3894,20 @@ def test_a_contradicted_to_common_figure_is_not_put_back_by_the_restore_step():
     year = XBRLParser().extract_annual_financials(facts)["2020"]
     assert year["net_income_to_common"] == -50.0e6, (year["net_income_to_common"], year.get("_repairs"))
 
+
+def test_a_day_is_parsed_once_and_as_strptime_parses_it():
+    # The parse reads each entry's start and end on every as-of snapshot's replay: a day's date is kept per string.
+    from datetime import datetime
+
+    from src.parsers.xbrl_parser import _iso_date
+
+    for value in ("2020-02-29", "2021-02-29", "2020-1-5", "2020-01-05T00:00:00", "", None, 20200105, "x"):
+        try:
+            expected = datetime.strptime(value, "%Y-%m-%d").date() if value else None  # type: ignore[arg-type]
+        except (ValueError, TypeError):
+            expected = None
+        assert XBRLParser._parse_iso_date(value) == expected  # type: ignore[arg-type]
+    _iso_date.cache_clear()
+    for _ in range(3):
+        XBRLParser._parse_iso_date("2019-12-31")
+    assert (_iso_date.cache_info().misses, _iso_date.cache_info().hits) == (1, 2)
