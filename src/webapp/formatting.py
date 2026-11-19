@@ -82,6 +82,17 @@ def fmt_price(x: Optional[float]) -> str:
     return f"-${-x:,.2f}" if x < 0 else f"${x:,.2f}"
 
 
+def fmt_bar_price(x: Optional[float]) -> str:
+    """Format one price of a stored daily bar: ``fmt_price``, but with four decimals under $1 and "—" for no price.
+
+    A split-adjusted price of the 1970s is a fraction of a cent to a few cents (MNST's 1995 bars are $0.0033), which
+    two decimals printed as "$0.00" (BUG-156). A zero or missing price is no price, not a free share: "—".
+    """
+    if x is None or x <= 0:
+        return "—"
+    return f"${x:,.4f}" if x < 1 else fmt_price(x)
+
+
 def fmt_signed_price(x: Optional[float]) -> str:
     """Format a per-share figure that may be below zero with its sign before the dollar.
 

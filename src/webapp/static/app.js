@@ -242,6 +242,12 @@ function _gpRenderCompareFigure(el, compareData, ticker, compareList) {
     el.innerHTML = '<p class="muted">No comparison data available.</p>';
     return;
   }
+  // Series without a single point (the range holds no bars) would draw an empty figure and its legend (BUG-157).
+  var drawn = traces.filter(function (t) { return t.x && t.x.length > 0; });
+  if (drawn.length === 0) {
+    el.innerHTML = '<p class="muted">No price bars in this range.</p>';
+    return;
+  }
   var layout = _gpBaseLayout();
   layout.xaxis = slateAxis({});
   layout.yaxis = slateAxis({ ticksuffix: '%' });

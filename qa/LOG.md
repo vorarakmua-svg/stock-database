@@ -3313,3 +3313,13 @@ Gates: ruff ✓ mypy ✓ pytest 3376 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(refresh): a quote or valuation write that failed is reported, and the valuation retried (BUG-053, BUG-237, BUG-163)
 Next: more of structural #4 (BUG-202, 098, 030, 038, 054, 145, 278, 027, 107, 282 - several touch sqlite_store/fetcher
 sections the as-of branch rewrites: wait for Q18); BUG-232/281/289 and BUG-156/157/222 (workers).
+
+## Iteration 194: 2026-11-20 02:40: fix (BUG-156, BUG-157, BUG-222)
+Picked: three UI P3s outside the as-of branch's sections; a sonnet worker.
+Did: the HP table marks placeholder and partial bars and shows sub-dollar prices; the compare chart says when a range
+has no bars; the screener pins its verdict column.
+- RED: 27 failed of 33 on bb148b8; GREEN. 46 of 46 mutants. No stored data moves.
+Result: BUG-156, BUG-157, BUG-222 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3409 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(web): the HP table marks placeholder and partial bars; an empty compare says so; the verdict stays in view (BUG-156, BUG-157, BUG-222)
+Next: BUG-232/281/289 (ready); scores batch (worker); code review 31 due.

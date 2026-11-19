@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 145 · NEEDS-USER 1 · Decided: 7 · Verified: 212
+**Open:** P0 0 · P1 0 · P2 0 · P3 142 · NEEDS-USER 1 · Decided: 7 · Verified: 215
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1195,16 +1195,18 @@ Expected: 404 for an unknown ticker throughout (and one rule for case).   Actual
 Fix (iteration 188, `qa/evidence/bug155-investigation.txt`): `/api/stocks/{t}/bars` and `/indicators` check the ticker first, like every other route: unknown (and lower-case, as everywhere) is 404 'Unknown ticker' (^GSPC too: no companies row; compare-bars unchanged). Residual: earnings, dividends, splits, holders, insiders still answer 200 [] for an unknown ticker.
 
 ### BUG-156 [P3][UI] The HP table shows partial and placeholder bars as ordinary rows: CVS's last bar opens above its high, old prices read "$0.00"
-Status: OPEN
-Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 194)
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_web_bar_flags.py (new); 27 failing first
 Repro: the user's copy ran 10:50-12:09 New York on 2026-08-04: 112 of 128 last bars have 14-60% of their 20-day median volume, and ORCL's, C's, SCCO's and CVS's open lies outside their low-high range (CVS open 105.00, high 104.94); split-adjusted 1960s-70s prices print "$0.00" (1,890 rows: MO, WMT); 658 zero-volume placeholder bars at 45 tickers (573 flat) read "$0" volume; the table is unpaginated (about 16,000 rows, 3.3 MB, AAPL's MAX); the CSV carries float32 noise and "82488700.0" volumes.
 Expected: a partial day marked, enough precision, placeholders marked or skipped.   Actual: as above.
+Fix (iteration 194, `qa/evidence/bug156-investigation.txt`): the HP table marks rather than omits (the chart and CSV carry the same bars): prices under $1 show four decimals, zero/missing prices and volumes a dash; a placeholder row (no close, or flat prices with no volume) is dimmed and tagged; the newest bar is tagged partial when dated today in New York before 16:00 or when its open/close lies outside [low, high]. Real-data copy: 30,346 placeholder bars at 200 tickers; 127 '$0.00' rows (MNST, WMT) now show their price. Residual: a mid-session bar viewed on a later day with consistent OHLC isn't detectable (bars carry no collection time).
 
 ### BUG-157 [P3][UI] An empty range draws a blank compare chart with a legend, not a message
-Status: OPEN
-Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 194)
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_web_bar_flags.py (new); 27 failing first
 Repro: with no bars in the range, GP's compare chart plots two empty traces: the user's copy gives 0 points for every company's 1M overlay (BUG-151's anchoring).
 Expected: "no bars in this range" as the HP tab says.   Actual: a blank figure.
+Fix (iteration 194, with BUG-156): the compare chart says 'No price bars in this range.' when every series is empty (node test over app.js).
 
 ### BUG-158 [P3][OPS] The web app makes data/cache and data/output/{csv,json} under the directory it starts in
 Status: VERIFIED (iteration 158)
@@ -1712,11 +1714,12 @@ Expected: the current securities read (a noncurrent-inclusive `MarketableSecurit
 Notes: a mapping change reaches the stored figures only at the next collection. Net debt feeds M1's EV/EBITDA history and fair-value line, M2's Magic Formula and the screener, not the six models' median or the verdicts.
 
 ### BUG-222 [P3][UI] The screener's results table is wider than the page, so its verdict column scrolls out of view
-Status: OPEN
-Found: build iteration 43 (M4-2's browser check) | Fixed: | Regression test:
+Status: VERIFIED (iteration 194)
+Found: build iteration 43 (M4-2's browser check) | Fixed: (this commit) | Regression tests: tests/test_web_bar_flags.py (new); 27 failing first
 Repro: `/screener`, sorted by any field, in a 1400px-wide window: the results table, with M3's Gurus column and M4-2's Implied growth column, needs about 80px more than the page's 1200px; `.table-responsive` scrolls it sideways and the Valuation pills are cut off at the right edge (`qa/evidence/indicators-m4-2-screener-reverse-dcf.png`).
 Expected: every column visible at a common desktop width, or the verdict column first.   Actual: the last column is reachable only by scrolling the table.
 Notes: a layout choice: a wider page for the screener, narrower headers, or fewer default columns.
+Fix (iteration 194, with BUG-156): tighter cell padding and the Valuation column pinned at the table's right edge (CSS); min width 1153 -> 1095 px; checked in headless Edge at 900/1100 px.
 
 ### BUG-223 [P3][DATA] V files its EPS and share counts only by class, so none is stored
 Status: OPEN
