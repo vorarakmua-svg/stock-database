@@ -209,6 +209,9 @@ class SECHandler:
 
     SEC_BASE_URL = "https://data.sec.gov"
     SEC_WWW_URL = "https://www.sec.gov"
+    #: Each thread's ``fetch_all`` in progress: the times its payloads read from the payload cache were cached
+    #: (``cached``, None outside a ``fetch_all``), for the run's ``sec_read_at`` (BUG-232).
+    _reading = threading.local()
 
     def __init__(
         self,
@@ -307,14 +310,19 @@ class SECHandler:
         """Return cached JSON if present and fresher than the TTL, else None."""
         if self.cache_ttl_seconds <= 0 or not path.exists():
             return None
-        if (time.time() - path.stat().st_mtime) > self.cache_ttl_seconds:
+        cached_at = path.stat().st_mtime
+        if (time.time() - cached_at) > self.cache_ttl_seconds:
             return None
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                payload = json.load(f)
         except Exception as e:
             self.logger.debug(f"Cache read failed for {path}: {e}")
             return None
+        cached = getattr(self._reading, "cached", None)
+        if cached is not None:  # within a fetch_all: its SEC data is as old as this payload
+            cached.append(cached_at)
+        return payload
 
     def _write_payload_cache(self, path: Path, data: Dict[str, Any]) -> None:
         if self.cache_ttl_seconds <= 0:
@@ -336,8 +344,22 @@ class SECHandler:
         Returns:
             Dictionary containing all fetched SEC data, with ``missing_report`` when the companyfacts carry no fact of
             the latest report the submissions list (``report_without_facts``); then the facts of the reports they lack
-            are read from the filings' own XBRL into ``company_facts`` (``_read_gap``, Q17)
+            are read from the filings' own XBRL into ``company_facts`` (``_read_gap``, Q17). ``sec_read_at``: when the
+            SEC served the oldest companyfacts (a predecessor's too) or submissions read, naive local as
+            ``fetched_at``: a payload from the cache when it was cached, else as this asked (BUG-232: a run on
+            the 7-day cache lacks what was filed since)
         """
+        self._reading.cached = []
+        asked = datetime.now()
+        try:
+            data = self._fetch_all(ticker)
+        finally:
+            cached, self._reading.cached = self._reading.cached, None
+        data["sec_read_at"] = min([asked] + [datetime.fromtimestamp(at) for at in cached]).isoformat()
+        return data
+
+    def _fetch_all(self, ticker: str) -> Dict[str, Any]:
+        """``fetch_all``'s data but ``sec_read_at``."""
         self.logger.info(f"Fetching SEC EDGAR data for {ticker}")
 
         # Get CIK for ticker

@@ -25,12 +25,13 @@ on the list wasn't collected in that run; ``insiders`` and ``gurus`` after an it
   collection's benchmark fetch stores it again.
 - ``sec`` (weekly): every company's submissions feed, read fresh through the SEC handler, every one of its recent
   filings (not the newest 100 the handler keeps for its other callers, which a bank's 424B2s fill in days). A 10-K,
-  10-Q, 20-F, 40-F, a transition report (10-KT, 10-QT) or an amendment of one filed on or after the day of the
-  company's last collection with the SEC puts it on the list. So does that collection when its SEC read was
+  10-Q, 20-F, 40-F, a transition report (10-KT, 10-QT) or an amendment of one filed on or after the day the SEC served
+  the SEC data of the company's last collection with the SEC (``collection_runs.sec_read_at``: a collection by hand
+  reads the SEC handler's 7-day cache, BUG-232) puts it on the list. So does that collection when its SEC read was
   incomplete (``collection_runs.incomplete``): it read no facts of the latest report its submissions listed (its
   companyfacts lacked them, the SEC's lag, BUG-251, or their request failed), or it couldn't read its predecessor's
-  filings (BUG-279). Up to INCOMPLETE_RETRIES times for one gap, counted over the collections in a row that found it;
-  then the company waits for its next report.
+  filings (BUG-279). Up to INCOMPLETE_RETRIES tries at one gap, each a read of the SEC a week after the last
+  (``incomplete_tries``); then the company waits for its next report.
 - ``collect`` (whenever the list isn't empty): a full collection of the list as ``stock-data`` runs one (json, csv
   and sqlite, stored and valued a batch at a time), its SEC payloads read fresh; a company it didn't store fails it.
 - ``insiders`` and ``gurus`` (weekly): M3's collectors, the insiders' last three years for every company with a CIK
@@ -103,9 +104,14 @@ PERIODS: Dict[str, timedelta] = {"quotes": DAILY, "bars": DAILY, "sec": WEEKLY, 
 REPORT_FORMS: Tuple[str, ...] = ("10-K", "10-Q", "20-F", "40-F", "10-KT", "10-QT")
 #: How many times the SEC step puts a company on the list again for one gap in its collections' SEC reads (BUG-251,
 #: BUG-279): the same report without facts, or the predecessor unread. The SEC fills a lag in days, so a gap that
-#: three more collections a week apart still find is the source's (DLR's 10-Q of 2026-07-31 had no facts 86 days on):
-#: the company then waits for its next report, each collection's warning still naming the report.
+#: three more reads of the SEC a week apart still find is the source's (DLR's 10-Q of 2026-07-31 had no facts 86 days
+#: on): the company then waits for its next report, each collection's warning still naming the report. The tries are
+#: counted by ``incomplete_tries``.
 INCOMPLETE_RETRIES = 3
+#: How far apart two collections' reads of the SEC must be for both to be tries at a gap (BUG-289): the SEC fills a
+#: lag in days, so reads hours or a day apart (collections by hand, forced runs) are one try. Under the SEC step's
+#: weekly period, so that each weekly run's collection is a try though it came later in its run than the next one's.
+RETRY_SPACING = timedelta(days=6)
 #: A long step says how far it is every BATCH companies.
 BATCH = 25
 #: The benchmark index whose bars a collection stores beside the companies' (``fetch_and_export``'s ^GSPC), which the
@@ -456,6 +462,57 @@ def _lacking(lacked: Dict[str, Any]) -> str:
     return " and ".join(parts)
 
 
+def _read_at(run: Sequence[Any]) -> datetime:
+    """When the SEC served a collection's SEC data, *run* being its ``collection_runs`` (collected_at, incomplete,
+    sec_read_at): its ``sec_read_at`` (a payload from the SEC handler's 7-day cache is as old as the cache, BUG-232),
+    else its collection's time, which read the SEC as it ran (every run stored before the column)."""
+    if run[2]:
+        try:
+            return _utc(str(run[2]))
+        except ValueError:
+            pass
+    return _utc(str(run[0]))
+
+
+def incomplete_tries(runs: Sequence[Sequence[Any]]) -> Optional[Dict[str, Any]]:
+    """The tries at what a company's latest collection with the SEC lacked (BUG-251, BUG-279), from *runs*, its
+    collections with the SEC newest first, each its ``collection_runs`` (collected_at, incomplete, sec_read_at). None
+    when the latest was complete, or there is none.
+
+    The gap's collections are those in a row back from the latest that were incomplete in any way (a report's facts
+    unread, the predecessor's filings unread, or both: a predecessor read, or a filing's own XBRL read, that fails and
+    succeeds by turns starts no new count, BUG-289). They end at a complete collection, at one that lacked another
+    report, and at one whose SEC data the SEC served before the day the gap's report was filed: a new report's lag gets
+    its own tries. (On that day, the collector's, which east of New York runs ahead of the SEC's, it may have seen it.)
+    The tries are the gap's reads of the SEC (``_read_at``), oldest first, each RETRY_SPACING or more after the last
+    try: a collection on the SEC handler's 7-day cache read what the collection that cached it read, and is no try
+    (BUG-281), and reads days apart are one (BUG-289).
+
+    Returns the gap's ``tries``, its ``collections`` and the day the first of them ran (``since``)."""
+    lacked = [_parsed(run[1]) for run in runs]
+    if not runs or _gap(lacked[0]) == (None, False):
+        return None
+    report: Optional[str] = None
+    filed = ""
+    count = 0
+    for run, what in zip(runs, lacked):
+        accession, predecessor = _gap(what)
+        if (accession, predecessor) == (None, False) or (report is not None and accession not in (None, report)):
+            break
+        if filed and _read_at(run).date().isoformat() < filed:
+            break
+        if report is None and accession is not None:
+            listed = what.get("report")
+            report, filed = accession, str(listed.get("filed") or "")[:10] if isinstance(listed, dict) else ""
+        count += 1
+    tries: List[datetime] = []
+    for run in reversed(runs[:count]):
+        at = _read_at(run)
+        if not tries or at >= tries[-1] + RETRY_SPACING:
+            tries.append(at)
+    return {"tries": len(tries), "collections": count, "since": str(runs[count - 1][0])[:10]}
+
+
 @dataclass
 class StepResult:
     """A step of a run: whether it *ran* (else *reason* says why it was skipped) and why it ran *again* though it
@@ -630,8 +687,8 @@ class _Run:
         (``gurus``). And for ``sec``, the companies it put on the collection list (for a new report, or to redo an
         incomplete collection) when that run's ``collect`` step didn't finish ok (it failed or was skipped, or the run
         stopped before it ended), which lost the list. Running the SEC step again is safe: a report filed on or after
-        the day of a company's latest collection with the SEC is found again until that company is collected, and so
-        is an incomplete latest collection."""
+        the day the SEC served a company's latest collection with the SEC is found again until that company is
+        collected, and so is an incomplete latest collection."""
         if PERIODS.get(step) != WEEKLY:
             return None
         undone = []
@@ -863,21 +920,24 @@ class _Run:
     # ---- sec --------------------------------------------------------------
 
     def _sec(self, result: StepResult) -> None:
-        """Every company's submissions feed: each report (``is_report``) filed on or after the day of its last
-        collection with the SEC puts it on the list. The day is the collector's own (``collection_runs``), which east
-        of New York runs ahead of the SEC's: a report filed on it may have come after the collection, so it counts.
-        That collection itself does when its SEC read was incomplete (``_again``)."""
+        """Every company's submissions feed: each report (``is_report``) filed on or after the day the SEC served
+        the SEC data of its last collection with the SEC puts it on the list (``_read_at``: a collection by hand that
+        read the SEC handler's 7-day cache lacks what was filed since, BUG-232). The day is the collector's own
+        (``collection_runs``), which east of New York runs ahead of the SEC's: a report filed on it may have come after
+        the read, so it counts. That collection itself does when its SEC read was incomplete (``_again``)."""
         s = result.summary
         s.update({"feeds": 0, "new_filings": {}, "incomplete": {}, "incomplete_left": {}, "no_cik": [], "errors": {}})
-        # Whether the runs say what their SEC reads lacked: a database last written before the column says nothing.
-        said = "incomplete" in {row[1] for row in self._rows("PRAGMA table_info(collection_runs)")}
+        # What the runs say: what their SEC reads lacked and when the SEC served them. A database last written before
+        # a column says nothing (complete; read as the run ran).
+        kept = {row[1] for row in self._rows("PRAGMA table_info(collection_runs)")}
+        columns = ", ".join(c if c in kept else "NULL" for c in ("incomplete", "sec_read_at"))
         total = len(self.companies)
         for done, (ticker, cik) in enumerate(self.companies, 1):
             if not cik:
                 s["no_cik"].append(ticker)
             else:
                 try:
-                    self._filings_of(ticker, cik, s, said)
+                    self._filings_of(ticker, cik, s, columns)
                 except Exception as exc:  # one company's feed is its own: the others go on
                     s["errors"][ticker] = f"{type(exc).__name__}: {exc}"
                     self.out.note(f"sec: {ticker} failed: {s['errors'][ticker]}")
@@ -895,16 +955,16 @@ class _Run:
                            f"at {len(s['new_filings'])} companies{redo}, {len(s['no_cik'])} without a CIK, "
                            f"{len(s['errors'])} errors")
 
-    def _filings_of(self, ticker: str, cik: str, s: Dict[str, Any], said: bool) -> None:
+    def _filings_of(self, ticker: str, cik: str, s: Dict[str, Any], columns: str) -> None:
         filings = self.services.sec.recent_filings(cik)
         if filings is None:
             raise LookupError(f"the SEC has no submissions feed for CIK {cik}")
         s["feeds"] += 1
-        # Its collections with the SEC, newest first, and what each one's SEC read lacked (none where the runs don't
-        # say: they read as complete).
-        runs = self._rows(f"SELECT collected_at, {'incomplete' if said else 'NULL'} FROM collection_runs "
+        # Its collections with the SEC, newest first, what each one's SEC read lacked and when the SEC served it
+        # (*columns*: NULL where the runs don't say).
+        runs = self._rows(f"SELECT collected_at, {columns} FROM collection_runs "
                           "WHERE ticker = ? AND data_sources LIKE '%sec_edgar%' ORDER BY collected_at DESC", ticker)
-        since = str(runs[0][0])[:10] if runs else None
+        since = _read_at(runs[0]).date().isoformat() if runs else None
         new = [f for f in filings
                if is_report(f.get("form")) and (since is None or str(f.get("filingDate") or "")[:10] >= since)]
         if new:
@@ -918,27 +978,23 @@ class _Run:
 
     def _again(self, ticker: str, runs: List[Tuple[Any, ...]], s: Dict[str, Any]) -> None:
         """Put *ticker* on the list again when its latest collection with the SEC (*runs*, newest first: when each
-        ran and what its SEC read lacked) was incomplete (BUG-251, BUG-279): its companyfacts lacked the latest report
-        its submissions listed (the SEC's lag), or its predecessor's filings couldn't be read. The collections in a row
-        incomplete the same way (``_gap``) count: once INCOMPLETE_RETRIES more have found that gap, it is the source's,
-        and the company is left to its next report (``incomplete_left``)."""
-        lacked = _parsed(runs[0][1]) if runs else {}
-        gap = _gap(lacked)
-        if gap == (None, False):
+        ran, what its SEC read lacked and when the SEC served it) was incomplete (BUG-251, BUG-279): its companyfacts
+        lacked the latest report its submissions listed (the SEC's lag), or its predecessor's filings couldn't be read.
+        Its tries at that gap count (``incomplete_tries``: reads of the SEC a week apart): after INCOMPLETE_RETRIES
+        more, the gap is the source's, and the company is left to its next report (``incomplete_left``)."""
+        tried = incomplete_tries(runs)
+        if tried is None:
             return
-        streak = 1
-        while streak < len(runs) and _gap(_parsed(runs[streak][1])) == gap:
-            streak += 1
-        day, why = str(runs[0][0])[:10], _lacking(lacked)
-        if streak > INCOMPLETE_RETRIES:
-            since = str(runs[streak - 1][0])[:10]
-            s["incomplete_left"][ticker] = {"collected_at": runs[0][0], "why": why, "collections": streak,
-                                            "since": since}
-            self.out.note(f"sec: {ticker} not collected again: its {streak} collections since {since} each {why}; it "
-                          f"waits for its next report")
+        day, why, tries = str(runs[0][0])[:10], _lacking(_parsed(runs[0][1])), tried["tries"]
+        if tries > INCOMPLETE_RETRIES:
+            s["incomplete_left"][ticker] = {"collected_at": runs[0][0], "why": why, "collections": tried["collections"],
+                                            "tries": tries, "since": tried["since"]}
+            self.out.note(f"sec: {ticker} not collected again: {tries} reads of the SEC a week apart since "
+                          f"{tried['since']} found its collections incomplete (the latest {why}); it waits for its "
+                          f"next report")
             return
-        s["incomplete"][ticker] = {"collected_at": runs[0][0], "why": why, "again": streak}
-        self._queue(ticker, f"sec: its collection of {day} {why}; collected again ({streak} of {INCOMPLETE_RETRIES})")
+        s["incomplete"][ticker] = {"collected_at": runs[0][0], "why": why, "again": tries}
+        self._queue(ticker, f"sec: its collection of {day} {why}; collected again ({tries} of {INCOMPLETE_RETRIES})")
         self.out.note(f"sec: {ticker} to collect again: its collection of {day} {why}")
 
     # ---- collect ----------------------------------------------------------

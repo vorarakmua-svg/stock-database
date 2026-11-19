@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 142 · NEEDS-USER 1 · Decided: 7 · Verified: 215
+**Open:** P0 0 · P1 0 · P2 0 · P3 139 · NEEDS-USER 1 · Decided: 7 · Verified: 218
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1785,10 +1785,11 @@ Expected: the class the DB already holds, or the "(Class A)" row, kept; a compan
 Fix (iteration 187, `qa/evidence/bug231-investigation.txt`): of a CIK's rows the first whose name ends '(Class A)' represents the company, else the first row (independent of the page's sort); `--skip-existing` also leaves out a ticker whose list CIK (zero-padded) equals a stored company's under another ticker (logged 'GOOG (stored as GOOGL)'); .txt lists and blank cik cells compare by ticker; a malformed cik is 'Cannot read the tickers', exit 1. The stored 500-row list is unchanged on the name-sorted page; a symbol-sorted page no longer swaps GOOGL/FOXA/NWSA for their class B/C rows.
 
 ### BUG-232 [P3][REFRESH] A collection outside the refresh can store a company without a report just filed, and the refresh won't queue it again
-Status: OPEN
-Found: build iteration 53 (M5-3) | Fixed: | Regression test:
+Status: VERIFIED (iteration 195)
+Found: build iteration 53 (M5-3) | Fixed: (this commit) | Regression tests: tests/test_refresh.py, tests/test_sec_cache.py, tests/test_sqlite_store.py (20 new, 2 changed); 19 failing first
 Repro: `stock-data` and the web's collect job read the SEC handler's 7-day cache of companyfacts and submissions. A company that files a 10-Q on day 2 after its cache was written on day 0, and is collected by hand on day 3, is stored without the 10-Q; its collection_runs row (day 3) then postdates the filing, so `stock-data refresh`'s SEC step (a report filed on or after the latest collection's day) never queues it for that report.
 Expected: a collection's SEC data at least as new as its time, or the SEC step comparing the filing with the SEC data the stored figures came from.   Actual: the company stays without the report until a later report or a collection after the cache's expiry. The refresh's own collections read the SEC fresh and aren't affected.
+Fix (iteration 195, BUG-232/281/289 together, `qa/evidence/bug232-investigation.txt`; no Decision lines: the loop's recommendation): a run records `collection_runs.sec_read_at`, when the SEC served the oldest companyfacts or submissions it read (a cached payload counts from its cache file's time); older rows read as collected_at. A report filed on or after the day of the latest run's SEC read queues the company (BUG-232). `incomplete_tries` (pure, over collection_runs): a gap is the latest runs in a row incomplete in any way (the predecessor flag neither starts nor ends one); it ends at a complete run, a run lacking another report, or a run whose read predates the gap's report. A run is a try if it is the gap's first or its read is >= RETRY_SPACING (6 days) after the last try's; a run on the cache is never a try (BUG-281); queued while tries <= INCOMPLETE_RETRIES (3), then left with a `tries` key (BUG-289). Real-data copy: 0 companies queued before and after. Residuals: runs from before the column can't tell when they read; a forced daily SEC step re-collects a gap daily for up to ~3 weeks; /api/quality/runs gains sec_read_at. Merge note: feat/asof-snapshots also adds a pop in StockData.to_dict (keep both).
 
 ### BUG-233 [P1][COLLECT] A collection held every company until one all-or-nothing store, and exited 0 when the store failed
 Status: VERIFIED (build iteration 56)
@@ -2449,10 +2450,11 @@ Repro: `report_without_facts` looks at the latest report the submissions list. N
 Expected: every report since the last complete collection checked.   Actual: the latest only.
 
 ### BUG-281 [P3][REFRESH] CLI and web collections count toward a gap's three retries though they read the 7-day cache
-Status: OPEN
-Found: iteration 119 (BUG-251's worker, residuals) | Fixed: | Regression test:
+Status: VERIFIED (iteration 195)
+Found: iteration 119 (BUG-251's worker, residuals) | Fixed: (this commit) | Regression tests: tests/test_refresh.py, tests/test_sec_cache.py, tests/test_sqlite_store.py (20 new, 2 changed); 19 failing first
 Repro: the retries are counted over the collections in a row that found a gap; a `stock-data` or web collection within the SEC cache's 7 days reads the same cached companyfacts, so it finds the gap again and uses up a try without asking the SEC (the refresh's own collect step reads fresh).
 Expected: only a collection that read the SEC fresh counts.   Actual: every collection does.
+Fix: see BUG-232 (iteration 195).
 
 ### BUG-282 [P3][GATHER] A run whose submissions request failed can't be checked for the SEC's lag, so it reads as complete
 Status: OPEN
@@ -2498,10 +2500,11 @@ Repro: 5 of the reviewer's 11 boundary mutants survive: BUG-267's exact `b != m`
 Expected: tests at each boundary and true docstrings.   Actual: as listed.
 
 ### BUG-289 [P3][REFRESH] BUG-251's retry bound counts collections, not time, and a flipping predecessor flag resets it
-Status: OPEN
-Found: code review 22 (M-4) | Fixed: | Regression test:
+Status: VERIFIED (iteration 195)
+Found: code review 22 (M-4) | Fixed: (this commit) | Regression tests: tests/test_refresh.py, tests/test_sec_cache.py, tests/test_sqlite_store.py (20 new, 2 changed); 19 failing first
 Repro: the three retries can be spent a day apart (CLI and web collections count, BUG-281), and `_gap` compares (report, predecessor-failed): a gap whose predecessor read fails and succeeds by turns starts a new count each time, the one path found that could re-collect for ever.
 Expected: retries spread in time and a count that survives a flipping flag.   Actual: as above.
+Fix: see BUG-232 (iteration 195).
 
 ### BUG-290 [P2][PARSE] Corpay's FY2021-23 annual records count the current maturities twice: FY2022 total debt $9.35B for $7.04B
 Status: VERIFIED (iteration 128; applied at the user's decision, 2026-11-02)

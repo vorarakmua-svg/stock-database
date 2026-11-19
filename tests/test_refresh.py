@@ -20,6 +20,7 @@ import pytest
 
 import src.main
 import src.refresh
+from src.config import AppConfig, StorageConfig
 from src.exporters.sqlite_store import SQLiteStore
 from src.fetchers.sec_handler import SECHandler
 from src.fetchers.stock_data_fetcher import StockDataFetcher
@@ -781,15 +782,17 @@ _AAA_FEED = {rf.cik_of("AAA"): [rf.filing("10-Q", "2026-10-23", "0000000001-26-0
 _LACKED = "read no facts of its 10-Q filed 2026-10-23 (0000000001-26-000003)"
 
 
-def _collected(db, ticker, at, report=None, predecessor=None):
+def _collected(db, ticker, at, report=None, predecessor=None, read=None):
     """A collection of *ticker* with Yahoo and the SEC at *at* (naive local, as the collector writes it), stored by the
     store: its companyfacts lacking *report*, the latest report its submissions listed (BUG-251), its predecessor's
-    filings unread for *predecessor* (BUG-279); a complete one without either."""
+    filings unread for *predecessor* (BUG-279); a complete one without either. Its SEC data read from the SEC at
+    *read* (a cached payload's time, BUG-232), else as it ran."""
     stock = StockData(ticker=ticker, cik=rf.cik_of(ticker), collected_at=at)
     stock.add_source("yahoo_finance")
     stock.add_source("sec_edgar")
     stock.missing_report = report
     stock.predecessor_error = predecessor
+    stock.sec_read_at = (read or at).isoformat()
     SQLiteStore(db).export([stock])
 
 
@@ -835,42 +838,202 @@ def test_a_complete_collection_since_ends_it(tmp_path):
     assert sec.ran is True and (sec.summary["incomplete"], sec.summary["incomplete_left"]) == ({}, {})
 
 
+def _aaa_never_collected(tmp_path):
+    """The test database without AAA's collection of rf.COLLECTED (2026-10-21), so that a test's own are AAA's every
+    one."""
+    db = rf.make_db(tmp_path / "stock.db")
+    conn = sqlite3.connect(db)
+    conn.execute("DELETE FROM collection_runs WHERE ticker = 'AAA'")
+    conn.commit()
+    conn.close()
+    return db
+
+
+#: AAA's 10-Q of 2026-07-31, an earlier report its collections' companyfacts lacked, and what such a run did.
+AAA_Q2 = {"form": "10-Q", "accession": "0000000001-26-000002", "filed": "2026-07-31"}
+_LACKED_Q2 = "read no facts of its 10-Q filed 2026-07-31 (0000000001-26-000002)"
+
+
 def test_a_report_still_without_facts_is_collected_again_three_times_then_left(tmp_path):
     # The SEC fills a lag within days. A report three more collections a week apart still find without facts is the
     # source's gap (DLR's 10-Q of 2026-07-31 still had none 86 days on): AAA then waits for its next report, each run's
     # warning naming the report.
-    db = rf.make_db(tmp_path / "stock.db")
-    _collected(db, "AAA", datetime(2026, 10, 24, 9, 0), report=AAA_Q3)
+    db = _aaa_never_collected(tmp_path)
+    _collected(db, "AAA", datetime(2026, 10, 18, 9, 0), report=AAA_Q2)
     queued, collected = [], []
     for week in range(5):
         at = (rf.NOW + timedelta(days=7 * week, hours=1)).replace(tzinfo=None).isoformat()
-        collect = rf.FakeCollect(db, collected_at=at, incomplete={"AAA": {"report": AAA_Q3}})
-        report = _day(db, 7 * week, sec=rf.FakeSEC(_AAA_FEED), collect=collect)
+        collect = rf.FakeCollect(db, collected_at=at, incomplete={"AAA": {"report": AAA_Q2}})
+        report = _day(db, 7 * week, collect=collect)
         queued.append(report.queue.get("AAA"))
         collected += collect.calls
-    assert queued == [[_redo("2026-10-24", _LACKED, 1)], [_redo("2026-10-25", _LACKED, 2)],
-                      [_redo("2026-11-01", _LACKED, 3)], None, None]
+    assert queued == [[_redo("2026-10-18", _LACKED_Q2, 1)], [_redo("2026-10-25", _LACKED_Q2, 2)],
+                      [_redo("2026-11-01", _LACKED_Q2, 3)], None, None]
     assert collected == [["AAA"]] * 3
     sec = report.result("sec")
     assert sec.summary["incomplete"] == {}
-    assert sec.summary["incomplete_left"] == {"AAA": {"collected_at": "2026-11-08T06:00:00", "why": _LACKED,
-                                                      "collections": 4, "since": "2026-10-24"}}
+    assert sec.summary["incomplete_left"] == {"AAA": {"collected_at": "2026-11-08T06:00:00", "why": _LACKED_Q2,
+                                                      "collections": 4, "tries": 4, "since": "2026-10-18"}}
     assert sec.headline == ("3 feeds read, 0 new reports at 0 companies, 0 incomplete collections to redo (and 1 left "
                             "after 3 tries), 0 without a CIK, 0 errors")
 
 
 def test_another_report_without_facts_starts_its_own_count(tmp_path):
-    # AAA's 10-Q of 2026-07-31 was left after four collections without its facts; the next one's lag is its own.
-    db = rf.make_db(tmp_path / "stock.db")
-    q2 = {"form": "10-Q", "accession": "0000000001-26-000002", "filed": "2026-07-31"}
-    for at in (datetime(2026, 10, 22, 9, 0), datetime(2026, 10, 22, 12, 0), datetime(2026, 10, 23, 9, 0),
-               datetime(2026, 10, 23, 12, 0)):
-        _collected(db, "AAA", at, report=q2)
+    # AAA's 10-Q of 2026-07-31 was left after four collections a week apart without its facts; the next one's lag is
+    # its own.
+    db = _aaa_never_collected(tmp_path)
+    for at in (datetime(2026, 10, 2, 9, 0), datetime(2026, 10, 9, 9, 0), datetime(2026, 10, 16, 9, 0),
+               datetime(2026, 10, 23, 9, 0)):
+        _collected(db, "AAA", at, report=AAA_Q2)
     sec = rf.run(db, rf.services(db), steps=["sec"]).result("sec")
     assert list(sec.summary["incomplete_left"]) == ["AAA"] and sec.summary["incomplete_left"]["AAA"]["collections"] == 4
     _collected(db, "AAA", datetime(2026, 10, 24, 9, 0), report=AAA_Q3)
     report = rf.run(db, rf.services(db, sec=rf.FakeSEC(_AAA_FEED)), steps=["sec"])
     assert report.queue == {"AAA": [_redo("2026-10-24", _LACKED, 1)]}
+
+
+# ---- which collections are tries, and what ends a gap (BUG-232, BUG-281, BUG-289) ----
+
+def _runs(*runs):
+    """``incomplete_tries``'s rows: each (collected_at, its companyfacts' missing report, its predecessor's error,
+    when its SEC data was read; None for as it ran), as ``collection_runs`` keeps them, newest first."""
+    rows = []
+    for at, report, predecessor, read in runs:
+        lacked = {**({"report": report} if report else {}), **({"predecessor": predecessor} if predecessor else {})}
+        rows.append((at.isoformat(), json.dumps(lacked) if lacked else None, read.isoformat() if read else None))
+    return sorted(rows, reverse=True)
+
+
+def _weekly(first, n, report=AAA_Q2, predecessor=None):
+    """*n* collections a week apart from *first*, each read fresh, lacking *report* and *predecessor* alike."""
+    return [(first + timedelta(days=7 * i), report, predecessor, None) for i in range(n)]
+
+
+def test_a_report_filed_after_the_sec_data_a_collection_read_puts_the_company_on_the_list(tmp_path):
+    # BUG-232: AAA's collection of 2026-10-24 (`stock-data`, by hand) read the companyfacts and submissions the SEC
+    # handler had cached on 2026-10-21, before its 10-Q of 2026-10-23, which neither listed: AAA was stored without it.
+    # The run postdated the filing, so the SEC step never put AAA on the list for it.
+    db = rf.make_db(tmp_path / "stock.db")
+    _collected(db, "AAA", datetime(2026, 10, 24, 9, 0), read=datetime(2026, 10, 21, 8, 0))
+    report = rf.run(db, rf.services(db, sec=rf.FakeSEC(_AAA_FEED)), steps=["sec"])
+    assert report.queue == {"AAA": ["sec: 10-Q filed 2026-10-23 (0000000001-26-000003)"]}
+
+
+def test_a_report_filed_before_the_sec_data_a_collection_read_doesnt(tmp_path):
+    db = rf.make_db(tmp_path / "stock.db")
+    _collected(db, "AAA", datetime(2026, 10, 24, 9, 0), read=datetime(2026, 10, 24, 8, 0))
+    assert rf.run(db, rf.services(db, sec=rf.FakeSEC(_AAA_FEED)), steps=["sec"]).queue == {}
+
+
+def test_a_collection_on_the_sec_cache_isnt_a_try(tmp_path):
+    # BUG-281: of AAA's four collections a week apart without its 10-Q's facts, the one of 2026-10-17 (by hand) read
+    # the SEC data the refresh's collection of 2026-10-11 had cached: three reads of the SEC, so AAA is collected a
+    # third time.
+    db = _aaa_never_collected(tmp_path)
+    for at, read in ((datetime(2026, 10, 4, 9, 0), None), (datetime(2026, 10, 11, 9, 0), None),
+                     (datetime(2026, 10, 17, 10, 0), datetime(2026, 10, 11, 9, 1)),
+                     (datetime(2026, 10, 23, 9, 0), None)):
+        _collected(db, "AAA", at, report=AAA_Q2, read=read)
+    report = rf.run(db, rf.services(db), steps=["sec"])
+    assert report.queue == {"AAA": [_redo("2026-10-23", _LACKED_Q2, 3)]}
+    assert report.result("sec").summary["incomplete"]["AAA"]["again"] == 3
+
+
+def test_collections_that_read_the_sec_days_apart_are_one_try(tmp_path):
+    # BUG-289: four collections a day apart (by hand, each after the cache's week) spent AAA's three tries in four days,
+    # though the SEC fills a lag in days: they are one, and AAA is collected again.
+    db = _aaa_never_collected(tmp_path)
+    for day in (20, 21, 22, 23):
+        _collected(db, "AAA", datetime(2026, 10, day, 9, 0), report=AAA_Q2)
+    assert rf.run(db, rf.services(db), steps=["sec"]).queue == {"AAA": [_redo("2026-10-23", _LACKED_Q2, 1)]}
+
+
+def test_a_predecessor_read_that_fails_by_turns_doesnt_start_a_new_count(tmp_path):
+    # BUG-289: each collection compared its gap with the one before, report and predecessor alike, so a predecessor
+    # read that failed and succeeded by turns started a new count each week: AAA was collected again for ever.
+    db = _aaa_never_collected(tmp_path)
+    for i, at in enumerate((datetime(2026, 9, 27, 9, 0), datetime(2026, 10, 4, 9, 0), datetime(2026, 10, 11, 9, 0),
+                            datetime(2026, 10, 18, 9, 0))):
+        _collected(db, "AAA", at, report=AAA_Q2, predecessor=None if i % 2 else "503 Server Error")
+    sec = rf.run(db, rf.services(db), steps=["sec"]).result("sec")
+    assert sec.summary["incomplete"] == {}
+    assert sec.summary["incomplete_left"] == {"AAA": {"collected_at": "2026-10-18T09:00:00", "why": _LACKED_Q2,
+                                                      "collections": 4, "tries": 4, "since": "2026-09-27"}}
+
+
+def test_a_report_read_from_its_own_xbrl_by_turns_doesnt_start_a_new_count(tmp_path):
+    # BUG-289's kind: beside a predecessor that can't be read, the 10-Q's own XBRL read (Q17) that succeeds and fails
+    # by turns left the report off the gap every other week.
+    db = _aaa_never_collected(tmp_path)
+    for i, at in enumerate((datetime(2026, 9, 27, 9, 0), datetime(2026, 10, 4, 9, 0), datetime(2026, 10, 11, 9, 0),
+                            datetime(2026, 10, 18, 9, 0))):
+        _collected(db, "AAA", at, report=None if i % 2 else AAA_Q2, predecessor="no XBRL data")
+    sec = rf.run(db, rf.services(db), steps=["sec"]).result("sec")
+    assert (sec.summary["incomplete"], list(sec.summary["incomplete_left"])) == ({}, ["AAA"])
+    assert sec.summary["incomplete_left"]["AAA"]["tries"] == 4
+
+
+def test_a_new_reports_lag_after_a_predecessor_left_unread_gets_its_own_tries(tmp_path):
+    # XOM-like: four weekly collections couldn't read the predecessor, so it waits for its next report; the
+    # collection for that report then finds the SEC's lag on it as well, which collections from before the report
+    # was filed can't have seen: it gets its own tries.
+    db = _aaa_never_collected(tmp_path)
+    for at in (datetime(2026, 9, 25, 9, 0), datetime(2026, 10, 2, 9, 0), datetime(2026, 10, 9, 9, 0),
+               datetime(2026, 10, 16, 9, 0)):
+        _collected(db, "AAA", at, predecessor="no XBRL data")
+    assert list(rf.run(db, rf.services(db), steps=["sec"]).result("sec").summary["incomplete_left"]) == ["AAA"]
+    _collected(db, "AAA", datetime(2026, 10, 24, 9, 0), report=AAA_Q3, predecessor="no XBRL data")
+    report = rf.run(db, rf.services(db, sec=rf.FakeSEC(_AAA_FEED)), steps=["sec"])
+    assert report.queue == {"AAA": [_redo(
+        "2026-10-24", f"{_LACKED} and couldn't read its predecessor's filings (no XBRL data)", 1)]}
+
+
+def test_the_tries_of_a_complete_latest_collection_are_none():
+    assert src.refresh.incomplete_tries([]) is None
+    assert src.refresh.incomplete_tries(_runs((datetime(2026, 10, 18), None, None, None),
+                                              *_weekly(datetime(2026, 9, 1), 5))) is None
+
+
+def test_the_tries_are_reads_of_the_sec_a_week_apart_back_to_a_complete_collection():
+    runs = _runs((datetime(2026, 9, 1), None, None, None), *_weekly(datetime(2026, 9, 8), 3))
+    assert src.refresh.incomplete_tries(runs) == {"tries": 3, "collections": 3, "since": "2026-09-08"}
+    # Six days apart is a week's tries; less is the same one.
+    assert src.refresh.incomplete_tries(_runs((datetime(2026, 9, 8), AAA_Q2, None, None),
+                                              (datetime(2026, 9, 14), AAA_Q2, None, None)))["tries"] == 2
+    assert src.refresh.incomplete_tries(_runs((datetime(2026, 9, 8), AAA_Q2, None, None),
+                                              (datetime(2026, 9, 13, 23, 59), AAA_Q2, None, None)))["tries"] == 1
+
+
+def test_a_collection_that_read_older_sec_data_than_a_try_isnt_one():
+    # A collection on another cache, older than the last try's read: not a try, and not the reference for the next.
+    runs = _runs((datetime(2026, 9, 8), AAA_Q2, None, None),
+                 (datetime(2026, 9, 22), AAA_Q2, None, datetime(2026, 9, 1)),
+                 (datetime(2026, 9, 15), AAA_Q2, None, None))
+    assert src.refresh.incomplete_tries(runs) == {"tries": 2, "collections": 3, "since": "2026-09-08"}
+
+
+def test_a_runs_stored_before_their_sec_read_was_kept_are_read_as_of_their_collection():
+    runs = [(row[0], row[1], None) for row in _runs(*_weekly(datetime(2026, 9, 1), 4))]
+    assert src.refresh.incomplete_tries(runs) == {"tries": 4, "collections": 4, "since": "2026-09-01"}
+    # And one this code didn't write.
+    runs = [(row[0], row[1], "unknown") for row in runs]
+    assert src.refresh.incomplete_tries(runs) == {"tries": 4, "collections": 4, "since": "2026-09-01"}
+
+
+def test_a_collection_that_lacked_another_report_ends_the_gap():
+    runs = _runs(*_weekly(datetime(2026, 8, 1), 4, report={**AAA_Q2, "accession": "0000000001-26-000001"}),
+                 *_weekly(datetime(2026, 9, 1), 2))
+    assert src.refresh.incomplete_tries(runs) == {"tries": 2, "collections": 2, "since": "2026-09-01"}
+
+
+def test_a_collection_that_read_the_sec_before_the_report_was_filed_ends_the_gap():
+    runs = _runs(*_weekly(datetime(2026, 7, 3), 4, report=None, predecessor="503"),
+                 (datetime(2026, 7, 31, 9, 0), None, "503", datetime(2026, 7, 30, 9, 0)),
+                 (datetime(2026, 8, 7), AAA_Q2, "503", None))
+    assert src.refresh.incomplete_tries(runs) == {"tries": 1, "collections": 1, "since": "2026-08-07"}
+    # Read on the report's day (the collector's, which east of New York runs ahead of the SEC's), it may have seen it.
+    runs = _runs((datetime(2026, 7, 31, 9, 0), None, "503", None), (datetime(2026, 8, 7), AAA_Q2, "503", None))
+    assert src.refresh.incomplete_tries(runs)["collections"] == 2
 
 
 def test_a_company_with_a_new_report_and_an_incomplete_collection_has_both_reasons(tmp_path):
@@ -946,6 +1109,50 @@ def test_the_real_collection_stores_a_failed_predecessor_read_and_the_sec_step_c
     assert collect_tickers(db, tmp_path / "out", tmp_path / "cache", ["BLK"], lambda line: None)["stored"] == 1
     assert rf.run(db, rf.services(db, sec=quiet), steps=["sec"]).queue == {}
     assert quiet.calls == ["0002012383", "0002012383"]
+
+
+def _age_dlr_cache(cache, days):
+    """Date DLR's cached companyfacts and submissions in *cache* *days* back; returns that time."""
+    then = int(time.time()) - days * 86400
+    for name in ("companyfacts_CIK0001297996.json", "submissions_CIK0001297996.json"):
+        os.utime(cache / name, (then, then))
+    return then
+
+
+def test_a_collection_by_hand_on_the_sec_cache_is_queued_for_a_report_filed_since_the_cache(tmp_path, monkeypatch):
+    # BUG-232 end to end: `stock-data` collects DLR from the companyfacts and submissions the SEC handler cached three
+    # days ago, and DLR filed a 10-Q yesterday, which neither lists: the next SEC step puts DLR on the list for it,
+    # though the collection ran after the filing.
+    db = tmp_path / "stock.db"
+    cached = SECHandler._read_payload_cache
+    serve_dlr(monkeypatch, lagging=False)
+    monkeypatch.setattr(SECHandler, "_read_payload_cache", cached)  # `stock-data`'s handler reads its cache
+    config = AppConfig(storage=StorageConfig(base_dir=tmp_path, db_path=db))
+    with StockDataFetcher(config=config) as fetcher:
+        assert fetcher.fetch_and_export(["DLR"], formats=["sqlite"])["stored"] == 1
+    then = _age_dlr_cache(tmp_path / "cache", 3)
+    with StockDataFetcher(config=config) as fetcher:
+        assert fetcher.fetch_and_export(["DLR"], formats=["sqlite"])["stored"] == 1
+    yesterday = (datetime.now() - timedelta(days=1)).date().isoformat()
+    feed = rf.FakeSEC({"0001297996": [rf.filing("10-Q", yesterday, "0001104659-26-099999")]})
+    assert rf.run(db, rf.services(db, sec=feed), steps=["sec"]).queue == {
+        "DLR": [f"sec: 10-Q filed {yesterday} (0001104659-26-099999)"]}
+    assert rf.rows(db, "SELECT sec_read_at FROM collection_runs ORDER BY collected_at DESC LIMIT 1") == [
+        (datetime.fromtimestamp(then).isoformat(),)]
+
+
+def test_the_refresh_collection_reads_the_sec_as_it_runs_whatever_the_cache_holds(tmp_path, monkeypatch):
+    # The collect step's FreshSECHandler asks the SEC: its run's SEC data is of now, a try at a gap (BUG-281).
+    db = tmp_path / "stock.db"
+    cached = SECHandler._read_payload_cache
+    serve_dlr(monkeypatch, lagging=False)
+    monkeypatch.setattr(SECHandler, "_read_payload_cache", cached)
+    assert collect_tickers(db, tmp_path / "out", tmp_path / "cache", ["DLR"], lambda line: None)["stored"] == 1
+    _age_dlr_cache(tmp_path / "cache", 3)
+    before = datetime.now()
+    assert collect_tickers(db, tmp_path / "out", tmp_path / "cache", ["DLR"], lambda line: None)["stored"] == 1
+    (read,), = rf.rows(db, "SELECT sec_read_at FROM collection_runs ORDER BY collected_at DESC LIMIT 1")
+    assert before <= datetime.fromisoformat(read) <= datetime.now()
 
 
 # ---------------------------------------------------------------------------

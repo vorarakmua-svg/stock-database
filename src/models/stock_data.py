@@ -95,6 +95,12 @@ class StockData:
     # names the report either way.
     missing_report: Optional[Dict[str, Any]] = None
 
+    # When the SEC served the run's SEC data (sec_handler.fetch_all's sec_read_at, ISO, naive local): a
+    # payload from the handler's 7-day cache is as old as the cache. collection_runs.sec_read_at keeps it,
+    # so that `stock-data refresh` looks for reports filed since then and counts as tries only reads of
+    # the SEC (BUG-232, BUG-281). SQLite-only, like the report without facts.
+    sec_read_at: Optional[str] = None
+
     # Insider transactions (from SEC Form 4)
     insider_transactions: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -145,6 +151,7 @@ class StockData:
         data.pop("financials_annual_vintages", None)
         data.pop("predecessor_error", None)
         data.pop("missing_report", None)
+        data.pop("sec_read_at", None)  # SQLite-only too (collection_runs.sec_read_at)
         return data
 
     def to_json(self, indent: int = 2) -> str:
@@ -377,6 +384,8 @@ class StockData:
         # The latest report the submissions list whose facts the companyfacts lacked (BUG-251): a
         # warning, as the fetcher words it, and the store keeps it for the refresh.
         self.missing_report = sec_data.get("missing_report")
+        # When the SEC served what the run read: the refresh compares a filing with it (BUG-232).
+        self.sec_read_at = sec_data.get("sec_read_at")
 
         # CIK
         if "cik" in sec_data:

@@ -584,6 +584,45 @@ def test_a_runs_table_from_before_the_incomplete_column_gains_it_and_keeps_its_r
     assert old == ("yahoo_finance, sec_edgar, fred_treasury_gov, calculated_metrics", 7, 0, 85, "[]")
 
 
+def _read_at(db):
+    """Each stored run's ``sec_read_at`` by (ticker, collected_at): None where it has none."""
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        return {(r["ticker"], r["collected_at"]): dict(r).get("sec_read_at")
+                for r in conn.execute("SELECT * FROM collection_runs")}
+    finally:
+        conn.close()
+
+
+def test_a_collection_run_keeps_when_its_sec_data_was_read_from_the_sec(tmp_path):
+    # BUG-232: a collection by hand reads the SEC handler's 7-day cache; the refresh's SEC step compares a filing with
+    # that read, not with the run's own time.
+    stock = _run_of("DLR")
+    stock.sec_read_at = "2026-10-22T08:15:00"
+    SQLiteStore(tmp_path / "s.db").export([stock, _run_of("DLR", at=datetime(2026, 10, 26, 9, 0))])
+    assert _read_at(tmp_path / "s.db") == {("DLR", "2026-10-25T12:32:58"): "2026-10-22T08:15:00",
+                                           ("DLR", "2026-10-26T09:00:00"): None}
+
+
+def test_a_runs_table_from_before_the_sec_read_column_gains_it_and_keeps_its_runs(tmp_path):
+    # The runs stored before it read as of their collection, as the refresh read them.
+    db = tmp_path / "s.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE collection_runs (ticker TEXT NOT NULL, collected_at TEXT NOT NULL, data_sources TEXT, "
+                 "warning_count INTEGER, error_count INTEGER, quality_score INTEGER, warnings TEXT, incomplete TEXT, "
+                 "PRIMARY KEY (ticker, collected_at))")
+    conn.execute("INSERT INTO collection_runs VALUES ('DLR', '2026-11-01T09:00:00', 'yahoo_finance, sec_edgar', 7, 0, "
+                 "85, '[]', ?)", (json.dumps({"report": _DLR_10Q}),))
+    conn.commit()
+    conn.close()
+    stock = _run_of("DLR", at=datetime(2026, 11, 8, 9, 0))
+    stock.sec_read_at = "2026-11-08T09:00:05"
+    SQLiteStore(db).export([stock])
+    assert _read_at(db) == {("DLR", "2026-11-01T09:00:00"): None, ("DLR", "2026-11-08T09:00:00"): "2026-11-08T09:00:05"}
+    assert _incomplete(db)[("DLR", "2026-11-01T09:00:00")] == {"report": _DLR_10Q}
+
+
 def _filer(annual=None, quarterly=None, ttm=None, vintages=None):
     """AAA as a collection's SEC parse gives it: the annual record, quarters, trailing years and vintages."""
     s = StockData(ticker="AAA", cik="000", company_name="AAA Inc.")

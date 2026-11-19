@@ -3,6 +3,7 @@
 import json
 import os
 import time
+from datetime import datetime
 
 import pytest
 import requests
@@ -166,6 +167,38 @@ def test_a_registrant_without_a_predecessor_reads_its_own_filings(tmp_path, monk
     assert "predecessor_cik" not in data
     assert [url for url in requested if "companyfacts" in url] == [
         "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json"]
+
+
+_AAPL = {"companyfacts/CIK0000320193.json": {"entityName": "Apple Inc.", "facts": {"us-gaap": {}}},
+         "submissions/CIK0000320193.json": {"name": "Apple Inc.", "filings": {"recent": {}}}}
+
+
+def test_a_run_that_asked_the_sec_is_dated_as_it_asked(tmp_path, monkeypatch):
+    handler, _ = _successor_handler(tmp_path, monkeypatch, _AAPL)
+    before = datetime.now()
+    data = handler.fetch_all("AAPL")
+    assert before <= datetime.fromisoformat(data["sec_read_at"]) <= datetime.now()
+
+
+def test_a_run_read_from_the_cache_is_dated_by_its_oldest_cached_payload(tmp_path, monkeypatch):
+    # BUG-232: `stock-data` and the web's jobs read the 7-day cache, so a run can lack a report filed before it ran;
+    # the refresh compares a filing with when the SEC served what the run read.
+    handler, requested = _successor_handler(tmp_path, monkeypatch, _AAPL)
+    handler.fetch_all("AAPL")
+    three, one = int(time.time()) - 3 * 86400, int(time.time()) - 86400
+    for name, then in (("companyfacts", three), ("submissions", one)):
+        os.utime(handler._payload_cache_path(name, "0000320193"), (then, then))
+    requested.clear()
+    data = handler.fetch_all("AAPL")
+    assert requested == []
+    assert data["sec_read_at"] == datetime.fromtimestamp(three).isoformat()
+
+
+def test_a_collection_keeps_when_its_sec_data_was_read_for_the_database_alone():
+    stock = StockData(ticker="AAPL")
+    stock.merge_sec_data({"cik": "0000320193", "source": "sec_edgar", "sec_read_at": "2026-10-22T08:15:00"})
+    assert stock.sec_read_at == "2026-10-22T08:15:00"
+    assert "sec_read_at" not in stock.to_dict()
 
 
 def test_a_failed_predecessor_request_keeps_the_successors_filings(tmp_path, monkeypatch):

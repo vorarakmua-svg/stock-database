@@ -1680,10 +1680,13 @@ companies on the **collection list**, each with its reason: `quotes`, `bars` and
   bank files hundreds of prospectus supplements a week, so the newest 100 hide its 10-Q. Read on 2026-10-25, GS's recent
   block held 16,518 filings (2025-10-24 to 2026-10-23), the newest 100 reached back only to 2026-10-21, and its latest
   10-Q, filed 2026-08-03, sat behind 3,159 newer ones. A 10-K, 10-Q, 20-F, 40-F, a transition report (10-KT, 10-QT) or
-  an amendment of one ("10-Q/A") filed on or after the day of the company's latest collection with SEC data puts it on
-  the collection list. That day is the collector's own (`collection_runs`), which east of New York runs ahead of the
-  SEC's, so a report filed that day counts; a company never collected with the SEC counts every report in its feed. A
-  company without a CIK is counted and skipped, and a feed that fails is that company's error.
+  an amendment of one ("10-Q/A") filed on or after the day the SEC served the SEC data of the company's latest
+  collection with SEC data puts it on the collection list. That is the day the collection ran, unless it read the SEC
+  handler's 7-day cache (`stock-data`, the web's collect job), whose companyfacts and submissions are as old as the cache
+  and lack what was filed since: then the day they were cached (`collection_runs.sec_read_at`, the older of the two;
+  BUG-232). That day is the collector's own, which east of New York runs ahead of the SEC's, so a report filed that day
+  counts; a company never collected with the SEC counts every report in its feed. A company without a CIK is counted and
+  skipped, and a feed that fails is that company's error.
   - A company also goes on the list when that latest collection's SEC read was incomplete, as its `collection_runs` row
     says (`incomplete`): it read no facts of the latest report its submissions listed (its companyfacts lacked them,
     the SEC's lag, BUG-251, and the filing's own XBRL couldn't be read either, or their request failed), or it
@@ -1696,9 +1699,15 @@ companies on the **collection list**, each with its reason: `quotes`, `bars` and
     fact there 86 days on, though the 424B7 DLR filed on 2026-08-19 had.
   - The reason names the collection and the report: `DLR (sec: its collection of 2026-10-25 read no facts of its 10-Q
     filed 2026-07-31 (0001104659-26-089296); collected again (1 of 3))`. The SEC usually fills a lag in days, so a gap
-    is collected again three times at most: when three more collections in a row have read no facts of the same report
-    (or none of them could read the predecessor's filings), the gap is the source's, and the company waits for its next
-    report. The step's summary lists it under `incomplete_left`, and each run's warning still names the report.
+    gets three more tries at most, each a read of the SEC at least six days after the last: when the collections in a
+    row since the gap was found (incomplete in any way: the report's facts unread, the predecessor's filings unread, or
+    both, so a read that fails and succeeds by turns starts no new count) hold four such reads, the gap is the source's,
+    and the company waits for its next report. A collection on the 7-day cache read what the collection that cached it
+    read, so it is no try, and reads of the SEC hours or days apart (by hand, a forced run) are one (BUG-281, BUG-289).
+    A complete collection ends the gap, and so does one that lacked another report or read the SEC before the gap's
+    report was filed: a new report's lag gets its own tries. The step's summary lists the company under
+    `incomplete_left` (its `collections`, `tries` and the day the gap was found, `since`), and each run's warning still
+    names the report.
 - **`collect`** (whenever the list isn't empty): a full collection of the list as `stock-data` runs it (Yahoo and the
   SEC, every year, the JSON, CSV and SQLite outputs, stored and valued 25 companies at a time), four fetched at a time,
   its SEC data read fresh like the `sec` step's. The list is built within the run by the three steps above, so naming
@@ -1888,16 +1897,15 @@ schtasks /Create /SC DAILY /ST 05:00 /TN "stock-database refresh" /TR "cmd /c cd
 
 ### Refresh limitations
 
-- BUG-232: collections outside the refresh (`stock-data`, the web's collect job) read the SEC handler's 7-day cache of
-  companyfacts and submissions. A company that files a 10-Q on day 2 after its cache was written on day 0, and is
-  collected by hand on day 3, is stored without the 10-Q, and its `collection_runs` row (day 3) then postdates the
-  filing, so the SEC step never queues it for that report. It stays without the report until a later report or a
-  collection after the cache's expiry. The refresh's own collections read the SEC fresh and aren't affected. That
-  collection isn't incomplete either (BUG-251's check): its cached submissions don't list the report.
-- A company whose companyfacts keep lacking its latest report is collected again three times, a week apart (a day apart
-  while the SEC step runs again for another reason), then waits for its next report. Collections outside the refresh
-  (`stock-data`, the web's jobs) count among the three, though they may read the SEC handler's 7-day cache. Every run
-  stored before `collection_runs.incomplete` (to 2026-10-25) reads as complete: the 58 companies whose companyfacts
+- Collections outside the refresh (`stock-data`, the web's collect job) still read the SEC handler's 7-day cache of
+  companyfacts and submissions: a company that files a 10-Q on day 2 after its cache was written on day 0, and is
+  collected by hand on day 3, is stored without the 10-Q until the next SEC step puts it on the list (that collection
+  read the SEC as of day 0, BUG-232). A run stored before `collection_runs.sec_read_at` reads as of when it ran, so such
+  a run from the cache still hides a report filed between its cache and its run, until the company's next report.
+- A company whose companyfacts keep lacking its latest report gets three more tries, reads of the SEC at least six days
+  apart, then waits for its next report: it is collected again for about three weeks, once a week by the scheduled run,
+  or at every run while the SEC step runs again for another reason (those within six days of a try aren't tries). Every
+  run stored before `collection_runs.incomplete` (to 2026-10-25) reads as complete: the 58 companies whose companyfacts
   lacked their latest report that day go on the list again only once a collection finds the gap again (at their next
   report, or one by hand).
 - The market step stores the market collector's cached answers again while they are a day old or less (that collector's
@@ -2417,6 +2425,10 @@ companyfacts carry, the run is stored as incomplete). `collection_runs.incomplet
 earlier report the companyfacts lack from their own XBRL; `predecessor`, why the
 predecessor's filings couldn't be read), empty for a complete run, so that `stock-data refresh`
 collects the company again (see [Keeping the data current](#keeping-the-data-current-stock-data-refresh)).
+`collection_runs.sec_read_at` keeps when the SEC served the run's companyfacts and submissions (the
+older; a payload from the handler's 7-day cache as of when it was cached), empty in a run stored before
+the column, which reads as of the run: the refresh looks for reports filed since then and counts only
+reads of the SEC as tries at a gap (BUG-232, BUG-281).
 `dividend_events` keeps each payment as Yahoo served it,
 split-adjusted as of `served_on`: the collection's day on Yahoo's calendar, its last
 daily bar or the latest split Yahoo listed, whichever is later (the collector's own date

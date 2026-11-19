@@ -3323,3 +3323,16 @@ Result: BUG-156, BUG-157, BUG-222 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3409 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(web): the HP table marks placeholder and partial bars; an empty compare says so; the verdict stays in view (BUG-156, BUG-157, BUG-222)
 Next: BUG-232/281/289 (ready); scores batch (worker); code review 31 due.
+
+## Iteration 195: 2026-11-20 03:30: fix (BUG-232, BUG-281, BUG-289)
+Picked: three REFRESH P3s on the re-queue rule for incomplete collections; an opus worker.
+Did: a run records when the SEC served what it read (sec_read_at); new reports are judged against that, not the
+run's day; retries of a gap count only reads at least 6 days apart (cache re-reads don't count) and a flipping
+predecessor flag no longer restarts the count.
+- RED: 19 failed of 274 on the worker's base; GREEN. 32 mutants (24 new + 8 BUG-251 ports). Applied on top of
+  BUG-053's changes to sqlite_store.py and refresh.py; full suite green together.
+- Real-data copy: 0 companies queued before and after.
+Result: BUG-232, BUG-281, BUG-289 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3429 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(refresh): a run's SEC data dates from when the SEC served it; tries are reads a week apart (BUG-232, BUG-281, BUG-289)
+Next: code review 31 (due); scores batch (worker).

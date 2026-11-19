@@ -10,7 +10,7 @@ Tables:
 - ``financials_quarterly`` canonical quarterly line items, one row per (ticker, period_end)
 - ``metrics_annual``       calculated ratios per (ticker, fy)
 - ``market_snapshots``     point-in-time market/valuation data per (ticker, collected_at)
-- ``collection_runs``      provenance/quality of each collection, and what its SEC read lacked
+- ``collection_runs``      provenance/quality of each collection, what its SEC read lacked and when the SEC served it
 
 All writes are idempotent upserts on the natural keys.
 """
@@ -389,6 +389,7 @@ class SQLiteStore:
                 quality_score INTEGER,
                 warnings TEXT,
                 incomplete TEXT,
+                sec_read_at TEXT,
                 PRIMARY KEY (ticker, collected_at)
             );
 
@@ -737,8 +738,9 @@ class SQLiteStore:
             "market_snapshots": {**{c: "REAL" for c in _SNAPSHOT_COLUMNS},
                                  **{c: "TEXT" for c in _SNAPSHOT_TEXT_COLUMNS}},
             # What a run's SEC read lacked (BUG-251, BUG-279): NULL in every run stored before the column, which
-            # reads as complete, as it did.
-            "collection_runs": {"warnings": "TEXT", "incomplete": "TEXT"},
+            # reads as complete, as it did. When the SEC served that read (BUG-232): NULL before the column, which
+            # reads as the run's own time, as it did.
+            "collection_runs": {"warnings": "TEXT", "incomplete": "TEXT", "sec_read_at": "TEXT"},
         }
         for table, columns in expected.items():
             self._ensure_columns(conn, table, columns)
@@ -1101,6 +1103,9 @@ class SQLiteStore:
             "warnings": json.dumps(stock.warnings),
             # What its SEC read lacked, for the refresh to collect the company again (BUG-251, BUG-279).
             "incomplete": _incomplete(stock),
+            # When the SEC served that read (a cached payload's time): the refresh looks for reports filed since and
+            # counts only reads of the SEC as tries (BUG-232, BUG-281).
+            "sec_read_at": stock.sec_read_at,
         })
 
         # unmapped_facts (tags not yet in the canonical registry; tag is a row value): each tag's
