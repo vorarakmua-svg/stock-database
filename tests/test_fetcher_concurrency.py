@@ -470,6 +470,48 @@ def test_a_collection_that_built_no_snapshots_says_so(tmp_path, monkeypatch):
     assert without_sec.financials_annual_known is None
 
 
+def test_a_snapshot_build_that_fails_keeps_the_runs_sec_record_and_the_stored_snapshots(tmp_path, monkeypatch):
+    # build_snapshots raising threw away the whole SEC record (annual, quarterly, warnings, insider transactions). It
+    # is the snapshots' failure alone now: the run warns, builds none (None, vintages {}), and the store leaves the
+    # stored snapshots and vintages as they were.
+    from src.fetchers import stock_data_fetcher
+    from tests.known_rows import snapshot
+
+    fetcher = _sec_only_fetcher(tmp_path, monkeypatch, {
+        "cik": "0001018724", "ticker": "AMZN", "source": "sec_edgar", "company_facts": _split_restated_facts()})
+    stored = StockData(ticker="AMZN", cik="0001018724", company_name="Amazon")
+    stored.financials_annual_known = [snapshot(2015, "2016-01-29", accn="old", revenue=1.0)]
+    stored.financials_annual_vintages = {"2015": {"old": {"fiscal_year": 2015, "accn": "old",
+                                                          "filed_date": "2016-01-29", "period_end": "2015-12-31",
+                                                          "form": "10-K", "revenue": 1.0}}}
+    fetcher.sqlite_store.export([stored])
+    insiders = [{"name": "Insider", "shares": 10}]
+    monkeypatch.setattr(fetcher.sec_handler, "get_insider_transactions", lambda cik, limit=50: insiders)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("snapshot boom")
+
+    monkeypatch.setattr(stock_data_fetcher, "build_snapshots", boom)
+    stock = fetcher.fetch_ticker("AMZN", include_yahoo=False)
+    assert stock.financials_annual and stock.financials_quarterly
+    assert stock.insider_transactions == insiders
+    assert stock.financials_annual_known is None and stock.financials_annual_vintages == {}
+    assert not [e for e in stock.errors if "SEC EDGAR" in e]
+    assert ("SEC EDGAR: AMZN's as-of snapshots couldn't be built (snapshot boom): the stored ones are kept"
+            in stock.warnings)
+    fetcher.sqlite_store.export([stock])
+    conn = sqlite3.connect(fetcher.sqlite_store.db_path)
+    try:
+        assert conn.execute("SELECT count(*) FROM financials_annual WHERE ticker = 'AMZN'").fetchone()[0] > 0
+        assert conn.execute("SELECT count(*) FROM financials_quarterly WHERE ticker = 'AMZN'").fetchone()[0] > 0
+        assert conn.execute("SELECT known_accn FROM financials_annual_known WHERE ticker = 'AMZN'").fetchall() == [
+            ("old",)]
+        assert conn.execute("SELECT accn FROM financials_annual_vintages WHERE ticker = 'AMZN'").fetchall() == [
+            ("old",)]
+    finally:
+        conn.close()
+
+
 def test_a_successor_registrant_is_noted_with_its_predecessor(tmp_path, monkeypatch):
     # Q6: XOM reads ExxonMobil Holdings Corp with Exxon Mobil Corp's filings; the run says so, where it used to say
     # there were no annual financials.

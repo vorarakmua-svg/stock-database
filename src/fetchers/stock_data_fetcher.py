@@ -254,13 +254,21 @@ class StockDataFetcher:
                     split_levels = {end: period.pop("_split_levels") for end, period in quarterly.items()
                                     if "_split_levels" in period}
                     # The record as known on each filing day (the as-of snapshots) and each filing's views (its
-                    # vintages, already normalised), replayed on the same facts with the run's years_back.
-                    snapshots = build_snapshots(self.xbrl_parser, facts, ticker=ticker, years_back=years_back)
-                    for warning in snapshots.warnings:
-                        stock.add_warning(warning)
-                    stock.financials_annual_known = snapshots.rows
-                    stock.financials_annual_vintages = snapshots.vintages
-                    stock.years_back = years_back
+                    # vintages, already normalised), replayed on the same facts with the run's years_back. A build
+                    # that fails costs the snapshots alone: the run builds none (financials_annual_known None,
+                    # vintages {}), so the store leaves the stored ones as they were, and the record stands.
+                    try:
+                        snapshots = build_snapshots(self.xbrl_parser, facts, ticker=ticker, years_back=years_back)
+                    except Exception as e:  # noqa: BLE001 - the run's SEC record mustn't go with the snapshots
+                        self.logger.error(f"As-of snapshot error for {ticker}: {e}")
+                        stock.add_warning(f"SEC EDGAR: {ticker}'s as-of snapshots couldn't be built ({e}): the "
+                                          "stored ones are kept")
+                    else:
+                        for warning in snapshots.warnings:
+                            stock.add_warning(warning)
+                        stock.financials_annual_known = snapshots.rows
+                        stock.financials_annual_vintages = snapshots.vintages
+                        stock.years_back = years_back
 
                     stock.merge_parsed_financials(annual, quarterly)
 
