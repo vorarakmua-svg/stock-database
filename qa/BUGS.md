@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 119 · NEEDS-USER 1 · Decided: 7 · Verified: 251
+**Open:** P0 0 · P1 0 · P2 0 · P3 123 · NEEDS-USER 1 · Decided: 7 · Verified: 251
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2333,6 +2333,30 @@ Status: OPEN
 Found: BUG-288's test-gap worker (iteration 203; synthetic, not measured on real filers) | Fixed: | Regression test:
 Repro: BE-shaped facts: a FY2024 10-K plus a Q3 2025 10-Q with $1.4M borrowings against $1.424M maturities give short_term_debt 1,400,000; adding a 10-K LiabilitiesAndStockholdersEquity instant at 2025-01-01 gives 2,824,000. The code takes any annual-form L&SE instant as a year end (cf. BUG-272's adoption-day instants). (Wait for feat/asof-snapshots: it rewrites xbrl_parser.py.)
 Expected: 1,400,000.   Actual: 2,824,000.
+
+### BUG-360 [P3][UI] A palette Enter pressed before its results land stays armed while the user keeps typing
+Status: OPEN
+Found: code review 33 (`qa/evidence/review33.txt`, Minor 1; partly pre-existing) | Fixed: | Regression test:
+Repro: nothing clears `enterQuery` on input, and BUG-003's move() drops arrow presses while it is set: AAP, Enter, AAPL, Down opens AAPL instead of AAPLX; editing back to 'AAP' later navigates with no Enter (also at 6942b63). Probe: %LOCALAPPDATA%\stockdb-qa\review33\head\tests\test_review33.py (driver review33\head\tests\js\review33_driver.js).
+Expected: typing cancels a waiting Enter.   Actual: it stays armed.
+
+### BUG-361 [P3][UI] Early palette arrow presses are added up, not replayed
+Status: OPEN
+Found: code review 33 (Minor 2) | Fixed: | Regression test:
+Repro: Down x3 then Up before a two-row list lands picks row 2; on the landed list the same keys pick row 1 (clamping per press). Also pre-existing: a second build for the same text resets a selection moved to row 0. Probe: %LOCALAPPDATA%\stockdb-qa\review33\head\tests\test_review33.py.
+Expected: the same row either way.   Actual: different rows.
+
+### BUG-362 [P3][UI] The guru page's confidential-omission note shows only for a flagged quarter, not the one after
+Status: OPEN
+Found: code review 33 (Minor 3; made-up data; real cases suspected: Berkshire 2025-06-30, Pershing 2025-03-31) | Fixed: | Regression test:
+Repro: the note's own text names 'new because the quarter before omitted it', which never shows the note; and a later 13F-HR/A disclosing the omitted holdings still leaves it on (any() over filings; suspected). Probe: %LOCALAPPDATA%\stockdb-qa\review33\head\tests\test_review33.py.
+Expected: the note on the following quarter's 'new' rows, and off once an amendment discloses.   Actual: neither.
+
+### BUG-363 [P3][CODE] No test covers 'any filing of the quarter' for the confidential-omission flag
+Status: OPEN
+Found: code review 33 (Minor 4) | Fixed: | Regression test:
+Repro: an any->all mutant and a 'latest filing only' mutant both survive tests/test_web_gurus.py: every flagged quarter in the tests has one filing.
+Expected: a two-filing quarter test.   Actual: none.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)

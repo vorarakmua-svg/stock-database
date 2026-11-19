@@ -3458,3 +3458,14 @@ Result: BUG-003, BUG-067, BUG-068, BUG-214 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3607 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(web): the palette's early arrow lands; dashes for nulls; failed tickers named; confidential omissions noted (BUG-003, BUG-067, BUG-068, BUG-214)
 Next: GATHER 107/282/340 (worker); code review 33 after this (3 units since review 32).
+
+## Iteration 206: 2026-11-20 15:40: code review 33
+Picked: code review 33 (6942b63..fe9cbd5: the test pins, BUG-353..357, BUG-003/067/068/214); an opus reviewer.
+Did: `qa/evidence/review33.txt`; 3 probes failing at HEAD (node driver); 15 test files pass (830).
+Result: no Critical or Important. Minors -> BUG-360..363 (P3: palette Enter/arrow edge cases, the guru omission
+note's coverage and its test). Checked right: every reader agrees on the Magic Formula's excluded sectors; the bounded
+bars walk equals the old answer on 60 random logs; collection_runs.errors has one writer; the 17 pin tests each kill
+their mutant alone.
+Gates: unchanged (qa/ only) | CI: PR #29
+Commit: (this commit) chore(qa): code review 33 recorded; four Minor findings (BUG-360..363)
+Next: BUG-360..363; GATHER 107/282/340 (worker).
