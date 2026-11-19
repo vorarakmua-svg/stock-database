@@ -3289,3 +3289,14 @@ Result: BUG-345, BUG-346 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3316 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(market): a timeout while the body streams is retried again; the guard refuses reverse lookups (BUG-345, BUG-346)
 Next: BUG-232/281/289 (worker); more P3s outside the as-of branch.
+
+## Iteration 192: 2026-11-20 00:05: fix (BUG-347)
+Picked: review 30's title finding; a sonnet worker.
+Did: the CEO/CFO title rule reads retired/ex-/assistant/regional/divisional chiefs as not the company's chief in
+office, and a chief's other roles after a comma, and 'of the Company', as the company's chief.
+- RED: 27 failed of 195 on 5ac2b58; GREEN. 26 of 26 mutants; bug206's spec re-quoted (11 stale -> 55 of 55).
+- Real titles: 0 of 3,556 change reading; no stored flag, screener or INS value moves.
+Result: BUG-347 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3357 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(insiders): a retired, assistant or regional chief isn't the CEO; a chief's other roles are (BUG-347)
+Next: BUG-232/281/289, BUG-053/237/163 (workers).

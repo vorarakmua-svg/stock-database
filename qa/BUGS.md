@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 149 · NEEDS-USER 1 · Decided: 7 · Verified: 208
+**Open:** P0 0 · P1 0 · P2 0 · P3 148 · NEEDS-USER 1 · Decided: 7 · Verified: 209
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2215,10 +2215,11 @@ Expected: reverse lookups of non-local addresses refused.   Actual: they go out.
 Fix (iteration 191, with BUG-345): the guard also refuses `gethostbyaddr` and `getnameinfo` for a non-local address (getfqdn through gethostbyaddr). Note: the mutants that remove these guards make real reverse lookups when run; the RED run used a stub resolver.
 
 ### BUG-347 [P3][OWNERSHIP] ceo_or_cfo misreads some plausible titles the README's rules cover
-Status: OPEN
-Found: code review 30 (Minor 3; made-up titles; all 555 chief titles in the cached Form 4s read right) | Fixed: | Regression test:
+Status: VERIFIED (iteration 192)
+Found: code review 30 (Minor 3; made-up titles; all 555 chief titles in the cached Form 4s read right) | Fixed: (this commit) | Regression tests: tests/test_ownership_insiders.py (4 new); 27 failing first
 Repro: counted as the company's chief: 'Assistant CFO', 'Retired CEO', 'Ex-CEO', 'CEO (Retired)', 'Regional CFO', 'Divisional CFO'; read as a unit's head: 'CFO, Principal Accounting Officer', 'CFO, Corporate Secretary', 'CEO, Board Member', 'CEO of the Company'. A real 'FORMER RETIRED CEO' exists. Probe: %LOCALAPPDATA%\stockdb-qa\review30\head\tests\test_review30.py.
 Expected: as the README's rules say.   Actual: as listed.
+Fix (iteration 192, `qa/evidence/bug347-investigation.txt`): `ceo_or_cfo` marks retired / ex- as not in office, assistant / asst. / regional / divisional as under the chief, a bracket after the name holding retired/former/ex- as past; after a comma or semicolon principal, board, member and corporate secretary/controller/treasurer/counsel are the same person's other roles; a unit 'the Company/Corporation/Registrant' is the company. Census: 0 of 3,556 distinct real titles (DB and 105,042 cached Form 4s) change reading; 0 stored rows differ. Residuals: free-text units ('Taco Bell, CEO'); '(Elect)'/'(Designate)' brackets; a unit named 'Principal ...' after a comma would read as the chief (none in the data). Side note: 109 stored (ticker, title) flags predate BUG-206's rule until the next insiders collection.
 
 ### BUG-348 [P3][PARSE] Two fiscal years can share a calendar_year at the 52/53-week boundary around June 30
 Status: OPEN

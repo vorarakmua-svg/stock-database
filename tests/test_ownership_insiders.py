@@ -85,6 +85,41 @@ def test_a_unit_named_as_the_companys_own_ticker_is_the_company(title, ticker, e
     assert ceo_or_cfo(title, ticker) is expected
 
 
+# BUG-347: made-up titles the README's rules cover (none is among the cached Form 4 titles, bar the real one marked).
+@pytest.mark.parametrize("title", [
+    # An assistant's, a past one's or a unit's word before the name, or a past mark after it: no chief in office.
+    "Assistant CFO", "Assistant Chief Financial Officer", "Asst. CFO", "Retired CEO", "Retired Chairman & CEO",
+    "Ex-CEO", "Ex-Chairman & CEO", "CEO (Retired)", "CFO (Former)", "CEO (Ex-CEO)",
+    "FORMER RETIRED CEO",  # the last is real
+    "Regional CFO", "Divisional CFO", "Regional CEO",
+])
+def test_an_assistants_a_past_or_a_regional_chief_doesnt_count(title):
+    assert ceo_or_cfo(title) is False
+
+
+@pytest.mark.parametrize("title", [
+    # Another of the person's roles after a comma, or the company named as such: the company's chief.
+    "CFO, Principal Accounting Officer", "CEO, Principal Executive Officer", "CFO, Corporate Secretary",
+    "CFO, Corporate Controller", "CFO, Corporate Treasurer", "CEO, Corporate Counsel", "CEO, Board Member",
+    "CEO, Member of the Board", "CFO; Principal Accounting Officer",
+    "CEO of the Company", "CEO of Company", "CFO of the Corporation", "Chief Executive Officer of the Registrant",
+    "CEO, the Company", "CEO and Director of the Company",
+    # Still the company's chief: words that only look like a past or an assistant's mark.
+    "Retiring CFO", "CEO (Chief Executive Officer)", "Exec. VP & CFO", "Executive CFO",
+    "CFO (Principal Financial Officer)",
+])
+def test_another_role_or_the_company_after_the_name_is_the_companys_chief(title):
+    assert ceo_or_cfo(title) is True
+
+
+@pytest.mark.parametrize("title", [  # such words without a comma, or a unit starting with one, stay units
+    "CEO Corporate Banking", "CFO Board Services", "CEO, Corporate Banking", "CEO, Memberworks",
+    "CEO, Boarders Inc.", "CEO of the Company's Bank", "CEO of Principal Financial Group",
+])
+def test_a_unit_that_starts_with_such_a_word_is_still_a_unit(title):
+    assert ceo_or_cfo(title) is False
+
+
 def test_a_ceo_or_cfo_buy_is_a_filing_its_purchases_summed():
     # BUG-215: one buy per filing with a CEO's or CFO's purchase in the year, however many rows it has.
     s = summarize([

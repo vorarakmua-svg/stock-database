@@ -48,10 +48,13 @@ _CHIEF = re.compile(
     r"|\bchief\s+(?:exec(?:utive)?|fin(?:ancial|ancal|ance)?)\b\.?(?:\s*(?:&|and|/)\s*[a-z]+\.?)?"
     r"\s*(?:officer|office|offr|off\.?|ofcr|ofc\.?)(?!\w)", re.IGNORECASE)
 #: Before the name, in its part of the title (back to a comma or a semicolon): someone else's chief ("Advisor to the
-#: CEO", "COS to the Chairman & CEO", "Office of the CEO") or a past one ("Former Senior VP & CFO").
-_NOT_THEIRS = re.compile(r"\b(?:to|former|office\s+of)\b[^,;]*$", re.IGNORECASE)
-#: Right before the name: a deputy, or a unit ("KFC Division CEO", "BU and Ops CFO").
-_UNDER = re.compile(r"\b(?:deputy|division|ops)\s*$", re.IGNORECASE)
+#: CEO", "COS to the Chairman & CEO", "Office of the CEO") or a past one ("Former Senior VP & CFO", "Retired CEO",
+#: "Ex-CEO").
+_NOT_THEIRS = re.compile(r"(?:\b(?:to|former|retired|office\s+of)\b|(?<!\w)ex-)[^,;]*$", re.IGNORECASE)
+#: Right before the name: a deputy or an assistant, or a unit ("KFC Division CEO", "Regional CFO", "BU and Ops CFO").
+_UNDER = re.compile(r"\b(?:deputy|assistant|asst\.?|division|divisional|regional|ops)\s*$", re.IGNORECASE)
+#: A bracket after the name that marks a past chief: "CEO (Retired)", "CFO (Former)", "CEO (Ex-CEO)".
+_PAST_BRACKET = re.compile(r"\([^)]*(?:\b(?:retired|former)\b|(?<!\w)ex-)", re.IGNORECASE)
 #: The roles joined to the name ("& President", "and Treasurer", "/Chairman"), each up to a comma, a semicolon, a
 #: colon, a dash or a bracket; and a bracket's words ("Chief Executive Officer (CEO)").
 _JOINED = re.compile(r"(?:\s*(?:&|\band\b|/)[^,;:\-–(]*|\s*\([^)]*\))*", re.IGNORECASE)
@@ -60,28 +63,35 @@ _JOINED = re.compile(r"(?:\s*(?:&|\band\b|/)[^,;:\-–(]*|\s*\([^)]*\))*", re.IG
 _ROLE = re.compile(
     r"(?:chair\w*|vice|pres\w*|director|c[a-z]?[a-z]o|chief|exec\w*|evp|svp|vp|sr|senior|treas\w*|secretary|"
     r"controller|ctrl|general\s+counsel|founder|head|interim|acting)\b", re.IGNORECASE)
+#: More roles, but only straight after a comma or a semicolon (a unit may start with such a word without one: "CEO
+#: Corporate Banking"): "CFO, Principal Accounting Officer", "CFO, Corporate Secretary", "CEO, Board Member".
+_COMMA_ROLE = re.compile(
+    r"(?:principal|board|member|corporate\s+(?:secretary|controller|treasurer|counsel))\b", re.IGNORECASE)
+#: A unit that is the company itself: "CEO of the Company".
+_THE_COMPANY = re.compile(r"(?:the\s+)?(?:company|corporation|registrant)$", re.IGNORECASE)
 
 
 def _a_unit(rest: str, ticker: Optional[str]) -> bool:
     """Whether *rest*, a title after a chief's name and the roles joined to it, names a unit the chief heads: "of" or
     "at" one ("CEO of Payments"), or one after a comma, a dash or a space ("CEO, BGS"; "CEO-The Americas"; "CEO Amazon
-    Web Services"), unless it is another role (``_ROLE``: "CEO, Chairman") or the company's own *ticker* ("Pres. & CEO
-    of NCLH" at NCLH)."""
+    Web Services"), unless it is another role (``_ROLE``: "CEO, Chairman"; ``_COMMA_ROLE`` after a comma: "CFO,
+    Corporate Secretary"), or the company itself: its own *ticker* ("Pres. & CEO of NCLH" at NCLH) or "the Company"."""
     named = re.match(r"\s*(?:of|at)\b(.*)", rest, re.IGNORECASE | re.DOTALL)
     words = (named.group(1) if named else re.sub(r"^\s*[,;:\-–]?\s*(?:(?:and|&)\s+)?", "", rest)).strip(" .")
-    if not words or (not named and _ROLE.match(words)):
+    if not words or (not named and (_ROLE.match(words) or (re.match(r"\s*[,;]", rest) and _COMMA_ROLE.match(words)))):
         return False
     unit = re.sub(r"[,;:(].*", "", words, flags=re.DOTALL).strip(" .")
-    return not (ticker and unit.casefold() == ticker.casefold())
+    return not (_THE_COMPANY.match(unit) or (ticker and unit.casefold() == ticker.casefold()))
 
 
 def ceo_or_cfo(title: Optional[str], ticker: Optional[str] = None) -> bool:
     """Whether an officer title names the chief executive or financial officer (``_CHIEF``) of the company, *ticker*.
 
-    Not when the name follows someone else's or a past chief's mark (``_NOT_THEIRS``) or a deputy's or a unit's word
-    (``_UNDER``); nor when a unit follows it (``_a_unit``), right after it or after the roles joined to it
-    (``_JOINED``) by a dash or a space ("CEO & President - RJA"), or within them ("CEO and EVP at PG&E Company"). After
-    a joined role, a comma's unit is that role's ("CFO and SVP, Business Ops"). So "EVP, Pres. & CEO, BGS" and "CEO of
+    Not when the name follows someone else's or a past chief's mark (``_NOT_THEIRS``) or a deputy's, an assistant's or a
+    unit's word (``_UNDER``), or a past mark follows it (``_PAST_BRACKET``: "CEO (Retired)"); nor when a unit follows
+    it (``_a_unit``), right after it or after the roles joined to it (``_JOINED``) by a dash or a space ("CEO &
+    President - RJA"), or within them ("CEO and EVP at PG&E Company"). After a joined role, a comma's unit is that
+    role's ("CFO and SVP, Business Ops"). So "EVP, Pres. & CEO, BGS" and "CEO of
     Payments" head units, and "CEO-Elect", "CFO - Designate" and "CFO Emeritus" read as no chief in office, while "CEO,
     Chairman" and "CFO, EVP & Treasurer" are the company's."""
     if not title:
@@ -92,7 +102,7 @@ def ceo_or_cfo(title: Optional[str], ticker: Optional[str] = None) -> bool:
             continue
         joined = _JOINED.match(after).group()  # type: ignore[union-attr]  # (it matches the empty string too)
         rest = after[len(joined):]
-        if re.search(r"\bat\b", joined, re.IGNORECASE):
+        if re.search(r"\bat\b", joined, re.IGNORECASE) or _PAST_BRACKET.search(joined):
             continue
         if joined.strip() and re.match(r"\s*[,;]", rest):
             return True

@@ -915,10 +915,12 @@ The aggregates, computed at read time from the trades no amendment restated:
   "Chief Financial Officer" as filers shorten it ("Chief Exec. Officer", "CHIEF EXECUTIVE OFF.", "Chief Fin & Op
   Officer"), in any case. A unit named after it, after a comma, a dash, "of", "at" or a space, makes it the unit's
   head, which doesn't count ("EVP, Pres. & CEO, BGS", "CEO & President - RJA", "CEO of Payments", "CEO Amazon Web
-  Services"), unless it is the company's own ticker ("Pres. & CEO of NCLH"); another role after a comma doesn't
-  ("CEO, Chairman", "CFO, EVP & Treasurer"; BUG-207). Nor do someone else's or a past chief ("Advisor to the CEO",
-  "Former CEO"), a deputy or a unit's word before it ("Deputy CFO", "KFC Division CEO"), or one not yet in office
-  ("President & CEO Elect", "CFO - Designate"). The flag is stored per filing and owner
+  Services"), unless it is the company itself, its own ticker or "the Company" ("Pres. & CEO of NCLH", "CEO of the
+  Company"); another role after a comma doesn't ("CEO, Chairman", "CFO, EVP & Treasurer", "CFO, Principal
+  Accounting Officer", "CFO, Corporate Secretary", "CEO, Board Member"; BUG-207, BUG-347). Nor do someone else's or
+  a past chief ("Advisor to the CEO", "Former CEO", "Retired CEO", "Ex-CEO", "CEO (Retired)"), a deputy, an
+  assistant or a unit's word before it ("Deputy CFO", "Assistant CFO", "Regional CFO", "KFC Division CEO"), or one
+  not yet in office ("President & CEO Elect", "CFO - Designate"). The flag is stored per filing and owner
   (`insider_filings.is_ceo_cfo`) when the insiders are collected.
 - **Cluster buys**: 3 or more distinct insiders buying (code P) within 30 days of the first of them, over the
   last 12 months, a joint filing being one insider. A purchase belongs to one cluster at most.
