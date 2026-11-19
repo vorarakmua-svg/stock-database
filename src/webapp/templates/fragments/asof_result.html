@@ -58,6 +58,10 @@
     >Show all filings (vintages)</button>
   </div>
 </div>
+{% elif not known %}
+<div class="empty-state">
+  <strong>{{ ticker }}</strong> is unknown: no company <strong>{{ ticker }}</strong> has been collected.
+</div>
 {% elif not built %}
 <div class="empty-state">
   The as-of data for <strong>{{ ticker }}</strong> isn't built yet: it was collected before the record was kept as

@@ -75,6 +75,15 @@ class AsOfReader:
             "SELECT 1 FROM financials_annual_known WHERE ticker = ? LIMIT 1", (ticker,)
         ).fetchone() is not None
 
+    def has_company(self, ticker: str) -> bool:
+        """Whether *ticker* is a collected company (a ``companies`` row), its as-of data built or not."""
+        try:
+            return self._conn.execute(
+                "SELECT 1 FROM companies WHERE ticker = ? LIMIT 1", (ticker,)
+            ).fetchone() is not None
+        except sqlite3.OperationalError:  # a database without the table knows no company
+            return False
+
     def as_of_annual(
         self, ticker: str, fiscal_year: int, as_of_date: AsOfDate
     ) -> Optional[Dict[str, Any]]:

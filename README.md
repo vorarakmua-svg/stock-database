@@ -2447,8 +2447,13 @@ of the database (7.6 KB a row).
 A database collected before the snapshots, or a ticker not collected since, has no rows: its
 as-of data **isn't built**. `AsOfReader` then reads `None` (and `{}` for a history), with no
 fallback to another rule; `has_snapshots(ticker)` tells this apart from a year not yet filed,
-the as-of page says the data isn't built yet, and `/api/asof/{ticker}/annual` answers 404 saying
-so. Collecting the ticker again builds it.
+the as-of page says the data isn't built yet, and every as-of endpoint (`/api/asof/{ticker}/annual`,
+`/history`, `/metrics` and `/metrics/history`) answers 404 saying so, so a backtest over a partly
+rebuilt database doesn't read an unbuilt company as one with nothing filed (a built ticker with
+nothing filed by the date still reads `{}` from the histories, and 404 "had not been filed" from
+`/annual`). A ticker no collection holds (no `companies` row, `has_company(ticker)`) is said to be
+unknown instead, on the page and in each endpoint's 404. The page and the endpoints read a ticker
+upper-cased and stripped, as the collection stores it. Collecting the ticker again builds it.
 
 ```sql
 -- FY2019 as it was known on 2020-06-30 (no row, or present = 0: not in the record that day):

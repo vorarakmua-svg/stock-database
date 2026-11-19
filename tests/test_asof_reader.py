@@ -164,6 +164,18 @@ def test_has_snapshots_is_whether_the_ticker_has_rows(tmp_path):
         assert r.has_snapshots("ZZZZ") is False
 
 
+def test_has_company_is_whether_a_collection_holds_the_ticker(tmp_path):
+    # A company collected before the snapshots is known, its as-of data unbuilt; one no collection holds is unknown.
+    db = build_db(tmp_path, None, ticker="OLD")
+    with AsOfReader(db) as r:
+        assert (r.has_company("OLD"), r.has_snapshots("OLD")) == (True, False)
+        assert r.has_company("ZZZZ") is False
+    bare = tmp_path / "bare.db"
+    sqlite3.connect(bare).close()
+    with AsOfReader(bare) as r:
+        assert r.has_company("OLD") is False
+
+
 # ---------------------------------------------------------------------------
 # history_as_of
 # ---------------------------------------------------------------------------
