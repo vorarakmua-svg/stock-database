@@ -1,5 +1,6 @@
 """Insiders from the SEC's Form 4 filings on the web (Milestone 3): GET /api/stocks/{ticker}/form4, the INS tab
 and the screener's insider fields (docs/superpowers/specs/2026-10-22-sec-ownership-design.md)."""
+import re
 import sqlite3
 from datetime import date, timedelta
 
@@ -314,3 +315,55 @@ def test_a_price_given_as_a_footnote_shows_its_text(client, web_db):
     html = client.get("/ui/stocks/AAA/ins").text
     assert "Each restricted stock unit converts into one share." in html  # where the price is the footnote
     assert "A weighted average of prices" not in html  # a price shown: its footnote stays in the API
+
+
+def _planned_filing(accession, when, trades, plan):
+    """One Form 4 of one owner with several kinds of trades, (code, shares, price, kind) each, and its 10b5-1 box."""
+    filing = Form4(accession=accession, form="4", period_of_report=when, issuer_ticker="AAA", aff10b5one=plan,
+                   owners=[Owner(cik="0000000500", name="INSIDER 500", is_officer=True, officer_title="SVP")],
+                   trades=[Trade(table=kind, seq=i, security_title="Common Stock", date=when, code=code,
+                                 shares=shares, price=price, acquired_disposed="A" if code in ("P", "A") else "D",
+                                 owned_after=10000.0, direct_indirect="D")
+                           for i, (code, shares, price, kind) in enumerate(trades)])
+    return FilingRef(accession, "4", when, when, "doc.xml"), filing
+
+
+def _plan_cells(html):
+    """Each trade row's (transaction cell, 10b5-1 cell) of the INS table."""
+    rows = re.findall(r'<tr>\s*<td class="row-label">[^<]*</td>.*?</tr>', html, re.S)
+    out = []
+    for row in rows:
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
+        out.append((re.sub(r"\s+", " ", cells[3]).strip(), cells[-1].strip()))
+    return out
+
+
+def test_the_10b5_1_mark_shows_on_the_open_market_trades_of_a_filing_that_ticks_it_only(client, web_db):
+    # BUG-216: the box belongs to the filing; "yes" showed on its grants, withholdings and exercises too.
+    SQLiteStore(db_path=web_db).export_insider_filings("AAA", [
+        _planned_filing("P-1", _ago(10), [("S", 100.0, 50.0, "nonderivative"), ("F", 30.0, 50.0, "nonderivative"),
+                                          ("A", 200.0, None, "nonderivative"), ("M", 100.0, 10.0, "derivative"),
+                                          ("S", 50.0, 51.0, "derivative")], plan=1),
+        _planned_filing("P-2", _ago(20), [("S", 10.0, 50.0, "nonderivative"), ("A", 5.0, None, "nonderivative")],
+                        plan=0),
+    ], "2026-10-22T00:00:00+00:00")
+    cells = _plan_cells(client.get("/ui/stocks/AAA/ins").text)
+    by_meaning = {}
+    for meaning, plan in cells:
+        by_meaning.setdefault(meaning, []).append(plan)
+    assert by_meaning["S: open-market sale"] == ["yes", ""]  # P-1's sale marked; P-2's, whose box is 0, not
+    assert by_meaning["F: shares withheld for tax"] == [""]
+    assert by_meaning["A: grant or award"] == ["", ""]
+    assert by_meaning["M: exercise or conversion (derivative)"] == [""]
+    assert by_meaning["S: open-market sale (derivative)"] == [""]  # a derivative's row is no open-market sale
+    # The API keeps the filing's flag, as filed, on every row.
+    api = client.get("/api/stocks/AAA/form4").json()["trades"]
+    assert [t["plan"] for t in api if t["accession"] == "P-1"] == [True] * 5
+
+
+def test_the_ins_tab_labels_the_10b5_1_flag_as_the_filings(client, web_db):
+    _seed(web_db)
+    html = " ".join(client.get("/ui/stocks/AAA/ins").text.split())
+    assert "10b5-1 (filing)" in html and "Sales in 10b5-1 filings" in html
+    assert "the filing's box, not a trade's" in html
+    assert "Sales under a 10b5-1 plan" not in html

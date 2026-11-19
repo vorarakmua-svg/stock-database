@@ -4,6 +4,7 @@ table exists, plus the Lynch model's upside and Graham's price / NCAV.
 docs/superpowers/specs/2026-10-21-quality-scores-design.md
 """
 import json
+import re
 import sqlite3
 from urllib.parse import parse_qsl
 
@@ -179,3 +180,49 @@ def test_a_scores_table_from_before_a_column_screens_on(web_db):
         assert items["AAA"]["composite_score"] == 62.5 and items["AAA"]["scores_debt_to_ebitda"] is None
         spec = ScreenSpec(filters=[MetricFilter(field="scores_debt_to_ebitda", op="lte", value=3)])
         assert r.screen(spec)["total"] == 0
+
+
+@pytest.mark.parametrize("key, columns", [
+    ("buffett_munger", ["Predictability stars", "ROIC - WACC", "Debt / EBITDA (debt-free filers at 0)"]),
+    ("lynch", ["Lynch model upside"]),
+    ("graham_net_net", ["Price / NCAV"]),
+    ("magic_formula", ["Magic Formula rank"]),
+    ("undervalued_predictable", ["Predictability stars"]),
+])
+def test_a_presets_own_key_fields_are_columns_of_its_results(key, columns):
+    # BUG-201: the results showed the fixed columns, none of the preset's own figures.
+    from src.webapp.routes.pages import screen_extra_columns
+
+    qs = next(p[2] for p in PRESETS if p[0] == key)
+    assert [c["label"] for c in screen_extra_columns(parse_screen_params(dict(parse_qsl(qs))))] == columns
+
+
+def test_the_results_table_shows_the_key_columns_with_each_rows_value_in_its_own_format(client, web_db):
+    _seed(web_db, row=_row(predictability_stars=4.5, roic_minus_wacc=0.09, debt_to_ebitda=1.5))
+    html = client.get("/ui/screen?predictability_stars_gte=4&roic_minus_wacc_gt=0&magic_formula_rank_gte=1"
+                      "&scores_debt_to_ebitda_lte=3&sort=magic_formula_rank&sort_dir=asc").text
+    for label in ("Predictability stars", "ROIC - WACC", "Debt / EBITDA (debt-free filers at 0)",
+                  "Magic Formula rank"):
+        assert label in html, label
+    assert "sort=roic_minus_wacc" in html  # each key column sorts, as the fixed ones do
+    row = html[html.index("/stocks/AAA"):]
+    row = row[:row.index("</tr>")]
+    cells = re.findall(r"<td>([^<]*)</td>", row)
+    assert ["4.5", "9.0%", "4", "1.5x"] == [c for c in cells if c in ("4.5", "9.0%", "1.5x", "4")]
+
+
+def test_a_column_already_in_the_table_is_not_shown_twice(client, web_db):
+    from src.webapp.routes.pages import screen_extra_columns
+
+    _seed(web_db)
+    spec = parse_screen_params({"composite_score_gte": "1", "roic_gt": "0", "sort": "composite_score"})
+    assert screen_extra_columns(spec) == []
+    html = client.get("/ui/screen?composite_score_gte=1&sort=composite_score").text
+    assert html.count("Composite") == 1
+
+
+def test_a_sort_field_is_a_column_even_where_no_filter_names_it():
+    from src.webapp.routes.pages import screen_extra_columns
+
+    spec = parse_screen_params({"roe_gt": "0", "sort": "magic_formula_rank", "sort_dir": "asc"})
+    assert [(c["key"], c["kind"]) for c in screen_extra_columns(spec)] == [("magic_formula_rank", "raw")]

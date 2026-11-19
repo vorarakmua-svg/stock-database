@@ -165,6 +165,36 @@ def altman(cur: AnnualRow, market_cap: Optional[float]) -> Tuple[Optional[float]
     return z, zone
 
 
+_ALTMAN_INPUTS = (("total_assets", "total assets"), ("total_liabilities", "total liabilities"),
+                   ("current_assets", "current assets"), ("current_liabilities", "current liabilities"),
+                   ("retained_earnings", "retained earnings"), ("operating_income", "operating income"),
+                   ("revenue", "revenue"))
+
+
+def _missing(row: AnnualRow, inputs: Tuple[Tuple[str, str], ...]) -> List[str]:
+    """The names of *inputs* (figure, name) the year lacks."""
+    return [name for key, name in inputs if row.figures.get(key) is None]
+
+
+def altman_reason(cur: AnnualRow, market_cap: Optional[float]) -> str:
+    """Why the Altman Z is None, naming the inputs (BUG-193): the figures the year lacks, the market cap, or the zero
+    total the ratios divide by."""
+    missing = _missing(cur, _ALTMAN_INPUTS) + (["market cap"] if market_cap is None else [])
+    if missing:
+        return "missing " + ", ".join(missing)
+    return "total assets of 0" if cur.figures.get("total_assets") == 0 else "total liabilities of 0"
+
+
+_SLOAN_INPUTS = (("net_income", "net income"), ("operating_cash_flow", "operating cash flow"),
+                 ("investing_cash_flow", "investing cash flow"), ("total_assets", "total assets"))
+
+
+def sloan_reason(cur: AnnualRow) -> str:
+    """Why the Sloan ratio is None, naming the missing inputs (BUG-193)."""
+    missing = _missing(cur, _SLOAN_INPUTS)
+    return "missing " + ", ".join(missing) if missing else "total assets of 0"
+
+
 def beneish(cur: AnnualRow, prev: AnnualRow) -> Tuple[Optional[float], Dict[str, Optional[float]]]:
     """Beneish's M and its eight variables. SGAI and DEPI are 1 when their inputs are missing; any other gap
     leaves M None."""
@@ -275,6 +305,19 @@ def predictability(f: Fundamentals) -> Tuple[Optional[float], Dict[str, float]]:
     return stars_for(min(r2.values())), r2
 
 
+def _predictability_reason(f: Fundamentals) -> str:
+    """Why predictability is None (BUG-193): fewer than ten fiscal years t-9 to t, or, with all ten, the per-share
+    figure some year lacks."""
+    if len(f.window(PREDICTABILITY_YEARS)) < PREDICTABILITY_YEARS:
+        return f"fewer than {PREDICTABILITY_YEARS} fiscal years of data"
+    years = {r.fiscal_year for r in f.window(PREDICTABILITY_YEARS)}
+    for label, key in (("revenue per share", "revenue_ps"),
+                       ("EPS", "eps") if f.sector_class in _FINANCIALS else ("EBITDA per share", "ebitda_ps")):
+        if any(v is None for y, v in f.series(key) if y in years):
+            return f"no {label} in some of the last {PREDICTABILITY_YEARS} fiscal years"
+    return f"fewer than {PREDICTABILITY_YEARS} fiscal years of data"
+
+
 def stars_for(r2: float) -> float:
     """1 + 4·R², rounded down to the half star: a rating is earned, never rounded up to."""
     return math.floor((1.0 + 4.0 * r2) * 2) / 2
@@ -285,7 +328,7 @@ def compute_scores(f: Fundamentals, market: Market) -> Scores:
     s = Scores()
     if not f.rows:
         s.na_reasons = {k: "no annual financials" for k in ("piotroski", "altman", "beneish", "sloan", "wacc",
-                                                              "predictability", "magic_formula")}
+                                                              "predictability", "magic_formula", "ncav")}
         return s
     cur = f.rows[-1]
     # t-1 is fiscal year t - 1, not the row stored before t (BUG-198).
@@ -309,7 +352,7 @@ def compute_scores(f: Fundamentals, market: Market) -> Scores:
     if not skipped("altman"):
         s.altman_z, s.altman_zone = altman(cur, market.market_cap)
         if s.altman_z is None:
-            s.na_reasons["altman"] = "an input is missing"
+            s.na_reasons["altman"] = altman_reason(cur, market.market_cap)
     if not skipped("beneish"):
         if prev is None:
             s.na_reasons["beneish"] = no_prev
@@ -321,7 +364,7 @@ def compute_scores(f: Fundamentals, market: Market) -> Scores:
     if not skipped("sloan"):
         s.sloan_ratio = sloan(cur)
         if s.sloan_ratio is None:
-            s.na_reasons["sloan"] = "an input is missing"
+            s.na_reasons["sloan"] = sloan_reason(cur)
     s.roic = cur.figures.get("roic")
     if s.roic is None:
         s.na_reasons["roic"] = _roic_reason(cur, sector)
@@ -336,11 +379,15 @@ def compute_scores(f: Fundamentals, market: Market) -> Scores:
                 s.roic_minus_wacc = s.roic - s.wacc
     s.predictability_stars, s.predictability_r2 = predictability(f)
     if s.predictability_stars is None:
-        s.na_reasons["predictability"] = f"fewer than {PREDICTABILITY_YEARS} fiscal years of data"
+        s.na_reasons["predictability"] = _predictability_reason(f)
     c = cur.figures
     ca, cl, tl, ppe = (c.get(k) for k in ("current_assets", "current_liabilities", "total_liabilities", "ppe_net"))
     if ca is not None and tl is not None and cur.shares:
         s.ncav_per_share = (ca - tl) / cur.shares
+    else:
+        s.na_reasons["ncav"] = "missing " + ", ".join(
+            _missing(cur, (("current_assets", "current assets"), ("total_liabilities", "total liabilities")))
+            + ([] if cur.shares else ["the share count"]))
     ebit = c.get("ebit") if c.get("ebit") is not None else c.get("operating_income")
     debt, ebitda = _total_debt(cur), c.get("ebitda")
     s.debt_to_ebitda = debt / ebitda if debt is not None and ebitda is not None and ebitda > 0 else None

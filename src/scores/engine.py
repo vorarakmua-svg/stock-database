@@ -66,7 +66,11 @@ def compute_ticker(conn: sqlite3.Connection, ticker: str) -> Tuple[Dict[str, Any
     g = growth(f)
     history = _history(conn, ticker, market.price)
     signs = warning_signs(f, s, history)
-    mom = momentum(_bars(conn, ticker), market.beta)
+    bars = _bars(conn, ticker)
+    mom = momentum(bars, market.beta)
+    if mom is None:  # BUG-193: the STAT tab's and the API's reason for an empty momentum
+        s.na_reasons["momentum"] = ("no price history" if not bars
+                                    else "needs closes from a year back, 6 months and 1 month")
     row: Dict[str, Any] = {
         "fiscal_year": s.fiscal_year,
         **g,

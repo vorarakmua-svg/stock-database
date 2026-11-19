@@ -324,3 +324,55 @@ def test_predictability_needs_the_ten_fiscal_years_t_minus_9_to_t():
     assert compute_scores(f, _market()).na_reasons["predictability"] == "fewer than 10 fiscal years of data"
     # Without the gap the same rows are rated.
     assert predictability(_steady(years=11))[0] == 5.0
+
+
+def _only(**figures):
+    """The steady company's latest year with *figures* overridden (None removes one)."""
+    f = _steady()
+    f.rows[-1].figures.update(figures)
+    return f
+
+
+def test_an_altman_z_that_cant_be_computed_names_the_missing_inputs():
+    # BUG-193: the reason read "an input is missing" and named none.
+    s = compute_scores(_only(operating_income=None, retained_earnings=None), _market())
+    assert s.altman_z is None and s.na_reasons["altman"] == "missing retained earnings, operating income"
+    assert compute_scores(_only(current_assets=None, current_liabilities=None, revenue=None, total_assets=None,
+                                total_liabilities=None), _market()).na_reasons["altman"] == (
+        "missing total assets, total liabilities, current assets, current liabilities, revenue")
+    assert compute_scores(_steady(), Market()).na_reasons["altman"] == "missing market cap"
+    assert compute_scores(_only(total_assets=0.0), _market()).na_reasons["altman"] == "total assets of 0"
+    assert compute_scores(_only(total_liabilities=0.0), _market()).na_reasons["altman"] == "total liabilities of 0"
+    assert "altman" not in compute_scores(_steady(), _market()).na_reasons
+
+
+def test_a_sloan_ratio_that_cant_be_computed_names_the_missing_inputs():
+    s = compute_scores(_only(net_income=None, investing_cash_flow=None), _market())
+    assert s.sloan_ratio is None and s.na_reasons["sloan"] == "missing net income, investing cash flow"
+    assert compute_scores(_only(operating_cash_flow=None), _market()).na_reasons["sloan"] == (
+        "missing operating cash flow")
+    assert compute_scores(_only(total_assets=None), _market()).na_reasons["sloan"] == "missing total assets"
+    assert compute_scores(_only(total_assets=0.0), _market()).na_reasons["sloan"] == "total assets of 0"
+    assert "sloan" not in compute_scores(_steady(), _market()).na_reasons
+
+
+def test_a_missing_ncav_names_its_input():
+    assert compute_scores(_only(current_assets=None), _market()).na_reasons["ncav"] == "missing current assets"
+    assert compute_scores(_only(current_assets=None, total_liabilities=None), _market()).na_reasons["ncav"] == (
+        "missing current assets, total liabilities")
+    f = _steady()
+    f.rows[-1].shares = None
+    assert compute_scores(f, _market()).na_reasons["ncav"] == "missing the share count"
+    assert "ncav" not in compute_scores(_steady(), _market()).na_reasons
+
+
+def test_predictability_with_ten_years_but_a_missing_per_share_figure_says_which():
+    f = _steady()
+    f.rows[3].figures["ebitda"] = None
+    s = compute_scores(f, _market())
+    assert s.predictability_stars is None
+    assert s.na_reasons["predictability"] == "no EBITDA per share in some of the last 10 fiscal years"
+    f = _steady(sector="bank")
+    f.rows[3].eps = None
+    assert compute_scores(f, _market()).na_reasons["predictability"] == (
+        "no EPS in some of the last 10 fiscal years")

@@ -18,7 +18,6 @@ from fastapi.responses import HTMLResponse
 from ...fetchers.stock_data_fetcher import NO_ANNUAL_FINANCIALS, REPORT_WITHOUT_FACTS, STALE_ANNUAL_FINANCIALS
 from ...new_york import taken_before_close
 from ...ownership.portfolio import share_classes
-from ...scores.ranks import MAGIC_EXCLUDED
 from ...universe.industries import sic_label
 from ...valuation.assumptions import DISCOUNT_SPREAD, GROWTH_CAP
 from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
@@ -39,7 +38,7 @@ from ..formatting import (
 from ..gurus import gurus_holding, has_gurus
 from ..insiders import insider_view
 from ..jobs import CollectionJobManager
-from ..quality import GROWTH_SPANS, RANK_LABELS, quality_view
+from ..quality import GROWTH_SPANS, RANK_LABELS, _json, quality_view
 from ..repository import Reader
 from ..settings import WebSettings
 from ..valuation_indicators import indicators_view
@@ -500,8 +499,30 @@ def _build_stat_rows(
     for label, key, kind in spec:
         value = source.get(key)
         formatted = fmt_raw2(value) if kind == "raw2" else fmt_value(value, kind)
-        rows.append({"label": label, "value": formatted})
+        rows.append({"label": label, "key": key, "value": formatted, "note": ""})
     return rows
+
+
+def _stat_empty_notes(r: Reader, ticker: str, latest: Dict[str, Any]) -> Dict[str, str]:
+    """Why the ROIC and Debt/EBITDA cards are empty where the Quality section below has a figure or a reason (BUG-204).
+
+    The cards read ``metrics_annual`` as filed, which has no total debt for a filer tagging none; the scores read such
+    a filer as debt-free (BUG-190), so the section shows its ROIC and a debt / EBITDA of 0. The card says so, with that
+    figure, or gives the scores' reason for having no ROIC. Only for the fiscal year both describe."""
+    row = r.quality_scores(ticker)
+    if row is None or row.get("fiscal_year") is None or row["fiscal_year"] != latest.get("fiscal_year"):
+        return {}
+    reason = ("no debt figure filed; the Quality section below reads it as none" if latest.get("total_debt") is None
+              else "not stored; the Quality section below reads")
+    notes: Dict[str, str] = {}
+    if latest.get("roic") is None:
+        if row.get("roic") is not None:
+            notes["roic"] = f"{reason}: {fmt_pct(row['roic'])}"
+        elif _json(row.get("na_reasons")).get("roic"):
+            notes["roic"] = _json(row["na_reasons"])["roic"]
+    if latest.get("debt_to_ebitda") is None and row.get("debt_to_ebitda") is not None:
+        notes["debt_to_ebitda"] = f"{reason}: {fmt_mult(row['debt_to_ebitda'])}"
+    return notes
 
 
 @router.get("/ui/stocks/{ticker}/stat", response_class=HTMLResponse)
@@ -521,6 +542,13 @@ def stat_fragment(
     # merge order doesn't matter — this just lets every row spec below read
     # from one dict regardless of which table its key actually lives in.
     merged: Dict[str, Any] = {**quote, **latest_metrics}
+    notes = _stat_empty_notes(r, ticker, latest_metrics)
+    sections = {name: _build_stat_rows(merged, spec) for name, spec in (
+        ("profitability", _STAT_PROFITABILITY), ("leverage", _STAT_LEVERAGE), ("valuation", _STAT_VALUATION),
+        ("shares", _STAT_SHARES))}
+    for rows in sections.values():
+        for row in rows:
+            row["note"] = notes.get(row["key"], "")
 
     return templates.TemplateResponse(
         request,
@@ -528,10 +556,7 @@ def stat_fragment(
         {
             "request": request,
             "ticker": ticker,
-            "profitability": _build_stat_rows(merged, _STAT_PROFITABILITY),
-            "leverage": _build_stat_rows(merged, _STAT_LEVERAGE),
-            "valuation": _build_stat_rows(merged, _STAT_VALUATION),
-            "shares": _build_stat_rows(merged, _STAT_SHARES),
+            **sections,
         },
     )
 
@@ -955,6 +980,11 @@ def _insider_tint_class(text: str) -> str:
     return "flat"
 
 
+#: The transaction codes a Form 4's 10b5-1 box can be about: open-market purchases and sales. The box is the filing's,
+#: so the INS tab marks only those rows of a filing that has it, not its grants, withholdings or exercises (BUG-216).
+_PLAN_CODES = ("P", "S")
+
+
 @router.get("/ui/stocks/{ticker}/ins", response_class=HTMLResponse)
 def ins_fragment(
     ticker: str,
@@ -989,7 +1019,8 @@ def ins_fragment(
                         # A price given as a footnote alone shows the footnote's text (an RSU's, a gift's).
                         "price_footnote": t["price_footnote"] if t["price"] is None else None,
                         "value": fmt_money(t["value"]), "after": fmt_count(t["owned_after"]),
-                        "plan": "yes" if t["plan"] else "", "form": t["form"],
+                        "plan": "yes" if t["plan"] and t["code"] in _PLAN_CODES and t["kind"] != "derivative" else "",
+                        "form": t["form"],
                         "tint_class": "up" if t["code"] == "P" else "down" if t["code"] == "S" else "flat"}
                        for t in view["trades"][:200]],
             "count": len(view["trades"]),
@@ -1244,15 +1275,13 @@ def scores_fragment(
         {"label": "Predictability", "value": _stars(pred["stars"]),
          "note": pred["na_reason"] or "10-year consistency of revenue and EBITDA per share"},
         {"label": "Magic Formula rank", "value": str(magic["rank"]) if magic["rank"] is not None else "—",
-         "note": "not ranked for banks, insurers, utilities and REITs"
-                 if magic["rank"] is None and company.get("sector_class") in MAGIC_EXCLUDED
-                 else f"not ranked: {magic['na_reason']}" if magic["rank"] is None and magic["na_reason"]
+         "note": f"not ranked: {magic['na_reason']}" if magic["rank"] is None and magic["na_reason"]
                  else f"earnings yield {fmt_pct(magic['earnings_yield'])}, return on capital "
                       f"{fmt_pct(magic['return_on_capital'])}"},
         {"label": "NCAV / share", "value": fmt_price(q["ncav_per_share"]),
-         "note": "current assets less all liabilities, per share (Graham's net-net)"},
+         "note": q["ncav_na_reason"] or "current assets less all liabilities, per share (Graham's net-net)"},
         {"label": "Momentum", "value": fmt_pct(q["momentum"]),
-         "note": "mean of the 12-1 and 6-1 month returns, over beta"},
+         "note": q["momentum_na_reason"] or "mean of the 12-1 and 6-1 month returns, over beta"},
     ]
     growth = [{"label": g["label"], **{span: fmt_pct(g[f"cagr_{span}"]) for span in GROWTH_SPANS}}
               for g in q["growth"]]
@@ -1284,6 +1313,9 @@ def scores_fragment(
             "growth": growth,
             "spans": GROWTH_SPANS,
             "signs": q["warning_signs"],
+            # A row without a fiscal year scored nothing (no annual financials, or a failed run): no sign was tested.
+            "scored": q["fiscal_year"] is not None,
+            "unscored_reason": p["na_reason"] or a["na_reason"] or "no scores",
             # The XSS defense of the other inline configs: "</" can't close the <script>.
             "cfg_json": json.dumps(cfg).replace("</", "<\\/"),
         },

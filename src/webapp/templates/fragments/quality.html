@@ -13,7 +13,7 @@
     <span class="pill verdict-none">Industry composite {{ industry.composite }} / 100</span>
     {% endif %}
     <span class="text-muted">Five ranks of 1-10 against the universe (or the sector, given 10 peers), equal weights
-      · fiscal year {{ fiscal_year }} · computed {{ computed_at }}</span>
+      · {% if scored %}fiscal year {{ fiscal_year }}{% else %}no fiscal year scored{% endif %} · computed {{ computed_at }}</span>
   </div>
   <div class="two-col mt-2">
     <div id="quality-radar" class="gp-chart"></div>
@@ -84,7 +84,11 @@
     </table>
   </div>
   {% else %}
+  {% if scored %}
   <p class="text-muted">No warning signs fired.</p>
+  {% else %}
+  <p class="text-muted">No warning signs were tested: nothing was scored ({{ unscored_reason }}).</p>
+  {% endif %}
   {% endif %}
   <p class="text-muted mt-2">Every formula, cutoff and weight is published (the README's "Quality scores"); the
     figures are the latest fiscal year's, as later restated. The composite weighs the five ranks equally until you

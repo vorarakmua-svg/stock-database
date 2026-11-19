@@ -1053,7 +1053,8 @@ ORDER BY value_usd DESC;
     first `date` and `last_date`, `owner_name`, `officer_title`, summed `shares` and `value`), `clusters_12m` and
     `planned_sale_share_12m`.
     Each trade has its `date`, `code` and `meaning`, `kind`, `shares`, `price`, `value`, `owned_after`, the
-    owner's `owner_name`, `role` and `is_ceo_cfo`, and `plan` (true, false or null), among others;
+    owner's `owner_name`, `role` and `is_ceo_cfo`, and `plan` (the filing's 10b5-1 box, true, false or null, on every
+    row of the filing; the INS tab marks only its open-market purchases and sales), among others;
   - `GET /api/stocks/{ticker}/gurus` returns `{ticker, classes, gurus}`: the ticker and its other share
     classes (`GOOGL` with `GOOG`), and each guru's positions in them in its latest quarter (the guru's `cik`,
     `manager`, `period`, `filed` and `complete`, and the position's `put_call` (null for shares), `shares`,

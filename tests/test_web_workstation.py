@@ -1018,3 +1018,56 @@ def test_ern_fragment_names_yahoos_earnings_growth_for_what_it_is(client):
     body = client.get("/ui/stocks/AAA/ern").text
     assert "Quarterly Earnings Growth (YoY)" in body
     assert ">Earnings Growth<" not in body
+
+
+# BUG-204: a debt-free filer's ROIC and Debt/EBITDA cards against the Quality section.
+
+
+def _debt_free_latest_year(web_db, **quality):
+    """AAA's FY2024 metrics_annual row as a filer tagging no debt has it (no ROIC, no debt), and its scores row."""
+    from tests.test_web_api_scores import _row, _seed
+
+    conn = sqlite3.connect(web_db)
+    conn.execute("UPDATE metrics_annual SET roic = NULL, total_debt = NULL, debt_to_ebitda = NULL "
+                 "WHERE ticker = 'AAA' AND fiscal_year = 2024")
+    conn.commit()
+    conn.close()
+    _seed(web_db, row=_row(**{"fiscal_year": 2024, "roic": 0.306, "wacc": 0.123, "roic_minus_wacc": 0.183,
+                              "debt_to_ebitda": 0.0, **quality}))
+
+
+def _card(body, label):
+    m = re.search(r'<span class="summary-label">' + re.escape(label) + r'</span>'
+                  r'<span class="summary-value">(.*?)</span>'
+                  r'(?:<span class="text-muted summary-note">(.*?)</span>)?</div>', body, re.S)
+    assert m, label
+    return m.group(1), m.group(2)
+
+
+def test_a_debt_free_filers_empty_cards_say_what_the_quality_section_reads(client, web_db):
+    _debt_free_latest_year(web_db)
+    body = client.get("/ui/stocks/AAA/stat").text
+    assert _card(body, "ROIC") == ("—", "no debt figure filed; the Quality section below reads it as none: 30.6%")
+    assert _card(body, "Debt/EBITDA") == ("—", "no debt figure filed; the Quality section below reads it as none: 0.0x")
+    assert _card(body, "ROE")[1] is None  # a card with a figure, or nothing to add, carries no note
+
+
+def test_an_empty_roic_card_gives_the_scores_reason_when_they_have_no_roic_either(client, web_db):
+    _debt_free_latest_year(web_db, roic=None, roic_minus_wacc=None, debt_to_ebitda=None,
+                           na_reasons='{"roic": "no ROIC: no operating income"}')
+    body = client.get("/ui/stocks/AAA/stat").text
+    assert _card(body, "ROIC") == ("—", "no ROIC: no operating income")
+    assert _card(body, "Debt/EBITDA") == ("—", None)
+
+
+def test_the_cards_add_nothing_when_the_scores_describe_another_year_or_the_card_has_its_figure(client, web_db):
+    _debt_free_latest_year(web_db, fiscal_year=2023)
+    assert _card(client.get("/ui/stocks/AAA/stat").text, "ROIC") == ("—", None)
+    from tests.test_web_api_scores import _row, _seed
+
+    conn = sqlite3.connect(web_db)
+    conn.execute("UPDATE metrics_annual SET roic = 0.15 WHERE ticker = 'AAA' AND fiscal_year = 2024")
+    conn.commit()
+    conn.close()
+    _seed(web_db, row=_row(fiscal_year=2024))
+    assert _card(client.get("/ui/stocks/AAA/stat").text, "ROIC") == ("15.0%", None)

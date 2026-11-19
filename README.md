@@ -581,7 +581,10 @@ Inputs:
   `(last / first) ** (1 / years) - 1`, when both ends are positive and the start year is exactly that many
   fiscal years back.
 
-The scores. Each is N/A, with its reason stored, where its inputs are missing:
+The scores. Each is N/A, with its reason stored, where its inputs are missing; the reason names them ("missing
+retained earnings, operating income" for the Altman Z, "missing investing cash flow" for the Sloan ratio, "missing
+current assets" for NCAV, "no EBITDA per share in some of the last 10 fiscal years" for predictability, "no price
+history" for momentum), or the zero total the ratio divides by (BUG-193):
 - **Piotroski F**, 0-9, a point for each test passed: ROA (net income / total assets) above zero; operating
   cash flow (CFO) above zero; ROA up; CFO above net income; long-term debt / total assets down (untested when
   either year's debt is missing); current ratio up; no new shares (the split-normalized count up by no more
@@ -692,9 +695,15 @@ database), the previous scores stay and the log says so.
 
 Where it shows:
 - **STAT tab**: a Quality section with the composite and a radar of the five ranks, the ranks, each score with
-  its reading, the nine Piotroski tests, the growth table (the CAGRs) and the warning signs, severe first.
+  its reading, the nine Piotroski tests, the growth table (the CAGRs) and the warning signs, severe first. A
+  company with no scored fiscal year (no annual financials, or a failed run) says "no fiscal year scored" and that
+  no warning sign was tested, rather than "fiscal year None" and "No warning signs fired" (BUG-201). The
+  Profitability and Leverage cards above read `metrics_annual` as filed; where its ROIC or Debt/EBITDA is empty and
+  the section below has a figure (a filer tagging no debt, which the scores read as debt-free: ANET) or a reason,
+  the card says so under its "—" (BUG-204).
 - **API**: `GET /api/stocks/{ticker}/scores` returns the same as JSON, with the Beneish variables, the
-  predictability fit's R² and the per-share series. It answers 404 for an unknown ticker and
+  predictability fit's R² and the per-share series, and `ncav_na_reason` and `momentum_na_reason` where those two
+  are empty (`magic_formula.na_reason` also names the sectors the Magic Formula leaves out). It answers 404 for an unknown ticker and
   `"computed": false` before its scores exist.
 - **Screener**: filters and sorts by `piotroski_f`, `altman_z`, `beneish_m`, `sloan_ratio`,
   `predictability_stars`, `rev_ps_cagr_5y`, `eps_cagr_5y`, `roic_minus_wacc`, the five `rank_*`,
@@ -710,6 +719,11 @@ Where it shows:
   - Magic Formula: ranked, best first (banks, insurers, utilities and REITs have no rank, nor have the
     companies missing an input, each with its reason in the STAT tab);
   - Undervalued-predictable: predictability ≥ 4 and price / historical value < 0.9, lowest first.
+
+  The results table has fixed columns (ROIC, ROE, net margin, debt / EBITDA, the upsides, price / historical
+  value, P/E percentile, composite, F-score, gurus) and one more, sortable, for each other field the query
+  filters or sorts by, so a preset's own figures (the Magic Formula rank, price / NCAV, the Lynch upside, the
+  predictability stars, ROIC - WACC, the scores' debt / EBITDA) are on the page (BUG-201).
 
 Checked by `qa/oracle/scores_oracle.py`, which imports nothing from `src` and recomputes from the raw tables,
 with its own split basis (each year's count from its latest filing, times the declared splits after it). All 9
@@ -938,16 +952,19 @@ The aggregates, computed at read time from the trades no amendment restated:
   (`insider_filings.is_ceo_cfo`) when the insiders are collected.
 - **Cluster buys**: 3 or more distinct insiders buying (code P) within 30 days of the first of them, over the
   last 12 months, a joint filing being one insider. A purchase belongs to one cluster at most.
-- **Sales under a 10b5-1 plan**: of the shares sold in the last 12 months in filings that state the flag, the
-  share sold under a plan; empty where no filing states it.
+- **Sales in 10b5-1 filings**: of the shares sold in the last 12 months in filings that state the flag, the
+  share sold in filings that tick the 10b5-1 box; empty where no filing states it. The box belongs to the
+  filing, not to a trade, so a filing mixing planned and unplanned sales counts them all (BUG-216).
 
 Where it shows:
 - **INS tab**: the last 12 months' open-market buying and selling, the net buying over 3, 6 and 12 months, the
   CEO/CFO buys and the share of sales under a plan, a line for each cluster buy and CEO/CFO buy, then the
   trades newest first (the latest 200): date, insider, role, the code with its meaning, shares, price, value,
-  holding after and plan. A price given as a footnote alone shows the footnote's text. A company with no Form 4
-  stored keeps Yahoo's rows, as before. Its windows count back from today's date in UTC, as the screener's do
-  (SQLite's `date('now')`), so the two agree on any day in any time zone (BUG-219).
+  holding after and the filing's 10b5-1 box, marked on the open-market purchases and sales of a filing that ticks
+  it (not on its grants, withholdings or exercises; the API's `plan` stays the filing's flag on every row). A price
+  given as a footnote alone shows the footnote's text. A company with no Form 4 stored keeps Yahoo's rows, as
+  before. Its windows count back from today's date in UTC, as the screener's do (SQLite's `date('now')`), so the
+  two agree on any day in any time zone (BUG-219).
 - **API**: `GET /api/stocks/{ticker}/form4` returns `source` (`sec`, `yahoo` with Yahoo's rows where no Form 4
   is stored, or null for neither), the aggregates in `summary` and the `trades`.
   `GET /api/stocks/{ticker}/insiders` still serves Yahoo's rows.

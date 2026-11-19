@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 127 · NEEDS-USER 1 · Decided: 7 · Verified: 234
+**Open:** P0 0 · P1 0 · P2 0 · P3 123 · NEEDS-USER 1 · Decided: 7 · Verified: 238
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1522,10 +1522,11 @@ Repro: `scores.py` says "fewer than 10 fiscal years" for 9 of 16 N/As that have 
 Expected: the actual reason.   Actual: a wrong or vague one.
 
 ### BUG-193 [P3][UI] Several N/A scores name no input
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 201)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression tests: tests/test_scores_*.py, test_web_scores.py, test_web_insiders.py, test_web_screener_quality.py, test_web_workstation.py; 21 failing first
 Repro: Altman's "an input is missing" (15 companies) doesn't say which; the Magic Formula row with capital of 0 or less and ROIC - WACC without ROIC give no reason.
 Expected: the missing input named.   Actual: no name.
+Fix (iteration 201, `qa/evidence/bug193-investigation.txt`; parts already fixed by BUG-190/191): Altman and Sloan name their missing inputs ('missing retained earnings, operating income', 'total assets of 0'); NCAV and momentum store a reason; predictability with ten years but a missing per-share figure names it; the API adds magic_formula.na_reason, ncav_na_reason, momentum_na_reason. Real data: scores identical over 502; na_reasons text changes for 152 companies at the next scores run.
 
 ### BUG-194 [P3][SCORES] FCF/share and book/share CAGRs exist only for 5 years
 Status: VERIFIED (iteration 163)
@@ -1571,10 +1572,11 @@ Repro: `ranks.py`: short histories (GEV, SNDK) can't rank high on it.
 Expected: a share of the years available.   Actual: a count.
 
 ### BUG-201 [P3][UI] Quality display nits
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 201)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression tests: tests/test_scores_*.py, test_web_scores.py, test_web_insiders.py, test_web_screener_quality.py, test_web_workstation.py; 21 failing first
 Repro: SPCX shows "fiscal year None" and "No warning signs fired" with no data behind it; a negative NCAV prints as "$-67.48"; the screener results don't show the presets' own key columns (Magic rank, price / NCAV, Lynch upside, stars).
 Expected: clean states and the key columns.   Actual: as described.
+Fix (iteration 201, with BUG-193; negative NCAV already fixed by BUG-137, now pinned): a row with no fiscal year reads 'no fiscal year scored' and 'No warning signs were tested: nothing was scored (<reason>)' (closes BUG-202's 'fiscal year None' residual); screener results add a sortable column for each filter or sort field the fixed table lacks.
 
 ### BUG-202 [P3][SCORES] A failed scores run keeps the previous row
 Status: VERIFIED (iteration 196)
@@ -1591,11 +1593,12 @@ Expected: the tags mapped, with fallbacks, and an EBIT definition chosen for the
 Notes: a mapping change reaches the stored figures only at the next collection, which is live (not in M2's offline backfill). Operating income feeds EBITDA, M1's EV/EBITDA history and the fair-value line, and the screener, so a fallback needs a valuation-policy check first.
 
 ### BUG-204 [P3][UI] The STAT tab's metric cards and its Quality section read a debt-free filer's debt differently
-Status: OPEN
-Found: build iteration 35 (M2-9's web smoke test) | Fixed: | Regression test:
+Status: VERIFIED (iteration 201)
+Found: build iteration 35 (M2-9's web smoke test) | Fixed: (this commit) | Regression tests: tests/test_scores_*.py, test_web_scores.py, test_web_insiders.py, test_web_screener_quality.py, test_web_workstation.py; 21 failing first
 Repro: ANET's STAT tab: the Profitability and Leverage cards show ROIC "—" and Debt/EBITDA "—" (from `metrics_annual`, which has no total debt for a filer tagging none), while the Quality section below shows ROIC 30.6% and ROIC - WACC 18.3% from the scores' reading of the debt (BUG-190).
 Expected: one reading on the page, or the cards saying why they're empty.   Actual: "—" above, figures below.
 Notes: BUG-190's fix kept `metrics_annual` as filed on purpose: the screener's metric columns and M1's EV/EBITDA history read it, and the history has its own rule for missing debt. Applying the reading there means checking M1's fair-value line first.
+Fix (iteration 201, with BUG-193; the entry's 'or the cards saying why'): metrics_annual stays as filed; an empty ROIC or Debt/EBITDA card for the same fiscal year says 'no debt figure filed; the Quality section below reads it as none: <value>'.
 
 ### BUG-205 [P3][OWNERSHIP] Four edge cases of the CUSIP map and the gurus' quarters
 Status: OPEN
@@ -1683,10 +1686,11 @@ Expected: one unit.   Actual: two.
 Fix: see BUG-206 (iteration 186).
 
 ### BUG-216 [P3][UI] The 10b5-1 flag is a filing's but shows on every row of it
-Status: OPEN
-Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: | Regression test:
+Status: VERIFIED (iteration 201)
+Found: code review 17 (opus, 33f3c8f..eabb52f and M2-9's fixes), build M3-8 | Fixed: (this commit) | Regression tests: tests/test_scores_*.py, test_web_scores.py, test_web_insiders.py, test_web_screener_quality.py, test_web_workstation.py; 21 failing first
 Repro: `workstation.py:911`: "yes" on each row of a filing with the flag, its grants and withholdings included, and the plan share applies it to every sale in the filing.
 Expected: the flag where it applies, or labelled as the filing's.   Actual: on every row.
+Fix (iteration 201, with BUG-193): the INS tab marks 10b5-1 only on the open-market P and S rows of a filing that ticks it, labelled as the filing's ('10b5-1 (filing)', 'Sales in 10b5-1 filings', a footnote); the API's `plan` and the planned-sale share are unchanged.
 
 ### BUG-217 [P3][OWNERSHIP] The ownership CLI on a missing database, and its exit code
 Status: VERIFIED (iteration 199)

@@ -419,3 +419,24 @@ def test_a_failure_that_can_t_be_stored_either_says_the_previous_scores_stay(tmp
     assert after["computed_at"] == before["computed_at"] and after["piotroski_f"] == before["piotroski_f"]
     assert "Quality scores failed for AAA: database is locked" in caplog.text
     assert "AAA's previous scores stay" in caplog.text
+
+
+def test_a_missing_momentum_stores_its_reason(tmp_path):
+    # BUG-193: an empty momentum named nothing.
+    db = _seed(tmp_path / "s.db")
+    conn = sqlite3.connect(db)
+    conn.execute("DELETE FROM price_bars WHERE ticker = 'AAA'")
+    conn.execute("DELETE FROM price_bars WHERE ticker = 'BBB' AND date < '2025-12-01'")
+    conn.commit()
+    compute_and_store(db)
+    rows = _scores(db)
+    assert rows["AAA"]["momentum"] is None and rows["BBB"]["momentum"] is None
+    assert json.loads(rows["AAA"]["na_reasons"])["momentum"] == "no price history"
+    assert json.loads(rows["BBB"]["na_reasons"])["momentum"] == "needs closes from a year back, 6 months and 1 month"
+    compute_and_store(db, tickers=["AAA"])
+    conn.execute("INSERT INTO price_bars (ticker, date, close) VALUES ('AAA', '2025-01-30', 40.0), "
+                 "('AAA', '2025-08-01', 41.0), ('AAA', '2026-01-30', 50.0)")
+    conn.commit()
+    compute_and_store(db, tickers=["AAA"])
+    row = _scores(db)["AAA"]
+    assert row["momentum"] is not None and "momentum" not in json.loads(row["na_reasons"])

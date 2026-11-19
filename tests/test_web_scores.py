@@ -78,3 +78,59 @@ def test_an_unranked_company_says_why(client, web_db):
           ranks={"magic_formula_rank": None})
     html = client.get("/ui/stocks/AAA/scores").text
     assert "not ranked: no net PP&amp;E figure" in html
+
+
+def test_a_company_with_no_scored_year_says_so_and_does_not_claim_no_signs_fired(client, web_db):
+    # BUG-201 (SPCX): no annual financials, so a row without a fiscal year, and no sign was ever tested.
+    reasons = {"piotroski": "no annual financials", "altman": "no annual financials"}
+    _seed(web_db, ticker="BBB", row=_row(fiscal_year=None, piotroski_f=None, piotroski_tested=None,
+                                         piotroski_tests=json.dumps({}), altman_z=None, altman_zone=None,
+                                         na_reasons=json.dumps(reasons)), signs=[])
+    html = client.get("/ui/stocks/BBB/scores").text
+    assert "fiscal year None" not in html and "no fiscal year scored" in html
+    assert "No warning signs fired" not in html
+    assert "No warning signs were tested: nothing was scored (no annual financials)" in " ".join(html.split())
+
+
+def test_a_scored_company_without_signs_still_says_none_fired(client, web_db):
+    _seed(web_db, signs=[])
+    html = client.get("/ui/stocks/AAA/scores").text
+    assert "fiscal year 2024" in html and "No warning signs fired" in html
+
+
+def test_a_negative_ncav_reads_minus_dollar(client, web_db):
+    # BUG-201: "$-67.48"; the sign goes before the dollar (BUG-137's fmt_price).
+    _seed(web_db, row=_row(ncav_per_share=-67.48))
+    html = client.get("/ui/stocks/AAA/scores").text
+    assert "-$67.48" in html and "$-67" not in html
+
+
+def test_the_scores_name_the_inputs_they_miss(client, web_db):
+    # BUG-193: Altman, Sloan, NCAV and momentum said an input was missing, or nothing, and named none.
+    reasons = {"altman": "missing retained earnings, operating income", "sloan": "missing investing cash flow",
+               "ncav": "missing current assets", "momentum": "no price history"}
+    _seed(web_db, row=_row(altman_z=None, altman_zone=None, sloan_ratio=None, ncav_per_share=None, momentum=None,
+                           na_reasons=json.dumps(reasons)))
+    html = client.get("/ui/stocks/AAA/scores").text
+    for reason in reasons.values():
+        assert reason in html
+    body = client.get("/api/stocks/AAA/scores").json()
+    assert (body["altman"]["na_reason"], body["sloan"]["na_reason"]) == (reasons["altman"], reasons["sloan"])
+    assert (body["ncav_na_reason"], body["momentum_na_reason"]) == ("missing current assets", "no price history")
+
+
+def test_a_figure_that_is_there_carries_no_na_reason(client, web_db):
+    _seed(web_db, row=_row(na_reasons=json.dumps({"ncav": "missing current assets", "momentum": "no price history"})))
+    body = client.get("/api/stocks/AAA/scores").json()
+    assert body["ncav_na_reason"] is None and body["momentum_na_reason"] is None
+
+
+def test_a_bank_has_no_magic_formula_rank_and_the_api_says_why(client, web_db):
+    # BUG-193: the Magic Formula row of a bank, insurer, utility or REIT named nothing in the API; the page said it.
+    _seed(web_db, ticker="BBB", row=_row(return_on_capital=None, earnings_yield=None, na_reasons=json.dumps({})),
+          ranks={"magic_formula_rank": None})
+    reason = client.get("/api/stocks/BBB/scores").json()["magic_formula"]["na_reason"]
+    assert reason == "the Magic Formula leaves out banks, insurers, utilities and REITs"
+    assert f"not ranked: {reason}" in client.get("/ui/stocks/BBB/scores").text
+    _seed(web_db, ticker="AAA", row=_row(na_reasons=json.dumps({})), ranks={"magic_formula_rank": None})
+    assert client.get("/api/stocks/AAA/scores").json()["magic_formula"]["na_reason"] is None  # a general company

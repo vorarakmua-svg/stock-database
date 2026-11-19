@@ -26,6 +26,7 @@ from ..screener import (
     METRIC_KINDS,
     PRESETS,
     SNAPSHOT_SCREEN_COLUMNS,
+    ScreenSpec,
     parse_screen_params,
 )
 from .screener_api import _annotate_verdicts
@@ -549,6 +550,31 @@ def asof_vintages_fragment(
 # Screener page & fragments
 # ---------------------------------------------------------------------------
 
+#: The columns the results table always shows (screener_results.html); every other field a query filters or sorts by
+#: gets a column of its own, so a preset's key figures are on the page (BUG-201).
+_SCREEN_FIXED_FIELDS = frozenset((
+    "roic", "roe", "net_margin", "debt_to_ebitda", "val_upside_pct", "oe_upside_pct", "reverse_dcf_growth",
+    "price_to_hist_value", "pe_pct_10y", "composite_score", "piotroski_f", "gurus_holding", "gurus_buying"))
+
+
+def screen_extra_columns(spec: ScreenSpec) -> List[Dict[str, str]]:
+    """The columns beyond the table's fixed ones: each field the query filters by, then the one it sorts by, with its
+    label and display kind (BUG-201: the Magic Formula rank, price / NCAV, Lynch upside and predictability stars of
+    the presets)."""
+    labels: Dict[str, str] = {}
+    for options in (SCREENER_METRIC_OPTIONS, SCREENER_SNAPSHOT_OPTIONS, SCREENER_HISTORY_OPTIONS,
+                    SCREENER_VALUATION_OPTIONS, SCREENER_INDICATOR_OPTIONS, SCREENER_QUALITY_OPTIONS,
+                    SCREENER_INSIDER_OPTIONS, SCREENER_GURU_OPTIONS):
+        labels.update({key: label for label, key in options})
+    fields = [f.field for f in spec.filters] + ([spec.sort] if spec.sort else [])
+    columns: List[Dict[str, str]] = []
+    for name in fields:
+        if name in _SCREEN_FIXED_FIELDS or name not in labels or any(c["key"] == name for c in columns):
+            continue
+        columns.append({"key": name, "label": labels[name], "kind": METRIC_KINDS.get(name, "raw")})
+    return columns
+
+
 @router.get("/screener", response_class=HTMLResponse)
 def screener_page(
     request: Request,
@@ -645,6 +671,9 @@ def screen_fragment(
         if k not in ("sort", "sort_dir")
     ]
     base_params = urlencode(base_items)
+    extra = screen_extra_columns(spec)
+    for item in result["items"]:
+        item["extra_cells"] = [fmt_value(item.get(c["key"]), c["kind"]) for c in extra]
 
     return templates.TemplateResponse(
         request,
@@ -652,6 +681,7 @@ def screen_fragment(
         {
             "request": request,
             "error": None,
+            "extra_columns": extra,
             "items": result["items"],
             "total": result["total"],
             "columns": result["columns"],

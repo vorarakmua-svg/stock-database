@@ -38,6 +38,18 @@
           </a>
         </th>
         {% endfor %}
+        {% for c in extra_columns %}
+        {% set dir = 'asc' if (sort == c.key and sort_dir == 'desc') else 'desc' %}
+        {% set sep = '&' if base_params else '' %}
+        <th>
+          <a hx-get="/ui/screen?{{ base_params | safe }}{{ sep }}sort={{ c.key }}&sort_dir={{ dir }}"
+             hx-target="#screen-results"
+             hx-swap="innerHTML"
+             class="sort-link">
+            {{ c.label }}{% if sort == c.key %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}
+          </a>
+        </th>
+        {% endfor %}
         <th>Valuation</th>
       </tr>
     </thead>
@@ -62,6 +74,7 @@
         <td>{{ "%.1f"|format(composite) if composite is not none else "—" }}</td>
         <td>{{ row.get("piotroski_f") if row.get("piotroski_f") is not none else "—" }}</td>
         <td>{% if row.get("gurus_holding") is not none %}{{ row.get("gurus_holding") }} <span class="text-muted" title="Of them buying: a new position or an addition in their latest 13F">({{ row.get("gurus_buying") }})</span>{% else %}—{% endif %}</td>
+        {% for cell in row.get("extra_cells", []) %}<td>{{ cell }}</td>{% endfor %}
         <td>{% if row.get("val_verdict") == "cheap" %}<span class="pill verdict-cheap">Looks cheap</span>
             {% elif row.get("val_verdict") == "expensive" %}<span class="pill verdict-expensive">Looks expensive</span>
             {% elif row.get("val_verdict") == "fair" %}<span class="pill verdict-fair">Fairly valued</span>

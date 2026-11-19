@@ -3398,3 +3398,14 @@ Result: BUG-349..352 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3515 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix: dropped bodies retried; New York days for SEC reads and partial bars; a bracket's past role isn't the chief's (BUG-349..352)
 Next: UI 193/201/204/216 (worker); code review 32 after 1 more unit.
+
+## Iteration 201: 2026-11-20 10:40: fix (BUG-193, BUG-201, BUG-204, BUG-216)
+Picked: four UI display P3s; a sonnet worker.
+Did: N/A scores name their missing inputs; a row with no fiscal year says so; screener results show the fields a
+screen filters or sorts by; the STAT cards say why an empty ROIC/Debt-EBITDA differs from the Quality section; the
+10b5-1 box shows only on the trades it can cover, labelled as the filing's.
+- RED: 21 failed of 218 on 864d95e; GREEN. 43 of 43 mutants. Scores identical over 502 (only na_reasons text).
+Result: BUG-193, BUG-201, BUG-204, BUG-216 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3539 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(web): N/A notes name their inputs; unscored rows say so; cards explain debt-free reads; 10b5-1 on the trades it covers (BUG-193, BUG-201, BUG-204, BUG-216)
+Next: code review 32 (scope c68ec07..HEAD).
