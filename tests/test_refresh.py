@@ -1821,6 +1821,86 @@ def test_the_tries_of_an_unchecked_latest_collection():
     assert src.refresh.incomplete_tries(runs) == {"tries": 1, "collections": 1, "since": "2026-10-18"}
 
 
+# ---- BUG-365 (code review 34): a collection that names no report, after a report newer than the gap's ----
+
+_Q2_LEFT = [(_local(2026, 8, day, 13, 0), AAA_Q2, None, None) for day in (1, 8, 15, 22)]
+#: AAA's feed: its 10-Q of 2026-10-23 and its 10-Q of 2026-07-31 (the gap's).
+_AAA_BOTH = [rf.filing("10-Q", "2026-10-23", AAA_Q3["accession"]), rf.filing("10-Q", "2026-07-31", AAA_Q2["accession"])]
+
+
+def _named_none(at, lacked):
+    """A ``collection_runs`` row (collected_at, incomplete, sec_read_at) of a collection that names no report: its
+    submissions unread, or its predecessor's filings alone."""
+    return (at.isoformat(), json.dumps(lacked), None)
+
+
+@pytest.mark.parametrize("lacked, why", [
+    ({"submissions": "503 Server Error"}, _UNCHECKED),
+    ({"predecessor": "no XBRL data"}, "couldn't read its predecessor's filings (no XBRL data)"),
+])
+def test_a_collection_naming_no_report_after_an_abandoned_gap_gets_its_own_tries(tmp_path, lacked, why):
+    # BUG-365: AAA's 10-Q of 2026-07-31 went without facts at four reads a week apart (left). Its 10-Q of 2026-10-23
+    # put it on the list, and that collection's submissions request failed (BUG-282), or it read the report and not
+    # its predecessor's filings: it was joined to July's gap (five tries) and left, waiting a quarter.
+    db = _aaa_never_collected(tmp_path)
+    for at, report, _, _ in _Q2_LEFT:
+        _collected(db, "AAA", at, report=report)
+    at = _local(2026, 10, 24, 13, 0)  # 09:00 in New York, the day after the 10-Q
+    _collected(db, "AAA", at, predecessor=lacked.get("predecessor"), submissions=lacked.get("submissions"))
+    report = rf.run(db, rf.services(db, sec=rf.FakeSEC({rf.cik_of("AAA"): _AAA_BOTH})), steps=["sec"])
+    assert report.queue == {"AAA": [_redo(str(at)[:10], why, 1)]}
+    assert report.result("sec").summary["incomplete_left"] == {}
+
+
+def test_the_report_a_collection_naming_none_looked_for_is_the_feeds_latest_by_its_read():
+    # Read before the 10-Q of 2026-10-23 was filed, the collection looked for July's 10-Q: a try at its gap. Read on
+    # the 10-Q's day (the SEC's) or after it, the 10-Q's: its own. Without a feed, nothing ends the gap.
+    gap = _runs(*_Q2_LEFT)
+    before = [_named_none(_local(2026, 10, 23, 2, 0), {"submissions": "503"})] + gap   # 22:00 NY on 10-22
+    on_the_day = [_named_none(_local(2026, 10, 23, 20, 0), {"submissions": "503"})] + gap   # 16:00 NY on 10-23
+    assert src.refresh.incomplete_tries(before, _AAA_BOTH) == {"tries": 5, "collections": 5,
+                                                               "since": str(gap[-1][0])[:10]}
+    assert src.refresh.incomplete_tries(on_the_day, _AAA_BOTH) == {"tries": 1, "collections": 1,
+                                                                   "since": str(on_the_day[0][0])[:10]}
+    assert src.refresh.incomplete_tries(on_the_day)["collections"] == 5
+    assert src.refresh.incomplete_tries(on_the_day, [])["collections"] == 5
+
+
+def test_collections_naming_no_report_before_and_after_a_new_report_split_at_it():
+    runs = [_named_none(_local(2026, 10, 31, 13, 0), {"submissions": "503"}),
+            _named_none(_local(2026, 10, 17, 13, 0), {"submissions": "503"})] + _runs(*_Q2_LEFT)
+    assert src.refresh.incomplete_tries(runs, _AAA_BOTH) == {"tries": 1, "collections": 1,
+                                                             "since": str(runs[0][0])[:10]}
+
+
+@pytest.mark.parametrize("later", [
+    rf.filing("10-Q/A", "2026-10-01", "0000000001-26-000004"),                # an amendment
+    {**rf.filing("10-Q", "2026-10-01", "0000000001-26-000004"), "isXBRL": 0},  # a report without XBRL
+    rf.filing("8-K", "2026-10-01", "0000000001-26-000004"),
+])
+def test_a_filing_the_collection_doesnt_look_for_doesnt_end_the_gap(later):
+    # A collection names the latest report as filed, with XBRL (``sec_handler._latest_report``): a filing it wouldn't
+    # name leaves the run a try at July's report.
+    runs = [_named_none(_local(2026, 10, 24, 13, 0), {"submissions": "503"})] + _runs(*_Q2_LEFT)
+    assert src.refresh.incomplete_tries(runs, [later, _AAA_BOTH[1]])["collections"] == 5
+
+
+def test_a_collection_naming_the_older_report_on_the_new_reports_day_doesnt_reopen_the_older_gap():
+    # Read at 16:00 New York on 2026-10-23, before the 10-Q was accepted that day, a collection named July's report:
+    # the day is the 10-Q's (it may have seen it), so it stays in the latest run's gap, and the reads before the 10-Q
+    # (July's gap, given up on) don't join it.
+    runs = [_named_none(_local(2026, 10, 24, 13, 0), {"submissions": "503"})] + _runs(
+        (_local(2026, 10, 23, 20, 0), AAA_Q2, None, None), *_Q2_LEFT)
+    assert src.refresh.incomplete_tries(runs, _AAA_BOTH) == {"tries": 1, "collections": 2,
+                                                             "since": str(runs[1][0])[:10]}
+
+
+def test_a_collection_naming_its_report_isnt_read_from_the_feed():
+    # It said which report it lacked: July's, on a read of 2026-10-24 (the SEC hadn't listed the 10-Q of 10-23 yet).
+    runs = _runs((_local(2026, 10, 24, 13, 0), AAA_Q2, None, None), *_Q2_LEFT)
+    assert src.refresh.incomplete_tries(runs, _AAA_BOTH)["collections"] == 5
+
+
 def test_the_real_collection_stores_a_failed_submissions_read_and_the_sec_step_collects_it_again(tmp_path,
                                                                                                  monkeypatch):
     # BUG-282 through the collect step's collection: DLR's run whose submissions request failed goes on the list

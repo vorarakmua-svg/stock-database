@@ -282,3 +282,38 @@ def test_the_reason_names_a_quarters_missing_debt():
     reason = "no long-term debt in the quarter to 2025-09-30, though its 10-Ks report some"
     assert ev.applicable and ev.current is None and ev.na_reason == reason
     assert _no_multiple_reason("ev_ebitda", _point(ebitda=-5.0)) == "EBITDA is zero or negative"
+
+
+_EV_AT_MOST_ZERO = "the enterprise value is zero or negative (net cash at or above the market cap)"
+
+
+def test_the_reason_names_an_enterprise_value_of_zero_or_less():
+    # BUG-367: from the quarter to 2025-09-30 net cash (5,000) is above the market cap (2,000), EBITDA still 200: no
+    # EV/EBITDA, for want of an enterprise value, not of EBITDA.
+    from dataclasses import replace
+    x = _inputs()
+    x.points = [replace(p, net_debt=-5000.0) if p.period_end >= "2025-09-30" else p for p in x.points]
+    result = compute_history(x)
+    ev = {r.metric: r for r in result.ranges}["ev_ebitda"]
+    assert result.rows[-1].enterprise_value == pytest.approx(-3000.0)
+    assert ev.applicable and ev.current is None and ev.na_reason == _EV_AT_MOST_ZERO
+    x.points = [replace(p, net_debt=-2000.0) if p.period_end >= "2025-09-30" else p for p in x.points]
+    assert {r.metric: r for r in compute_history(x).ranges}["ev_ebitda"].na_reason == _EV_AT_MOST_ZERO   # EV 0
+
+
+@pytest.mark.parametrize("point, ev, reason", [
+    # EBITDA first: with the debt found, or the EV above zero, there'd still be no multiple.
+    (dict(ebitda=-5.0, net_debt=None, debt_missing=True), None, "EBITDA is zero or negative"),
+    (dict(ebitda=None, net_debt=None, debt_missing=True), None, "no EBITDA in the trailing year"),
+    (dict(ebitda=-5.0, net_debt=-5000.0), -3000.0, "EBITDA is zero or negative"),
+    # Then the missing debt, which leaves no enterprise value to judge.
+    (dict(net_debt=None, debt_missing=True), None,
+     "no long-term debt in the quarter to 2025-12-31, though its 10-Ks report some"),
+    # Then the enterprise value; with both positive, the reason is EBITDA's (the old wording).
+    (dict(net_debt=-5000.0), -3000.0, _EV_AT_MOST_ZERO),
+    (dict(net_debt=-5000.0), 0.0, _EV_AT_MOST_ZERO),
+    (dict(ebitda=0.0), 2300.0, "EBITDA is zero or negative"),
+])
+def test_the_ev_ebitda_reasons_precedence(point, ev, reason):
+    from src.valuation.history import _no_multiple_reason
+    assert _no_multiple_reason("ev_ebitda", _point(**point), ev) == reason

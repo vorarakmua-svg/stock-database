@@ -10,7 +10,7 @@ import math
 import statistics
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from .assumptions import (
     DDM_GROWTH_CAP,
@@ -45,13 +45,24 @@ DIVIDEND_CAGR_YEARS = 10
 #: stray 0.01 beside 3.84 paid). Only a payer whose year before or year after
 #: holds two or more payments is read so: an annual payer's year can hold two
 #: when the next payment's ex-date slips into it, and its figure is then the
-#: year's (BUG-311).
+#: year's (BUG-311). The payments counted beside a year are its regular ones
+#: (REGULAR_PAYMENT_SHARE): an extra or special one beside an annual payer's
+#: slipped year doesn't make it a payer of two a year (BUG-366).
 ONE_PAYMENT_TOLERANCE = 0.02
+
+#: A payment in the 365 days before or after a year counts for ``_one_payment``'s gate
+#: (BUG-366) when it isn't a one-off whole (``one_off_dividends``, Q3: a special) and is
+#: at least this share of the median of those 365 days' such payments, itself among them: a small
+#: extra beside an annual payment (0.50 beside 2.95) is no second payment a year, while a
+#: semiannual payer's interim counts down to a third of its final dividend (the median
+#: of two is their mean). Measured within the 365 days, not against the year's own
+#: payments, which specials can hold (TPL's FY2020): its quarters beside them count.
+REGULAR_PAYMENT_SHARE = 0.5
 
 
 def _one_payment(sec: float, payments: List[float], beside: Sequence[int]) -> bool:
     """Whether SEC's figure for a year holds at most one of its *payments* (ONE_PAYMENT_TOLERANCE), where *beside*
-    counts the payments in the year before it and in the year after it."""
+    counts the regular payments (REGULAR_PAYMENT_SHARE) in the year before it and in the year after it."""
     return len(payments) >= 2 and max(beside, default=0) >= 2 and (sec < min(payments) or any(
         abs(sec - paid) <= ONE_PAYMENT_TOLERANCE * paid for paid in payments))
 
@@ -286,9 +297,13 @@ def _annual_dividend_totals(dividends: List[Tuple[str, float]]) -> List[Tuple[in
     return sorted(totals.items())
 
 
-def _paid_between(dividends: List[Tuple[str, float]], start: str, end: str) -> List[float]:
-    """The payments with ex-dates in (*start*, *end*]."""
-    return [amount for day, amount in dividends if start < day[:10] <= end]
+def _regular_between(dividends: List[Tuple[str, float]], start: str, end: str,
+                     whole: Set[Tuple[str, float]]) -> int:
+    """How many payments with ex-dates in (*start*, *end*] are regular (BUG-366): of those that aren't a one-off
+    whole (*whole*, by ex-date and amount), the ones at least REGULAR_PAYMENT_SHARE of their median."""
+    amounts = [amount for day, amount in dividends if start < day[:10] <= end and (day[:10], amount) not in whole]
+    least = REGULAR_PAYMENT_SHARE * statistics.median(amounts) if amounts else 0.0
+    return sum(1 for amount in amounts if amount >= least)
 
 
 def dividend_history(inputs: ValuationInputs, anchor: date,
@@ -306,7 +321,7 @@ def dividend_history(inputs: ValuationInputs, anchor: date,
     summed: a filer that tags only point-in-time payments leaves the year empty
     (BUG-013), and one that tags a single payment as the year is no better
     (``_one_payment``, read only where the 365 days before the year or after it
-    hold two or more payments, BUG-311). A company without fiscal years (no SEC annual record) uses
+    hold two or more regular payments, BUG-311, BUG-366). A company without fiscal years (no SEC annual record) uses
     the complete calendar years before the anchor's, on Yahoo's payments alone. A
     year with neither source paid nothing (amount None). Each year's ``one_off`` sums
     the *one_offs* (``one_off_dividends``) ex-dated in it.
@@ -326,6 +341,8 @@ def dividend_history(inputs: ValuationInputs, anchor: date,
     else:
         spans = [(year, f"{year - 1}-12-31", f"{year}-12-31", None)
                  for year in range(anchor.year - DIVIDEND_CAGR_YEARS, anchor.year)]
+    # The one-offs that are a whole payment (a slot's keeps its regular part, ONE_OFF_SLOT_INTERVALS).
+    whole = {(day[:10], amount) for day, amount in one_offs}
     history = []
     for year, start, end, sec in spans:
         paid = [(day[:10], amount) for day, amount in dividends if start < day[:10] <= end]
@@ -334,8 +351,10 @@ def dividend_history(inputs: ValuationInputs, anchor: date,
         restart = not paid or not before or (
             date.fromisoformat(paid[0][0]) - date.fromisoformat(before[-1])).days > DIVIDEND_STALE_DAYS
         one_off = sum(amount for day, amount in one_offs if start < day[:10] <= end)
-        beside = (len(_paid_between(dividends, (date.fromisoformat(start) - timedelta(days=365)).isoformat(), start)),
-                  len(_paid_between(dividends, end, (date.fromisoformat(end) + timedelta(days=365)).isoformat())))
+        beside = (_regular_between(dividends, (date.fromisoformat(start) - timedelta(days=365)).isoformat(), start,
+                                   whole),
+                  _regular_between(dividends, end, (date.fromisoformat(end) + timedelta(days=365)).isoformat(),
+                                   whole))
         if sec is not None and sec > 0 and not _one_payment(sec, payments, beside):
             history.append(DividendYear(year, sec, "sec", payments, restart, one_off))
         elif payments:

@@ -635,25 +635,52 @@ def test_the_quarter_is_flagged_when_any_one_of_its_filings_states_omissions(web
     assert _view(web_db)["confidential_omitted"] is False
 
 
-def test_a_later_amendment_that_states_no_omissions_clears_the_quarter(web_db):
-    # BUG-362: Berkshire's 2025-03-31 report omitted holdings, and a 13F-HR/A (NEW HOLDINGS) filed in August 2025 that
-    # states none are omitted discloses them: the quarter carries no note, though each filing still says its own.
+@pytest.mark.parametrize("amendment", ["RESTATEMENT", None])
+def test_a_later_restatement_that_states_no_omissions_clears_the_quarter(web_db, amendment):
+    # BUG-362: a 13F-HR/A that restates the report (a whole report; one without an amendment type counts as one, as
+    # the quarter's filings do) and states none omitted discloses what the report left out: the quarter carries no
+    # note, though each filing still says its own.
     _seed(web_db)
     _flag_omissions(web_db, "B-Q2")
-    _add_filing_row(web_db, "B-Q2-A", "B-Q2", form="13F-HR/A", amendment="NEW HOLDINGS", flag=0, filed="2026-09-01")
+    _add_filing_row(web_db, "B-Q2-A", "B-Q2", form="13F-HR/A", amendment=amendment, flag=0, filed="2026-09-01")
     view = _view(web_db)
     assert view["confidential_omitted"] is False
     assert [f["confidential_omitted"] for f in view["filings"]] == [True, False]
 
 
-def test_an_amendment_that_still_states_omissions_or_says_nothing_leaves_the_quarter_flagged(web_db):
+@pytest.mark.parametrize("amendment", ["NEW HOLDINGS", "new holdings"])
+def test_a_new_holdings_amendment_that_states_no_omissions_leaves_the_quarter_flagged(web_db, amendment):
+    # BUG-368: a NEW HOLDINGS amendment adds rows to the report, and its cover speaks for those rows alone: stating
+    # none omitted, it may have disclosed one confidential holding while another still is. Berkshire's 2025-03-31
+    # report omitted holdings; its NEW HOLDINGS amendment of 2025-08-14 states none omitted (202 Lennar B shares).
+    _seed(web_db)
+    _flag_omissions(web_db, "B-Q2")
+    _add_filing_row(web_db, "B-Q2-A", "B-Q2", form="13F-HR/A", amendment=amendment, flag=0, filed="2026-09-01")
+    view = _view(web_db)
+    assert view["confidential_omitted"] is True
+    assert [f["confidential_omitted"] for f in view["filings"]] == [True, False]
+    # A restatement after it, stating none omitted, is a whole report: it clears the quarter.
+    _add_filing_row(web_db, "B-Q2-R", "B-Q2", form="13F-HR/A", amendment="RESTATEMENT", flag=0, filed="2026-09-02")
+    assert _view(web_db)["confidential_omitted"] is False
+
+
+@pytest.mark.parametrize("amendment", ["NEW HOLDINGS", "RESTATEMENT"])
+def test_an_amendment_that_still_states_omissions_or_says_nothing_leaves_the_quarter_flagged(web_db, amendment):
     # The data can't tell a disclosing amendment from one that doesn't say (the cover's flag is optional; Pershing's
     # 2024-12-31 amendment leaves it out), so only an explicit "none omitted" clears the quarter.
     _seed(web_db)
     _flag_omissions(web_db, "B-Q2")
-    _add_filing_row(web_db, "B-Q2-A", "B-Q2", form="13F-HR/A", amendment="NEW HOLDINGS", flag=None, filed="2026-09-01")
+    _add_filing_row(web_db, "B-Q2-A", "B-Q2", form="13F-HR/A", amendment=amendment, flag=None, filed="2026-09-01")
     assert _view(web_db)["confidential_omitted"] is True
     _flag_omissions(web_db, "B-Q2-A")
+    assert _view(web_db)["confidential_omitted"] is True
+
+
+def test_a_new_holdings_amendment_that_states_omissions_flags_the_quarter(web_db):
+    # Its cover speaks for its own rows: omitting some, the quarter omits, though the report it adds to didn't.
+    _seed(web_db)
+    _flag_omissions(web_db, "B-Q2", 0)
+    _add_filing_row(web_db, "B-Q2-A", "B-Q2", form="13F-HR/A", amendment="NEW HOLDINGS", flag=1, filed="2026-09-01")
     assert _view(web_db)["confidential_omitted"] is True
 
 
@@ -662,7 +689,7 @@ def test_an_amendment_clears_only_its_own_filers_omissions(web_db):
     _seed(web_db)
     _add_filing_row(web_db, "B-Q2-F2", "B-Q2", filer="2222222", flag=1)
     _flag_omissions(web_db, "B-Q2")
-    _add_filing_row(web_db, "B-Q2-A", "B-Q2", form="13F-HR/A", amendment="NEW HOLDINGS", flag=0, filed="2026-09-01")
+    _add_filing_row(web_db, "B-Q2-A", "B-Q2", form="13F-HR/A", amendment="RESTATEMENT", flag=0, filed="2026-09-01")
     assert _view(web_db)["confidential_omitted"] is True
     _flag_omissions(web_db, "B-Q2-F2", 0)
     assert _view(web_db)["confidential_omitted"] is False
@@ -678,11 +705,13 @@ def test_a_quarter_after_one_with_omissions_carries_the_flag_for_its_new_rows(we
     assert (q1["confidential_omitted"], q1["prior_confidential_omitted"]) == (True, False)
 
 
-def test_the_quarter_after_isnt_flagged_when_the_omitting_quarter_was_disclosed_by_an_amendment(web_db):
+@pytest.mark.parametrize("amendment, flagged", [("RESTATEMENT", False), ("NEW HOLDINGS", True)])
+def test_the_quarter_after_isnt_flagged_when_the_omitting_quarter_was_restated(web_db, amendment, flagged):
+    # A restatement stating none omitted discloses the quarter before; a NEW HOLDINGS amendment doesn't (BUG-368).
     _seed(web_db)
     _flag_omissions(web_db, "B-Q1")
-    _add_filing_row(web_db, "B-Q1-A", "B-Q1", form="13F-HR/A", amendment="NEW HOLDINGS", flag=0, filed="2026-06-01")
-    assert _view(web_db)["prior_confidential_omitted"] is False
+    _add_filing_row(web_db, "B-Q1-A", "B-Q1", form="13F-HR/A", amendment=amendment, flag=0, filed="2026-06-01")
+    assert _view(web_db)["prior_confidential_omitted"] is flagged
 
 
 def test_the_prior_quarters_flag_counts_only_where_the_changes_exist(web_db):
@@ -727,10 +756,12 @@ def test_the_page_notes_the_omission_a_quarter_before_beside_the_changes(client,
     assert client.get("/api/gurus/1067983").json()["prior_confidential_omitted"] is True
 
 
-def test_the_page_drops_the_note_once_an_amendment_discloses_the_omissions(client, web_db):
+def test_the_page_drops_the_note_once_a_restatement_discloses_the_omissions(client, web_db):
     _seed(web_db)
     _flag_omissions(web_db, "B-Q2")
     _add_filing_row(web_db, "B-Q2-A", "B-Q2", form="13F-HR/A", amendment="NEW HOLDINGS", flag=0, filed="2026-09-01")
+    assert "confidential treatment" in client.get("/gurus/1067983").text      # BUG-368: not a NEW HOLDINGS one
+    _add_filing_row(web_db, "B-Q2-R", "B-Q2", form="13F-HR/A", amendment="RESTATEMENT", flag=0, filed="2026-09-02")
     assert "confidential treatment" not in client.get("/gurus/1067983").text
 
 

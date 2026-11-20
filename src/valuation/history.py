@@ -307,7 +307,7 @@ def compute_history(inputs: HistoryInputs) -> HistoryResult:
             r.min, r.p25, r.median = stats["min"], stats["p25"], stats["median"]
             r.p75, r.max, r.pct_rank = stats["p75"], stats["max"], stats["pct_rank"]
         if r.current is None and r.na_reason is None:
-            r.na_reason = latest_gap or _no_multiple_reason(metric, used[-1])
+            r.na_reason = latest_gap or _no_multiple_reason(metric, used[-1], latest.enterprise_value)
         implied = latest_implied.get(metric)
         if implied is not None and implied[0] is not None:
             r.implied_value = implied[0] * to_price
@@ -334,14 +334,21 @@ def compute_history(inputs: HistoryInputs) -> HistoryResult:
     return result
 
 
-def _no_multiple_reason(metric: str, point: Optional[TTMPoint]) -> str:
+def _no_multiple_reason(metric: str, point: Optional[TTMPoint], enterprise_value: Optional[float] = None) -> str:
+    """Why the latest month has no *metric*, on its trailing year *point*. EV/EBITDA's reason is the first that
+    applies of: no EBITDA or one of zero or less (with the debt found, or the EV above zero, there'd still be no
+    multiple), the quarter's missing long-term debt (BUG-293: no enterprise value to judge), and an
+    *enterprise_value* (the month's) of zero or less, net cash at or above the market cap (BUG-367)."""
     if metric == "div_yield":
         return "no dividends in the trailing year"
-    if metric == "ev_ebitda" and point is not None and point.debt_missing:
-        return f"no long-term debt in the quarter to {point.period_end}, though its 10-Ks report some"
     name = _FUNDAMENTAL[metric]
     value = getattr(point, name) if point is not None else None
     label = _LABEL[name]
     if name == "earnings" and point is not None and point.net_income_to_common is not None:
         label = "net income to common"
+    if metric == "ev_ebitda" and point is not None and value is not None and value > 0:
+        if point.debt_missing:
+            return f"no long-term debt in the quarter to {point.period_end}, though its 10-Ks report some"
+        if enterprise_value is not None and enterprise_value <= 0:
+            return "the enterprise value is zero or negative (net cash at or above the market cap)"
     return f"no {label} in the trailing year" if value is None else f"{label} is zero or negative"

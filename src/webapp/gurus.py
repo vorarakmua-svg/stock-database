@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..ownership.portfolio import LATEST_QUARTERS_SQL, previous_period, share_classes
+from ..ownership.portfolio import LATEST_QUARTERS_SQL, NEW_HOLDINGS, previous_period, share_classes
 from .repository import Reader
 
 #: The changes of a quarter, in the order the views group them.
@@ -127,14 +127,20 @@ def _filings(r: Reader, tables: Set[str], accessions: List[str]) -> List[Dict[st
 
 def _omits_holdings(filings: List[Dict[str, Any]]) -> bool:
     """Whether a quarter, standing on *filings* in their order, still omits holdings under confidential treatment: some
-    filer's latest filing that states the flag says so. A later amendment that states none omitted (the cover's flag
-    False) discloses what an earlier report left out, so it clears that filer's flag; one that doesn't state it
-    (None, the flag is optional) can't be told from one that doesn't disclose, and changes nothing."""
+    filer's latest filing that states the flag says so. A later restatement that states none omitted (the cover's flag
+    False) is a whole report that discloses what an earlier one left out, so it clears that filer's flag. A NEW
+    HOLDINGS amendment's cover speaks for the rows it adds alone, so stating none omitted it clears nothing (BUG-368:
+    it may disclose one confidential holding while another still is); stating some, it flags. A 13F-HR/A without an
+    amendment type counts as a restatement, as the quarter's filings take it (``portfolio.Filing.adds``). A filing
+    that doesn't state the flag (None, the flag is optional) can't be told from one that doesn't disclose, and changes
+    nothing."""
     latest: Dict[Any, bool] = {}
     for position, f in enumerate(filings):
-        if f["confidential_omitted"] is not None:
-            # A filing without a filer row keeps its own key, so it neither clears nor is cleared by another's.
-            latest[f["filer_cik"] if f["filer_cik"] is not None else ("?", position)] = f["confidential_omitted"]
+        flag = f["confidential_omitted"]
+        if flag is None or (not flag and (f.get("amendment_type") or "").upper() == NEW_HOLDINGS):
+            continue
+        # A filing without a filer row keeps its own key, so it neither clears nor is cleared by another's.
+        latest[f["filer_cik"] if f["filer_cik"] is not None else ("?", position)] = flag
     return any(latest.values())
 
 
@@ -145,8 +151,8 @@ def guru_view(r: Reader, cik: str, period: Optional[str] = None) -> Optional[Dic
     quarter before, or with either incomplete), and ``confidential_omitted``: whether any of the quarter's filings
     states omitted holdings, which a position that reads sold out (or absent) may be (BUG-214), and
     ``prior_confidential_omitted``: the same for the quarter before when the changes exist, whose omitted positions
-    may read as new here (BUG-362); a filer's later amendment that states none omitted clears its flag
-    (``_omits_holdings``). None for a guru or period not stored."""
+    may read as new here (BUG-362); a filer's later restatement that states none omitted clears its flag, a NEW
+    HOLDINGS amendment doesn't (``_omits_holdings``, BUG-368). None for a guru or period not stored."""
     tables = _tables(r)
     if not _TABLES <= tables:
         return None

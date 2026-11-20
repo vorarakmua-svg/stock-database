@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 113 · NEEDS-USER 3 · Decided: 7 · Verified: 266
+**Open:** P0 0 · P1 0 · P2 0 · P3 109 · NEEDS-USER 3 · Decided: 7 · Verified: 270
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2390,28 +2390,32 @@ What it does: appends fallback tags (long_term_debt: LongTermDebtAndCapitalLease
 Decision: 
 
 ### BUG-365 [P3][REFRESH] A run whose submissions request failed joins an older, given-up gap, so the company is left uncollected
-Status: OPEN
-Found: code review 34 (`qa/evidence/review34.txt`, Minor 1; BUG-282's rule outside a gap) | Fixed: | Regression test:
+Status: VERIFIED (iteration 214)
+Found: code review 34 (`qa/evidence/review34.txt`, Minor 1; BUG-282's rule outside a gap) | Fixed: (this commit) | Regression tests: tests/test_refresh.py, test_valuation_models.py, test_valuation_history.py, test_valuation_oracle_seam.py, test_web_gurus.py; 31 failing first
 Repro: refresh.py ~518-528, ~1011: AAA's 10-Q of 2026-07-31 lacked facts at four weekly reads (given up); its 10-Q of 2026-10-23 is then collected with submissions failing: the queue is empty and incomplete_left shows 5 tries. About a quarter's delay. Probe: %LOCALAPPDATA%\stockdb-qa\review34\head\tests\test_review34.py.
 Expected: an unchecked run after a given-up gap gets its own tries.   Actual: it inherits the gap's count.
+Fix (iteration 214, `qa/evidence/bug365-investigation.txt`): a latest run naming no report (submissions failed, or only a predecessor's filings unread) takes the report it would have looked for from the SEC feed (the latest filed on or before its read day, as `_latest_report`); that report's filing day cuts the gap, so an older given-up gap isn't inherited. Real DB: 0 decisions move (no incomplete column yet).
 
 ### BUG-366 [P3][VAL] The one-payment dividend test's neighbour gate counts special (extra) payments
-Status: OPEN
-Found: code review 34 (Minor 2; also at the base; no real case measured) | Fixed: | Regression test:
+Status: VERIFIED (iteration 214)
+Found: code review 34 (Minor 2; also at the base; no real case measured) | Fixed: (this commit) | Regression tests: tests/test_refresh.py, test_valuation_models.py, test_valuation_history.py, test_valuation_oracle_seam.py, test_web_gurus.py; 31 failing first
 Repro: models.py ~337-339 (and the oracle): an annual payer with an extra 0.50 in 2024 loses SEC's figure for its slipped 2025: FY2025 reads 6.36 (Yahoo) for SEC's 3.10, dividend CAGR 13.7% for 5.0%. Probe: %LOCALAPPDATA%\stockdb-qa\review34\head\tests\test_review34.py.
 Expected: the gate counts regular payments only.   Actual: extras count.
+Fix (iteration 214, with BUG-365): the neighbour gate counts regular payments only (`_regular_between`: whole-payment one-offs dropped, then payments at least half the side's median; oracle `regular_beside`). Engine over 502: every table identical; oracle unchanged. Residuals: an extra about the regular size still counts; a semiannual interim under a third of its final no longer does.
 
 ### BUG-367 [P3][VAL] The EV/EBITDA N/A reason says 'EBITDA is zero or negative' when net cash exceeds the market cap
-Status: OPEN
-Found: code review 34 (Minor 3; wording only; no real case today) | Fixed: | Regression test:
+Status: VERIFIED (iteration 214)
+Found: code review 34 (Minor 3; wording only; no real case today) | Fixed: (this commit) | Regression tests: tests/test_refresh.py, test_valuation_models.py, test_valuation_history.py, test_valuation_oracle_seam.py, test_web_gurus.py; 31 failing first
 Repro: history.py ~337-346: EV <= 0 with a positive EBITDA reads 'EBITDA is zero or negative'; a missing debt also outranks a negative EBITDA in the wording. Probe: %LOCALAPPDATA%\stockdb-qa\review34\head\tests\test_review34.py.
 Expected: the reason that applies.   Actual: the wrong one.
+Fix (iteration 214, with BUG-365): `_no_multiple_reason` checks no/non-positive EBITDA, then missing long-term debt, then EV <= 0 ('net cash at or above the market cap'). 0 stored rows change.
 
 ### BUG-368 [P3][UI] A NEW HOLDINGS 13F-HR/A stating nothing omitted clears the quarter's confidential-omission note
-Status: OPEN
-Found: code review 34 (Minor 4; suspected) | Fixed: | Regression test:
+Status: VERIFIED (iteration 214)
+Found: code review 34 (Minor 4; suspected) | Fixed: (this commit) | Regression tests: tests/test_refresh.py, test_valuation_models.py, test_valuation_history.py, test_valuation_oracle_seam.py, test_web_gurus.py; 31 failing first
 Repro: gurus.py ~128-139 (BUG-362): a NEW HOLDINGS amendment's cover may speak only for that amendment, so clearing on it can hide holdings still confidential (real case: Berkshire 2025-03-31 cleared by its 2025-08-14 NEW HOLDINGS amendment). Orchestrator's call: only a RESTATEMENT amendment stating none omitted clears the flag; a NEW HOLDINGS one leaves it.
 Expected: as the call says.   Actual: any amendment stating 0 clears.
+Fix (iteration 214, with BUG-365; orchestrator's call): a NEW HOLDINGS 13F-HR/A stating none omitted no longer clears its filer's flag (amendment_type already stored); a RESTATEMENT or untyped amendment still does. Real data: Berkshire 2025-03-31 shows the note again, 2025-06-30 the prior-quarter note.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)

@@ -527,6 +527,21 @@ def one_offs(events: List[Tuple[str, float]]) -> Dict[str, float]:
     return out
 
 
+def regular_beside(events: List[Tuple[str, float]], extra: Dict[str, float], start: str, end: str) -> int:
+    """BUG-311's gate, counting regular payments only (BUG-366): the larger of the counts of payments in the 365 days
+    up to a fiscal year's *start* and in the 365 days after its *end*. Within each side, a payment counts unless it is
+    a one-off whole (*extra*, ``one_offs``: its one-off part is the whole amount) or under half the median of that
+    side's other such payments. The 0.5 share is the fix's own heuristic (loop section 7): a small extra beside an
+    annual payment isn't a second payment a year; a semiannual interim down to a third of the final is."""
+    year = datetime.timedelta(days=365)
+
+    def regular(lo: str, hi: str) -> int:
+        amounts = [a for d, a in events if lo < d <= hi and extra.get(d[:10]) != a]
+        least = 0.5 * median(amounts) if amounts else 0.0
+        return sum(1 for a in amounts if a >= least)
+    return max(regular((_day(start) - year).isoformat(), start), regular(end, (_day(end) + year).isoformat()))
+
+
 def payment_gaps(db: sqlite3.Connection, ticker: str, splits: List[Tuple[str, float]]) -> List[Tuple[int, str, str]]:
     """BUG-012's completeness check, re-derived for Q4 (decided 2026-11-02, option c), over the latest 5 fiscal
     years as a collection scores them: a gap in Yahoo's stored schedule over 1.7x its median interval, beginning
@@ -660,10 +675,7 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
                                                  - datetime.date.fromisoformat(before[-1])).days > 456
             # BUG-311: only where the 365 days before the year or after it hold two or more payments; an annual
             # payer's year holds two when the next ex-date slips into it, and SEC's figure is then the year's.
-            year = datetime.timedelta(days=365)
-            beside = max(sum(1 for d, _ in events if (datetime.date.fromisoformat(start) - year).isoformat() < d
-                             <= start),
-                         sum(1 for d, _ in events if end < d <= (datetime.date.fromisoformat(end) + year).isoformat()))
+            beside = regular_beside(events, extra, start, end)
             one = len(amounts) >= 2 and beside >= 2 and dps is not None and (
                 dps < min(amounts) or any(abs(dps - a) <= 0.02 * a for a in amounts))
             from_sec = dps is not None and dps > 0 and not one

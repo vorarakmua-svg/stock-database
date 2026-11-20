@@ -355,6 +355,46 @@ def test_value_ddm_keeps_an_annual_payers_sec_figure_beside_a_slipped_ex_date(mo
     assert {source for _, _, source in res.assumptions["dividend_growth_years"]} == {"sec"}
 
 
+@pytest.mark.parametrize("extra", [
+    [("2024-07-15", 0.5)],     # an extra under half the median of the year's payments (code review 34's probe)
+    [("2024-07-15", 10.0)],    # a special: over 3x the payments either side, not recurring (Q3's one-off)
+    [("2024-07-15", 10.0), ("2024-09-15", 0.5)],   # both: the special is no regular payment to measure against
+])
+def test_value_ddm_keeps_an_annual_payers_slipped_year_beside_an_extra_payment(extra):
+    # BUG-366: the year before 2025 (the slipped one) holds two payments or more only because of extra ones: the
+    # payer is still annual, and SEC's 3.10 is 2025's (Yahoo's 6.36, both payments, read a 13.7% CAGR for 5%).
+    dps = {y: _true_total(y) for y in range(2016, 2026)}
+    divs = _paid_in({y: 1 for y in range(2015, 2027)}, moved=[("2026-01-15", "2025-12-30")], extra=extra)
+    res = value_ddm(_inputs(fy_records=_sec_years(dps), dividends=divs, as_of=date(2026, 8, 4)))
+    years = {year: (amount, source) for year, amount, source in res.assumptions["dividend_growth_years"]}
+    assert years[2025] == (pytest.approx(_true_total(2025)), "sec")
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.05)
+
+
+def _history(dps, divs, anchor=date(2026, 1, 20)):
+    from src.valuation.models import dividend_history, one_off_dividends
+    x = _inputs(fy_records=_sec_years(dps), dividends=divs, as_of=anchor)
+    return {e.year: (e.amount, e.source) for e in dividend_history(x, anchor, one_off_dividends(divs))}
+
+
+def test_a_semiannual_payers_interim_is_a_regular_payment():
+    # BUG-366's gate counts a payment of at least half the median of the 365 days' payments: a semiannual payer whose
+    # interim is 0.4 of its final, tagging FY2025 with its final alone (BUG-020), still shows two payments a year.
+    divs = [(f"{y}-{m}", amount) for y in (2023, 2024, 2025) for m, amount in (("03-15", 0.4), ("09-15", 1.0))]
+    years = _history({2023: 1.4, 2024: 1.4, 2025: 1.0}, divs)
+    assert years[2025] == (pytest.approx(1.4), "yahoo")
+    assert years[2024] == (pytest.approx(1.4), "sec")
+
+
+def test_quarters_beside_a_year_of_specials_are_regular_payments():
+    # TPL's FY2020 (on today's basis): two large payments (a regular one with a special, and a special), SEC's 1.11
+    # one of them, beside a quarterly 2021. The quarters count against each other, not against FY2020's payments.
+    divs = [("2019-03-07", 0.666667), ("2020-03-06", 1.777778), ("2020-12-10", 1.111111), ("2021-03-05", 0.305556),
+            ("2021-06-07", 0.305556), ("2021-09-07", 0.305556), ("2021-12-07", 0.305556)]
+    years = _history({2019: 0.666667, 2020: 1.111111, 2021: 1.222222}, divs, date(2022, 1, 20))
+    assert years[2020] == (pytest.approx(2.888889), "yahoo")
+
+
 def test_value_ddm_keeps_secs_figure_for_a_year_of_one_payment_beside_quarterly_years():
     # BUG-049's rule, beside BUG-311's: a year holding a single payment keeps SEC's figure, even one a little under
     # that payment beside a year of four (a quarterly payer turned annual in 2021).

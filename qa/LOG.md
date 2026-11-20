@@ -3554,3 +3554,15 @@ reader digest is stable across hash seeds; bank/insurer EV consistent.
 Gates: unchanged (qa/ only) | CI: PR #29
 Commit: (this commit) chore(qa): code review 34 recorded; four Minor findings (BUG-365..368)
 Next: BUG-365..368.
+
+## Iteration 214: 2026-11-21 16:00: fix (BUG-365, BUG-366, BUG-367, BUG-368)
+Picked: code review 34's findings; an opus worker (BUG-366 under the stop rule: nothing moved).
+Did: an unchecked run gets its own gap from the SEC feed's report; the dividend gate counts regular payments only;
+the EV/EBITDA N/A reason names the case that applies; only a RESTATEMENT amendment clears a guru's omission note.
+- RED: 31 failed of 392 on 1214c95; GREEN. 23 of 23 mutants; 6 stale older mutants re-quoted
+  (qa/evidence/bug365-requoted-mutants.json).
+- DB copies: every valuation table identical; Berkshire's two notes change.
+Result: BUG-365..368 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3714 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix: an unchecked run gets its own gap; regular payments gate the dividend test; EV/EBITDA reasons; NEW HOLDINGS amendments keep the note (BUG-365..368)
+Next: more P3s.

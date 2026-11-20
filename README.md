@@ -405,7 +405,7 @@ five sector-aware models per ticker, each producing a bear/base/bull per-share r
 | Model | Applies to | Basis |
 |---|---|---|
 | **DCF** (two-stage FCF) | general, utility, energy | Median 3-year FCF, growth = the historical CAGR clamped to 0-15% (from the first positive year when the window starts on a loss and at least 4 years remain from it, else 0%; Yahoo's quarterly "earnings growth" is no forecast and takes no part), CAPM discount rate |
-| **DDM** (multi-stage Gordon) | any steady dividend payer | Trailing-12-month dividend (Yahoo's payments); dividend CAGR over up to 10 fiscal years of SEC's dividends per share (the 10-K's declared, else cash-paid, figure, on today's split basis and, across a spin-off, on the basis of Yahoo's payments), with the payments ex-dated in the year where SEC has no figure or one that holds a single payment (read so only where the year before or after it holds two or more payments: an annual payer's year holds two when the next ex-date slips into it, BUG-311); a year in which the dividend started or restarted (none paid in the 15 months before) doesn't open the window, and fewer than 4 years measure no CAGR. A company without SEC fiscal years uses calendar years of payments. A one-off payment (over 3× the regular payments on each side of it; the latest payment never is one, since it can be a raise) leaves the trailing-12-month dividend and the CAGR's first and last years, and only its excess when it came in place of a regular payment; a variable dividend that recurs (a payment that large within a quarter of the same date in 2 of the 3 years before, such as PGR's each January) stays. N/A ("dividend history incomplete") where the dividend completeness check finds Yahoo missing payments DDM reads: a gap that runs into the trailing 12 months, or a growth year taken from Yahoo's payments |
+| **DDM** (multi-stage Gordon) | any steady dividend payer | Trailing-12-month dividend (Yahoo's payments); dividend CAGR over up to 10 fiscal years of SEC's dividends per share (the 10-K's declared, else cash-paid, figure, on today's split basis and, across a spin-off, on the basis of Yahoo's payments), with the payments ex-dated in the year where SEC has no figure or one that holds a single payment (read so only where the year before or after it holds two or more regular payments: an annual payer's year holds two when the next ex-date slips into it, BUG-311; a one-off, or a payment under half the median of the payments in those 365 days, such as a small extra beside an annual dividend, isn't regular, BUG-366); a year in which the dividend started or restarted (none paid in the 15 months before) doesn't open the window, and fewer than 4 years measure no CAGR. A company without SEC fiscal years uses calendar years of payments. A one-off payment (over 3× the regular payments on each side of it; the latest payment never is one, since it can be a raise) leaves the trailing-12-month dividend and the CAGR's first and last years, and only its excess when it came in place of a regular payment; a variable dividend that recurs (a payment that large within a quarter of the same date in 2 of the 3 years before, such as PGR's each January) stays. N/A ("dividend history incomplete") where the dividend completeness check finds Yahoo missing payments DDM reads: a gap that runs into the trailing 12 months, or a growth year taken from Yahoo's payments |
 | **Graham Number** | any company with positive EPS + book value in its latest fiscal year (N/A if that year lacks either); the bear, on the lowest EPS of 3 FYs, is N/A with a loss year among them | `sqrt(22.5 × EPS × BVPS)` |
 | **Peter Lynch fair value** | general, utility, energy | Growth-rate-as-fair-P/E × EPS |
 | **Historical multiples band** | all sectors (sector-appropriate multiple: P/E, P/B for banks/insurers, P/FFO for REITs) | Company's own 5-year multiples, each on its fiscal-year-end close as traded (spin-off factors undone): bear, base and bull at their 25th percentile, median and 75th percentile (inclusive quartiles), so one year can't set a case |
@@ -482,7 +482,8 @@ How it's built:
   revenue was restated by more than 1% in 8% of the years.
 - **Multiples on totals.** Market cap = the close × the spin-off factors after that day × the quarter's
   share count, put on the price bars' split basis. Dividing a price by a filed EPS would cross split
-  bases. Zero or negative earnings, book, FCF or EBITDA give no multiple, and the sector rules apply: no
+  bases. Zero or negative earnings, book, FCF or EBITDA give no multiple, nor does an enterprise value of zero
+  or less (net cash at or above the market cap; the N/A reason names it, BUG-367), and the sector rules apply: no
   P/FCF or EV/EBITDA for banks, and P/FFO in place of P/E for REITs. Each month stores the enterprise value
   EV/EBITDA divides: market cap + net debt, an unknown net debt (no debt line) as 0, as the snapshots define
   EV; none for banks, whose EV family is suppressed, or for a quarter whose long-term debt can't be read
@@ -1118,10 +1119,13 @@ Where it shows, each guru at its latest complete quarter (its latest, flagged in
   changes, since a position may read as sold out only because it moved into the confidential part (BUG-214), and
   the quarter after one that omitted says so too, since a position may read as new only because it moved out of it
   (BUG-362). A quarter omits when some filer's latest filing that states the cover's flag says so: a later
-  13F-HR/A whose cover states none omitted discloses what the report left out and clears it, while one that leaves
-  the flag out (it is optional) changes nothing. Stored on 2026-11-20 (235 quarters): Icahn's seven and Pershing's
-  Q4 2024 omit (Berkshire's Q1 2025, flagged by its report, was disclosed by its August 2025 amendment), and the
-  notes about "new" cover Icahn's six later quarters and Pershing's Q1 2025. `/gurus/portfolio` aggregates the gurus: per security, the gurus holding it,
+  restatement (a 13F-HR/A of type RESTATEMENT, or without a type) whose cover states none omitted is a whole report
+  that discloses what the earlier one left out, and clears it. A NEW HOLDINGS amendment's cover speaks for the rows
+  it adds alone, so stating none omitted it clears nothing (BUG-368), and a filing that leaves the flag out (it is
+  optional) changes nothing. Stored on 2026-11-20 (235 quarters): Icahn's seven, Pershing's Q4 2024 and Berkshire's
+  Q1 2025 omit (Berkshire's flagged by its report; its August 2025 NEW HOLDINGS amendment, 202 Lennar class B
+  shares, states none omitted), and the notes about "new" cover Icahn's six later quarters, Pershing's Q1 2025 and
+  Berkshire's Q2 2025. `/gurus/portfolio` aggregates the gurus: per security, the gurus holding it,
   their summed shares and value, and the buyers (new or added) and sellers (reduced or sold out) of the latest
   quarter. The nav has a Gurus link.
 - **HDS tab**: a Gurus section above Yahoo's holders: each guru's latest quarter, shown on each row (Scion's
@@ -1799,7 +1803,10 @@ companies on the **collection list**, each with its reason: `quotes`, `bars` and
     and the company waits for its next report. A collection on the 7-day cache read what the collection that cached it
     read, so it is no try, and reads of the SEC hours or days apart (by hand, a forced run) are one (BUG-281, BUG-289).
     A complete collection ends the gap, and so does one that lacked another report or read the SEC before the gap's
-    report was filed: a new report's lag gets its own tries. The step's summary lists the company under
+    report was filed: a new report's lag gets its own tries. A latest collection that names no report (its
+    submissions request failed, or only its predecessor's filings went unread) is taken to have looked for the
+    latest report its feed lists as filed by its read, so one that followed a newer report gets its own tries, even
+    after an older report's gap was given up on (BUG-365). The step's summary lists the company under
     `incomplete_left` (its `collections`, `tries` and the day the gap was found, `since`), and each run's warning still
     names the report.
 - **`collect`** (whenever the list isn't empty): a full collection of the list as `stock-data` runs it (Yahoo and the

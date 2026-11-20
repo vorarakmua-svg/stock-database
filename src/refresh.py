@@ -67,7 +67,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Text
 from .config import AppConfig, SECConfig, StorageConfig, YahooConfig
 from .exporters.sqlite_store import SQLiteStore, read_only_uri
 from .fetchers.quote_refresh import QuoteRefresh, describe_splits, refresh_quote
-from .fetchers.sec_handler import SECHandler
+from .fetchers.sec_handler import SECHandler, _latest_report
 from .fetchers.stock_data_fetcher import StockDataFetcher
 from .fetchers.yahoo_handler import YahooHandler
 from .market.collect import SOURCES as MARKET_SOURCES
@@ -493,7 +493,16 @@ def _read_day(run: Sequence[Any]) -> str:
     return new_york_day(_read_at(run)).isoformat()
 
 
-def incomplete_tries(runs: Sequence[Sequence[Any]]) -> Optional[Dict[str, Any]]:
+def _looked_for(filings: Sequence[Dict[str, Any]], day: str) -> str:
+    """The filing day of the report a collection that read the SEC on *day* (the SEC's) looked for: the latest of
+    *filings* (the submissions feed) filed on or before that day, as a collection names the report it lacked
+    (``report_without_facts``: as filed, with XBRL). "" for none."""
+    latest = _latest_report([f for f in filings if str(f.get("filingDate") or "")[:10] <= day])
+    return str(latest.get("filingDate") or "")[:10] if latest else ""
+
+
+def incomplete_tries(runs: Sequence[Sequence[Any]],
+                     filings: Optional[Sequence[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
     """The tries at what a company's latest collection with the SEC lacked (BUG-251, BUG-279), from *runs*, its
     collections with the SEC newest first, each its ``collection_runs`` (collected_at, incomplete, sec_read_at). None
     when the latest was complete, or there is none.
@@ -503,7 +512,11 @@ def incomplete_tries(runs: Sequence[Sequence[Any]]) -> Optional[Dict[str, Any]]:
     submissions read, or a filing's own XBRL read, that fails and succeeds by turns starts no new count, BUG-289).
     They end at a complete collection, at one that lacked another report, and at one whose SEC data the SEC served
     before the day the gap's report was filed (``_read_day``, the SEC's day): a new report's lag gets its own tries.
-    (On that day it may have seen it.)
+    (On that day it may have seen it.) A latest collection that names no report (its submissions unread, or its
+    predecessor's filings alone) looked for the latest report of *filings*, the company's submissions feed, filed by
+    its read (``_looked_for``): the gap's collections end, too, at one read before that report was filed, so a run
+    after a newer report isn't joined to an older report's gap, one given up on included (BUG-365). Without a feed,
+    nothing says which.
     The tries are the gap's reads of the SEC (``_read_at``), oldest first, each RETRY_SPACING or more after the last
     try: a collection on the SEC handler's 7-day cache read what the collection that cached it read, and is no try
     (BUG-281), and reads days apart are one (BUG-289).
@@ -513,7 +526,7 @@ def incomplete_tries(runs: Sequence[Sequence[Any]]) -> Optional[Dict[str, Any]]:
     if not runs or _gap(lacked[0]) == (None, False, False):
         return None
     report: Optional[str] = None
-    filed = ""
+    filed = _looked_for(filings or [], _read_day(runs[0])) if _gap(lacked[0])[0] is None else ""
     count = 0
     for run, what in zip(runs, lacked):
         accession, predecessor, unchecked = _gap(what)
@@ -524,7 +537,8 @@ def incomplete_tries(runs: Sequence[Sequence[Any]]) -> Optional[Dict[str, Any]]:
             break
         if report is None and accession is not None:
             listed = what.get("report")
-            report, filed = accession, str(listed.get("filed") or "")[:10] if isinstance(listed, dict) else ""
+            report = accession
+            filed = max(filed, str(listed.get("filed") or "")[:10] if isinstance(listed, dict) else "")
         count += 1
     tries: List[datetime] = []
     for run in reversed(runs[:count]):
@@ -995,16 +1009,18 @@ class _Run:
                 self._queue(ticker, f"sec: {f['form']} filed {f['filed']} ({f['accession']})")
             self.out.note(f"sec: {ticker} to collect: " + ", ".join(
                 f"{f['form']} filed {f['filed']}" for f in s["new_filings"][ticker]))
-        self._again(ticker, runs, s)
+        self._again(ticker, runs, s, filings)
 
-    def _again(self, ticker: str, runs: List[Tuple[Any, ...]], s: Dict[str, Any]) -> None:
+    def _again(self, ticker: str, runs: List[Tuple[Any, ...]], s: Dict[str, Any],
+               filings: Sequence[Dict[str, Any]]) -> None:
         """Put *ticker* on the list again when its latest collection with the SEC (*runs*, newest first: when each
         ran, what its SEC read lacked and when the SEC served it) was incomplete (BUG-251, BUG-279, BUG-282): its
         companyfacts lacked the latest report its submissions listed (the SEC's lag), its predecessor's filings
         couldn't be read, or its submissions couldn't, so that it couldn't look for such a report.
-        Its tries at that gap count (``incomplete_tries``: reads of the SEC a week apart): after INCOMPLETE_RETRIES
-        more, the gap is the source's, and the company is left to its next report (``incomplete_left``)."""
-        tried = incomplete_tries(runs)
+        Its tries at that gap count (``incomplete_tries``: reads of the SEC a week apart, *filings* its submissions
+        feed): after INCOMPLETE_RETRIES more, the gap is the source's, and the company is left to its next report
+        (``incomplete_left``)."""
+        tried = incomplete_tries(runs, filings)
         if tried is None:
             return
         day, why, tries = str(runs[0][0])[:10], _lacking(_parsed(runs[0][1])), tried["tries"]
