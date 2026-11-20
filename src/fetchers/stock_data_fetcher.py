@@ -166,6 +166,7 @@ class StockDataFetcher:
             max_retries=self.config.retry.max_retries,
             base_delay=self.config.retry.base_delay,
             max_delay=self.config.retry.max_delay,
+            cache_dir=self.config.storage.cache_dir,
         )
 
         # Initialize exporters

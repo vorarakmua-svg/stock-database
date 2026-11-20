@@ -95,8 +95,10 @@ def refresh_quote(handler: Any, store: SQLiteStore, ticker: str, collected_at: O
     split history with it, and the outcome is "rebased": the caller values the ticker on it (BUG-128). So it is after
     a factor stored earlier that the stored valuations predate (``unvalued_factors``: valuing the ticker on it failed),
     with those factors (BUG-163). A saved quote stores Yahoo's payments with it, a factor or not (BUG-160, BUG-258). A
-    failed write stores nothing and is an "error" with the write's message (BUG-053, BUG-237)."""
-    quote = handler.fetch_quote(ticker)
+    failed write stores nothing and is an "error" with the write's message (BUG-053, BUG-237). Yahoo's splits and
+    payments are asked from the earliest day either check needs (``SQLiteStore.quote_events_since``), not over the
+    whole daily history (BUG-108)."""
+    quote = handler.fetch_quote(ticker, since=store.quote_events_since(ticker))
     if "error" in quote:
         return QuoteRefresh(ticker, "error", str(quote["error"]))
     splits = quote.get("splits") or []

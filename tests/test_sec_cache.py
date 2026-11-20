@@ -404,16 +404,17 @@ def test_the_submissions_keep_the_newest_100_filings_and_the_latest_report_behin
     assert submissions["latest_report"] == _DLR_10Q2
 
 
-def test_submissions_cached_before_the_latest_report_was_kept_are_read_as_before(tmp_path, monkeypatch):
-    # A cached submissions file written without "latest_report" (the handler's until BUG-285): its newest 100 are
-    # looked through, as then.
-    handler = _dlr(tmp_path, monkeypatch, [])
-    path = handler._payload_cache_path("submissions", "0001297996")
-    path.write_text(json.dumps({"name": "DIGITAL REALTY TRUST, INC.", "filings": [_DLR_424B7, _DLR_10Q2, _DLR_10Q1]}),
-                    encoding="utf-8")
-    data = handler.fetch_all("DLR")
-    assert data["submissions"]["filings"] == [_DLR_424B7, _DLR_10Q2, _DLR_10Q1]
-    assert data.get("missing_report") == {"form": "10-Q", "accession": "0001104659-26-089296", "filed": "2026-07-31"}
+#: DLR's companyfacts as ``_dlr`` serves them: its first quarter's revenue and the 424B7's fee.
+_DLR_FACTS = {"facts": {"ffd": {"TtlFeeAmt": {"units": {"USD": [_DLR_FEE]}}},
+                        "us-gaap": {"Revenues": {"units": {"USD": [_DLR_Q1_REVENUE]}}}}}
+
+
+def test_submissions_without_the_latest_report_are_looked_through_as_before():
+    # Submissions without "latest_report" (the handler's until BUG-285; a file cached so is fetched again since
+    # BUG-296): their newest 100 are looked through, as then.
+    submissions = {"name": "DIGITAL REALTY TRUST, INC.", "filings": [_DLR_424B7, _DLR_10Q2, _DLR_10Q1]}
+    assert sec_handler.report_without_facts(submissions, _DLR_FACTS) == {
+        "form": "10-Q", "accession": "0001104659-26-089296", "filed": "2026-07-31"}
 
 
 # ---- Q17: the reports the companyfacts lack, read from their own XBRL ----
@@ -598,30 +599,23 @@ def test_the_submissions_keep_a_years_reports_at_most(tmp_path, monkeypatch):
     assert submissions["reports"] == reports[:4]
 
 
-def test_submissions_cached_before_the_reports_were_kept_give_the_latest_report(tmp_path, monkeypatch):
-    # A file cached by an earlier build: the newest 100 filings and the latest report are looked through.
-    handler, _ = _dlr_reading(tmp_path, monkeypatch, [], {
-        _DLR_10Q2_FOLDER + "dlr-20260630x10q_htm.xml": _DLR_10Q2_INSTANCE})
-    handler._payload_cache_path("submissions", "0001297996").write_text(json.dumps(
-        {"name": "DIGITAL REALTY TRUST, INC.", "filings": _424B2S[:100], "latest_report": _DLR_10Q2_INLINE}),
-        encoding="utf-8")
-    assert [r["accession"] for r in handler.fetch_all("DLR")["reports_read"]] == ["0001104659-26-089296"]
+def test_submissions_without_the_reports_give_the_latest_report():
+    # Submissions an earlier build gave (a file cached so is fetched again since BUG-296): the newest 100 filings and
+    # the latest report are looked through.
+    submissions = {"name": "DIGITAL REALTY TRUST, INC.", "filings": _424B2S[:100], "latest_report": _DLR_10Q2_INLINE}
+    assert [r["accessionNumber"] for r in sec_handler.reports_without_facts(submissions, _DLR_FACTS)] == [
+        "0001104659-26-089296"]
 
 
 @pytest.mark.parametrize("filings, recovered", [
     (_424B2S[:100], False),  # the reports before the latest unseen: the gap's end isn't known (BUG-337)
     ([*_424B2S[:98], _DLR_10Q2_INLINE, _DLR_10Q1_INLINE], True),  # the 10-Q the facts carry is among them
 ])
-def test_submissions_cached_before_the_reports_were_kept_recover_only_back_to_a_report_the_facts_carry(
-        tmp_path, monkeypatch, filings, recovered):
-    handler, _ = _dlr_reading(tmp_path, monkeypatch, [], {
-        _DLR_10Q2_FOLDER + "dlr-20260630x10q_htm.xml": _DLR_10Q2_INSTANCE})
-    handler._payload_cache_path("submissions", "0001297996").write_text(json.dumps(
-        {"name": "DIGITAL REALTY TRUST, INC.", "filings": filings, "latest_report": _DLR_10Q2_INLINE}),
-        encoding="utf-8")
-    data = handler.fetch_all("DLR")
-    assert [r["accession"] for r in data["reports_read"]] == ["0001104659-26-089296"]
-    assert data["reports_unread"] == [] and bool(data["missing_report"].get("recovered")) is recovered
+def test_submissions_without_the_reports_recover_only_back_to_a_report_the_facts_carry(filings, recovered):
+    gap, whole = sec_handler.report_gap(
+        {"name": "DIGITAL REALTY TRUST, INC.", "filings": filings, "latest_report": _DLR_10Q2_INLINE}, _DLR_FACTS)
+    assert [r["accessionNumber"] for r in gap] == ["0001104659-26-089296"]
+    assert whole is recovered
 
 
 def test_a_report_read_once_is_read_from_the_cache_after(tmp_path, monkeypatch):
@@ -831,3 +825,128 @@ def test_a_reader_with_other_rules_reads_every_cached_filing_again(tmp_path, mon
     again, requested = _dlr_reading(tmp_path, monkeypatch, [_DLR_424B7, _DLR_10Q2_INLINE, _DLR_10Q1_INLINE], {})
     assert again.fetch_all("DLR")["reports_read"][0]["instance"] == "dlr-20260630x10q_htm.xml"
     assert requested == []  # and the reader's own version is kept across runs, at any age
+
+
+# ---- BUG-296: submissions cached by an earlier build are fetched again ----
+
+def _cache_submissions(handler, submissions):
+    handler._payload_cache_path("submissions", "0001297996").write_text(json.dumps(submissions), encoding="utf-8")
+
+
+@pytest.mark.parametrize("cached", [
+    {"name": "DIGITAL REALTY TRUST, INC.", "filings": _424B2S[:100]},  # before BUG-285: the newest 100 alone
+    {"name": "DIGITAL REALTY TRUST, INC.", "filings": _424B2S[:100], "latest_report": None},  # before Q17
+])
+def test_submissions_cached_by_an_earlier_build_are_fetched_again(tmp_path, monkeypatch, cached):
+    # A bank's newest 100 filings are 424B2s: a file cached before BUG-285 hid its 10-Q from the gap check for the
+    # cache's week. Read again, the feed's latest report is seen.
+    handler = _dlr(tmp_path, monkeypatch, [*_424B2S, _DLR_10Q2, _DLR_10Q1])
+    _cache_submissions(handler, cached)
+    data = handler.fetch_all("DLR")
+    assert data["submissions"]["latest_report"] == _DLR_10Q2
+    assert data.get("missing_report") == {"form": "10-Q", "accession": "0001104659-26-089296", "filed": "2026-07-31"}
+
+
+def test_submissions_cached_by_this_build_are_read_from_the_cache(tmp_path, monkeypatch):
+    handler, requested = _successor_handler(tmp_path, monkeypatch, _AAPL)
+    first = handler.get_submissions("0000320193")
+    requested.clear()
+    assert handler.get_submissions("0000320193") == first
+    assert requested == []
+
+
+def test_the_submissions_cache_keeps_its_version_beside_the_submissions(tmp_path, monkeypatch):
+    # The version is the cache's: the submissions a run reads (and the JSON export keeps) are as before.
+    handler, _ = _successor_handler(tmp_path, monkeypatch, _AAPL)
+    submissions = handler.get_submissions("0000320193")
+    cached = json.loads(handler._payload_cache_path("submissions", "0000320193").read_text(encoding="utf-8"))
+    assert cached == {**submissions, "cache_version": sec_handler.SUBMISSIONS_CACHE_VERSION}
+    assert "cache_version" not in submissions and "cache_version" not in handler.get_submissions("0000320193")
+
+
+def test_the_submissions_cache_version_names_the_submissions_shape(tmp_path, monkeypatch):
+    # A key added to (or dropped from) get_submissions' answer must bump SUBMISSIONS_CACHE_VERSION, or files cached
+    # before it keep the old shape for the cache's week (BUG-296). Bump both together.
+    handler, _ = _successor_handler(tmp_path, monkeypatch, _AAPL)
+    shape = {1: {"entity_type", "sic", "sic_description", "name", "tickers", "exchanges", "ein", "description",
+                 "category", "fiscal_year_end", "state_of_incorporation", "state_of_incorporation_description",
+                 "addresses", "phone", "filings", "latest_report", "reports"}}
+    assert set(handler.get_submissions("0000320193")) == shape[sec_handler.SUBMISSIONS_CACHE_VERSION]
+
+
+# ---- BUG-235: the SEC's ticker map expires, and a miss reads it again ----
+
+def _ticker_map(tmp_path, monkeypatch, served, cached=None, age_days=0.0):
+    """A handler whose SEC ticker map answers *served* (an entry list of (ticker, CIK); an int: that HTTP status),
+    with *cached* in the cache, *age_days* old; and the map requests it made."""
+    handler = _handler(tmp_path)
+    if cached is not None:
+        path = tmp_path / "company_tickers.json"
+        path.write_text(json.dumps({str(i): {"ticker": t, "cik_str": c} for i, (t, c) in enumerate(cached)}),
+                        encoding="utf-8")
+        then = time.time() - age_days * 86400
+        os.utime(path, (then, then))
+    requested = []
+
+    def fake_request(url, timeout=30):
+        assert url.endswith("/files/company_tickers.json")
+        requested.append(url)
+        if isinstance(served, int):
+            return _FakeResp(served, {})
+        return _FakeResp(200, {str(i): {"ticker": t, "cik_str": c} for i, (t, c) in enumerate(served)})
+
+    monkeypatch.setattr(handler, "_request", fake_request)
+    return handler, requested
+
+
+def test_a_ticker_map_cached_over_a_week_ago_is_fetched_again(tmp_path, monkeypatch):
+    # The map was read whatever its age: a ticker the SEC listed since was "CIK not found", and the company was
+    # stored without SEC data; a ticker passed to another company since kept the old one's CIK.
+    handler, requested = _ticker_map(tmp_path, monkeypatch, [("OLD", 3), ("NEW", 2)], cached=[("OLD", 1)],
+                                     age_days=7.1)
+    assert handler.ticker_to_cik("OLD") == "0000000003"
+    assert handler.ticker_to_cik("NEW") == "0000000002"
+    assert len(requested) == 1
+    assert "NEW" in (tmp_path / "company_tickers.json").read_text(encoding="utf-8")
+
+
+def test_a_ticker_map_cached_within_the_week_is_read_from_the_cache(tmp_path, monkeypatch):
+    handler, requested = _ticker_map(tmp_path, monkeypatch, [("OLD", 9)], cached=[("OLD", 1)], age_days=6.9)
+    assert handler.ticker_to_cik("OLD") == "0000000001"
+    assert requested == []
+
+
+def test_a_ticker_the_cached_map_lacks_reads_the_map_again_once(tmp_path, monkeypatch):
+    handler, requested = _ticker_map(tmp_path, monkeypatch, [("OLD", 1), ("NEW", 2)], cached=[("OLD", 1)])
+    assert handler.ticker_to_cik("NEW") == "0000000002"
+    assert handler.ticker_to_cik("NOPE") is None and handler.ticker_to_cik("NOPE2") is None
+    assert len(requested) == 1
+
+
+def test_a_ticker_the_fetched_map_lacks_doesnt_read_it_again(tmp_path, monkeypatch):
+    handler, requested = _ticker_map(tmp_path, monkeypatch, [("OLD", 1)])
+    assert handler.ticker_to_cik("NOPE") is None
+    assert len(requested) == 1
+
+
+def test_a_ticker_mapped_by_hand_doesnt_read_the_map_again(tmp_path, monkeypatch):
+    # BAC and PLD aren't in the SEC's map: their fallback answers without a request.
+    handler, requested = _ticker_map(tmp_path, monkeypatch, [("OLD", 1)], cached=[("OLD", 1)])
+    assert handler.ticker_to_cik("BAC") == "0000070858"
+    assert requested == []
+
+
+@pytest.mark.parametrize("age_days", [0.0, 30.0])
+def test_a_cached_map_stands_when_the_sec_cant_be_reached(tmp_path, monkeypatch, age_days):
+    handler, requested = _ticker_map(tmp_path, monkeypatch, 403, cached=[("OLD", 1)], age_days=age_days)
+    assert handler.ticker_to_cik("NOPE") is None
+    assert handler.ticker_to_cik("OLD") == "0000000001"
+    assert len(requested) == 1
+    assert json.loads((tmp_path / "company_tickers.json").read_text(encoding="utf-8")) == {
+        "0": {"ticker": "OLD", "cik_str": 1}}
+
+
+def test_without_a_map_a_failed_request_is_tried_again(tmp_path, monkeypatch):
+    handler, requested = _ticker_map(tmp_path, monkeypatch, 403)
+    assert handler.ticker_to_cik("OLD") is None and handler.ticker_to_cik("OLD") is None
+    assert len(requested) == 2

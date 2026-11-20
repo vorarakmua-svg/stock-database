@@ -1399,19 +1399,7 @@ class SQLiteStore:
         try:
             known = {str(d)[:10] for (d,) in conn.execute(
                 "SELECT date FROM split_events WHERE ticker = ?", (ticker,))}
-            snap = conn.execute("SELECT collected_at, current_price FROM market_snapshots WHERE ticker = ? "
-                                "ORDER BY collected_at DESC LIMIT 1", (ticker,)).fetchone()
-            priced_on = str(snap[0])[:10] if snap and snap[0] and snap[1] is not None else None
-            since = None
-            # The last collection with Yahoo: its run row, else (no such row) its
-            # latest price bar, which only Yahoo gives.
-            for sql in ("SELECT max(collected_at) FROM collection_runs WHERE ticker = ? "
-                        "AND data_sources LIKE '%yahoo%'",
-                        "SELECT max(date) FROM price_bars WHERE ticker = ?"):
-                row = conn.execute(sql, (ticker,)).fetchone()
-                if row and row[0]:
-                    since = str(row[0])[:10]
-                    break
+            priced_on, since = self._priced_and_collected(conn, ticker)
         except sqlite3.Error:
             return []
         finally:
@@ -1422,6 +1410,43 @@ class SQLiteStore:
         return [s for s in candidates
                 if (priced_on and str(s["date"])[:10] > priced_on)
                 or (str(s["date"])[:10] not in known and str(s["date"])[:10] >= min(starts))]
+
+    @staticmethod
+    def _priced_and_collected(conn: sqlite3.Connection, ticker: str) -> Tuple[Optional[str], Optional[str]]:
+        """*ticker*'s latest snapshot's day when it has a price (``priced_on``), and the day of its last collection
+        with Yahoo: its run row, else (no such row) its latest price bar, which only Yahoo gives. Either None."""
+        snap = conn.execute("SELECT collected_at, current_price FROM market_snapshots WHERE ticker = ? "
+                            "ORDER BY collected_at DESC LIMIT 1", (ticker,)).fetchone()
+        priced_on = str(snap[0])[:10] if snap and snap[0] and snap[1] is not None else None
+        since = None
+        for sql in ("SELECT max(collected_at) FROM collection_runs WHERE ticker = ? "
+                    "AND data_sources LIKE '%yahoo%'",
+                    "SELECT max(date) FROM price_bars WHERE ticker = ?"):
+            row = conn.execute(sql, (ticker,)).fetchone()
+            if row and row[0]:
+                since = str(row[0])[:10]
+                break
+        return priced_on, since
+
+    def quote_events_since(self, ticker: str) -> Optional[str]:
+        """The day a quote refresh of *ticker* reads Yahoo's splits and payments from (``YahooHandler.fetch_quote``'s
+        *since*), the earliest of: the stored price's day and the last collection with Yahoo, from which
+        ``factors_since_collection`` counts a split; and the latest payment stored, so that every payment since is
+        stored as the whole history would store it. None (the whole history) without any, or a database that can't be
+        read (BUG-108)."""
+        try:
+            conn = sqlite3.connect(read_only_uri(self.db_path), uri=True)
+        except sqlite3.Error:
+            return None
+        try:
+            days = list(self._priced_and_collected(conn, ticker))
+            days.append(conn.execute("SELECT max(date) FROM dividend_events WHERE ticker = ?", (ticker,)).fetchone()[0])
+        except sqlite3.Error:
+            return None
+        finally:
+            conn.close()
+        starts = [str(day)[:10] for day in days if day]
+        return min(starts) if starts else None
 
     def unvalued_factors(self, ticker: str) -> List[Dict[str, Any]]:
         """The factors stored in ``split_events`` for *ticker* (every ratio but 1.0, as

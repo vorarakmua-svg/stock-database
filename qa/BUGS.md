@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 105 · NEEDS-USER 3 · Decided: 7 · Verified: 274
+**Open:** P0 0 · P1 0 · P2 0 · P3 101 · NEEDS-USER 3 · Decided: 7 · Verified: 278
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -451,10 +451,11 @@ Repro: across 112 single-figure real companies the latest FY diluted count (toda
 Expected: a tiebreaker fresher than the last fiscal year (e.g. the latest 10-Q count).   Actual: the FY count, up to a year stale. Notes: whether units and second classes count at all is Q7.
 
 ### BUG-052 [P3][GATHER] The Treasury.gov fallback takes last year's year-end rate on any failure, and a blank latest 10-year gives no rate
-Status: OPEN
-Found: iteration 39 by code review 5 (M4), re-run on 98013f4 with the request stubbed (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 216)
+Found: iteration 39 by code review 5 (M4), re-run on 98013f4 with the request stubbed (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_fred_handler.py, test_quote_events_window.py (new), test_quote_refresh*.py, test_sec_cache.py; 47 failing first
 Repro (`t_bug041/check_fallbacks.py`): on 2026-10-20 a 500 from the current-year request gives source treasury_gov, date 2025-12-31, 4.57%; a latest row whose 10 Yr is blank gives rate None although the day before has a yield. In early January (current-year feed empty) the prior year's 2025-12-31 is right. No test covers the prior-year path that GATHER-04 names.
 Expected: the prior year only while the current year has no rows; the latest row that has a 10-year yield.   Actual: as above.
+Fix (iteration 216, `qa/evidence/bug052-investigation.txt`): a failed Treasury.gov year (raise, non-200, no 'Date' header) is told from one with no rows; the rate is the latest day with a 10-year yield, the prior year only while the current has none; every answer is saved (cache_dir/treasury_gov_rate.json) and used, dated and warned, when a fetch fails; else the flagged static estimate. Engine over 502: all tables identical. Residual: the saved rate has no age limit (dated and warned).
 
 ### BUG-053 [P3][UI] A quote refresh whose database write fails reports success
 Status: VERIFIED (iteration 193)
@@ -875,10 +876,11 @@ Root cause: `_get_dividend_history` (`src/fetchers/yahoo_handler.py:697`) and `_
 Fix (iteration 209, `qa/evidence/bug107-investigation.txt`): yfinance 1.0 answers a failed chart request with an empty history lacking the event columns; `_served(answer, column)` tells it from a served empty one. Unserved dividends become an error with a warning that the stored dividends weren't refreshed; an unserved or raising split history warns likewise; unserved bars get the existing warning. Orchestrator's call: in `fetch_quote` an unserved split history is that refresh's error (the quote can't be checked for a split since the last collection), so a refresh that used to be saved now fails. Residual: the refresh's bars step still reads an empty answer as no bars (already the company's error per README).
 
 ### BUG-108 [P3][GATHER] A quote refresh downloads the whole daily price history to read the splits
-Status: OPEN
-Found: iteration 70 by code review 10 (M5), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 216)
+Found: iteration 70 by code review 10 (M5), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_fred_handler.py, test_quote_events_window.py (new), test_quote_refresh*.py, test_sec_cache.py; 47 failing first
 Repro: `review10/scripts/quote_requests.py`: `fetch_quote` makes two requests, the quote's and a chart from 1927-11-15 (`period1=-1329577857`) to now with dividends and splits, for `_get_splits` (`src/fetchers/yahoo_handler.py:883`), which BUG-093's fix added.
 Expected: the splits since the last collection, a short window.   Actual: the whole history for every refreshed ticker (the payload is unmeasured offline).
+Fix (iteration 216, with BUG-052): a quote refresh reads splits and dividends for the shortest yfinance period reaching 7 days before `quote_events_since` (the earliest of the stored price's day, the last Yahoo collection, the latest stored payment); BUG-093/107's checks unchanged. Real data: 3mo for 326 tickers, max for 10 (was max for all 502). Residual: a stored split older than the window isn't backfilled by a refresh.
 
 ### BUG-109 [P3][CODE] The oracle's split and dividend basis rules are the code's own, so it passes a run whose split was never stored
 Status: OPEN
@@ -1839,10 +1841,11 @@ Expected: "Fetching the S&P 500 list failed: ..." and exit 1.   Actual: a traceb
 Fix (iteration 187, with BUG-231): `fetch_page` streams with a 20 MiB cap (as BUG-229), always closes the response, and a non-UTF-8 body is an OSError the CLI reports as 'Fetching the S&P 500 list failed: ...' with exit 1 (the page is UTF-8, so another encoding means it changed).
 
 ### BUG-235 [P3][SEC] The SEC's ticker map is cached with no expiry, so a future index member with a newer ticker is collected without SEC data
-Status: OPEN
-Found: code review 19 (m-2), build M5-6 | Fixed: | Regression test:
+Status: VERIFIED (iteration 216)
+Found: code review 19 (m-2), build M5-6 | Fixed: (this commit) | Regression tests: tests/test_fred_handler.py, test_quote_events_window.py (new), test_quote_refresh*.py, test_sec_cache.py; 47 failing first
 Repro: src/fetchers/sec_handler.py:301 loads data/cache/company_tickers.json whatever its age. A ticker newer than the file is "CIK not found", and the collection stores the company without SEC data. Today's map (2026-10-21) resolves all 500 members of universe/sp500-2026-10-25.csv.
 Expected: the map reloaded once when a ticker misses and the file is over a week old, or universe/README.md's refresh steps saying to refresh it.   Actual: a silent gap for that company.
+Fix (iteration 216, with BUG-052): the SEC ticker map expires after 7 days; a failed re-fetch uses the cache with a warning; an unknown ticker triggers one re-fetch per handler.
 
 ### BUG-236 [P3][WEB] A company ranked before its SIC code was filled is told its industry "has fewer than 10 companies here"
 Status: OPEN
@@ -2739,10 +2742,11 @@ Expected: the gap named at C's next collection (BUG-251/285's warning; to confir
 Fix (iteration 178, Q17): C's companyfacts fetched 2026-11-13 still carry none of its three 2026 10-Qs; the collection now reads them from their own XBRL (4 requests: submissions and three instances). C's quarters 2026-03-31, 06-30, 09-30: revenue $24.633B / $24.766B / $23.845B, net income $5.785B / $5.831B / $5.245B; TTM to 09-30 revenue $93.115B; 14 of 15 values equal the raw filings' (Q3 EPS: BUG-335). Its historical-value band appears (104.05 at 120.62, above).
 
 ### BUG-296 [P3][GATHER] Submissions cached before BUG-285 keep the banks' blind spot until the 7-day cache expires
-Status: OPEN
-Found: iteration 122 (BUG-285's worker, residuals) | Fixed: | Regression test:
+Status: VERIFIED (iteration 216)
+Found: iteration 122 (BUG-285's worker, residuals) | Fixed: (this commit) | Regression tests: tests/test_fred_handler.py, test_quote_events_window.py (new), test_quote_refresh*.py, test_sec_cache.py; 47 failing first
 Repro: a submissions file cached by an earlier build has no latest_report, so a CLI or web collection within the cache's 7 days still checks the newest 100 alone (the refresh reads fresh).
 Expected: the check as fixed on every collection.   Actual: blind until the cache expires.
+Fix (iteration 216, with BUG-052): cached submissions carry `cache_version` (SUBMISSIONS_CACHE_VERSION, pinned to the answer's key set); a file without it is fetched again. Note for QA tooling: offline collection (stockdb-qa scripts, network blocked, long TTL) must stamp cache_version on the old cached files or use a fresh cache.
 
 ### Q2 [VAL] NEEDS-USER: "analyst growth" is Yahoo's quarterly YoY earnings growth, not an analyst forecast
 Status: VERIFIED (iteration 144; regression tests tests/test_valuation_assumptions.py::test_derive_growth_*)

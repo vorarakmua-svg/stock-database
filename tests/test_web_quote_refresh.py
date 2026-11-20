@@ -54,7 +54,7 @@ class FakeQuoteHandler:
     def __init__(self, canned: Optional[Dict[str, Any]] = None) -> None:
         self._canned = canned if canned is not None else _CANNED_QUOTE
 
-    def fetch_quote(self, ticker: str) -> Dict[str, Any]:
+    def fetch_quote(self, ticker: str, since: Optional[str] = None) -> Dict[str, Any]:
         return dict(self._canned)
 
 
@@ -640,7 +640,7 @@ def test_quote_and_full_jobs_serialize(web_db: Path) -> None:
     conc_lock = threading.Lock()
 
     class TrackingQuoteHandler:
-        def fetch_quote(self, ticker: str) -> Dict[str, Any]:
+        def fetch_quote(self, ticker: str, since: Optional[str] = None) -> Dict[str, Any]:
             with conc_lock:
                 active[0] += 1
                 if active[0] > peak[0]:

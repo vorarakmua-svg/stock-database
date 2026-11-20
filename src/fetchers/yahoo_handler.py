@@ -1,7 +1,7 @@
 """Yahoo Finance data handler using yfinance library."""
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
@@ -18,6 +18,33 @@ _EARNINGS_SURPRISE_KEYS = ("surprisePercent", "Surprise(%)", "Surprise (%)")
 #: Why a history yfinance didn't get from Yahoo is unavailable: yfinance answers a chart request that failed (no
 #: timezone found, an error or an empty answer) with an empty history rather than an error (BUG-107).
 NO_HISTORY = "yfinance returned no history, its answer to a failed request"
+
+
+#: yfinance's chart periods (Yahoo's ranges, counted back from now) and the fewest days each spans, shortest first.
+_EVENT_PERIODS: Tuple[Tuple[str, int], ...] = (
+    ("1mo", 28), ("3mo", 89), ("6mo", 181), ("1y", 365), ("2y", 730), ("5y", 1826), ("10y", 3652))
+#: How many days before its start a quote's chart of splits and payments reaches: Yahoo's day (New York's) runs
+#: behind the collector's east of it, and a range ends at Yahoo's now.
+EVENT_WINDOW_MARGIN_DAYS = 7
+
+
+def events_period(since: Optional[str], today: date) -> str:
+    """The shortest yfinance period whose chart, asked on *today*, reaches EVENT_WINDOW_MARGIN_DAYS before *since* (an
+    ISO day, or a time on it): what a quote refresh reads splits and payments from (BUG-108: the whole daily history
+    from 1927 was asked for every refreshed ticker). "max", the whole history, without a start or past ten years."""
+    if since is None:
+        return "max"
+    needed = (today - date.fromisoformat(str(since)[:10])).days + EVENT_WINDOW_MARGIN_DAYS
+    return next((period for period, days in _EVENT_PERIODS if days >= needed), "max")
+
+
+def _events(stock: Any, name: str, period: str) -> Any:
+    """yfinance's *name* events ("splits" or "dividends") of *stock*'s daily chart over *period*: the whole history's
+    (the ``splits``/``dividends`` properties, a collection's) or a shorter one's (``get_splits``/``get_dividends``).
+    yfinance asks one chart a period, which both events come from."""
+    if period == "max":
+        return getattr(stock, name)
+    return getattr(stock, f"get_{name}")(period=period)
 
 
 def _served(answer: Any, column: str) -> bool:
@@ -135,7 +162,7 @@ class YahooHandler:
                 "source": "yahoo_finance",
             }
 
-    def fetch_quote(self, ticker: str) -> Dict[str, Any]:
+    def fetch_quote(self, ticker: str, since: Optional[str] = None) -> Dict[str, Any]:
         """Fetch a lightweight, quote-only snapshot for on-demand refresh (Task 10).
 
         Makes exactly ONE rate-limited ``yf.Ticker(ticker)`` call and reuses
@@ -149,7 +176,10 @@ class YahooHandler:
         payments (``_get_dividend_history``, from the same cached chart
         request), which a saved refresh stores as a collection does, so DDM's
         trailing year, which ends on the refresh's day, holds every payment
-        since the last collection (BUG-160, BUG-258).
+        since the last collection (BUG-160, BUG-258). Both come from the chart
+        reaching back to *since* (an ISO day: ``events_period``, the refresh's
+        ``SQLiteStore.quote_events_since``), the whole history without it
+        (BUG-108).
 
         Deliberately makes no ``stock.history()`` call of its own, so the
         returned ``market_data`` never includes ``ma_50``/``ma_200`` here (those
@@ -167,16 +197,17 @@ class YahooHandler:
         try:
             self.rate_limiter.wait()
             stock = yf.Ticker(ticker)
-            splits, splits_error = self._splits_and_error(stock)
+            period = events_period(since, date.today())
+            splits, splits_error = self._splits_and_error(stock, period)
             quote = {
                 "market_data": self._get_market_data(stock, include_moving_averages=False),
                 "valuation": self._get_valuation_metrics(stock),
                 "shareholders": self._get_shareholder_stats(stock),
                 "analyst_estimates": self._get_analyst_estimates(stock),
                 "splits": splits,
-                # The same chart request as the splits (yfinance caches history(period="max")): a saved refresh
+                # The same chart request as the splits (yfinance caches a period's history): a saved refresh
                 # stores them, as a collection does (BUG-160, BUG-258).
-                "dividend_history": self._get_dividend_history(stock),
+                "dividend_history": self._get_dividend_history(stock, period),
             }
             # The extractors swallow Yahoo's errors (a rate limit leaves each one empty),
             # so a quote without a price is a failed fetch, not a refresh.
@@ -758,9 +789,11 @@ class YahooHandler:
             self.logger.debug(f"Error getting analyst estimates: {e}")
             return {}
 
-    def _get_dividend_history(self, stock: yf.Ticker) -> Dict[str, Any]:
+    def _get_dividend_history(self, stock: yf.Ticker, period: str = "max") -> Dict[str, Any]:
         """
-        Get complete dividend payment history.
+        Get complete dividend payment history (that of the chart over *period*,
+        ``_events``: a quote's since its last collection, whose yearly figures
+        cover those payments alone).
 
         Useful for:
         - Dividend growth rate calculation (Peter Lynch)
@@ -771,7 +804,7 @@ class YahooHandler:
             # The payments come from the chart, as the splits do, and a failed quote
             # mustn't keep them from a split the same run stores (BUG-094). A chart
             # yfinance didn't get isn't a stock without dividends (BUG-107).
-            dividends = stock.dividends
+            dividends = _events(stock, "dividends", period)
             if not _served(dividends, "Dividends"):
                 raise LookupError(NO_HISTORY)
             try:
@@ -959,11 +992,13 @@ class YahooHandler:
         """Get historical stock split events as ``{date, ratio}`` records, ascending."""
         return self._splits_and_error(stock)[0]
 
-    def _splits_and_error(self, stock: yf.Ticker) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-        """``_get_splits``' records, and why the request failed, if it did: an error, or a split history yfinance
-        didn't get from Yahoo (``_served``, BUG-107), which is no answer to whether a split came."""
+    def _splits_and_error(self, stock: yf.Ticker,
+                          period: str = "max") -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """``_get_splits``' records (those of the chart over *period*, ``_events``), and why the request failed, if it
+        did: an error, or a split history yfinance didn't get from Yahoo (``_served``, BUG-107), which is no answer to
+        whether a split came."""
         try:
-            splits = stock.splits
+            splits = _events(stock, "splits", period)
             if not _served(splits, "Stock Splits"):
                 self.logger.warning(f"Error getting splits: {NO_HISTORY}")
                 return [], NO_HISTORY

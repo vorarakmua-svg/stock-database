@@ -189,6 +189,13 @@ def _why(exc: Exception) -> str:
 # These update at most quarterly, so a week-long cache is safe and slashes
 # repeated network load when re-running over many tickers.
 _DEFAULT_CACHE_TTL_SECONDS = 7 * 24 * 3600
+#: The shape of ``get_submissions``' answer, kept in its cached file (``cache_version``): a file cached by a build that
+#: gave another shape (without ``latest_report``, BUG-285, or ``reports``, Q17) is fetched again, not read for the
+#: cache's week (BUG-296). Bump it with any change to the answer's keys or their meaning.
+SUBMISSIONS_CACHE_VERSION = 1
+#: How long the SEC's ticker map (company_tickers.json) is read from the cache: a ticker listed since was "CIK not
+#: found", and its company stored without SEC data (BUG-235). A ticker the cached map lacks reads it again, once.
+TICKER_MAP_TTL_SECONDS = 7 * 24 * 3600
 
 
 class SECHandler:
@@ -261,6 +268,8 @@ class SECHandler:
 
         # CIK mapping cache
         self._cik_mapping: Optional[Dict[str, str]] = None
+        # Whether this handler asked the SEC for the map: a map from the cache that lacks a ticker is asked for once.
+        self._cik_map_asked = False
 
         # Fallback mappings for tickers missing from SEC's company_tickers.json
         # These are common stocks where only preferred tickers are listed
@@ -550,10 +559,20 @@ class SECHandler:
         if fallback_cik:
             return str(fallback_cik).zfill(10)
 
+        # A map read from the cache may predate the ticker (BUG-235): ask the SEC for it, once a handler.
+        if self._cik_mapping is not None and not self._cik_map_asked:
+            with self._cik_lock:
+                if not self._cik_map_asked:
+                    self._fetch_cik_mapping()
+            cik = (self._cik_mapping or {}).get(ticker)
+            if cik:
+                return str(cik).zfill(10)
+
         return None
 
     def _load_cik_mapping(self) -> None:
-        """Load ticker to CIK mapping from SEC."""
+        """Load ticker to CIK mapping from SEC: the cached copy while it is under TICKER_MAP_TTL_SECONDS old, else
+        the SEC's, else (the request failed) the cached copy at any age (BUG-235)."""
         # Try to load from cache first
         cache_file = self.cache_dir / "company_tickers.json"
 
@@ -562,16 +581,23 @@ class SECHandler:
                 with open(cache_file, 'r') as f:
                     data = json.load(f)
                 self._cik_mapping = self._parse_tickers_json(data)
-                self.logger.info("Loaded CIK mapping from cache")
-                return
+                if time.time() - cache_file.stat().st_mtime <= TICKER_MAP_TTL_SECONDS:
+                    self.logger.info("Loaded CIK mapping from cache")
+                    return
             except Exception as e:
                 self.logger.warning(f"Error loading cached CIK mapping: {e}")
 
-        # Fetch from SEC
+        self._fetch_cik_mapping()
+
+    def _fetch_cik_mapping(self) -> None:
+        """Fetch the SEC's ticker map into the mapping and the cache. A failed request keeps the mapping as it was
+        (one from the cache, or None, so a later ticker can retry the fetch within the same run)."""
+        cache_file = self.cache_dir / "company_tickers.json"
         url = f"{self.SEC_WWW_URL}/files/company_tickers.json"
         self.logger.info("Fetching CIK mapping from SEC...")
 
         try:
+            self._cik_map_asked = True
             response = self._request(url, timeout=30)
             response.raise_for_status()
 
@@ -586,10 +612,12 @@ class SECHandler:
             self.logger.info(f"Loaded {len(self._cik_mapping)} ticker mappings")
 
         except Exception as e:
+            if self._cik_mapping is not None:
+                self.logger.warning(f"Error fetching CIK mapping: {e}; the cached map stands")
+                return
             # Leave the mapping as None (not {}) so a later ticker can retry the
             # fetch within the same run instead of being permanently disabled.
             self.logger.error(f"Error fetching CIK mapping: {e}")
-            self._cik_mapping = None
 
     def _parse_tickers_json(self, data: Dict) -> Dict[str, str]:
         """Parse SEC company_tickers.json format."""
@@ -656,9 +684,10 @@ class SECHandler:
 
         cache_path = self._payload_cache_path("submissions", cik)
         cached = self._read_payload_cache(cache_path)
-        if cached is not None:
+        # A file cached in another shape is fetched again (BUG-296: one without latest_report hid a bank's reports).
+        if cached is not None and cached.get("cache_version") == SUBMISSIONS_CACHE_VERSION:
             self.logger.debug(f"submissions cache hit for CIK {cik}")
-            return cached
+            return {key: value for key, value in cached.items() if key != "cache_version"}
 
         url = f"{self.SEC_BASE_URL}/submissions/CIK{cik}.json"
         self.logger.debug(f"Fetching submissions from {url}")
@@ -697,7 +726,7 @@ class SECHandler:
             "reports": _newest_reports(recent),
         }
 
-        self._write_payload_cache(cache_path, result)
+        self._write_payload_cache(cache_path, {**result, "cache_version": SUBMISSIONS_CACHE_VERSION})
         return result
 
     def _extract_recent_filings(

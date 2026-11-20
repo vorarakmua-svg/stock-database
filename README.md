@@ -343,6 +343,10 @@ python diagnose.py AAPL MSFT GOOGL
 - Official financial statements (10-K, 10-Q, 20-F, 40-F)
 - Complete XBRL data (all US-GAAP tags)
 - Company submissions and filings
+- The SEC's ticker map (`company_tickers.json`), which gives each ticker its CIK: cached for a week, then fetched
+  again (a stale copy stands, with a warning, when the SEC can't be reached); a ticker the cached map lacks has it
+  fetched again once a run (BUG-235). Cached submissions carry the version of their shape and are fetched again when
+  an earlier build wrote them (BUG-296)
 - Insider transactions (Form 4): each filing's XML for the last 3 years, parsed (see
   [SEC ownership](#sec-ownership-insiders-and-gurus))
 - Institutional holdings reports (13F-HR) of 34 gurus, from each filing's full submission text
@@ -371,7 +375,9 @@ python diagnose.py AAPL MSFT GOOGL
 
 - The daily par yield curve, a CSV a year from 1990: every maturity from 1 month to 30 years, in percent as published
 - Asked by `python -m src.market.collect` for every year; a collection without a FRED API key also asks the current
-  year's file for the 10-year rate
+  year's file for the 10-year rate: its latest day with a 10-year yield, the prior year's while the current year has
+  none (early January). When Treasury.gov fails, the rate last fetched (kept in `data/cache/treasury_gov_rate.json`)
+  stands in with its own day, which the valuations show, and a warning; with none kept, the static estimate (flagged)
 
 ### OpenFIGI
 
@@ -2553,8 +2559,11 @@ reads of the SEC as tries at a gap (BUG-232, BUG-281).
 split-adjusted as of `served_on`: the collection's day on Yahoo's calendar, its last
 daily bar or the latest split Yahoo listed, whichever is later (the collector's own date
 can run a day ahead of New York's). A saved quote refresh stores them too, by the same
-rule for a run without bars: the latest split Yahoo lists, else the day before the
-refresh's own (BUG-160, BUG-258). The valuation takes each payment to its price's
+rule for a run without bars: the latest split Yahoo lists in the refresh's chart, else the day
+before the refresh's own (BUG-160, BUG-258). That chart reaches a week before the earliest of the
+stored price's day, the last collection with Yahoo and the latest payment stored (a month's chart
+for a company collected lately), and over the whole history only for a ticker with none of them
+(BUG-108). The valuation takes each payment to its price's
 split basis by the splits in between, so a run whose dividend request failed can still
 store a split. A request fails however yfinance reports it: yfinance 1.0 answers a chart request
 that failed (no timezone found, an error or empty answer) with an empty history rather than an
@@ -2736,7 +2745,7 @@ The server binds to `127.0.0.1` by default (localhost only).
 - **Cross-company screener** — filter by any fundamental metric (ROIC, net margin, debt/EBITDA, …) *or* market/valuation column (P/E, dividend yield, PEG, short interest, …) *or* the valuation layer's Upside % / verdict *or* the quality scores (Piotroski F, Altman Z, the ranks and composite, …, with five preset screens) *or* the other valuation indicators (the reverse DCF's implied growth, the upsides to the EPV, the median P/S value and the tangible Graham number, price / net-net working capital) *or* the insiders' open-market trades and the gurus' holdings (`ins_*`, `gurus_holding`, `gurus_buying`) *or* the SEC's industry (a SIC prefix filter) and the ranks within it (`ind_*`), sort, paginate, compare selected companies side-by-side, and download results as CSV.
 - **Screener units** — a value typed in the filter box is in the unit the field is shown in: a percent for every field shown as a % (`insider_percent`, `short_percent_of_float`, `roic`, the margins, the upsides, the percentiles, … stored as fractions, so *Insider % > 5* is `insider_percent_gt=0.05`) and for Debt / equity (%), which is Yahoo's percent as stored (100 is 1x); a plain number for the rest. The script converts when a filter is added and shows a chip in the typed unit; the URL (`/screener?insider_percent_gt=0.05`), the saved screens (browser storage), the presets and `GET /api/screen` stay in the stored unit, so none of them changes meaning.
 - **Point-in-time (as-of) explorer** — look up what financials and ratios looked like as of any historical date (before later restatements), and browse vintage side-by-side tables.
-- **On-demand quote refresh** — re-fetch a single ticker's live price/market snapshot from the workstation without running a full collection (see `STOCK_WEB_ALLOW_QUOTE_REFRESH` below). After a stock split the stored valuations don't reflect (one dated after the stored price, as after a collection whose Yahoo quote failed, or one not yet stored since the ticker's last collection with Yahoo), the refresh isn't saved, because those valuations are on the pre-split basis; its status asks for a full collection of the ticker instead. Nor is a refresh whose split history Yahoo didn't serve (yfinance's empty answer to a failed request): it can't tell a split, so its status says so (BUG-107). A split here is a share split (a simple ratio such as 2:1, 5:4 or 1:10) or any price factor of 3:2 or more. The stock dividends and smaller spin-off factors Yahoo also lists don't stop a refresh: it stores them with the price and values the ticker again, so its DDM and multiples band move onto the new price's basis, as a full collection would put them. Every saved refresh also stores Yahoo's dividend payments, from the request that serves its split history, as a collection stores them, so a valuation after it counts DDM's trailing year, which ends on the refresh's day, on the payments a full collection would have (BUG-160). A saved refresh recomputes the snapshot's enterprise value, EV/EBITDA, EV/FCF and FCF yield as a full collection does (its new market cap with the latest year's net debt, EBITDA and FCF), so the columns keep one definition; Yahoo's own enterprise value stays in the JSON's `valuation` section.
+- **On-demand quote refresh** — re-fetch a single ticker's live price/market snapshot from the workstation without running a full collection (see `STOCK_WEB_ALLOW_QUOTE_REFRESH` below). After a stock split the stored valuations don't reflect (one dated after the stored price, as after a collection whose Yahoo quote failed, or one not yet stored since the ticker's last collection with Yahoo), the refresh isn't saved, because those valuations are on the pre-split basis; its status asks for a full collection of the ticker instead. Nor is a refresh whose split history Yahoo didn't serve (yfinance's empty answer to a failed request): it can't tell a split, so its status says so (BUG-107). A split here is a share split (a simple ratio such as 2:1, 5:4 or 1:10) or any price factor of 3:2 or more. The stock dividends and smaller spin-off factors Yahoo also lists don't stop a refresh: it stores them with the price and values the ticker again, so its DDM and multiples band move onto the new price's basis, as a full collection would put them. Every saved refresh also stores Yahoo's dividend payments, from the request that serves its split history (Yahoo's chart since the last collection, not the whole daily history, BUG-108), as a collection stores them, so a valuation after it counts DDM's trailing year, which ends on the refresh's day, on the payments a full collection would have (BUG-160). A saved refresh recomputes the snapshot's enterprise value, EV/EBITDA, EV/FCF and FCF yield as a full collection does (its new market cap with the latest year's net debt, EBITDA and FCF), so the columns keep one definition; Yahoo's own enterprise value stays in the JSON's `valuation` section.
 - **CSV export** — download annual financials, annual metrics, or screener results as CSV from any company page or screener view.
 
 ### Terminal command bar

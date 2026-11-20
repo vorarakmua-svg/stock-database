@@ -5,7 +5,7 @@ the job's errors, and the ticker's next refresh values it again (its valuations 
 are SQLite's own: another writer holds the lock past the wait (``refresh_fakes.locked``)."""
 import sqlite3
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pytest
 
@@ -24,7 +24,7 @@ class _Handler:
     def __init__(self, answer: Dict[str, Any]) -> None:
         self.answer = answer
 
-    def fetch_quote(self, ticker: str) -> Dict[str, Any]:
+    def fetch_quote(self, ticker: str, since: Optional[str] = None) -> Dict[str, Any]:
         return dict(self.answer)
 
 

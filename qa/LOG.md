@@ -3576,3 +3576,15 @@ Result: BUG-002, BUG-089, BUG-090, BUG-091 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3829 passed, 2 skipped | CI: PR #29
 Commit: (this commit) fix: one escaped read-only URI everywhere; a quiet suite; price_bars documented (BUG-002, BUG-089, BUG-090, BUG-091)
 Next: GATHER 052/108/235/296 (worker), then stop (the user's instruction).
+
+## Iteration 216: 2026-11-21 20:00: fix (BUG-052, BUG-108, BUG-235, BUG-296)
+Picked: four GATHER/SEC P3s; an opus worker (BUG-052 under the stop rule: nothing moved).
+Did: a failed Treasury fetch uses the last saved rate with its own date, never last year's year-end; a quote
+refresh reads only the events window it needs; the SEC ticker map expires weekly; old-shape cached submissions are
+fetched again.
+- RED: 47 failed on c441e02; GREEN. 37 of 37 mutants; bug258's spec re-quoted.
+- Engine over 502: all tables identical.
+Result: BUG-052, BUG-108, BUG-235, BUG-296 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3883 passed, 2 skipped | CI: PR #29
+Commit: (this commit) fix(gather): the saved Treasury rate on a failure; a refresh reads only the events it needs; the ticker map and old submissions expire (BUG-052, BUG-108, BUG-235, BUG-296)
+Stopped after this unit at the user's request ("after current work done then stop").

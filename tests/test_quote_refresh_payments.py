@@ -77,7 +77,7 @@ class _Handler:
     def __init__(self, answer: Dict[str, Any]) -> None:
         self.answer = answer
 
-    def fetch_quote(self, ticker: str) -> Dict[str, Any]:
+    def fetch_quote(self, ticker: str, since: Optional[str] = None) -> Dict[str, Any]:
         return dict(self.answer)
 
 

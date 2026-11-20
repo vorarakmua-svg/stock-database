@@ -4,7 +4,7 @@ after a split the stored valuations don't reflect (BUG-093, BUG-102), which only
 with a stock dividend's or a spin-off's factor since (BUG-128), for the caller to value the ticker on; or Yahoo's
 error. The web job's own behavior is tests/test_web_quote_refresh.py's."""
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pytest
 
@@ -22,7 +22,7 @@ class _Handler:
         self.answer = answer
         self.calls: List[str] = []
 
-    def fetch_quote(self, ticker: str) -> Dict[str, Any]:
+    def fetch_quote(self, ticker: str, since: Optional[str] = None) -> Dict[str, Any]:
         self.calls.append(ticker)
         return dict(self.answer)
 

@@ -119,7 +119,7 @@ class FakeYahoo:
         self.quote_calls: List[str] = []
         self.bar_calls: List[tuple] = []
 
-    def fetch_quote(self, ticker: str) -> Dict[str, Any]:
+    def fetch_quote(self, ticker: str, since: Optional[str] = None) -> Dict[str, Any]:
         self.quote_calls.append(ticker)
         got = self.quotes.get(ticker)
         if isinstance(got, Exception):
