@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 115 · NEEDS-USER 2 · Decided: 7 · Verified: 260
+**Open:** P0 0 · P1 0 · P2 0 · P3 115 · NEEDS-USER 3 · Decided: 7 · Verified: 260
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2376,6 +2376,12 @@ Expected: their debt read.   Actual: none.
 Status: OPEN (NEEDS-USER)
 Found: BUG-308's worker (iteration 208) | Fixed: | Regression test:
 Context: `inputs._normalize_splits` drops every year older than a share-count seam beyond 50x, calling it a unit/scale break ('no company splits 1:50'). EXE's FY2017->FY2018 seam (906M -> 4.546M diluted) is a real 1:200 reverse split. Truncating leaves EXE's DCF growth at 0.9%; folding the split would make it ~15% (a valuation change). Recommendation: fold a seam when a stored split (or the implied-count test) explains it, keep truncating true unit breaks; measure over the 502 before deciding. EG is the other truncated ticker.
+Decision: 
+
+### Q20 [DATA] NEEDS-USER: apply the fallback-tag fix for BUG-364/203/221? It moves 18 historical values (no label), 37 EPV bases and adds 59 Magic Formula ranks
+Status: OPEN (NEEDS-USER)
+Found: the BUG-364/203/221 worker (iteration 210), prepared in %LOCALAPPDATA%\stockdb-qa\bug364\out (diffs, mutants, census, DB-copy diffs; `qa/evidence/bug364-investigation.txt`) | Fixed: | Regression test:
+What it does: appends fallback tags (long_term_debt: LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities and DebtLongtermAndShorttermCombinedAmount; ppe_net: the lease-inclusive PP&E concept; short_term_investments: six current-securities tags incl. DebtSecuritiesCurrent and MarketableSecurities last) plus an xbrl_parser.py rule (+42/-2, `_totals_beside_current_debt_set_aside` in `_filer_facts`) so a total including current debt isn't read on a date its current part is tagged. GM's debt ($131.6B) and PGR's become read; 102 filers gain PP&E; NVDA-style short-term investments. Census: annual LTD 59 cells/6 filers, STI 756/110, PP&E 418/93 (+quarters, TTM, vintages). Moves on DB copies: 18 historical values within their labels (HUM 319.04->276.76, INTC 23.19->24.55, GM 75.14->76.91, FSLR, KLAC, ORCL, TYL ...), EPV base at 37 (GM 120.02->38.24, ELV 407.34->526.69, VEEV 48.15->79.89), NCAV bear at 10, Magic Formula ranked 256->315, 15 composites by 2, 5 new beneish flags; no median, verdict, owner-earnings verdict or label. Oracles identical. Look-ahead 0. Concerns: MarketableSecurities stores banks' whole securities books as short-term investments (BAC $925.6B; no valuation moves, but FA/exports show it); GM's quarters lose EV (no debt in its 10-Qs); the parser edit must be carried across feat/asof-snapshots (Q18). Recommendation: apply after Q18's merge, dropping MarketableSecurities for banks (sector rule) or leaving it out.
 Decision: 
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?

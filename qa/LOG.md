@@ -3508,3 +3508,13 @@ Result: BUG-107, BUG-282, BUG-340 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3662 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(gather): a failed Yahoo or SEC request isn't read as an empty answer; the XBRL cache follows its reader (BUG-107, BUG-282, BUG-340)
 Next: DATA 364/203/221 (worker, expected NEEDS-USER); code review 34 due.
+
+## Iteration 210: 2026-11-20 21:10: BUG-364/203/221 prepared, held for the user (Q20)
+Picked: three DATA P3s (unread tags); an opus worker, under the stop rule.
+Did: fallback tags for long-term debt, PP&E and short-term investments, with a parser rule so a total holding current
+debt isn't double-counted. Fully measured on DB copies (engine over 502): 18 historical values move within their
+labels, 37 EPV bases, 59 new Magic Formula ranks; no median, verdict or label. Not applied: Q20 NEEDS-USER (and the
+parser edit should land after Q18's merge).
+Gates: unchanged (qa/ only) | CI: PR #29
+Commit: (this commit) chore(qa): the fallback-tag fix waits on the user (Q20)
+Next: VAL 039/293/311 (worker).
