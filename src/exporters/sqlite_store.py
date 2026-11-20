@@ -310,6 +310,27 @@ class SQLiteStore:
                 PRIMARY KEY (ticker, fiscal_year, accn)
             );
 
+            -- The annual record as known at each filing date (the as-of snapshots): a row per fiscal year and day
+            -- its row changed, known_from the day and known_accn its latest filing; present 0 the day a year left the
+            -- record. source_tags (each field's tag) and source_filings (each field's accn, filed, form) are JSON.
+            CREATE TABLE IF NOT EXISTS financials_annual_known (
+                ticker TEXT NOT NULL,
+                fiscal_year INTEGER NOT NULL,
+                known_from TEXT NOT NULL,
+                known_accn TEXT,
+                present INTEGER NOT NULL,
+                accn TEXT,
+                filed_date TEXT,
+                form TEXT,
+                period_end TEXT,
+                calendar_year INTEGER,
+                frame TEXT,
+                source_tags TEXT,
+                source_filings TEXT,
+                {_cols_ddl(_CANONICAL_COLUMNS)},
+                PRIMARY KEY (ticker, fiscal_year, known_from)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_fa_calendar_year
                 ON financials_annual (calendar_year);
             CREATE INDEX IF NOT EXISTS idx_fq_calendar
@@ -318,6 +339,8 @@ class SQLiteStore:
                 ON financials_ttm (ticker, calendar_year, calendar_quarter);
             CREATE INDEX IF NOT EXISTS idx_fav_asof
                 ON financials_annual_vintages (ticker, fiscal_year, filed_date);
+            CREATE INDEX IF NOT EXISTS idx_fak_asof
+                ON financials_annual_known (ticker, fiscal_year, known_from);
 
             CREATE TABLE IF NOT EXISTS metrics_annual (
                 ticker TEXT NOT NULL,
@@ -738,10 +761,11 @@ class SQLiteStore:
             "financials_ttm": {"fiscal_year": "INTEGER", "calendar_year": "INTEGER",
                                "calendar_quarter": "INTEGER",
                                **{c: "REAL" for c in _CANONICAL_COLUMNS}},
-            # Each figure's tag (BUG-271): NULL in a vintage stored before the column, which the as-of view
-            # reads as it did, by filing date alone, until the next collection.
+            # Each figure's tag (BUG-271): NULL in a vintage stored before the column, until the next
+            # collection restates the ticker's vintages.
             "financials_annual_vintages": {"calendar_year": "INTEGER", "source_tags": "TEXT",
                                             **{c: "REAL" for c in _CANONICAL_COLUMNS}},
+            "financials_annual_known": {c: "REAL" for c in _CANONICAL_COLUMNS},
             "metrics_annual": {c: "REAL" for c in _METRIC_COLUMNS},
             "market_snapshots": {**{c: "REAL" for c in _SNAPSHOT_COLUMNS},
                                  **{c: "TEXT" for c in _SNAPSHOT_TEXT_COLUMNS}},
@@ -832,7 +856,8 @@ class SQLiteStore:
     @staticmethod
     def _figure_tags(period: Dict[str, Any]) -> Optional[str]:
         """The tag each canonical figure of *period* was read from (its ``_source_tags``: a us-gaap tag, "derived",
-        "rescaled x1000"), as JSON; None without any. The as-of view ranks a vintage's figure by it (BUG-271)."""
+        "rescaled x1000"), as JSON; None without any. Stored with each vintage (BUG-271); the as-of view reads its
+        snapshots' own ``source_tags``, not this."""
         tags = period.get("_source_tags") or {}
         kept = {c: tags[c] for c in _CANONICAL_COLUMNS if period.get(c) is not None and c in tags}
         return json.dumps(kept, sort_keys=True) if kept else None
@@ -1049,7 +1074,11 @@ class SQLiteStore:
             row.update(self._canonical_values(period, restated))
             self._upsert(conn, "financials_ttm", ["ticker", "period_end"], row, fill_only=fill)
 
-        # financials_annual_vintages (point-in-time: one row per filing/accession)
+        # financials_annual_vintages (point-in-time: one row per filing/accession). A run that built the as-of
+        # snapshots, which give the vintages too, restates both tables' rows for the years it built.
+        replace = stock.financials_annual_known is not None and not fill
+        if replace:
+            self._clear_snapshots(conn, stock)
         for fy, by_accn in (stock.financials_annual_vintages or {}).items():
             for accn, period in by_accn.items():
                 vrow = {
@@ -1065,6 +1094,10 @@ class SQLiteStore:
                 vrow.update(self._canonical_values(period, restated))
                 self._upsert(conn, "financials_annual_vintages",
                              ["ticker", "fiscal_year", "accn"], vrow, fill_only=fill)
+
+        # financials_annual_known (the as-of snapshots)
+        if replace:
+            self._write_known(conn, stock)
 
         # market_snapshots (point-in-time)
         md = stock.market_data or {}
@@ -1154,6 +1187,55 @@ class SQLiteStore:
         self._write_price_bars(conn, stock.ticker, stock.price_bars or [])
         self._write_earnings_history(conn, stock.ticker, stock.earnings_history or [])
         self._write_split_events(conn, stock.ticker, stock.splits or [])
+
+    @staticmethod
+    def _clear_snapshots(conn: sqlite3.Connection, stock: StockData) -> None:
+        """Delete the stored rows a run that built *stock*'s as-of snapshots restates, in ``financials_annual_known``
+        and ``financials_annual_vintages``, before it writes its own (the run's transaction holds both).
+
+        Whether a run built them is ``stock.financials_annual_known``: None when it didn't (its companyfacts request
+        failed, a run without SEC data, any run that didn't reach ``build_snapshots``), which deletes nothing; a list,
+        empty or not, when it did. A run that built them speaks for every row of the ticker's, so a vintage or a
+        snapshot it no longer gives goes (a view of a year not over on its filing's day, BUG-113), and an empty list
+        deletes them all. With a ``years_back``, the run kept its latest years' rows (replayed on every filing), so
+        it speaks for those fiscal years only. A run that only fills (its predecessor's filings couldn't be read,
+        BUG-179) isn't one to call this for: its snapshots read part of the facts.
+        """
+        if not stock.years_back:
+            for table in ("financials_annual_known", "financials_annual_vintages"):
+                conn.execute(f"DELETE FROM {table} WHERE ticker = ?", (stock.ticker,))
+            return
+        years = sorted({int(row["fiscal_year"]) for row in stock.financials_annual_known or []}
+                       | {int(fy) for fy in stock.financials_annual_vintages or {} if str(fy).isdigit()})
+        if not years:
+            return
+        marks = ", ".join("?" for _ in years)
+        for table in ("financials_annual_known", "financials_annual_vintages"):
+            conn.execute(f"DELETE FROM {table} WHERE ticker = ? AND fiscal_year IN ({marks})", [stock.ticker, *years])
+
+    @staticmethod
+    def _write_known(conn: sqlite3.Connection, stock: StockData) -> None:
+        """Insert *stock*'s as-of snapshots (``financials_annual_known``), after ``_clear_snapshots`` has deleted the
+        rows they restate."""
+        rows = stock.financials_annual_known or []
+        if not rows:
+            return
+        columns = ["ticker", "fiscal_year", "known_from", "known_accn", "present", "accn", "filed_date", "form",
+                   "period_end", "calendar_year", "frame", "source_tags", "source_filings", *_CANONICAL_COLUMNS]
+
+        def stored(row: Dict[str, Any]) -> List[Any]:
+            present = bool(row.get("present"))
+            tags, filings = row.get("source_tags"), row.get("source_filings")
+            return [stock.ticker, int(row["fiscal_year"]), row["known_from"], row.get("known_accn"), int(present),
+                    row.get("accn"), row.get("filed_date"), row.get("form"), row.get("period_end"),
+                    row.get("calendar_year"), row.get("frame"),
+                    json.dumps(tags, sort_keys=True) if present and tags is not None else None,
+                    json.dumps(filings, sort_keys=True) if present and filings is not None else None,
+                    *(row.get(c) if present else None for c in _CANONICAL_COLUMNS)]
+
+        col_list = ", ".join(f'"{c}"' for c in columns)
+        conn.executemany(f"INSERT INTO financials_annual_known ({col_list}) "
+                         f"VALUES ({', '.join('?' for _ in columns)})", [stored(row) for row in rows])
 
     def _write_holders(self, conn: sqlite3.Connection, ticker: str, collected_at: str,
                         shareholders: Dict[str, Any]) -> None:

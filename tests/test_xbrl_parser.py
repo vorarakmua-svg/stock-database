@@ -4,6 +4,7 @@ import pytest
 
 from src.exporters.sqlite_store import SQLiteStore
 from src.models.stock_data import StockData
+from src.parsers.annual_snapshots import build_snapshots
 from src.parsers.calculated_metrics import CalculatedMetrics
 from src.parsers.derived_fields import apply_derivations
 from src.parsers.share_scale import normalize_share_scale
@@ -892,9 +893,12 @@ def test_a_later_vintage_whose_borrowings_hold_the_paper_reads_none_outside_them
 
 
 def _debt_as_of(tmp_path, facts, *days):
-    """FY2025's total debt as the as-of view reads it on each of *days*, from the vintages a collection stores."""
+    """FY2025's total debt as the as-of view reads it on each of *days*, from the snapshots a collection stores (the
+    annual record replayed on the facts known by each filing date)."""
+    snapshots = build_snapshots(XBRLParser(), facts, ticker="DEBT", years_back=None)
     stock = StockData(ticker="DEBT", cik="1", company_name="Debt Co")
-    stock.financials_annual_vintages = XBRLParser().extract_annual_vintages(facts)
+    stock.financials_annual_known = snapshots.rows
+    stock.financials_annual_vintages = snapshots.vintages
     db = tmp_path / "stock.db"
     SQLiteStore(db_path=str(db)).export([stock])
     with AsOfReader(db) as reader:
@@ -918,6 +922,15 @@ def _debt_as_of(tmp_path, facts, *days):
 def test_the_as_of_view_reads_each_10ks_debt_in_its_window(tmp_path, facts, totals):
     # BUG-256: as of a day before the later 10-K, and a day after it.
     assert _debt_as_of(tmp_path, facts(), "2026-06-30", "2027-06-30") == [pytest.approx(t) for t in totals]
+
+
+def test_the_as_of_debt_counts_the_maturities_once_beside_a_later_total(tmp_path):
+    # BUG-334 (code review 28): the as-of debt view read a field its filing lacked from an earlier one, a later 10-K's
+    # LongTermDebt total, which holds the maturities, beside the first 10-K's $4B of maturities: $48B for $44B. The
+    # view is now the record as known on the day, which reads the year's debt by its own rules on either day.
+    facts = _with_later_10k(_debt_filing(LongTermDebtNoncurrent=40.0e9, LongTermDebtCurrent=4.0e9), "2027-02-12",
+                            LongTermDebt=44.0e9)
+    assert _debt_as_of(tmp_path, facts, "2026-06-30", "2027-06-30") == [pytest.approx(44.0e9)] * 2
 
 
 def test_a_vintage_reads_no_10qs_figure_beside_its_paper(tmp_path):
@@ -2729,6 +2742,74 @@ def test_a_later_filings_scale_typo_keeps_the_figure_earlier_filings_report():
         ("dividends_per_share", "scale x10^6", 2770000.0)]
 
 
+def test_a_restored_figure_names_the_filing_whose_figure_was_kept():
+    # The 2024 10-K's FY2022 dividend is a scale typo: the figure put back is the 2023 10-K's, the latest that agreed.
+    annual = _annual(_filed_years("CommonStockDividendsPerShareDeclared", "USD/shares", {
+        2021: [("2021-08-06", 2.68)],
+        2022: [("2022-08-05", 2.77), ("2023-08-04", 2.77), ("2024-08-02", 2770000.0)],
+        2023: [("2023-08-04", 2.80), ("2024-08-02", 2.80)]}))
+    assert annual["2022"]["_source_filings"]["dividends_per_share"] == {
+        "accn": "2023-08-04", "filed": "2023-08-04", "form": "10-K"}
+    assert annual["2023"]["_source_filings"]["dividends_per_share"]["accn"] == "2024-08-02"
+
+
+def _filed(entry, accn):
+    return {**entry, "accn": accn}
+
+
+def test_each_annual_figure_names_the_filing_it_came_from():
+    # FY2020's revenue, restated in the FY2021 10-K, names that 10-K; its net income, only in the FY2020 10-K, names it.
+    first, second = "0000001-21-000010", "0000001-22-000020"
+    facts = {"facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": [
+            _filed(usd(100.0, start="2020-01-01", end="2020-12-31", fy=2020, filed="2021-02-15"), first),
+            _filed(usd(105.0, start="2020-01-01", end="2020-12-31", fy=2021, filed="2022-02-15"), second),
+            _filed(usd(120.0, start="2021-01-01", end="2021-12-31", fy=2021, filed="2022-02-15"), second)]}},
+        "NetIncomeLoss": {"units": {"USD": [
+            _filed(usd(10.0, start="2020-01-01", end="2020-12-31", fy=2020, filed="2021-02-15"), first),
+            _filed(usd(12.0, start="2021-01-01", end="2021-12-31", fy=2021, filed="2022-02-15"), second)]}},
+    }}}
+    annual = XBRLParser().extract_annual_financials(facts)
+    assert annual["2020"]["revenue"] == 105.0
+    assert annual["2020"]["_source_filings"]["revenue"] == {"accn": second, "filed": "2022-02-15", "form": "10-K"}
+    assert annual["2020"]["_source_filings"]["net_income"] == {"accn": first, "filed": "2021-02-15", "form": "10-K"}
+    assert annual["2021"]["_source_filings"]["revenue"]["accn"] == second
+    # a derived figure names no filing
+    period = annual["2020"]
+    apply_derivations(period)
+    assert set(period["_source_filings"]) == {"revenue", "net_income"}
+    assert all(period["_source_tags"][k] == "derived" for k in period["_source_tags"]
+               if k not in period["_source_filings"])
+
+
+def test_the_filings_named_reach_neither_the_stored_row_nor_the_json_export(tmp_path):
+    import json
+    import sqlite3
+
+    from src.models.canonical import validate_period
+    facts = {"facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": [usd(100.0, start="2020-01-01", end="2020-12-31", fy=2020, filed="2021-02-15")]}},
+        "NetIncomeLoss": {"units": {"USD": [
+            usd(10.0, start="2020-01-01", end="2020-12-31", fy=2020, filed="2021-02-15")]}}}}}
+    period = XBRLParser().extract_annual_financials(facts)["2020"]
+    apply_derivations(period)
+    clean, errors = validate_period(period)
+    assert errors == [] and clean["_source_filings"] == period["_source_filings"]
+    stock = StockData(ticker="PROV", cik="1", company_name="Prov Co")
+    stock.financials_annual = {"2020": clean}
+    exported = stock.to_dict()
+    assert "_source_filings" not in json.dumps(exported)
+    assert exported["financials_annual"]["2020"]["_source_tags"] == clean["_source_tags"]
+    assert stock.financials_annual["2020"]["_source_filings"]  # the export leaves the record alone
+    db = tmp_path / "stock.db"
+    SQLiteStore(db_path=str(db)).export([stock])
+    with sqlite3.connect(db) as conn:
+        cur = conn.execute("SELECT * FROM financials_annual WHERE ticker = 'PROV'")
+        row = dict(zip([d[0] for d in cur.description], cur.fetchone()))
+    assert row["revenue"] == 100.0
+    assert not [c for c, v in row.items() if "filings" in c or (isinstance(v, str) and '"accn"' in v)]
+
+
 def test_a_later_filing_that_corrects_a_scale_typo_wins():
     # BRK-B's 10-Ks of 2011 and 2012 agreed on 1.6 trillion weighted shares for FY2010; the 2013 one corrected it.
     annual = _annual(_filed_years("WeightedAverageNumberOfSharesOutstandingBasic", "shares", {
@@ -2783,6 +2864,26 @@ def test_flipped_cash_flow_sections_go_back_when_the_year_then_adds_up():
                      year("CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecrease"
                           "IncludingExchangeRateEffect", (0.940e9,) * 3))
     assert (annual["2021"]["investing_cash_flow"], annual["2021"]["financing_cash_flow"]) == (-0.686e9, -1.895e9)
+
+
+def test_the_as_of_view_puts_a_later_filings_flip_right_from_its_day():
+    # BUG-085: the as-of view served the tagging errors the annual record puts right (AMD's FY2021 investing and
+    # financing cash flows read +$0.686B and +$1.895B as of 2026-10-20). It is now the record as known on each day:
+    # put right from the flipping 10-K's own day, the figure kept named as the earlier filing's.
+    def year(tag, by_filing):
+        return _filed_years(tag, "USD", {2021: list(zip(("2022-02-03", "2023-02-27", "2024-01-31"), by_filing))})
+
+    tags = (year("NetCashProvidedByUsedInOperatingActivities", (3.521e9,) * 3),
+            year("NetCashProvidedByUsedInInvestingActivities", (-0.686e9, -0.686e9, 0.686e9)),
+            year("NetCashProvidedByUsedInFinancingActivities", (-1.895e9, -1.895e9, 1.895e9)),
+            year("CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecrease"
+                 "IncludingExchangeRateEffect", (0.940e9,) * 3))
+    facts = {"facts": {"us-gaap": {k: v for tag in tags for k, v in tag.items()}}}
+    rows = [row for row in build_snapshots(XBRLParser(), facts, ticker="AMD", years_back=None).rows
+            if row["fiscal_year"] == 2021]
+    assert [(row["known_from"], row["investing_cash_flow"], row["financing_cash_flow"]) for row in rows] == [
+        ("2022-02-03", -0.686e9, -1.895e9), ("2023-02-27", -0.686e9, -1.895e9), ("2024-01-31", -0.686e9, -1.895e9)]
+    assert rows[-1]["source_filings"]["investing_cash_flow"]["filed"] == "2023-02-27"
 
 
 def test_a_ten_for_one_restatement_is_left_alone():
@@ -3793,3 +3894,20 @@ def test_a_contradicted_to_common_figure_is_not_put_back_by_the_restore_step():
     year = XBRLParser().extract_annual_financials(facts)["2020"]
     assert year["net_income_to_common"] == -50.0e6, (year["net_income_to_common"], year.get("_repairs"))
 
+
+def test_a_day_is_parsed_once_and_as_strptime_parses_it():
+    # The parse reads each entry's start and end on every as-of snapshot's replay: a day's date is kept per string.
+    from datetime import datetime
+
+    from src.parsers.xbrl_parser import _iso_date
+
+    for value in ("2020-02-29", "2021-02-29", "2020-1-5", "2020-01-05T00:00:00", "", None, 20200105, "x"):
+        try:
+            expected = datetime.strptime(value, "%Y-%m-%d").date() if value else None  # type: ignore[arg-type]
+        except (ValueError, TypeError):
+            expected = None
+        assert XBRLParser._parse_iso_date(value) == expected  # type: ignore[arg-type]
+    _iso_date.cache_clear()
+    for _ in range(3):
+        XBRLParser._parse_iso_date("2019-12-31")
+    assert (_iso_date.cache_info().misses, _iso_date.cache_info().hits) == (1, 2)

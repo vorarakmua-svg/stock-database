@@ -477,7 +477,12 @@ def asof_result_fragment(
     pit: PointInTimeMetrics = Depends(get_pit_metrics),
 ) -> Any:
     """HTMX fragment: as-of financials + ratios for one (ticker, fiscal_year, date)."""
+    ticker = ticker.upper().strip()
     filing = asof_reader.as_of_annual(ticker, fiscal_year, date)
+    # A ticker collected before the as-of snapshots has none: its page says so, not "not filed yet"; and one no
+    # collection holds says it's unknown.
+    built = filing is not None or asof_reader.has_snapshots(ticker)
+    known = built or asof_reader.has_company(ticker)
     ratios: Optional[Dict[str, Any]] = None
     if filing is not None:
         ratios = pit.metrics_as_of(ticker, fiscal_year, date)
@@ -507,6 +512,8 @@ def asof_result_fragment(
             "fiscal_year": fiscal_year,
             "date": date,
             "filing": filing,
+            "built": built,
+            "known": known,
             "fin_rows": fin_rows,
             "ratio_rows": ratio_rows,
         },
@@ -521,6 +528,7 @@ def asof_vintages_fragment(
     r: Reader = Depends(get_reader),
 ) -> Any:
     """HTMX fragment: side-by-side vintage table for one (ticker, fiscal_year)."""
+    ticker = ticker.upper().strip()
     rows = r.vintages(ticker, fiscal_year=fiscal_year)
 
     # Build (row_label, [value per filing]) structure

@@ -11,6 +11,9 @@
         <tr><th class="row-label">Filed</th><td>{{ filing.get("filed_date", "—") }}</td></tr>
         <tr><th class="row-label">Period end</th><td>{{ filing.get("period_end", "—") }}</td></tr>
         <tr><th class="row-label">Accession</th><td class="accn">{{ filing.get("accn", "—") }}</td></tr>
+        {% if filing.get("known_from") %}
+        <tr><th class="row-label">In the record</th><td>as known from {{ filing.get("known_from") }}{% if filing.get("known_accn") %} <span class="muted accn">({{ filing.get("known_accn") }})</span>{% endif %}</td></tr>
+        {% endif %}
       </tbody>
     </table>
   </div>
@@ -57,6 +60,15 @@
       hx-trigger="click"
     >Show all filings (vintages)</button>
   </div>
+</div>
+{% elif not known %}
+<div class="empty-state">
+  <strong>{{ ticker }}</strong> is unknown: no company <strong>{{ ticker }}</strong> has been collected.
+</div>
+{% elif not built %}
+<div class="empty-state">
+  The as-of data for <strong>{{ ticker }}</strong> isn't built yet: it was collected before the record was kept as
+  known on each filing date. Re-collecting <strong>{{ ticker }}</strong> builds it.
 </div>
 {% else %}
 <div class="empty-state">

@@ -3588,3 +3588,16 @@ Result: BUG-052, BUG-108, BUG-235, BUG-296 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3883 passed, 2 skipped | CI: PR #29
 Commit: (this commit) fix(gather): the saved Treasury rate on a failure; a refresh reads only the events it needs; the ticker map and old submissions expire (BUG-052, BUG-108, BUG-235, BUG-296)
 Stopped after this unit at the user's request ("after current work done then stop").
+
+## Iteration 217: 2026-11-21 21:30: the as-of snapshots branch merged (Q18)
+Picked: the user's decision on Q18 ("merge", with the as-of branch first, before merging PR #29 to main).
+Did: merged feat/asof-snapshots (ce4ff10, 23 commits) into qa/full-loop; two conflicts (StockData.to_dict's pops kept
+from both sides; pit_metrics' docstring from the branch). The as-of view is now the annual record replayed at each
+filing date (financials_annual_known; lookup-only reader; any-day oracle qa/oracle/asof_oracle.py).
+- VERIFIED: BUG-116, 120, 085, 334, 320. Narrowed: BUG-113, BUG-344 (vintage half). New: BUG-369, BUG-370 (P3).
+- Merged tree: ruff ✓ mypy ✓ pytest 3949 passed, 2 skipped; parser mutant specs re-run (bug087, bug341, bug277).
+- The 502 need one re-collection to build the snapshots (the as-of page reads "isn't built yet" until then); expect
+  MCO's historical value $543.04 -> $531.37 (below -> near) from the vintage replacement.
+Gates: ruff ✓ mypy ✓ pytest 3949 passed, 2 skipped | CI: PR #29
+Commit: (this commit) Merge feat/asof-snapshots: the as-of view is the record as known on the day (Q18)
+Next: merge PR #29 to main; delete merged branches.

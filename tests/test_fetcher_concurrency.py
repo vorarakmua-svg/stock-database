@@ -1,5 +1,6 @@
 """Tests that parallel fetch_multiple preserves order and matches sequential."""
 
+import copy
 import json
 import sqlite3
 import time
@@ -12,6 +13,9 @@ from src.fetchers.sec_handler import SECHandler
 from src.fetchers.stock_data_fetcher import StockDataFetcher
 from src.fetchers.yahoo_handler import YahooHandler
 from src.models.stock_data import StockData
+from src.parsers.annual_record import clean_annual
+from src.parsers.annual_snapshots import build_snapshots
+from src.parsers.xbrl_parser import XBRLParser
 from tests.test_sec_cache import _FakeResp
 from tests.test_xbrl_instance import CONTEXTS, instance
 from tests.test_xbrl_parser import _split_restated_facts
@@ -98,26 +102,13 @@ def test_assess_flags_magnitude_outlier_end_to_end(tmp_path):
         "2023": {"fiscal_year": 2023, "revenue": 1.1e9, **base},   # reverts
         "2024": {"fiscal_year": 2024, "revenue": 1.2e9, **base},
     }
-    fetcher._clean_and_derive(stock)
+    # Cleaned as the run cleans an annual record (build_annual_record): the outlier survives the cleaning.
+    stock.financials_annual = clean_annual(stock.financials_annual, [])
     fetcher._compute_metrics(stock)
     fetcher._assess(stock)
     codes = [f["code"] for f in stock.data_quality["findings"]]
     assert "magnitude_outlier" in codes
     assert stock.data_quality["score"] < 100
-
-
-def test_a_filings_vintage_takes_no_count_scale_from_another_filings_view(tmp_path):
-    # BUG-329: HSY's FY2011 10-K tags FY2011's diluted count in thousands (229,919); the 10-Ks of 2013 and 2014 give it
-    # in units. The first filing's vintage is its own view, as filed: no later filing sets its scale.
-    fetcher = _make_fetcher(tmp_path, workers=1)
-    stock = StockData(ticker="HSY", cik="47111", company_name="Hershey")
-    stock.financials_annual = {"2011": {"fiscal_year": 2011, "net_income": 6.29e8}}
-    stock.financials_annual_vintages = {"2011": {
-        accn: {"fiscal_year": 2011, "net_income": 6.29e8, "weighted_avg_shares_diluted": count}
-        for accn, count in (("0001193125-12-067143", 229_919.0), ("0000047111-13-000007", 229_919_000.0),
-                            ("0000047111-14-000006", 229_919_000.0))}}
-    fetcher._clean_and_derive(stock)
-    assert stock.financials_annual_vintages["2011"]["0001193125-12-067143"]["weighted_avg_shares_diluted"] == 229_919.0
 
 
 def test_assess_clean_company_scores_100(tmp_path):
@@ -130,7 +121,9 @@ def test_assess_clean_company_scores_100(tmp_path):
                  "total_equity": 1.0e9, "operating_cash_flow": 2.0e8}
         for y in (2021, 2022, 2023, 2024)
     }
-    fetcher._clean_and_derive(stock)
+    warnings: list = []
+    stock.financials_annual = clean_annual(stock.financials_annual, warnings)  # as build_annual_record cleans it
+    assert warnings == []
     fetcher._compute_metrics(stock)
     fetcher._assess(stock)
     integrity_codes = {"magnitude_outlier", "cashflow_imbalance",
@@ -424,6 +417,99 @@ def test_a_collected_quarterly_record_and_its_trailing_years_sit_on_one_split_ba
     assert stock.financials_ttm["2019-12-31"]["eps_diluted"] == pytest.approx(23.01)
     assert not [end for end, period in stock.financials_quarterly.items() if "_split_levels" in period]
 
+
+
+@pytest.mark.parametrize("years_back", [None, 2])
+def test_a_collection_carries_the_annual_record_as_known_at_each_filing(tmp_path, monkeypatch, years_back):
+    # The as-of snapshots and each filing's views (its vintages) come from one replay of the record over the filing
+    # dates (build_snapshots), on the facts the run parses, with the run's years_back; its warnings are the run's.
+    from tests.test_annual_snapshots import _three_10ks, _year
+
+    facts = _three_10ks()
+    facts["facts"]["us-gaap"]["Revenues"]["units"]["USD"].append(_year(130.0, 2022, None, "a4"))  # no filing date
+    expected = build_snapshots(XBRLParser(), copy.deepcopy(facts), ticker="SNP", years_back=years_back)
+    fetcher = _sec_only_fetcher(tmp_path, monkeypatch, {
+        "cik": "0000000001", "ticker": "SNP", "source": "sec_edgar", "company_facts": facts,
+        "submissions": {"name": "Snapshot Corp", "filings": []}})
+    stock = fetcher.fetch_ticker("SNP", include_yahoo=False, years_back=years_back)
+    assert stock.financials_annual_known == expected.rows
+    assert stock.financials_annual_vintages == expected.vintages
+    assert {row["fiscal_year"] for row in stock.financials_annual_known} == ({2019, 2020, 2021} if years_back is None
+                                                                             else {2020, 2021})
+    assert stock.years_back == years_back
+    assert expected.warnings and all(warning in stock.warnings for warning in expected.warnings)
+    # The agreement rule: each year's latest row is present and holds the run's record of that year, value for value.
+    from src.mappings.canonical import CANONICAL_BY_KEY
+    from tests.test_annual_snapshots import _same
+    latest = {row["fiscal_year"]: row for row in stock.financials_annual_known}
+    assert {str(fy) for fy in latest} == set(stock.financials_annual)
+    for fy, period in stock.financials_annual.items():
+        row = latest[int(fy)]
+        assert row["present"] is True
+        record = {key: value for key, value in period.items() if key in CANONICAL_BY_KEY}
+        assert {key for key in row if key in CANONICAL_BY_KEY} == set(record)
+        assert all(_same(row[key], value) for key, value in record.items()), fy
+    fetcher.sqlite_store.export([stock])
+    conn = sqlite3.connect(fetcher.sqlite_store.db_path)
+    try:
+        assert conn.execute("SELECT count(*) FROM financials_annual_known WHERE ticker = 'SNP'").fetchone() == (
+            len(expected.rows),)
+    finally:
+        conn.close()
+
+
+def test_a_collection_that_built_no_snapshots_says_so(tmp_path, monkeypatch):
+    # A failed companyfacts request, or a run without SEC data, builds none: None, which the store reads as a run that
+    # can't speak for the stored snapshots and vintages (an empty list would delete them).
+    failed = _collect_from_sec(tmp_path, monkeypatch, {
+        "cik": "0000000001", "ticker": "SNP", "source": "sec_edgar", "company_facts_error": "403 Client Error",
+        "submissions": {"name": "Snapshot Corp", "filings": []}})
+    assert failed.financials_annual_known is None
+    without_sec = _sec_only_fetcher(tmp_path, monkeypatch, {}).fetch_ticker("SNP", include_yahoo=False,
+                                                                           include_sec=False)
+    assert without_sec.financials_annual_known is None
+
+
+def test_a_snapshot_build_that_fails_keeps_the_runs_sec_record_and_the_stored_snapshots(tmp_path, monkeypatch):
+    # build_snapshots raising threw away the whole SEC record (annual, quarterly, warnings, insider transactions). It
+    # is the snapshots' failure alone now: the run warns, builds none (None, vintages {}), and the store leaves the
+    # stored snapshots and vintages as they were.
+    from src.fetchers import stock_data_fetcher
+    from tests.known_rows import snapshot
+
+    fetcher = _sec_only_fetcher(tmp_path, monkeypatch, {
+        "cik": "0001018724", "ticker": "AMZN", "source": "sec_edgar", "company_facts": _split_restated_facts()})
+    stored = StockData(ticker="AMZN", cik="0001018724", company_name="Amazon")
+    stored.financials_annual_known = [snapshot(2015, "2016-01-29", accn="old", revenue=1.0)]
+    stored.financials_annual_vintages = {"2015": {"old": {"fiscal_year": 2015, "accn": "old",
+                                                          "filed_date": "2016-01-29", "period_end": "2015-12-31",
+                                                          "form": "10-K", "revenue": 1.0}}}
+    fetcher.sqlite_store.export([stored])
+    insiders = [{"name": "Insider", "shares": 10}]
+    monkeypatch.setattr(fetcher.sec_handler, "get_insider_transactions", lambda cik, limit=50: insiders)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("snapshot boom")
+
+    monkeypatch.setattr(stock_data_fetcher, "build_snapshots", boom)
+    stock = fetcher.fetch_ticker("AMZN", include_yahoo=False)
+    assert stock.financials_annual and stock.financials_quarterly
+    assert stock.insider_transactions == insiders
+    assert stock.financials_annual_known is None and stock.financials_annual_vintages == {}
+    assert not [e for e in stock.errors if "SEC EDGAR" in e]
+    assert ("SEC EDGAR: AMZN's as-of snapshots couldn't be built (snapshot boom): the stored ones are kept"
+            in stock.warnings)
+    fetcher.sqlite_store.export([stock])
+    conn = sqlite3.connect(fetcher.sqlite_store.db_path)
+    try:
+        assert conn.execute("SELECT count(*) FROM financials_annual WHERE ticker = 'AMZN'").fetchone()[0] > 0
+        assert conn.execute("SELECT count(*) FROM financials_quarterly WHERE ticker = 'AMZN'").fetchone()[0] > 0
+        assert conn.execute("SELECT known_accn FROM financials_annual_known WHERE ticker = 'AMZN'").fetchall() == [
+            ("old",)]
+        assert conn.execute("SELECT accn FROM financials_annual_vintages WHERE ticker = 'AMZN'").fetchall() == [
+            ("old",)]
+    finally:
+        conn.close()
 
 
 def test_a_successor_registrant_is_noted_with_its_predecessor(tmp_path, monkeypatch):

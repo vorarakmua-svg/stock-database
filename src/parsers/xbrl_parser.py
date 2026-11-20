@@ -7,6 +7,7 @@ import statistics
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from fractions import Fraction
+from functools import lru_cache
 from itertools import combinations
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
@@ -292,7 +293,7 @@ def _on_balance_sheet_dates(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     dates. Cash reads the restricted-cash total last, for balance sheets that tag nothing else
     (GE's FY2025; BUG-139); read from a cash flow statement's opening balances too, it made
     cash-only years (DIS's FY2016) and, in the vintages, replaced a balance sheet's own cash in
-    the as-of view (PH's FY2022: $0.536B, its 2024 10-K's $6.648B with the Meggitt escrow)."""
+    a filing's view (PH's FY2022: $0.536B, its 2024 10-K's $6.648B with the Meggitt escrow)."""
     if not any(tag in us_gaap for tag in _BALANCE_SHEET_ONLY):
         return us_gaap
     dates: Dict[str, Set[str]] = defaultdict(set)
@@ -602,12 +603,12 @@ def _current_debt_set_aside(us_gaap: Dict[str, Any], view: str,
     for the annual record (a later 10-K can show an earlier one's paper inside its borrowings: KO's
     FY2019 $10.0B), the 10-Qs' and 10-Ks' for a quarter (a 10-Q's comparative DebtCurrent can hold a
     10-K's paper: NEE's 2011-12-31; BUG-257), and a vintage's own filing's, as known then (KO's
-    FY2019 10-K shows its paper apart; BUG-256). The as-of view fills a vintage's gaps from earlier
-    ones (BUG-110), so a vintage that shows no short-term figure on the date reads its paper beside
-    the latest earlier annual report's (QCOM's FY2016 10-K tags as paper the line its FY2015 10-K
-    tags as borrowings), and one that shows a short-term figure but no paper states the latest paper
-    an earlier annual report filed there, against its own figure (HON's FY2015 10-K, whose borrowings
-    hold its FY2014 10-K's paper: 0.0; AEP's FY2021 10-K, which shows only the maturities). A
+    FY2019 10-K shows its paper apart; BUG-256). A vintage that shows no short-term figure on the
+    date reads its paper beside the latest earlier annual report's (QCOM's FY2016 10-K tags as paper
+    the line its FY2015 10-K tags as borrowings), and one that shows a short-term figure but no paper
+    states the latest paper an earlier annual report filed there, against its own figure (HON's
+    FY2015 10-K, whose borrowings hold its FY2014 10-K's paper: 0.0; AEP's FY2021 10-K, which shows
+    only the maturities). A
     DebtCurrent below its filing's current maturities is a part that holds none (IFF's FY2022);
     DebtCurrent is read as filed, before a refinancing sets it aside. The borrowings and maturities
     *combined* into a DebtCurrent for that view's records (``_current_debt_combinations``) are among
@@ -655,7 +656,7 @@ def _current_debt_set_aside(us_gaap: Dict[str, Any], view: str,
         forms = _ANNUAL_FORMS if view == _ANNUAL_VIEW else _QUARTERLY_FORMS
         held = {key for key, paper in papers.items() if holds(latest(key[1], forms), paper)}
     else:
-        # each annual report in filing order (the as-of view's), on each date it shows a paper or a short-term figure
+        # each annual report in filing order, on each date it shows a paper or a short-term figure
         shows = {key for tag in short_term for key in _by_filing(us_gaap, tag)}
         dates: Dict[str, Set[str]] = defaultdict(set)
         for accn, end in set(papers) | shows:
@@ -663,7 +664,7 @@ def _current_debt_set_aside(us_gaap: Dict[str, Any], view: str,
                 dates[end].add(accn)
         for end in sorted(dates):
             paper: Optional[float] = None  # the latest paper filed on the date
-            source: Optional[Tuple[str, str]] = None  # and short-term figure, the as-of view's
+            source: Optional[Tuple[str, str]] = None  # and the latest short-term figure filed by then
             for accn in sorted(dates[end], key=lambda a: (filings[a][1], a)):
                 key = (accn, end)
                 source = key if key in shows else source
@@ -1228,6 +1229,16 @@ def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+@lru_cache(maxsize=None)
+def _iso_date(value: str) -> Optional[date]:
+    """``value`` (``YYYY-MM-DD``) as a date, or None if it doesn't parse: strptime's answer, kept per string. A
+    filer's entries repeat a few thousand days, and the as-of snapshots parse them again on every filing day."""
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
 def _filer_facts(facts: Dict[str, Any], view: str) -> Dict[str, Any]:
     """A filer's us-gaap facts as the extractions of *view* read them, in this order: its dollar filings', the
     balance-sheet-only tags on their balance sheets' dates, and long-term debt's on its filing's (where it tags its
@@ -1358,6 +1369,11 @@ _REVENUE_WITH_TAXES = "RevenueFromContractWithCustomerIncludingAssessedTax"
 
 def _agree(a: float, b: float) -> bool:
     return abs(a - b) <= _AGREE * max(abs(a), abs(b))
+
+
+def _filing_of(entry: Dict[str, Any]) -> Dict[str, str]:
+    """The filing a fact came from, as a period's ``_source_filings`` names it: its accession, filing day and form."""
+    return {"accn": entry.get("accn") or "", "filed": entry.get("filed") or "", "form": entry.get("form") or ""}
 
 
 def _same_period(end: Optional[str], year_end: Optional[str]) -> bool:
@@ -1602,6 +1618,8 @@ class XBRLParser:
         """Parse an ISO ``YYYY-MM-DD`` string into a date, or None."""
         if not value:
             return None
+        if isinstance(value, str):
+            return _iso_date(value)
         try:
             return datetime.strptime(value, "%Y-%m-%d").date()
         except (ValueError, TypeError):
@@ -1695,7 +1713,8 @@ class XBRLParser:
 
         Each period dict uses canonical keys (see ``mappings/canonical.py``) so the
         same concept is comparable across companies regardless of which XBRL tag a
-        filer used. A ``_source_tags`` map records the tag each value came from, and
+        filer used. A ``_source_tags`` map records the tag each value came from, a
+        ``_source_filings`` map the filing (``{"accn", "filed", "form"}``), and
         a ``_repairs`` list any later filing's tagging error put right (see
         ``_restore_agreed_figures``).
 
@@ -1724,6 +1743,7 @@ class XBRLParser:
         self,
         facts: Dict[str, Any],
         years_back: Optional[int] = None,
+        keep_year_end: bool = False,
     ) -> Dict[str, Dict[str, Dict[str, Any]]]:
         """Every filing's view of each annual period: ``{fiscal_year: {accn: period}}``.
 
@@ -1732,6 +1752,8 @@ class XBRLParser:
         restated year retains both its original and restated vintages. Reads the
         already-fetched ``companyfacts`` (every historical instance carries its own
         ``accn``/``filed``); no extra network. Annual reports (10-K, 20-F, 40-F) only.
+        With *keep_year_end* each view keeps its year's end (``_year_end``, ``_apply_calendar``), so the snapshot
+        builder can drop a view of a year not yet over on its filing's day (BUG-113).
         """
         us_gaap = _filer_facts(facts, _VINTAGE_VIEW)
         if not us_gaap:
@@ -1777,6 +1799,9 @@ class XBRLParser:
                         flow_ends.setdefault(period, {})[field.key] = entry.get("end")
 
         self._apply_calendar(data, period_frames, flow_ends)
+        if not keep_year_end:
+            for period_dict in data.values():
+                period_dict.pop("_year_end", None)  # the annual record's and the snapshots' alone
         if not _in_dollars(data.values()):
             return {}
 
@@ -2205,7 +2230,8 @@ class XBRLParser:
     ) -> bool:
         """Store ``entry``'s value for ``field`` under ``period`` iff it beats the
         current best (higher-priority tag, or the same tag filed at least as late).
-        Seeds a new period dict from ``seed``. Returns True when it won, so the caller
+        Seeds a new period dict from ``seed``, and records the value's tag (``_source_tags``)
+        and filing (``_source_filings``). Returns True when it won, so the caller
         can run any period-level metadata update."""
         filed = entry.get("filed") or ""
         bkey = (period, field.key)
@@ -2221,6 +2247,7 @@ class XBRLParser:
         period_dict = data.setdefault(period, dict(seed))
         period_dict[field.key] = value
         period_dict.setdefault("_source_tags", {})[field.key] = tag
+        period_dict.setdefault("_source_filings", {})[field.key] = _filing_of(entry)
         return True
 
     def _resolve_canonical(
@@ -2366,11 +2393,11 @@ class XBRLParser:
 
     def _annual_filings(self, us_gaap: Dict[str, Any], field: Any, tag: str, period_key_fn,
                         unread: FrozenSet[Tuple[str, str, Any]] = frozenset()
-                        ) -> Dict[Any, List[Tuple[str, float, str]]]:
+                        ) -> Dict[Any, List[Tuple[str, float, str, Dict[str, str]]]]:
         """Each annual report's figure for *field* under *tag*, as ``_resolve_canonical``
-        reads them: ``{period: [(filed, value, end), ...]}`` in filing order, without the facts
-        *unread* names (``_to_common_contradicted``; BUG-316)."""
-        filings: Dict[Any, List[Tuple[str, float, str]]] = defaultdict(list)
+        reads them: ``{period: [(filed, value, end, filing), ...]}`` in filing order (*filing*:
+        ``_filing_of``), without the facts *unread* names (``_to_common_contradicted``; BUG-316)."""
+        filings: Dict[Any, List[Tuple[str, float, str, Dict[str, str]]]] = defaultdict(list)
         for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
             value = entry.get("val")
             if entry.get("form", "") not in _ANNUAL_FORMS or not isinstance(value, (int, float)):
@@ -2383,7 +2410,7 @@ class XBRLParser:
             if period is not None:
                 filings[period].append((entry.get("filed") or "",
                                         float(abs(value) if field.sign == SIGN_ABS else value),
-                                        entry.get("end") or ""))
+                                        entry.get("end") or "", _filing_of(entry)))
         for values in filings.values():
             values.sort(key=lambda filing: filing[0])
         return filings
@@ -2448,7 +2475,8 @@ class XBRLParser:
                                 data: Dict[Any, Dict[str, Any]], period_key_fn) -> None:
         """Put back the figure the earlier filings agree on where a later filing's
         comparative reads as a tagging error of it (see ``_tagging_error``), and record
-        each in the period's ``_repairs``.
+        each in the period's ``_repairs``; its ``_source_filings`` names the latest of
+        those earlier filings.
 
         The latest filing wins otherwise, as a restatement should. A year's own net
         change in cash decides for its cash-flow sections (AMD's 2024 10-K flipped
@@ -2456,7 +2484,7 @@ class XBRLParser:
         the years around it decide the rest, so a later filing that corrects an earlier
         error keeps its figure (BRK-B's FY2010 share count, LLY's FY2008 D&A).
         """
-        conflicts: List[Tuple[Any, str, str, float, float, str, str]] = []
+        conflicts: List[Tuple[Any, str, str, float, float, str, str, Dict[str, str]]] = []
         unread = _to_common_contradicted(us_gaap)  # a figure no record reads can't be put back either (BUG-316)
         for field in CANONICAL_FIELDS:
             years_by_tag: Dict[str, List[Any]] = defaultdict(list)
@@ -2468,16 +2496,17 @@ class XBRLParser:
                 for fy in years:
                     history = filings.get(fy, [])
                     latest = float(data[fy][field.key])
-                    filed, _, end = history[-1] if history else ("", 0.0, "")
-                    earlier = [value for when, value, _ in history if when < filed]
-                    if not earlier or not all(_agree(value, latest) for when, value, _ in history
+                    filed, _, end, _ = history[-1] if history else ("", 0.0, "", {})
+                    before = [filing for filing in history if filing[0] < filed]
+                    earlier = [value for _, value, _, _ in before]
+                    if not earlier or not all(_agree(value, latest) for when, value, _, _ in history
                                               if when == filed):
                         continue
                     if not all(_agree(value, earlier[-1]) for value in earlier):
                         continue  # the earlier filings disagree among themselves
                     kind = _tagging_error(earlier[-1], latest, field.key)
-                    if kind:
-                        conflicts.append((fy, field.key, kind, earlier[-1], latest, filed, end))
+                    if kind:  # the figure put back is the latest earlier filing's
+                        conflicts.append((fy, field.key, kind, earlier[-1], latest, filed, end, before[-1][3]))
 
         agreed_cash: Dict[Any, Dict[str, float]] = defaultdict(dict)
         for fy, key, _, earlier_value, *_ in conflicts:
@@ -2502,8 +2531,9 @@ class XBRLParser:
                           if y != fy and isinstance(data.get(y, {}).get(key), (int, float))]
             if _years_side_with_earlier(kind, earlier_value, latest, neighbours):
                 restored.append(conflict)
-        for fy, key, kind, earlier_value, latest, filed, end in restored:
+        for fy, key, kind, earlier_value, latest, filed, end, kept_from in restored:
             data[fy][key] = earlier_value
+            data[fy].setdefault("_source_filings", {})[key] = kept_from
             data[fy].setdefault("_repairs", []).append({"field": key, "kind": kind, "kept": earlier_value,
                                                         "dropped": latest, "filed": filed, "period_end": end})
 
@@ -2528,11 +2558,13 @@ class XBRLParser:
         prior calendar year), else the frame SEC's rule gives that end (``_frame_of_end``);
         never a frame of another end (a 52-week figure to March in TEL's September year), nor
         an instant's (a March year-end's balance sheet is CY####Q1I of the year the fiscal
-        year mostly isn't in). BUG-057, BUG-123, BUG-277.
+        year mostly isn't in). BUG-057, BUG-123, BUG-277. That end is kept as ``_year_end``, the
+        day the year is over (``build_annual_record`` drops a year not yet ended, BUG-113).
         """
         for period, period_dict in data.items():
             ends = Counter(e for e in flow_ends.get(period, {}).values() if e)
             end = max(ends, key=lambda e: (ends[e], e)) if ends else period_dict.get("period_end")
+            period_dict["_year_end"] = end
             year, _, chosen = self._calendar_from_frames(
                 {frame for at, frame in period_frames.get(period, set()) if at == end}, end, quarterly=False)
             period_dict["calendar_year"] = year

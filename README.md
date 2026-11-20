@@ -2234,9 +2234,16 @@ period therefore carries two labels:
   to 2019-06-28) and the transition period's balance sheet (Mosaic's at 2013-12-31 beside
   its year to 2013-05-31); a balance dated elsewhere in the year (a goodwill impairment
   test, a merger date, a cover page's share count). Ends within a week are one period (a
-  52/53-week year tagged to its nominal month-end). A filing's view of a year (a vintage)
+  52/53-week year tagged to its nominal month-end). A year not yet ended isn't in the record:
+  a fiscal year whose end (the end most of its income and cash-flow figures share, else its
+  latest balance-sheet date) is after the latest day a fact was filed is dropped, so a 10-K
+  that tags a figure of the year ahead opens no year with it until that figure's own date has
+  passed (Bank of America's FY2010 10-K, filed 2011-02-25, tags a $0.01 dividend for all of 2011).
+  A figure dated inside the year ahead opens that year once its date passes, before the year
+  ends (Eli Lilly's FY2013 10-K tags short-term borrowings at 2014-03-31, so FY2014 opens on
+  2014-04-28, its first filing after that date, with that figure alone; BUG-113 open). A filing's view of a year (a vintage)
   is the period the annual record held on its filing day, from the reports filed by then;
-  a view holding only another period's figures has no row. The transition period itself
+  a view holding only another period's figures, or of a year not over on its filing day, has no row. The transition period itself
   (GPN's June-December 2016) is no fiscal year and has no annual record, so the step
   between the last old year and the first new one spans more than twelve months (GPN
   FY2016 to FY2017: 19), and growth rates count it as one year.
@@ -2340,7 +2347,8 @@ numbers SEC filings report:
   report's, a quarter by the latest 10-Q's or 10-K's, and a filing's vintage by its own, as known
   then (Coca-Cola's FY2019 10-K shows its $10.0B of paper apart from its other debt; only its
   FY2020 10-K shows it inside its borrowings). A vintage that shows no short-term figure on the
-  date reads its paper beside the one the as-of view carries from an earlier filing.
+  date reads its paper beside the latest earlier annual report's (Qualcomm's FY2016 10-K tags as
+  paper the line its FY2015 10-K tags as borrowings).
 - **Cash.** Cash is the balance sheet's cash and cash equivalents. Where a filing tags it only
   with the total that includes restricted cash, that total is read (GE's FY2025: $12.4B), on
   balance-sheet dates only, and before a note's cash equivalents, a part of the cash line (P&G's
@@ -2455,7 +2463,8 @@ ORDER BY m.roic DESC;
 ```
 
 Tables: `companies`, `financials_annual`, `financials_quarterly`, `financials_ttm`,
-`financials_annual_vintages`, `metrics_annual`, `market_snapshots`, `collection_runs`,
+`financials_annual_vintages`, `financials_annual_known` (the as-of snapshots; see
+[Point-in-time as-of queries](#point-in-time-as-of-queries)), `metrics_annual`, `market_snapshots`, `collection_runs`,
 plus (added for the web terminal — see [Web interface](#web-interface)) `price_bars`
 (daily OHLCV, also used for the `^GSPC` S&P 500 benchmark; see below for what its prices are), `analyst_snapshots`
 (point-in-time price targets/recommendations), `earnings_history` (EPS
@@ -2572,39 +2581,74 @@ error, and a run reads one without the chart's dividend and split columns as una
 the same for the split history and the daily bars; the stored ones stay), never as a stock without
 dividends (BUG-107).
 
-The `financials_annual_vintages` table stores **point-in-time** data: one row per
-(ticker, fiscal_year, filing accession), so you can see every filing's view of a year —
-the original and each later restatement — keyed by `filed_date` (a filing whose figures
-for the year are all of another period, such as a recast after a change of fiscal
-year-end, has none; see "Fiscal vs calendar year"). This is sub-project 1 of
-the no-look-ahead point-in-time work (point-in-time metrics follow). Vintages are
-SQLite-only (not in the per-ticker JSON).
+The `financials_annual_vintages` table stores each filing's own view of its years, **as filed**:
+one row per (ticker, fiscal_year, filing accession), so you can see every filing's view of a
+year (the original and each later restatement) keyed by `filed_date`. A filing whose figures
+for the year are all of another period, such as a recast after a change of fiscal year-end, or
+a year not over on its filing day, has none (see "Fiscal vs calendar year"). A view is read from
+the facts filed on or before its filing day, the as-of view's gate, so its set-asides read no
+later filing (BUG-120), and its share counts take a scale only from the year's views filed by
+then: a count no view filed by then checks stays as filed (ConocoPhillips' FY2018-20 diluted
+counts in thousands). A run that builds the as-of snapshots replaces the ticker's vintages with
+its own (a full run all, a `years_back` run those years), so a view an older parse made doesn't
+stay. The as-of explorer's side-by-side table and the valuation's first-filed dates (a year's
+earliest `filed_date`) read them; the as-of view doesn't. Vintages are SQLite-only (not in the
+per-ticker JSON).
 
 ### Point-in-time as-of queries
 
-To read fundamentals **as they were known on a given date** (no look-ahead), take each
-figure from the latest filing made on or before that date that reports it. A 10-K repeats
-only part of each earlier year (two years of income and cash-flow statements, one balance
-sheet, the equity statement's opening balances), so a later filing's row for a year is
-mostly empty, and a figure it leaves out keeps the value last filed.
+The as-of view answers "what would our own annual record have said on date D, using only what
+had been filed by D?" (for backtests), with **one rule**: the view of a fiscal year on D is the
+annual record the collection builds from the companyfacts filed on or before D. A fact is known
+from its `filed` day on (the same day included); a fact with no filing day is never known. The
+gate is the only as-of rule: every rule of the annual record above (tag ranks, set-asides, the
+repair of a later filing's tagging error, share scale, derivations, validation, a year not yet
+ended) applies as it stood on D, to the filings known then, so the view holds no figure filed
+after D, and no rule of its own.
 
-A later filing's figure under a narrower concept doesn't replace an earlier one's: under a tag
-the field ranks below the held figure's (each vintage row keeps the tag of each figure in
-`source_tags`, as JSON) and under half of it, it is a part of the figure, not the year restated
-(Exelon's FY2024 10-K tags only a $0.198B note as FY2023's long-term debt, beside the $41.3B its
-FY2023 10-K reports). A restatement under the same tag, a better-ranked one, or a lesser one from
-half the figure up still replaces it. The debt is read as one filing's view of the date (its
-long-term and short-term debt and commercial paper together, since a filing's lines split the
-debt one way): the latest filing's, unless its long-term or short-term debt is such a narrower
-figure. A vintage stored before `source_tags` (NULL) is never set aside, until the next
-collection. In SQL, for one figure, the latest filing that reports it (without that exception):
+The record can change only on a day a fact was filed, so a collection replays it on the facts
+known on each of the company's filing days (every form's, 10-Qs and 8-Ks too, and the reports
+read from the filings' own XBRL) and stores a year's row in `financials_annual_known` each day it
+changed: one row per (ticker, fiscal_year, `known_from`), with `known_accn` (the latest
+accession filed that day), the canonical figures, `source_tags` and `source_filings` (JSON: each
+figure's tag, and its filing's `accn`, `filed` and `form`), `period_end`, `calendar_year` and
+`frame` (the `frame` SEC attaches to the year's facts known that day, else the frame SEC's rule
+gives its end: SEC attaches a frame to the latest-filed fact only, so an earlier day's facts may
+lack one, and the two agree on all 5.2 million cached frames, BUG-277),
+and `accn`, `filed_date` and `form`, the latest filing among the year's figures. A year that
+leaves the record on a day (a later filing moves its only figure to another period) gets a
+row with `present` 0, a tombstone: the view holds no such year until a later row brings it back.
+The view on D is each year's row with the latest `known_from` on or before D, a lookup; each
+year's latest row is the annual record the same run built, cell for cell. A full run replaces
+all of a ticker's rows, a `years_back` run the rows of the years it built (replayed on all the
+facts); a fill-only run (its predecessor's filings couldn't be read, BUG-179) and a run that
+read no companyfacts leave them as they were. A `years_back` run (`--years N`) trims its record
+to the N latest years before cleaning it, but builds each snapshot on all the years and trims
+after; the share scale reads a year's neighbours, so such a run's record can differ from its
+latest snapshot of a year at the window's edge (a full run's agree, and the refresh collects
+full runs). The cost is the collection's snapshot step, one record build per filing day, but a
+day none of whose facts the record reads (no fact of its parsed taxonomy filed that day, and no
+year left out as not yet ended reached by it) is skipped exactly, its snapshot the day before's,
+and each date string is parsed once a build: measured offline on 100 companies, 2.62 s a company
+against 0.81 s before (about 3.2 times; roughly 22 minutes for the 502), and 28,565 rows over 499
+companies, 216 MB of the database (7.6 KB a row).
+
+A database collected before the snapshots, or a ticker not collected since, has no rows: its
+as-of data **isn't built**. `AsOfReader` then reads `None` (and `{}` for a history), with no
+fallback to another rule; `has_snapshots(ticker)` tells this apart from a year not yet filed,
+the as-of page says the data isn't built yet, and every as-of endpoint (`/api/asof/{ticker}/annual`,
+`/history`, `/metrics` and `/metrics/history`) answers 404 saying so, so a backtest over a partly
+rebuilt database doesn't read an unbuilt company as one with nothing filed (a built ticker with
+nothing filed by the date still reads `{}` from the histories, and 404 "had not been filed" from
+`/annual`). A ticker no collection holds (no `companies` row, `has_company(ticker)`) is said to be
+unknown instead, on the page and in each endpoint's 404. The page and the endpoints read a ticker
+upper-cased and stripped, as the collection stores it. Collecting the ticker again builds it.
 
 ```sql
--- Net income for FY2019 as it was known on 2020-06-30:
-SELECT net_income, filed_date, accn FROM financials_annual_vintages
-WHERE ticker = 'PRU' AND fiscal_year = 2019 AND filed_date <= '2020-06-30'
-  AND net_income IS NOT NULL
-ORDER BY filed_date DESC, accn DESC LIMIT 1;
+-- FY2019 as it was known on 2020-06-30 (no row, or present = 0: not in the record that day):
+SELECT present, net_income, known_from, accn, filed_date FROM financials_annual_known
+WHERE ticker = 'PRU' AND fiscal_year = 2019 AND known_from <= '2020-06-30'
+ORDER BY known_from DESC LIMIT 1;
 ```
 
 Or in Python via `AsOfReader`:
@@ -2616,12 +2660,19 @@ with AsOfReader("data/output/stock.db") as r:
     period = r.as_of_annual("PRU", 2019, "2020-06-30")   # full period dict, or None
     ni = r.as_of_value("PRU", 2019, "net_income", "2020-06-30")
     history = r.history_as_of("PRU", "2020-06-30")        # {fiscal_year: period}, newest first
+    built = r.has_snapshots("PRU")                        # False: the as-of data isn't built
 ```
 
-`as_of_date` accepts an ISO `YYYY-MM-DD` string or a `datetime.date`. A year not yet filed
-as of that date resolves to `None` (and is absent from `history_as_of`). A period carries the
-latest filing's `accn`, `filed_date` and `form`, and `carried_from` names the filing of each
-figure read from an earlier filing (`{"revenue": {"accn": ..., "filed_date": ..., "form": ...}}`).
+`as_of_date` accepts an ISO `YYYY-MM-DD` string or a `datetime.date`. A year not in the record
+as of that date (not yet filed, not yet ended, or a tombstone) resolves to `None` and is absent
+from `history_as_of`, whose `years_back` keeps the N latest years the record held then (none, 0
+or less keeps all). A period carries `accn`, `filed_date` and `form` of the latest filing among
+its figures, its `period_end` and `calendar_year`, `known_from` and `known_accn` (the snapshot
+row it was read from: the day the record took it and that day's latest accession; the as-of page
+shows it as "as known from <date>"), and `carried_from` names the filing of each figure from an
+earlier one (`{"revenue": {"accn": ..., "filed_date": ..., "form": ...}}`), from
+`source_filings`. A canonical column the stored table lacks (a database not reopened for writing
+since the column was added; the reader is read-only) reads `None`.
 
 For point-in-time **ratios** (computed on the as-of financials), use `PointInTimeMetrics`:
 

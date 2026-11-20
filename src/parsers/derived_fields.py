@@ -88,7 +88,8 @@ def apply_derivations(period: Dict[str, Any]) -> List[str]:
     """Fill missing derived fields in ``period`` (in place).
 
     Returns the list of canonical keys that were derived (for logging/auditing).
-    Each derived value is recorded in ``period['_source_tags'][key] = 'derived'``.
+    Each derived value is recorded in ``period['_source_tags'][key] = 'derived'``,
+    and names no filing in ``period['_source_filings']``.
     """
     derived_keys: List[str] = []
     for key, fn, _formula in DERIVATIONS:
@@ -98,5 +99,6 @@ def apply_derivations(period: Dict[str, Any]) -> List[str]:
         if value is not None:
             period[key] = value
             period.setdefault("_source_tags", {})[key] = "derived"
+            period.get("_source_filings", {}).pop(key, None)
             derived_keys.append(key)
     return derived_keys

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 101 · NEEDS-USER 3 · Decided: 7 · Verified: 278
+**Open:** P0 0 · P1 0 · P2 0 · P3 98 · NEEDS-USER 2 · Decided: 8 · Verified: 283
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -695,8 +695,8 @@ Impact today: a failed bar fetch beside successful dividends, for any ticker who
 Re-run in iteration 63 (code review 9's M6: iteration 59 took this figure from review 8 unchecked): a second stale quarter adds +0.60%, +0.45% and +0.66% to KO's, JPM's and XOM's FY2025 prices, as much as the first (`qa/evidence/iter63-review9-rerun.txt`).
 Fix: Yahoo's stored bars count as adjusted for the dividends up to the last dividend-adjusted bar (the last flagged one, or any bar of a database from before the flag), which dates when Yahoo served them: `_yahoo_dividend_factors` leaves later dividends out, both as factors to undo and from the later factors each older one is solved with. And a failed price-history request is a run warning: "Yahoo Finance: price history unavailable (...); the stored daily bars weren't refreshed". The oracle took the same rule first, in its own commit (27ce753): on review 8's copy of the user's data with October's dividends and no new bars, valued by the unfixed code, it flags KO's and XOM's multiples (77.39 and 76.50 stored against 76.94 and 76.06), and with a second stale quarter JPM's too; its output elsewhere is unchanged, apart from two synthetic BUG-048 databases whose only bars are their FY ends (`qa/evidence/iter65-bug084-oracle.txt`). Four tests (two RED, one per kind of database, and the warning; one pins the boundary: a dividend on the last bar's own day is still undone), and five mutants, of which the one that survives (the cutoff from any bar, not only the flagged ones) is equivalent in practice, since a run that stores bars rewrites them all (`qa/evidence/iter65-bug084-{red,green,mutants}.txt`). With the fix the stale copies' multiples bases are 76.94, 212.32 and 76.06, the user's data's without the stale dividends, and the oracle agrees; 0 of 889 valuation and summary rows move on the user's copy and 0 of 133 on the golden basket; through the real fetcher on code review 9's fake market, a run whose price-history request fails now records the warning in its summary and in `collection_runs` (`qa/evidence/iter65-bug084-impact.txt`).
 ### BUG-085 [P3][STORE] The as-of view serves the tagging errors the annual record puts right
-Status: OPEN
-Found: iteration 58 by code review 8 (M1), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 217)
+Found: iteration 58 by code review 8 (M1), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: the as-of snapshots merge (iteration 217) | Regression tests: tests/test_asof_reader.py, tests/test_annual_snapshots.py, qa/oracle/asof_oracle.py
 Repro: `AsOfReader` returns the latest vintage filed on or before the date, and BUG-061's repairs apply only to the annual record: AMD collected offline keeps FY2021's investing and financing cash flows at -686M and -1,895M in `financials_annual`, while `/api/asof/AMD/annual?fiscal_year=2021&date=2026-10-20` returns +686M and +1,895M; as of 2024-08-02 to 2025-07-31 STX's FY2022 dividend reads 2,770,000, and as of 2011-02-25 to 2012-02-22 BAC's FY2008 total assets 0.
 Expected: the as-of view says the figure is as filed, or applies the repair the filings known on that date support.   Actual: the known error, unmarked.
 
@@ -704,6 +704,8 @@ Re-run in iteration 63 (code review 9's M6: iteration 59 re-ran AMD only): on 51
 Re-run in iteration 78 (BUG-110's fix, `qa/evidence/iter78-bug110-realdata.txt`): a figure the latest filing leaves out now keeps its last filed value, so these errors also stand after their ranges. As of 2026-12-31 the as-of view serves the error for 11 of the annual record's 14 repairs on a fresh collection, 9 of them newly carried where they read None (BAC's FY2008 total assets 0, STX's FY2022 dividend 2,770,000, BRK-B's FY2008 basic shares x10^6, and GE's, PEP's, RTX's, WMT's, WELL's and NOW's sign flips), and AMD's two as before.
 Re-run in iteration 88 (BUG-127's fix): acquisitions are read signed now, so GE's 2015 10-K's flip of FY2012 (-$1.456B where its 2013 and 2014 10-Ks agree on +$1.456B), which the annual record puts right, is what the as-of view serves for FY2012 from 2015-02-27 on, carried past the 2016 10-K that leaves the figure out (`/api/asof/GE/annual?fiscal_year=2012&date=2016-06-30` gives -1.456e9), and for FY2013-14 until the 2016 10-K; read by size, the flip didn't show (`qa/evidence/iter88-bug127-e2e.txt`).
 Re-run in iteration 93 (code review 13's M7): BUG-127 reads vintages as filed, so a first-filed sign error now shows in the as-of view: SLB's FY2010 acquisitions as of 2011-06-30 read -$889M (+$889M before; its 2011 10-K tags a payment negative beside gross outflows all positive, and its 2012 and 2013 10-Ks give +$889M).
+Fix (iteration 217, Q18's merge of feat/asof-snapshots): the as-of view serves the record as our rules read it on the day; a later filing's flip shows from its day.
+
 ### BUG-086 [P3][VALID] BUG-061 misses a tagging error every later filing repeats: BRK-B's FY2009 basic shares
 Status: OPEN
 Found: iteration 58 by code review 8 (M2), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
@@ -917,6 +919,7 @@ Status: OPEN
 Found: iteration 77 via VALID-10 (`qa/evidence/iter77-pit.txt`) | Fixed: — | Regression test: —
 Repro: BAC's FY2010 10-K (filed 2011-02-25) tags a dividend declared of $0.01 a share for 2011-01-01 to 2011-12-31, and LLY's FY2013 10-K (filed 2014-02-19) short-term borrowings of $1B at 2014-03-31. Each becomes a vintage of the next fiscal year, so as of 2011-03-01 `history_as_of("BAC", ...)` lists FY2011, a year not yet ended, holding that dividend alone (LLY's FY2014 likewise until its 10-K). The only two of 7,711 vintages.
 Expected: a filing's vintages are the years ended by its filing date.   Actual: as above.
+Narrowed (iteration 217, Q18's merge): a year not yet ended at the latest filing is dropped from the record and from vintages; still OPEN: a forward-dated figure opens its year once its own date passes (LLY FY2014 from 2014-04-28, TEL FY2025).
 
 ### BUG-114 [P3][VALID] The balance-sheet identity has no term for temporary equity: SPGI scores 50
 Status: OPEN
@@ -931,11 +934,13 @@ Repro: MO deducts both cost of sales and excise taxes on products (`OtherCostOfO
 Expected: the identity holds where a filed cost line explains the gap (or excise taxes count in cost of revenue).   Actual: five LOW findings.
 
 ### BUG-116 [P3][STORE] The as-of view and the annual record choose between filings by different rules: a later filing's fallback tag beats an earlier one's preferred tag
-Status: OPEN
-Found: iteration 78 while verifying BUG-110 (`qa/evidence/iter78-bug110-realdata.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 217)
+Found: iteration 78 while verifying BUG-110 (`qa/evidence/iter78-bug110-realdata.txt`) | Fixed: the as-of snapshots merge (iteration 217) | Regression tests: tests/test_asof_reader.py, tests/test_annual_snapshots.py, qa/oracle/asof_oracle.py
 Repro: each vintage resolves its own tags, and the as-of view takes each figure from the latest filing that reports it, while the annual record takes the preferred tag first and the latest filing after. So as of 2026-12-31, on a fresh offline collection of the 126 cached filers, the two differ in 1,250 of the 95,407 figures both hold (823 the latest filing's own, as before BUG-110's fix; 427 carried from an earlier filing), 274 by more than 10% (11 of them BUG-085's): ALL's FY2020 claims reserve $1.028B (its FY2021 10-K) against $27.61B, AMGN's FY2010 long-term debt $13.36B against $10.87B, and total equity with the non-controlling interest (762 years, from the equity statements' opening balances) against the parent's. Either can be the better figure: ADI's FY2018 revenue of $6.225B is the FY2019 10-K's restatement, which the annual record passes over for the $6.201B first filed (BUG-062's mix).
 Expected: one rule for both (for instance each vintage figure stored with its tag, so the as-of view ranks as the annual record does).   Actual: as above.
 Code review 14 (M6), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`): since BUG-139, 6 years' as-of cash differs from the annual record's by more than 10% (2 before): AXP's FY2017 ($33.263B as of, $0.070B in the record), KLAC's FY2019, KKR's FY2020, PG's FY2019, CVX's FY2018 and FY2023.
+Fix (iteration 217, Q18's merge of feat/asof-snapshots): the as-of view is the annual record replayed on the facts known that day: one rule, by construction.
+
 ### BUG-117 [P2][VAL] A payment's served day is the collector's local date: east of New York, a run before the open on a split's day keeps pre-split payments as post-split, and DDM reads ten times its value
 Status: VERIFIED (iteration 81)
 Found: iteration 78 by code review 11 (I1), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: iteration 81 (see LOG) | Regression tests: `tests/test_store_migration.py::test_a_run_before_new_yorks_open_dates_its_payments_by_its_last_bar`, `::test_a_split_yahoo_lists_dates_the_payments_it_adjusted`, `::test_a_run_without_bars_or_splits_dates_its_payments_the_day_before_its_own`, `::test_dividends_keep_the_day_yahoo_served_them` (now with bars), `tests/test_valuation_inputs.py::test_a_run_before_the_open_on_a_splits_day_keeps_its_payments_pre_split`
@@ -960,10 +965,11 @@ Repro: code review 11's `bug099_synthetic.py` on a399dc0. (A) The README (`:577`
 Expected: code and README agree.   Actual: as above. Impact: none today (only TJX FY2017-18 take the tax-inclusive tag beside another figure, and the two are equal; no cached filer has a negative total beside a positive part).
 
 ### BUG-120 [P3][STORE] An earlier filing's vintage takes the revenue a later filing's restatement decides (look-ahead)
-Status: OPEN
-Found: iteration 78 by code review 11 (M3), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 217)
+Found: iteration 78 by code review 11 (M3), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: the as-of snapshots merge (iteration 217) | Regression tests: tests/test_asof_reader.py, tests/test_annual_snapshots.py, qa/oracle/asof_oracle.py
 Repro: code review 11's `bug099_vintage_lookahead.py` on a399dc0: a FY2016 10-K (filed 2017-02-15) reports `Revenues` of $10.0B and contract revenue of $8.0B, its operating lines adding up to $10.0B, and a later 10-K restates contract revenue to $7.0B. `_revenue_set_aside` is computed from every filing's latest figures and applied to each vintage (`xbrl_parser.py:455`, `:480`), so the FY2016 10-K's own vintage reads $8.0B (8c34a86: $10.0B).
 Expected: each vintage's set-aside decided from that filing's own figures.   Actual: a later filing's. Impact: none in the cached filers.
+Fix (iteration 217, Q18's merge of feat/asof-snapshots): a vintage is built from the facts filed by its own day (facts_known_by), so no later restatement reaches it.
 
 ### BUG-121 [P3][DOCS] Three comments still describe the old behavior
 Status: VERIFIED (iteration 198)
@@ -1053,6 +1059,7 @@ Status: OPEN
 Found: iteration 84 by code review 12 (M4, M5), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: — | Regression test: —
 Repro: code review 12's `asof_check.py` on eb0aec3. On a copy of the user's data, 35 years at 24 tickers as of 2026-12-31 take per-share figures and counts from filings on two sides of a split: AAPL FY2018's EPS 2.98 (filed 2020-10-30, after the 4:1 split) beside `shares_outstanding` 4.755B (filed 2019, before it); none on a fresh collection. 203 carried figures at 5 tickers (119 at 3 on the fresh collection) come from a filing whose period end is more than a week from the year's: fiscal-year changes (MS FY2008, NOW FY2011) and stray vintages (AMGN FY2011's "Period end 2011-12-15" above 41 carried figures, AMT, DUK FY2015). The annual record has the same mixes (BUG-113, BUG-116).
 Expected: carried figures on the answer's basis and period (restated by the splits between the filings, carried only from vintages of the same period end), or the mix documented.   Actual: as above. Impact: the API; the point-in-time ratios use no per-share figure.
+Note (iteration 217): after Q18's merge the as-of view reports what the annual record holds; still OPEN in the record itself.
 
 ### BUG-133 [P3][VALID] Long-term debt is still missing where a filer tags only a total with its current maturities: JPM, USB, MET, TRV, PGR, EQIX
 Status: OPEN
@@ -2172,10 +2179,11 @@ Repro: xbrl_parser.py ~978-985 decides which years' 10-Qs move before the "combi
 Expected: the 10-Qs follow the 10-K as the guard leaves it.   Actual: they move alone.
 
 ### BUG-334 [P3][ASOF] The as-of debt view carries a field its filing lacks from an earlier filing: a later total plus the first 10-K's maturities
-Status: OPEN
-Found: code review 28 (Minor 2; also at bf7e23e) | Fixed: | Regression test:
+Status: VERIFIED (iteration 217)
+Found: code review 28 (Minor 2; also at bf7e23e) | Fixed: the as-of snapshots merge (iteration 217) | Regression tests: tests/test_asof_reader.py, tests/test_annual_snapshots.py, qa/oracle/asof_oracle.py
 Repro: asof.py ~115-117, ~190-195: the debt view is documented as one filing's (asof.py ~87, README ~2343), but a debt field the viewed filing lacks is read from an earlier one: a later 10-K's LongTermDebt total $44B (holding the maturities) beside the first 10-K's $4B of maturities reads $48B. QCOM's test relies on the carry for paper beside borrowings. Probe: %LOCALAPPDATA%\stockdb-qa\review28\head\tests\test_review28.py::test_the_debt_view_doesnt_carry_maturities_its_total_holds.
 Expected: no short-term debt carried beside a later total that can hold the maturities, or the docs say so.   Actual: counted twice.
+Fix (iteration 217, Q18's merge of feat/asof-snapshots): the debt is the record's own (one rule); the maturities are counted once (test on the branch).
 
 ### BUG-335 [P3][TTM] A third quarter's EPS derived as nine months less six carries the halves' rounding: C Q3 2026 2.86 for 2.85
 Status: OPEN
@@ -2207,6 +2215,7 @@ Status: OPEN
 Found: code review 29 (Minor 2; values improve, not a regression) | Fixed: | Regression test:
 Repro: share_scale pass 3 (shares outstanding follow only an EPS-checked count) with pass 4 off for vintages (stock_data_fetcher.py ~439): 10 vintage cells move shares outstanding to units while the weighted counts stay mis-scaled: HST FY2021 714.1M beside 710.3, NTRS FY2009 241.7M beside 235.5T, AMT FY2015 423.9M beside 419,000, DLR FY2022 291.1M beside 286,334, FITB FY2010-11 beside 791/906, HSY FY2009-11. Wider than BUG-329's stated residual (HSY only). Nothing found that reads a vintage's two counts together.
 Expected: one scale per vintage view.   Actual: a 10^3 or 10^6 seam.
+Note (iteration 217): unchanged by Q18's merge; still OPEN.
 
 ### BUG-340 [P3][GATHER] Q17's per-filing XBRL cache never expires and its version isn't tied to the reader's rules
 Status: VERIFIED (iteration 209)
@@ -2239,14 +2248,15 @@ Status: OPEN
 Found: the as-of snapshots design's builder check and BUG-341's residual R1 | Fixed: | Regression test:
 Repro: sqlite_store._write_stock upserts financials_annual and financials_annual_vintages and never deletes, so an existing DB keeps years an older parse made, years from a `years_back` run, and after BUG-341 16 vintages the parser no longer produces (each 1-2 figures from another period, mostly equity or cash at a transition date). The current as-of reader reads them as the latest-filed view (the as-of snapshots plan replaces that reader).
 Expected: a full run's annual rows and vintages are exactly what it parsed.   Actual: leftovers persist.
+Partly fixed (iteration 217, Q18's merge): a run that built snapshots replaces the ticker's vintages, so leftover vintages go at the next collection; still OPEN for financials_annual rows.
 
 ### Q18 [ASOF] NEEDS-USER: merge the as-of snapshots branch? It moves one historical-value label (MCO below -> near) by removing look-ahead
-Status: OPEN (NEEDS-USER)
+Status: DECIDED (iteration 217): merged
 Found: as-of snapshots plan (docs/superpowers/specs/2026-11-18-asof-snapshots-design.md, plan docs/superpowers/plans/2026-11-18-asof-snapshots.md), Task 8's downstream diff | Fixed: | Regression test:
 Branch: feat/asof-snapshots at ce4ff10 (pushed, not merged), 23 commits on ef349cc, every task and the whole branch reviewed; full suite 3141 passed. The as-of view is the annual record replayed on the facts filed by each date (table financials_annual_known; lookup-only reader). Verified on a real-data copy: latest snapshots equal the record over 711,079 cells; any-day oracle 0 of 2,017; look-ahead 0; identical under two hash seeds; collection ~3.2x the old cost (~22 min for 502); DB +216 MB.
 The decision: the branch replaces each ticker's vintages on a run, removing views the parser no longer makes (BUG-344 leftovers) and views of a year not yet ended (BUG-113). Valuation reads MIN(filed_date) from the vintages, so 14 first-filed dates at 12 tickers move LATER (all were look-ahead): 191 valuation-history rows; MCO's historical value $543.04 -> $531.37 and its label below -> near (FY2017 first filed 2017-02-24 -> 2018-02-27). No median, verdict or owner-earnings verdict moves.
 Recommendation: merge (the old values used information not yet filed). After merge: re-collect the 502 once (the as-of page reads 'isn't built yet' until then), run the engine and verdicts on the live DB (it may hold other leftovers), and record: VERIFIED BUG-116, 120, 085, 334, 320 and BUG-344's vintage half; still open 268, 113 (narrowed: LLY FY2014, TEL FY2025), 132, 287, 339; new bugs: COP FY2018-20 vintages' diluted count in thousands, BAC FY2011 / FAST dividend per share from the prior 10-K's forward-dated fact (2 cells). Details: the branch's .superpowers/sdd/2026-11-18-asof-snapshots/task-8-report.md.
-Decision: 
+Decision: the user, 2026-11-21: merge ("merge" with the as-of branch first).
 
 ### BUG-345 [P3][MARKET] Since BUG-229 a read timeout during a market download's body isn't retried
 Status: VERIFIED (iteration 191)
@@ -2424,6 +2434,18 @@ Repro: gurus.py ~128-139 (BUG-362): a NEW HOLDINGS amendment's cover may speak o
 Expected: as the call says.   Actual: any amendment stating 0 clears.
 Fix (iteration 214, with BUG-365; orchestrator's call): a NEW HOLDINGS 13F-HR/A stating none omitted no longer clears its filer's flag (amendment_type already stored); a RESTATEMENT or untyped amendment still does. Real data: Berkshire 2025-03-31 shows the note again, 2025-06-30 the prior-quarter note.
 
+### BUG-369 [P3][VALID] COP's FY2018-20 vintages hold the diluted share count in thousands
+Status: OPEN
+Found: the as-of snapshots branch, Task 6/8 (feat/asof-snapshots task reports) | Fixed: | Regression test:
+Repro: since vintages read share scale only from views filed by their day (no look-ahead), COP's FY2018-20 views keep the diluted count as filed in thousands (1.12e6 for 1.12e9); no earlier sibling's EPS checks it.
+Expected: units.   Actual: thousands.
+
+### BUG-370 [P3][VALID] BAC's FY2011 and FAST's dividends per share in the record come from the prior 10-K's forward-dated figure
+Status: OPEN
+Found: the as-of snapshots branch, Task 8 | Fixed: | Regression test:
+Repro: today's financials_annual: BAC FY2011 dividends_per_share $0.01, FAST $0.50, where each year's own 10-K files $0.04 and $0.65: the higher-ranked tag on a dividend dated ahead in the prior 10-K wins. 2 cells over 502.
+Expected: the year's own 10-K figure.   Actual: the prior 10-K's forward-dated one.
+
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: the history's P/E on net income to common, as its P/B already is.
@@ -2540,6 +2562,7 @@ Status: OPEN
 Found: code review 21 (M-3) | Fixed: | Regression test:
 Repro: BUG-159's combination reaches the JSON export and the API with _source_tags "DebtCurrent", though no filing tagged that figure; a paper stated by a later filing (BUG-256 rule b) reads as that filing's own, so /api/asof's carried_from doesn't name the filing it came from. Both were recorded decisions (the BUG-159 investigation 10.1; bug256-done 5.3).
 Expected: provenance that says how a figure was made (a pseudo-tag or a note).   Actual: a tag no filing used.
+Note (iteration 217): unchanged by Q18's merge; still OPEN.
 
 ### BUG-269 [P3][VALID] The integrity outlier check skips short_term_debt entirely since BUG-159, so a real scale error in it passes
 Status: OPEN
@@ -2569,11 +2592,12 @@ Expected: the filings' balance-sheet debt and total revenue.   Actual: a narrowe
 Fix (iteration 172, `qa/evidence/bug319-investigation.txt`): long-term debt took the first of its tags a year has, latest filing first, and two shapes got through: (a) a note's figure on a day the filing's balance sheet doesn't show (PSX FY2015 $1.1B dated 2015-03-02; ECHO FY2024 $1.98B from the FY2023 10-K; TGT's year to 2010-01-30); (b) a part under a better-ranked tag than the line beside it on the balance-sheet date (PHM FY2021-25 LongTermDebt $31-77M beside NotesPayable $1.6-2.0B; GNRC FY2016's term loan in thousands; BIIB FY2015-16). In `_filer_facts`, so every record: long-term debt's tags are kept only on dates the same filing tags LiabilitiesAndStockholdersEquity or Assets on (a filing with neither keeps all: REG, MAA), and a figure is set aside where the same filing tags a lower-ranked tag of its kind (noncurrent or total) on the date more than twice as large, or where a later filing only repeats it; only filings filed by then are read. Census over 504 filers: annual long-term debt 20 cells at 15 filers (PHM, PSX $8.843B, ECHO $25.66B, GNRC, TGT $10.643B, BIIB $6.52B, PLD FY2021 $17.715B, CRM, VICI, DXCM, LDOS, TDY, TMO, DE; IP FY2007's stray $2.1B emptied), quarterly 53, TTM 40, vintages 34; 20 quarterly and 13 vintage rows of off-date figures alone not built (none stored). XEL's case is BUG-259(b). On DB copies (with BUG-274): 0 medians, verdicts, owner-earnings verdicts or labels; PHM's and PLD's historical values move within their labels; PHM FY2025 EV/EBITDA 6.99 -> 7.52, Piotroski 3 -> 4; ECHO May-July 2024 has no EV now (its Q1 10-Q tags no debt the field reads: BUG-259(g)). Look-ahead 0; 17 mutants. Residuals: BUG-330, BUG-331; short-term debt is not date-filtered (ILMN's one-day-off checkpoint); CVS FY2018's adoption-day figure; BIIB FY2014 $0.
 
 ### BUG-320 [P3][ASOF] A fill-only run's figures carry no tag, so the as-of view ranks them last
-Status: OPEN
-Found: iteration 167 (BUG-271's residuals) | Fixed: | Regression test:
+Status: VERIFIED (iteration 217)
+Found: iteration 167 (BUG-271's residuals) | Fixed: the as-of snapshots merge (iteration 217) | Regression tests: tests/test_asof_reader.py, tests/test_annual_snapshots.py, qa/oracle/asof_oracle.py
 Repro: a run whose predecessor read failed only fills (BUG-179: COALESCE of the stored value first), source_tags included, so a figure it fills into a vintage has no tag in the stored JSON and ranks last; a broader earlier filing's figure could then set it aside as narrower.
 Expected: the filled figure's tag merged into the vintage's source_tags.   Actual: the stored tags kept whole.
 Also (code review 28, Minor 3): on a database from before the column, a first fill-only run writes its JSON whole into the empty source_tags while every stored figure stays, so an old narrow figure gets the new run's first-ranked tag and is never set aside (sqlite_store.py ~801 with ~1051; probe %LOCALAPPDATA%\stockdb-qa\review28\head\tests\test_review28.py::test_a_fill_only_run_on_an_old_database_doesnt_tag_figures_it_didnt_write).
+Fix (iteration 217, Q18's merge of feat/asof-snapshots): the as-of view no longer ranks stored vintage tags; it reads the stored snapshot of the record.
 
 ### BUG-272 [P3][PARSE] An adoption-day instant becomes a fiscal year's period_end: ICE FY2018 "2019-01-01", FY2019 "2020-01-01"
 Status: OPEN
@@ -2684,6 +2708,7 @@ Status: OPEN
 Found: code review 22 (M-2) | Fixed: | Regression test:
 Repro: a stored LongTermDebt total that already holds the maturities, beside short-term maturities a later parser fills in, gives total debt $12B where both parses say $10B. Needs BLK or XOM, a failed predecessor read and a parser change in between; on the user's copy BLK's and XOM's fill runs leave every financial table as stored.
 Expected: a row from one parse.   Actual: a cell-by-cell mix, until the next good run.
+Note (iteration 217): unchanged by Q18's merge (fill-only runs don't touch snapshots); still OPEN.
 
 ### BUG-288 [P3][QA] Boundaries of the last five fixes no test pins (code review 22's surviving mutants), and small doc points
 Status: VERIFIED (iteration 203)
