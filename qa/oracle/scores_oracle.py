@@ -1357,11 +1357,23 @@ def severe_signs(d: Data, mine: Dict[str, Oracle]) -> None:
           f"{', '.join(f'{t} {c} ({expected[(t, c)]})' for t, c in absent) or 'none'}")
 
 
+def read_only_uri(path):
+    """A ``mode=ro`` SQLite URI for *path*, as ``src.exporters.sqlite_store.read_only_uri`` builds it (this oracle must
+    not import ``src``; tests/test_read_only_uri.py holds the two together): '%', '#' and '?' escaped, so a folder
+    named ``or#1`` doesn't cut ``mode=ro`` off, and a path starting '//' given an empty URI authority (BUG-089)."""
+    text = str(path)
+    for char, escape in (("%", "%25"), ("#", "%23"), ("?", "%3f")):
+        text = text.replace(char, escape)
+    if text.startswith("//"):
+        text = "//" + text
+    return f"file:{text}?mode=ro"
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--db", required=True)
     args = p.parse_args(argv)
-    db = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+    db = sqlite3.connect(read_only_uri(args.db), uri=True)
     failures: List[str] = []
     GATES.clear()
     d = Data(db)

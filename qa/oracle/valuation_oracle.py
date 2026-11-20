@@ -811,6 +811,18 @@ def check_level2(db: sqlite3.Connection, tickers: List[str], tol: float) -> int:
     return bad + len(skipped)
 
 
+def read_only_uri(path):
+    """A ``mode=ro`` SQLite URI for *path*, as ``src.exporters.sqlite_store.read_only_uri`` builds it (this oracle must
+    not import ``src``; tests/test_read_only_uri.py holds the two together): '%', '#' and '?' escaped, so a folder
+    named ``or#1`` doesn't cut ``mode=ro`` off, and a path starting '//' given an empty URI authority (BUG-089)."""
+    text = str(path)
+    for char, escape in (("%", "%25"), ("#", "%23"), ("?", "%3f")):
+        text = text.replace(char, escape)
+    if text.startswith("//"):
+        text = "//" + text
+    return f"file:{text}?mode=ro"
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--db", required=True)
@@ -818,7 +830,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--level", choices=("1", "2", "both"), default="both")
     p.add_argument("tickers", nargs="*")
     args = p.parse_args(argv)
-    db = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+    db = sqlite3.connect(read_only_uri(args.db), uri=True)
     tickers = [t.upper() for t in args.tickers]
     bad = 0
     if args.level in ("1", "both"):

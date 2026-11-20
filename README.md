@@ -2451,7 +2451,7 @@ ORDER BY m.roic DESC;
 Tables: `companies`, `financials_annual`, `financials_quarterly`, `financials_ttm`,
 `financials_annual_vintages`, `metrics_annual`, `market_snapshots`, `collection_runs`,
 plus (added for the web terminal — see [Web interface](#web-interface)) `price_bars`
-(daily OHLCV, also used for the `^GSPC` S&P 500 benchmark), `analyst_snapshots`
+(daily OHLCV, also used for the `^GSPC` S&P 500 benchmark; see below for what its prices are), `analyst_snapshots`
 (point-in-time price targets/recommendations), `earnings_history` (EPS
 estimate/actual/surprise per quarter), `dividend_events`, `split_events`,
 `holders` (institutional + mutual-fund), `insider_transactions`, and `officers`; and the valuation
@@ -2463,7 +2463,17 @@ layer's `valuations`, `valuation_summary`, `valuation_history` and `valuation_ra
 `guru_quarters` and `guru_positions` (see [SEC ownership](#sec-ownership-insiders-and-gurus)); and the market data's
 `market_series` and `market_fetches` (see [Market data](#market-data)); and `stock-data refresh`'s `refresh_log` (see
 [Keeping the data current](#keeping-the-data-current-stock-data-refresh)). `companies` also holds each company's SEC
-`sic` and `sic_description` (see [SIC codes](#sic-codes)):
+`sic` and `sic_description` (see [SIC codes](#sic-codes)).
+
+`price_bars` holds **market prices**: what the stock traded at, on today's split basis (Yahoo's `auto_adjust=False`),
+not adjusted for dividends, so a return computed from them is a price return (BUG-075). Bars stored before that
+change are Yahoo's dividend-adjusted closes, and the `dividend_adjusted` column says which: `1` marks such a bar (the
+migration flagged every bar then stored), NULL a market price (every bar a collection writes now). A full
+collection rewrites the dates it fetches as NULL, so a re-collected ticker holds market prices, while one not
+re-collected since keeps its flagged bars, which give a total return; a return over a mix of the two is neither.
+The valuation inputs skip the flagged closes where they need the market's; an SQL user computing returns should
+filter on `dividend_adjusted IS NULL`, or compare like with like. `stock-data refresh`'s bars step leaves a ticker with any
+flagged bar to a full collection.
 
 ```sql
 -- Cheap against their own history: P/E in the bottom quarter of its last 10 years,

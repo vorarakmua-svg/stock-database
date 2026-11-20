@@ -38,6 +38,14 @@ addopts = "-q"
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::pytest.PytestDeprecationWarning",
+    # BUG-002: Starlette 1.3 deprecates its httpx-based TestClient in favour of the separate `httpx2` package, which
+    # this project doesn't depend on. The warning is a UserWarning raised once, on `import fastapi.testclient`, so the
+    # DeprecationWarning filter above misses it; only that message is ignored.
+    "ignore:Using .httpx. with .starlette.testclient. is deprecated:starlette.exceptions.StarletteDeprecationWarning",
+    # BUG-002: curl_cffi's async session on Windows' default Proactor loop warns once that it starts a selector thread
+    # (tests/test_no_network.py). The test is of the network guard, not the loop policy. (curl_cffi's CurlCffiWarning
+    # is a UserWarning; named by that, so the filter needs no curl_cffi import.)
+    "ignore:(?s)\\s*Proactor event loop does not implement add_reader:UserWarning",
 ]
 
 [tool.ruff]

@@ -76,8 +76,20 @@ def iso(yyyymmdd):
     return f"{yyyymmdd[:4]}-{yyyymmdd[4:6]}-{yyyymmdd[6:8]}" if yyyymmdd and len(yyyymmdd) == 8 else None
 
 
+def read_only_uri(path):
+    """A ``mode=ro`` SQLite URI for *path*, as ``src.exporters.sqlite_store.read_only_uri`` builds it (this oracle must
+    not import ``src``; tests/test_read_only_uri.py holds the two together): '%', '#' and '?' escaped, so a folder
+    named ``or#1`` doesn't cut ``mode=ro`` off, and a path starting '//' given an empty URI authority (BUG-089)."""
+    text = str(path)
+    for char, escape in (("%", "%25"), ("#", "%23"), ("?", "%3f")):
+        text = text.replace(char, escape)
+    if text.startswith("//"):
+        text = "//" + text
+    return f"file:{text}?mode=ro"
+
+
 def check(db, cache):
-    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    conn = sqlite3.connect(read_only_uri(db), uri=True)
     conn.row_factory = sqlite3.Row
     filings = conn.execute("SELECT * FROM guru_filings ORDER BY guru_cik, period, filed").fetchall()
     holdings = {}

@@ -3566,3 +3566,13 @@ Result: BUG-365..368 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3714 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix: an unchecked run gets its own gap; regular payments gate the dividend test; EV/EBITDA reasons; NEW HOLDINGS amendments keep the note (BUG-365..368)
 Next: more P3s.
+
+## Iteration 215: 2026-11-21 17:30: fix (BUG-002, BUG-089, BUG-090, BUG-091)
+Picked: small CODE/STORE/DOCS P3s; a sonnet worker.
+Did: one escaped read-only URI rule in the store and every oracle ('//' roots, #, ?, %); the suite's two warnings
+filtered narrowly; the README explains price_bars' market prices and dividend_adjusted.
+- RED: 103 failed of 116 on c441e02; GREEN. 28 of 28 mutants. No stored data changes.
+Result: BUG-002, BUG-089, BUG-090, BUG-091 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3829 passed, 2 skipped | CI: PR #29
+Commit: (this commit) fix: one escaped read-only URI everywhere; a quiet suite; price_bars documented (BUG-002, BUG-089, BUG-090, BUG-091)
+Next: GATHER 052/108/235/296 (worker), then stop (the user's instruction).

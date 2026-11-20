@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 109 · NEEDS-USER 3 · Decided: 7 · Verified: 270
+**Open:** P0 0 · P1 0 · P2 0 · P3 105 · NEEDS-USER 3 · Decided: 7 · Verified: 274
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -20,13 +20,14 @@ Root cause: USAGE_GUIDE predates the canonical snake_case schema (`src/mappings/
 Notes: verified 2026-10-20 against `data/output/json/AAPL.json`. The RED run of the new docs test found 12 missing keys and 2 crashing examples: Accessing Dividend History (`KeyError: 'years_of_dividends'`; the field is `years_of_data`) and Graham Number (`KeyError: 'eps'`, a knock-on effect of `'Total Stockholders Equity'` reading 0). Fixed in USAGE_GUIDE.md (12 lookups plus the stale section list) and in README's sample JSON. Evidence: `qa/evidence/iter02-bug001-{red,green,real-output}.txt`. The real-data run prints FY2025 revenue $416.16B and net income $112.01B (matches the 10-K).
 
 ### BUG-002 [P3][CODE] Test runs emit StarletteDeprecationWarning (httpx + starlette.testclient)
-Status: OPEN
-Found: bootstrap (seeded) via CODE-11 | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 215)
+Found: bootstrap (seeded) via CODE-11 | Fixed: (this commit) | Regression tests: tests/test_read_only_uri.py (new); the suite's 0 warnings
 Repro: `pytest` ends with "1 warning": `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.`
 Expected: clean test output, or a documented decision to defer.
 Actual: the warning on every run (Starlette 1.3.1, httpx 0.28.1).
 Root cause: Starlette 1.3 deprecates its httpx-based TestClient; `fastapi.testclient` re-exports it.
 Notes: options are migrating per Starlette's guidance, or a dated `filterwarnings` entry. Must stay green on CI's Python 3.9.
+Fix (iteration 215, `qa/evidence/bug002-investigation.txt`): both suite warnings are UserWarnings the DeprecationWarning filter missed; Starlette 1.3.1's TestClient warning (wants httpx2, not installable here) and curl_cffi's proactor-loop warning are filtered narrowly by message in pyproject.toml with a comment. The suite runs with 0 warnings.
 
 ### BUG-003 [P3][UI] Palette arrow keys may act on a stale list (suspected)
 Status: VERIFIED (iteration 205)
@@ -726,22 +727,25 @@ Expected: every route off the machine refused, and all of 127.0.0.0/8 local.   A
 Fix (iteration 183, `qa/evidence/bug088-investigation.txt`): the autouse guard checks `socket.connect` and `connect_ex` (AF_INET/AF_INET6), refuses non-local names in `getaddrinfo`, `gethostbyname`, `gethostbyname_ex`, guards the Windows proactor loop's `sock_connect` (ConnectEx bypasses Python's socket methods; the selector loop goes through `socket.connect`), and curl_cffi's `Curl.setopt` URL option (libcurl opens its own sockets; optional import). Local: `localhost`, 127.0.0.0/8, ::1, ::ffff:127.x. Test-only: no src or stored data change. 15 mutants killed (an IPv4-mapped mutant survives on 3.13 only, where `is_loopback` covers it; clause kept for 3.9-3.12). Residuals: UDP sendto / datagram endpoints, libcurl redirects from a local server, other transports; one CurlCffiWarning (proactor loop) in the suite's output. Note: the worker's RED run against the old guard reached the network (DNS lookups, one Yahoo GET) - read-only, nothing stored.
 
 ### BUG-089 [P3][CODE] The oracle's read-only URI is unescaped
-Status: OPEN
-Found: iteration 58 by code review 8 (M5), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 215)
+Found: iteration 58 by code review 8 (M5), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_read_only_uri.py (new); the suite's 0 warnings
 Repro: `qa/oracle/valuation_oracle.py` opens `file:{args.db}?mode=ro`; with `--db ...\or#1\stock.db` it creates an empty file `or` and fails with "no such table: valuations" (BUG-080's case, in the QA tooling).
 Expected: any path the OS allows, read-only, without importing `src`.   Actual: as above.
+Fix (iteration 215, with BUG-002): the six oracles (7 call sites) open the DB through a `read_only_uri` copy (they don't import src) that escapes %, #, ? and applies the '//' rule; tests/test_read_only_uri.py ties each copy to the store's helper.
 
 ### BUG-090 [P3][STORE] `read_only_uri` fails on a POSIX path that starts with '//'
-Status: OPEN
-Found: iteration 58 by code review 8 (M6), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 215)
+Found: iteration 58 by code review 8 (M6), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_read_only_uri.py (new); the suite's 0 warnings
 Repro: `read_only_uri(PurePosixPath("//srv/data/stock.db"))` gives `file://srv/data/stock.db?mode=ro`, which SQLite rejects: "invalid uri authority: srv". The form before BUG-080's fix did the same.
 Expected: such a path opens.   Actual: an error.
+Fix (iteration 215, with BUG-002): `read_only_uri` prefixes another '//' when the escaped path starts with '//' (empty authority), so POSIX '//' roots and UNC paths open.
 
 ### BUG-091 [P3][DOCS] The README doesn't say `price_bars` now holds market prices, or what `dividend_adjusted` means
-Status: OPEN
-Found: iteration 58 by code review 8 (M7), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 215)
+Found: iteration 58 by code review 8 (M7), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_read_only_uri.py (new); the suite's 0 warnings
 Repro: README.md:590 describes `price_bars` as "daily OHLCV, also used for the ^GSPC S&P 500 benchmark": nothing on market prices since BUG-075, Yahoo's adjusted prices in bars stored before, or the flag, so an SQL user computing returns gets price returns for re-collected tickers and total returns for the rest.
 Expected: the table's basis and the flag described.   Actual: as above.
+Fix (iteration 215, with BUG-002): the README says price_bars holds market prices (today's split basis, not dividend-adjusted) and what dividend_adjusted=1 marks, and to filter on dividend_adjusted IS NULL.
 
 ### BUG-092 [P2][VALID] The quarterly ladder differences share counts filed at different scales, so a quarter's count comes out negative or tens of times its year's
 Status: VERIFIED (iteration 66)

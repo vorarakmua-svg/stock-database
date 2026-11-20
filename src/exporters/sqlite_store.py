@@ -103,6 +103,9 @@ def read_only_uri(path: Union[str, Path]) -> str:
     text = str(path)
     for char, escape in (("%", "%25"), ("#", "%23"), ("?", "%3f")):
         text = text.replace(char, escape)
+    if text.startswith("//"):
+        # "file://srv/x" reads "srv" as the URI's authority, which SQLite refuses (BUG-090): name an empty one.
+        text = "//" + text
     return f"file:{text}?mode=ro"
 
 

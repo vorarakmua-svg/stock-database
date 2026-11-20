@@ -90,13 +90,25 @@ def gate(name: str, ok: bool, detail: str, failures: List[str]) -> None:
         failures.append(name)
 
 
+def read_only_uri(path):
+    """A ``mode=ro`` SQLite URI for *path*, as ``src.exporters.sqlite_store.read_only_uri`` builds it (this oracle must
+    not import ``src``; tests/test_read_only_uri.py holds the two together): '%', '#' and '?' escaped, so a folder
+    named ``or#1`` doesn't cut ``mode=ro`` off, and a path starting '//' given an empty URI authority (BUG-089)."""
+    text = str(path)
+    for char, escape in (("%", "%25"), ("#", "%23"), ("?", "%3f")):
+        text = text.replace(char, escape)
+    if text.startswith("//"):
+        text = "//" + text
+    return f"file:{text}?mode=ro"
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--db", required=True)
     p.add_argument("--json-dir", default="data/output/json")
     p.add_argument("--reference", default=None, help="another copy whose valuations should be unchanged")
     args = p.parse_args(argv)
-    db = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+    db = sqlite3.connect(read_only_uri(args.db), uri=True)
     failures: List[str] = []
 
     snaps: Dict[str, Tuple] = {}
@@ -319,7 +331,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # 7. The valuations and summaries, against another copy.
     if args.reference:
-        ref = sqlite3.connect(f"file:{args.reference}?mode=ro", uri=True)
+        ref = sqlite3.connect(read_only_uri(args.reference), uri=True)
         for q in ("SELECT ticker, model, applicable, na_reason, value_bear, value_base, value_bull, assumptions, "
                   "basis_fiscal_year FROM valuations ORDER BY 1, 2",
                   "SELECT ticker, n_applicable, median_bear, median_base, median_bull FROM valuation_summary "

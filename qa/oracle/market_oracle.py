@@ -482,12 +482,24 @@ def check_cape_api(d: Data, api: Optional[Dict[str, Any]], failures: List[str]) 
           f"{fmt(a.get('max'))} ({a.get('max_date')})") + ("; differ: " + "; ".join(bad) if bad else ""), failures)
 
 
+def read_only_uri(path):
+    """A ``mode=ro`` SQLite URI for *path*, as ``src.exporters.sqlite_store.read_only_uri`` builds it (this oracle must
+    not import ``src``; tests/test_read_only_uri.py holds the two together): '%', '#' and '?' escaped, so a folder
+    named ``or#1`` doesn't cut ``mode=ro`` off, and a path starting '//' given an empty URI authority (BUG-089)."""
+    text = str(path)
+    for char, escape in (("%", "%25"), ("#", "%23"), ("?", "%3f")):
+        text = text.replace(char, escape)
+    if text.startswith("//"):
+        text = "//" + text
+    return f"file:{text}?mode=ro"
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--db", required=True)
     p.add_argument("--api", default=None, help="a saved answer of GET /api/market (JSON)")
     args = p.parse_args(argv)
-    db = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+    db = sqlite3.connect(read_only_uri(args.db), uri=True)
     api = None
     if args.api:
         with open(args.api, encoding="utf-8") as f:
