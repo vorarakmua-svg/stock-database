@@ -288,6 +288,14 @@ Each ticker JSON file contains:
 }
 ```
 
+A re-collection merges into the file and the two CSVs as the database takes it. A section the run didn't get (a failed
+request) keeps the earlier one, and the file's `section_collected_at` names each one kept with the time it was
+collected (`price_history_snapshots` files the earlier price statistics under that time too). A run without a price
+(Yahoo failed, `--no-yahoo`, "quote unavailable") keeps the earlier market data, valuation ratios and the metrics
+priced on the market cap (`enterprise_value`, `ev_to_ebitda`, ...), as the database keeps its latest snapshot. A run
+that couldn't read a successor's predecessor's filings only fills the stored periods, here and in
+`financial_history.csv` as in the database.
+
 ### CSV Summary Fields
 
 The summary CSV contains key metrics for quick comparison:

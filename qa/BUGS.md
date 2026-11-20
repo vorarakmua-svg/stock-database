@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 113 · NEEDS-USER 3 · Decided: 7 · Verified: 262
+**Open:** P0 0 · P1 0 · P2 0 · P3 109 · NEEDS-USER 3 · Decided: 7 · Verified: 266
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -248,10 +248,11 @@ Notes: P0 under the ledger's scale (a crash on a main flow); opening the summary
 Fix: the history file's path goes into `results.setdefault("csv", [])`, so a failed summary only loses itself (its error is still logged). Verified on the real path: with `os.replace` refused for summary.csv, the export returns json, financial_history.csv and sqlite, and the database is written (`qa/evidence/iter18-bug026-e2e.txt`).
 
 ### BUG-027 [P3][STORE] Two unreadable CSVs moved aside in the same second overwrite each other
-Status: OPEN
-Found: iteration 17 by code review 2 (reproduced there with a frozen clock) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 212)
+Found: iteration 17 by code review 2 (reproduced there with a frozen clock) | Fixed: (this commit) | Regression tests: tests/test_exports_after_failed_runs.py (new), tests/test_csv_exporter.py; 6 failing first
 Repro: the moved-aside name `<name>.unreadable-<YYYYmmdd-HHMMSS>.csv` has 1-second resolution and `Path.replace` overwrites an existing file.
 Expected: every kept copy survives.
+Fix (iteration 212, `qa/evidence/bug027-investigation.txt`): a moved-aside unreadable CSV whose name is taken gets -2, -3, ... (not atomic across processes).
 
 ### BUG-028 [P3][DOCS] Two wordings no longer match the code
 Status: VERIFIED (iteration 198)
@@ -269,10 +270,11 @@ Code review 10 (M4), re-run in iteration 71: after re-collecting the user's copy
 Iteration 98: this iteration's own prototype collections, re-collected into a database an earlier prototype had filled, kept 74 short-term debt cells the newer parse left empty (AMD's FY2011 $489M, from a tag the second prototype no longer read) until the database was recreated. Upgraded to P2: a fix that leaves a field empty reaches an existing database only through a fresh one, so the user's re-collection keeps the old figure (BUG-013's dividends here, BUG-092's counts in code review 10's re-run); the loop's evidence comes from fresh databases.
 Fix (at the user's request, after their 2026-10-21 update kept 500 such cells: `qa/evidence/update-20261021.txt`): a ticker's run that parsed its annual record writes every canonical column of every period it gives (`sqlite_store._canonical_values`, `restated`), so a figure the current rules leave empty is NULL, not the earlier parse's; periods the run doesn't give keep their rows (BUG-168), and a run with no annual record, a filer with no 10-K yet (XOM's new holding company, SPCX), only adds: XOM's new registrant gives 2 to 15 fields for quarters whose stored rows came from Exxon Mobil Corp, so a plain rewrite would have cleared 143 of its figures (Q6). The history limit (`--years`) trims whole periods after they resolve, so a limited run's periods are complete. One test RED, one guard; six mutants, each failing a test (`qa/evidence/bug029-{red,green,mutants}.txt`). On a copy of the user's database, an offline re-collection with the fix clears exactly the 500 cells a fresh parse of the same filings leaves empty (32 annual: 21 zero impairments, 11 dividends per share; 101 quarterly: debt repaid, capex, buybacks, acquisitions, share counts; 299 TTM; 68 vintages) and changes nothing else; then the user's database itself, re-collected live with the fix (127 tickers, 0 errors): the same 500 cleared, nothing else in the financial tables changed, XOM and SPCX untouched, none left beside a fresh parse (`qa/evidence/bug029-realdata.txt`; backups in the user's %LOCALAPPDATA%\stockdb-backups\2026-10-21 and 2026-10-21-b).
 ### BUG-030 [P3][STORE] After a failed run, the JSON files old price statistics under the failed run's time
-Status: OPEN
-Found: iteration 23 by code review 3 (moved out of BUG-018 in iteration 24) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 212)
+Found: iteration 23 by code review 3 (moved out of BUG-018 in iteration 24) | Fixed: (this commit) | Regression tests: tests/test_exports_after_failed_runs.py (new), tests/test_csv_exporter.py; 6 failing first
 Repro: a failed run keeps the earlier `price_history` section (BUG-018's rule); the next run's merge moves that section into `price_history_snapshots` labelled with the failed run's `collected_at`.
 Expected: kept data keeps its own time (the review suggests a per-section collected_at, or a last-good timestamp).
+Fix (iteration 212, with BUG-027): the JSON records `section_collected_at` for each section kept from an earlier run (carried across failed runs, dropped when nothing is kept); price_history_snapshots use it.
 
 ### BUG-031 [P1][VAL] NOW's per-share history mixes pre- and post-split years: the EPS-direction check vetoes a declared split
 Status: VERIFIED (iteration 27)
@@ -337,10 +339,11 @@ Notes: no current row uses the 4.35% estimate (real rates are 0.0440–0.0475). 
 Fix (iteration 36): `FREDHandler.get_risk_free_rate_details` returns the rate with its day and source ("fred", "treasury_gov" or "estimate", the static one having no day); the fetcher keeps both instead of labelling every key-less rate "fallback"; `market_snapshots` stores `risk_free_rate_date` and `risk_free_rate_source` (added by the usual column migration; a quote refresh carries them forward with the rate); `load_inputs` reads them, from `SELECT *` so a database not yet migrated still loads; and DCF, DDM and owner earnings record `risk_free_rate_as_of` and `risk_free_rate_source` in their assumptions, with `rf_estimate` for the static estimate. The VAL tab lists every assumption, so the day shows there. Six mutants (one per layer, plus reading the new columns by name) each fail a test. A live key-less collection of AAPL stored 5.15% for 2026-10-19 from Treasury.gov, its three rate-using models record it, and the VAL tab shows it (`qa/evidence/iter36-bug037-e2e.txt`); backfills of the real and golden copies move no value (their old snapshots carry no day until re-collected).
 
 ### BUG-038 [P3][STORE] After a failed Yahoo run, the CSV and JSON show no EV while SQLite keeps the last one
-Status: OPEN
-Found: iteration 29 by code review 4 (confirmed by reading the code paths; not re-run) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 212)
+Found: iteration 29 by code review 4 (confirmed by reading the code paths; not re-run) | Fixed: (this commit) | Regression tests: tests/test_exports_after_failed_runs.py (new), tests/test_csv_exporter.py; 6 failing first
 Repro: a run with Yahoo failing, or `--no-yahoo`: the new calculated metrics have no EV (no market cap), so summary.csv's `calc_ev` and `calc_ev_to_ebitda` and the JSON's are blank and both show the new risk-free rate, while SQLite's latest snapshot (the earlier run's, kept by BUG-018's fix) keeps the old EV and rate.
 Expected: the stores agree on the current values (MATCH-05).
+Fix (iteration 212, with BUG-027): `got_price()` (SQLite's own test before a snapshot) decides: a run without a price keeps the earlier market_data, valuation and the five price-dependent metrics in the JSON and summary.csv, as SQLite keeps its last snapshot (also covers a 'quote unavailable' run). Residuals: the exports show the rate such a run fetched; shareholders' columns can still blank.
 
 ### BUG-039 [P3][VAL] With no Yahoo share count, market cap ÷ price is never considered
 Status: VERIFIED (iteration 211)
@@ -2584,10 +2587,11 @@ Expected: the same calendar_year on every run.   Actual: it depends on the hash 
 Fix (iteration 181, with BUG-057/123/277, `qa/evidence/bug277-investigation.txt`): a period's calendar follows SEC's own rule (`xbrl_instance.frame_of`: a year is the calendar year holding its end less 180 days, a quarter the quarter holding its end less 45 days; it matches all 5.2 million frames in the 504 cached companyfacts). A year's end is the one most of its full-year flow figures share (the later on a tie; period_end with none); it takes SEC's full-year frame on a fact ending there, else the rule's, never a frame of another end or an instant's. A quarter takes a quarter frame, else its instant frame, else the rule's. Several frames of one kind: the first in sort order. Census (HEAD under seeds 0-7, the fix under 0/4/7): the fix is seed-independent; stable cells it moves: annual calendar_year 31 (Feb-early June year ends HEAD labelled by the instant, e.g. ORCL 2007 -> 2006, BF-B 2008 -> 2007; TEL 2024-25 +1; LHX 2019 -> 2018), vintages 620, quarterly year 81 / quarter 306, TTM 14 / 13, frame labels throughout. DB copies over 502: only calendar_year / calendar_quarter move; every valuation, metrics, quality and warning table identical; valuation oracle identical. Look-ahead 0.
 
 ### BUG-278 [P3][STORE] The JSON export and financial_history.csv take a failed-predecessor run's partial years
-Status: OPEN
-Found: iteration 118 (BUG-179's worker, residuals) | Fixed: | Regression test:
+Status: VERIFIED (iteration 212)
+Found: iteration 118 (BUG-179's worker, residuals) | Fixed: (this commit) | Regression tests: tests/test_exports_after_failed_runs.py (new), tests/test_csv_exporter.py; 6 failing first
 Repro: since BUG-179 the SQLite store only fills from a run whose predecessor read failed, but the per-ticker JSON and the financial_history.csv export are rewritten from that run's record: checked in memory against the user's files, BLK.json would lose 319 cells and the CSV 56, until the next good run.
 Expected: the exports keep what the run can't speak for, as the store does.   Actual: they take the partial years.
+Fix (iteration 212, with BUG-027): `fill(old, new)` (SQLite's COALESCE) for a run with predecessor_error: the JSON's periods, unmapped facts and historical metrics, financial_history.csv, and summary.csv's sec_* keep stored values and fill only empty ones. Offline BLK/XOM fill runs: 0 export cells differ from the DB (HEAD: 58-194 per section).
 
 ### BUG-279 [P3][REFRESH] The refresh doesn't re-collect a company whose last collection couldn't read its predecessor
 Status: VERIFIED (iteration 119, with BUG-251)

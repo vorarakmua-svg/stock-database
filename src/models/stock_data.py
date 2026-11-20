@@ -32,6 +32,33 @@ SUMMARY_IDENTITY_COLUMNS: Tuple[str, ...] = ("ticker", "cik", "company_name")
 #: The run's own columns: always the latest run's.
 SUMMARY_RUN_COLUMNS: Tuple[str, ...] = ("collected_at", "data_sources", "warning_count", "error_count")
 
+#: Yahoo's quote, the sections a market snapshot is made of. A run without a price (Yahoo failed, ``--no-yahoo``,
+#: "quote unavailable") speaks for none of it: SQLite writes no snapshot and keeps the latest one (BUG-018, BUG-033),
+#: and the exports keep these sections and the metrics priced on the market cap, as they were (BUG-038).
+QUOTE_SECTIONS: Tuple[str, ...] = ("market_data", "valuation")
+#: The calculated metrics computed from the run's market data (``CalculatedMetrics.calculate_all``).
+PRICED_METRICS: Tuple[str, ...] = ("enterprise_value", "ev_to_ebitda", "ev_to_revenue", "ev_to_fcf", "fcf_yield")
+#: Their summary columns.
+SUMMARY_PRICED_COLUMNS: Tuple[str, ...] = ("calc_ev", "calc_ev_to_ebitda")
+
+
+def got_price(market_data: Optional[Dict[str, Any]]) -> bool:
+    """Whether a run's market data holds a price, the test ``SQLiteStore`` makes before writing a market snapshot:
+    the exports make it too before taking a run's quote (BUG-038)."""
+    return (market_data or {}).get("current_price") is not None
+
+
+def fill(old: Any, new: Any) -> Any:
+    """*old*, with *new* filling only what it lacks (None or ""), dicts key by key: how a run that can't speak for
+    what's stored writes it (a successor's whose predecessor's filings couldn't be read), SQLite's
+    ``_upsert(fill_only=True)`` in the database (BUG-179) and this in the exports (BUG-278)."""
+    if isinstance(old, dict) and isinstance(new, dict):
+        filled = dict(old)
+        for key, value in new.items():
+            filled[key] = fill(old[key], value) if key in old else value
+        return filled
+    return new if old is None or old == "" else old
+
 
 @dataclass
 class StockData:
@@ -171,7 +198,7 @@ class StockData:
 
         Tolerates extra keys not declared on the model. The JSON exporter's
         merge mode adds bookkeeping fields (``collection_history``,
-        ``first_collected_at``, ``price_history_snapshots``) that are not
+        ``first_collected_at``, ``price_history_snapshots``, ``section_collected_at``) that are not
         dataclass fields, so we filter down to known fields before constructing.
         """
         # Only keep keys that correspond to declared dataclass fields

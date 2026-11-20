@@ -3530,3 +3530,16 @@ Result: BUG-039, BUG-311 VERIFIED; BUG-293 partly fixed, OPEN.
 Gates: ruff ✓ mypy ✓ pytest 3671 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(valuation): shares from market cap without Yahoo's count; an annual payer keeps SEC's dividend; missing debt named (BUG-039, BUG-311, BUG-293)
 Next: STORE 027/030/038/278 (worker); code review 34 due.
+
+## Iteration 212: 2026-11-21 12:10: fix (BUG-027, BUG-030, BUG-038, BUG-278)
+Picked: four STORE P3s of structural #4 (exports after failed or partial runs); an opus worker.
+Did: the CSV/JSON exports follow SQLite's rules after a failed run: a run without a price keeps the earlier quote and
+price-dependent metrics; a fill-only run fills only empty values; kept sections keep their own collection time;
+moved-aside CSVs never overwrite each other.
+- RED: 6 failed of 31 on b9843b3; GREEN. 33 of 33 mutants.
+- Real data: all 502 current exports re-exported identically; offline failure scenarios now match the DB; no table
+  the engine reads changes.
+Result: BUG-027, BUG-030, BUG-038, BUG-278 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3679 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(export): the CSV and JSON keep what SQLite keeps after a failed or partial run (BUG-027, BUG-030, BUG-038, BUG-278)
+Next: code review 34 (scope ce49a04..HEAD).

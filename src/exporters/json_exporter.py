@@ -6,10 +6,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from ..models.stock_data import StockData
+from ..models.stock_data import PRICED_METRICS, QUOTE_SECTIONS, StockData, fill, got_price
+from ..parsers.calculated_metrics import CalculatedMetrics
 
 #: A run's own diagnostics: always the latest run's when merging, even when empty.
 _RUN_FIELDS = frozenset({"collected_at", "data_sources", "errors", "warnings"})
+#: The merge's own bookkeeping: never data a run kept.
+_BOOKKEEPING = frozenset({"collection_history", "first_collected_at", "price_history_snapshots",
+                          "section_collected_at"})
+#: The SEC record's sections a run that can't read the predecessor's filings only fills (BUG-179, BUG-278).
+_FILLED_SECTIONS = ("financials_annual", "financials_quarterly", "financials_ttm")
 
 
 def _is_empty(value: Any) -> bool:
@@ -96,7 +102,8 @@ class JSONExporter:
                 try:
                     with open(filepath, 'r', encoding='utf-8') as f:
                         existing_data = json.load(f)
-                    new_data = self._merge_data(existing_data, new_data)
+                    new_data = self._merge_data(existing_data, new_data,
+                                                fill_only=bool(stock.predecessor_error))
                     self.logger.info(f"Merged new data with existing {stock.ticker} data")
                 except Exception as e:
                     self.logger.warning(f"Could not load existing data for merge: {e}")
@@ -114,7 +121,8 @@ class JSONExporter:
     def _merge_data(
         self,
         existing: Dict[str, Any],
-        new: Dict[str, Any]
+        new: Dict[str, Any],
+        fill_only: bool = False
     ) -> Dict[str, Any]:
         """
         Merge new data with existing data, preserving historical records.
@@ -127,8 +135,19 @@ class JSONExporter:
         - market_data, valuation, shareholders: Use latest (new)
         - calculated_metrics: Use latest (new)
         - company_info: Use latest but preserve missing fields
+        - a section the new run didn't get keeps the earlier one, and ``section_collected_at`` says when
+          that was collected (BUG-030); a run without a price keeps the quote and the metrics priced on
+          it, as the database's latest snapshot does (BUG-038)
+        - *fill_only* (a run that couldn't read its predecessor's filings): the SEC record's periods and
+          unmapped facts only fill what's stored, each year's metrics computed on the year as merged, as
+          the database does (BUG-179, BUG-278)
         """
         merged = new.copy()
+        kept_at: Dict[str, Any] = {}
+
+        def collected_at(key: str) -> Any:
+            """When the existing file's *key* was collected: its own run's time, which a kept one carries."""
+            return (existing.get("section_collected_at") or {}).get(key) or existing.get("collected_at")
 
         # Merge annual financials (keep all years)
         if existing.get("financials_annual") and new.get("financials_annual"):
@@ -162,7 +181,7 @@ class JSONExporter:
             # Store previous snapshots in history
             history_snapshots = existing.get("price_history_snapshots", [])
             old_snapshot = {
-                "collected_at": existing.get("collected_at"),
+                "collected_at": collected_at("price_history"),
                 **{k: v for k, v in existing["price_history"].items()
                    if k not in ["annual_returns"]}
             }
@@ -179,14 +198,40 @@ class JSONExporter:
                     merged_info[k] = v
             merged["company_info"] = merged_info
 
+        # A run that couldn't read its predecessor's filings speaks for nothing stored: its periods
+        # and unmapped facts only fill, and each year's metrics are the year's as merged (BUG-278).
+        if fill_only:
+            self._fill_sec_record(existing, new, merged)
+
+        # A run without a price has no quote: the earlier quote stays, with the metrics priced on
+        # its market cap, as the database keeps its latest snapshot (BUG-038).
+        if not got_price(new.get("market_data")):
+            for key in QUOTE_SECTIONS:
+                if not _is_empty(existing.get(key)):
+                    merged[key] = existing[key]
+                    kept_at[key] = collected_at(key)
+            old_metrics = existing.get("calculated_metrics") or {}
+            priced = {k: old_metrics[k] for k in PRICED_METRICS if k in old_metrics}
+            if priced and not _is_empty(merged.get("calculated_metrics")):
+                merged["calculated_metrics"] = {**merged["calculated_metrics"], **priced}
+                kept_at.update({f"calculated_metrics.{k}": collected_at(f"calculated_metrics.{k}") for k in priced})
+
         # A section the new run didn't get (a failed or partial fetch) keeps the earlier data
-        # instead of being emptied, and so does the quality report describing kept financials.
-        # Only the run's own diagnostics are always the new run's.
+        # instead of being emptied, and so does the quality report describing kept financials,
+        # each with the time it was collected (BUG-030). Only the run's own diagnostics are
+        # always the new run's.
         for key, old in existing.items():
             if key not in _RUN_FIELDS and not _is_empty(old) and _is_empty(merged.get(key)):
                 merged[key] = old
+                if key not in _BOOKKEEPING:
+                    kept_at[key] = collected_at(key)
         if not new.get("financials_annual") and existing.get("financials_annual") and existing.get("data_quality"):
             merged["data_quality"] = existing["data_quality"]
+            kept_at["data_quality"] = collected_at("data_quality")
+        if kept_at:
+            merged["section_collected_at"] = kept_at
+        else:
+            merged.pop("section_collected_at", None)
 
         # Track data collection history
         collection_history = existing.get("collection_history", [])
@@ -204,6 +249,29 @@ class JSONExporter:
             merged["first_collected_at"] = existing.get("collected_at")
 
         return merged
+
+    def _fill_sec_record(self, existing: Dict[str, Any], new: Dict[str, Any], merged: Dict[str, Any]) -> None:
+        """Merge a run that couldn't read its predecessor's filings the way the database takes it
+        (``SQLiteStore._write_stock``, BUG-179): its periods and unmapped facts only fill the stored
+        ones, and each year it gives has its metrics computed on the year as merged (BUG-278)."""
+        for section in _FILLED_SECTIONS:
+            if existing.get(section) and new.get(section):
+                merged[section] = fill(existing[section], new[section])
+        if existing.get("unmapped_facts") and new.get("unmapped_facts"):
+            facts = {fact.get("tag"): fact for fact in existing["unmapped_facts"]}
+            for fact in new["unmapped_facts"]:
+                tag = fact.get("tag")
+                facts[tag] = fill(facts[tag], fact) if tag in facts else fact
+            merged["unmapped_facts"] = list(facts.values())
+        metrics = new.get("calculated_metrics") or {}
+        annual = merged.get("financials_annual") or {}
+        if metrics.get("historical"):
+            calculator = CalculatedMetrics(self.logger)
+            historical = dict((existing.get("calculated_metrics") or {}).get("historical") or {})
+            for year in metrics["historical"]:
+                historical[year] = calculator.calculate_historical(
+                    {year: annual.get(year) or {}}, sector=new.get("sector_class"))[year]
+            merged["calculated_metrics"] = {**metrics, "historical": historical}
 
     def _merge_transactions(
         self,
