@@ -17,13 +17,16 @@ from fastapi.templating import Jinja2Templates
 from ...exporters.sqlite_store import _METRIC_COLUMNS
 from ...query.asof import AsOfReader
 from ...query.pit_metrics import PointInTimeMetrics
+from ...universe.industries import industry_options
 from ..dependencies import get_asof_reader, get_pit_metrics, get_reader
-from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_value
+from ..formatting import fmt_money, fmt_mult, fmt_pct, fmt_price, fmt_raw2, fmt_sources, fmt_value
 from ..repository import Reader
 from ..screener import (
     DEFAULT_COMPARE_METRICS,
     METRIC_KINDS,
+    PRESETS,
     SNAPSHOT_SCREEN_COLUMNS,
+    ScreenSpec,
     parse_screen_params,
 )
 from .screener_api import _annotate_verdicts
@@ -38,6 +41,7 @@ templates.env.globals.update(
     fmt_mult=fmt_mult,
     fmt_pct=fmt_pct,
     fmt_price=fmt_price,
+    fmt_sources=fmt_sources,
 )
 
 # ---------------------------------------------------------------------------
@@ -153,6 +157,78 @@ SCREENER_METRIC_OPTIONS: List[tuple[str, str]] = [
 # Market/valuation options for the screener's "MARKET / VALUATION" optgroup.
 SCREENER_SNAPSHOT_OPTIONS: List[tuple[str, str]] = [
     (_SNAPSHOT_SCREENER_LABELS.get(col, col), col) for col in SNAPSHOT_SCREEN_COLUMNS
+]
+
+# The valuation history's fields (screener.HISTORY_EXPRS): percentiles are fractions.
+SCREENER_HISTORY_OPTIONS: List[tuple[str, str]] = [
+    ("P/E percentile (10y)", "pe_pct_10y"),
+    ("P/S percentile (10y)", "ps_pct_10y"),
+    ("P/B percentile (10y)", "pb_pct_10y"),
+    ("P/FCF percentile (10y)", "pfcf_pct_10y"),
+    ("EV/EBITDA percentile (10y)", "ev_ebitda_pct_10y"),
+    ("P/FFO percentile (10y)", "pffo_pct_10y"),
+    ("Dividend yield percentile (10y)", "div_yield_pct_10y"),
+    ("Price / historical value", "price_to_hist_value"),
+]
+
+# The valuation models' upsides (screener.VALUATION_EXPRS), fractions.
+SCREENER_VALUATION_OPTIONS: List[tuple[str, str]] = [
+    ("Upside to the median value", "val_upside_pct"),
+    ("Owner-earnings upside", "oe_upside_pct"),
+    ("Lynch model upside", "lynch_upside_pct"),
+]
+
+# The other valuation indicators (screener.INDICATOR_EXPRS): the reverse DCF's growth and the upsides are fractions.
+SCREENER_INDICATOR_OPTIONS: List[tuple[str, str]] = [
+    ("Reverse DCF implied growth", "reverse_dcf_growth"),
+    ("EPV upside", "epv_upside_pct"),
+    ("Median P/S value upside", "ps_value_upside_pct"),
+    ("Tangible Graham upside", "graham_tangible_upside_pct"),
+    ("Price / net-net working capital", "price_to_nnwc"),
+]
+
+# The quality scores' fields (screener.QUALITY_EXPRS): ranks 1-10, the composite 0-100, the rest as stored.
+SCREENER_QUALITY_OPTIONS: List[tuple[str, str]] = [
+    ("Piotroski F", "piotroski_f"),
+    ("Altman Z", "altman_z"),
+    ("Beneish M", "beneish_m"),
+    ("Sloan ratio", "sloan_ratio"),
+    ("Predictability stars", "predictability_stars"),
+    ("Revenue / share CAGR (5y)", "rev_ps_cagr_5y"),
+    ("EPS CAGR (5y)", "eps_cagr_5y"),
+    ("ROIC - WACC", "roic_minus_wacc"),
+    ("Financial strength rank", "rank_strength"),
+    ("Profitability rank", "rank_profitability"),
+    ("Growth rank", "rank_growth"),
+    ("Valuation rank", "rank_valuation"),
+    ("Momentum rank", "rank_momentum"),
+    ("Composite score", "composite_score"),
+    ("Momentum", "momentum"),
+    ("Magic Formula rank", "magic_formula_rank"),
+    ("Warning signs", "warning_count"),
+    ("Price / NCAV", "price_to_ncav"),
+    ("Debt / EBITDA (debt-free filers at 0)", "scores_debt_to_ebitda"),
+    # Within the company's SIC industry group (screener.INDUSTRY_RANK_FIELDS), none without one.
+    ("Financial strength rank (industry)", "ind_rank_strength"),
+    ("Profitability rank (industry)", "ind_rank_profitability"),
+    ("Growth rank (industry)", "ind_rank_growth"),
+    ("Valuation rank (industry)", "ind_rank_valuation"),
+    ("Momentum rank (industry)", "ind_rank_momentum"),
+    ("Composite score (industry)", "ind_composite"),
+]
+
+# Insiders' open-market trades over the last year, from the SEC's Form 4 filings (screener.INSIDER_EXPRS).
+SCREENER_INSIDER_OPTIONS: List[tuple[str, str]] = [
+    ("Insider net buying, 12 months ($)", "ins_net_buy_12m"),
+    ("Insiders buying, 12 months", "ins_buyers_12m"),
+    ("CEO/CFO buys, 12 months", "ins_ceo_cfo_buys_12m"),
+    ("Insiders buying within 30 days (cluster)", "ins_cluster_buyers_12m"),
+]
+
+# The gurus holding the stock in their latest 13F quarter, and of those the ones buying (screener.GURU_EXPRS).
+SCREENER_GURU_OPTIONS: List[tuple[str, str]] = [
+    ("Gurus holding (latest 13F)", "gurus_holding"),
+    ("Gurus buying (new or added)", "gurus_buying"),
 ]
 
 
@@ -401,7 +477,12 @@ def asof_result_fragment(
     pit: PointInTimeMetrics = Depends(get_pit_metrics),
 ) -> Any:
     """HTMX fragment: as-of financials + ratios for one (ticker, fiscal_year, date)."""
+    ticker = ticker.upper().strip()
     filing = asof_reader.as_of_annual(ticker, fiscal_year, date)
+    # A ticker collected before the as-of snapshots has none: its page says so, not "not filed yet"; and one no
+    # collection holds says it's unknown.
+    built = filing is not None or asof_reader.has_snapshots(ticker)
+    known = built or asof_reader.has_company(ticker)
     ratios: Optional[Dict[str, Any]] = None
     if filing is not None:
         ratios = pit.metrics_as_of(ticker, fiscal_year, date)
@@ -431,6 +512,8 @@ def asof_result_fragment(
             "fiscal_year": fiscal_year,
             "date": date,
             "filing": filing,
+            "built": built,
+            "known": known,
             "fin_rows": fin_rows,
             "ratio_rows": ratio_rows,
         },
@@ -445,6 +528,7 @@ def asof_vintages_fragment(
     r: Reader = Depends(get_reader),
 ) -> Any:
     """HTMX fragment: side-by-side vintage table for one (ticker, fiscal_year)."""
+    ticker = ticker.upper().strip()
     rows = r.vintages(ticker, fiscal_year=fiscal_year)
 
     # Build (row_label, [value per filing]) structure
@@ -474,20 +558,74 @@ def asof_vintages_fragment(
 # Screener page & fragments
 # ---------------------------------------------------------------------------
 
+#: The columns the results table always shows (screener_results.html); every other field a query filters or sorts by
+#: gets a column of its own, so a preset's key figures are on the page (BUG-201).
+_SCREEN_FIXED_FIELDS = frozenset((
+    "roic", "roe", "net_margin", "debt_to_ebitda", "val_upside_pct", "oe_upside_pct", "reverse_dcf_growth",
+    "price_to_hist_value", "pe_pct_10y", "composite_score", "piotroski_f", "gurus_holding", "gurus_buying"))
+
+
+def screen_extra_columns(spec: ScreenSpec) -> List[Dict[str, str]]:
+    """The columns beyond the table's fixed ones: each field the query filters by, then the one it sorts by, with its
+    label and display kind (BUG-201: the Magic Formula rank, price / NCAV, Lynch upside and predictability stars of
+    the presets)."""
+    labels: Dict[str, str] = {}
+    for options in (SCREENER_METRIC_OPTIONS, SCREENER_SNAPSHOT_OPTIONS, SCREENER_HISTORY_OPTIONS,
+                    SCREENER_VALUATION_OPTIONS, SCREENER_INDICATOR_OPTIONS, SCREENER_QUALITY_OPTIONS,
+                    SCREENER_INSIDER_OPTIONS, SCREENER_GURU_OPTIONS):
+        labels.update({key: label for label, key in options})
+    fields = [f.field for f in spec.filters] + ([spec.sort] if spec.sort else [])
+    columns: List[Dict[str, str]] = []
+    for name in fields:
+        if name in _SCREEN_FIXED_FIELDS or name not in labels or any(c["key"] == name for c in columns):
+            continue
+        columns.append({"key": name, "label": labels[name], "kind": METRIC_KINDS.get(name, "raw")})
+    return columns
+
+
 @router.get("/screener", response_class=HTMLResponse)
 def screener_page(
     request: Request,
     r: Reader = Depends(get_reader),
 ) -> Any:
-    """Screener page with filter form and HTMX result target."""
+    """Screener page with filter form and HTMX result target. The industry choices are every 2- and 3-digit SIC
+    prefix with a company, with its size and label (``industries.industry_options``)."""
     sectors = r.distinct_sectors()
+    industries = industry_options((c["sic"], c["sic_description"]) for c in r.sic_codes())
     metric_options = SCREENER_METRIC_OPTIONS
     snapshot_options = SCREENER_SNAPSHOT_OPTIONS
     metric_json = json.dumps(
-        [{"key": key, "label": label, "group": "Metrics"} for label, key in metric_options]
+        [
+            {"key": key, "label": label, "group": "Metrics", "kind": METRIC_KINDS.get(key, "raw")}
+            for label, key in metric_options
+        ]
         + [
-            {"key": key, "label": label, "group": "Market / Valuation"}
+            {"key": key, "label": label, "group": "Market / Valuation", "kind": METRIC_KINDS.get(key, "raw")}
             for label, key in snapshot_options
+        ]
+        + [
+            {"key": key, "label": label, "group": "Historical value", "kind": METRIC_KINDS.get(key, "raw")}
+            for label, key in SCREENER_HISTORY_OPTIONS
+        ]
+        + [
+            {"key": key, "label": label, "group": "Valuation models", "kind": METRIC_KINDS.get(key, "raw")}
+            for label, key in SCREENER_VALUATION_OPTIONS
+        ]
+        + [
+            {"key": key, "label": label, "group": "Other indicators", "kind": METRIC_KINDS.get(key, "raw")}
+            for label, key in SCREENER_INDICATOR_OPTIONS
+        ]
+        + [
+            {"key": key, "label": label, "group": "Quality scores", "kind": METRIC_KINDS.get(key, "raw")}
+            for label, key in SCREENER_QUALITY_OPTIONS
+        ]
+        + [
+            {"key": key, "label": label, "group": "Insiders (SEC)", "kind": METRIC_KINDS.get(key, "raw")}
+            for label, key in SCREENER_INSIDER_OPTIONS
+        ]
+        + [
+            {"key": key, "label": label, "group": "Gurus (13F)", "kind": METRIC_KINDS.get(key, "raw")}
+            for label, key in SCREENER_GURU_OPTIONS
         ]
     )
     return templates.TemplateResponse(
@@ -496,9 +634,11 @@ def screener_page(
         {
             "request": request,
             "sectors": sectors,
+            "industries": industries,
             "metric_options": metric_options,
             "snapshot_options": snapshot_options,
             "metric_json": metric_json,
+            "presets": PRESETS,
         },
     )
 
@@ -539,6 +679,9 @@ def screen_fragment(
         if k not in ("sort", "sort_dir")
     ]
     base_params = urlencode(base_items)
+    extra = screen_extra_columns(spec)
+    for item in result["items"]:
+        item["extra_cells"] = [fmt_value(item.get(c["key"]), c["kind"]) for c in extra]
 
     return templates.TemplateResponse(
         request,
@@ -546,6 +689,7 @@ def screen_fragment(
         {
             "request": request,
             "error": None,
+            "extra_columns": extra,
             "items": result["items"],
             "total": result["total"],
             "columns": result["columns"],

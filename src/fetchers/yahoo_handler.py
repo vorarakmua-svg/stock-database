@@ -1,7 +1,7 @@
 """Yahoo Finance data handler using yfinance library."""
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
@@ -14,6 +14,52 @@ from .rate_limiter import RateLimiter
 _EARNINGS_ESTIMATE_KEYS = ("epsEstimate", "EPS Estimate")
 _EARNINGS_ACTUAL_KEYS = ("epsActual", "Reported EPS", "EPS Actual")
 _EARNINGS_SURPRISE_KEYS = ("surprisePercent", "Surprise(%)", "Surprise (%)")
+
+#: Why a history yfinance didn't get from Yahoo is unavailable: yfinance answers a chart request that failed (no
+#: timezone found, an error or an empty answer) with an empty history rather than an error (BUG-107).
+NO_HISTORY = "yfinance returned no history, its answer to a failed request"
+
+
+#: yfinance's chart periods (Yahoo's ranges, counted back from now) and the fewest days each spans, shortest first.
+_EVENT_PERIODS: Tuple[Tuple[str, int], ...] = (
+    ("1mo", 28), ("3mo", 89), ("6mo", 181), ("1y", 365), ("2y", 730), ("5y", 1826), ("10y", 3652))
+#: How many days before its start a quote's chart of splits and payments reaches: Yahoo's day (New York's) runs
+#: behind the collector's east of it, and a range ends at Yahoo's now.
+EVENT_WINDOW_MARGIN_DAYS = 7
+
+
+def events_period(since: Optional[str], today: date) -> str:
+    """The shortest yfinance period whose chart, asked on *today*, reaches EVENT_WINDOW_MARGIN_DAYS before *since* (an
+    ISO day, or a time on it): what a quote refresh reads splits and payments from (BUG-108: the whole daily history
+    from 1927 was asked for every refreshed ticker). "max", the whole history, without a start or past ten years."""
+    if since is None:
+        return "max"
+    needed = (today - date.fromisoformat(str(since)[:10])).days + EVENT_WINDOW_MARGIN_DAYS
+    return next((period for period, days in _EVENT_PERIODS if days >= needed), "max")
+
+
+def _events(stock: Any, name: str, period: str) -> Any:
+    """yfinance's *name* events ("splits" or "dividends") of *stock*'s daily chart over *period*: the whole history's
+    (the ``splits``/``dividends`` properties, a collection's) or a shorter one's (``get_splits``/``get_dividends``).
+    yfinance asks one chart a period, which both events come from."""
+    if period == "max":
+        return getattr(stock, name)
+    return getattr(stock, f"get_{name}")(period=period)
+
+
+def _served(answer: Any, column: str) -> bool:
+    """Whether *answer*, yfinance's daily history (a frame) or one of its event columns (``dividends``: "Dividends",
+    ``splits``: "Stock Splits", the *column* named), came from a chart Yahoo served. A served chart always holds both
+    columns, 0 on a day without an event, and ``dividends`` and ``splits`` are those columns' non-zero days; yfinance
+    answers a request that failed with a history without them, and with an unnamed empty Series for the events. So any
+    row says served; an empty answer only with *column* (BUG-107: an outage read "non-dividend paying")."""
+    if answer is None:
+        return False
+    if not answer.empty:
+        return True
+    if isinstance(answer, pd.DataFrame):
+        return column in answer.columns
+    return getattr(answer, "name", None) == column
 
 
 def _pct_to_fraction(value: Optional[float]) -> Optional[float]:
@@ -72,6 +118,7 @@ class YahooHandler:
             self.rate_limiter.wait()
             stock = yf.Ticker(ticker)
             bars, bars_error = self._price_bars_and_error(stock)
+            splits, splits_error = self._splits_and_error(stock)
 
             data: Dict[str, Any] = {
                 "company_info": self._get_company_info(stock),
@@ -84,7 +131,7 @@ class YahooHandler:
                 "dividend_history": self._get_dividend_history(stock),
                 "price_bars": bars,
                 "earnings_history": self._get_earnings_history(stock),
-                "splits": self._get_splits(stock),
+                "splits": splits,
                 "fetched_at": datetime.now().isoformat(),
                 "source": "yahoo_finance",
             }
@@ -96,6 +143,8 @@ class YahooHandler:
                 # takes them to the price's basis past any split this run stores (BUG-103).
                 warnings.append(f"dividend history unavailable ({data['dividend_history']['error']}); "
                                 "the stored dividends weren't refreshed")
+            if splits_error:
+                warnings.append(f"split history unavailable ({splits_error}); the stored splits weren't refreshed")
             if bars_error:
                 # The stored bars stay as they were beside this run's newer dividends (BUG-084).
                 warnings.append(f"price history unavailable ({bars_error}); the stored daily bars weren't refreshed")
@@ -113,16 +162,24 @@ class YahooHandler:
                 "source": "yahoo_finance",
             }
 
-    def fetch_quote(self, ticker: str) -> Dict[str, Any]:
+    def fetch_quote(self, ticker: str, since: Optional[str] = None) -> Dict[str, Any]:
         """Fetch a lightweight, quote-only snapshot for on-demand refresh (Task 10).
 
         Makes exactly ONE rate-limited ``yf.Ticker(ticker)`` call and reuses
         the same private extractors ``fetch_all`` uses for market data,
         valuation, and analyst estimates, plus the SCALAR shareholder stats
-        only (no holder-list DataFrame calls, no bars), and the split history
-        (``_get_splits``, Yahoo's chart request), so the quote job can tell a
-        split since the last full collection, which would put this price on
-        another basis than everything stored (BUG-093).
+        only (no holder-list DataFrame calls, no bars), the split history
+        (``_splits_and_error``, Yahoo's chart request), so the quote job can tell a
+        split after the stored price's day, which would put this price on
+        another basis than everything stored (BUG-093): a split history that
+        request didn't get is the quote's error, as it can't tell (BUG-107); and the dividend
+        payments (``_get_dividend_history``, from the same cached chart
+        request), which a saved refresh stores as a collection does, so DDM's
+        trailing year, which ends on the refresh's day, holds every payment
+        since the last collection (BUG-160, BUG-258). Both come from the chart
+        reaching back to *since* (an ISO day: ``events_period``, the refresh's
+        ``SQLiteStore.quote_events_since``), the whole history without it
+        (BUG-108).
 
         Deliberately makes no ``stock.history()`` call of its own, so the
         returned ``market_data`` never includes ``ma_50``/``ma_200`` here (those
@@ -131,7 +188,7 @@ class YahooHandler:
         snapshot's values for those forward instead of leaving them ``None``.
 
         Returns ``{"market_data": ..., "valuation": ..., "shareholders": ...,
-        "analyst_estimates": ..., "splits": ...}`` on success, or ``{"error": ...}`` (never
+        "analyst_estimates": ..., "splits": ..., "dividend_history": ...}`` on success, or ``{"error": ...}`` (never
         raises) on failure — mirroring ``fetch_all``'s contract so callers
         (e.g. ``CollectionJobManager``'s quote-job worker) can check for the
         ``"error"`` key rather than needing a try/except per ticker.
@@ -140,21 +197,60 @@ class YahooHandler:
         try:
             self.rate_limiter.wait()
             stock = yf.Ticker(ticker)
+            period = events_period(since, date.today())
+            splits, splits_error = self._splits_and_error(stock, period)
             quote = {
                 "market_data": self._get_market_data(stock, include_moving_averages=False),
                 "valuation": self._get_valuation_metrics(stock),
                 "shareholders": self._get_shareholder_stats(stock),
                 "analyst_estimates": self._get_analyst_estimates(stock),
-                "splits": self._get_splits(stock),
+                "splits": splits,
+                # The same chart request as the splits (yfinance caches a period's history): a saved refresh
+                # stores them, as a collection does (BUG-160, BUG-258).
+                "dividend_history": self._get_dividend_history(stock, period),
             }
             # The extractors swallow Yahoo's errors (a rate limit leaves each one empty),
             # so a quote without a price is a failed fetch, not a refresh.
             if quote["market_data"].get("current_price") is None:
                 self.logger.error(f"Yahoo returned no price for {ticker}")
                 return {"error": "Yahoo returned no price"}
+            if splits_error:
+                self.logger.error(f"Yahoo returned no split history for {ticker}: {splits_error}")
+                return {"error": f"Yahoo's split history unavailable ({splits_error}), so the quote can't be checked "
+                                 "for a split since the last collection"}
             return quote
         except Exception as e:
             self.logger.error(f"Error fetching Yahoo quote for {ticker}: {e}")
+            return {"error": str(e)}
+
+    def fetch_price_bars_since(self, ticker: str, start: str) -> Dict[str, Any]:
+        """Fetch the daily bars from *start* (an ISO date, inclusive) to now, for ``stock-data refresh``'s bars step
+        (docs/superpowers/specs/2026-10-25-universe-automation-design.md, "stock-data refresh").
+
+        Makes exactly ONE rate-limited ``history(start=...)`` request with a collection's parameters
+        (``_price_bars_and_error``: ``interval="1d"``, ``auto_adjust=False``, the market's prices on today's split
+        basis, BUG-075) and returns its bars in a collection's shape (``_bars_from_history``), with the split
+        factors Yahoo lists in that range (the history's "Stock Splits"; a stock dividend's or a spin-off's factor
+        too): Yahoo's prices before one are on its basis, unlike bars stored before it.
+
+        Returns ``{"bars": [...], "splits": [{date, ratio}, ...]}``, or ``{"error": ...}`` (never raises) on failure,
+        as ``fetch_quote`` does.
+        """
+        self.logger.info(f"Fetching Yahoo daily bars for {ticker} from {start}")
+        try:
+            self.rate_limiter.wait()
+            stock = yf.Ticker(ticker)
+            hist = stock.history(start=start, interval="1d", auto_adjust=False)
+            splits: List[Dict[str, Any]] = []
+            if hist is not None and not hist.empty and "Stock Splits" in hist.columns:
+                for idx, ratio in hist["Stock Splits"].sort_index().items():
+                    value = self._safe_float(ratio)
+                    if value:
+                        date_key = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)
+                        splits.append({"date": date_key, "ratio": value})
+            return {"bars": self._bars_from_history(hist), "splits": splits}
+        except Exception as e:
+            self.logger.error(f"Error fetching Yahoo daily bars for {ticker}: {e}")
             return {"error": str(e)}
 
     def _get_company_info(self, stock: yf.Ticker) -> Dict[str, Any]:
@@ -693,9 +789,11 @@ class YahooHandler:
             self.logger.debug(f"Error getting analyst estimates: {e}")
             return {}
 
-    def _get_dividend_history(self, stock: yf.Ticker) -> Dict[str, Any]:
+    def _get_dividend_history(self, stock: yf.Ticker, period: str = "max") -> Dict[str, Any]:
         """
-        Get complete dividend payment history.
+        Get complete dividend payment history (that of the chart over *period*,
+        ``_events``: a quote's since its last collection, whose yearly figures
+        cover those payments alone).
 
         Useful for:
         - Dividend growth rate calculation (Peter Lynch)
@@ -704,8 +802,11 @@ class YahooHandler:
         """
         try:
             # The payments come from the chart, as the splits do, and a failed quote
-            # mustn't keep them from a split the same run stores (BUG-094).
-            dividends = stock.dividends
+            # mustn't keep them from a split the same run stores (BUG-094). A chart
+            # yfinance didn't get isn't a stock without dividends (BUG-107).
+            dividends = _events(stock, "dividends", period)
+            if not _served(dividends, "Dividends"):
+                raise LookupError(NO_HISTORY)
             try:
                 info = stock.info or {}
             except Exception as e:  # quoteSummary and v7/quote failed (yfinance raises)
@@ -815,28 +916,36 @@ class YahooHandler:
         return self._price_bars_and_error(stock)[0]
 
     def _price_bars_and_error(self, stock: yf.Ticker) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-        """``_get_price_bars``' bars, and why the request failed, if it did."""
+        """``_get_price_bars``' bars, and why the request failed, if it did: an error, or a history yfinance didn't
+        get from Yahoo (``_served``, BUG-107)."""
         try:
             hist = stock.history(period="max", interval="1d", auto_adjust=False)
-            if hist is None or hist.empty:
-                return [], None
-
-            hist = hist.sort_index()
-            bars = []
-            for idx, row in hist.iterrows():
-                date_key = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)
-                bars.append({
-                    "date": date_key,
-                    "open": self._safe_float(row.get("Open")),
-                    "high": self._safe_float(row.get("High")),
-                    "low": self._safe_float(row.get("Low")),
-                    "close": self._safe_float(row.get("Close")),
-                    "volume": self._safe_float(row.get("Volume")),
-                })
-            return bars, None
+            if not _served(hist, "Dividends"):
+                self.logger.warning(f"Error getting price bars: {NO_HISTORY}")
+                return [], NO_HISTORY
+            return self._bars_from_history(hist), None
         except Exception as e:
             self.logger.warning(f"Error getting price bars: {e}")
             return [], str(e)
+
+    def _bars_from_history(self, hist: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
+        """A daily history's bars, ascending by ISO date: ``{date, open, high, low, close, volume}`` records, a
+        missing value as None; ``[]`` for no history. The shape a collection stores and the refresh's bars."""
+        if hist is None or hist.empty:
+            return []
+        hist = hist.sort_index()
+        bars = []
+        for idx, row in hist.iterrows():
+            date_key = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)
+            bars.append({
+                "date": date_key,
+                "open": self._safe_float(row.get("Open")),
+                "high": self._safe_float(row.get("High")),
+                "low": self._safe_float(row.get("Low")),
+                "close": self._safe_float(row.get("Close")),
+                "volume": self._safe_float(row.get("Volume")),
+            })
+        return bars
 
     def _get_earnings_history(self, stock: yf.Ticker) -> List[Dict[str, Any]]:
         """
@@ -881,20 +990,30 @@ class YahooHandler:
 
     def _get_splits(self, stock: yf.Ticker) -> List[Dict[str, Any]]:
         """Get historical stock split events as ``{date, ratio}`` records, ascending."""
+        return self._splits_and_error(stock)[0]
+
+    def _splits_and_error(self, stock: yf.Ticker,
+                          period: str = "max") -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """``_get_splits``' records (those of the chart over *period*, ``_events``), and why the request failed, if it
+        did: an error, or a split history yfinance didn't get from Yahoo (``_served``, BUG-107), which is no answer to
+        whether a split came."""
         try:
-            splits = stock.splits
-            if splits is None or splits.empty:
-                return []
+            splits = _events(stock, "splits", period)
+            if not _served(splits, "Stock Splits"):
+                self.logger.warning(f"Error getting splits: {NO_HISTORY}")
+                return [], NO_HISTORY
+            if splits.empty:
+                return [], None
 
             splits = splits.sort_index()
             records = []
             for date, ratio in splits.items():
                 date_key = date.strftime("%Y-%m-%d") if hasattr(date, "strftime") else str(date)
                 records.append({"date": date_key, "ratio": float(ratio)})
-            return records
+            return records, None
         except Exception as e:
             self.logger.warning(f"Error getting splits: {e}")
-            return []
+            return [], str(e) or type(e).__name__
 
     def _extract_earnings_quarter(self, idx: Any, rec: Dict[str, Any]) -> Optional[str]:
         """Get the quarter-end date (ISO string) from a ``quarter`` column or the row index."""

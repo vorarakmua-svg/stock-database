@@ -4,47 +4,34 @@ import sqlite3
 
 import pytest
 
-from src.exporters.sqlite_store import SQLiteStore
-from src.models.stock_data import StockData
 from src.query.pit_metrics import PointInTimeMetrics
+from tests.known_rows import build_db, snapshot
 
 
-def _build_db(tmp_path, vintages, ticker="PRU", sector_class=None):
-    """Write a StockData (vintages + optional sector_class) and return the db path.
-
-    vintages: {fy_str: {accn: period_dict}} as StockData.financials_annual_vintages.
-    """
-    s = StockData(ticker=ticker, cik="1", company_name="Co")
-    if sector_class is not None:
-        s.sector_class = sector_class
-    s.financials_annual_vintages = vintages
-    db = tmp_path / "stock.db"
-    SQLiteStore(db_path=str(db)).export([s])
-    return str(db)
+def _build_db(tmp_path, rows, ticker="PRU", sector_class=None):
+    """A database holding *ticker*'s snapshot *rows* (and an optional sector_class); its path."""
+    attrs = {} if sector_class is None else {"sector_class": sector_class}
+    return build_db(tmp_path, rows, ticker=ticker, **attrs)
 
 
-_ONE_VINTAGE = {
-    "2019": {"a": {"fiscal_year": 2019, "accn": "a", "filed_date": "2020-02-15",
-                   "period_end": "2019-12-31", "form": "10-K", "calendar_year": 2019,
-                   "net_income": 100.0, "total_equity": 1000.0, "revenue": 1000.0}},
-}
+_ONE_YEAR = [snapshot(2019, "2020-02-15", accn="a", net_income=100.0, total_equity=1000.0, revenue=1000.0)]
 
 
 def test_sector_auto_read_from_companies(tmp_path):
-    db = _build_db(tmp_path, _ONE_VINTAGE, sector_class="bank")
+    db = _build_db(tmp_path, _ONE_YEAR, sector_class="bank")
     with PointInTimeMetrics.from_path(db) as pm:
         assert pm._sector("PRU") == "bank"
 
 
 def test_sector_none_when_absent_or_unknown(tmp_path):
-    db = _build_db(tmp_path, _ONE_VINTAGE)  # no sector_class set
+    db = _build_db(tmp_path, _ONE_YEAR)  # no sector_class set
     with PointInTimeMetrics.from_path(db) as pm:
         assert pm._sector("PRU") is None       # column is NULL
         assert pm._sector("ZZZZ") is None       # no such company row
 
 
 def test_from_path_builds_reader_and_closes(tmp_path):
-    db = _build_db(tmp_path, _ONE_VINTAGE)
+    db = _build_db(tmp_path, _ONE_YEAR)
     pm = PointInTimeMetrics.from_path(db)
     assert pm.reader is not None
     pm.close()
@@ -57,16 +44,10 @@ def test_from_path_builds_reader_and_closes(tmp_path):
 # Task 2: metrics_as_of + metric_as_of
 # ---------------------------------------------------------------------------
 
-_RESTATED = {
-    "2019": {
-        "orig": {"fiscal_year": 2019, "accn": "orig", "filed_date": "2020-02-15",
-                 "period_end": "2019-12-31", "form": "10-K", "calendar_year": 2019,
-                 "net_income": 100.0, "total_equity": 1000.0, "revenue": 1000.0},
-        "restate": {"fiscal_year": 2019, "accn": "restate", "filed_date": "2021-02-15",
-                    "period_end": "2019-12-31", "form": "10-K", "calendar_year": 2019,
-                    "net_income": 90.0, "total_equity": 1000.0, "revenue": 1000.0},
-    },
-}
+_RESTATED = [
+    snapshot(2019, "2020-02-15", accn="orig", net_income=100.0, total_equity=1000.0, revenue=1000.0),
+    snapshot(2019, "2021-02-15", accn="restate", net_income=90.0, total_equity=1000.0, revenue=1000.0),
+]
 
 
 def test_metric_is_point_in_time(tmp_path):
@@ -105,15 +86,11 @@ def test_valuation_ratios_excluded(tmp_path):
 
 
 def test_sector_auto_applies_bank_ratios(tmp_path):
-    # A bank vintage: net_interest_income + total_assets -> net_interest_margin computed,
+    # A bank year: net_interest_income + total_assets -> net_interest_margin computed,
     # and generic roic suppressed (set to None) by the sector overlay.
-    bank_vintage = {
-        "2019": {"a": {"fiscal_year": 2019, "accn": "a", "filed_date": "2020-02-15",
-                       "period_end": "2019-12-31", "form": "10-K", "calendar_year": 2019,
-                       "net_income": 100.0, "total_equity": 1000.0,
-                       "net_interest_income": 50.0, "total_assets": 2000.0}},
-    }
-    db = _build_db(tmp_path, bank_vintage, ticker="JPM", sector_class="bank")
+    bank_year = [snapshot(2019, "2020-02-15", accn="a", net_income=100.0, total_equity=1000.0,
+                          net_interest_income=50.0, total_assets=2000.0)]
+    db = _build_db(tmp_path, bank_year, ticker="JPM", sector_class="bank")
     with PointInTimeMetrics.from_path(db) as pm:
         m = pm.metrics_as_of("JPM", 2019, "2020-06-30")
         assert m["net_interest_margin"] == 50.0 / 2000.0   # bank ratio present
@@ -122,13 +99,9 @@ def test_sector_auto_applies_bank_ratios(tmp_path):
 
 def test_explicit_sector_overrides_table(tmp_path):
     # Table says bank, but the caller overrides with "general": no bank ratios added.
-    bank_vintage = {
-        "2019": {"a": {"fiscal_year": 2019, "accn": "a", "filed_date": "2020-02-15",
-                       "period_end": "2019-12-31", "form": "10-K", "calendar_year": 2019,
-                       "net_income": 100.0, "total_equity": 1000.0,
-                       "net_interest_income": 50.0, "total_assets": 2000.0}},
-    }
-    db = _build_db(tmp_path, bank_vintage, ticker="JPM", sector_class="bank")
+    bank_year = [snapshot(2019, "2020-02-15", accn="a", net_income=100.0, total_equity=1000.0,
+                          net_interest_income=50.0, total_assets=2000.0)]
+    db = _build_db(tmp_path, bank_year, ticker="JPM", sector_class="bank")
     with PointInTimeMetrics.from_path(db) as pm:
         m = pm.metrics_as_of("JPM", 2019, "2020-06-30", sector="general")
         assert "net_interest_margin" not in m   # override won; generic suite only
@@ -140,15 +113,11 @@ def test_explicit_sector_overrides_table(tmp_path):
 
 def _three_years(tmp_path):
     def period(fy, accn, filed, ni):
-        return {"fiscal_year": fy, "accn": accn, "filed_date": filed,
-                "period_end": f"{fy}-12-31", "form": "10-K", "calendar_year": fy,
-                "net_income": ni, "total_equity": 1000.0, "revenue": 1000.0}
-    return _build_db(tmp_path, {
-        "2018": {"k18": period(2018, "k18", "2019-02-15", 80.0)},
-        "2019": {"k19": period(2019, "k19", "2020-02-15", 100.0),
-                 "k19r": period(2019, "k19r", "2021-02-15", 90.0)},
-        "2020": {"k20": period(2020, "k20", "2021-02-15", 110.0)},
-    })
+        return snapshot(fy, filed, accn=accn, net_income=ni, total_equity=1000.0, revenue=1000.0)
+    return _build_db(tmp_path, [period(2018, "k18", "2019-02-15", 80.0),
+                                period(2019, "k19", "2020-02-15", 100.0),
+                                period(2019, "k19r", "2021-02-15", 90.0),
+                                period(2020, "k20", "2021-02-15", 110.0)])
 
 
 def test_history_metrics_only_filed_years_and_pit(tmp_path):
@@ -192,15 +161,13 @@ def test_history_metrics_captures_per_year_errors(tmp_path):
         assert hist[fy] == {"error": "boom"}              # captured, not raised
 
 
-def test_ratios_read_each_figure_as_last_filed(tmp_path):
-    # BUG-110: a later 10-K holding only the year's opening equity left every ratio empty.
-    def period(accn, filed, **figures):
-        return {"fiscal_year": 2016, "accn": accn, "filed_date": filed, "period_end": "2016-06-30",
-                "form": "10-K", "calendar_year": 2016, **figures}
-    db = _build_db(tmp_path, {"2016": {
-        "k18": period("k18", "2018-08-03", revenue=91.2e9, net_income=20.5e9),
-        "k19": period("k19", "2019-08-01", total_equity=83.1e9),
-    }}, ticker="MSFT")
+def test_ratios_read_each_figure_as_the_record_knew_it(tmp_path):
+    # BUG-110: a later 10-K holding only the year's opening equity left every ratio empty; the record keeps the
+    # earlier filing's income statement beside it.
+    k18 = ("k18", "2018-08-03", "10-K")
+    db = _build_db(tmp_path, [snapshot(2016, "2019-08-01", accn="k19", period_end="2016-06-30", revenue=91.2e9,
+                                       net_income=20.5e9, total_equity=83.1e9,
+                                       earlier={"revenue": k18, "net_income": k18})], ticker="MSFT")
     with PointInTimeMetrics.from_path(db) as pm:
         m = pm.metrics_as_of("MSFT", 2016, "2026-01-01")
     assert m["net_margin"] == pytest.approx(20.5 / 91.2)

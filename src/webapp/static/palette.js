@@ -78,6 +78,7 @@
   var itemsQuery = ''; // the input text `items` were built for
   var enterQuery = null; // Enter beat this text's results; run the top one when they land
   var selected = 0;
+  var pendingMoves = []; // arrow presses (+1 / -1) made while the list was out of date: replayed, in order, on the typed text's results
   var mode = null;     // null | {mode:'add', onPick:fn}
   var debounceTimer = null;
   var reqSeq = 0;
@@ -86,6 +87,8 @@
     mode = opts && opts.mode === 'add' ? opts : null;
     overlay.hidden = false;
     input.value = '';
+    pendingMoves = [];
+    itemsQuery = null; // a new session: its first list starts on its first row
     input.placeholder = mode ? 'Add ticker to watchlist…' : 'Search tickers, pages, functions…  (try: AAPL GP)';
     build('');
     input.focus();
@@ -136,14 +139,24 @@
     });
   }
 
+  function clampRow(row) { return Math.max(Math.min(row, items.length - 1), 0); }
+
   function setItems(list, query) {
+    // A second build for the text already on show (typed away and back) keeps a row the user moved to (BUG-361).
+    var kept = query === itemsQuery && query === input.value ? selected : 0;
     items = list;
     itemsQuery = query;
-    selected = 0;
+    selected = clampRow(kept);
+    if (query === input.value) {
+      // The arrows pressed before these results landed were meant for them (BUG-003): each press as it would have
+      // acted on the landed list, one by one, stopping at the ends (BUG-361).
+      pendingMoves.forEach(function (delta) { selected = clampRow(selected + delta); });
+      pendingMoves = [];
+    }
     render();
     if (enterQuery !== null && enterQuery === query) {
       enterQuery = null;
-      execute(items[0]);
+      execute(items[selected]);
     }
   }
 
@@ -247,14 +260,28 @@
     build(input.value);
   }
 
+  // An arrow key moves the selection of the list on show, which is the typed text's own; while that list is out of
+  // date (the debounce or the company search hasn't finished) the press is kept for the results to come, and an
+  // Enter that is already waiting for this very text has chosen, so it keeps its row.
+  function move(delta) {
+    if (itemsQuery === input.value) {
+      selected = clampRow(selected + delta);
+      render();
+    } else if (enterQuery !== input.value) {
+      pendingMoves.push(delta);
+    }
+  }
+
   // ---- Events ----
   input.addEventListener('input', function () {
+    pendingMoves = [];
+    enterQuery = null; // an Enter is for the text it was pressed on: typing on cancels a waiting one (BUG-360)
     window.clearTimeout(debounceTimer);
     debounceTimer = window.setTimeout(function () { build(input.value); }, 150);
   });
   input.addEventListener('keydown', function (evt) {
-    if (evt.key === 'ArrowDown') { evt.preventDefault(); selected = Math.min(selected + 1, items.length - 1); render(); }
-    else if (evt.key === 'ArrowUp') { evt.preventDefault(); selected = Math.max(selected - 1, 0); render(); }
+    if (evt.key === 'ArrowDown') { evt.preventDefault(); move(1); }
+    else if (evt.key === 'ArrowUp') { evt.preventDefault(); move(-1); }
     else if (evt.key === 'Enter') { evt.preventDefault(); enter(); }
     else if (evt.key === 'Escape') { close(); }
   });

@@ -1,11 +1,32 @@
 /**
  * Stock DB — screener.js
  * Chip-based filter builder over the existing GET /ui/screen contract:
- * sector, {field}_{op}=value, sort, sort_dir. State lives in the URL
- * (history.replaceState) and saved screens in localStorage.
+ * sector, industry (a 2- or 3-digit SIC prefix), {field}_{op}=value, sort,
+ * sort_dir. State lives in the URL (history.replaceState) and saved screens
+ * in localStorage.
  */
 (function () {
   'use strict';
+
+  // ---- Units (BUG-164) ----
+  // What a user types after a "%" field's label is a percent. The URL, the saved screens, the presets and
+  // /api/screen hold the stored unit: a fraction for the "pct" kinds (0.05 is 5%), Yahoo's percent for the "percent"
+  // kind (debt / equity, 100 is 1x), the figure itself for the rest. The conversion is made where a value is typed
+  // (typedToStored) and where a stored one is shown (storedToTyped), never in parseQS or buildQS.
+  function cleanNumber(x) { return Number(x.toPrecision(12)).toString(); }
+  function typedToStored(kind, text) {
+    var x = Number(text);
+    if (kind !== 'pct' || text === '' || !isFinite(x)) return text;
+    return cleanNumber(x / 100);
+  }
+  function storedToTyped(kind, text) {
+    var x = Number(text);
+    if (kind !== 'pct' || text === '' || !isFinite(x)) return text;
+    return cleanNumber(x * 100);
+  }
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { typedToStored: typedToStored, storedToTyped: storedToTyped };
+  }
 
   var metricsEl = document.getElementById('screener-metrics');
   var chipsEl = document.getElementById('chips');
@@ -19,26 +40,30 @@
   var SKEY = 'stockdb.screens';
 
   var sectorSel = document.getElementById('sector-select');
+  var industrySel = document.getElementById('industry-select');
   var verdictSel = document.getElementById('verdict-select');
   var oeVerdictSel = document.getElementById('oe-verdict-select');
+  var presetSel = document.getElementById('preset-select');
   var popover = document.getElementById('filter-popover');
   var popSearch = document.getElementById('popover-search');
   var popList = document.getElementById('popover-list');
   var popEditor = document.getElementById('popover-editor');
   var popLabel = document.getElementById('popover-metric-label');
+  var popUnit = document.getElementById('popover-unit');
   var popOp = document.getElementById('popover-op');
   var popValue = document.getElementById('popover-value');
   var note = document.getElementById('scr-note');
 
-  var state = { sector: '', verdict: '', oeVerdict: '', filters: [], sort: '', sort_dir: 'desc' };
+  var state = { sector: '', industry: '', verdict: '', oeVerdict: '', filters: [], sort: '', sort_dir: 'desc' };
   var pendingKey = null;
   var debounceTimer = null;
 
   // ---- URL <-> state ----
   function parseQS(qs) {
-    var s = { sector: '', verdict: '', oeVerdict: '', filters: [], sort: '', sort_dir: 'desc' };
+    var s = { sector: '', industry: '', verdict: '', oeVerdict: '', filters: [], sort: '', sort_dir: 'desc' };
     new URLSearchParams(qs).forEach(function (value, key) {
       if (key === 'sector') { s.sector = value; return; }
+      if (key === 'industry') { s.industry = value; return; }
       if (key === 'verdict') { s.verdict = value; return; }
       if (key === 'oe_verdict') { s.oeVerdict = value; return; }
       if (key === 'sort') { s.sort = value; return; }
@@ -57,6 +82,7 @@
   function buildQS() {
     var p = new URLSearchParams();
     if (state.sector) p.set('sector', state.sector);
+    if (state.industry) p.set('industry', state.industry);
     if (state.verdict) p.set('verdict', state.verdict);
     if (state.oeVerdict) p.set('oe_verdict', state.oeVerdict);
     state.filters.forEach(function (f) { p.set(f.field + '_' + f.op, f.value); });
@@ -65,13 +91,22 @@
   }
 
   // ---- Rendering ----
+  // The selects show the state (the URL's, a preset's or a saved screen's).
+  function showSelects() {
+    sectorSel.value = state.sector;
+    if (industrySel) industrySel.value = state.industry;
+    verdictSel.value = state.verdict;
+    oeVerdictSel.value = state.oeVerdict;
+  }
+
   function renderChips() {
     chipsEl.textContent = '';
     state.filters.forEach(function (f, i) {
       var m = BY_KEY[f.field];
       var chip = document.createElement('span');
       chip.className = 'filter-chip';
-      chip.appendChild(document.createTextNode((m ? m.label : f.field) + ' ' + OPS[f.op] + ' ' + f.value));
+      chip.appendChild(document.createTextNode(
+        (m ? m.label : f.field) + ' ' + OPS[f.op] + ' ' + storedToTyped(m ? m.kind : 'raw', f.value)));
       var x = document.createElement('button');
       x.className = 'filter-chip-x';
       x.type = 'button';
@@ -105,9 +140,7 @@
       chip.title = 'Load this screen';
       chip.addEventListener('click', function () {
         state = parseQS(sc.qs);
-        sectorSel.value = state.sector;
-        verdictSel.value = state.verdict;
-        oeVerdictSel.value = state.oeVerdict;
+        showSelects();
         sync();
       });
       var x = document.createElement('button');
@@ -154,6 +187,11 @@
   });
 
   // ---- Popover ----
+  function unitHint(kind) {
+    if (kind === 'pct' || kind === 'percent') return 'in %, e.g. 5 for 5%';
+    if (kind === 'money') return 'in dollars';
+    return 'a plain number';
+  }
   function renderPopList(query) {
     popList.textContent = '';
     var lastGroup = null;
@@ -172,6 +210,8 @@
       item.addEventListener('click', function () {
         pendingKey = m.key;
         popLabel.textContent = m.label;
+        popUnit.textContent = unitHint(m.kind);
+        popValue.placeholder = m.kind === 'pct' || m.kind === 'percent' ? 'value (%)' : 'value';
         popEditor.hidden = false;
         popValue.focus();
       });
@@ -191,7 +231,7 @@
   popSearch.addEventListener('input', function () { renderPopList(popSearch.value); });
   document.getElementById('popover-apply').addEventListener('click', function () {
     if (!pendingKey || popValue.value === '') return;
-    state.filters.push({ field: pendingKey, op: popOp.value, value: popValue.value });
+    state.filters.push({ field: pendingKey, op: popOp.value, value: typedToStored(BY_KEY[pendingKey].kind, popValue.value) });
     popover.hidden = true;
     popValue.value = '';
     sync();
@@ -202,11 +242,17 @@
     }
   });
 
-  // ---- Sector / verdict / save / copy ----
+  // ---- Sector / industry / verdict / save / copy ----
   sectorSel.addEventListener('change', function () {
     state.sector = sectorSel.value;
     sync();
   });
+  if (industrySel) {
+    industrySel.addEventListener('change', function () {
+      state.industry = industrySel.value;
+      sync();
+    });
+  }
   verdictSel.addEventListener('change', function () {
     state.verdict = verdictSel.value;
     sync();
@@ -215,15 +261,25 @@
     state.oeVerdict = oeVerdictSel.value;
     sync();
   });
+  // A preset replaces the filters with its own query string, as loading a saved screen does.
+  if (presetSel) {
+    presetSel.addEventListener('change', function () {
+      if (!presetSel.value) return;
+      state = parseQS(presetSel.value);
+      showSelects();
+      sync();
+    });
+  }
   document.getElementById('scr-save').addEventListener('click', function () {
     var qs = buildQS();
     if (!qs) { note.textContent = 'Add at least one filter before saving.'; return; }
     var name = '';
     var existing = state.filters.map(function (f) {
       var m = BY_KEY[f.field];
-      return (m ? m.label : f.field) + OPS[f.op] + f.value;
+      return (m ? m.label : f.field) + OPS[f.op] + storedToTyped(m ? m.kind : 'raw', f.value);
     });
-    var prefix = [state.sector, state.verdict, state.oeVerdict].filter(Boolean).join(' · ');
+    var prefix = [state.sector, state.industry ? 'SIC ' + state.industry : '', state.verdict, state.oeVerdict]
+      .filter(Boolean).join(' · ');
     name = (prefix ? prefix + ' · ' : '') + existing.join(', ');
     var screens;
     try { screens = JSON.parse(localStorage.getItem(SKEY)) || []; } catch (e) { screens = []; }
@@ -243,14 +299,11 @@
 
   // ---- Init from URL ----
   state = parseQS(window.location.search);
-  sectorSel.value = state.sector;
-  verdictSel.value = state.verdict;
-  oeVerdictSel.value = state.oeVerdict;
+  showSelects();
   renderChips();
   renderSaved();
-  if (window.location.search) {
-    // This script executes at parse time, but htmx is loaded with `defer`
-    // (runs before DOMContentLoaded) — delay the auto-run until it exists.
-    document.addEventListener('DOMContentLoaded', function () { run(); });
-  }
+  // A bare /screener runs the default, unfiltered screen too, so the page never
+  // opens empty (Q1). This script executes at parse time, but htmx is loaded with
+  // `defer` (runs before DOMContentLoaded) — delay the auto-run until it exists.
+  document.addEventListener('DOMContentLoaded', function () { run(); });
 })();

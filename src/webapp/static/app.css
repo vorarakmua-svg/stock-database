@@ -150,6 +150,21 @@ label { color: var(--color-ink-muted); font-size: 0.85rem; }
 .data-table tbody tr:nth-child(odd) { background: transparent; }
 .data-table .num, .table .num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .sort-link { color: inherit; }
+/* Screener results (BUG-222): tighter cells so the 18 columns fit the 1200px page; where they still don't, the
+   Valuation verdict stays pinned at the right edge while the other columns scroll under it. */
+.screen-table thead th, .screen-table td { padding-left: 0.5rem; padding-right: 0.5rem; }
+.screen-table th:last-child, .screen-table td:last-child {
+  position: sticky; right: 0; background: var(--color-surface); box-shadow: -1px 0 0 var(--color-border-2);
+}
+.screen-table tbody tr:hover td:last-child { background: var(--color-surface-2); }
+/* HP: a partial or placeholder bar is dimmed and tagged, not an ordinary row (BUG-156) */
+.data-table tr.hp-partial td, .data-table tr.hp-placeholder td { color: var(--color-ink-muted); font-style: italic; }
+.hp-flag {
+  font-size: 0.65rem; font-style: normal; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 0.05rem 0.4rem; border: 1px solid var(--color-border-2); border-radius: var(--radius-pill); color: var(--color-ink-muted);
+}
+.hp-flag-row { margin-left: 0.5rem; }
+.hp-flag-key { font-size: 0.8rem; margin: 0.4rem 0 0; }
 .data-table .row-label, .help-table .row-label { color: var(--color-ink); font-weight: 500; }
 .table-sm td, .table-sm th { padding: 0.35rem 0.6rem; }
 .table-bordered td, .table-bordered th { border: 1px solid var(--color-border); }
@@ -283,6 +298,7 @@ input:focus, select:focus, .form-control:focus, .form-input:focus, .metric-selec
 }
 .summary-label { font-size: 0.68rem; color: var(--color-ink-muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .summary-value { font-family: var(--font-mono); font-size: 0.9rem; font-weight: 600; }
+.summary-note { font-size: 0.68rem; line-height: 1.3; }
 .gp-controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
 .gp-chart { min-height: 420px; }
 

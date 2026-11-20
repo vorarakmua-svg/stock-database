@@ -4,29 +4,146 @@ No fixture here performs network I/O — all SEC/Yahoo/FRED data is synthetic so
 test suite is fast and deterministic. ``no_network`` holds every test to that.
 """
 
+import ipaddress
 import socket
+from functools import wraps
+from urllib.parse import urlsplit
 
 import pytest
 
 from src.models.stock_data import StockData
 
 
+def _is_local(host):
+    """True for what stays on this machine: the name ``localhost`` and every address in 127.0.0.0/8 and ``::1``
+    (also as an IPv4-mapped IPv6 address)."""
+    if isinstance(host, bytes):
+        host = host.decode("ascii", "replace")
+    if not isinstance(host, str):
+        return False
+    host = host.lower()
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback or (ip.version == 6 and ip.ipv4_mapped is not None and ip.ipv4_mapped.is_loopback)
+
+
+def _is_remote_name(host):
+    """True for a host *name* that isn't local: an address literal is no lookup (a connect to it is refused instead)."""
+    if isinstance(host, bytes):
+        host = host.decode("ascii", "replace")
+    if not isinstance(host, str) or not host or _is_local(host):
+        return False
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    return False
+
+
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):
-    """Refuse any connection off this machine, and fail the test that tried one: a
-    fetcher test once made a live SEC request that the code under test swallowed
-    (BUG-073). Yields the refused addresses."""
+    """Refuse every route off this machine, and fail the test that tried one: a fetcher test once made a live SEC
+    request that the code under test swallowed (BUG-073). The routes: ``socket.connect`` and ``connect_ex`` (so
+    ``create_connection``, urllib3 and requests), name lookups of anything but ``localhost`` (``getaddrinfo``,
+    ``gethostbyname``, ``gethostbyname_ex``) and reverse lookups of anything but a local address
+    (``gethostbyaddr``, ``getnameinfo``, ``getfqdn`` through ``gethostbyaddr``), asyncio's proactor ``sock_connect``
+    (Windows connects without a Python socket call) and curl_cffi (libcurl, yfinance 1.0's transport, opens its own
+    sockets). All of 127.0.0.0/8 and ``::1`` stay allowed, for the tests that start a local server. Yields the
+    refused addresses."""
     refused = []
-    connect = socket.socket.connect
 
-    def guarded(sock, address):
-        host = address[0] if isinstance(address, tuple) else address
-        if sock.family in (socket.AF_INET, socket.AF_INET6) and host not in ("127.0.0.1", "::1", "localhost"):
-            refused.append(address)
-            raise OSError(f"the test suite doesn't use the network: refused {address}")
+    def refuse(address):
+        refused.append(address)
+        raise OSError(f"the test suite doesn't use the network: refused {address}")
+
+    def check_address(sock, address):
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            host = address[0] if isinstance(address, tuple) else address
+            if not _is_local(host):
+                refuse(address)
+
+    connect = socket.socket.connect
+    connect_ex = socket.socket.connect_ex
+
+    def guarded_connect(sock, address):
+        check_address(sock, address)
         return connect(sock, address)
 
-    monkeypatch.setattr(socket.socket, "connect", guarded)
+    def guarded_connect_ex(sock, address):
+        check_address(sock, address)
+        return connect_ex(sock, address)
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect_ex)
+
+    def guard_lookup(name):
+        original = getattr(socket, name)
+
+        @wraps(original)
+        def guarded(host, *args, **kwargs):
+            if _is_remote_name(host):
+                refuse((host, args[0] if args and name == "getaddrinfo" else None))
+            return original(host, *args, **kwargs)
+
+        monkeypatch.setattr(socket, name, guarded)
+
+    for lookup in ("getaddrinfo", "gethostbyname", "gethostbyname_ex"):
+        guard_lookup(lookup)
+
+    def guard_reverse(name):
+        # gethostbyaddr(address or name) and getnameinfo((address, port, ...), flags): the resolver is asked either
+        # way, so anything but a local address (or ``localhost``) is refused. getfqdn reaches it by gethostbyaddr.
+        original = getattr(socket, name)
+
+        @wraps(original)
+        def guarded(target, *args, **kwargs):
+            host = target[0] if name == "getnameinfo" and isinstance(target, (tuple, list)) and target else target
+            if not _is_local(host):
+                refuse((host, None))
+            return original(target, *args, **kwargs)
+
+        monkeypatch.setattr(socket, name, guarded)
+
+    for lookup in ("gethostbyaddr", "getnameinfo"):
+        guard_reverse(lookup)
+
+    # The selector loop connects through ``socket.connect``, guarded above; the Windows proactor loop connects
+    # with ConnectEx and never calls it.
+    from asyncio import proactor_events
+    proactor_connect = proactor_events.BaseProactorEventLoop.sock_connect
+
+    @wraps(proactor_connect)
+    async def guarded_proactor_connect(self, sock, address):
+        check_address(sock, address)
+        return await proactor_connect(self, sock, address)
+
+    monkeypatch.setattr(proactor_events.BaseProactorEventLoop, "sock_connect", guarded_proactor_connect)
+
+    try:
+        from curl_cffi import curl as curl_curl
+        from curl_cffi.const import CurlOpt
+    except ImportError:  # curl_cffi is yfinance's transport; without it there is no such route
+        pass
+    else:
+        def guard_setopt(cls):  # the easy handle: sessions, async sessions and direct Curl all set the URL here
+            original = cls.setopt
+
+            @wraps(original)
+            def guarded(self, option, value):
+                if option == CurlOpt.URL:
+                    url = value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
+                    if not _is_local(urlsplit(url).hostname):
+                        refuse(url)
+                return original(self, option, value)
+
+            monkeypatch.setattr(cls, "setopt", guarded)
+
+        guard_setopt(curl_curl.Curl)
+
     yield refused
     if refused:
         pytest.fail(f"the test tried to connect to {refused}")
@@ -189,7 +306,8 @@ def web_db(tmp_path):
 
     Three companies across sectors:
     - AAA (general): 3 fiscal years of financials + metrics, 2 quarterly periods,
-      1 TTM period, multi-vintage FY2022 (original + restatement), 2 snapshots
+      1 TTM period, multi-vintage FY2022 (original + restatement) and FY2022 as
+      known from each of them (the as-of snapshots), 2 snapshots
       (latest has dividend_yield=0.02, short_percent_of_float=0.03 — for
       screener market/valuation-column tests), 1 unmapped fact, 260 daily price
       bars, 1 analyst snapshot, 4 earnings-surprise rows, 6 dividend events + 1
@@ -207,6 +325,7 @@ def web_db(tmp_path):
     from datetime import datetime
 
     from src.exporters.sqlite_store import SQLiteStore
+    from tests.known_rows import snapshot
 
     db_path = tmp_path / "stock.db"
     store = SQLiteStore(db_path)
@@ -304,6 +423,11 @@ def web_db(tmp_path):
             },
         }
     }
+    # FY2022 as known from each filing (the as-of snapshots): the original, then the restatement
+    aaa1.financials_annual_known = [
+        snapshot(2022, "2023-02-10", accn="0001-10K-2022", revenue=800.0, net_income=80.0),
+        snapshot(2022, "2023-08-15", accn="0002-10KA-2022", form="10-K/A", revenue=800.0, net_income=82.0),
+    ]
     aaa1.unmapped_facts = [
         {
             "tag": "SomeCustomTag", "label": "Custom Label",

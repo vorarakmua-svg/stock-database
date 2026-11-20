@@ -32,6 +32,33 @@ SUMMARY_IDENTITY_COLUMNS: Tuple[str, ...] = ("ticker", "cik", "company_name")
 #: The run's own columns: always the latest run's.
 SUMMARY_RUN_COLUMNS: Tuple[str, ...] = ("collected_at", "data_sources", "warning_count", "error_count")
 
+#: Yahoo's quote, the sections a market snapshot is made of. A run without a price (Yahoo failed, ``--no-yahoo``,
+#: "quote unavailable") speaks for none of it: SQLite writes no snapshot and keeps the latest one (BUG-018, BUG-033),
+#: and the exports keep these sections and the metrics priced on the market cap, as they were (BUG-038).
+QUOTE_SECTIONS: Tuple[str, ...] = ("market_data", "valuation")
+#: The calculated metrics computed from the run's market data (``CalculatedMetrics.calculate_all``).
+PRICED_METRICS: Tuple[str, ...] = ("enterprise_value", "ev_to_ebitda", "ev_to_revenue", "ev_to_fcf", "fcf_yield")
+#: Their summary columns.
+SUMMARY_PRICED_COLUMNS: Tuple[str, ...] = ("calc_ev", "calc_ev_to_ebitda")
+
+
+def got_price(market_data: Optional[Dict[str, Any]]) -> bool:
+    """Whether a run's market data holds a price, the test ``SQLiteStore`` makes before writing a market snapshot:
+    the exports make it too before taking a run's quote (BUG-038)."""
+    return (market_data or {}).get("current_price") is not None
+
+
+def fill(old: Any, new: Any) -> Any:
+    """*old*, with *new* filling only what it lacks (None or ""), dicts key by key: how a run that can't speak for
+    what's stored writes it (a successor's whose predecessor's filings couldn't be read), SQLite's
+    ``_upsert(fill_only=True)`` in the database (BUG-179) and this in the exports (BUG-278)."""
+    if isinstance(old, dict) and isinstance(new, dict):
+        filled = dict(old)
+        for key, value in new.items():
+            filled[key] = fill(old[key], value) if key in old else value
+        return filled
+    return new if old is None or old == "" else old
+
 
 @dataclass
 class StockData:
@@ -77,8 +104,45 @@ class StockData:
     # from to_dict/JSON); see the vintaged-ingestion spec.
     financials_annual_vintages: Dict[str, Any] = field(default_factory=dict)
 
+    # The annual record as known at each filing date (as-of snapshots, ``build_snapshots``'s rows): a row per fiscal
+    # year and day its row changed. None when the run didn't build them (its companyfacts request failed, a run
+    # without SEC data, any run that didn't reach ``build_snapshots``): the SQLite store then keeps the stored
+    # snapshots and vintages. A list, even an empty one, is what the run built, and replaces them. SQLite-only
+    # (excluded from to_dict/JSON), like the vintages.
+    financials_annual_known: Optional[List[Dict[str, Any]]] = None
+    # The run's years_back (None: the whole history). A run that kept its latest years only speaks for those years'
+    # snapshots and vintages, so the SQLite store replaces those alone. SQLite-only.
+    years_back: Optional[int] = None
+
     # SEC submission data
     sec_submissions: Dict[str, Any] = field(default_factory=dict)
+
+    # Why a successor's predecessor's company facts couldn't be read (sec_handler.PREDECESSOR_CIKS),
+    # None when they were or there is none: the run's record then lacks every figure only the
+    # predecessor filed, so the SQLite store only fills from it (BUG-179). SQLite-only, like the
+    # vintages (excluded from to_dict/JSON); the run's warning says so.
+    predecessor_error: Optional[str] = None
+
+    # The latest report the SEC's submissions list whose facts the run's companyfacts lacked, the SEC's
+    # lag (sec_handler.report_without_facts: its form, accession and filing date), None when they had
+    # it or there was none to look for: the run's figures stop at the report before (BUG-251), unless
+    # the run read it, and every earlier report they lacked, from the filings' own XBRL ("recovered":
+    # True, Q17). SQLite-only, like the predecessor's error: collection_runs.incomplete keeps an
+    # unrecovered one, so that `stock-data refresh` collects the company again, and the run's warning
+    # names the report either way.
+    missing_report: Optional[Dict[str, Any]] = None
+
+    # Why the run's submissions request failed (sec_handler.fetch_all's submissions_error), None when it
+    # didn't: without the submissions the run couldn't look for the latest report its companyfacts lack
+    # (the SEC's lag). SQLite-only, like the report without facts: collection_runs.incomplete keeps it,
+    # so that `stock-data refresh` collects the company again (BUG-282); the run's errors name it.
+    submissions_error: Optional[str] = None
+
+    # When the SEC served the run's SEC data (sec_handler.fetch_all's sec_read_at, ISO, naive local): a
+    # payload from the handler's 7-day cache is as old as the cache. collection_runs.sec_read_at keeps it,
+    # so that `stock-data refresh` looks for reports filed since then and counts as tries only reads of
+    # the SEC (BUG-232, BUG-281). SQLite-only, like the report without facts.
+    sec_read_at: Optional[str] = None
 
     # Insider transactions (from SEC Form 4)
     insider_transactions: List[Dict[str, Any]] = field(default_factory=list)
@@ -125,8 +189,21 @@ class StockData:
         # Convert datetime to ISO string
         if isinstance(data["collected_at"], datetime):
             data["collected_at"] = data["collected_at"].isoformat()
-        # Vintages are SQLite-only — never written to the per-ticker JSON.
+        # Vintages, the as-of snapshots, the run's years_back, the predecessor's error and the report without facts
+        # are SQLite-only — never written to the per-ticker JSON, whose merge would keep an earlier run's report for
+        # a run that had none.
         data.pop("financials_annual_vintages", None)
+        data.pop("financials_annual_known", None)
+        data.pop("years_back", None)
+        data.pop("predecessor_error", None)
+        data.pop("missing_report", None)
+        data.pop("submissions_error", None)
+        data.pop("sec_read_at", None)  # SQLite-only too (collection_runs.sec_read_at)
+        # Each figure's filing (the parser's ``_source_filings``) is for the as-of record, not the JSON.
+        for attr in ("financials_annual", "financials_quarterly"):
+            for period in (data.get(attr) or {}).values():
+                if isinstance(period, dict):
+                    period.pop("_source_filings", None)
         return data
 
     def to_json(self, indent: int = 2) -> str:
@@ -139,7 +216,7 @@ class StockData:
 
         Tolerates extra keys not declared on the model. The JSON exporter's
         merge mode adds bookkeeping fields (``collection_history``,
-        ``first_collected_at``, ``price_history_snapshots``) that are not
+        ``first_collected_at``, ``price_history_snapshots``, ``section_collected_at``) that are not
         dataclass fields, so we filter down to known fields before constructing.
         """
         # Only keep keys that correspond to declared dataclass fields
@@ -353,6 +430,16 @@ class StockData:
         for key, endpoint in (("company_facts_error", "companyfacts"), ("submissions_error", "submissions")):
             if sec_data.get(key):
                 self.add_error(f"SEC EDGAR {endpoint}: {sec_data[key]}")
+        # A successor's facts read without its predecessor's (a 503, a 404: "no XBRL data") lack the
+        # predecessor's figures: a warning, as the fetcher words it, and the store only fills (BUG-179).
+        self.predecessor_error = sec_data.get("predecessor_error")
+        # The latest report the submissions list whose facts the companyfacts lacked (BUG-251): a
+        # warning, as the fetcher words it, and the store keeps it for the refresh.
+        self.missing_report = sec_data.get("missing_report")
+        # A failed submissions request: the run couldn't look for that report (BUG-282).
+        self.submissions_error = sec_data.get("submissions_error")
+        # When the SEC served what the run read: the refresh compares a filing with it (BUG-232).
+        self.sec_read_at = sec_data.get("sec_read_at")
 
         # CIK
         if "cik" in sec_data:
@@ -364,9 +451,10 @@ class StockData:
             # Update company name from SEC if not set
             if not self.company_name and sec_data["submissions"]:
                 self.company_name = sec_data["submissions"].get("name")
-            # Classify sector from SIC for sector-aware standardization
+            # Classify sector from SIC for sector-aware standardization; a finance SIC without deposits in the
+            # companyfacts is a general company (Q9).
             from ..mappings.sectors import classify_submissions
-            self.sector_class = classify_submissions(sec_data["submissions"])
+            self.sector_class = classify_submissions(sec_data["submissions"], sec_data.get("company_facts") or None)
 
     def merge_parsed_financials(
         self,

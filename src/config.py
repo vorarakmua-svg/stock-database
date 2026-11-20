@@ -11,6 +11,11 @@ try:
 except ImportError:
     pass
 
+#: How many fetched companies a collection (``StockDataFetcher.fetch_and_export``) exports, stores and values at a
+#: time: a run stores its companies batch by batch as they arrive, so one stopped part way keeps what it stored, and
+#: only a batch and the workers' companies (about 5.6 MB each) are in memory at once.
+DEFAULT_BATCH_SIZE = 25
+
 
 @dataclass
 class SECConfig:
@@ -81,7 +86,7 @@ class StorageConfig:
         return self.base_dir / "cache"
 
     def ensure_directories(self) -> None:
-        """Create all required directories."""
+        """Create all output and cache directories (on request only: nothing calls this at import)."""
         self.json_dir.mkdir(parents=True, exist_ok=True)
         self.csv_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -117,9 +122,12 @@ class AppConfig:
     # Number of tickers to fetch concurrently (1 = sequential)
     max_workers: int = 4
 
-    def __post_init__(self):
-        """Ensure directories exist after initialization."""
-        self.storage.ensure_directories()
+    # Companies a collection exports, stores and values at a time (DEFAULT_BATCH_SIZE)
+    batch_size: int = DEFAULT_BATCH_SIZE
+
+    # No folder is made here: the default instance below is built at import, which made data/output and
+    # data/cache wherever anything imported this module (BUG-284), a read-only web browser too (BUG-158). Each
+    # writer makes its own folder when it writes (the exporters, the SEC cache, the database's parent).
 
 
 # Default configuration instance

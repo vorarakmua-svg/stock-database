@@ -27,9 +27,9 @@ def seeded_db(tmp_path):
             (fy, f"{fy}-12-31", 200.0, 1000.0, 2.0 + 0.1 * i, 100.0),
         )
         conn.execute(
-            "INSERT INTO metrics_annual (ticker, fiscal_year, levered_fcf) "
-            "VALUES ('AAA', ?, ?)",
-            (fy, 100.0 * 1.05 ** i),
+            "INSERT INTO metrics_annual (ticker, fiscal_year, free_cash_flow, levered_fcf) "
+            "VALUES ('AAA', ?, ?, ?)",
+            (fy, 100.0 * 1.05 ** i, 100.0 * 1.05 ** i),
         )
         conn.execute(
             "INSERT INTO price_bars (ticker, date, close) VALUES ('AAA', ?, ?)",
@@ -135,7 +135,10 @@ def test_backfill_cli_empty_db_returns_1(tmp_path):
 
 
 def test_fetch_and_export_triggers_valuations(monkeypatch):
-    """fetch_and_export calls compute_and_store for the collected tickers."""
+    """fetch_and_export calls compute_and_store for the tickers each batch stored."""
+    from pathlib import Path
+
+    from src.exporters.sqlite_store import StoreResult
     from src.fetchers import stock_data_fetcher as sdf
 
     calls = {}
@@ -167,8 +170,9 @@ def test_fetch_and_export_triggers_valuations(monkeypatch):
     fetcher.logger = _logging.getLogger("test")
     fetcher.sqlite_store = _FakeStore()
     fetcher.config = type("C", (), {"output_formats": ["sqlite"]})()
-    monkeypatch.setattr(fetcher, "fetch_multiple", lambda *a, **k: [_FakeStock()])
-    monkeypatch.setattr(fetcher, "export", lambda *a, **k: {"sqlite": ["fake.db"]})
+    monkeypatch.setattr(fetcher, "fetch_ticker", lambda *a, **k: _FakeStock())
+    monkeypatch.setattr(fetcher, "_export", lambda *a, **k: (
+        {"sqlite": ["fake.db"]}, StoreResult(path=Path("fake.db"), stored=["AAA"])))
     monkeypatch.setattr(
         fetcher, "yahoo_handler",
         type("Y", (), {"fetch_benchmark_bars": lambda self: []})(),

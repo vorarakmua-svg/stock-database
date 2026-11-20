@@ -7,7 +7,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..models.stock_data import SUMMARY_IDENTITY_COLUMNS, SUMMARY_SECTIONS, StockData
+from ..models.stock_data import (
+    QUOTE_SECTIONS,
+    SUMMARY_IDENTITY_COLUMNS,
+    SUMMARY_PRICED_COLUMNS,
+    SUMMARY_SECTIONS,
+    StockData,
+    fill,
+    got_price,
+)
+
+
+def _year(value: Any) -> Optional[int]:
+    """A fiscal year as the summary holds it ("2025", 2025), None when there is none."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
 
 
 class CSVExporter:
@@ -63,7 +79,9 @@ class CSVExporter:
             # run got nothing for (a failed or partial fetch) keeps its earlier values, as the JSON
             # merge does. Identifiers and company details the run lacks keep theirs field by field,
             # as the JSON's company_info and SQLite's companies row do; the run's own columns are
-            # always new.
+            # always new. A run without a price keeps the quote and the EV (BUG-038), and one that
+            # couldn't read its predecessor's filings only fills the latest year (BUG-278), as the
+            # database does.
             existing_columns, existing_rows = self._read_existing(filepath)
             new_rows = {stock.ticker: self._clean_for_csv(stock.to_summary()) for stock in data}
             rows = {row["ticker"]: row for row in existing_rows}
@@ -74,6 +92,11 @@ class CSVExporter:
                             if not getattr(stock, section) for c in columns]
                     kept += [c for c in SUMMARY_IDENTITY_COLUMNS + SUMMARY_SECTIONS["company_info"]
                              if new_row.get(c) in ("", None)]
+                    if not got_price(stock.market_data):
+                        kept += [c for section in QUOTE_SECTIONS for c in SUMMARY_SECTIONS[section]]
+                        kept += list(SUMMARY_PRICED_COLUMNS)
+                    if stock.predecessor_error:
+                        kept += self._stored_latest_year(new_row, old_row)
                     new_row = {**new_row, **{c: old_row[c] for c in kept if c in old_row}}
                 rows[stock.ticker] = new_row
 
@@ -111,6 +134,18 @@ class CSVExporter:
             self.logger.error(f"Error exporting to CSV: {e}")
             return None
 
+    @staticmethod
+    def _stored_latest_year(new_row: Dict[str, Any], old_row: Dict[str, str]) -> List[str]:
+        """The latest-year (``sec_*``) columns a run that only fills keeps from *old_row*: every one when its record
+        ends before the stored latest year, those with a value when it gives the same year (BUG-278)."""
+        columns = SUMMARY_SECTIONS["financials_annual"]
+        old_year, new_year = _year(old_row.get("sec_fiscal_year")), _year(new_row.get("sec_fiscal_year"))
+        if old_year is None or (new_year is not None and new_year > old_year):
+            return []
+        if new_year is None or new_year < old_year:
+            return list(columns)
+        return [c for c in columns if old_row.get(c) not in ("", None)]
+
     def _read_existing(self, filepath: Path) -> Tuple[List[str], List[Dict[str, str]]]:
         """Columns and rows of an earlier export, so a run adds to it instead of replacing it.
 
@@ -132,7 +167,13 @@ class CSVExporter:
                 raise csv.Error(f"no 'ticker' column (header {','.join(columns)[:60]!r})")
             return columns, rows
         except (UnicodeDecodeError, csv.Error) as e:
-            kept = filepath.with_name(f"{filepath.stem}.unreadable-{datetime.now():%Y%m%d-%H%M%S}{filepath.suffix}")
+            # The name has one-second resolution: one taken already (a file kept aside in the same second) gets a
+            # count, so no kept copy is overwritten (BUG-027).
+            stamp = f"{filepath.stem}.unreadable-{datetime.now():%Y%m%d-%H%M%S}"
+            kept, n = filepath.with_name(stamp + filepath.suffix), 1
+            while kept.exists():
+                n += 1
+                kept = filepath.with_name(f"{stamp}-{n}{filepath.suffix}")
             filepath.replace(kept)
             self.logger.warning(
                 f"Could not read existing {filepath.name} ({e}); kept it as {kept.name} and wrote this run's data only"
@@ -184,7 +225,9 @@ class CSVExporter:
 
         Creates a time-series CSV with annual financials. Like the JSON merge,
         a ticker-year in ``data`` replaces the same ticker-year; all other rows
-        (other tickers, older years) are kept.
+        (other tickers, older years) are kept. A run that couldn't read its
+        predecessor's filings only fills the ticker-years it gives, as the
+        database does (BUG-179, BUG-278).
 
         Args:
             data: List of StockData objects
@@ -197,9 +240,12 @@ class CSVExporter:
             filepath = self.output_dir / filename
 
             rows = []
+            fills = set()
             for stock in data:
                 if not stock.financials_annual:
                     continue
+                if stock.predecessor_error:
+                    fills.add(stock.ticker)
 
                 for year, financials in stock.financials_annual.items():
                     row = {
@@ -214,11 +260,13 @@ class CSVExporter:
                 self.logger.warning("No financial history to export")
                 return None
 
-            # This run's ticker-years replace the same ticker-years from earlier runs
+            # This run's ticker-years replace the same ticker-years from earlier runs, or only fill them
             existing_columns, existing_rows = self._read_existing(filepath)
             merged = {(row["ticker"], row.get("fiscal_year", "")): row for row in existing_rows}
             for row in rows:
-                merged[(str(row["ticker"]), str(row["fiscal_year"]))] = self._clean_for_csv(row)
+                key = (str(row["ticker"]), str(row["fiscal_year"]))
+                new_row = self._clean_for_csv(row)
+                merged[key] = fill(merged[key], new_row) if key in merged and row["ticker"] in fills else new_row
 
             # Get all columns
             all_columns = set(existing_columns)

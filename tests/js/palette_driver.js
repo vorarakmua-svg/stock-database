@@ -9,9 +9,14 @@
  * Usage:  node palette_driver.js <path/to/palette.js>  < spec.json
  * spec:   {"scenarios": [[["open"], ["type", "AAPL GP"], ["settle"], ["enter"]], ...],
  *          "searchHits": {"<query>": [{"ticker": ..., "company_name": ...}]},
- *          "allowCollect": true|false}   // the page's data-allow-collect flag
+ *          "allowCollect": true|false,   // the page's data-allow-collect flag
+ *          "manualSearch": true|false}   // the company search answers only when told (resolve steps)
  * Steps:  open | type <text> | settle (let the input debounce and the company
- *         search finish) | enter | escape. Every scenario ends with a settle.
+ *         search finish) | enter | escape | down | up (the arrow keys).
+ *         Every scenario ends with a settle. With "manualSearch" the company search answers only on
+ *         fire (run the pending debounce timers, no answer), resolve <query> (answer the oldest open
+ *         request for that text) or resolveAll (answer every open request, newest first), so a scenario
+ *         can order the debounce, the requests and their answers; settle then answers what is open.
  * Prints: a JSON array with one outcome per scenario.
  */
 'use strict';
@@ -50,6 +55,7 @@ async function play(source, steps, spec) {
   let nextTimer = 0;
   const storage = new Map();
   let navigatedTo = null;
+  const openRequests = []; // manualSearch: [{q, answer}]
 
   const window = {
     location: {
@@ -75,23 +81,43 @@ async function play(source, steps, spec) {
     fetch: (url) => {
       const q = new URL(url, 'http://localhost').searchParams.get('q');
       const hits = (spec.searchHits || {})[q] || [];
-      return Promise.resolve({ ok: true, json: () => Promise.resolve(hits) });
+      const reply = { ok: true, json: () => Promise.resolve(hits) };
+      if (!spec.manualSearch) return Promise.resolve(reply);
+      return new Promise((resolve) => { openRequests.push({ q, answer: () => resolve(reply) }); });
     },
   });
 
   const input = elements['palette-input'];
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  async function fire() {
+    for (const [id, fn] of [...timers]) { timers.delete(id); fn(); }
+    await tick(); // let company searches answer
+  }
+  async function resolveQuery(q) {
+    const i = openRequests.findIndex((r) => r.q === q);
+    if (i >= 0) openRequests.splice(i, 1)[0].answer();
+    for (let k = 0; k < 5; k++) await tick();
+  }
+  async function resolveAll() {
+    while (openRequests.length) {
+      openRequests.pop().answer();
+      for (let k = 0; k < 5; k++) await tick();
+    }
+  }
   async function settle() {
     do {
-      for (const [id, fn] of [...timers]) { timers.delete(id); fn(); }
-      await new Promise((resolve) => setImmediate(resolve)); // let company searches answer
-    } while (timers.size);
+      await fire();
+      await resolveAll();
+    } while (timers.size || openRequests.length);
   }
   const actions = {
     open: () => window.Palette.open(),
     type: (text) => { input.value = text; input.fire('input'); },
-    settle,
+    settle, fire, resolve: resolveQuery, resolveAll,
     enter: () => input.fire('keydown', { key: 'Enter' }),
     escape: () => input.fire('keydown', { key: 'Escape' }),
+    down: () => input.fire('keydown', { key: 'ArrowDown' }),
+    up: () => input.fire('keydown', { key: 'ArrowUp' }),
   };
   for (const [name, arg] of steps) await actions[name](arg);
   await settle();

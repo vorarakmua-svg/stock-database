@@ -38,6 +38,16 @@ addopts = "-q"
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::pytest.PytestDeprecationWarning",
+    # BUG-002: Starlette 1.3 deprecates its httpx-based TestClient in favour of the separate `httpx2` package, which
+    # this project doesn't depend on. The warning is a UserWarning raised once, on `import fastapi.testclient`, so the
+    # DeprecationWarning filter above misses it; only that message is ignored. Named by UserWarning (its base), not
+    # starlette.exceptions.StarletteDeprecationWarning: older Starlettes (Python 3.9's in CI) lack that class, and
+    # pytest refuses to start on a filter naming a class it can't import.
+    "ignore:Using .httpx. with .starlette.testclient. is deprecated:UserWarning",
+    # BUG-002: curl_cffi's async session on Windows' default Proactor loop warns once that it starts a selector thread
+    # (tests/test_no_network.py). The test is of the network guard, not the loop policy. (curl_cffi's CurlCffiWarning
+    # is a UserWarning; named by that, so the filter needs no curl_cffi import.)
+    "ignore:(?s)\\s*Proactor event loop does not implement add_reader:UserWarning",
 ]
 
 [tool.ruff]
@@ -62,16 +72,23 @@ files = [
     "src/models/canonical.py",
     "src/validation",
     "src/valuation",
+    "src/scores",
+    "src/ownership",
+    "src/market",
+    "src/universe",
     "src/parsers/derived_fields.py",
     "src/parsers/metric_utils.py",
     "src/parsers/sector_metrics.py",
     "src/parsers/ttm.py",
     "src/parsers/unmapped.py",
+    "src/parsers/xbrl_instance.py",
     "src/analysis",
     "src/exporters/sqlite_store.py",
     "src/query/asof.py",
     "src/query/pit_metrics.py",
     "src/webapp",
+    "src/refresh.py",
+    "src/fetchers/quote_refresh.py",
 ]
 
 # click 8.x uses `match` (3.10+) which mypy's 3.9 parser rejects with a syntax

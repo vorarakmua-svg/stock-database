@@ -40,6 +40,12 @@ def test_is_transient_error_classification():
     assert not is_transient_error(ValueError("nope"))
 
 
+def test_a_connection_dropped_mid_body_is_transient_and_a_body_that_cant_be_decoded_isnt():
+    # BUG-349: requests raises a body cut short (urllib3's IncompleteRead, a ProtocolError) as ChunkedEncodingError.
+    assert is_transient_error(requests.exceptions.ChunkedEncodingError("IncompleteRead(10 bytes read, 86 more)"))
+    assert not is_transient_error(requests.exceptions.ContentDecodingError("bad gzip"))
+
+
 def test_retry_succeeds_after_transient_failures(monkeypatch):
     monkeypatch.setattr(rl.time, "sleep", lambda s: None)
     handler = RetryHandler(max_retries=3, base_delay=0.01)

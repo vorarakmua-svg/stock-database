@@ -1,0 +1,385 @@
+"""Insider aggregates (Milestone 3): open-market buying and selling over 3, 6 and 12 months, CEO and CFO buys,
+cluster buys and planned sales, from the stored Form 4 trades, and the trades each 4/A restates
+(docs/superpowers/specs/2026-10-22-sec-ownership-design.md)."""
+import pytest
+
+from src.ownership.insiders import CODE_MEANINGS, ceo_or_cfo, price_suspect, summarize, supersessions
+
+TODAY = "2026-10-22"
+
+
+def _trade(date, code, shares, price, owner="A", title=None, plan=None, kind="nonderivative", suspect=None,
+           accession=None):
+    return {"date": date, "code": code, "shares": shares, "price": price, "owner_cik": owner, "owner_name": owner,
+            "officer_title": title, "is_ceo_cfo": ceo_or_cfo(title), "aff10b5one": plan, "kind": kind,
+            "price_suspect": suspect, "accession": accession or f"{owner}-{date}"}
+
+
+@pytest.mark.parametrize("title, expected", [
+    ("CEO", True), ("Chairman & CEO", True), ("President and Chief Executive Officer", True), ("EVP, CFO", True),
+    ("Senior Vice President,  CFO", True), ("CFO & Treasurer", True), ("Chief Financial Officer", True),
+    ("EVP, Pres. & CEO, BGS", False), ("CEO of Payments", False), ("COO", False), ("SVP & Controller", False),
+    (None, False),
+])
+def test_ceo_or_cfo_names_the_companys_chief_not_a_units(title, expected):
+    assert ceo_or_cfo(title) is expected
+
+
+# BUG-207: spellings of the stored officer titles (insider_filings, 2026-10-25), each as filed.
+@pytest.mark.parametrize("title", [
+    # Another role after the comma, not a unit: the company's chief.
+    "CEO, Chairman", "CEO, Chairman of Board", "CEO, Chair of Board", "CEO, President and Director",
+    "CEO, President, and Director", "President, CEO, and Director", "CEO, Pres. & Chair", "CEO, CTO & Chairman",
+    "Chairman, CEO, President", "Exec. Chairman, CEO, President", "CFO, EVP & Treasurer", "CFO, Executive VP",
+    "CFO, Treasurer and EVP", "CFO, President International", "Chief Financial Officer, EVP",
+    "Chief Exec Officer, President", "SVP, CFO, Chief Acct. Officer", "SVP, Interim CFO, CAO & Cntrlr",
+    "SVP, Interim CFO, Ctrl & CAO", "VP, ACTING CFO, TREASURER",
+    "Interim Co-CEO, CEO Intel Prod", "Interim Co-CEO, EVP, CFO", "Chief Executive Officer (CEO)",
+    "CFO and Head of Business Techn", "EVP, CFO & Transformation Off", "Pres, CCO & Interim Co-CEO",
+    "CFO and SVP, Business Ops",  # a comma after a joined role: that role's unit
+    # The short forms filers write.
+    "Chief Exec. Officer & Director", "CHIEF EXECUTIVE OFF.", "PRESIDENT/CHIEF EXECUTIVE OFF.",
+    "PRES. & CHIEF EXEC. OFFICER", "Pres.&Chief Exec. Officer", "EVP CHIEF FINANCIAL OFF", "Exec VP & Chief Fin Ofc",
+    "EVP, Chief Financal Officer", "EVP and Chief Financial Office", "Chief Fin & Op Officer",
+    "Chief Financial & Admn Officer", "EVP, Chief Finance/Strat Ofcr", "Sr VP, Chief Fin & Ops Off",
+    "President & C.E.O.", "Sr MD Chief Financial Officer", "Co-CEO", "Retiring Sr. VP and CFO",
+])
+def test_a_title_naming_the_chief_among_other_roles_counts(title):
+    assert ceo_or_cfo(title) is True
+
+
+@pytest.mark.parametrize("title", [  # made up: the other roles a title may list after the chief's
+    "CFO, Vice President", "CFO, SVP", "CFO, VP", "CFO, Sr. VP", "CFO, Senior Vice President", "CFO, Secretary",
+    "CEO, General Counsel", "CEO, Founder", "CFO, Head of Strategy", "CEO, Interim COO", "CFO, Acting COO",
+    "CFO, Controller", "CEO, Chief Strategy Officer", "CFO, Executive Vice President",
+])
+def test_another_role_after_a_comma_is_no_unit(title):
+    assert ceo_or_cfo(title) is True
+
+
+@pytest.mark.parametrize("title", [
+    # A unit's chief: after a comma, a dash, "of", "at" or a space, or a word before it.
+    "CEO, Citibank, N.A.", "CEO, UnitedHealthcare", "ceo, International", "CEO, BOE & CCO",
+    "Chairman, President & CEO, APC", "Chief Executive Officer, Optum", "Chief Executive Officer - KFC",
+    "CEO-The Americas", "SVP, CFO, Aflac U.S.", "EVP, CFO, DISH", "CEO & President - RJA",
+    "CEO and EVP at PG&E Company", "CEO Amazon Web Services",
+    "President & CEO CET", "EVP,  Pres/CEO Insurance Div", "Co-CEO CIB", "President & COO, CEO CIB",
+    "KFC Division CEO", "Corp. VP, BU and Ops CFO", "Taco Bell, CEO, YUM CCO",
+    "CEO of Presidio Bank",  # made up: a unit after "of" whose name starts like a role ("Pres")
+    # Someone else's chief, a past or a future one, a deputy.
+    "Advisor to the CEO", "SVP, COS to the Chairman & CEO", "Office of the CEO", "Former CEO", "FORMER RETIRED CEO",
+    "Former Senior VP & CFO", "Deputy CFO & CAO", "Deputy Chief Financial Officer", "FSVP, Deputy CFO, Aflac Japan",
+    "CFO Emeritus", "President & CEO Elect", "President and CEO-Elect", "CEO - ELECT", "EVP and CFO - Designate",
+    # No chief at all.
+    "Chief Accounting Officer", "Chief Operating Officer", "See Remarks", "",
+])
+def test_a_title_naming_a_units_or_someone_elses_chief_doesnt_count(title):
+    assert ceo_or_cfo(title) is False
+
+
+@pytest.mark.parametrize("title, ticker, expected", [
+    ("Pres. & CEO of NCLH", "NCLH", True), ("Pres. & CEO of NCLH", None, False), ("Pres. & CEO of NCLH", "RCL", False),
+    ("CEO, AAA", "aaa", True), ("Taco Bell, CEO, YUM CCO", "YUM", False),
+])
+def test_a_unit_named_as_the_companys_own_ticker_is_the_company(title, ticker, expected):
+    assert ceo_or_cfo(title, ticker) is expected
+
+
+# BUG-347: made-up titles the README's rules cover (none is among the cached Form 4 titles, bar the real one marked).
+@pytest.mark.parametrize("title", [
+    # An assistant's, a past one's or a unit's word before the name, or a past mark after it: no chief in office.
+    "Assistant CFO", "Assistant Chief Financial Officer", "Asst. CFO", "Retired CEO", "Retired Chairman & CEO",
+    "Ex-CEO", "Ex-Chairman & CEO", "CEO (Retired)", "CFO (Former)", "CEO (Ex-CEO)",
+    "FORMER RETIRED CEO",  # the last is real
+    "Regional CFO", "Divisional CFO", "Regional CEO",
+])
+def test_an_assistants_a_past_or_a_regional_chief_doesnt_count(title):
+    assert ceo_or_cfo(title) is False
+
+
+@pytest.mark.parametrize("title", [
+    # Another of the person's roles after a comma, or the company named as such: the company's chief.
+    "CFO, Principal Accounting Officer", "CEO, Principal Executive Officer", "CFO, Corporate Secretary",
+    "CFO, Corporate Controller", "CFO, Corporate Treasurer", "CEO, Corporate Counsel", "CEO, Board Member",
+    "CEO, Member of the Board", "CFO; Principal Accounting Officer",
+    "CEO of the Company", "CEO of Company", "CFO of the Corporation", "Chief Executive Officer of the Registrant",
+    "CEO, the Company", "CEO and Director of the Company",
+    # Still the company's chief: words that only look like a past or an assistant's mark.
+    "Retiring CFO", "CEO (Chief Executive Officer)", "Exec. VP & CFO", "Executive CFO",
+    "CFO (Principal Financial Officer)",
+])
+def test_another_role_or_the_company_after_the_name_is_the_companys_chief(title):
+    assert ceo_or_cfo(title) is True
+
+
+# BUG-352: a bracket's past mark marks the chief past only when it is about the chief itself (made-up titles; the
+# census of the real ones: qa/evidence/bug349-investigation.txt).
+@pytest.mark.parametrize("title", [
+    # A sitting chief's past role in a bracket: the company's chief (BUG-347's bracket rule read them as past).
+    "President & CEO (former CFO)", "Chairman & CEO (Former President)", "Interim CEO (Ex-CFO)",
+    "CFO (Former CEO)", "CEO (Former Board Member)", "Chief Executive Officer (Retired Chairman)",
+    # The company beside another entity: a bank holding company's chief of both.
+    "President and CEO of the Company and the Bank", "CEO of the Company & the Bank", "CFO of the Corporation and Bank",
+])
+def test_a_past_role_in_a_bracket_or_the_company_beside_another_is_still_the_companys_chief(title):
+    assert ceo_or_cfo(title, "XYZ") is True
+
+
+@pytest.mark.parametrize("title", [
+    # The bracket's past mark about the chief itself, alone, with the chief's own name or with a date.
+    "CEO (Retired)", "CEO (former)", "CFO (Former CFO)", "CEO (Ex-CEO)", "Chief Executive Officer (Retired)",
+    "CEO & President (Retired)", "CEO (retired 2023)", "C.F.O. (Former Chief Financial Officer)",
+])
+def test_a_bracket_about_the_chief_itself_still_marks_it_past(title):
+    assert ceo_or_cfo(title, "XYZ") is False
+
+
+@pytest.mark.parametrize("title", [  # such words without a comma, or a unit starting with one, stay units
+    "CEO Corporate Banking", "CFO Board Services", "CEO, Corporate Banking", "CEO, Memberworks",
+    "CEO, Boarders Inc.", "CEO of the Company's Bank", "CEO of Principal Financial Group",
+])
+def test_a_unit_that_starts_with_such_a_word_is_still_a_unit(title):
+    assert ceo_or_cfo(title) is False
+
+
+def test_a_ceo_or_cfo_buy_is_a_filing_its_purchases_summed():
+    # BUG-215: one buy per filing with a CEO's or CFO's purchase in the year, however many rows it has.
+    s = summarize([
+        _trade("2026-08-13", "P", 300, 11.0, owner="TAN", title="CEO", accession="F-1"),
+        _trade("2026-08-12", "P", 200, 10.0, owner="TAN", title="CEO", accession="F-1"),
+        _trade("2026-08-11", "S", 999, 10.0, owner="TAN", title="CEO", accession="F-1"),  # a sale: no buy
+        _trade("2025-08-11", "P", 999, 10.0, owner="TAN", title="CEO", accession="F-1"),  # older than a year
+        _trade("2026-06-01", "P", 100, 9.0, owner="TAN", title="CEO", accession="F-2"),
+        _trade("2026-06-01", "P", 100, 9.0, owner="DIR", accession="F-3"),
+    ], TODAY)
+    assert [(b["accession"], b["date"], b["last_date"], b["owner_name"], b["shares"], b["value"])
+            for b in s["ceo_cfo_buys_12m"]] == [
+        ("F-1", "2026-08-12", "2026-08-13", "TAN", 500, 300 * 11.0 + 200 * 10.0),
+        ("F-2", "2026-06-01", "2026-06-01", "TAN", 100, 900.0)]
+
+
+def test_the_windows_count_open_market_purchases_and_sales_only():
+    s = summarize([
+        _trade("2026-10-01", "P", 1000, 20.0, owner="A"),
+        _trade("2026-06-01", "P", 500, 10.0, owner="B"),
+        _trade("2026-09-15", "S", 300, 30.0, owner="C"),
+        _trade("2026-09-20", "A", 9999, 0.0, owner="D"),  # a grant: no open-market trade
+        _trade("2026-09-20", "M", 50, 5.0, owner="E", kind="derivative"),
+        _trade("2025-01-01", "P", 7000, 10.0, owner="F"),  # older than a year
+    ], TODAY)
+    w3, w12 = s["windows"]["3m"], s["windows"]["12m"]
+    assert (w3["bought_shares"], w3["bought_value"], w3["sold_shares"], w3["sold_value"], w3["net_value"]) == (
+        1000, 20000.0, 300, 9000.0, 11000.0)
+    assert (w3["buyers"], w3["sellers"]) == (1, 1)
+    assert (w12["bought_shares"], w12["bought_value"], w12["buyers"], w12["net_value"]) == (1500, 25000.0, 2, 16000.0)
+
+
+def test_a_trade_without_a_price_counts_its_shares_but_no_value():
+    w = summarize([_trade("2026-10-01", "P", 100, None)], TODAY)["windows"]["12m"]
+    assert (w["bought_shares"], w["bought_value"]) == (100, 0.0)
+
+
+def test_ceo_and_cfo_buys_are_listed():
+    s = summarize([
+        _trade("2026-08-11", "P", 105263, 95.0, owner="TAN", title="CEO"),
+        _trade("2026-08-12", "P", 100, 90.0, owner="UNIT", title="EVP, Pres. & CEO, BGS"),
+        _trade("2026-08-13", "S", 100, 90.0, owner="CFO", title="EVP, CFO"),
+    ], TODAY)
+    assert [(b["owner_name"], b["shares"], b["value"]) for b in s["ceo_cfo_buys_12m"]] == [
+        ("TAN", 105263, 105263 * 95.0)]
+
+
+def test_three_insiders_buying_within_30_days_make_a_cluster():
+    s = summarize([
+        _trade("2026-03-01", "P", 100, 10.0, owner="A"),
+        _trade("2026-03-10", "P", 100, 10.0, owner="B"),
+        _trade("2026-03-25", "P", 100, 10.0, owner="C"),
+        _trade("2026-03-26", "P", 100, 10.0, owner="A"),  # the same insider again
+        _trade("2026-07-01", "P", 100, 10.0, owner="D"),  # two buyers later: no cluster
+        _trade("2026-07-20", "P", 100, 10.0, owner="E"),
+    ], TODAY)
+    assert [(c["start"], c["end"], c["buyers"], c["value"]) for c in s["clusters_12m"]] == [
+        ("2026-03-01", "2026-03-26", 3, 4000.0)]
+
+
+def test_buyers_spread_over_more_than_30_days_are_no_cluster():
+    s = summarize([_trade("2026-03-01", "P", 1, 1.0, owner="A"), _trade("2026-03-20", "P", 1, 1.0, owner="B"),
+                   _trade("2026-04-05", "P", 1, 1.0, owner="C")], TODAY)
+    assert s["clusters_12m"] == []
+
+
+def test_the_share_of_sales_under_a_plan_counts_flagged_filings_only():
+    s = summarize([
+        _trade("2026-09-01", "S", 300, 10.0, owner="A", plan=1),
+        _trade("2026-09-02", "S", 100, 10.0, owner="B", plan=0),
+        _trade("2026-09-03", "S", 600, 10.0, owner="C", plan=None),  # an older form without the flag
+    ], TODAY)
+    assert s["planned_sale_share_12m"] == pytest.approx(0.75)  # 300 of the 400 shares whose filings say
+    assert summarize([_trade("2026-09-03", "S", 600, 10.0, plan=None)], TODAY)["planned_sale_share_12m"] is None
+
+
+@pytest.mark.parametrize("price, close, suspect", [
+    (1031414.0, 1025.28, True),  # the Lilly Endowment's 0000316011-25-000073, 2025-11-14: $1,031.414 less its point
+    (1032319.0, 1025.28, True),  # the same filing's next sale
+    (878401.0, 881.40, True),  # 0001415889-25-005456, 2025-02-24
+    (1030.312, 1025.28, False),  # the Endowment's same-day sale, its price as it should be
+    (775883.3, 510.08, False),  # BRK-B's 0000919574-25-001778: 2 Class A shares, 1,521 times the B close, a real price
+    (1.031414, 1025.28, True),  # a thousandth of it: the point moved the other way
+    (1125000.0, 1025.28, True),  # 1,000 times $1,125: within 10% of the close
+    (1135000.0, 1025.28, False),  # 1,000 times $1,135: over 10% off
+    (0.0, 1025.28, False),  # a gift's price
+    (None, 1025.28, None),  # no price: nothing to check
+    (1031414.0, None, None),  # no close on or before the trade's date
+])
+def test_a_price_1000_times_or_a_thousandth_of_the_days_close_lost_its_decimal_point(price, close, suspect):
+    assert price_suspect(price, close) is suspect
+
+
+def test_a_suspect_price_counts_in_shares_only():
+    # BUG-220: the Endowment's 55,908 shares sold "at $1,031,414" count as shares, not as $57.7B.
+    s = summarize([
+        _trade("2026-09-01", "S", 55908, 1031414.0, owner="E", suspect=1),
+        _trade("2026-09-01", "S", 949, 1033.155, owner="E", suspect=0),
+        _trade("2026-09-02", "P", 100, 1000.0, owner="F"),  # no close to check it against: as filed
+    ], TODAY)
+    w = s["windows"]["12m"]
+    assert (w["sold_shares"], w["bought_shares"]) == (56857, 100)
+    assert w["sold_value"] == pytest.approx(949 * 1033.155)
+    assert w["net_value"] == pytest.approx(100 * 1000.0 - 949 * 1033.155)
+
+
+def test_every_code_has_a_meaning():
+    assert {"P", "S", "A", "M", "F", "G", "D", "C", "X", "I", "J", "U"} <= set(CODE_MEANINGS)
+
+
+# ---- amendments: the filing a 4/A amends, and the trades it restates ----------------------------------------------
+
+def _filing_row(accession, filed, form="4", owner="1", period="2026-08-20", original=None):
+    return {"accession": accession, "owner_cik": owner, "form": form, "filed_date": filed,
+            "period_of_report": period, "original_filed": original}
+
+
+def _trade_row(accession, seq=0, code="S", day="2026-08-20", shares=100.0, price=10.0, kind="nonderivative",
+               title="Common Stock"):
+    return {"accession": accession, "seq": seq, "kind": kind, "code": code, "security_title": title, "date": day,
+            "shares": shares, "price": price}
+
+
+#: A Form 4 filed on 2026-08-24 and its 4/A, filed on 2026-08-27 and naming that day as the original's.
+ORIGINAL = _filing_row("O", "2026-08-24")
+AMENDMENT = _filing_row("A", "2026-08-27", form="4/A", original="2026-08-24")
+
+
+@pytest.mark.parametrize("restating, restated", [
+    (_trade_row("A"), True),  # the same trade again
+    (_trade_row("A", code="P"), True),  # the same but for its code: a code corrected (a purchase filed as a sale)
+    (_trade_row("A", day="2026-08-19"), True),  # its date corrected: the same shares and price
+    (_trade_row("A", shares=90.0), True),  # its shares corrected: the same date
+    (_trade_row("A", price=11.0), True),  # its price corrected
+    (_trade_row("A", title="common  stock"), True),  # the title's case and spacing aside
+    (_trade_row("A", day="2026-08-21", shares=90.0), False),  # another day, other shares: a trade added
+    (_trade_row("A", code="P", shares=90.0), False),  # another code and other shares: a trade added
+    (_trade_row("A", code="P", day="2026-08-19"), False),  # another code and another day: a trade added
+    (_trade_row("A", kind="derivative"), False),  # the other table
+    (_trade_row("A", title="Series A Preferred Stock"), False),  # another security
+])
+def test_an_amendment_restates_a_trade_of_the_same_kind_code_and_security_on_its_day_or_in_its_amount(
+        restating, restated):
+    amended_by, superseded = supersessions([ORIGINAL, AMENDMENT], [_trade_row("O"), restating])
+    assert amended_by == {"O": "A"}  # the filing-level note, restated or not
+    assert superseded == ({("O", 0): "A"} if restated else {})
+
+
+def test_trades_are_matched_one_for_one():
+    # Two lots sold the same day at the same price; the amendment restates one: the other stands.
+    _, superseded = supersessions([ORIGINAL, AMENDMENT], [_trade_row("O", 0), _trade_row("O", 1), _trade_row("A")])
+    assert superseded == {("O", 0): "A"}
+    # Each of the amendment's trades restates one: the second, its date corrected, finds the lot left.
+    _, superseded = supersessions([ORIGINAL, AMENDMENT], [
+        _trade_row("O", 0), _trade_row("O", 1, day="2026-08-21"),
+        _trade_row("A", 0), _trade_row("A", 1, day="2026-08-22")])
+    assert superseded == {("O", 0): "A", ("O", 1): "A"}
+
+
+def test_the_same_trade_first_then_the_same_amount_then_the_same_day():
+    # The 02-22 withholding of 200 shares is the 02-23 one with its date corrected, not the 02-22 one of 100.
+    _, superseded = supersessions([ORIGINAL, AMENDMENT], [
+        _trade_row("O", 0, code="F", day="2025-02-22", shares=100.0), _trade_row("O", 1, code="F", day="2025-02-23",
+                                                                                 shares=200.0),
+        _trade_row("A", 0, code="F", day="2025-02-22", shares=200.0)])
+    assert superseded == {("O", 1): "A"}
+    # An exact restatement claims its trade before another trade's corrected amount can.
+    _, superseded = supersessions([ORIGINAL, AMENDMENT], [
+        _trade_row("O", 0, day="2026-08-20", shares=100.0), _trade_row("O", 1, day="2026-08-21", shares=50.0),
+        _trade_row("A", 0, day="2026-08-21", shares=100.0), _trade_row("A", 1, day="2026-08-20", shares=100.0)])
+    assert superseded == {("O", 0): "A", ("O", 1): "A"}
+
+
+def test_a_code_correction_comes_right_after_the_exact_matches():
+    # A sale and a purchase of 100 at $10 on 08-20: the 4/A's purchase is the purchase again, not the sale corrected.
+    _, superseded = supersessions([ORIGINAL, AMENDMENT], [
+        _trade_row("O", 0, code="S"), _trade_row("O", 1, code="P"), _trade_row("A", 0, code="P")])
+    assert superseded == {("O", 1): "A"}
+    # A sale on 08-20 and a purchase on 08-21, alike otherwise: the 4/A's purchase on 08-20 is the sale with its code
+    # corrected, before it could be the purchase with its date corrected.
+    _, superseded = supersessions([ORIGINAL, AMENDMENT], [
+        _trade_row("O", 0, code="S"), _trade_row("O", 1, code="P", day="2026-08-21"), _trade_row("A", 0, code="P")])
+    assert superseded == {("O", 0): "A"}
+
+
+def test_only_the_same_owners_filing_is_amended():
+    # Two officers' tax withholdings filed the same day look alike; the 4/A is the first officer's.
+    filings = [_filing_row("O-1", "2026-08-24", owner="1"), _filing_row("O-2", "2026-08-24", owner="2"),
+               _filing_row("A", "2026-08-27", form="4/A", owner="1", original="2026-08-24")]
+    amended_by, superseded = supersessions(filings, [_trade_row("O-1"), _trade_row("O-2"), _trade_row("A")])
+    assert (amended_by, superseded) == ({"O-1": "A"}, {("O-1", 0): "A"})
+
+
+def test_an_amendment_amends_the_filing_of_its_original_filing_day_only():
+    # The original of 2026-08-24 isn't stored (before the window, say): a later Form 4 isn't what the 4/A amends.
+    filings = [_filing_row("O-2", "2026-08-25"), AMENDMENT]
+    assert supersessions(filings, [_trade_row("O-2"), _trade_row("A")]) == ({}, {})
+
+
+def test_the_period_of_report_chooses_between_the_days_filings():
+    # Two Form 4s by one owner on 2026-08-24, for 08-18 and 08-20: the 4/A is for 08-20.
+    filings = [_filing_row("O-2", "2026-08-24", period="2026-08-20"),
+               _filing_row("O-9", "2026-08-24", period="2026-08-18"),
+               _filing_row("A", "2026-08-27", form="4/A", original="2026-08-24", period="2026-08-20")]
+    trades = [_trade_row("O-2", day="2026-08-20"), _trade_row("O-9", day="2026-08-18"),
+              _trade_row("A", day="2026-08-20")]
+    assert supersessions(filings, trades) == ({"O-2": "A"}, {("O-2", 0): "A"})
+
+
+def test_a_4a_of_a_4a_restates_the_first_amendments_trade():
+    filings = [ORIGINAL, AMENDMENT, _filing_row("A-2", "2026-09-02", form="4/A", original="2026-08-27")]
+    trades = [_trade_row("O", shares=100.0), _trade_row("A", shares=90.0), _trade_row("A-2", shares=95.0)]
+    assert supersessions(filings, trades) == ({"O": "A", "A": "A-2"}, {("O", 0): "A", ("A", 0): "A-2"})
+
+
+def test_a_second_amendment_of_the_same_original_restates_the_first_ones_trade():
+    # Both 4/As name the original's filing day; the second restates the trade the first one restated.
+    filings = [ORIGINAL, AMENDMENT, _filing_row("A-2", "2026-09-02", form="4/A", original="2026-08-24")]
+    trades = [_trade_row("O", shares=100.0), _trade_row("A", shares=90.0), _trade_row("A-2", shares=95.0)]
+    assert supersessions(filings, trades) == ({"O": "A-2"}, {("O", 0): "A", ("A", 0): "A-2"})
+
+
+def test_an_amendment_filed_the_day_of_its_original_amends_it():
+    filings = [_filing_row("Z-0", "2026-08-24"), _filing_row("A-0", "2026-08-24", form="4/A", original="2026-08-24")]
+    assert supersessions(filings, [_trade_row("Z-0"), _trade_row("A-0", shares=90.0)]) == (
+        {"Z-0": "A-0"}, {("Z-0", 0): "A-0"})
+
+
+# BUG-356: "ex-officio" means by virtue of office, not former (made-up titles; the census of the real ones:
+# qa/evidence/bug353-investigation.txt).
+@pytest.mark.parametrize("title", [
+    "CEO (Ex-Officio)", "President, CEO & Director (Ex-Officio Trustee)", "Chief Financial Officer (ex-officio)",
+    "Ex-Officio Director & CEO", "Ex-officio Trustee and CFO",
+])
+def test_an_ex_officio_chief_is_a_sitting_chief(title):
+    assert ceo_or_cfo(title, "XYZ") is True
+
+
+@pytest.mark.parametrize("title", ["Ex-CEO", "CEO (Ex-CEO)", "Ex-Officer & CEO", "CEO (Ex-Office)"])
+def test_ex_before_anything_else_is_still_past(title):
+    assert ceo_or_cfo(title, "XYZ") is False

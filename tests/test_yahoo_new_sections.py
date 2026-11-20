@@ -5,6 +5,8 @@ All tests monkeypatch ``yf.Ticker`` with fakes exposing only the surface
 ``fetch_all`` touches — no network calls.
 """
 
+import json
+
 import pandas as pd
 import pytest
 
@@ -62,7 +64,8 @@ class _FakeTicker:
 
     @property
     def dividends(self):
-        return pd.Series(dtype=float)
+        # A chart Yahoo served without a payment, as yfinance gives it: its "Dividends" column, none of them non-zero.
+        return pd.Series(dtype=float, name="Dividends", index=pd.DatetimeIndex([], tz="America/New_York"))
 
     @property
     def major_holders(self):
@@ -388,3 +391,180 @@ def test_a_run_whose_dividends_fail_keeps_its_splits(monkeypatch):
     stock.merge_yahoo_data(data)
     assert [w for w in stock.warnings if "dividend history" in w] == [
         "Yahoo Finance: dividend history unavailable (chart request failed); the stored dividends weren't refreshed"]
+
+
+# ---- BUG-107: yfinance answers a failed chart request with an empty history, not an error ----
+
+def _silent_failure_frame():
+    """yfinance's answer to a chart request that failed (``utils.empty_df``): no rows, and no event columns."""
+    return pd.DataFrame(index=pd.DatetimeIndex([], name="Date"),
+                        data={c: [] for c in ("Open", "High", "Low", "Close", "Adj Close", "Volume")})
+
+
+class _FakeTickerChartFailsSilently(_FakeTicker):
+    """yfinance 1.0 when the chart request fails with a cold timezone cache ("possibly delisted; no timezone found"),
+    or Yahoo answers it with an error: history() gives an empty frame without the "Dividends" and "Stock Splits"
+    columns, and dividends and splits an unnamed empty Series, rather than raise."""
+
+    def history(self, period="1y", interval="1d", **kwargs):
+        return _silent_failure_frame()
+
+    @property
+    def dividends(self):
+        return pd.Series(dtype=object)
+
+    @property
+    def splits(self):
+        return pd.Series(dtype=object)
+
+
+_NO_HISTORY = "yfinance returned no history, its answer to a failed request"
+
+
+def test_a_chart_request_yfinance_failed_silently_isnt_a_stock_without_dividends(monkeypatch):
+    # BUG-107: an outage read "No dividend history (non-dividend paying stock)" with no warning, for KO, JNJ and PG.
+    _patch_ticker(monkeypatch, _FakeTickerChartFailsSilently)
+    data = YahooHandler(rate_limit_delay=0.0).fetch_all("KO")
+    assert "note" not in data["dividend_history"] and "dividend_payments" not in data["dividend_history"]
+    stock = StockData(ticker="KO")
+    stock.merge_yahoo_data(data)
+    assert [w for w in stock.warnings if "history unavailable" in w] == [
+        f"Yahoo Finance: dividend history unavailable ({_NO_HISTORY}); the stored dividends weren't refreshed",
+        f"Yahoo Finance: split history unavailable ({_NO_HISTORY}); the stored splits weren't refreshed",
+        f"Yahoo Finance: price history unavailable ({_NO_HISTORY}); the stored daily bars weren't refreshed",
+    ]
+
+
+def test_a_chart_yahoo_served_without_a_payment_is_a_stock_without_dividends(monkeypatch):
+    class Served(_FakeTicker):
+        @property
+        def splits(self):
+            return pd.Series(dtype=float, name="Stock Splits", index=pd.DatetimeIndex([], tz="America/New_York"))
+
+    _patch_ticker(monkeypatch, Served)
+    data = YahooHandler(rate_limit_delay=0.0).fetch_all("TSLA")
+    assert data["dividend_history"]["note"] == "No dividend history (non-dividend paying stock)"
+    assert data["dividend_history"]["dividend_payments"] == [] and data["splits"] == []
+    assert not [w for w in data.get("warnings", []) if "history unavailable" in w]
+
+
+def test_a_served_history_without_a_day_is_no_failure(monkeypatch):
+    # A chart Yahoo served holds the event columns, rows or not: only their absence says the request failed.
+    class Empty(_FakeTicker):
+        def history(self, period="1y", interval="1d", **kwargs):
+            return _silent_failure_frame().assign(Dividends=[], **{"Stock Splits": []})
+
+    _patch_ticker(monkeypatch, Empty)
+    data = YahooHandler(rate_limit_delay=0.0).fetch_all("AAA")
+    assert data["price_bars"] == []
+    assert not [w for w in data.get("warnings", []) if "price history" in w]
+
+
+def test_a_failed_split_history_request_is_a_run_warning(monkeypatch):
+    class SplitsFail(_FakeTicker):
+        @property
+        def splits(self):
+            raise RuntimeError("chart request failed")
+
+    _patch_ticker(monkeypatch, SplitsFail)
+    data = YahooHandler(rate_limit_delay=0.0).fetch_all("AAA")
+    assert data["splits"] == []
+    assert [w for w in data["warnings"] if "split history" in w] == [
+        "split history unavailable (chart request failed); the stored splits weren't refreshed"]
+
+
+def test_a_quote_whose_split_history_failed_isnt_stored(monkeypatch):
+    # The refresh stores a price only once it knows no split came since the last collection (BUG-093): a split history
+    # yfinance failed to get is no answer to that. The quote itself answered.
+    _patch_ticker(monkeypatch, _FakeTickerChartFailsSilently)
+    quote = YahooHandler(rate_limit_delay=0.0).fetch_quote("AAA")
+    assert quote == {"error": f"Yahoo's split history unavailable ({_NO_HISTORY}), so the quote can't be checked "
+                              "for a split since the last collection"}
+
+
+def test_a_quote_whose_chart_was_served_is_stored_with_its_payments(monkeypatch):
+    _patch_ticker(monkeypatch, _FakeTicker)
+    quote = YahooHandler(rate_limit_delay=0.0).fetch_quote("AAA")
+    assert "error" not in quote and quote["splits"] == [{"date": "2024-06-10", "ratio": 2.0}]
+    assert quote["dividend_history"]["note"] == "No dividend history (non-dividend paying stock)"
+
+
+# ---- the same through the installed yfinance, every request of it answered without the network ----
+
+class _TzCache:
+    """yfinance's timezone cache, holding *tz* for every ticker (None: cold)."""
+
+    def __init__(self, tz):
+        self.tz = tz
+
+    def lookup(self, ticker):
+        return self.tz
+
+    def store(self, ticker, tz):
+        pass
+
+
+class _ChartResponse:
+    """Yahoo's v8 chart answer for three days of a stock, with a dividend on the second when *paid*."""
+
+    status_code = 200
+    url = "https://query2.finance.yahoo.com/v8/finance/chart/"
+
+    def __init__(self, paid):
+        days = [1704205800, 1704292200, 1704378600]  # 2024-01-02 to 01-04, at the open
+        self.payload = {"chart": {"error": None, "result": [{
+            "meta": {"currency": "USD", "symbol": "AAA", "instrumentType": "EQUITY", "priceHint": 2,
+                     "exchangeTimezoneName": "America/New_York", "timezone": "EST", "gmtoffset": -18000,
+                     "validRanges": ["1d", "5d", "max"], "regularMarketPrice": 60.0},
+            "timestamp": days,
+            "events": {"dividends": {str(days[1]): {"amount": 0.46, "date": days[1]}}} if paid else {},
+            "indicators": {"quote": [{"open": [59.0, 59.5, 60.0], "high": [60.0] * 3, "low": [58.0] * 3,
+                                      "close": [59.5, 60.0, 60.0], "volume": [1000] * 3}],
+                           "adjclose": [{"adjclose": [59.5, 60.0, 60.0]}]}}]}}
+        self.text = json.dumps(self.payload)
+
+    def json(self):
+        return self.payload
+
+    def raise_for_status(self):
+        pass
+
+
+def _yfinance_answering(monkeypatch, tz, chart=None):
+    """The installed yfinance with its timezone cache holding *tz*, and every request of it failing (no network) but
+    the chart's, answered by *chart* when given."""
+    import yfinance.cache
+    import yfinance.data
+
+    def get(self, url, *args, **kwargs):
+        if chart is not None and "/v8/finance/chart/" in url:
+            return chart
+        raise OSError("no network")
+
+    for method in ("get", "cache_get", "post"):
+        monkeypatch.setattr(yfinance.data.YfData, method, get)
+    monkeypatch.setattr(yfinance.cache, "get_tz_cache", lambda: _TzCache(tz))
+
+
+@pytest.mark.parametrize("tz", [None, "America/New_York"])
+def test_the_installed_yfinances_failed_chart_request_is_a_warning(monkeypatch, tz):
+    # BUG-107's repro: with a cold timezone cache yfinance logs the failure and returns an empty history; with a warm
+    # one it raises. Either way the run says the dividends, splits and bars weren't refreshed.
+    _yfinance_answering(monkeypatch, tz)
+    data = YahooHandler(rate_limit_delay=0.0).fetch_all("JNJ")
+    assert "note" not in data["dividend_history"]
+    assert [w.split(" (")[0] for w in data["warnings"] if "history unavailable" in w] == [
+        "dividend history unavailable", "split history unavailable", "price history unavailable"]
+
+
+@pytest.mark.parametrize("paid, payments, note", [
+    (False, [], "No dividend history (non-dividend paying stock)"),
+    (True, [{"date": "2024-01-03", "amount": 0.46}], None),
+])
+def test_the_installed_yfinances_served_chart_is_read_as_served(monkeypatch, paid, payments, note):
+    _yfinance_answering(monkeypatch, "America/New_York", _ChartResponse(paid))
+    data = YahooHandler(rate_limit_delay=0.0).fetch_all("AAA")
+    assert data["dividend_history"]["dividend_payments"] == payments
+    assert data["dividend_history"].get("note") == note
+    assert len(data["price_bars"]) == 3 and data["splits"] == []
+    assert not [w for w in data["warnings"] if "history unavailable" in w]

@@ -41,8 +41,9 @@ def classify_sic(sic: Optional[Any]) -> str:
     # Depository institutions, holding companies, broker-dealers, finance.
     if 6020 <= code <= 6299 or code == 6712:
         return BANK
-    # Insurance carriers and agents (life, health, P&C, title, surety).
-    if 6300 <= code <= 6411:
+    # Insurance carriers and agents (life, health, P&C, title, surety). Hospital and medical service plans (6324,
+    # UNH) are managed care, valued on their earnings as a general company (Q9).
+    if 6300 <= code <= 6411 and code != 6324:
         return INSURANCE
     # Real estate investment trusts.
     if code == 6798:
@@ -56,11 +57,27 @@ def classify_sic(sic: Optional[Any]) -> str:
     return GENERAL
 
 
-def classify_submissions(submissions: Optional[dict]) -> str:
-    """Convenience: classify from a SEC submissions dict (uses its ``sic``)."""
+#: The balance sheet's deposits, as the canonical ``total_deposits`` reads them.
+DEPOSIT_TAGS = ("Deposits", "InterestBearingDepositLiabilities", "DepositsTotal")
+
+
+def classify_submissions(submissions: Optional[dict], company_facts: Optional[dict] = None) -> str:
+    """Classify from a SEC submissions dict (its ``sic``), and the companyfacts when there are any.
+
+    SIC 6020-6299 holds asset managers and finance companies beside banks (BLK 6211; BX, KKR 6282). A bank also has
+    deposits on its balance sheet: a filer in that range whose *company_facts* tag none is valued as a general
+    company (Q9). Without the facts (a failed request) the SIC decides, as before."""
     if not submissions:
         return GENERAL
-    return classify_sic(submissions.get("sic"))
+    sector = classify_sic(submissions.get("sic"))
+    if sector == BANK and company_facts is not None and not _has_deposits(company_facts):
+        return GENERAL
+    return sector
+
+
+def _has_deposits(company_facts: dict) -> bool:
+    us_gaap = ((company_facts or {}).get("facts") or {}).get("us-gaap") or {}
+    return any(any(entries for entries in (us_gaap.get(tag) or {}).get("units", {}).values()) for tag in DEPOSIT_TAGS)
 
 
 def _to_int(value: Optional[Any]) -> Optional[int]:

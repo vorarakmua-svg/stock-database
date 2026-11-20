@@ -1,16 +1,18 @@
-"""Point-in-time as-of-date queries over the vintaged annual store.
+"""Point-in-time as-of-date queries over the annual record as it was known on each filing date.
 
-A read-only consumer of the ``financials_annual_vintages`` table (see
-``exporters/sqlite_store.py``). For a given date ``D``, each figure of an annual period
-resolves to the latest filing made on or before ``D`` that reports it — so backtests read
-fundamentals with no look-ahead bias. The connection is opened ``mode=ro``; the reader
-never mutates data.
+A read-only consumer of the ``financials_annual_known`` table (see ``exporters/sqlite_store.py``): the collection
+replays the annual record (``build_annual_record``) on the facts filed by each filing date and stores a year's row
+each day it changed, so the record as known on any date ``D`` is each year's latest row on or before ``D`` (see
+``parsers/annual_snapshots.py``). Reading it is a lookup, with no selection rule of its own, so backtests read the
+fundamentals the record held then, with no look-ahead. The connection is opened ``mode=ro``; the reader never
+mutates data.
 
-A vintage with a NULL ``filed_date`` (unknown filing date) is deliberately invisible to
-every as-of query — ``NULL <= D`` is never true — which keeps resolution on the safe side
-of no-look-ahead (omit rather than leak unknown-timed data).
+A database collected before the snapshots, or a ticker not re-collected since, has none: every as-of query reads
+nothing for it (no fallback to another rule), and :meth:`AsOfReader.has_snapshots` tells it apart from a year not
+yet filed.
 """
 
+import json
 import logging
 import sqlite3
 from datetime import date, datetime
@@ -22,9 +24,16 @@ from ..exporters.sqlite_store import _CANONICAL_COLUMNS, read_only_uri
 # Accepts an ISO ``YYYY-MM-DD`` string or a date/datetime (normalized before querying).
 AsOfDate = Union[str, date]
 
+#: A period's provenance: its latest contributing filing's (as the vintages gave it), and the snapshot's own
+#: ``known_from`` (the day the record took the row) and ``known_accn`` (that day's latest accession).
+_PROVENANCE = ("ticker", "fiscal_year", "accn", "filed_date", "period_end", "form", "calendar_year", "known_from",
+               "known_accn")
+#: The figures a ``carried_from`` entry may name.
+_FIGURES = frozenset(_CANONICAL_COLUMNS)
+
 
 class AsOfReader:
-    """Resolve vintaged annual data as it was known on a given date."""
+    """Read the annual record as it was known on a given date."""
 
     def __init__(self, db_path: Union[str, Path],
                  logger: Optional[logging.Logger] = None) -> None:
@@ -32,6 +41,9 @@ class AsOfReader:
         self.logger = logger or logging.getLogger(__name__)
         self._conn = sqlite3.connect(read_only_uri(self.db_path), uri=True)
         self._conn.row_factory = sqlite3.Row
+        self._built = self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'financials_annual_known'"
+        ).fetchone() is not None
 
     def close(self) -> None:
         self._conn.close()
@@ -56,40 +68,48 @@ class AsOfReader:
             return as_of_date.isoformat()
         return str(as_of_date)
 
+    def has_snapshots(self, ticker: str) -> bool:
+        """Whether *ticker*'s as-of data is built: it has rows in ``financials_annual_known``. False for a database
+        or a ticker collected before the snapshots."""
+        if not self._built:
+            return False
+        return self._conn.execute(
+            "SELECT 1 FROM financials_annual_known WHERE ticker = ? LIMIT 1", (ticker,)
+        ).fetchone() is not None
+
+    def has_company(self, ticker: str) -> bool:
+        """Whether *ticker* is a collected company (a ``companies`` row), its as-of data built or not."""
+        try:
+            return self._conn.execute(
+                "SELECT 1 FROM companies WHERE ticker = ? LIMIT 1", (ticker,)
+            ).fetchone() is not None
+        except sqlite3.OperationalError:  # a database without the table knows no company
+            return False
+
     def as_of_annual(
         self, ticker: str, fiscal_year: int, as_of_date: AsOfDate
     ) -> Optional[Dict[str, Any]]:
-        """The annual period for ``(ticker, fiscal_year)`` as known on ``as_of_date``.
+        """The annual period for ``(ticker, fiscal_year)`` as known on ``as_of_date``: the year's row with the
+        latest ``known_from`` on or before it.
 
-        Each figure is the one last filed on or before ``as_of_date``. A 10-K repeats only
-        part of each earlier year (the income and cash-flow statements of two years back,
-        the balance sheet of one, the equity statement's opening balances), so a figure the
-        latest filing leaves out keeps the value an earlier filing gave it (BUG-110).
-        Returns a plain dict (all canonical line items + provenance metadata), or ``None``
-        if the year had not been filed yet as of that date. The provenance (``accn``,
-        ``filed_date``, ``form``, ``period_end``) is the latest filing's, and
-        ``carried_from`` names the filing of each figure last filed earlier:
-        ``{field: {"accn", "filed_date", "form"}}``.
+        Returns a plain dict (all canonical line items + provenance metadata), or ``None`` if the year wasn't in the
+        record as of that date: not filed yet, left the record that day (a ``present`` 0 row), or no snapshots built
+        for the ticker. The provenance (``accn``, ``filed_date``, ``form``) is the year's latest contributing
+        filing's; ``period_end``, ``calendar_year``, ``known_from`` (the day the record took this row) and
+        ``known_accn`` (that day's latest accession) are the row's, and ``carried_from`` names the filing of each
+        figure read from an earlier one: ``{field: {"accn", "filed_date", "form"}}``.
         """
-        cutoff = self._norm_date(as_of_date)
-        rows = self._conn.execute(
-            "SELECT * FROM financials_annual_vintages "
-            "WHERE ticker = ? AND fiscal_year = ? AND filed_date <= ? "
-            "ORDER BY filed_date DESC, accn DESC",
-            (ticker, int(fiscal_year), cutoff),
-        ).fetchall()
-        if not rows:
+        if not self._built:
             return None
-        period = dict(rows[0])
-        figures = [key for key in _CANONICAL_COLUMNS if key in period]
-        carried: Dict[str, Dict[str, Any]] = {}
-        for row in rows[1:]:  # newest first, so each gap takes the latest figure filed
-            for key in figures:
-                if period[key] is None and row[key] is not None:
-                    period[key] = row[key]
-                    carried[key] = {"accn": row["accn"], "filed_date": row["filed_date"], "form": row["form"]}
-        period["carried_from"] = carried
-        return period
+        row = self._conn.execute(
+            "SELECT * FROM financials_annual_known "
+            "WHERE ticker = ? AND fiscal_year = ? AND known_from <= ? "
+            "ORDER BY known_from DESC LIMIT 1",
+            (ticker, int(fiscal_year), self._norm_date(as_of_date)),
+        ).fetchone()
+        if row is None or not row["present"]:
+            return None
+        return _period(row)
 
     def as_of_value(
         self, ticker: str, fiscal_year: int, field: str, as_of_date: AsOfDate
@@ -101,23 +121,38 @@ class AsOfReader:
     def history_as_of(
         self, ticker: str, as_of_date: AsOfDate, years_back: Optional[int] = None
     ) -> Dict[int, Dict[str, Any]]:
-        """Every fiscal year known as of ``as_of_date``, each resolved to its latest
-        vintage filed <= that date. Keyed by fiscal_year, newest first; ``years_back``
-        trims to the most recent N years.
+        """Every fiscal year in the record as of ``as_of_date``, each read as :meth:`as_of_annual` reads it. Keyed
+        by fiscal_year, newest first; ``years_back`` trims to the most recent N years the record held then (a year
+        that had left it takes no place). ``years_back`` None, 0 or negative trims nothing.
         """
+        if not self._built:
+            return {}
         cutoff = self._norm_date(as_of_date)
-        cur = self._conn.execute(
-            "SELECT DISTINCT fiscal_year FROM financials_annual_vintages "
-            "WHERE ticker = ? AND filed_date <= ? "
-            "ORDER BY fiscal_year DESC",
+        years = [row["fiscal_year"] for row in self._conn.execute(
+            "SELECT DISTINCT fiscal_year FROM financials_annual_known "
+            "WHERE ticker = ? AND known_from <= ? ORDER BY fiscal_year DESC",
             (ticker, cutoff),
-        )
-        years = [row["fiscal_year"] for row in cur.fetchall()]
-        if years_back:
-            years = years[:years_back]
+        )]
         result: Dict[int, Dict[str, Any]] = {}
         for fy in years:
+            if years_back is not None and years_back > 0 and len(result) >= years_back:
+                break
             period = self.as_of_annual(ticker, fy, cutoff)
             if period is not None:
                 result[int(fy)] = period
         return result
+
+
+def _period(row: sqlite3.Row) -> Dict[str, Any]:
+    """A stored snapshot row as the as-of period: its provenance, the canonical figures and ``carried_from`` (each
+    figure whose filing, in the row's ``source_filings``, isn't the row's latest one). A canonical column the table
+    lacks (a database stored before it, which the read-only reader can't migrate) reads None."""
+    columns = set(row.keys())
+    period: Dict[str, Any] = {key: row[key] for key in _PROVENANCE}
+    period.update({key: row[key] if key in columns else None for key in _CANONICAL_COLUMNS})
+    filings = json.loads(row["source_filings"]) if row["source_filings"] else {}
+    period["carried_from"] = {
+        key: {"accn": filing.get("accn"), "filed_date": filing.get("filed"), "form": filing.get("form")}
+        for key, filing in sorted(filings.items())
+        if filing and key in _FIGURES and period[key] is not None and filing.get("accn") != row["accn"]}
+    return period

@@ -34,8 +34,8 @@ class WebSettings:
                                           ``off`` (case-insensitive) disable full
                                           collection; default ``True`` when unset
                                           (enabled unless set to a falsy value).
-          STOCK_WEB_ALLOW_QUOTE_REFRESH — same truthy set enables the lightweight
-                                          on-demand quote refresh; unlike
+          STOCK_WEB_ALLOW_QUOTE_REFRESH — same truthy set enables the on-demand
+                                          quote refresh; unlike
                                           STOCK_WEB_ALLOW_COLLECTION, this
                                           defaults to ``True`` when unset (quote
                                           refresh is low-risk/low-cost, so it is

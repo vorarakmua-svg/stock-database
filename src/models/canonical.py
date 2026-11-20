@@ -36,20 +36,27 @@ CanonicalFinancials = create_model(  # type: ignore[call-overload]
     **_field_defs,
 )
 
+# A period's provenance maps: the tag (``_source_tags``) and the filing (``_source_filings``) each figure came from.
+_PROVENANCE = ("_source_tags", "_source_filings")
+#: The day a fiscal year's period ends (the parser's ``_year_end``): the annual record's to decide whether the year has
+#: ended (``build_annual_record``), no figure of the period's.
+_YEAR_END = "_year_end"
+
 
 def validate_period(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
     """Validate/coerce one period dict against :data:`CanonicalFinancials`.
 
-    The provenance map (``_source_tags``) is preserved verbatim and not validated.
+    The provenance maps (``_source_tags``, ``_source_filings``) are preserved verbatim and not validated; a year's
+    ``_year_end`` is left out.
 
     Returns:
         ``(clean, errors)`` — ``clean`` is the coerced dict (only present values,
-        plus ``_source_tags`` if it was given); ``errors`` lists human-readable
+        plus each provenance map that was given); ``errors`` lists human-readable
         validation messages (empty when valid). On failure the original ``raw`` is
         returned so collection is never lost.
     """
-    source_tags = raw.get("_source_tags")
-    payload = {k: v for k, v in raw.items() if k != "_source_tags"}
+    provenance = {k: raw[k] for k in _PROVENANCE if raw.get(k) is not None}
+    payload = {k: v for k, v in raw.items() if k not in _PROVENANCE and k != _YEAR_END}
 
     try:
         model = CanonicalFinancials.model_validate(payload)
@@ -61,6 +68,5 @@ def validate_period(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
         return raw, messages
 
     clean = model.model_dump(exclude_none=True)
-    if source_tags is not None:
-        clean["_source_tags"] = source_tags
+    clean.update(provenance)
     return clean, []

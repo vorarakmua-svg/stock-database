@@ -24,8 +24,8 @@
       </thead>
       <tbody>
         {% for row in rows %}
-        <tr>
-          <td class="row-label hp-bar-date">{{ row.date }}</td>
+        <tr{% if row.flag %} class="hp-{{ row.flag }}" title="{{ flag_notes[row.flag] }}"{% endif %}>
+          <td class="row-label hp-bar-date">{{ row.date }}{% if row.flag %}<span class="hp-flag hp-flag-row">{{ row.flag }}</span>{% endif %}</td>
           <td class="num">{{ row.open }}</td>
           <td class="num">{{ row.high }}</td>
           <td class="num">{{ row.low }}</td>
@@ -36,6 +36,9 @@
       </tbody>
     </table>
   </div>
+  {% for flag, note in flags %}
+  <p class="muted hp-flag-key"><span class="hp-flag">{{ flag }}</span> {{ note }}.</p>
+  {% endfor %}
   {% else %}
   <div class="empty-state">No price history collected.</div>
   {% endif %}

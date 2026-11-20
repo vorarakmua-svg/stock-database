@@ -17,7 +17,7 @@ from fastapi.responses import Response
 from ..dependencies import get_reader
 from ..repository import Reader
 from ..screener import parse_screen_params
-from .stocks_api import resample_bars, resolve_interval, resolve_range_start
+from .stocks_api import range_anchor, resample_bars, resolve_interval, resolve_range_start
 
 router = APIRouter(prefix="/api/export", tags=["export"])
 
@@ -86,7 +86,7 @@ def export_stock_bars(
     if r.get_company(ticker) is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
     try:
-        start = resolve_range_start(range)
+        start = resolve_range_start(range, range_anchor(r, ticker))
         resolved_interval = resolve_interval(interval, range)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

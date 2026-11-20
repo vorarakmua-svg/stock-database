@@ -4,17 +4,20 @@ import json
 import logging
 import os
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime
+from itertools import islice
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
-from ..config import AppConfig, default_config
+from ..config import DEFAULT_BATCH_SIZE, AppConfig, default_config
 from ..exporters.csv_exporter import CSVExporter
 from ..exporters.json_exporter import JSONExporter
-from ..exporters.sqlite_store import SQLiteStore, read_only_uri
+from ..exporters.sqlite_store import SQLiteStore, StoreResult, read_only_uri
 from ..models.canonical import validate_period
 from ..models.stock_data import StockData
+from ..parsers.annual_record import build_annual_record
+from ..parsers.annual_snapshots import build_snapshots
 from ..parsers.calculated_metrics import CalculatedMetrics
 from ..parsers.derived_fields import apply_derivations
 from ..parsers.share_scale import normalize_share_scale
@@ -37,6 +40,82 @@ from .yahoo_handler import YahooHandler
 NO_ANNUAL_FINANCIALS = "SEC EDGAR: no annual financials"
 #: How it begins for a record that stops where the filer's IFRS reports begin.
 STALE_ANNUAL_FINANCIALS = "SEC EDGAR: annual financials stop"
+#: How it begins for the latest report the SEC's submissions list, which its companyfacts lack (BUG-251): the record
+#: stops before it, or the run read it from the filing's own XBRL (Q17).
+REPORT_WITHOUT_FACTS = "SEC EDGAR: the companyfacts lack"
+#: The tickers a collection's worker has submitted at most: one fetching and one waiting its turn, so the workers go
+#: on while the calling thread exports a batch, and the finished companies it hasn't taken yet stay few.
+IN_FLIGHT_PER_WORKER = 2
+#: How long a collection waits for a fetch to finish before it waits again: a timed wait, so Ctrl+C is seen within
+#: this even where a thread's untimed wait doesn't wake for it (Windows).
+POLL_SECONDS = 0.5
+
+
+class CollectionInterrupted(KeyboardInterrupt):
+    """Ctrl+C stopped a collection (``StockDataFetcher.fetch_and_export``). *summary* is its summary so far: the
+    batches it exported and stored. The tickers not started were cancelled, and the companies fetched since the last
+    batch, like the few still fetching, weren't exported."""
+
+    def __init__(self, summary: Dict[str, Any]) -> None:
+        super().__init__(f"collection interrupted after storing {summary['stored']} companies")
+        self.summary = summary
+
+
+class _Tally:
+    """A collection's counts as it goes: the companies fetched and how, the batches exported and what the database
+    stored, so nothing of a batch need be kept once it is exported."""
+
+    def __init__(self, requested: int, batch_size: int) -> None:
+        self.requested = requested
+        self.batch_size = batch_size
+        self.fetched = self.successful = self.with_warnings = self.with_errors = 0
+        self.batches = self.exported = self.stored = 0
+        self.not_stored: Dict[str, str] = {}
+        self.sqlite_errors: List[str] = []
+        self.export_paths: Dict[str, List[Path]] = {}
+        self.benchmark_done = False
+        #: The stored companies whose batch's valuations haven't finished.
+        self.unvalued: List[str] = []
+
+    def fetched_one(self, stock: StockData) -> None:
+        self.fetched += 1
+        self.successful += 0 if stock.errors else 1
+        self.with_warnings += 1 if stock.warnings else 0
+        self.with_errors += 1 if stock.errors else 0
+
+    def exported_batch(self, count: int, paths: Dict[str, List[Path]], stored: Optional[StoreResult]) -> None:
+        self.batches += 1
+        self.exported += count
+        for kind, written in paths.items():
+            known = self.export_paths.setdefault(kind, [])
+            known.extend(path for path in written if path not in known)
+        if stored is not None:
+            self.stored += len(stored.stored)
+            self.not_stored.update(stored.failed)
+            if stored.error is not None:
+                self.sqlite_errors.append(f"batch {self.batches}: {stored.error}")
+
+    def summary(self, start: datetime, interrupted: bool) -> Dict[str, Any]:
+        end = datetime.now()
+        return {
+            "tickers_requested": self.requested,
+            "tickers_fetched": self.fetched,
+            "successful": self.successful,
+            "with_warnings": self.with_warnings,
+            "with_errors": self.with_errors,
+            "batch_size": self.batch_size,
+            "batches": self.batches,
+            "exported": self.exported,
+            "stored": self.stored,
+            "not_stored": dict(self.not_stored),
+            "sqlite_errors": list(self.sqlite_errors),
+            "interrupted": interrupted,
+            "unvalued": list(self.unvalued),
+            "export_paths": {kind: list(paths) for kind, paths in self.export_paths.items()},
+            "duration_seconds": (end - start).total_seconds(),
+            "started_at": start.isoformat(),
+            "completed_at": end.isoformat(),
+        }
 
 
 class StockDataFetcher:
@@ -89,6 +168,7 @@ class StockDataFetcher:
             max_retries=self.config.retry.max_retries,
             base_delay=self.config.retry.base_delay,
             max_delay=self.config.retry.max_delay,
+            cache_dir=self.config.storage.cache_dir,
         )
 
         # Initialize exporters
@@ -132,6 +212,8 @@ class StockDataFetcher:
         stock = StockData(ticker=ticker)
         # Each quarter's split basis, for the trailing years; not a figure to store (BUG-082).
         split_levels: Dict[str, Dict[str, float]] = {}
+        # The annual record's cleaning warnings (share scale, validation), added where the cleaning's always were.
+        annual_warnings: List[str] = []
 
         # Fetch Yahoo Finance data
         if include_yahoo:
@@ -147,31 +229,47 @@ class StockDataFetcher:
             try:
                 sec_data = self.sec_handler.fetch_all(ticker)
                 stock.merge_sec_data(sec_data)
+                # A finance SIC is a bank only if the companyfacts tag deposits (Q9). Without the facts (a failed
+                # request) the SIC alone says bank, and the last good collection's sector stands (BUG-309).
+                if stock.sector_class == "bank" and not sec_data.get("company_facts"):
+                    stored = self._stored_sector(ticker)
+                    if stored and stored != "bank":
+                        stock.sector_class = stored
+                        stock.add_warning(f"SEC EDGAR: sector '{stored}' taken from the stored record "
+                                          "(the companyfacts data is unavailable)")
 
                 # Parse XBRL financials if company facts available
                 annual: Dict[str, Any] = {}
                 if "company_facts" in sec_data and sec_data["company_facts"]:
                     facts = sec_data["company_facts"]
 
-                    annual = self.xbrl_parser.extract_annual_financials(
-                        facts, years_back=years_back
-                    )
-                    # A later filing's tagging error the parser put right (BUG-061).
-                    for fy, period in annual.items():
-                        for r in period.pop("_repairs", []):
-                            stock.add_warning(
-                                f"SEC EDGAR: {ticker} FY{fy} {r['field']} is {r['kept']:.4g}, as earlier "
-                                f"filings report; the filing of {r['filed']} reports {r['dropped']:.4g}, "
-                                f"which looks like a tagging error ({r['kind']})")
+                    record = build_annual_record(self.xbrl_parser, facts, ticker=ticker, years_back=years_back)
+                    annual = record.periods
+                    # The parse's warnings here; the cleaning's where the other statements are cleaned.
+                    for warning in record.warnings[:record.repairs]:
+                        stock.add_warning(warning)
+                    annual_warnings = record.warnings[record.repairs:]
                     quarterly = self.xbrl_parser.extract_quarterly_financials(
                         facts, quarters_back=(years_back * 4 if years_back else None)
                     )
                     split_levels = {end: period.pop("_split_levels") for end, period in quarterly.items()
                                     if "_split_levels" in period}
-                    vintages = self.xbrl_parser.extract_annual_vintages(
-                        facts, years_back=years_back
-                    )
-                    stock.financials_annual_vintages = vintages
+                    # The record as known on each filing day (the as-of snapshots) and each filing's views (its
+                    # vintages, already normalised), replayed on the same facts with the run's years_back. A build
+                    # that fails costs the snapshots alone: the run builds none (financials_annual_known None,
+                    # vintages {}), so the store leaves the stored ones as they were, and the record stands.
+                    try:
+                        snapshots = build_snapshots(self.xbrl_parser, facts, ticker=ticker, years_back=years_back)
+                    except Exception as e:  # noqa: BLE001 - the run's SEC record mustn't go with the snapshots
+                        self.logger.error(f"As-of snapshot error for {ticker}: {e}")
+                        stock.add_warning(f"SEC EDGAR: {ticker}'s as-of snapshots couldn't be built ({e}): the "
+                                          "stored ones are kept")
+                    else:
+                        for warning in snapshots.warnings:
+                            stock.add_warning(warning)
+                        stock.financials_annual_known = snapshots.rows
+                        stock.financials_annual_vintages = snapshots.vintages
+                        stock.years_back = years_back
 
                     stock.merge_parsed_financials(annual, quarterly)
 
@@ -179,6 +277,23 @@ class StockDataFetcher:
                     # taxonomy evolution / firm tag variability never silently
                     # drops data.
                     stock.unmapped_facts = detect_unmapped(facts)
+
+                # A successor read with its predecessor's filings says so (sec_handler.PREDECESSOR_CIKS).
+                if sec_data.get("predecessor_error"):
+                    stock.add_warning(f"SEC EDGAR: {ticker}'s predecessor, CIK {sec_data['predecessor_cik']}, "
+                                      f"couldn't be read ({sec_data['predecessor_error']}), so its history is "
+                                      f"missing from this run")
+                elif sec_data.get("predecessor_cik"):
+                    name = (sec_data.get("submissions") or {}).get("name") or "name unknown"
+                    stock.add_warning(f"SEC EDGAR: {ticker} reads CIK {sec_data['cik']} ({name}) with its "
+                                      f"predecessor's filings, CIK {sec_data['predecessor_cik']} "
+                                      f"({sec_data.get('predecessor_name') or 'name unknown'})")
+
+                # The latest report the submissions list, which the companyfacts lack: the SEC's lag (BUG-251), and
+                # whether the run read it from the filing's own XBRL (Q17). A companyfacts request that failed has its
+                # error.
+                if sec_data.get("missing_report") and "company_facts_error" not in sec_data:
+                    stock.add_warning(self._report_without_facts(ticker, sec_data))
 
                 # An empty record otherwise reads like a short history: say why.
                 if sec_data.get("cik") and not annual:
@@ -235,7 +350,7 @@ class StockDataFetcher:
         # Clean, derive identities, and build the TTM series.
         if stock.financials_annual or stock.financials_quarterly:
             try:
-                self._clean_and_derive(stock, split_levels)
+                self._clean_and_derive(stock, split_levels, annual_warnings)
             except Exception as e:
                 self.logger.warning(f"Data cleaning error for {ticker}: {e}")
                 stock.add_warning(f"Data cleaning: {str(e)}")
@@ -307,20 +422,23 @@ class StockDataFetcher:
         stock.merge_calculated_metrics(metrics)
 
     def _clean_and_derive(self, stock: StockData,
-                          split_levels: Optional[Dict[str, Dict[str, float]]] = None) -> None:
-        """Derive identities, validate/coerce each period, and build the TTM series
-        (*split_levels*: each quarter's split basis, the parser's ``_split_levels``)."""
-        for attr in ("financials_annual", "financials_quarterly"):
-            periods = getattr(stock, attr)
-            if not periods:
-                continue
+                          split_levels: Optional[Dict[str, Dict[str, float]]] = None,
+                          annual_warnings: Sequence[str] = ()) -> None:
+        """Derive identities, validate/coerce each quarter, and build the TTM series
+        (*split_levels*: each quarter's split basis, the parser's ``_split_levels``). The annual record comes cleaned
+        (``build_annual_record``), and the vintages normalised (``build_snapshots``); the record's cleaning's warnings,
+        *annual_warnings*, are added first, as they always were."""
+        for warning in annual_warnings:
+            stock.add_warning(warning)
+        periods = stock.financials_quarterly
+        if periods:
             # Fix share counts filed in thousands/millions BEFORE anything reads
             # them — derivations, validation and every per-share metric downstream
-            # all assume units. Cross-period, so a year with no EPS to anchor on
+            # all assume units. Cross-period, so a quarter with no EPS to anchor on
             # still inherits the scale its siblings agree on.
             for period_key, fields in normalize_share_scale(periods).items():
                 stock.add_warning(
-                    f"share scale {attr} {period_key}: rescaled {', '.join(fields)} "
+                    f"share scale financials_quarterly {period_key}: rescaled {', '.join(fields)} "
                     "(filed in thousands/millions)"
                 )
             cleaned = {}
@@ -329,17 +447,48 @@ class StockDataFetcher:
                 clean, errors = validate_period(period)
                 cleaned[period_key] = clean
                 for err in errors:
-                    stock.add_warning(f"validation {attr} {period_key}: {err}")
-            setattr(stock, attr, cleaned)
-
-        # Derive identities within each point-in-time vintage (self-contained snapshots).
-        for by_accn in (stock.financials_annual_vintages or {}).values():
-            normalize_share_scale(by_accn)
-            for period in by_accn.values():
-                apply_derivations(period)
+                    stock.add_warning(f"validation financials_quarterly {period_key}: {err}")
+            stock.financials_quarterly = cleaned
 
         if stock.financials_quarterly:
             stock.financials_ttm = compute_ttm(stock.financials_quarterly, split_levels)
+
+    @staticmethod
+    def _report_without_facts(ticker: str, sec_data: Dict[str, Any]) -> str:
+        """The run's warning for the latest report the companyfacts lack (``missing_report``, BUG-251): read from the
+        filing's own XBRL with the earlier reports they lack (``reports_read``, Q17), or the run's figures stop before
+        it, with why its XBRL couldn't be read (``reports_unread``); a run that couldn't read every one, or found no
+        earlier report the companyfacts carry (BUG-337), is collected again by the refresh."""
+        missing = sec_data["missing_report"]
+        lag = f"{REPORT_WITHOUT_FACTS} {ticker}'s {missing['form']} filed {missing['filed']} ({missing['accession']})"
+        read = {r["accession"]: r for r in sec_data.get("reports_read") or []}
+        unread = sec_data.get("reports_unread") or []
+
+        def listed(reports: List[Dict[str, str]]) -> str:
+            return ", ".join(f"{r['form']} filed {r['filed']} ({r['accession']})" for r in reports)
+
+        latest = read.get(missing["accession"])
+        earlier = [r for accession, r in read.items() if accession != missing["accession"]]
+        if latest:
+            text = f"{lag}, so this run read its figures from the filing's own XBRL ({latest['instance']})"
+            if earlier:
+                text += f", and those of the earlier reports they lack from theirs: {listed(earlier)}"
+        else:
+            why = next((f" (its own XBRL couldn't be read: {r['why']})" for r in unread
+                        if r["accession"] == missing["accession"]), "")
+            text = f"{lag}, so this run's figures stop before it{why}"
+            if earlier:
+                text += f"; it read the earlier reports they lack from their own XBRL: {listed(earlier)}"
+        others = [r for r in unread if r["accession"] != missing["accession"]]
+        if others:
+            text += "; " + "; ".join(f"the XBRL of its {r['form']} filed {r['filed']} ({r['accession']}), which they "
+                                     f"lack too, couldn't be read: {r['why']}" for r in others)
+        if missing.get("recovered"):
+            return text
+        if latest and not unread:
+            # Every report read, but the gap's end wasn't reached (sec_handler.report_gap, BUG-337).
+            text += "; it found no earlier report they carry, so reports before those may be missing too"
+        return f"{text}; the refresh collects {ticker} again"
 
     @staticmethod
     def _no_annual_financials(ticker: str, sec_data: Dict[str, Any]) -> str:
@@ -403,39 +552,67 @@ class StockDataFetcher:
             years_back: Years of historical financial data
 
         Returns:
-            List of StockData objects
+            List of StockData objects, in the order of *tickers*
         """
         workers = max(1, getattr(self.config, "max_workers", 1))
         self.logger.info(
             f"Fetching data for {len(tickers)} tickers "
             f"({'sequential' if workers == 1 or len(tickers) <= 1 else f'{workers} workers'})"
         )
-
-        if workers == 1 or len(tickers) <= 1:
-            results = [
-                self._safe_fetch_ticker(t, include_yahoo, include_sec, years_back)
-                for t in tickers
-            ]
-            self.logger.info(f"Completed fetching {len(results)} tickers")
-            return results
-
-        # Parallel fetch. Per-source RateLimiters are thread-safe and serialize each
-        # external API, so we overlap work across tickers without exceeding limits.
         # Results are placed back in input order.
         ordered: List[Optional[StockData]] = [None] * len(tickers)
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_to_idx = {
-                executor.submit(
-                    self._safe_fetch_ticker, ticker, include_yahoo, include_sec, years_back
-                ): idx
-                for idx, ticker in enumerate(tickers)
-            }
-            for future in as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                ordered[idx] = future.result()
-
+        for idx, stock in self._fetch_each(tickers, include_yahoo, include_sec, years_back):
+            ordered[idx] = stock
         self.logger.info(f"Completed fetching {len(ordered)} tickers")
         return [r for r in ordered if r is not None]
+
+    def _fetch_each(
+        self,
+        tickers: List[str],
+        include_yahoo: bool,
+        include_sec: bool,
+        years_back: Optional[int],
+    ) -> Iterator[Tuple[int, StockData]]:
+        """Each ticker's StockData as its fetch finishes, with the ticker's place in *tickers*.
+
+        With one worker (or one ticker), one after another on this thread. Else on ``max_workers`` threads, each
+        with IN_FLIGHT_PER_WORKER tickers submitted at most, the rest waiting here: the workers go on while the caller
+        exports what it took, and the finished ones it hasn't taken yet stay few. Per-source RateLimiters are
+        thread-safe and serialize each external API, so we overlap work across tickers without exceeding limits.
+        Closing the iterator, or Ctrl+C while it waits, cancels the tickers not started; the few running finish in
+        their threads, and nothing reads them.
+        """
+        workers = max(1, getattr(self.config, "max_workers", 1))
+        if workers == 1 or len(tickers) <= 1:
+            for idx, ticker in enumerate(tickers):
+                yield idx, self._safe_fetch_ticker(ticker, include_yahoo, include_sec, years_back)
+            return
+        queue = iter(enumerate(tickers))
+        executor = ThreadPoolExecutor(max_workers=workers)
+        pending: Dict[Future, int] = {}
+        finished = False
+
+        def submit(count: int) -> None:
+            for idx, ticker in islice(queue, count):
+                pending[executor.submit(self._safe_fetch_ticker, ticker, include_yahoo, include_sec, years_back)] = idx
+
+        try:
+            submit(IN_FLIGHT_PER_WORKER * workers)
+            while pending:
+                done = wait(pending, timeout=POLL_SECONDS, return_when=FIRST_COMPLETED).done
+                while done:
+                    future = done.pop()
+                    idx = pending.pop(future)
+                    stock = future.result()
+                    del future  # a finished fetch is the caller's alone
+                    submit(1)
+                    yield idx, stock
+                    del stock
+            finished = True
+        finally:
+            # Done, nothing is left to wait for. Else (Ctrl+C, the caller stopped), the tickers not started are
+            # cancelled, and the running ones aren't waited for.
+            executor.shutdown(wait=finished, cancel_futures=not finished)
 
     def _safe_fetch_ticker(
         self,
@@ -468,14 +645,23 @@ class StockDataFetcher:
 
         Args:
             data: List of StockData objects
-            formats: List of formats to export ('json', 'csv')
+            formats: List of formats to export ('json', 'csv', 'sqlite')
                     Defaults to config setting
 
         Returns:
-            Dictionary mapping format to list of created file paths
+            Dictionary mapping format to list of created file paths: the database's when it stored any of *data*
+            (each stock in its own savepoint; one it didn't take carries the error, "SQLite write failed: ...")
         """
+        return self._export(data, formats)[0]
+
+    def _export(
+        self,
+        data: List[StockData],
+        formats: Optional[List[str]] = None
+    ) -> Tuple[Dict[str, List[Path]], Optional[StoreResult]]:
+        """``export``'s paths, and what the SQLite store did with *data* (None without the sqlite format)."""
         formats = formats or self.config.output_formats
-        results = {}
+        results: Dict[str, List[Path]] = {}
 
         if "json" in formats:
             json_paths = self.json_exporter.export(data)
@@ -494,12 +680,13 @@ class StockDataFetcher:
             if history_path:
                 results.setdefault("csv", []).append(history_path)
 
+        stored: Optional[StoreResult] = None
         if "sqlite" in formats:
-            db_path = self.sqlite_store.export(data)
-            if db_path:
-                results["sqlite"] = [db_path]
+            stored = self.sqlite_store.write_batch(data)
+            if stored.stored:
+                results["sqlite"] = [stored.path]
 
-        return results
+        return results, stored
 
     def fetch_and_export(
         self,
@@ -507,10 +694,23 @@ class StockDataFetcher:
         include_yahoo: bool = True,
         include_sec: bool = True,
         years_back: Optional[int] = None,
-        formats: Optional[List[str]] = None
+        formats: Optional[List[str]] = None,
+        batch_size: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Convenience method to fetch and export in one call.
+        Fetch *tickers* and export them as they arrive, a batch at a time (code review 19, I-1).
+
+        The workers fetch without a pause between batches (``_fetch_each``). Each time *batch_size* companies have
+        arrived, and with the rest at the end, the batch is exported on this thread (JSON, the CSVs merged with the
+        files', SQLite with each stock in its own savepoint), then the companies it stored are valued and every
+        stored one ranked (``valuation_engine.compute_and_store``): a run stopped part way leaves what it stored
+        valued and ranked, and the last batch's pass gives the run's ranks. The benchmark's bars (^GSPC) are fetched
+        once a run, after the first batch is stored. Nothing of a batch is kept once it is exported: at most
+        *batch_size* companies plus IN_FLIGHT_PER_WORKER times the workers' are in memory at once.
+
+        Ctrl+C stops it at once: the tickers not started are cancelled, the companies fetched since the last batch
+        (like the few still fetching) aren't exported, and CollectionInterrupted, a KeyboardInterrupt, carries the
+        summary so far.
 
         Args:
             tickers: List of ticker symbols
@@ -518,70 +718,98 @@ class StockDataFetcher:
             include_sec: Whether to fetch SEC EDGAR data
             years_back: Years of historical financial data
             formats: Export formats
+            batch_size: Companies exported at a time, 1 or more (default: the config's, DEFAULT_BATCH_SIZE)
 
         Returns:
-            Dictionary with results summary
+            Dictionary with results summary: the tickers requested and fetched, those without errors, with warnings
+            and with errors; the batch size, the batches exported and the companies in them; ``stored``, the companies
+            the database took, and ``not_stored``, each one exported that it didn't with why (none without the sqlite
+            format); ``sqlite_errors``, each batch whose whole export failed and why; ``interrupted``; ``unvalued``,
+            the stored companies whose batch's valuations Ctrl+C cut short; the export paths; the duration and times
         """
         start_time = datetime.now()
+        resolved_formats = formats or self.config.output_formats
+        size = batch_size if batch_size is not None else getattr(self.config, "batch_size", DEFAULT_BATCH_SIZE)
+        if size < 1:
+            raise ValueError(f"the batch size must be 1 or more, not {size}")
+        tally = _Tally(len(tickers), size)
+        self.logger.info(f"Collecting {len(tickers)} tickers: exported, stored and valued {size} at a time")
+        fetched = self._fetch_each(tickers, include_yahoo, include_sec, years_back)
+        batch: List[Tuple[int, StockData]] = []
+        try:
+            for item in fetched:
+                tally.fetched_one(item[1])
+                batch.append(item)
+                del item
+                if len(batch) >= size:
+                    self._export_batch(batch, tally, resolved_formats, include_yahoo)
+                    batch = []
+            if batch:
+                self._export_batch(batch, tally, resolved_formats, include_yahoo)
+                batch = []
+        except KeyboardInterrupt:
+            summary = tally.summary(start_time, interrupted=True)
+            self.logger.info(f"Collection stopped by Ctrl+C: {summary['stored']} of {len(tickers)} companies stored; "
+                             f"{summary['tickers_fetched'] - summary['exported']} fetched since the last batch, left "
+                             "out")
+            raise CollectionInterrupted(summary) from None
+        finally:
+            fetched.close()  # the tickers not started are cancelled (nothing to do once every one was taken)
 
-        # Fetch data
-        data = self.fetch_multiple(
-            tickers,
-            include_yahoo=include_yahoo,
-            include_sec=include_sec,
-            years_back=years_back
+        summary = tally.summary(start_time, interrupted=False)
+        self.logger.info(
+            f"Fetch complete: {summary['successful']}/{summary['tickers_requested']} successful "
+            f"in {summary['duration_seconds']:.1f}s"
+            + (f"; {summary['stored']} stored in the database" if "sqlite" in resolved_formats else "")
         )
 
-        # Export
-        export_paths = self.export(data, formats=formats)
+        return summary
+
+    def _export_batch(
+        self,
+        batch: List[Tuple[int, StockData]],
+        tally: _Tally,
+        formats: List[str],
+        include_yahoo: bool,
+    ) -> None:
+        """Export a batch in its tickers' order (``_export``), fetch the benchmark's bars after the run's first, and
+        value the companies it stored. A benchmark or valuation failure never fails the run."""
+        number = tally.batches + 1
+        stocks = [stock for _, stock in sorted(batch, key=lambda item: item[0])]
+        paths, result = self._export(stocks, formats)
+        tally.exported_batch(len(stocks), paths, result)
+        stored = list(result.stored) if result is not None else []
+        tally.unvalued = stored
+        self.logger.info(f"Batch {number}: {len(stocks)} exported"
+                         + (f", {len(stored)} stored" if result is not None else "")
+                         + f" ({tally.exported} of {tally.requested} so far)")
 
         # Benchmark (^GSPC) bars: collected once per run, not once per ticker, so
         # market-relative metrics (beta, relative strength) have a common index.
         # A benchmark failure must never fail the run.
-        resolved_formats = formats or self.config.output_formats
-        if include_yahoo and "sqlite" in resolved_formats:
+        if include_yahoo and "sqlite" in formats and not tally.benchmark_done:
+            tally.benchmark_done = True
             try:
                 benchmark_bars = self.yahoo_handler.fetch_benchmark_bars()
                 self.sqlite_store.export_benchmark_bars("^GSPC", benchmark_bars)
             except Exception as e:
                 self.logger.warning(f"Benchmark bars fetch/export failed: {e}")
 
-        # Valuations: recompute for the just-collected tickers so the stored
-        # fair-value ranges always reflect the newest fundamentals. Import is
-        # local + lazy, and a valuation failure must never fail the run.
-        if "sqlite" in resolved_formats and data:
+        # Valuations: recompute for the companies just stored so the stored
+        # fair-value ranges always reflect the newest fundamentals; each pass
+        # ranks every stored company. Import is local + lazy, and a valuation
+        # failure must never fail the run.
+        if stored:
             try:
                 from ..valuation import engine as valuation_engine
                 valuation_engine.compute_and_store(
                     self.sqlite_store.db_path,
-                    tickers=[s.ticker for s in data],
+                    tickers=list(stored),
                     logger=self.logger,
                 )
             except Exception as e:
-                self.logger.warning(f"Valuation computation failed: {e}")
-
-        end_time = datetime.now()
-        duration = (end_time - start_time).total_seconds()
-
-        # Build summary
-        summary = {
-            "tickers_requested": len(tickers),
-            "tickers_fetched": len(data),
-            "successful": sum(1 for s in data if not s.errors),
-            "with_warnings": sum(1 for s in data if s.warnings),
-            "with_errors": sum(1 for s in data if s.errors),
-            "export_paths": export_paths,
-            "duration_seconds": duration,
-            "started_at": start_time.isoformat(),
-            "completed_at": end_time.isoformat(),
-        }
-
-        self.logger.info(
-            f"Fetch complete: {summary['successful']}/{summary['tickers_requested']} successful "
-            f"in {duration:.1f}s"
-        )
-
-        return summary
+                self.logger.warning(f"Valuation computation failed for batch {number} ({', '.join(stored)}): {e}")
+        tally.unvalued = []
 
     def close(self) -> None:
         """Close handlers and release resources."""

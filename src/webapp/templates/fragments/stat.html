@@ -2,7 +2,7 @@
   <h2 class="section-heading">Profitability</h2>
   <div class="summary-grid">
     {% for row in profitability %}
-    <div class="summary-item"><span class="summary-label">{{ row.label }}</span><span class="summary-value">{{ row.value }}</span></div>
+    <div class="summary-item"><span class="summary-label">{{ row.label }}</span><span class="summary-value">{{ row.value }}</span>{% if row.note %}<span class="text-muted summary-note">{{ row.note }}</span>{% endif %}</div>
     {% endfor %}
   </div>
 </section>
@@ -11,7 +11,7 @@
   <h2 class="section-heading">Leverage &amp; Liquidity</h2>
   <div class="summary-grid">
     {% for row in leverage %}
-    <div class="summary-item"><span class="summary-label">{{ row.label }}</span><span class="summary-value">{{ row.value }}</span></div>
+    <div class="summary-item"><span class="summary-label">{{ row.label }}</span><span class="summary-value">{{ row.value }}</span>{% if row.note %}<span class="text-muted summary-note">{{ row.note }}</span>{% endif %}</div>
     {% endfor %}
   </div>
 </section>
@@ -20,7 +20,7 @@
   <h2 class="section-heading">Valuation</h2>
   <div class="summary-grid">
     {% for row in valuation %}
-    <div class="summary-item"><span class="summary-label">{{ row.label }}</span><span class="summary-value">{{ row.value }}</span></div>
+    <div class="summary-item"><span class="summary-label">{{ row.label }}</span><span class="summary-value">{{ row.value }}</span>{% if row.note %}<span class="text-muted summary-note">{{ row.note }}</span>{% endif %}</div>
     {% endfor %}
   </div>
 </section>
@@ -29,7 +29,11 @@
   <h2 class="section-heading">Share Statistics</h2>
   <div class="summary-grid">
     {% for row in shares %}
-    <div class="summary-item"><span class="summary-label">{{ row.label }}</span><span class="summary-value">{{ row.value }}</span></div>
+    <div class="summary-item"><span class="summary-label">{{ row.label }}</span><span class="summary-value">{{ row.value }}</span>{% if row.note %}<span class="text-muted summary-note">{{ row.note }}</span>{% endif %}</div>
     {% endfor %}
   </div>
 </section>
+
+<div id="stat-quality" hx-get="/ui/stocks/{{ ticker }}/scores" hx-trigger="load" hx-swap="outerHTML">
+  <p class="text-muted">Loading the quality scores…</p>
+</div>

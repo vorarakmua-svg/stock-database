@@ -4,14 +4,26 @@ Provides risk-free rate (Treasury yields) and other economic data for financial 
 FRED API is free but requires registration at https://fred.stlouisfed.org/docs/api/api_key.html
 """
 
+import json
 import logging
 import os
+import threading
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
 from .rate_limiter import RateLimiter, RetryHandler, is_transient_error
+
+#: The Treasury.gov rate a key-less run last fetched, in the cache folder: a run whose request for the current year
+#: fails takes it, with its own day, rather than the prior year's year-end (BUG-052).
+TREASURY_RATE_CACHE = "treasury_gov_rate.json"
+
+
+class _TreasuryYearFailed(Exception):
+    """Treasury.gov didn't serve a year's file: an error, a status other than 200 or a text that isn't the CSV. Unlike
+    a file without rows (the current year's in early January), it says nothing about the year (BUG-052)."""
 
 
 class FREDHandler:
@@ -51,6 +63,7 @@ class FREDHandler:
         max_retries: int = 3,
         base_delay: float = 1.0,
         max_delay: float = 60.0,
+        cache_dir: Optional[Path] = None,
     ):
         """
         Initialize FRED handler.
@@ -63,8 +76,11 @@ class FREDHandler:
             max_retries: Max retry attempts for transient network failures
             base_delay: Initial backoff delay in seconds
             max_delay: Maximum backoff delay cap in seconds
+            cache_dir: Where the Treasury.gov rate last fetched is kept (TREASURY_RATE_CACHE), for a run whose
+                request fails; None keeps none
         """
         self.api_key = api_key or os.getenv("FRED_API_KEY")
+        self.cache_dir = Path(cache_dir) if cache_dir is not None else None
         self.logger = logger or logging.getLogger(__name__)
         self.rate_limiter = RateLimiter(
             min_interval=rate_limit_delay,
@@ -279,12 +295,23 @@ class FREDHandler:
         self.logger.info("Using fallback Treasury yields (no FRED API key)")
 
         # Try to fetch from Treasury.gov CSV feed (no API key required). The feed is
-        # organized by calendar year; try the current year, then fall back to the
-        # prior year (the current-year feed is empty in early January).
-        for year in (datetime.now().year, datetime.now().year - 1):
-            yields = self._fetch_treasury_gov_year(year)
-            if yields:
-                return yields
+        # organized by calendar year: the current year, then the prior year while the
+        # current year has no rows (early January). A year that failed is no answer: the
+        # rate last fetched stands in, with its own day (BUG-052: a 500 gave 2025-12-31's
+        # rate for 2026-10-20's).
+        try:
+            for year in (datetime.now().year, datetime.now().year - 1):
+                yields = self._treasury_gov_year(year)
+                if yields:
+                    self._keep_treasury_rate(yields)
+                    return yields
+        except _TreasuryYearFailed as e:
+            kept = self._kept_treasury_rate()
+            if kept:
+                self.logger.warning(f"Treasury.gov's yields unavailable ({e}); using the rate last fetched, for "
+                                    f"{kept.get('date')}")
+                return kept
+            self.logger.warning(f"Treasury.gov's yields unavailable ({e}) and no rate fetched before")
 
         # Return typical market estimates as last resort. These are static and
         # quickly go stale, so warn loudly — downstream WACC/DCF must know the
@@ -318,8 +345,18 @@ class FREDHandler:
     def _fetch_treasury_gov_year(self, year: int) -> Optional[Dict[str, Any]]:
         """Fetch the daily Treasury yield curve CSV for a calendar ``year``.
 
-        Returns a yields dict (latest row) or None if unavailable/empty.
+        Returns a yields dict (``_treasury_gov_year``) or None if unavailable/empty.
         """
+        try:
+            return self._treasury_gov_year(year)
+        except _TreasuryYearFailed as e:
+            self.logger.debug(f"Treasury.gov fallback failed for {year}: {e}")
+            return None
+
+    def _treasury_gov_year(self, year: int) -> Optional[Dict[str, Any]]:
+        """The yields of the latest day of *year*'s Treasury.gov file that has a 10-year yield (a blank or N/A 10 Yr
+        on the latest row is a day not yet complete, BUG-052), None when the file has no such row (the current year's
+        in early January). Raises _TreasuryYearFailed when Treasury.gov didn't serve the file."""
         url = (
             "https://home.treasury.gov/resource-center/data-chart-center/"
             f"interest-rates/daily-treasury-rates.csv/{year}/all"
@@ -329,53 +366,72 @@ class FREDHandler:
 
         try:
             response = self._request(url, timeout=30)
-
-            if response.status_code == 200:
-                lines = response.text.strip().split('\n')
-                if len(lines) > 1:
-                    headers = lines[0].split(',')
-                    # The feed lists the year newest first, so the latest day is the row with the
-                    # latest date, not the last row: that was the year's first trading day (January
-                    # 2's 4.19% stood in for October 19's 5.15% on 2026-10-20).
-                    dated: List[Tuple[datetime, str]] = []
-                    for line in lines[1:]:
-                        day = self._feed_date(line)
-                        if day is not None:
-                            dated.append((day, line))
-                    if not dated:
-                        return None
-                    latest_day, latest_line = max(dated, key=lambda item: item[0])
-                    latest = latest_line.split(',')
-
-                    yields = {
-                        "fetched_at": datetime.now().isoformat(),
-                        "source": "treasury_gov",
-                        "date": latest_day.date().isoformat(),
-                    }
-
-                    col_map = {
-                        "1 Mo": "1m", "2 Mo": "2m", "3 Mo": "3m",
-                        "6 Mo": "6m", "1 Yr": "1y", "2 Yr": "2y",
-                        "3 Yr": "3y", "5 Yr": "5y", "7 Yr": "7y",
-                        "10 Yr": "10y", "20 Yr": "20y", "30 Yr": "30y",
-                    }
-
-                    for i, header in enumerate(headers):
-                        header = header.strip().strip('"')
-                        if header in col_map and i < len(latest):
-                            try:
-                                value = float(latest[i].strip().strip('"'))
-                                yields[f"treasury_{col_map[header]}"] = value
-                            except (ValueError, IndexError):
-                                pass
-
-                    if len(yields) > 3:  # More than just fetched_at, source and date
-                        return yields
-
         except Exception as e:
-            self.logger.debug(f"Treasury.gov fallback failed for {year}: {e}")
+            raise _TreasuryYearFailed(f"{year}: {str(e) or type(e).__name__}") from e
+        if response.status_code != 200:
+            raise _TreasuryYearFailed(f"{year}: HTTP {response.status_code}")
+        lines = response.text.strip().split('\n')
+        headers = [header.strip().strip('"') for header in lines[0].split(',')]
+        if headers[0] != "Date":
+            raise _TreasuryYearFailed(f"{year}: not the yield curve CSV (it starts {ascii(lines[0][:40])})")
 
-        return None
+        col_map = {
+            "1 Mo": "1m", "2 Mo": "2m", "3 Mo": "3m",
+            "6 Mo": "6m", "1 Yr": "1y", "2 Yr": "2y",
+            "3 Yr": "3y", "5 Yr": "5y", "7 Yr": "7y",
+            "10 Yr": "10y", "20 Yr": "20y", "30 Yr": "30y",
+        }
+        # The feed lists the year newest first, so the latest day is the row with the
+        # latest date, not the last row: that was the year's first trading day (January
+        # 2's 4.19% stood in for October 19's 5.15% on 2026-10-20).
+        days: List[Tuple[datetime, Dict[str, float]]] = []
+        for line in lines[1:]:
+            day = self._feed_date(line)
+            if day is None:
+                continue
+            cells = line.split(',')
+            values: Dict[str, float] = {}
+            for i, header in enumerate(headers):
+                if header in col_map and i < len(cells):
+                    try:
+                        values[f"treasury_{col_map[header]}"] = float(cells[i].strip().strip('"'))
+                    except ValueError:
+                        pass
+            if "treasury_10y" in values:
+                days.append((day, values))
+        if not days:
+            return None
+        latest_day, latest = max(days, key=lambda item: item[0])
+        return {
+            "fetched_at": datetime.now().isoformat(),
+            "source": "treasury_gov",
+            "date": latest_day.date().isoformat(),
+            **latest,
+        }
+
+    def _keep_treasury_rate(self, yields: Dict[str, Any]) -> None:
+        """Keep *yields*, Treasury.gov's latest, as the rate last fetched (TREASURY_RATE_CACHE), when there is a cache
+        folder; a failed write keeps the earlier one."""
+        if self.cache_dir is None:
+            return
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            # Whole or not at all: a collection's workers fetch the rate side by side.
+            written = self.cache_dir / f"{TREASURY_RATE_CACHE}.{os.getpid()}.{threading.get_ident()}"
+            written.write_text(json.dumps(yields), encoding="utf-8")
+            os.replace(written, self.cache_dir / TREASURY_RATE_CACHE)
+        except OSError as e:
+            self.logger.debug(f"Treasury.gov rate not kept: {e}")
+
+    def _kept_treasury_rate(self) -> Optional[Dict[str, Any]]:
+        """The Treasury.gov rate last fetched (``_keep_treasury_rate``), None without one that reads."""
+        if self.cache_dir is None:
+            return None
+        try:
+            kept = json.loads((self.cache_dir / TREASURY_RATE_CACHE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return kept if isinstance(kept, dict) and kept.get("source") == "treasury_gov" and kept.get("date") else None
 
     def get_market_risk_premium(self) -> Dict[str, Any]:
         """

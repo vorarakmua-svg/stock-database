@@ -93,7 +93,8 @@ discounting implementation in the codebase, not two: years 1-5 at the base growt
 years 6-10 fading linearly to the 2.5% terminal rate, Gordon terminal at year 10.
 
 Growth is derived by the existing conservative rule (`derive_growth`) on the
-owner-earnings history: `min(historical CAGR, analyst estimate)`, clamped to
+owner-earnings history: the historical CAGR (amended 2026-11-02, Q2/Q5: no analyst term; from the first
+positive year when the window starts on a loss and at least 4 years remain, else 0%), clamped to
 `[0, 15%]`. Bear/base/bull come from the existing `growth_scenarios` spread
 (+/- 3pp), with the discount rate held **fixed** across scenarios — under this
 method the rate is an observable market fact (the Treasury yield), not a risk

@@ -5,7 +5,10 @@ from typing import Optional
 
 
 def _suffixed(abs_x: float) -> str:
-    """A non-negative magnitude with its B/M/K suffix and two decimals, whole below a thousand."""
+    """A non-negative magnitude with its T/B/M/K suffix and two decimals, whole below a thousand (a trillion read as
+    "3676.66B" before: BUG-138)."""
+    if abs_x >= 1_000_000_000_000:
+        return f"{abs_x / 1_000_000_000_000:.2f}T"
     if abs_x >= 1_000_000_000:
         return f"{abs_x / 1_000_000_000:.2f}B"
     if abs_x >= 1_000_000:
@@ -13,6 +16,24 @@ def _suffixed(abs_x: float) -> str:
     if abs_x >= 1_000:
         return f"{abs_x / 1_000:.2f}K"
     return f"{abs_x:.0f}"
+
+
+#: The risk-free rate's source is stored as ``fred_<source>`` in a run's ``data_sources`` ("fred_treasury_gov" when the
+#: rate came from Treasury.gov and FRED wasn't read), so the quality page names what the rate came from.
+_RATE_SOURCE_LABELS = {
+    "fred_fred": "fred",
+    "fred_treasury_gov": "treasury_gov (rate)",
+    "fred_estimate": "rate_estimate (static)",
+    "fred_fallback": "rate_fallback (static)",
+}
+
+
+def fmt_sources(stored: Optional[str]) -> str:
+    """A run's stored ``data_sources`` ("yahoo_finance, sec_edgar, fred_treasury_gov, ...") for display: the
+    risk-free rate's entries say where the rate came from, not that FRED was consulted. None or empty -> "—"."""
+    if not stored:
+        return "—"
+    return ", ".join(_RATE_SOURCE_LABELS.get(s.strip(), s.strip()) for s in str(stored).split(","))
 
 
 def fmt_money(x: Optional[float]) -> str:
@@ -71,11 +92,32 @@ def fmt_raw2(x: Optional[float]) -> str:
 def fmt_price(x: Optional[float]) -> str:
     """Format a share price with $ prefix and 2 decimal places.
 
-    None -> "—"; else "$x,xxx.xx" (cents matter for share prices).
+    None -> "—"; else "$x,xxx.xx" (cents matter for share prices), a negative one "-$x.xx", its sign before the
+    dollar as ``fmt_money`` puts it (BUG-137).
     """
     if x is None:
         return "—"
-    return f"${x:,.2f}"
+    return f"-${-x:,.2f}" if x < 0 else f"${x:,.2f}"
+
+
+def fmt_bar_price(x: Optional[float]) -> str:
+    """Format one price of a stored daily bar: ``fmt_price``, but with four decimals under $1 and "—" for no price.
+
+    A split-adjusted price of the 1970s is a fraction of a cent to a few cents (MNST's 1995 bars are $0.0033), which
+    two decimals printed as "$0.00" (BUG-156). A zero or missing price is no price, not a free share: "—".
+    """
+    if x is None or x <= 0:
+        return "—"
+    return f"${x:,.4f}" if x < 1 else fmt_price(x)
+
+
+def fmt_signed_price(x: Optional[float]) -> str:
+    """Format a per-share figure that may be below zero with its sign before the dollar.
+
+    None -> "—"; -9.17 -> "-$9.17": the VAL tab's other indicators, in the table and in the notes alike. Since
+    BUG-137 ``fmt_price`` writes the same.
+    """
+    return fmt_price(x)
 
 
 def fmt_value(x: Optional[float], kind: str) -> str:

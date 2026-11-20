@@ -1,0 +1,89 @@
+<?xml version="1.0"?>
+<ownershipDocument>
+
+    <schemaVersion>X0508</schemaVersion>
+
+    <documentType>4/A</documentType>
+
+    <periodOfReport>2025-02-22</periodOfReport>
+
+    <dateOfOriginalSubmission>2025-02-25</dateOfOriginalSubmission>
+
+    <issuer>
+        <issuerCik>0000078003</issuerCik>
+        <issuerName>PFIZER INC</issuerName>
+        <issuerTradingSymbol>PFE</issuerTradingSymbol>
+    </issuer>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0001988687</rptOwnerCik>
+            <rptOwnerName>BOSHOFF CHRISTOFFEL</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerStreet1>66 HUDSON BOULEVARD EAST</rptOwnerStreet1>
+            <rptOwnerStreet2>ATTN: CORPORATE SECRETARY</rptOwnerStreet2>
+            <rptOwnerCity>NEW YORK</rptOwnerCity>
+            <rptOwnerState>NY</rptOwnerState>
+            <rptOwnerZipCode>10001-2192</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isOfficer>1</isOfficer>
+            <officerTitle>President, R&amp;D</officerTitle>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <aff10b5One>0</aff10b5One>
+
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2025-02-24</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>F</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>403.0000</value>
+                    <footnoteId id="F1"/>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>26.6500</value>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>149882.0000</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>D</value>
+                </directOrIndirectOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+    </nonDerivativeTable>
+
+    <derivativeTable></derivativeTable>
+
+    <footnotes>
+        <footnote id="F1">The reported transaction constitutes the withholding of shares to satisfy tax obligations upon the vesting of restricted stock units (including dividend equivalents thereon).</footnote>
+    </footnotes>
+
+    <remarks>This amendment is being filed to include the transaction on 2/24/2025 for the withholding of shares to satisfy tax obligations omitted from the Form 4 filed on 2/25/2025.</remarks>
+
+    <ownerSignature>
+        <signatureName>/s/ Shanice A. Reid, by power of atty, for Christoffel Boshoff</signatureName>
+        <signatureDate>2025-03-03</signatureDate>
+    </ownerSignature>
+</ownershipDocument>

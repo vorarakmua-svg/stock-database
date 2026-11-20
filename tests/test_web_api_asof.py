@@ -2,7 +2,7 @@
 
 Fixtures:
 - ``client``  — TestClient(create_app(db_path=web_db))
-- ``web_db``  — SQLite with AAA having multi-vintage FY2022:
+- ``web_db``  — SQLite with AAA having multi-vintage FY2022, and FY2022 as known from each filing:
     original  accn="0001-10K-2022" filed_date="2023-02-10"
     restated  accn="0002-10KA-2022" filed_date="2023-08-15"
 
@@ -15,13 +15,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
-from src.exporters.sqlite_store import SQLiteStore
-from src.models.stock_data import StockData
 from src.query.asof import AsOfReader
 from src.query.pit_metrics import PointInTimeMetrics
 from src.webapp import create_app
+from tests.known_rows import build_db, snapshot
 
 # Fixture constants derived from conftest.py web_db
 TICKER = "AAA"
@@ -102,11 +102,11 @@ def test_history_asof_years_param(client: TestClient) -> None:
     assert len(data) == 1
 
 
-def test_history_asof_empty_for_unknown_ticker(client: TestClient) -> None:
-    """Unknown ticker returns empty object."""
+def test_history_asof_404_for_unknown_ticker(client: TestClient) -> None:
+    """Unknown ticker answers 404 saying so (a backtest mustn't read it as a company with nothing filed)."""
     resp = client.get("/api/asof/UNKNOWN/history", params={"date": DATE_RESTATE})
-    assert resp.status_code == 200
-    assert resp.json() == {}
+    assert resp.status_code == 404
+    assert "UNKNOWN is unknown" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -271,23 +271,18 @@ def test_asof_vintages_fragment_returns_200(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# BUG-110: the figures a later filing leaves out
+# BUG-110: the figures a later filing leaves out (the record's), named by carried_from
 # ---------------------------------------------------------------------------
 
 
 def _partial_refilings_client(tmp_path: Path) -> TestClient:
-    """MSFT FY2016, restated by the FY2018 10-K, then only its opening equity in the FY2019 10-K."""
-    def period(accn: str, filed: str, **figures: float) -> dict:
-        return {"fiscal_year": 2016, "accn": accn, "filed_date": filed, "period_end": "2016-06-30",
-                "form": "10-K", "calendar_year": 2016, **figures}
-    s = StockData(ticker="MSFT", cik="789019", company_name="Microsoft")
-    s.financials_annual_vintages = {"2016": {
-        "k18": period("k18", "2018-08-03", revenue=91.2e9, net_income=20.5e9),
-        "k19": period("k19", "2019-08-01", total_equity=83.1e9),
-    }}
-    db = tmp_path / "stock.db"
-    SQLiteStore(db_path=str(db)).export([s])
-    return TestClient(create_app(db_path=db))
+    """MSFT FY2016 as known from its FY2019 10-K, which holds only the opening equity: the income statement the
+    FY2018 10-K's."""
+    k18 = ("k18", "2018-08-03", "10-K")
+    db = build_db(tmp_path, [snapshot(2016, "2019-08-01", accn="k19", period_end="2016-06-30", revenue=91.2e9,
+                                      net_income=20.5e9, total_equity=83.1e9,
+                                      earlier={"revenue": k18, "net_income": k18})], ticker="MSFT")
+    return TestClient(create_app(db_path=Path(db)))
 
 
 def test_annual_asof_returns_the_figures_a_later_filing_leaves_out(tmp_path: Path) -> None:
@@ -307,3 +302,160 @@ def test_asof_result_fragment_dates_a_figure_last_filed_earlier(tmp_path: Path) 
     html = resp.text
     assert "$91.20B" in html and "$20.50B" in html
     assert "(filed 2018-08-03)" in html
+
+
+# ---------------------------------------------------------------------------
+# A ticker whose as-of data isn't built (collected before the snapshots)
+# ---------------------------------------------------------------------------
+
+
+def test_a_ticker_without_snapshots_reads_none_and_the_page_says_not_built(tmp_path: Path) -> None:
+    # Its vintages are stored, its snapshots not (a run that built none): no fallback to another rule.
+    vintages = {"2022": {"k22": {"fiscal_year": 2022, "accn": "k22", "filed_date": "2023-02-10",
+                                 "period_end": "2022-12-31", "form": "10-K", "net_income": 80.0}}}
+    db = build_db(tmp_path, None, ticker="OLD", vintages=vintages)
+    with AsOfReader(db) as reader:
+        assert reader.has_snapshots("OLD") is False
+        assert reader.as_of_annual("OLD", 2022, "2026-01-01") is None
+        assert reader.history_as_of("OLD", "2026-01-01") == {}
+    resp = TestClient(create_app(db_path=Path(db))).get(
+        "/ui/asof/result", params={"ticker": "OLD", "fiscal_year": 2022, "date": "2026-01-01"})
+    assert resp.status_code == 200
+    assert "The as-of data for <strong>OLD</strong> isn't built yet" in resp.text
+    assert "re-collect" in resp.text.lower()
+    assert "had not been filed" not in resp.text
+
+
+def test_a_ticker_with_snapshots_none_by_the_date_says_not_filed_yet(client: TestClient) -> None:
+    resp = client.get("/ui/asof/result", params={"ticker": TICKER, "fiscal_year": FY, "date": DATE_BEFORE})
+    assert resp.status_code == 200
+    assert "had not been filed yet" in resp.text
+    assert "isn't built yet" not in resp.text
+
+
+def test_the_annual_api_says_a_ticker_without_snapshots_isnt_built(tmp_path: Path) -> None:
+    vintages = {"2022": {"k22": {"fiscal_year": 2022, "accn": "k22", "filed_date": "2023-02-10",
+                                 "period_end": "2022-12-31", "form": "10-K", "net_income": 80.0}}}
+    db = build_db(tmp_path, None, ticker="OLD", vintages=vintages)
+    resp = TestClient(create_app(db_path=Path(db))).get(
+        "/api/asof/OLD/annual", params={"fiscal_year": 2022, "date": "2026-01-01"})
+    assert resp.status_code == 404
+    assert "isn't built yet" in resp.json()["detail"]
+    assert "had not been filed" not in resp.json()["detail"]
+
+
+def test_the_annual_api_says_a_built_tickers_year_wasnt_filed_yet(client: TestClient) -> None:
+    resp = client.get(f"/api/asof/{TICKER}/annual", params={"fiscal_year": FY, "date": DATE_BEFORE})
+    assert resp.status_code == 404
+    assert "had not been filed" in resp.json()["detail"]
+    assert "isn't built yet" not in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Every as-of endpoint tells an unbuilt or unknown ticker from a year not filed yet; tickers are normalised
+# ---------------------------------------------------------------------------
+
+_HISTORIES = ("history", "metrics/history")
+
+
+def _old_client(tmp_path: Path) -> TestClient:
+    """OLD is a collected company (its vintages stored) whose as-of data isn't built."""
+    vintages = {"2022": {"k22": {"fiscal_year": 2022, "accn": "k22", "filed_date": "2023-02-10",
+                                 "period_end": "2022-12-31", "form": "10-K", "net_income": 80.0}}}
+    return TestClient(create_app(db_path=Path(build_db(tmp_path, None, ticker="OLD", vintages=vintages))))
+
+
+@pytest.mark.parametrize("endpoint", _HISTORIES)
+def test_a_history_of_a_ticker_without_snapshots_says_it_isnt_built(tmp_path: Path, endpoint: str) -> None:
+    # A backtest over a partly rebuilt database mustn't read an unbuilt company as one with nothing filed.
+    resp = _old_client(tmp_path).get(f"/api/asof/OLD/{endpoint}", params={"date": "2026-01-01"})
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "The as-of data for OLD isn't built yet: re-collecting OLD builds it"
+
+
+@pytest.mark.parametrize("endpoint", _HISTORIES)
+def test_a_history_of_a_built_ticker_with_nothing_by_the_date_is_empty(client: TestClient, endpoint: str) -> None:
+    resp = client.get(f"/api/asof/{TICKER}/{endpoint}", params={"date": DATE_BEFORE})
+    assert resp.status_code == 200
+    assert resp.json() == {}
+
+
+def test_the_metrics_of_a_ticker_without_snapshots_say_it_isnt_built(tmp_path: Path) -> None:
+    resp = _old_client(tmp_path).get("/api/asof/OLD/metrics", params={"fiscal_year": 2022, "date": "2026-01-01"})
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "The as-of data for OLD isn't built yet: re-collecting OLD builds it"
+
+
+def test_the_metrics_of_a_built_tickers_year_not_filed_yet_say_so(client: TestClient) -> None:
+    resp = client.get(f"/api/asof/{TICKER}/metrics", params={"fiscal_year": FY, "date": DATE_BEFORE})
+    assert resp.status_code == 404
+    assert "not available as of" in resp.json()["detail"]
+    assert "isn't built yet" not in resp.json()["detail"]
+
+
+@pytest.mark.parametrize("endpoint, params", [
+    ("annual", {"fiscal_year": FY, "date": DATE_RESTATE}),
+    ("history", {"date": DATE_RESTATE}),
+    ("metrics", {"fiscal_year": FY, "date": DATE_RESTATE}),
+    ("metrics/history", {"date": DATE_RESTATE}),
+])
+def test_an_unknown_ticker_is_said_to_be_unknown(client: TestClient, endpoint: str, params: dict) -> None:
+    resp = client.get(f"/api/asof/zzzz/{endpoint}", params=params)
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "ZZZZ is unknown: no company ZZZZ has been collected"
+
+
+@pytest.mark.parametrize("endpoint, params", [
+    ("annual", {"fiscal_year": FY, "date": DATE_RESTATE}),
+    ("history", {"date": DATE_RESTATE}),
+    ("metrics", {"fiscal_year": FY, "date": DATE_RESTATE}),
+    ("metrics/history", {"date": DATE_RESTATE}),
+])
+def test_the_api_reads_a_ticker_in_any_case(client: TestClient, endpoint: str, params: dict) -> None:
+    resp = client.get(f"/api/asof/aaa%20/{endpoint}", params=params)
+    assert resp.status_code == 200
+    assert _untimed(resp.json()) == _untimed(client.get(f"/api/asof/{TICKER}/{endpoint}", params=params).json())
+
+
+def _untimed(data: dict) -> dict:
+    """*data* without the ratios' ``calculated_at`` stamps (each request's own)."""
+    return {k: _untimed(v) if isinstance(v, dict) else v for k, v in data.items() if k != "calculated_at"}
+
+
+def test_the_api_names_an_unbuilt_ticker_as_stored(tmp_path: Path) -> None:
+    resp = _old_client(tmp_path).get("/api/asof/old/annual", params={"fiscal_year": 2022, "date": "2026-01-01"})
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "The as-of data for OLD isn't built yet: re-collecting OLD builds it"
+
+
+def test_the_page_reads_a_ticker_in_any_case(client: TestClient) -> None:
+    resp = client.get("/ui/asof/result", params={"ticker": " aaa ", "fiscal_year": FY, "date": DATE_RESTATE})
+    assert resp.status_code == 200
+    assert f"{TICKER} FY{FY} as of {DATE_RESTATE}" in resp.text
+    resp = client.get("/ui/asof/vintages", params={"ticker": "aaa", "fiscal_year": FY})
+    assert "2023-02-10" in resp.text and "2023-08-15" in resp.text
+
+
+def test_the_page_says_an_unbuilt_tickers_name_as_stored(tmp_path: Path) -> None:
+    resp = _old_client(tmp_path).get("/ui/asof/result", params={"ticker": "old", "fiscal_year": 2022,
+                                                                 "date": "2026-01-01"})
+    assert "The as-of data for <strong>OLD</strong> isn't built yet" in resp.text
+
+
+def test_the_page_says_an_unknown_ticker_is_unknown(client: TestClient) -> None:
+    resp = client.get("/ui/asof/result", params={"ticker": "zzzz", "fiscal_year": FY, "date": DATE_RESTATE})
+    assert resp.status_code == 200
+    assert "<strong>ZZZZ</strong> is unknown" in resp.text
+    assert "isn't built yet" not in resp.text and "had not been filed" not in resp.text
+
+
+def test_the_page_says_since_when_the_period_was_known(client: TestClient) -> None:
+    resp = client.get("/ui/asof/result", params={"ticker": TICKER, "fiscal_year": FY, "date": DATE_ORIG})
+    assert "as known from 2023-02-10" in resp.text
+    resp = client.get("/ui/asof/result", params={"ticker": TICKER, "fiscal_year": FY, "date": DATE_RESTATE})
+    assert "as known from 2023-08-15" in resp.text
+
+
+def test_the_annual_api_says_since_when_the_period_was_known(client: TestClient) -> None:
+    data = client.get(f"/api/asof/{TICKER}/annual", params={"fiscal_year": FY, "date": DATE_RESTATE}).json()
+    assert (data["known_from"], data["known_accn"]) == ("2023-08-15", "0002-10KA-2022")

@@ -199,6 +199,18 @@ def check_interest_coverage(data: dict) -> list:
     return issues
 
 
+def _share_fields() -> frozenset:
+    """The canonical fields counted in shares, which print without a dollar sign."""
+    try:
+        from src.mappings.canonical import CANONICAL_FIELDS
+    except ImportError:  # run from outside the repo: every large figure reads as money, as before
+        return frozenset()
+    return frozenset(f.key for f in CANONICAL_FIELDS if f.xbrl_unit == "shares")
+
+
+_SHARE_FIELDS = _share_fields()
+
+
 def show_available_fields(data: dict):
     """Show all available fields for debugging."""
     print("\n" + "="*60)
@@ -215,7 +227,9 @@ def show_available_fields(data: dict):
         for field in fields:
             value = latest[field]
             if value and field not in ["fiscal_year", "period_end", "form", "filed_date", "_source_tags"]:
-                if isinstance(value, (int, float)) and abs(value) > 1e6:
+                if isinstance(value, (int, float)) and abs(value) > 1e6 and field in _SHARE_FIELDS:
+                    print(f"  {field}: {value/1e9:.2f}B")  # a count, not money (BUG-166)
+                elif isinstance(value, (int, float)) and abs(value) > 1e6:
                     print(f"  {field}: ${value/1e9:.2f}B")
                 else:
                     print(f"  {field}: {value}")

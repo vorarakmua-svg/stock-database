@@ -1,0 +1,91 @@
+<?xml version="1.0"?>
+<ownershipDocument>
+
+    <schemaVersion>X0508</schemaVersion>
+
+    <documentType>4</documentType>
+
+    <periodOfReport>2024-08-01</periodOfReport>
+
+    <notSubjectToSection16>1</notSubjectToSection16>
+
+    <issuer>
+        <issuerCik>0001805387</issuerCik>
+        <issuerName>Cerevel Therapeutics Holdings, Inc.</issuerName>
+        <issuerTradingSymbol>CERE</issuerTradingSymbol>
+    </issuer>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0000078003</rptOwnerCik>
+            <rptOwnerName>PFIZER INC</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerStreet1>66 HUDSON BOULEVARD EAST</rptOwnerStreet1>
+            <rptOwnerStreet2></rptOwnerStreet2>
+            <rptOwnerCity>NEW YORK</rptOwnerCity>
+            <rptOwnerState>NY</rptOwnerState>
+            <rptOwnerZipCode>10001-2192</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>0</isDirector>
+            <isOfficer>0</isOfficer>
+            <isTenPercentOwner>0</isTenPercentOwner>
+            <isOther>1</isOther>
+            <otherText>Former 10% Owner</otherText>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <aff10b5One>0</aff10b5One>
+
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2024-08-01</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>U</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+                <footnoteId id="F1"/>
+            </transactionCoding>
+            <transactionTimeliness>
+                <value></value>
+            </transactionTimeliness>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>27349211</value>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>45</value>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>0</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>D</value>
+                </directOrIndirectOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+    </nonDerivativeTable>
+
+    <footnotes>
+        <footnote id="F1">Pursuant to the Agreement and Plan of Merger (the &quot;Merger Agreement&quot;), dated December 6, 2023, by and among AbbVie Inc. (&quot;AbbVie&quot;), Symphony Harlan LLC, Symphony Harlan Merger Sub Inc. (&quot;Merger Sub&quot;) and Cerevel Therapeutics Holdings, Inc. (&quot;Issuer&quot;), on August 1, 2024 (the &quot;Effective Time&quot;), Merger Sub merged with and into Issuer, with Issuer surviving as a wholly owned subsidiary of AbbVie upon consummation of the transactions contemplated by the Merger Agreement. At the Effective Time, each outstanding share of common stock was cancelled and converted into the right to receive $45.00 in cash (the &quot;Merger Consideration&quot;), without interest.</footnote>
+    </footnotes>
+
+    <ownerSignature>
+        <signatureName>Pfizer Inc. by /s/ Susan Grant, Assistant Secretary</signatureName>
+        <signatureDate>2024-08-05</signatureDate>
+    </ownerSignature>
+</ownershipDocument>

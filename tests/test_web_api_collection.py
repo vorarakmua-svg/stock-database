@@ -1,6 +1,6 @@
 """Tests for data-collection API (Task 8).
 
-All tests use a fake fetcher — zero network I/O.
+All tests use a fake fetcher, or the real one with the SEC's answers faked — zero network I/O.
 """
 from __future__ import annotations
 
@@ -9,11 +9,23 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import pytest
 from fastapi.testclient import TestClient
 
+from src.config import AppConfig, StorageConfig
+from src.fetchers.stock_data_fetcher import StockDataFetcher
 from src.models.stock_data import StockData
 from src.webapp import create_app
 from src.webapp.settings import WebSettings
+from tests.test_fetcher_concurrency import (
+    BLK_FY2022,
+    DLR_10Q,
+    DLR_UNREAD,
+    serve_blk,
+    serve_dlr,
+    stored_blk,
+    stored_run,
+)
 
 # ---------------------------------------------------------------------------
 # Fake fetcher
@@ -277,6 +289,44 @@ def test_job_survives_valuation_failure(monkeypatch, web_db: Path) -> None:
     assert job_status["summary"]["valuations_computed"] == 0
 
 
+def test_a_job_keeps_what_a_failed_predecessor_read_cant_give(monkeypatch, web_db: Path, tmp_path: Path) -> None:
+    """A web collection (the job's fetch_ticker, then its SQLite export) stores a run as a terminal one does: after
+    a run that read both of BLK's filers, one whose read of the old BlackRock failed keeps the FY2022 they gave
+    (BUG-179)."""
+    app = create_app(settings=WebSettings(db_path=web_db, allow_collection=True))
+    app.state.job_manager.fetcher_factory = lambda config: StockDataFetcher(AppConfig(
+        storage=StorageConfig(base_dir=tmp_path, db_path=config.storage.database_path)))
+    client = TestClient(app)
+    for predecessor in (200, 503):
+        serve_blk(monkeypatch, predecessor)
+        r = client.post("/api/collection/jobs", json={"tickers": ["BLK"]})
+        assert r.status_code == 202
+        assert _wait_until_done(client, r.json()["job_id"])["state"] == "done"
+        assert stored_blk(web_db)[0] == BLK_FY2022
+
+
+@pytest.mark.parametrize("ticker, serve, incomplete, warning", [
+    ("DLR", lambda monkeypatch: serve_dlr(monkeypatch, lagging=True), {"report": DLR_10Q}, DLR_UNREAD),  # BUG-251
+    ("BLK", lambda monkeypatch: serve_blk(monkeypatch, 503), {"predecessor": "HTTPError"},  # BUG-279
+     "SEC EDGAR: BLK's predecessor, CIK 0001364742, couldn't be read (HTTPError), so its history is missing from "
+     "this run"),
+])
+def test_a_job_stores_what_its_sec_read_lacked(monkeypatch, web_db: Path, tmp_path: Path, ticker, serve, incomplete,
+                                               warning) -> None:
+    """A web collection stores a run as a terminal one does, with what its SEC read lacked, so the refresh collects
+    the company again: DLR's companyfacts without its latest 10-Q, BLK's predecessor unread."""
+    app = create_app(settings=WebSettings(db_path=web_db, allow_collection=True))
+    app.state.job_manager.fetcher_factory = lambda config: StockDataFetcher(AppConfig(
+        storage=StorageConfig(base_dir=tmp_path, db_path=config.storage.database_path)))
+    client = TestClient(app)
+    serve(monkeypatch)
+    r = client.post("/api/collection/jobs", json={"tickers": [ticker]})
+    assert r.status_code == 202
+    assert _wait_until_done(client, r.json()["job_id"])["state"] == "done"
+    warnings, stored = stored_run(web_db, ticker)
+    assert stored == incomplete and warning in warnings
+
+
 # ---------------------------------------------------------------------------
 # Tests: POST /ui/stocks/{ticker}/update (Task 2 — UPDATE DATA button)
 # ---------------------------------------------------------------------------
@@ -319,3 +369,39 @@ def test_update_route_disabled_409(web_db: Path) -> None:
     r = client.post("/ui/stocks/AAA/update")
     assert r.status_code == 409
     assert "Collection is disabled." in r.text
+
+
+class _FailingFetcher(FakeFetcher):
+    """AAA's collection ends with errors, BBB's with none."""
+
+    def fetch_ticker(self, ticker: str, include_yahoo: bool = True, include_sec: bool = True,
+                     years_back: Optional[int] = None) -> StockData:
+        stock = StockData(ticker=ticker)
+        if ticker == "AAA":
+            stock.add_error("SEC EDGAR companyfacts: 403 Client Error: Forbidden")
+            stock.add_error("SEC EDGAR submissions: timed out")
+        return stock
+
+
+def test_a_job_names_the_tickers_that_failed_and_why(monkeypatch, web_db: Path) -> None:
+    # BUG-068: the card read "1 with errors" and named no ticker or error.
+    monkeypatch.setattr("src.valuation.engine.compute_and_store", lambda db_path, tickers=None, logger=None: 0)
+    client = _make_client(web_db)
+    client.app.state.job_manager.fetcher_factory = lambda config: _FailingFetcher()
+    job_id = client.post("/api/collection/jobs", json={"tickers": ["AAA", "BBB"]}).json()["job_id"]
+    final = _wait_until_done(client, job_id)
+    assert final["summary"]["with_errors"] == 1
+    assert final["summary"]["errors"] == {
+        "AAA": "SEC EDGAR companyfacts: 403 Client Error: Forbidden; SEC EDGAR submissions: timed out"}
+    card = client.get(f"/ui/collection/jobs/{job_id}").text
+    assert "AAA" in card and "403 Client Error: Forbidden" in card and "submissions: timed out" in card
+    assert "BBB" not in card
+
+
+def test_a_job_without_failures_lists_none(monkeypatch, web_db: Path) -> None:
+    monkeypatch.setattr("src.valuation.engine.compute_and_store", lambda db_path, tickers=None, logger=None: 0)
+    client = _make_client(web_db)
+    job_id = client.post("/api/collection/jobs", json={"tickers": ["AAA"]}).json()["job_id"]
+    final = _wait_until_done(client, job_id)
+    assert final["summary"]["errors"] == {}
+    assert "job-errors" not in client.get(f"/ui/collection/jobs/{job_id}").text

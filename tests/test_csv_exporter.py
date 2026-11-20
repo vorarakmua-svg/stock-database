@@ -112,6 +112,30 @@ def test_an_unreadable_summary_is_kept_aside_not_overwritten(tmp_path: Path) -> 
     assert [r["ticker"] for r in _rows(path)] == ["CCC"]
 
 
+def test_unreadable_files_kept_aside_in_the_same_second_are_all_kept(tmp_path: Path,
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    # BUG-027 (code review 2): the kept copy's name has one-second resolution and Path.replace overwrites, so a
+    # second unreadable file moved aside in the same second took the first one's place.
+    from datetime import datetime
+
+    from src.exporters import csv_exporter
+
+    class FrozenClock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> "FrozenClock":
+            return cls(2026, 11, 20, 9, 30, 0)
+
+    monkeypatch.setattr(csv_exporter, "datetime", FrozenClock)
+    path = tmp_path / "summary.csv"
+    exporter = CSVExporter(tmp_path)
+    originals = [f"ticker,company_name\r\n{t},Société {t}\r\n".encode("cp1252") for t in ("AAA", "BBB", "CCC")]
+    for original in originals:
+        path.write_bytes(original)
+        exporter.export([_stock("DDD")])
+    assert sorted(kept.read_bytes() for kept in tmp_path.glob("summary.unreadable-*.csv")) == sorted(originals)
+    assert [r["ticker"] for r in _rows(path)] == ["DDD"]
+
+
 def test_a_failure_mid_write_leaves_the_old_summary_whole(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     exporter = CSVExporter(tmp_path)
     exporter.export([_stock("AAA"), _stock("BBB")])

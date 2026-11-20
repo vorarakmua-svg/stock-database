@@ -2,20 +2,200 @@
 
 import json
 import logging
+import re
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import requests
 
+from ..parsers import xbrl_instance
+from ..parsers.xbrl_instance import companyfacts_from_instance
 from .rate_limiter import RateLimiter, RetryHandler, is_transient_error
+
+#: A registrant SEC's ticker map now sends to a successor formed to take its place (a holding
+#: company reorganization), mapped from the successor's CIK: the successor's company facts are
+#: read with the predecessor's, so the ticker keeps its history (Q6, the user's decisions of
+#: 2026-10-21). XOM since 2026-07: ExxonMobil Holdings Corp, whose 10-Qs follow Exxon Mobil
+#: Corp's 20 years. BLK since 2024-10: BlackRock, Inc., formed with the GIP acquisition, after
+#: the old BlackRock, now BlackRock Finance, Inc.
+PREDECESSOR_CIKS: Dict[str, str] = {
+    "0002115436": "0000034088",
+    "0002012383": "0001364742",
+}
+
+_REPORT_FORMS = ("10-K", "10-Q", "20-F", "40-F")
+
+#: The most reports a collection reads from their own XBRL when the companyfacts lack them (Q17): a year's, the
+#: latest and the three before it; the submissions keep as many (``reports``).
+XBRL_REPORTS_READ = 4
+
+#: A filing's linkbases and the EDGAR documents beside its instance, none of them an instance.
+_NOT_INSTANCES = ("_cal.xml", "_def.xml", "_lab.xml", "_pre.xml", "filingsummary.xml")
+
+
+def _entries(facts: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+    for tags in (facts.get("facts") or {}).values():
+        for body in tags.values():
+            for entries in (body.get("units") or {}).values():
+                yield from entries
+
+
+def merge_company_facts(current: Dict[str, Any], earlier: Dict[str, Any]) -> Dict[str, Any]:
+    """*current*'s company facts with a predecessor's (*earlier*) beside them: each tag's entries
+    from both filers, whose accession numbers never coincide, and the successor's own name. The
+    predecessor's count only as filed before the successor's first annual or quarterly report:
+    from then on the successor reports, and a predecessor that keeps filing as its subsidiary
+    (Exxon Mobil Corp's 10-Q of 2026-08-03) reports another entity."""
+    reports = [e.get("filed") or "" for e in _entries(current) if (e.get("form") or "").startswith(_REPORT_FORMS)]
+    first = min(reports) if reports else None
+    facts: Dict[str, Dict[str, Any]] = {}
+    for source in (earlier, current):
+        for taxonomy, tags in (source.get("facts") or {}).items():
+            merged = facts.setdefault(taxonomy, {})
+            for tag, body in tags.items():
+                into = merged.setdefault(tag, {**{k: v for k, v in body.items() if k != "units"}, "units": {}})
+                for unit, entries in (body.get("units") or {}).items():
+                    into["units"].setdefault(unit, []).extend(
+                        entries if source is current or first is None
+                        else [e for e in entries if (e.get("filed") or "") < first])
+    return {**current, "facts": facts}
+
+
+def _latest_report(filings: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The latest of *filings* (a submissions feed's entries) that ``report_without_facts`` looks for, None when there
+    is none: a report the parser reads, as filed (a 10-K, 10-Q, 20-F or 40-F, not an amendment, which often has no
+    financial facts: a 10-K/A of Part III; nor a 10-KT), and filed with XBRL, as only such a report ever gets facts
+    that change the record."""
+    reports = [f for f in filings if f.get("form") in _REPORT_FORMS and f.get("isXBRL") != 0]
+    if not reports:
+        return None
+    return max(reports, key=lambda f: (str(f.get("filingDate") or ""), str(f.get("acceptanceDateTime") or "")))
+
+
+def _newest_reports(filings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The newest XBRL_REPORTS_READ of *filings* that ``_latest_report``'s rule looks for, newest first."""
+    reports = [f for f in filings if f.get("form") in _REPORT_FORMS and f.get("isXBRL") != 0]
+    reports.sort(key=lambda f: (str(f.get("filingDate") or ""), str(f.get("acceptanceDateTime") or "")), reverse=True)
+    return reports[:XBRL_REPORTS_READ]
+
+
+def report_without_facts(submissions: Optional[Dict[str, Any]],
+                         facts: Optional[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+    """The latest report *submissions* (``get_submissions``') list when *facts*, the companyfacts read with them (None
+    when that request failed or the SEC has none), carry no fact of it: the SEC's lag, after which a run's figures
+    stop at the report before (BUG-251: on 2026-10-25 DLR's companyfacts had no fact of its 10-Q of 2026-07-31, though
+    they had its 424B7 of 2026-08-19). Its form, accession and filing date; None when the facts carry it, or when there
+    is none to look for.
+
+    The report is the latest of the feed's whole "recent" block (``_latest_report``'s rule: as filed, with XBRL), kept
+    beside the newest 100 filings as ``latest_report``, which a bank's 424B2s fill in days (BUG-285: JPM's held 94
+    424B2s of two days and no report); submissions cached before that was kept give their newest 100 alone. Its facts
+    count under any taxonomy (an IFRS filer's 20-F under ifrs-full)."""
+    listed = submissions or {}
+    # The newest 100 and the latest report behind them: an empty entry where none was kept is no report.
+    latest = _latest_report([*(listed.get("filings") or []), listed.get("latest_report") or {}])
+    if latest is None:
+        return None
+    accession = latest.get("accessionNumber")
+    if not accession or any(e.get("accn") == accession for e in _entries(facts or {})):
+        return None
+    return {"form": str(latest["form"]), "accession": str(accession), "filed": str(latest.get("filingDate") or "")[:10]}
+
+
+def _named(filing: Dict[str, Any]) -> Dict[str, str]:
+    """A report as a run names it: its form, accession and filing date."""
+    return {"form": str(filing.get("form")), "accession": str(filing.get("accessionNumber")),
+            "filed": str(filing.get("filingDate") or "")[:10]}
+
+
+def reports_without_facts(submissions: Optional[Dict[str, Any]],
+                          facts: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The reports *submissions* list (``_latest_report``'s rule: as filed, with XBRL) that *facts* carry no fact of,
+    newest first, from the latest back to the first the facts carry, at most XBRL_REPORTS_READ: the gap whose figures a
+    run reads from the filings' own XBRL (Q17). Its first is ``report_without_facts``'; empty when that is None. The
+    reports are the submissions' ``reports`` (the newest of the feed's "recent" block), else, in a file cached before
+    those were kept, the newest 100 filings and the latest report."""
+    return report_gap(submissions, facts)[0]
+
+
+def report_gap(submissions: Optional[Dict[str, Any]],
+               facts: Optional[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], bool]:
+    """``reports_without_facts``' gap, and whether it ends at a report the facts carry (the report after its last,
+    among those listed): only then is the gap known whole. False when it runs past XBRL_REPORTS_READ reports or past
+    the reports listed (a file cached before ``reports`` were kept lists the newest 100 filings alone, BUG-337)."""
+    listed = submissions or {}
+    candidates = [f for f in [*(listed.get("reports") or []), *(listed.get("filings") or []),
+                              listed.get("latest_report") or {}]
+                  if f.get("form") in _REPORT_FORMS and f.get("isXBRL") != 0]
+    newest: Dict[str, Dict[str, Any]] = {}
+    for filing in sorted(candidates, key=lambda f: (str(f.get("filingDate") or ""),
+                                                     str(f.get("acceptanceDateTime") or "")), reverse=True):
+        newest.setdefault(str(filing.get("accessionNumber") or ""), filing)
+    carried = {e.get("accn") for e in _entries(facts or {})}
+    gap: List[Dict[str, Any]] = []
+    for accession, filing in newest.items():
+        if accession and accession in carried:
+            return gap, True
+        if not accession or len(gap) == XBRL_REPORTS_READ:
+            break
+        gap.append(filing)
+    return gap, False
+
+
+def merge_report_facts(facts: Dict[str, Any], read: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """*facts* (companyfacts) with the facts of reports read from their own XBRL (*read*, each in companyfacts' shape,
+    ``get_filing_facts``) beside them, under the same taxonomy, concept and unit. The companyfacts win: a fact of an
+    accession they carry any fact of is left out (a report they lack has none; one they carry is never read)."""
+    carried = {e.get("accn") for e in _entries(facts)}
+    merged = {taxonomy: dict(tags) for taxonomy, tags in (facts.get("facts") or {}).items()}
+    for piece in read:
+        for taxonomy, tags in (piece.get("facts") or {}).items():
+            into_taxonomy = merged.setdefault(taxonomy, {})
+            for tag, body in tags.items():
+                held = into_taxonomy.get(tag) or {"units": {}}
+                into = {**held, "units": {unit: list(entries) for unit, entries in (held.get("units") or {}).items()}}
+                for unit, entries in (body.get("units") or {}).items():
+                    into["units"].setdefault(unit, []).extend(e for e in entries if e.get("accn") not in carried)
+                into_taxonomy[tag] = into
+    return {**facts, "facts": merged}
+
+
+def _instance_name(names: List[str], primary: str) -> Optional[str]:
+    """A filing's XBRL instance among its documents (*names*, as its index lists them): EDGAR's extracted instance of
+    an inline filing (the primary document's ``_htm.xml``, else the one ``_htm.xml``), else the ``.xml`` that is no
+    linkbase and no FilingSummary, the one named after the filing's schema first. None when there is none."""
+    stem = primary.rsplit(".", 1)[0]
+    if f"{stem}_htm.xml" in names:
+        return f"{stem}_htm.xml"
+    extracted = sorted(n for n in names if n.lower().endswith("_htm.xml"))
+    if extracted:
+        return extracted[0]
+    schemas = {n[:-4] for n in names if n.lower().endswith(".xsd")}
+    instances = sorted((n[:-4] not in schemas, n) for n in names
+                       if n.lower().endswith(".xml") and not n.lower().endswith(_NOT_INSTANCES)
+                       and not re.fullmatch(r"R\d+\.xml", n))  # an early filing's rendered pages
+    return instances[0][1] if instances else None
+
+
+def _why(exc: Exception) -> str:
+    """An exception as a run's warning gives the reason."""
+    return str(exc) or type(exc).__name__
+
 
 # Default time-to-live for cached SEC payloads (companyfacts/submissions).
 # These update at most quarterly, so a week-long cache is safe and slashes
 # repeated network load when re-running over many tickers.
 _DEFAULT_CACHE_TTL_SECONDS = 7 * 24 * 3600
+#: The shape of ``get_submissions``' answer, kept in its cached file (``cache_version``): a file cached by a build that
+#: gave another shape (without ``latest_report``, BUG-285, or ``reports``, Q17) is fetched again, not read for the
+#: cache's week (BUG-296). Bump it with any change to the answer's keys or their meaning.
+SUBMISSIONS_CACHE_VERSION = 1
+#: How long the SEC's ticker map (company_tickers.json) is read from the cache: a ticker listed since was "CIK not
+#: found", and its company stored without SEC data (BUG-235). A ticker the cached map lacks reads it again, once.
+TICKER_MAP_TTL_SECONDS = 7 * 24 * 3600
 
 
 class SECHandler:
@@ -34,6 +214,9 @@ class SECHandler:
 
     SEC_BASE_URL = "https://data.sec.gov"
     SEC_WWW_URL = "https://www.sec.gov"
+    #: Each thread's ``fetch_all`` in progress: the times its payloads read from the payload cache were cached
+    #: (``cached``, None outside a ``fetch_all``), for the run's ``sec_read_at`` (BUG-232).
+    _reading = threading.local()
 
     def __init__(
         self,
@@ -85,6 +268,8 @@ class SECHandler:
 
         # CIK mapping cache
         self._cik_mapping: Optional[Dict[str, str]] = None
+        # Whether this handler asked the SEC for the map: a map from the cache that lacks a ticker is asked for once.
+        self._cik_map_asked = False
 
         # Fallback mappings for tickers missing from SEC's company_tickers.json
         # These are common stocks where only preferred tickers are listed
@@ -132,14 +317,19 @@ class SECHandler:
         """Return cached JSON if present and fresher than the TTL, else None."""
         if self.cache_ttl_seconds <= 0 or not path.exists():
             return None
-        if (time.time() - path.stat().st_mtime) > self.cache_ttl_seconds:
+        cached_at = path.stat().st_mtime
+        if (time.time() - cached_at) > self.cache_ttl_seconds:
             return None
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                payload = json.load(f)
         except Exception as e:
             self.logger.debug(f"Cache read failed for {path}: {e}")
             return None
+        cached = getattr(self._reading, "cached", None)
+        if cached is not None:  # within a fetch_all: its SEC data is as old as this payload
+            cached.append(cached_at)
+        return payload
 
     def _write_payload_cache(self, path: Path, data: Dict[str, Any]) -> None:
         if self.cache_ttl_seconds <= 0:
@@ -159,8 +349,24 @@ class SECHandler:
             ticker: Stock ticker symbol (e.g., 'AAPL')
 
         Returns:
-            Dictionary containing all fetched SEC data
+            Dictionary containing all fetched SEC data, with ``missing_report`` when the companyfacts carry no fact of
+            the latest report the submissions list (``report_without_facts``); then the facts of the reports they lack
+            are read from the filings' own XBRL into ``company_facts`` (``_read_gap``, Q17). ``sec_read_at``: when the
+            SEC served the oldest companyfacts (a predecessor's too) or submissions read, naive local as
+            ``fetched_at``: a payload from the cache when it was cached, else as this asked (BUG-232: a run on
+            the 7-day cache lacks what was filed since)
         """
+        self._reading.cached = []
+        asked = datetime.now()
+        try:
+            data = self._fetch_all(ticker)
+        finally:
+            cached, self._reading.cached = self._reading.cached, None
+        data["sec_read_at"] = min([asked] + [datetime.fromtimestamp(at) for at in cached]).isoformat()
+        return data
+
+    def _fetch_all(self, ticker: str) -> Dict[str, Any]:
+        """``fetch_all``'s data but ``sec_read_at``."""
         self.logger.info(f"Fetching SEC EDGAR data for {ticker}")
 
         # Get CIK for ticker
@@ -189,6 +395,22 @@ class SECHandler:
             self.logger.error(f"Error fetching company facts: {e}")
             data["company_facts_error"] = str(e)
 
+        # A successor's history is its predecessor's filings (PREDECESSOR_CIKS).
+        predecessor = PREDECESSOR_CIKS.get(cik)
+        if predecessor and data.get("company_facts"):
+            data["predecessor_cik"] = predecessor
+            try:
+                earlier = self.get_company_facts(predecessor)
+            except Exception as e:
+                earlier = None
+                data["predecessor_error"] = str(e) or type(e).__name__
+            if earlier:
+                data["company_facts"] = merge_company_facts(data["company_facts"], earlier)
+                data["predecessor_name"] = earlier.get("entityName")
+            else:
+                data.setdefault("predecessor_error", "no XBRL data")
+                self.logger.warning(f"Predecessor CIK {predecessor} of {ticker} not read: {data['predecessor_error']}")
+
         # Fetch submissions (filing history)
         try:
             submissions = self.get_submissions(cik)
@@ -196,13 +418,117 @@ class SECHandler:
                 data["submissions"] = submissions
         except Exception as e:
             self.logger.error(f"Error fetching submissions: {e}")
-            data["submissions_error"] = str(e)
+            # Never empty: without the submissions the run can't look for a report its companyfacts lack (BUG-282).
+            data["submissions_error"] = _why(e)
+
+        # The latest report the submissions list whose facts the companyfacts lack (BUG-251), and those reports' facts
+        # read from their own XBRL (Q17).
+        missing = report_without_facts(data.get("submissions"), data.get("company_facts"))
+        if missing:
+            data["missing_report"] = missing
+            self.logger.warning(f"The SEC's companyfacts of {ticker} carry no fact of its {missing['form']} filed "
+                                f"{missing['filed']} ({missing['accession']})")
+            if data.get("company_facts"):
+                self._read_gap(ticker, cik, data)
 
         if "company_facts_error" in data or "submissions_error" in data:
             self.logger.warning(f"SEC data for {ticker} is incomplete (see the error above)")
         else:
             self.logger.info(f"Successfully fetched SEC data for {ticker}")
         return data
+
+    def _read_gap(self, ticker: str, cik: str, data: Dict[str, Any]) -> None:
+        """Read the reports *data*'s companyfacts lack (``reports_without_facts``: the latest and up to three before
+        it) from their own XBRL (``get_filing_facts``: one request each, two for a filing that isn't inline) into
+        ``company_facts`` (``merge_report_facts``). ``reports_read`` names those read and their instance documents,
+        ``reports_unread`` those that couldn't be, and why; a failure never fails the collection. When every one was
+        read and the gap ends at a report the companyfacts carry (``report_gap``) the run's figures are whole:
+        ``missing_report`` gains ``recovered``, and the run isn't stored as incomplete (it is still named in the run's
+        warning). A gap whose end wasn't reached (over XBRL_REPORTS_READ reports, or past those the submissions list)
+        leaves the run incomplete, so the refresh collects it again (BUG-337)."""
+        read: List[Dict[str, Any]] = []
+        unread: List[Dict[str, str]] = []
+        pieces: List[Dict[str, Any]] = []
+        gap, whole = report_gap(data.get("submissions"), data.get("company_facts"))
+        for filing in gap:
+            try:
+                instance, facts = self.get_filing_facts(cik, filing)
+            except Exception as e:
+                unread.append({**_named(filing), "why": _why(e)})
+                self.logger.warning(f"The XBRL of {ticker}'s {filing.get('form')} filed {filing.get('filingDate')} "
+                                    f"couldn't be read: {_why(e)}")
+                continue
+            read.append({**_named(filing), "instance": instance})
+            pieces.append(facts)
+        if pieces:
+            data["company_facts"] = merge_report_facts(data["company_facts"], pieces)
+        data["reports_read"], data["reports_unread"] = read, unread
+        if read and not unread and whole:
+            data["missing_report"] = {**data["missing_report"], "recovered": True}
+
+    # ---- a filing's own XBRL (Q17) ----------------------------------------
+
+    def _filing_cache_path(self, cik: str, accession: str) -> Path:
+        return self.cache_dir / f"xbrl_CIK{str(cik).zfill(10)}_{accession}.json"
+
+    def _read_filing_cache(self, path: Path) -> Optional[Dict[str, Any]]:
+        """A filing's cached facts (``get_filing_facts``), at any age, as a filing's documents never change; None when
+        the cache is off (a TTL of 0 or less), or the file is missing, unreadable or of another version: the instance
+        reader's (``xbrl_instance.READER_VERSION``), as the facts are what it read (BUG-340)."""
+        if self.cache_ttl_seconds <= 0 or not path.exists():
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+        except Exception as e:
+            self.logger.debug(f"Cache read failed for {path}: {e}")
+            return None
+        if not isinstance(cached, dict) or cached.get("version") != xbrl_instance.READER_VERSION:
+            return None
+        return cached
+
+    def get_filing_facts(self, cik: str, filing: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        """The facts of *filing* (an entry of the submissions feed) from its own XBRL instance, in companyfacts' shape
+        (``companyfacts_from_instance``: its form and filing date as the feed lists them), and the instance's name.
+        Read from the payload cache when a run cached it before; else fetched through the rate limiter (``_instance``)
+        and cached. Raises when the instance can't be fetched or read."""
+        accession = str(filing.get("accessionNumber") or "")
+        path = self._filing_cache_path(cik, accession)
+        cached = self._read_filing_cache(path)
+        if cached is not None:
+            return str(cached.get("instance")), cached.get("facts") or {}
+        instance, content = self._instance(cik, filing)
+        facts = companyfacts_from_instance(content, cik, accession, str(filing.get("form")),
+                                           str(filing.get("filingDate") or "")[:10])
+        self._write_payload_cache(path, {"version": xbrl_instance.READER_VERSION, "accession": accession,
+                                         "instance": instance, "facts": facts})
+        return instance, facts
+
+    def _instance(self, cik: str, filing: Dict[str, Any]) -> Tuple[str, bytes]:
+        """*filing*'s XBRL instance document: its name and content. An inline filing's is EDGAR's extracted instance,
+        named after its primary document (``c-20260630.htm`` -> ``c-20260630_htm.xml``): one request. Else, or when
+        that isn't there, the filing's index names it (``_instance_name``): two."""
+        folder = (f"{self.SEC_WWW_URL}/Archives/edgar/data/{int(cik)}/"
+                  f"{str(filing.get('accessionNumber') or '').replace('-', '')}/")
+        primary = str(filing.get("primaryDocument") or "")
+        tried: List[str] = []
+        if filing.get("isInlineXBRL") and primary.lower().endswith((".htm", ".html")):
+            name = primary.rsplit(".", 1)[0] + "_htm.xml"
+            response = self._request(folder + name, timeout=60)
+            if response.status_code == 200:
+                return name, response.content
+            tried.append(f"HTTP {response.status_code} for {name}")
+        response = self._request(folder + "index.json", timeout=30)
+        if response.status_code != 200:
+            raise LookupError("; ".join(tried + [f"HTTP {response.status_code} for the filing's index"]))
+        items = ((response.json() or {}).get("directory") or {}).get("item") or []
+        found = _instance_name([str(item.get("name") or "") for item in items], primary)
+        if not found:
+            raise LookupError("; ".join(tried + ["no XBRL instance among the filing's documents"]))
+        response = self._request(folder + found, timeout=60)
+        if response.status_code != 200:
+            raise LookupError("; ".join(tried + [f"HTTP {response.status_code} for {found}"]))
+        return found, response.content
 
     def ticker_to_cik(self, ticker: str) -> Optional[str]:
         """
@@ -233,10 +559,20 @@ class SECHandler:
         if fallback_cik:
             return str(fallback_cik).zfill(10)
 
+        # A map read from the cache may predate the ticker (BUG-235): ask the SEC for it, once a handler.
+        if self._cik_mapping is not None and not self._cik_map_asked:
+            with self._cik_lock:
+                if not self._cik_map_asked:
+                    self._fetch_cik_mapping()
+            cik = (self._cik_mapping or {}).get(ticker)
+            if cik:
+                return str(cik).zfill(10)
+
         return None
 
     def _load_cik_mapping(self) -> None:
-        """Load ticker to CIK mapping from SEC."""
+        """Load ticker to CIK mapping from SEC: the cached copy while it is under TICKER_MAP_TTL_SECONDS old, else
+        the SEC's, else (the request failed) the cached copy at any age (BUG-235)."""
         # Try to load from cache first
         cache_file = self.cache_dir / "company_tickers.json"
 
@@ -245,16 +581,23 @@ class SECHandler:
                 with open(cache_file, 'r') as f:
                     data = json.load(f)
                 self._cik_mapping = self._parse_tickers_json(data)
-                self.logger.info("Loaded CIK mapping from cache")
-                return
+                if time.time() - cache_file.stat().st_mtime <= TICKER_MAP_TTL_SECONDS:
+                    self.logger.info("Loaded CIK mapping from cache")
+                    return
             except Exception as e:
                 self.logger.warning(f"Error loading cached CIK mapping: {e}")
 
-        # Fetch from SEC
+        self._fetch_cik_mapping()
+
+    def _fetch_cik_mapping(self) -> None:
+        """Fetch the SEC's ticker map into the mapping and the cache. A failed request keeps the mapping as it was
+        (one from the cache, or None, so a later ticker can retry the fetch within the same run)."""
+        cache_file = self.cache_dir / "company_tickers.json"
         url = f"{self.SEC_WWW_URL}/files/company_tickers.json"
         self.logger.info("Fetching CIK mapping from SEC...")
 
         try:
+            self._cik_map_asked = True
             response = self._request(url, timeout=30)
             response.raise_for_status()
 
@@ -269,10 +612,12 @@ class SECHandler:
             self.logger.info(f"Loaded {len(self._cik_mapping)} ticker mappings")
 
         except Exception as e:
+            if self._cik_mapping is not None:
+                self.logger.warning(f"Error fetching CIK mapping: {e}; the cached map stands")
+                return
             # Leave the mapping as None (not {}) so a later ticker can retry the
             # fetch within the same run instead of being permanently disabled.
             self.logger.error(f"Error fetching CIK mapping: {e}")
-            self._cik_mapping = None
 
     def _parse_tickers_json(self, data: Dict) -> Dict[str, str]:
         """Parse SEC company_tickers.json format."""
@@ -330,15 +675,19 @@ class SECHandler:
             cik: 10-digit CIK number
 
         Returns:
-            Dictionary containing submissions data, or None on error
+            Dictionary containing submissions data, or None on error: ``filings``, the newest 100 of the feed's
+            "recent" block, and ``latest_report``, the latest report of that whole block (``_latest_report``; None
+            when it lists none), which the newest 100 of a bank's feed don't reach (BUG-285); ``reports``, the newest
+            XBRL_REPORTS_READ reports by that rule, newest first (Q17)
         """
         cik = str(cik).zfill(10)
 
         cache_path = self._payload_cache_path("submissions", cik)
         cached = self._read_payload_cache(cache_path)
-        if cached is not None:
+        # A file cached in another shape is fetched again (BUG-296: one without latest_report hid a bank's reports).
+        if cached is not None and cached.get("cache_version") == SUBMISSIONS_CACHE_VERSION:
             self.logger.debug(f"submissions cache hit for CIK {cik}")
-            return cached
+            return {key: value for key, value in cached.items() if key != "cache_version"}
 
         url = f"{self.SEC_BASE_URL}/submissions/CIK{cik}.json"
         self.logger.debug(f"Fetching submissions from {url}")
@@ -351,6 +700,9 @@ class SECHandler:
 
         response.raise_for_status()
         data = response.json()
+        # Every entry of the "recent" block (a year's, or the latest 1,000 when that's more), newest first.
+        feed = data.get("filings", {})
+        recent = self._extract_recent_filings(feed, limit=len((feed.get("recent") or {}).get("accessionNumber") or []))
 
         # Extract relevant fields
         result = {
@@ -368,10 +720,13 @@ class SECHandler:
             "state_of_incorporation_description": data.get("stateOfIncorporationDescription"),
             "addresses": data.get("addresses", {}),
             "phone": data.get("phone"),
-            "filings": self._extract_recent_filings(data.get("filings", {})),
+            "filings": recent[:100],
+            "latest_report": _latest_report(recent),
+            # The newest reports by the same rule, which a run whose companyfacts lack them reads from their own XBRL.
+            "reports": _newest_reports(recent),
         }
 
-        self._write_payload_cache(cache_path, result)
+        self._write_payload_cache(cache_path, {**result, "cache_version": SUBMISSIONS_CACHE_VERSION})
         return result
 
     def _extract_recent_filings(
@@ -436,6 +791,11 @@ class SECHandler:
         ][:limit]
 
         return form4_filings
+
+    def get_raw(self, url: str) -> requests.Response:
+        """GET any SEC URL (a filing's document, a submissions page) through this handler's rate limiter,
+        retries and User-Agent; the caller reads the status and the body."""
+        return self._request(url, timeout=30)
 
     def close(self) -> None:
         """Close the session."""

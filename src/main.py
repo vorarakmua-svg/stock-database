@@ -6,15 +6,37 @@ Usage:
     python -m src.main AAPL --output-dir ./my_data
     python -m src.main AAPL MSFT --no-sec --formats json
     python -m src.main AAPL --years 10 --verbose
+    python -m src.main --tickers-file universe/core.txt
+    python -m src.main --tickers-file universe/sp500-2026-10-25.csv --skip-existing
+    python -m src.main refresh [--steps LIST] [--force] [--db PATH] [--output-dir DIR] [--cache-dir DIR]
+
+The tickers are the positional ones, then each --tickers-file's (a .txt, a ticker a line, or a .csv's ticker or
+Symbol column; ``src/universe/tickers.py``), in Yahoo's form (BRK.B as BRK-B), each once, in order.
+--skip-existing leaves out the tickers already in the database the run writes to (--db, else
+<output-dir>/output/stock.db), and a ticker whose company is stored under another ticker (a .csv's ``cik`` column
+against the database's CIKs: GOOG beside the stored GOOGL). Exit 1 when no ticker remains to collect
+(docs/superpowers/specs/2026-10-25-universe-automation-design.md, "The universe").
+
+The companies are exported, stored and valued --batch-size at a time as they arrive (code review 19, I-1). Exit 1 when
+the database didn't store every company fetched (each one it didn't is named), 130 on Ctrl+C, which keeps the batches
+stored: run it again for the rest (--skip-existing leaves out the companies already stored).
+
+``refresh`` as the first argument runs ``stock-data refresh`` (``src/refresh.py``) with the rest: no ticker is called
+REFRESH (the same spec, "stock-data refresh").
 """
 
 import argparse
 import logging
+import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Set
 
-from .config import AppConfig, SECConfig, StorageConfig, YahooConfig
-from .fetchers.stock_data_fetcher import StockDataFetcher
+from .config import DEFAULT_BATCH_SIZE, AppConfig, SECConfig, StorageConfig, YahooConfig
+from .exporters.sqlite_store import read_only_uri
+from .fetchers.stock_data_fetcher import CollectionInterrupted, StockDataFetcher
+from .universe.tickers import CIK_PATTERN, read_ciks_file, read_tickers_file, unique_tickers
 
 
 def setup_logging(verbose: bool = False) -> logging.Logger:
@@ -30,7 +52,79 @@ def setup_logging(verbose: bool = False) -> logging.Logger:
     return logging.getLogger("stock_fetcher")
 
 
-def parse_args() -> argparse.Namespace:
+def resolve_tickers(tickers: Sequence[str], files: Sequence[Path] = ()) -> List[str]:
+    """The tickers to collect: the positional *tickers* (a blank one left out), then each of *files*'
+    (``read_tickers_file``), in Yahoo's form, each once, in order. Raises ValueError for one that isn't a ticker or a
+    file that isn't a tickers file, OSError for a file that can't be read."""
+    named = [ticker for ticker in tickers if ticker.strip()]
+    for path in files:
+        named += read_tickers_file(path)
+    return unique_tickers(named)
+
+
+def stored_tickers(db_path: Path) -> Set[str]:
+    """The tickers in the database's companies table, read through a read-only connection: none without a database
+    (none is created), or with one that has no companies table yet."""
+    if not Path(db_path).is_file():
+        return set()
+    with closing(sqlite3.connect(read_only_uri(db_path), uri=True)) as conn:
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'companies'").fetchone() is None:
+            return set()
+        return {row[0] for row in conn.execute("SELECT ticker FROM companies")}
+
+
+def resolve_ciks(files: Sequence[Path] = ()) -> Dict[str, str]:
+    """The CIK each ticker of *files* (``read_ciks_file``) is listed with, the first file's for a ticker in two. Raises
+    ValueError for a CIK that isn't one, OSError for a file that can't be read."""
+    ciks: Dict[str, str] = {}
+    for path in files:
+        for ticker, cik in read_ciks_file(path).items():
+            ciks.setdefault(ticker, cik)
+    return ciks
+
+
+def stored_ciks(db_path: Path) -> Dict[str, str]:
+    """The CIKs in the database's companies table (ten digits, zero-padded), each with the ticker it is stored under,
+    read through a read-only connection: none without a database, or one without a companies table. A company
+    without a CIK (or one that isn't digits) is left out."""
+    if not Path(db_path).is_file():
+        return {}
+    with closing(sqlite3.connect(read_only_uri(db_path), uri=True)) as conn:
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'companies'").fetchone() is None:
+            return {}
+        rows = conn.execute("SELECT cik, ticker FROM companies ORDER BY ticker").fetchall()
+    held: Dict[str, str] = {}
+    for cik, ticker in rows:
+        if CIK_PATTERN.fullmatch(str(cik).strip()):
+            held.setdefault(str(cik).strip().zfill(10), ticker)
+    return held
+
+
+def _store_failures(summary: Dict[str, Any], logger: logging.Logger) -> bool:
+    """Log what the database didn't take, named: each batch whose whole export failed, then each company fetched but
+    not stored, with why. True when there was any: the run's exit 1."""
+    errors = summary.get("sqlite_errors") or []
+    for error in errors:
+        logger.error(f"The SQLite export failed: {error}")
+    not_stored = summary.get("not_stored") or {}
+    if not_stored:
+        logger.error(f"Not stored in the database ({len(not_stored)} of {summary.get('tickers_fetched')}): "
+                     + "; ".join(f"{ticker} ({why})" for ticker, why in not_stored.items()))
+    return bool(errors or not_stored)
+
+
+def _batch_size(value: str) -> int:
+    """``--batch-size``: a whole number, 1 or more."""
+    try:
+        size = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {value!r}") from None
+    if size < 1:
+        raise argparse.ArgumentTypeError(f"must be 1 or more, not {size}")
+    return size
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description="Fetch US stock fundamentals from Yahoo Finance and SEC EDGAR",
@@ -54,13 +148,34 @@ Examples:
 
     # Verbose logging
     python -m src.main AAPL -v
+
+    # A list of tickers (repeatable, beside positional tickers)
+    python -m src.main --tickers-file universe/core.txt
+
+    # The S&P 500's members not yet in the database
+    python -m src.main --tickers-file universe/sp500-2026-10-25.csv --skip-existing
         """
     )
 
     parser.add_argument(
         "tickers",
-        nargs="+",
-        help="Stock ticker symbols (e.g., AAPL MSFT GOOGL)"
+        nargs="*",
+        help="Stock ticker symbols (e.g., AAPL MSFT GOOGL); optional with --tickers-file"
+    )
+
+    parser.add_argument(
+        "--tickers-file",
+        type=Path,
+        action="append",
+        metavar="PATH",
+        help="A file of tickers to collect (repeatable): a .txt (a ticker a line, '#' comments) or a .csv (its "
+             "ticker or Symbol column); added after the positional tickers, each ticker once"
+    )
+
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Leave out the tickers already in the database (--db, else <output-dir>/output/stock.db)"
     )
 
     parser.add_argument(
@@ -101,6 +216,15 @@ Examples:
     )
 
     parser.add_argument(
+        "--batch-size",
+        type=_batch_size,
+        default=DEFAULT_BATCH_SIZE,
+        metavar="N",
+        help=f"Companies exported, stored and valued at a time as they arrive (default: {DEFAULT_BATCH_SIZE}); a run "
+             "stopped part way keeps the batches it stored"
+    )
+
+    parser.add_argument(
         "--sec-user-agent",
         type=str,
         default="StockDataCollector admin@example.com",
@@ -125,27 +249,68 @@ Examples:
         help="Enable verbose logging"
     )
 
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> int:
-    """Main entry point."""
-    args = parse_args()
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Main entry point: ``refresh`` as the first argument runs ``stock-data refresh`` with the rest."""
+    given = list(sys.argv[1:] if argv is None else argv)
+    if given[:1] == ["refresh"]:
+        from . import refresh
+        return refresh.main(given[1:])
+    args = parse_args(given)
 
     # Setup logging
     logger = setup_logging(args.verbose)
 
-    # Validate inputs
-    if not args.tickers:
-        logger.error("No tickers provided")
+    # Validate inputs: the positional tickers and the files', in Yahoo's form, each once
+    try:
+        tickers = resolve_tickers(args.tickers, args.tickers_file or [])
+    except (OSError, ValueError) as e:
+        logger.error(f"Cannot read the tickers: {e}")
+        return 1
+    if not tickers:
+        logger.error("No tickers given: name some, or a --tickers-file that lists some")
         return 1
 
     if args.no_yahoo and args.no_sec:
         logger.error("Cannot skip both Yahoo and SEC data sources")
         return 1
 
-    # Clean tickers
-    tickers = [t.upper().strip() for t in args.tickers if t.strip()]
+    storage = StorageConfig(base_dir=args.output_dir, db_path=args.db)
+    if args.skip_existing:
+        db_path = storage.database_path
+        try:
+            listed = resolve_ciks(args.tickers_file or [])
+        except (OSError, ValueError) as e:
+            logger.error(f"Cannot read the tickers: {e}")
+            return 1
+        try:
+            existing = stored_tickers(db_path)
+            held = stored_ciks(db_path)
+        except sqlite3.Error as e:
+            logger.error(f"Cannot read the companies in {db_path}: {e}")
+            return 1
+        new = []
+        under_other = []
+        for t in tickers:
+            if t in existing:
+                continue
+            other = held.get(listed.get(t, ""))
+            if other is not None:
+                under_other.append(f"{t} (stored as {other})")
+            else:
+                new.append(t)
+        logger.info(f"--skip-existing: {len(tickers) - len(new)} of {len(tickers)} tickers already in {db_path} "
+                    f"left out, {len(new)} to collect")
+        if under_other:
+            logger.info(f"--skip-existing: {len(under_other)} of those are companies stored under another ticker "
+                        f"(same CIK): {', '.join(under_other)}")
+        if not new:
+            logger.error(f"All {len(tickers)} tickers given are already in the database ({db_path}): nothing to "
+                         "collect (--skip-existing)")
+            return 1
+        tickers = new
 
     logger.info("Stock Data Fetcher starting")
     logger.info(f"Tickers: {', '.join(tickers)}")
@@ -154,14 +319,16 @@ def main() -> int:
     logger.info(f"Years of data: {args.years or 'all available'}")
     logger.info(f"Yahoo Finance: {'disabled' if args.no_yahoo else 'enabled'}")
     logger.info(f"SEC EDGAR: {'disabled' if args.no_sec else 'enabled'}")
+    logger.info(f"Batch size: {args.batch_size}")
 
     # Build configuration
     config = AppConfig(
         sec=SECConfig(user_agent=args.sec_user_agent),
         yahoo=YahooConfig(),
-        storage=StorageConfig(base_dir=args.output_dir, db_path=args.db),
+        storage=storage,
         output_formats=args.formats,
         max_workers=args.workers,
+        batch_size=args.batch_size,
     )
 
     # Run fetcher
@@ -183,6 +350,8 @@ def main() -> int:
         print(f"Successfully fetched: {summary['successful']}")
         print(f"With warnings: {summary['with_warnings']}")
         print(f"With errors: {summary['with_errors']}")
+        if "sqlite" in args.formats and summary.get("stored") is not None:
+            print(f"Stored in the database: {summary['stored']} of {summary.get('tickers_fetched')}")
         print(f"Duration: {summary['duration_seconds']:.1f} seconds")
         print()
         print("Output files:")
@@ -191,8 +360,23 @@ def main() -> int:
                 print(f"  [{format_type.upper()}] {path}")
         print("=" * 60)
 
-        return 0
+        return 1 if _store_failures(summary, logger) else 0
 
+    except CollectionInterrupted as interrupted:
+        done = interrupted.summary
+        if "sqlite" in args.formats:
+            logger.warning(f"Interrupted by user: {done['stored']} of {done['tickers_requested']} companies stored in "
+                           f"{config.storage.database_path}; run it again to collect the rest (--skip-existing leaves "
+                           "out the companies already stored)"
+                           + ("; the process ends once the few tickers still being fetched finish"
+                              if args.workers > 1 else ""))
+        else:
+            logger.warning(f"Interrupted by user: {done['exported']} of {done['tickers_requested']} companies "
+                           "exported")
+        if done.get("unvalued"):
+            logger.warning(f"The valuations of {', '.join(done['unvalued'])} were cut short: "
+                           "python -m src.valuation.backfill values them")
+        return 130
     except KeyboardInterrupt:
         logger.warning("Interrupted by user")
         return 130

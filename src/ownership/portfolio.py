@@ -1,0 +1,499 @@
+"""A guru's quarters (Milestone 3): the positions of each period of report, from the 13F filings that stand, and the
+changes from the quarter before (docs/superpowers/specs/2026-10-22-sec-ownership-design.md).
+
+**The filings a quarter stands on.** For each filer and period, of its filings that pass the checksum, ordered by
+(filed, accession): the base is the latest original 13F-HR or RESTATEMENT amendment (a 13F-HR/A without an amendment
+type counts as one), and each NEW HOLDINGS amendment filed after the base adds its rows; an amendment filed before the
+base is superseded by it. An amendment's row that repeats one of the base's (the same CUSIP, put/call, shares and
+value), each base row matching one, is a duplicate and left out: First Eagle's Q2 2026 13F-HR/A
+(0001325447-26-000033), labelled NEW HOLDINGS, is a complete report, its 616 rows the base's 614 and Exxon Mobil's
+two, so the quarter is $60.75B, not twice that; Berkshire's Q1 2025 one adds 202 Lennar class B shares to the
+152,572 its base reports, a row of its own. A filer whose original and restatements all fail the checksum (or that
+has none) leaves the quarter incomplete, and its rows are left out. The guru's quarter is the union of its filers'
+(Pershing Square Inc. and Pershing Square Capital Management are one guru), filed on the latest of its filings' days.
+
+**Complete** quarters: a quarter is complete when every filer with a filing for it has a report that stands, and every
+filer that reported the quarter before has reported it too, unless the quarter's filing deadline has passed
+(``deadline_passed``): a 13F-HR is due 45 days after the quarter, so until then a filer may still report, and after it
+one that hasn't has stopped (Pershing Square Capital Management filed a 13F-NT for Q2 2026, when Pershing Square Inc.
+took the portfolio over) or is late. The deadline is judged by the store's clock (``CLOCK_SQL``), the latest 13F filing
+date stored of any guru: every guru's feed is read in one run, so a filing dated after a deadline shows the run read
+past it. No wall clock: the same filings give the same quarters, and nothing reads ahead of what was filed. A guru's
+latest quarter, for every view and the screener, is its latest complete one (``LATEST_QUARTERS_SQL``); a guru is stale
+once the next quarter's deadline has passed by the clock (``current_sql``).
+
+**Positions** are keyed (security, put/call): the security is the CUSIP's ticker in ``cusip_map`` when it has one,
+else the CUSIP, as one security can take two CUSIPs within the window (Honeywell's 438516106 and 438516205 across
+its 2026 change, Exxon Mobil's 30231G102 and ExxonMobil Holdings' 30233Q108, a filer's 200021014 for Allstate's
+020002101). Shares and principal amounts are under None, options under 'Put' or 'Call', apart from the shares. Rows
+of one key are summed (shares, value), as one CUSIP may take several rows (other managers, discretion), and the
+position keeps the CUSIPs it covers and the first row's issuer, class and share type. Each position's weight is its
+value over the quarter's total.
+
+**Changes** compare a quarter with the one before it only (``previous_period``), when both are complete (an
+incomplete quarter leaves a filer's positions out, which would read sold out, or new): per key of either, new, sold out,
+added, reduced or unchanged by the shares, the shares before times the share splits of the security's ticker dated
+after the earlier period's end and on or before the later one (``split_factor``). A security without split data (no
+ticker, or one outside our companies: ``split_events`` covers those) has its split inferred from every guru's holding
+of it (``implied_splits``, BUG-213): a forward split of SPLIT_RATIOS when the shares and the price per share the
+filings imply both moved by it, and no holder's count stayed put.
+
+**Share classes**: each class keeps its own ticker, and a company's other class is the ticker of our universe whose
+CUSIP has the same issuer, its first six characters (``share_classes``: GOOGL with GOOG, BRK-B with BRK-A).
+"""
+from __future__ import annotations
+
+import math
+import sqlite3
+import statistics
+from collections import Counter
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+from typing import AbstractSet, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+
+from ..valuation.inputs import _simple_ratio
+from .cusips import UNIVERSE_CUSIPS
+
+#: A position's key: its security (the CUSIP's ticker, else the CUSIP) and put/call (None for shares and principal).
+Key = Tuple[Optional[str], Optional[str]]
+#: The amendment type whose rows add to the base's.
+NEW_HOLDINGS = "NEW HOLDINGS"
+ACTIONS = ("new", "added", "reduced", "sold_out", "unchanged")
+#: A 13F-HR is due 45 days after its quarter ends (Rule 13f-1), or on the next business day: 45 days after
+#: 2025-12-31 was Saturday 2026-02-14, and Presidents' Day moved the Q4 2025 reports to Tuesday 02-17. A deadline
+#: is taken as passed ROLL_DAYS later, the most a weekend and a Monday holiday move it.
+DEADLINE_DAYS = 45
+ROLL_DAYS = 3
+#: The store's clock (SQL): the latest 13F filing date stored, of any guru; NULL with none stored.
+CLOCK_SQL = "(SELECT substr(MAX(filed), 1, 10) FROM guru_filings)"
+#: Each guru's latest quarter (SQL, ``guru_cik``, ``period``), as every view and the screener read the stored quarters:
+#: its latest complete one, else, none complete, its latest (which shows as incomplete).
+LATEST_QUARTERS_SQL = ("(SELECT guru_cik, COALESCE(MAX(CASE WHEN complete = 1 THEN period END), MAX(period)) AS period "
+                       "FROM guru_quarters GROUP BY guru_cik)")
+#: The forward splits inferred for a security without split data (``implied_split``): 2-for-1 to 10-for-1, then the
+#: multiples of 5 to 100-for-1 (ORLY's 15, BKNG's 25). Reverse splits aren't inferred: a holder trimming a stock whose
+#: price doubled to half its shares looks the same (Unity, ZimVie, Garrett and Magnachip in the gurus' 2025-26 filings).
+SPLIT_RATIOS = tuple(range(2, 11)) + tuple(range(15, 101, 5))
+#: A holder's count is taken as moved by a ratio within 5% of it (traded a little across the split), and as unchanged
+#: within 5% of the count before.
+SPLIT_SHARES_TOLERANCE = 0.05
+#: The price per share the filings imply (value over shares) must have moved by the ratio within this factor either
+#: way (the quarter's own move: NFLX's 10-for-1 quarter read 12.8, ORLY's 15-for-1 15.9).
+SPLIT_PRICE_TOLERANCE = 1.3
+
+
+@dataclass(frozen=True)
+class Filing:
+    """A stored 13F filing (``guru_filings``), as the quarter's rules read it."""
+
+    accession: str
+    filer_cik: str
+    form: Optional[str]
+    period: Optional[str]
+    filed: Optional[str]
+    amendment_type: Optional[str]
+    checksum_ok: bool
+
+    @property
+    def adds(self) -> bool:
+        """A NEW HOLDINGS amendment: its rows add to the base's. Every other filing can be the base."""
+        return (self.amendment_type or "").upper() == NEW_HOLDINGS
+
+
+@dataclass(frozen=True)
+class Entry:
+    """A stored entry of a filing's information table (``guru_holdings``)."""
+
+    accession: str
+    row: int
+    cusip: Optional[str]
+    issuer: Optional[str]
+    title_of_class: Optional[str]
+    value_usd: Optional[float]
+    shares: Optional[float]
+    share_type: Optional[str]
+    put_call: Optional[str]
+
+
+@dataclass
+class Position:
+    """A security held at a period's end: its ticker (None without one), the CUSIPs its rows gave, the first row's
+    issuer, class and share type, the summed shares and value in dollars, and its weight in the quarter."""
+
+    security: Optional[str]
+    ticker: Optional[str]
+    put_call: Optional[str]
+    issuer: Optional[str]
+    title_of_class: Optional[str]
+    share_type: Optional[str]
+    cusips: Tuple[str, ...] = ()
+    shares: float = 0.0
+    value_usd: float = 0.0
+    weight: Optional[float] = None
+
+    @property
+    def key(self) -> Key:
+        return (self.security, self.put_call)
+
+
+@dataclass
+class Quarter:
+    """A guru's quarter: its positions by key, in the order the filings give them, their total value, whether every
+    filer's report stands, the filings it stands on in (filed, accession) order, and the latest of their filing
+    dates (None when it stands on none)."""
+
+    period: str
+    positions: Dict[Key, Position]
+    total_value: float
+    complete: bool
+    accessions: Tuple[str, ...]
+    filed: Optional[str] = None
+
+
+@dataclass
+class Change:
+    """A key's change from the quarter before: its action, the shares and values before (as filed) and after, the
+    split factor between, and the change in shares against the split-adjusted shares before, as a fraction (0.25 for
+    a quarter more; None for a new or sold-out position, or one from no shares)."""
+
+    security: Optional[str]
+    ticker: Optional[str]
+    put_call: Optional[str]
+    cusips: Tuple[str, ...]
+    issuer: Optional[str]
+    title_of_class: Optional[str]
+    share_type: Optional[str]
+    action: str
+    shares_before: Optional[float]
+    shares_after: Optional[float]
+    value_before: Optional[float]
+    value_after: Optional[float]
+    split_factor: float
+    change_pct: Optional[float]
+
+    @property
+    def shares_before_adjusted(self) -> Optional[float]:
+        """The shares before on the later quarter's split basis."""
+        return None if self.shares_before is None else self.shares_before * self.split_factor
+
+
+@dataclass
+class GuruQuarters:
+    """A guru's quarters by period, oldest first, and each one's changes from the quarter before (None without it)."""
+
+    guru_cik: str
+    quarters: Dict[str, Quarter] = field(default_factory=dict)
+    changes: Dict[str, Optional[List[Change]]] = field(default_factory=dict)
+
+
+def previous_period(period: str) -> str:
+    """The period of report before *period*: the last day of the calendar quarter before its own."""
+    day = date.fromisoformat(period[:10])
+    return (date(day.year, (day.month - 1) // 3 * 3 + 1, 1) - timedelta(days=1)).isoformat()
+
+
+def next_period(period: str) -> str:
+    """The period of report after *period*: the last day of the calendar quarter after its own."""
+    day = date.fromisoformat(period[:10])
+    year, month = divmod(day.year * 12 + (day.month - 1) // 3 * 3 + 6, 12)  # the month after it, from 0
+    return (date(year, month + 1, 1) - timedelta(days=1)).isoformat()
+
+
+def filing_deadline(period: str) -> str:
+    """The day *period*'s 13F-HRs are taken as due by: DEADLINE_DAYS after it, and ROLL_DAYS more for a deadline
+    moved to a business day."""
+    return (date.fromisoformat(period[:10]) + timedelta(days=DEADLINE_DAYS + ROLL_DAYS)).isoformat()
+
+
+def deadline_passed(period: str, clock: Optional[str]) -> bool:
+    """Whether *period*'s filing deadline has passed by *clock* (the store's, ``CLOCK_SQL``): a filing dated after
+    it is stored. Not without a clock."""
+    return clock is not None and clock[:10] > filing_deadline(period)
+
+
+def next_deadline_sql(period: str) -> str:
+    """SQL of ``filing_deadline(next_period(period))`` for the SQL date *period*."""
+    return f"date({period}, '+1 day', '+3 months', '-1 day', '+{DEADLINE_DAYS + ROLL_DAYS} days')"
+
+
+def current_sql(period: str) -> str:
+    """SQL true when a guru whose latest complete quarter is the SQL date *period* is current: the next quarter's
+    filing deadline hasn't passed by the store's clock (``deadline_passed``). Past it, without that quarter's report
+    standing complete, the guru is stale (Scion, whose last 13F-HR is for Q3 2025). Current without a clock."""
+    return f"{next_deadline_sql(period)} >= COALESCE({CLOCK_SQL}, '')"
+
+
+def _order(filing: Filing) -> Tuple[str, str]:
+    return (filing.filed or "", filing.accession)
+
+
+def _repeats(entry: Entry) -> Tuple[Optional[str], Optional[str], Optional[float], Optional[float]]:
+    """What makes a NEW HOLDINGS amendment's row the same as one of its base's: CUSIP, put/call, shares and value."""
+    return (entry.cusip, entry.put_call, entry.shares, entry.value_usd)
+
+
+def standing_filings(filings: Iterable[Filing]) -> Optional[List[Filing]]:
+    """The filings one filer's report for a period stands on, in (filed, accession) order: the latest original or
+    restatement that passes the checksum, then each NEW HOLDINGS amendment that passes it, filed after that base.
+    None when no original or restatement passes."""
+    passing = sorted((f for f in filings if f.checksum_ok), key=_order)
+    bases = [i for i, f in enumerate(passing) if not f.adds]
+    if not bases:
+        return None
+    base = bases[-1]
+    return [passing[base]] + [f for f in passing[base + 1:] if f.adds]
+
+
+def build_quarter(period: str, filings: Iterable[Filing], entries: Iterable[Entry],
+                  tickers: Optional[Mapping[str, str]] = None, clock: Optional[str] = None) -> Quarter:
+    """The guru's quarter for *period* from its filings (any filers and periods) and their entries; *tickers* maps a
+    CUSIP to its ticker (``cusip_map``). A NEW HOLDINGS amendment's rows that repeat its base's are left out, one for
+    one (``_repeats``). Incomplete when a filer's report doesn't stand, or a filer of the quarter before hasn't
+    reported and the deadline hasn't passed by *clock* (by default the latest of the *filings*' dates)."""
+    tickers = tickers or {}
+    filings = list(filings)
+    if clock is None:
+        clock = max((f.filed for f in filings if f.filed), default=None)
+    by_filer: Dict[str, List[Filing]] = {}
+    for filing in filings:
+        if filing.period == period:
+            by_filer.setdefault(filing.filer_cik, []).append(filing)
+    used: List[Tuple[Filing, Optional[Filing]]] = []  # each filing and, for a NEW HOLDINGS amendment, its base
+    complete = True
+    for filer in sorted(by_filer):
+        standing = standing_filings(by_filer[filer])
+        if standing is None:
+            complete = False
+        else:
+            used += [(standing[0], None)] + [(amendment, standing[0]) for amendment in standing[1:]]
+    awaited = {f.filer_cik for f in filings if f.period == previous_period(period)} - set(by_filer)
+    if awaited and not deadline_passed(period, clock):  # a filer of the quarter before may still report
+        complete = False
+    used.sort(key=lambda pair: _order(pair[0]))
+    rows: Dict[str, List[Entry]] = {f.accession: [] for f, _ in used}
+    for entry in entries:
+        if entry.accession in rows:
+            rows[entry.accession].append(entry)
+    for listed in rows.values():
+        listed.sort(key=lambda e: e.row)
+    positions: Dict[Key, Position] = {}
+    for filing, base in used:
+        repeated = Counter(_repeats(e) for e in rows[base.accession]) if base else Counter()
+        for entry in rows[filing.accession]:
+            if repeated[_repeats(entry)]:  # one of the base's rows, filed again
+                repeated[_repeats(entry)] -= 1
+                continue
+            ticker = tickers.get(entry.cusip) if entry.cusip else None
+            key = (ticker or entry.cusip, entry.put_call)
+            position = positions.get(key)
+            if position is None:
+                position = positions[key] = Position(
+                    security=key[0], ticker=ticker, put_call=entry.put_call, issuer=entry.issuer,
+                    title_of_class=entry.title_of_class, share_type=entry.share_type)
+            if entry.cusip and entry.cusip not in position.cusips:
+                position.cusips += (entry.cusip,)
+            position.shares += entry.shares or 0.0
+            position.value_usd += entry.value_usd or 0.0
+    total = sum(p.value_usd for p in positions.values())
+    for position in positions.values():
+        position.weight = position.value_usd / total if total else None
+    return Quarter(period=period, positions=positions, total_value=total, complete=complete,
+                   accessions=tuple(f.accession for f, _ in used),
+                   filed=max((f.filed for f, _ in used if f.filed), default=None))
+
+
+def build_quarters(filings: Iterable[Filing], entries: Iterable[Entry],
+                   tickers: Optional[Mapping[str, str]] = None, clock: Optional[str] = None) -> Dict[str, Quarter]:
+    """Every period of the guru's filings, oldest first (``build_quarter``, by *clock*); a filing without a period is
+    in none."""
+    filings, entries = list(filings), list(entries)
+    periods = sorted({f.period for f in filings if f.period})
+    return {period: build_quarter(period, filings, entries, tickers, clock) for period in periods}
+
+
+def split_factor(splits: Iterable[Tuple[str, Optional[float]]], after: str, through: str) -> float:
+    """The product of the share splits (``split_events``' ratios, new shares per old) dated after *after* and on or
+    before *through*. Only share splits count, a reverse one too: a simple ratio (``valuation.inputs._simple_ratio``),
+    not the stock dividends (SCCO's 1.01) and spin-off price factors (HON's 1.061 for Solstice) Yahoo's split
+    history also holds, which don't change a holder's count as their ratio says."""
+    factor = 1.0
+    for day, ratio in splits:
+        if ratio and ratio > 0 and _simple_ratio(ratio) and after < str(day)[:10] <= through:
+            factor *= ratio
+    return factor
+
+
+def nearest_split_ratio(ratio: float) -> int:
+    """The SPLIT_RATIOS ratio nearest *ratio* (a positive number), by their quotient."""
+    return min(SPLIT_RATIOS, key=lambda r: abs(math.log(ratio / r)))
+
+
+def implied_split(moves: Sequence[Tuple[float, float]]) -> float:
+    """The forward split a security's holders show between two quarters, else 1.0. *moves* holds each holder's
+    shares after over before and implied price per share (value over shares) before over after. A split of r
+    (``nearest_split_ratio``) when some holder's shares moved by r within SPLIT_SHARES_TOLERANCE, the holders' median
+    price moved by r within SPLIT_PRICE_TOLERANCE, and no holder's shares stayed within SPLIT_SHARES_TOLERANCE of
+    before (a holder that kept its count saw no split: Seadrill's halving price in Q1 2025, one guru doubling down).
+    Of two ratios that qualify, the one nearer the price's move.
+    A lone holder buying the ratio's worth more as the price falls by it reads as the split, which its 13F can't be
+    told from (BUG-354): with no other holder to veto, doubling down on a halved price is a 2-for-1. Two holders at
+    the ratio aren't required: RLI's 2-for-1 has one holder here, and HDFC Bank's bonus one of five at it."""
+    if not moves or any(abs(shares - 1.0) <= SPLIT_SHARES_TOLERANCE for shares, _ in moves):
+        return 1.0
+    price = statistics.median(p for _, p in moves)
+    ratios = {r for r in {nearest_split_ratio(shares) for shares, _ in moves}
+              if any(abs(shares / r - 1.0) <= SPLIT_SHARES_TOLERANCE for shares, _ in moves)
+              and max(price / r, r / price) <= SPLIT_PRICE_TOLERANCE}
+    if not ratios:
+        return 1.0
+    return float(min(ratios, key=lambda r: abs(math.log(price / r))))
+
+
+def implied_splits(gurus: Iterable[Mapping[str, Quarter]], covered: AbstractSet[str]) -> Dict[Tuple[str, str], float]:
+    """The splits inferred (``implied_split``) per (security, period) from every guru's quarters (each a mapping of
+    period to Quarter) for the securities without split data: no ticker, or one not in *covered* (the tickers whose
+    split history is collected). Each holder of the security's shares (put/call None, share type SH) in two
+    consecutive complete quarters, with shares and value in both, is a move; options and principal amounts aren't."""
+    moves: Dict[Tuple[str, str], List[Tuple[float, float]]] = {}
+    for quarters in gurus:
+        for period, quarter in quarters.items():
+            previous = quarters.get(previous_period(period))
+            if previous is None or not (quarter.complete and previous.complete):
+                continue
+            for key, now in quarter.positions.items():
+                before = previous.positions.get(key)
+                if (before is None or key[0] is None or key[1] is not None or (now.ticker and now.ticker in covered)
+                        or (now.share_type or "").upper() != "SH"):
+                    continue
+                if before.shares > 0 and now.shares > 0 and before.value_usd > 0 and now.value_usd > 0:
+                    moves.setdefault((key[0], period), []).append(
+                        (now.shares / before.shares,
+                         (before.value_usd / before.shares) / (now.value_usd / now.shares)))
+    found = {key: implied_split(held) for key, held in moves.items()}
+    return {key: factor for key, factor in found.items() if factor != 1.0}
+
+
+def quarter_changes(current: Quarter, previous: Optional[Quarter],
+                    splits: Optional[Mapping[str, Sequence[Tuple[str, Optional[float]]]]] = None,
+                    implied: Optional[Mapping[Tuple[str, str], float]] = None,
+                    ) -> Optional[List[Change]]:
+    """Each key's change from *previous*, ordered by key; None unless *previous* is the quarter before *current* and
+    both are complete.
+    *splits* maps a ticker to its split events (date, ratio); the shares before are adjusted by the splits of the
+    key's ticker between the two periods (``split_factor``), and a security without a ticker isn't adjusted by them.
+    *implied* maps (security, *current*'s period) to the split inferred for a security without split data
+    (``implied_splits``), which adjusts each of its keys, its options too."""
+    if previous is None or previous.period != previous_period(current.period):
+        return None
+    if not (current.complete and previous.complete):  # a filer's positions left out would read sold out, or new
+        return None
+    splits, implied = splits or {}, implied or {}
+    changes = []
+    for key in sorted(set(current.positions) | set(previous.positions), key=lambda k: (k[0] or "", k[1] or "")):
+        now, before = current.positions.get(key), previous.positions.get(key)
+        held = now or before
+        assert held is not None  # the key is one of theirs
+        ticker = held.ticker  # one key, one ticker: the security is the ticker when there's one
+        factor = split_factor(splits.get(ticker, ()), previous.period, current.period) if ticker else 1.0
+        factor *= implied.get((key[0], current.period), 1.0) if key[0] is not None else 1.0
+        change_pct: Optional[float] = None
+        if before is None:
+            action, factor = "new", 1.0
+        elif now is None:
+            action = "sold_out"
+        else:
+            adjusted = before.shares * factor
+            action = "added" if now.shares > adjusted else "reduced" if now.shares < adjusted else "unchanged"
+            change_pct = (now.shares - adjusted) / adjusted if adjusted else None
+        changes.append(Change(
+            security=key[0], ticker=ticker, put_call=key[1],
+            cusips=tuple(dict.fromkeys((now.cusips if now else ()) + (before.cusips if before else ()))),
+            issuer=held.issuer, title_of_class=held.title_of_class, share_type=held.share_type, action=action,
+            shares_before=before.shares if before else None, shares_after=now.shares if now else None,
+            value_before=before.value_usd if before else None, value_after=now.value_usd if now else None,
+            split_factor=factor, change_pct=change_pct))
+    return changes
+
+
+def _tables(conn: sqlite3.Connection) -> Set[str]:
+    return {name for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+
+
+def load_tickers(conn: sqlite3.Connection) -> Dict[str, str]:
+    """Each mapped CUSIP's ticker (``cusip_map``); none for a database without the map."""
+    if "cusip_map" not in _tables(conn):
+        return {}
+    return {cusip: ticker for cusip, ticker in conn.execute(
+        "SELECT cusip, ticker FROM cusip_map WHERE ticker IS NOT NULL")}
+
+
+def load_splits(conn: sqlite3.Connection, tickers: Iterable[str]) -> Dict[str, List[Tuple[str, Optional[float]]]]:
+    """The split events (date, ratio) of each of *tickers* that has some (``split_events``)."""
+    wanted = set(tickers)
+    if not wanted or "split_events" not in _tables(conn):
+        return {}
+    splits: Dict[str, List[Tuple[str, Optional[float]]]] = {}
+    for ticker, day, ratio in conn.execute("SELECT ticker, date, ratio FROM split_events ORDER BY ticker, date"):
+        if ticker in wanted:
+            splits.setdefault(ticker, []).append((str(day)[:10], ratio))
+    return splits
+
+
+def covered_tickers(conn: sqlite3.Connection) -> Set[str]:
+    """The tickers whose split history is collected: our companies' (``companies``), and any with ``split_events``."""
+    tables = _tables(conn)
+    covered: Set[str] = set()
+    for table in ("companies", "split_events"):
+        if table in tables:
+            covered |= {ticker for (ticker,) in conn.execute(f"SELECT DISTINCT ticker FROM {table}") if ticker}
+    return covered
+
+
+def _guru_quarters(conn: sqlite3.Connection, guru_cik: str, tickers: Mapping[str, str],
+                   clock: Optional[str]) -> Dict[str, Quarter]:
+    filings = [Filing(accession, filer, form, period, filed, amendment, bool(ok))
+               for accession, filer, form, period, filed, amendment, ok in conn.execute(
+                   "SELECT accession, filer_cik, form, period, filed, amendment_type, checksum_ok FROM guru_filings "
+                   "WHERE guru_cik = ?", (guru_cik,))]
+    entries = [Entry(*row) for row in conn.execute(
+        "SELECT accession, row, cusip, issuer, title_of_class, value_usd, shares, share_type, put_call "
+        "FROM guru_holdings WHERE guru_cik = ?", (guru_cik,))]
+    return build_quarters(filings, entries, tickers, clock)
+
+
+def load_gurus(conn: sqlite3.Connection, guru_ciks: Iterable[str]) -> Dict[str, GuruQuarters]:
+    """Each of *guru_ciks*' quarters and their changes, from its stored filings and entries (a read-only connection
+    will do), keyed by the ``cusip_map`` tickers, complete by the store's clock (``CLOCK_SQL``), and adjusted by the
+    ``split_events`` of our companies' tickers and, for a security without split data, by the split every stored
+    guru's holdings of it imply (``implied_splits``). Empty for a database without the gurus' tables."""
+    wanted = list(dict.fromkeys(guru_ciks))
+    if not {"guru_filings", "guru_holdings"} <= _tables(conn):
+        return {cik: GuruQuarters(cik) for cik in wanted}
+    tickers = load_tickers(conn)
+    (clock,) = conn.execute(f"SELECT {CLOCK_SQL}").fetchone()
+    stored = [cik for (cik,) in conn.execute("SELECT DISTINCT guru_cik FROM guru_filings ORDER BY guru_cik")]
+    every = {cik: _guru_quarters(conn, cik, tickers, clock) for cik in dict.fromkeys(stored + wanted)}
+    implied = implied_splits(every.values(), covered_tickers(conn))
+    splits = load_splits(conn, {p.ticker for cik in wanted for q in every[cik].values() for p in q.positions.values()
+                                if p.ticker})
+    loaded = {}
+    for cik in wanted:
+        quarters = every[cik]
+        changes = {period: quarter_changes(quarter, quarters.get(previous_period(period)), splits, implied)
+                   for period, quarter in quarters.items()}
+        loaded[cik] = GuruQuarters(cik, quarters, changes)
+    return loaded
+
+
+def load_guru(conn: sqlite3.Connection, guru_cik: str) -> GuruQuarters:
+    """One guru's quarters and their changes (``load_gurus``): every stored guru's holdings still inform the splits
+    inferred."""
+    return load_gurus(conn, [guru_cik])[guru_cik]
+
+
+def share_classes(ticker: str, universe: Mapping[str, str] = UNIVERSE_CUSIPS) -> Tuple[str, ...]:
+    """The ticker and its other share classes, its own first and the others in order: the tickers of our universe's
+    CUSIPs (*universe*, CUSIP -> ticker) whose issuer, the first six characters, is one of the ticker's (GOOGL with
+    GOOG, BRK-B with BRK-A). A ticker outside the universe has none."""
+    issuers = {cusip[:6] for cusip, mapped in universe.items() if mapped == ticker}
+    return (ticker,) + tuple(sorted({mapped for cusip, mapped in universe.items() if cusip[:6] in issuers} - {ticker}))

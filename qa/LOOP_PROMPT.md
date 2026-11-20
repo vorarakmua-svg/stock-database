@@ -175,7 +175,7 @@ reads raw inputs from the DB and never imports `src.valuation`. Adjudicate every
 - GATHER-10 `--workers 1` and `--workers 4` produce identical DB content apart from timestamps.
 - GATHER-11 Flag combinations: `--years N`, `--no-yahoo`, `--no-sec`, each `--formats` subset, `--db`, and an `--output-dir` containing spaces or non-ASCII (e.g. Thai) characters. Outputs are exactly what was asked for.
 - GATHER-12 Web jobs on a scratch server: queueing (one at a time), state transitions, failure reporting, valuations recomputed, `STOCK_WEB_ALLOW_COLLECTION=0` returns 409 and hides the buttons, overlapping requests, server stopped mid-job.
-- GATHER-13 Quote refresh (`POST /api/stocks/{T}/refresh-quote`) writes only the snapshot; `STOCK_WEB_ALLOW_QUOTE_REFRESH=0` disables it.
+- GATHER-13 Quote refresh (`POST /api/stocks/{T}/refresh-quote`) writes only the snapshot and Yahoo's dividend payments, as a collection stores them (BUG-160, BUG-258), with the split history after a stock dividend's or a spin-off's factor; `STOCK_WEB_ALLOW_QUOTE_REFRESH=0` disables it.
 
 ### STORE: Persistence and queries
 - STORE-01 Schema migrations applied to the real-DB copy are idempotent and non-destructive (row counts unchanged).

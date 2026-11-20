@@ -17,6 +17,8 @@ test modules assert exact company counts against it).
 """
 from __future__ import annotations
 
+import html
+import re
 import sqlite3
 from datetime import date, timedelta
 
@@ -431,6 +433,21 @@ def test_hp_fragment_known_ticker_shows_bar_date_and_csv_link(client, monkeypatc
     # row regardless of how much of the 1Y window falls before _AAA_START.
     assert _AAA_LAST.isoformat() in body
     assert "/api/export/stock/AAA/bars.csv" in body
+
+
+@pytest.mark.parametrize("range_key, rows", [("1M", 31), ("1Y", _AAA_BAR_COUNT), ("5Y", _AAA_BAR_COUNT),
+                                             ("MAX", _AAA_BAR_COUNT)])
+def test_hp_fragments_csv_is_the_table_it_sits_under(client, monkeypatch, range_key, rows):
+    # BUG-150: the link took the bars CSV's default interval, which resamples by range (weekly at 5Y, monthly at
+    # MAX), under a table of daily bars; and the CSV is the table's range (1M: the CSV's own default is 1Y).
+    _pin_today(monkeypatch, _AAA_LAST)
+    body = client.get("/ui/stocks/AAA/hp", params={"range": range_key}).text
+    href = html.unescape(re.search(r'href="(/api/export/stock/AAA/bars\.csv[^"]*)"', body).group(1))
+    table_dates = re.findall(r'class="row-label hp-bar-date">([^<]+)<', body)
+    csv_lines = client.get(href).text.strip().splitlines()
+    csv_dates = [line.split(",")[0][:10] for line in csv_lines[1:]]
+    assert len(table_dates) == rows
+    assert sorted(csv_dates) == sorted(d[:10] for d in table_dates)
 
 
 def test_hp_fragment_range_param_changes_row_count(client, monkeypatch):
@@ -980,3 +997,218 @@ def test_the_fa_and_val_tabs_say_when_annual_financials_stop(tmp_path):
     for tab in ("fa", "val"):
         assert str(escape(note)) in client.get(f"/ui/stocks/TSM/{tab}").text, tab
 
+
+def test_the_fa_and_val_tabs_keep_the_stale_note_beside_the_sec_lag_note(tmp_path):
+    # BUG-322 (code review 27): the collection adds the SEC-lag warning before the stale one, and the tabs showed the
+    # first matching warning only, so a run with both lost BUG-066's explanation.
+    from markupsafe import escape
+
+    lag = ("SEC EDGAR: the companyfacts lack TSM's 20-F filed 2026-04-01 (0001046179-26-000001), so this run's "
+           "figures stop before it; the refresh collects TSM again")
+    stale = ("SEC EDGAR: annual financials stop at FY2019 for TSM: later annual reports are in IFRS (20-F), which "
+             "isn't mapped")
+    client = _client_for(_db_after_a_run_with(tmp_path, [lag, stale]))
+    for tab in ("fa", "val"):
+        body = client.get(f"/ui/stocks/TSM/{tab}").text
+        assert [str(escape(note)) in body for note in (lag, stale)] == [True, True], tab
+
+
+def test_ern_fragment_names_yahoos_earnings_growth_for_what_it_is(client):
+    # BUG-312 (Q2's decision): Yahoo's earningsGrowth is the latest quarter against a year before, no forecast.
+    body = client.get("/ui/stocks/AAA/ern").text
+    assert "Quarterly Earnings Growth (YoY)" in body
+    assert ">Earnings Growth<" not in body
+
+
+# BUG-204: a debt-free filer's ROIC and Debt/EBITDA cards against the Quality section.
+
+
+def _debt_free_latest_year(web_db, **quality):
+    """AAA's FY2024 metrics_annual row as a filer tagging no debt has it (no ROIC, no debt), and its scores row."""
+    from tests.test_web_api_scores import _row, _seed
+
+    conn = sqlite3.connect(web_db)
+    conn.execute("UPDATE metrics_annual SET roic = NULL, total_debt = NULL, debt_to_ebitda = NULL "
+                 "WHERE ticker = 'AAA' AND fiscal_year = 2024")
+    conn.commit()
+    conn.close()
+    _seed(web_db, row=_row(**{"fiscal_year": 2024, "roic": 0.306, "wacc": 0.123, "roic_minus_wacc": 0.183,
+                              "debt_to_ebitda": 0.0, **quality}))
+
+
+def _card(body, label):
+    m = re.search(r'<span class="summary-label">' + re.escape(label) + r'</span>'
+                  r'<span class="summary-value">(.*?)</span>'
+                  r'(?:<span class="text-muted summary-note">(.*?)</span>)?</div>', body, re.S)
+    assert m, label
+    return m.group(1), m.group(2)
+
+
+def test_a_debt_free_filers_empty_cards_say_what_the_quality_section_reads(client, web_db):
+    _debt_free_latest_year(web_db)
+    body = client.get("/ui/stocks/AAA/stat").text
+    assert _card(body, "ROIC") == ("—", "no debt figure filed; the Quality section below reads it as none: 30.6%")
+    assert _card(body, "Debt/EBITDA") == ("—", "no debt figure filed; the Quality section below reads it as none: 0.0x")
+    assert _card(body, "ROE")[1] is None  # a card with a figure, or nothing to add, carries no note
+
+
+def test_an_empty_roic_card_gives_the_scores_reason_when_they_have_no_roic_either(client, web_db):
+    _debt_free_latest_year(web_db, roic=None, roic_minus_wacc=None, debt_to_ebitda=None,
+                           na_reasons='{"roic": "no ROIC: no operating income"}')
+    body = client.get("/ui/stocks/AAA/stat").text
+    assert _card(body, "ROIC") == ("—", "no ROIC: no operating income")
+    assert _card(body, "Debt/EBITDA") == ("—", None)
+
+
+def test_the_cards_add_nothing_when_the_scores_describe_another_year_or_the_card_has_its_figure(client, web_db):
+    _debt_free_latest_year(web_db, fiscal_year=2023)
+    assert _card(client.get("/ui/stocks/AAA/stat").text, "ROIC") == ("—", None)
+    from tests.test_web_api_scores import _row, _seed
+
+    conn = sqlite3.connect(web_db)
+    conn.execute("UPDATE metrics_annual SET roic = 0.15 WHERE ticker = 'AAA' AND fiscal_year = 2024")
+    conn.commit()
+    conn.close()
+    _seed(web_db, row=_row(fiscal_year=2024))
+    assert _card(client.get("/ui/stocks/AAA/stat").text, "ROIC") == ("15.0%", None)
+
+
+# BUG-067: a snapshot collected before the rate's date and source were kept stores them as null.
+
+
+def _seed_unknown_rate_and_cagr(web_db):
+    import json as _json
+    conn = sqlite3.connect(str(web_db))
+    for model, extra in (("dcf", {"hist_cagr": None}),
+                         ("owner_earnings", {"buy_below": 175.0, "maintenance_capex": None})):
+        a = {"growth_base": 0.05, "risk_free_rate": 0.045, "risk_free_rate_as_of": None, "risk_free_rate_source": None,
+             "sbc_added_back": False, **extra}
+        conn.execute("INSERT OR REPLACE INTO valuations VALUES ('AAA', ?, 1, NULL, 80.0, 100.0, 120.0, ?, 2023, "
+                     "'2024-01-05T00:00:00')", (model, _json.dumps(a)))
+    conn.commit()
+    conn.close()
+
+
+def test_the_val_tab_leaves_out_a_rate_date_and_source_it_doesnt_know(client, web_db):
+    _seed_val_rows(web_db)
+    _seed_unknown_rate_and_cagr(web_db)
+    body = client.get("/ui/stocks/AAA/val").text
+    assert "risk_free_rate_as_of" not in body and "risk_free_rate_source" not in body
+    assert "risk_free_rate</td>" in body            # the rate itself stays
+
+
+def test_the_val_tab_shows_any_other_unknown_assumption_as_a_dash(client, web_db):
+    _seed_val_rows(web_db)
+    _seed_unknown_rate_and_cagr(web_db)
+    body = client.get("/ui/stocks/AAA/val").text
+    assert "None" not in body
+    assert 'hist_cagr</td><td class="num">\u2014</td>' in body
+    assert 'maintenance_capex</td><td class="num">\u2014</td>' in body       # owner earnings' own table
+
+
+def test_the_val_tab_still_shows_a_known_rate_date_and_source(client, web_db):
+    import json as _json
+    _seed_val_rows(web_db)
+    conn = sqlite3.connect(str(web_db))
+    a = {"growth_base": 0.05, "risk_free_rate_as_of": "2026-10-20", "risk_free_rate_source": "fred"}
+    conn.execute("UPDATE valuations SET assumptions = ? WHERE ticker = 'AAA' AND model = 'dcf'", (_json.dumps(a),))
+    conn.commit()
+    conn.close()
+    body = client.get("/ui/stocks/AAA/val").text
+    assert "risk_free_rate_as_of</td>" in body and "2026-10-20" in body and ">fred<" in body
+
+
+# BUG-068: a collection whose SEC request failed, over years an earlier collection stored.
+
+_FAILED_REQUEST = ("SEC EDGAR: no annual financials for AAPL from CIK 0000320193 (Apple Inc.): its companyfacts "
+                   "request failed (403 Client Error: Forbidden)")
+
+
+def _years_then_a_failed_collection(tmp_path, warnings=(_FAILED_REQUEST,), errors=("SEC EDGAR companyfacts: 403",),
+                                    years=(2022, 2023, 2024)):
+    from datetime import datetime
+
+    from src.exporters.sqlite_store import SQLiteStore
+    from src.models.stock_data import StockData
+
+    db_path = tmp_path / "failed.db"
+    first = StockData(ticker="AAPL", cik="0000320193", company_name="Apple Inc.", collected_at=datetime(2026, 9, 1))
+    first.financials_annual = {
+        str(year): {"fiscal_year": year, "period_end": f"{year}-09-28", "calendar_year": year, "revenue": 1.0e9 + year}
+        for year in years}
+    second = StockData(ticker="AAPL", cik="0000320193", company_name="Apple Inc.", collected_at=datetime(2026, 10, 20))
+    for w in warnings:
+        second.add_warning(w)
+    for e in errors:
+        second.add_error(e)
+    SQLiteStore(db_path).export([first])
+    SQLiteStore(db_path).export([second])
+    return db_path
+
+
+def test_a_failed_request_over_stored_years_says_the_figures_are_from_earlier_collections(tmp_path):
+    from markupsafe import escape
+
+    client = _client_for(_years_then_a_failed_collection(tmp_path))
+    for tab in ("fa", "val"):
+        body = client.get(f"/ui/stocks/AAPL/{tab}").text
+        assert "got no annual financials" in body, tab
+        assert "SEC EDGAR: no annual financials" not in body, tab      # not the contradiction above the years
+        assert str(escape("its companyfacts request failed (403 Client Error: Forbidden)")) in body, tab
+        assert "FY2022 to FY2024" in body and "2024-09-28" in body and "2026-10-20" in body, tab
+        assert "earlier collections" in body, tab
+
+
+def test_a_collection_with_no_stored_years_keeps_the_plain_note(tmp_path):
+    from markupsafe import escape
+
+    client = _client_for(_db_after_a_run_with(tmp_path, [_TSM_NOTE]))
+    assert str(escape(_TSM_NOTE)) in client.get("/ui/stocks/TSM/fa").text
+
+
+def test_the_runs_keep_their_errors_beside_their_warnings(tmp_path):
+    db_path = _years_then_a_failed_collection(tmp_path, errors=("SEC EDGAR companyfacts: 403", "Yahoo: timed out"))
+    conn = sqlite3.connect(db_path)
+    stored = conn.execute("SELECT errors FROM collection_runs ORDER BY collected_at DESC").fetchone()[0]
+    conn.close()
+    import json as _json
+    assert _json.loads(stored) == ["SEC EDGAR companyfacts: 403", "Yahoo: timed out"]
+    rows = _client_for(db_path).get("/api/quality/runs?ticker=AAPL").json()
+    assert [r["errors"] for r in rows] == [["SEC EDGAR companyfacts: 403", "Yahoo: timed out"], []]
+
+
+def test_a_database_from_before_the_errors_column_is_migrated_and_read_without_it(tmp_path):
+    from datetime import datetime
+
+    from src.exporters.sqlite_store import SQLiteStore
+    from src.models.stock_data import StockData
+
+    db_path = _years_then_a_failed_collection(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE collection_runs DROP COLUMN errors")
+    conn.commit()
+    conn.close()
+    client = _client_for(db_path)        # the read-only web app can't add it: it reads [] and still renders
+    assert [r["errors"] for r in client.get("/api/quality/runs?ticker=AAPL").json()] == [[], []]
+    assert client.get("/ui/stocks/AAPL/fa").status_code == 200
+    SQLiteStore(db_path).export([StockData(ticker="AAPL", collected_at=datetime(2026, 10, 21))])   # a writer adds it
+    conn = sqlite3.connect(db_path)
+    assert "errors" in {row[1] for row in conn.execute("PRAGMA table_info(collection_runs)")}
+    conn.close()
+
+
+def test_a_single_stored_year_is_named_alone(tmp_path):
+    client = _client_for(_years_then_a_failed_collection(tmp_path, years=(2024,)))
+    body = client.get("/ui/stocks/AAPL/fa").text
+    assert "The 1 fiscal year shown, FY2024 (the latest ended 2024-09-28), is from earlier collections" in body
+
+
+def test_only_the_no_annual_financials_note_is_reworded_for_stored_years(tmp_path):
+    from markupsafe import escape
+
+    lag = ("SEC EDGAR: the companyfacts lack AAPL's 10-K filed 2026-10-30 (0000320193-26-000001), so this run's "
+           "figures stop before it; the refresh collects AAPL again")
+    stale = "SEC EDGAR: annual financials stop at FY2019 for AAPL: later annual reports are in IFRS (20-F)"
+    client = _client_for(_years_then_a_failed_collection(tmp_path, warnings=(_FAILED_REQUEST, lag, stale)))
+    body = client.get("/ui/stocks/AAPL/fa").text
+    assert str(escape(lag)) in body and str(escape(stale)) in body and "got no annual financials" in body
