@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 109 · NEEDS-USER 3 · Decided: 7 · Verified: 266
+**Open:** P0 0 · P1 0 · P2 0 · P3 113 · NEEDS-USER 3 · Decided: 7 · Verified: 266
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2388,6 +2388,30 @@ Status: OPEN (NEEDS-USER)
 Found: the BUG-364/203/221 worker (iteration 210), prepared in %LOCALAPPDATA%\stockdb-qa\bug364\out (diffs, mutants, census, DB-copy diffs; `qa/evidence/bug364-investigation.txt`) | Fixed: | Regression test:
 What it does: appends fallback tags (long_term_debt: LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities and DebtLongtermAndShorttermCombinedAmount; ppe_net: the lease-inclusive PP&E concept; short_term_investments: six current-securities tags incl. DebtSecuritiesCurrent and MarketableSecurities last) plus an xbrl_parser.py rule (+42/-2, `_totals_beside_current_debt_set_aside` in `_filer_facts`) so a total including current debt isn't read on a date its current part is tagged. GM's debt ($131.6B) and PGR's become read; 102 filers gain PP&E; NVDA-style short-term investments. Census: annual LTD 59 cells/6 filers, STI 756/110, PP&E 418/93 (+quarters, TTM, vintages). Moves on DB copies: 18 historical values within their labels (HUM 319.04->276.76, INTC 23.19->24.55, GM 75.14->76.91, FSLR, KLAC, ORCL, TYL ...), EPV base at 37 (GM 120.02->38.24, ELV 407.34->526.69, VEEV 48.15->79.89), NCAV bear at 10, Magic Formula ranked 256->315, 15 composites by 2, 5 new beneish flags; no median, verdict, owner-earnings verdict or label. Oracles identical. Look-ahead 0. Concerns: MarketableSecurities stores banks' whole securities books as short-term investments (BAC $925.6B; no valuation moves, but FA/exports show it); GM's quarters lose EV (no debt in its 10-Qs); the parser edit must be carried across feat/asof-snapshots (Q18). Recommendation: apply after Q18's merge, dropping MarketableSecurities for banks (sector rule) or leaving it out.
 Decision: 
+
+### BUG-365 [P3][REFRESH] A run whose submissions request failed joins an older, given-up gap, so the company is left uncollected
+Status: OPEN
+Found: code review 34 (`qa/evidence/review34.txt`, Minor 1; BUG-282's rule outside a gap) | Fixed: | Regression test:
+Repro: refresh.py ~518-528, ~1011: AAA's 10-Q of 2026-07-31 lacked facts at four weekly reads (given up); its 10-Q of 2026-10-23 is then collected with submissions failing: the queue is empty and incomplete_left shows 5 tries. About a quarter's delay. Probe: %LOCALAPPDATA%\stockdb-qa\review34\head\tests\test_review34.py.
+Expected: an unchecked run after a given-up gap gets its own tries.   Actual: it inherits the gap's count.
+
+### BUG-366 [P3][VAL] The one-payment dividend test's neighbour gate counts special (extra) payments
+Status: OPEN
+Found: code review 34 (Minor 2; also at the base; no real case measured) | Fixed: | Regression test:
+Repro: models.py ~337-339 (and the oracle): an annual payer with an extra 0.50 in 2024 loses SEC's figure for its slipped 2025: FY2025 reads 6.36 (Yahoo) for SEC's 3.10, dividend CAGR 13.7% for 5.0%. Probe: %LOCALAPPDATA%\stockdb-qa\review34\head\tests\test_review34.py.
+Expected: the gate counts regular payments only.   Actual: extras count.
+
+### BUG-367 [P3][VAL] The EV/EBITDA N/A reason says 'EBITDA is zero or negative' when net cash exceeds the market cap
+Status: OPEN
+Found: code review 34 (Minor 3; wording only; no real case today) | Fixed: | Regression test:
+Repro: history.py ~337-346: EV <= 0 with a positive EBITDA reads 'EBITDA is zero or negative'; a missing debt also outranks a negative EBITDA in the wording. Probe: %LOCALAPPDATA%\stockdb-qa\review34\head\tests\test_review34.py.
+Expected: the reason that applies.   Actual: the wrong one.
+
+### BUG-368 [P3][UI] A NEW HOLDINGS 13F-HR/A stating nothing omitted clears the quarter's confidential-omission note
+Status: OPEN
+Found: code review 34 (Minor 4; suspected) | Fixed: | Regression test:
+Repro: gurus.py ~128-139 (BUG-362): a NEW HOLDINGS amendment's cover may speak only for that amendment, so clearing on it can hide holdings still confidential (real case: Berkshire 2025-03-31 cleared by its 2025-08-14 NEW HOLDINGS amendment). Orchestrator's call: only a RESTATEMENT amendment stating none omitted clears the flag; a NEW HOLDINGS one leaves it.
+Expected: as the call says.   Actual: any amendment stating 0 clears.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)

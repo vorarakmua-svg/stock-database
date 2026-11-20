@@ -3543,3 +3543,14 @@ Result: BUG-027, BUG-030, BUG-038, BUG-278 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3679 passed, 1 skipped | CI: PR #29
 Commit: (this commit) fix(export): the CSV and JSON keep what SQLite keeps after a failed or partial run (BUG-027, BUG-030, BUG-038, BUG-278)
 Next: code review 34 (scope ce49a04..HEAD).
+
+## Iteration 213: 2026-11-21 13:00: code review 34
+Picked: code review 34 (ce49a04..40abb16: BUG-360..363, -183/308, -107/282/340, -039/311/293, -027/030/038/278); an
+opus reviewer.
+Did: `qa/evidence/review34.txt`; 3 probes failing at HEAD; 15 test files pass (782).
+Result: no Critical or Important. Minors -> BUG-365..368 (P3). Checked right: yfinance 1.0 always serves the event
+columns (a new listing isn't a failure); got_price equals SQLite's snapshot test; fill() matches COALESCE; the
+reader digest is stable across hash seeds; bank/insurer EV consistent.
+Gates: unchanged (qa/ only) | CI: PR #29
+Commit: (this commit) chore(qa): code review 34 recorded; four Minor findings (BUG-365..368)
+Next: BUG-365..368.
