@@ -337,6 +337,8 @@ def compute_history(inputs: HistoryInputs) -> HistoryResult:
 def _no_multiple_reason(metric: str, point: Optional[TTMPoint]) -> str:
     if metric == "div_yield":
         return "no dividends in the trailing year"
+    if metric == "ev_ebitda" and point is not None and point.debt_missing:
+        return f"no long-term debt in the quarter to {point.period_end}, though its 10-Ks report some"
     name = _FUNDAMENTAL[metric]
     value = getattr(point, name) if point is not None else None
     label = _LABEL[name]

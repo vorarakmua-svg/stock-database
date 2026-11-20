@@ -645,7 +645,8 @@ def _total_shares(snapshot: Optional[float], market_cap: Optional[float], price:
     of 12.23B shares), while market cap / price counts them all, the way Yahoo
     values the company: every class and partnership unit counts whenever market
     cap / price is more than SHARE_CLASS_GAP above the count (Q7; the FY count no
-    longer settles a 2-5% gap, which followed its drift: BUG-051). A count still
+    longer settles a 2-5% gap, which followed its drift: BUG-051). Without Yahoo's
+    count, market cap / price is the count (BUG-039). A count still
     under MIN_SHARE_COUNT_RATIO of the latest FY's diluted shares on today's basis
     is incomplete too (HON, whose market cap is halved as well), so that FY count
     is used instead.
@@ -653,7 +654,7 @@ def _total_shares(snapshot: Optional[float], market_cap: Optional[float], price:
     latest = next((r.shares for r in reversed(records) if r.shares and r.shares > 0), None)
     count, source = snapshot, "market_snapshot"
     by_value = market_cap / price if market_cap and price else None
-    if snapshot and by_value and by_value > SHARE_CLASS_GAP * snapshot:
+    if by_value and (not snapshot or by_value > SHARE_CLASS_GAP * snapshot):
         count, source = by_value, "market_cap / price"
     if count and latest and count < MIN_SHARE_COUNT_RATIO * latest:
         count, source = latest, "financials_annual"

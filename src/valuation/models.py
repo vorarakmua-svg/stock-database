@@ -42,13 +42,17 @@ DIVIDEND_CAGR_YEARS = 10
 #: within this share of one of them is that payment, not the year's: a filer
 #: that tags each quarter's rate in a full-year context (V, CEG, BKNG, AMAT,
 #: IBKR; BUG-020). One below every payment can't be their total either (PLD's
-#: stray 0.01 beside 3.84 paid).
+#: stray 0.01 beside 3.84 paid). Only a payer whose year before or year after
+#: holds two or more payments is read so: an annual payer's year can hold two
+#: when the next payment's ex-date slips into it, and its figure is then the
+#: year's (BUG-311).
 ONE_PAYMENT_TOLERANCE = 0.02
 
 
-def _one_payment(sec: float, payments: List[float]) -> bool:
-    """Whether SEC's figure for a year holds at most one of its *payments* (ONE_PAYMENT_TOLERANCE)."""
-    return len(payments) >= 2 and (sec < min(payments) or any(
+def _one_payment(sec: float, payments: List[float], beside: Sequence[int]) -> bool:
+    """Whether SEC's figure for a year holds at most one of its *payments* (ONE_PAYMENT_TOLERANCE), where *beside*
+    counts the payments in the year before it and in the year after it."""
+    return len(payments) >= 2 and max(beside, default=0) >= 2 and (sec < min(payments) or any(
         abs(sec - paid) <= ONE_PAYMENT_TOLERANCE * paid for paid in payments))
 
 
@@ -301,7 +305,8 @@ def dividend_history(inputs: ValuationInputs, anchor: date,
     Where SEC has no usable figure, Yahoo's payments with ex-dates in the year are
     summed: a filer that tags only point-in-time payments leaves the year empty
     (BUG-013), and one that tags a single payment as the year is no better
-    (``_one_payment``). A company without fiscal years (no SEC annual record) uses
+    (``_one_payment``, read only where the 365 days before the year or after it
+    hold two or more payments, BUG-311). A company without fiscal years (no SEC annual record) uses
     the complete calendar years before the anchor's, on Yahoo's payments alone. A
     year with neither source paid nothing (amount None). Each year's ``one_off`` sums
     the *one_offs* (``one_off_dividends``) ex-dated in it.
@@ -329,7 +334,9 @@ def dividend_history(inputs: ValuationInputs, anchor: date,
         restart = not paid or not before or (
             date.fromisoformat(paid[0][0]) - date.fromisoformat(before[-1])).days > DIVIDEND_STALE_DAYS
         one_off = sum(amount for day, amount in one_offs if start < day[:10] <= end)
-        if sec is not None and sec > 0 and not _one_payment(sec, payments):
+        beside = (len(_paid_between(dividends, (date.fromisoformat(start) - timedelta(days=365)).isoformat(), start)),
+                  len(_paid_between(dividends, end, (date.fromisoformat(end) + timedelta(days=365)).isoformat())))
+        if sec is not None and sec > 0 and not _one_payment(sec, payments, beside):
             history.append(DividendYear(year, sec, "sec", payments, restart, one_off))
         elif payments:
             history.append(DividendYear(year, sum(payments), "yahoo", payments, restart, one_off))

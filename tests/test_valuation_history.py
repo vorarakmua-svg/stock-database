@@ -267,3 +267,18 @@ def test_the_reason_names_net_income_to_common_where_the_year_has_it():
     from src.valuation.history import _no_multiple_reason
     assert _no_multiple_reason("pe", _point(net_income_to_common=-5.0)) == "net income to common is zero or negative"
     assert _no_multiple_reason("pe", _point(net_income=-5.0)) == "net income is zero or negative"
+
+
+def test_the_reason_names_a_quarters_missing_debt():
+    # BUG-293: a month whose quarter lacks the long-term debt its 10-Ks report (TMUS) has no EV/EBITDA for want of
+    # the debt, not of EBITDA.
+    from dataclasses import replace
+
+    from src.valuation.history import _no_multiple_reason
+    x = _inputs()
+    x.points = [replace(p, net_debt=None, debt_missing=True) if p.period_end >= "2025-09-30" else p
+                for p in x.points]
+    ev = {r.metric: r for r in compute_history(x).ranges}["ev_ebitda"]
+    reason = "no long-term debt in the quarter to 2025-09-30, though its 10-Ks report some"
+    assert ev.applicable and ev.current is None and ev.na_reason == reason
+    assert _no_multiple_reason("ev_ebitda", _point(ebitda=-5.0)) == "EBITDA is zero or negative"

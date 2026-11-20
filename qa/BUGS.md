@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 115 · NEEDS-USER 3 · Decided: 7 · Verified: 260
+**Open:** P0 0 · P1 0 · P2 0 · P3 113 · NEEDS-USER 3 · Decided: 7 · Verified: 262
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -343,9 +343,10 @@ Repro: a run with Yahoo failing, or `--no-yahoo`: the new calculated metrics hav
 Expected: the stores agree on the current values (MATCH-05).
 
 ### BUG-039 [P3][VAL] With no Yahoo share count, market cap ÷ price is never considered
-Status: OPEN
-Found: iteration 29 by code review 4 (confirmed by reading `_total_shares`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 211)
+Found: iteration 29 by code review 4 (confirmed by reading `_total_shares`) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, tests/test_valuation_models.py; failing first
 Repro: `_total_shares` looks at market cap ÷ price only when Yahoo's count exists; without it the count is None and DCF and owner earnings fall back to the FY diluted count (1.6x off for a unit structure like BX's). The oracle has the same gap.
+Fix (iteration 211, `qa/evidence/bug039-investigation.txt`): `_total_shares` (inputs.py) takes market cap / price when Yahoo has no count, or when it is more than 2% above Yahoo's; the 75%-of-latest-FY guard still applies; the oracle follows. No real case today: tables identical over 502.
 
 ### BUG-040 [P3][VAL] The DDM slip rule scales a regular-size extra at a window end, and misses a slip next to a big raise
 Status: VERIFIED (iteration 164: moot since BUG-049 removed the slip rule; Q3's one-off rule covers the special)
@@ -2038,10 +2039,11 @@ Repro: indicators.py reverse_dcf (~145-175) calls value_dcf directly; epv (~194-
 Expected: N/A with the same reason.   Actual: valued.
 
 ### BUG-311 [P3][VAL] An annual payer whose ex-date slips into the previous year loses SEC's dividend figure (BUG-049's one-payment test)
-Status: OPEN
-Found: code review 25 (Minor 1; synthetic test, no real case) | Fixed: | Regression test:
+Status: VERIFIED (iteration 211)
+Found: code review 25 (Minor 1; synthetic test, no real case) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, tests/test_valuation_models.py; failing first
 Repro: models.py `_one_payment` (~49-52) with `dividend_history` (~261-264): one payment a year growing 5%, the next ex-dated 2025-12-30: SEC's 1.1576 is within 2% of one of the year's two payments and is replaced by Yahoo's sum 2.4918 (CAGR 25.6%, capped). On the real copy all 7 overrides at a CAGR endpoint are the intended shape.
 Expected: SEC's figure kept unless the neighbouring years show two payments a year.   Actual: replaced.
+Fix (iteration 211, with BUG-039): `_one_payment` (models.py) applies only where the 365 days before or after the year hold two or more payments, so an annual payer whose next ex-date slips into the year keeps SEC's figure; the oracle, README's DDM row and the valuation spec follow. No real case today.
 
 ### BUG-312 [P3][UI] The ERN tab shows Yahoo's quarterly year-over-year earningsGrowth as "Earnings Growth"
 Status: VERIFIED (iteration 154)
@@ -2685,6 +2687,7 @@ Status: OPEN
 Found: iteration 121 (BUG-171's investigation) | Fixed: | Regression test:
 Repro: a month whose quarter has no debt figure reads as an EV/EBITDA N/A with the reason "EBITDA is zero or negative" (TMUS); and M1-4's unknown-debt rule leaves AXON's quarters that tag no debt at all (a debt-free filer) without an EV.
 Expected: an N/A reason that names the missing debt, and a debt-free quarter valued with no debt.   Actual: as above.
+Partly fixed (iteration 211): the N/A reason now says 'no long-term debt in the quarter to <end>, though its 10-Ks report some' (16 ev_ebitda reasons change; test in tests/test_valuation_history.py). Still OPEN: AXON's debt-free quarters. A rule 'unknown only after a 10-K reporting debt' was prepared (%LOCALAPPDATA%\stockdb-qa\bug039\out\held_*_293b.diff) but not applied: the stored data can't tell a debt-free 10-K from one whose debt is unread (BUG-294), so it would cut billions from F, DE, BXP, DLR, EQIX... (2,655 quarters at 215 tickers; 29 historical values, 4 labels incl. AXON near -> far above, BXP far below -> below). Needs a parser signal 'this filing's balance sheet has no debt line' (xbrl_parser.py; after Q18).
 
 ### BUG-294 [P3][PARSE] Quarters whose long-term debt stays unread after BUG-171's fix, and a few short by the tag order
 Status: OPEN

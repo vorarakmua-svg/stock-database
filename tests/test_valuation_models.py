@@ -339,6 +339,52 @@ def test_value_ddm_keeps_a_sec_figure_that_is_the_years_total(counts, extra):
     assert {source for _, _, source in res.assumptions["dividend_growth_years"]} == {"sec"}
 
 
+@pytest.mark.parametrize("moved, declared", [
+    ([("2026-01-15", "2025-12-30")], 1.0),   # the latest year holds the next year's payment
+    ([("2021-01-15", "2020-12-30")], 1.0),   # a year inside the window does
+    ([("2026-01-15", "2025-12-30")], 0.99),  # the declared figure is a little under the payment (rounding)
+])
+def test_value_ddm_keeps_an_annual_payers_sec_figure_beside_a_slipped_ex_date(moved, declared):
+    # BUG-311: an annual payer whose next payment went ex-dividend before the year end shows two payments in that
+    # year, and SEC's figure equals one of them (or sits just under both). The years beside it show one payment or
+    # none, so the figure is the year's (Yahoo's sum, 2.49 against 1.16, read a 25.6% CAGR).
+    dps = {y: declared * _true_total(y) for y in range(2016, 2026)}
+    res = value_ddm(_inputs(fy_records=_sec_years(dps), dividends=_paid_in({y: 1 for y in range(2015, 2027)}, moved),
+                            as_of=date(2026, 8, 4)))
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.05)
+    assert {source for _, _, source in res.assumptions["dividend_growth_years"]} == {"sec"}
+
+
+def test_value_ddm_keeps_secs_figure_for_a_year_of_one_payment_beside_quarterly_years():
+    # BUG-049's rule, beside BUG-311's: a year holding a single payment keeps SEC's figure, even one a little under
+    # that payment beside a year of four (a quarterly payer turned annual in 2021).
+    dps = {y: 0.99 * _true_total(y) for y in range(2016, 2026)}
+    res = value_ddm(_inputs(fy_records=_sec_years(dps), dividends=_paid_in({y: 4 if y <= 2020 else 1
+                                                                             for y in range(2015, 2027)}),
+                            as_of=date(2026, 8, 4)))
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.05)
+    assert {source for _, _, source in res.assumptions["dividend_growth_years"]} == {"sec"}
+
+
+@pytest.mark.parametrize("counts, one_payment_years", [
+    # a semiannual payer tagging a half-year's payment: the year before shows two (the latest year's next one
+    # holds a single payment so far)
+    ({y: 2 for y in range(2015, 2027)}, (2023, 2024, 2025)),
+    # an annual payer turned quarterly, tagging its first quarterly year's rate: the year after shows four
+    ({y: 1 if y <= 2020 else 4 for y in range(2015, 2027)}, (2021,)),
+])
+def test_value_ddm_takes_the_payments_where_a_year_beside_shows_two_or_more(counts, one_payment_years):
+    # BUG-311: a year's SEC figure equal to one of its payments is one payment where the year before it or the
+    # year after it shows two or more payments.
+    dps = {y: _true_total(y) for y in range(2016, 2026)}
+    for year in one_payment_years:
+        dps[year] = _true_total(year) / counts[year]
+    res = value_ddm(_inputs(fy_records=_sec_years(dps), dividends=_paid_in(counts), as_of=date(2026, 8, 4)))
+    assert res.assumptions["hist_cagr"] == pytest.approx(0.05)
+    sources = {year: source for year, _, source in res.assumptions["dividend_growth_years"]}
+    assert {year for year, source in sources.items() if source == "yahoo"} == set(one_payment_years)
+
+
 def test_value_ddm_skips_the_years_a_first_dividend_was_declared_and_paid_in():
     # MU declared its first dividend (0.10) in August 2021, the end of FY2021, and paid it in FY2022, which declared
     # only three (0.315) of the four it paid (0.415). Neither year is a full one.

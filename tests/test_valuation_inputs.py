@@ -384,6 +384,10 @@ def _shares_db(tmp_path, snapshot, market_cap_shares, fy_diluted, price=100.0):
     (2.2961e9, 2.3973e9, 2.5652e9, 2.3973e9, "market_cap / price"),  # PLTR: 4.4% apart, the filings side with it
     (0.3243e9, 0.3800e9, 0.3264e9, 0.3800e9, "market_cap / price"),  # SPG: 17% apart, units count (Q7)
     (1.000e9, 1.015e9, 0.900e9, 1.000e9, "market_snapshot"),        # 1.5% apart: within Yahoo's noise
+    # BUG-039: without Yahoo's count, market cap / price still counts every class and unit (BX: 1.6x its
+    # filed diluted shares), and is still checked against the latest FY's count (HON's market cap halved)
+    (None, 1.200e9, 0.750e9, 1.200e9, "market_cap / price"),
+    (None, 0.317e9, 0.643e9, 0.643e9, "financials_annual"),
 ])
 def test_per_share_values_count_every_share_class(tmp_path, snapshot, market_cap_shares, fy_diluted, shares, source):
     # DCF and owner earnings divide by the share count so the result compares with the price; Yahoo's

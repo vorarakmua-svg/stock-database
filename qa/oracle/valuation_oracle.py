@@ -279,7 +279,8 @@ class Inputs:
                                                              else "shares_outstanding"))
                           for r in reversed(self.annual) if r[5] or r[4]), None)
         self.ads_ratio, self.ads_unreadable = 1.0, None
-        fy_today = self.to_current_basis(*latest_fy) if self.snap_shares and latest_fy else None
+        fy_today = (self.to_current_basis(*latest_fy)
+                    if (self.snap_shares or (market_cap and self.price)) and latest_fy else None)
         # A foreign issuer's filings count ordinary shares, while the price is per ADS and Yahoo counts
         # ADS-equivalents (TSM: 25.93B ordinary, 5.186B ADS; BUG-065), so per-share values sit on the ADS basis
         # (VAL-03's same share basis). The ratio is the latest FY's period-end count (else its diluted one), on
@@ -299,8 +300,9 @@ class Inputs:
                 fy_today /= read
         by_value = market_cap / self.price if market_cap and self.price else None
         # Q7 (decided 2026-11-02, option a): every class and unit counts, market cap / price whenever it is more
-        # than 2% above Yahoo's count (within it, Yahoo's rounding); the 2-5% tiebreaker is gone.
-        if self.snap_shares and by_value and by_value > 1.02 * self.snap_shares:
+        # than 2% above Yahoo's count (within it, Yahoo's rounding); the 2-5% tiebreaker is gone. Without Yahoo's
+        # count, market cap / price is the count (BUG-039).
+        if by_value and (not self.snap_shares or by_value > 1.02 * self.snap_shares):
             self.snap_shares = by_value
         if self.snap_shares and fy_today and self.snap_shares < 0.75 * fy_today:
             self.snap_shares = fy_today
@@ -656,7 +658,13 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
             # payment, none before it, or the first more than 456 days (15 months) after the last one before it.
             restart = not paid or not before or (datetime.date.fromisoformat(paid[0][0])
                                                  - datetime.date.fromisoformat(before[-1])).days > 456
-            one = len(amounts) >= 2 and dps is not None and (
+            # BUG-311: only where the 365 days before the year or after it hold two or more payments; an annual
+            # payer's year holds two when the next ex-date slips into it, and SEC's figure is then the year's.
+            year = datetime.timedelta(days=365)
+            beside = max(sum(1 for d, _ in events if (datetime.date.fromisoformat(start) - year).isoformat() < d
+                             <= start),
+                         sum(1 for d, _ in events if end < d <= (datetime.date.fromisoformat(end) + year).isoformat()))
+            one = len(amounts) >= 2 and beside >= 2 and dps is not None and (
                 dps < min(amounts) or any(abs(dps - a) <= 0.02 * a for a in amounts))
             from_sec = dps is not None and dps > 0 and not one
             value = dps if from_sec else (sum(amounts) if amounts else None)

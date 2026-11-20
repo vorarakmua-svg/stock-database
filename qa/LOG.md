@@ -3518,3 +3518,15 @@ parser edit should land after Q18's merge).
 Gates: unchanged (qa/ only) | CI: PR #29
 Commit: (this commit) chore(qa): the fallback-tag fix waits on the user (Q20)
 Next: VAL 039/293/311 (worker).
+
+## Iteration 211: 2026-11-21 11:00: fix (BUG-039, BUG-311; BUG-293's wording)
+Picked: three VAL P3s under the stop rule; an opus worker.
+Did: shares from market cap / price when Yahoo has no count; the one-payment dividend test only beside multi-payment
+years; the history's N/A reason for missing debt says so. BUG-293's debt-free-quarters half held (it would misread
+unread debt as none for 215 tickers; needs a parser signal).
+- RED: 6 failed on the worker's base; GREEN. 14 of 14 mutants (5 rebased).
+- DB copies (engine over 502): only 16 N/A reason texts change; 0 valuation moves; oracle identical.
+Result: BUG-039, BUG-311 VERIFIED; BUG-293 partly fixed, OPEN.
+Gates: ruff ✓ mypy ✓ pytest 3671 passed, 1 skipped | CI: PR #29
+Commit: (this commit) fix(valuation): shares from market cap without Yahoo's count; an annual payer keeps SEC's dividend; missing debt named (BUG-039, BUG-311, BUG-293)
+Next: STORE 027/030/038/278 (worker); code review 34 due.
