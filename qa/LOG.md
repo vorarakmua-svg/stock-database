@@ -3661,3 +3661,14 @@ Result: BUG-358, BUG-359, BUG-373 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4075 passed, 2 skipped
 Commit: (this commit) fix(parser): the year end includes an adoption-day balance sheet; the stored sector before the parse (BUG-358, BUG-359, BUG-373)
 Next: BUG-338, BUG-342, BUG-348, BUG-293b.
+
+## Iteration 223: 2026-11-25 04:00: fix (BUG-338, BUG-342); Q21, Q22 for the user
+Picked: parser P3s BUG-338, 342, 348, 293b; an opus worker.
+Did: a 10-K tagging only a D&A total sets its year's basis; period_end is the year end the calendar already uses.
+- RED: 6 failed on 7905c59; GREEN. 5 of 5 mutants; bug332's m333 re-quoted (1 of 1); q20's 46 of 46. Look-ahead 0.
+- DB copies: period_end only (financials_annual 38 rows, as-of snapshots 48, vintages 1); everything else identical.
+Result: BUG-338, BUG-342 VERIFIED. BUG-348 -> Q21 (SEC's own frames; recommend keep and document), BUG-293b -> Q22
+(a policy; recommend the scores' interest rule for filers already unknown, measured first).
+Gates: ruff ✓ mypy ✓ pytest 4081 passed, 2 skipped
+Commit: (this commit) fix(parser): a D&A-total 10-K sets its year's basis; period_end is the calendar's year end (BUG-338, BUG-342)
+Next: the user on Q21, Q22; code review 36 (5 units since review 35).

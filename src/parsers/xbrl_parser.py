@@ -1065,7 +1065,8 @@ def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     one's as for any restatement (DDOG's FY2021 $22.9M over its first 10-K's $18.5M line). A year's 10-Qs are read so
     only where its latest 10-K is, as that 10-K is finally read, so its quarters stay on one basis (PSTG's FY2022);
     a year with no 10-K yet, as the last 10-K before it was, so the trailing year stays on one basis too (SWK's 10-Q
-    of April 2026: $113.0M, beside FY2025's quarters on its 10-K's total; BUG-332)."""
+    of April 2026: $113.0M, beside FY2025's quarters on its 10-K's total; BUG-332). A year whose 10-K tags its D&A
+    but no amortization has a 10-K, read as tagged, so its 10-Qs aren't read so (BUG-338)."""
     amortization: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
     figures: Dict[Tuple[str, str, str], List[float]] = defaultdict(list)
     for tag in _AMORTIZATION:
@@ -1193,6 +1194,11 @@ def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
         when = amortization[key].get("filed") or ""
         if _span_at_least_a_year(key) and when >= latest.get(key[1], ("", False))[0]:
             latest[key[1]] = (when, bool(lines))
+    # a year whose 10-K tags its D&A but no amortization has its 10-K, read as tagged: not the year before's (BUG-338)
+    for by_key in (*totals.values(), depreciation):
+        for key in by_key:
+            if _span_at_least_a_year(key):
+                latest.setdefault(key[1], ("", False))
 
     def year_read_so(start: str) -> bool:
         if start in latest:
@@ -2616,13 +2622,14 @@ class XBRLParser:
     def _apply_calendar(self, data: Dict[Any, Dict[str, Any]],
                         period_frames: Dict[Any, Set[Tuple[str, str]]],
                         flow_ends: Dict[Any, Dict[str, str]]) -> None:
-        """Set SEC-authoritative ``calendar_year`` (+frame) on each annual period.
+        """Set SEC-authoritative ``calendar_year`` (+frame) and the ``period_end`` on each annual period.
 
         A year's calendar is that of the fiscal year its figures cover: the end most of its
         full-year flow figures share (*flow_ends*: ``{field: end}``; the later end on a tie),
         else, with none (a balance sheet can stand on any day: EXE's fresh start of
-        2021-02-09), its ``period_end``. That end, not ``period_end``, which a stray later
-        filed figure can set (LRCX's FY2012 reads 2012-06-30 for its year to 2012-06-24). It
+        2021-02-09), the end of its latest filed figure. That end is the period's ``period_end``
+        too, not a stray later filed figure's (LRCX's FY2012 is its year to 2012-06-24, not the
+        2012-06-30 of the cash and equity its 10-K of 2015 tags; BUG-342). It
         takes the SEC's full-year frame on a fact ending there (a January year-end maps to the
         prior calendar year), else the frame SEC's rule gives that end (``_frame_of_end``);
         never a frame of another end (a 52-week figure to March in TEL's September year), nor
@@ -2634,6 +2641,7 @@ class XBRLParser:
             ends = Counter(e for e in flow_ends.get(period, {}).values() if e)
             end = max(ends, key=lambda e: (ends[e], e)) if ends else period_dict.get("period_end")
             period_dict["_year_end"] = end
+            period_dict["period_end"] = end
             year, _, chosen = self._calendar_from_frames(
                 {frame for at, frame in period_frames.get(period, set()) if at == end}, end, quarterly=False)
             period_dict["calendar_year"] = year

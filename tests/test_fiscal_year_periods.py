@@ -9,6 +9,7 @@ filer's, cut down.
 
 import pytest
 
+from src.parsers.annual_snapshots import build_snapshots
 from src.parsers.xbrl_parser import XBRLParser
 from tests.conftest import usd
 
@@ -213,3 +214,44 @@ def test_a_vintage_knows_only_the_annual_reports_filed_by_its_own(filed_first):
     else:             # the May 10-K came first: its two flow figures make May the key's, so this view is May's sheet
         assert view.get("revenue") is None
         assert (view["total_assets"], view["total_equity"], view["period_end"]) == (10664, 2630, "2016-05-31")
+
+
+def _lrcx_2012():
+    # LRCX's FY2012, its 52-week year to 2012-06-24; its 10-K of 2015 tags the cash and equity of 2012-06-30, a
+    # nominal month-end within the week, so the same year's (BUG-342).
+    a, b = "2012-08-23", "2015-08-13"
+    year = ("2011-06-27", "2012-06-24")
+    return {
+        "Revenues": [usd(4316, *year, fy=2012, filed=a)],
+        "NetIncomeLoss": [usd(169, *year, fy=2012, filed=a)],
+        "NetCashProvidedByUsedInOperatingActivities": [usd(548, *year, fy=2012, filed=a)],
+        "Assets": [usd(9348, None, "2012-06-24", fy=2012, filed=a)],
+        "StockholdersEquity": [usd(5132, None, "2012-06-24", fy=2012, filed=a),
+                               usd(5131, None, "2012-06-30", fy=2015, filed=b)],
+        "CashAndCashEquivalentsAtCarryingValue": [usd(1565, None, "2012-06-30", fy=2015, filed=b)],
+    }
+
+
+def test_a_stray_later_filed_figure_doesnt_set_the_years_end():
+    year = _annual(_lrcx_2012(), "2012")
+    assert year["total_equity"] == 5131                 # the later filing's figure of the same year stands
+    assert (year["period_end"], year["calendar_year"]) == ("2012-06-24", 2011)
+
+
+def test_a_view_takes_the_end_its_flows_share_not_its_first_figures():
+    # A 10-K tagging its year's revenue to the nominal month-end (2019-10-31) and its other flows to the true end
+    # (2019-11-02): the view's year ends where most of its flows do, whichever figure is read first.
+    filed = "2019-12-20"
+    view = _vintage({
+        "Revenues": [usd(3572, "2018-11-01", "2019-10-31", fy=2019, filed=filed)],
+        "NetIncomeLoss": [usd(253, "2018-11-04", "2019-11-02", fy=2019, filed=filed)],
+        "NetCashProvidedByUsedInOperatingActivities": [usd(486, "2018-11-04", "2019-11-02", fy=2019, filed=filed)],
+    }, "2019", filed)
+    assert view["period_end"] == "2019-11-02"
+
+
+def test_every_snapshot_of_the_year_keeps_its_own_end():
+    rows = [row for row in build_snapshots(XBRLParser(), _facts(_lrcx_2012()), ticker="LRCX", years_back=None).rows
+            if row["fiscal_year"] == 2012]
+    assert [(row["known_from"], row["period_end"]) for row in rows] == [("2012-08-23", "2012-06-24"),
+                                                                         ("2015-08-13", "2012-06-24")]

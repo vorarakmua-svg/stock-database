@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 95 · NEEDS-USER 0 · Decided: 8 · Verified: 293
+**Open:** P0 0 · P1 0 · P2 0 · P3 93 · NEEDS-USER 2 · Decided: 8 · Verified: 295
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2207,10 +2207,11 @@ Expected: `recovered` only when the walk stopped at an accession the companyfact
 Fix (iteration 180, `qa/evidence/bug337-investigation.txt`): a new `report_gap(submissions, facts) -> (gap, whole)` walks as before but says whether it stopped at an accession the companyfacts carry (checked before the cap, so four lacked reports whose listed fifth is carried are whole); `reports_without_facts` returns its gap; `_read_gap` sets `recovered` only when every report was read and the gap is whole, else the run stays incomplete and the refresh collects it again. The run's warning adds "it found no earlier report they carry, so reports before those may be missing too". The same reports are read and merged, so no figure moves; the stored DB (2026-10-25) predates Q17 (no `incomplete` column, 0 runs read a filing's XBRL), so no stored row changes. Residuals: a gap whose carried fifth report is listed nowhere stays incomplete (safe side); a filer whose companyfacts carry none of its reports is retried INCOMPLETE_RETRIES times; refresh._lacking's wording ("read no facts of its 10-Q") is unchanged for this case; a gap over four re-reads the same four on each retry (from the per-filing cache). BUG-336 not worsened.
 
 ### BUG-338 [P3][TTM] BUG-332's fallback reads a year whose 10-K tags no amortization as a year with no 10-K yet
-Status: OPEN
-Found: code review 29 (Minor 1; synthetic, a regression against 33d60b1; no real case among 17 candidate filers) | Fixed: | Regression test:
+Status: VERIFIED (iteration 223)
+Found: code review 29 (Minor 1; synthetic, a regression against 33d60b1; no real case among 17 candidate filers) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (3 new); failing first
 Repro: xbrl_parser.py ~1179-1189: `latest` holds only annual keys in `final` (periods with an amortization fact), so year_read_so() takes the year before for a year whose 10-K tags DDA alone; its 10-Qs follow the earlier 10-K's basis and Q4 can go negative (synthetic SWK-shaped: Q4 -15.0M for 96.9M at 33d60b1). Candidates (AMAT, WFC, PFE, O, CCL, LMT, NTAP, EBAY, CRM, EXC, CBOE, KKR, PM, XYZ, ETN, ICE, HLT): only CRM and EXC differ, both from BUG-327 and better. Probe: %LOCALAPPDATA%\stockdb-qa\review29\head\tests\test_review29.py::test_a_year_whose_10k_tags_no_amortization_follows_its_own_10k.
 Expected: "has a 10-K" decided from the year's annual D&A facts on a 10-K.   Actual: from `final`.
+Fix (iteration 223, `qa/evidence/bug338-investigation.txt`): in `_depreciation_combined` any year-long D&A fact (a total or Depreciation) means the year has a 10-K; with no amortization it is read as tagged (setdefault, so a 10-K with amortization still decides), and a following year with no 10-K yet follows it. The SWK-shaped case reads 91.1/90.9/91.1/96.9 (was 128.4/128.2/128.4/-15.0). As-of: quarters follow the year before until the 10-K is filed. 0 cells move over 504 cached filers (no real case, as review 29 found).
 
 ### BUG-339 [P3][VALID] After BUG-329 a vintage's shares outstanding and weighted counts sit on different scales in one filing's view: NTRS FY2009 241.7M beside 235.5 trillion
 Status: OPEN
@@ -2234,10 +2235,11 @@ Expected: one record per fiscal year, each of one period's figures (a transition
 Fix (iteration 182, `qa/evidence/bug341-investigation.txt`): a fiscal-year key's record holds one period, the end most of its full-year flow fields share (the later on a tie; with no flow figure the latest end); figures more than 7 days (`_SAME_PERIOD_DAYS`) from it are not read for the key. Applied in `_annual_periods` (resolve and restore), `_revenue_set_aside` and `extract_annual_vintages`; a vintage holds the period the record held on its filing day from the reports filed by then (a pure function of the facts). No key renumbering; transition periods still make no record (their balance sheets no longer leak into the old year); README says a transition step spans more than 12 months and CAGRs count it as one year. Decisions (orchestrator): KDP 2017 takes Keurig's year to 2017-09-30 (majority rule; the 'own year' variant broke the oracle on KDP), no transition-period records. Census over 504: annual 69 records moved, vintages 118 moved / 16 no longer produced, quarterly and TTM 0. DB copies over 502: financials_annual 87 rows, vintages 133, metrics 20, per-share 9, quality 5, valuations 5 (DDM TEL base 37.00 -> 37.83; Lynch GPN base 86.70 -> 70.91, FY2016 EPS 1.37 -> 2.04); 0 medians, verdicts, owner-earnings verdicts, historical values or labels; valuation oracle identical to HEAD. Look-ahead 0. Residuals: two companies' balance sheets on one date and ASC 606/842 opening balances within 7 days still mix; some years lose a balance sheet borrowed from another date (MS 2008, NOW 2011, KDP 2017); BUG-342 partly resolved (far strays no longer set period_end); stale vintages stay in an existing DB (BUG-344).
 
 ### BUG-342 [P3][VALID] A record's period_end isn't always its own end: a stray later-filed fact sets it
-Status: OPEN
-Found: BUG-277's census (residual 2) | Fixed: | Regression test:
+Status: VERIFIED (iteration 223)
+Found: BUG-277's census (residual 2) | Fixed: (this commit) | Regression tests: tests/test_fiscal_year_periods.py (3 new); failing first
 Repro: annual records take period_end from the latest-filed contributing fact, which can be a stray (LRCX FY2012 2012-06-30 for its year to 2012-06-24; TER, LULU); vintages take it from their first fact (LHX's FY2019 vintages say 2019-06-28 but hold the year to 2020-01-03). Since BUG-277 calendar_year no longer follows period_end, so 6 annual records' calendar_year differs from SEC's rule on their own period_end.
 Expected: period_end the end most of the record's flow figures share.   Actual: a stray's.
+Fix (iteration 223, `qa/evidence/bug338-investigation.txt`): `_apply_calendar` sets period_end to the end it already uses for the year end and calendar_year (the end most of the year's flow figures share, else the latest filed figure's), for every annual record, vintage and as-of snapshot. LRCX FY2012 2012-06-30 -> 2012-06-24. Records whose calendar_year disagrees with SEC's rule on their own period_end: 1 -> 0. DB copies: financials_annual 38 rows at 29 tickers, financials_annual_known 48 at 36, vintages 1 (WSM), period_end only; every other table identical; oracles as at HEAD; look-ahead 0.
 
 ### BUG-343 [P3][TTM] TTM rows carry no SEC frame label
 Status: OPEN
@@ -2484,6 +2486,17 @@ Status: OPEN
 Found: split from BUG-364 (iteration 221) | Fixed: | Regression test:
 Repro: their companyfacts carry no undimensioned long-term debt in any year; EV/EBITDA counts net debt as 0. Needs the filing's XBRL instance (Q17's reader) summed over the debt segments, or an explained N/A.
 Expected: their debt read, or EV marked unknown.   Actual: net debt 0.
+### Q21 [DATA] NEEDS-USER: BUG-348's shared calendar years come from SEC's own frames: keep SEC's labels, or assign our own?
+Status: OPEN (NEEDS-USER)
+Found: the BUG-338 worker (iteration 223; `qa/evidence/bug338-investigation.txt`) | Fixed: | Regression test:
+Context: two adjacent fiscal years share a calendar_year because SEC frames both on different concepts (LRCX FY2013: 13 facts framed CY2013; FY2014: 165 framed CY2013; none CY2012; also LRCX FY2024/25, STX FY2023/24). 24 shared calendar years at 8 filers at the June 52/53-week boundary (SYY, LRCX, TPR, WDC, STX, LITE, LHX, SNDK) plus 3 at fiscal-year changes. No valuation reads calendar_year. Options: A keep SEC's labels and document it (BUG-348 WONTFIX); B distinct years by our own rule (contradicts SEC's frame on ~24 rows); C shift only the duplicating year (moves SEC's majority frame). Recommendation: A.
+Decision: 
+
+### Q22 [VAL] NEEDS-USER: BUG-293b, telling a debt-free 10-K from one whose debt isn't read
+Status: OPEN (NEEDS-USER)
+Found: the BUG-338 worker (iteration 223; `qa/evidence/bug338-investigation.txt`) | Fixed: | Regression test:
+Context: company facts can't reliably separate them: debt-free filers show debt-like evidence (LULU InterestPaidNet, VRTX leases and interest, AXON FY2016/18 capital leases); unread-debt filers show weak evidence (TXT from FY2022 maturities only, PCAR from FY2012 InterestPaid and debt flows). Among years with no positive debt field: 826 no evidence, 722 interest only; 19 tickers never have a positive debt field (7 carry debt). Options: A today's rule; B the held rule (2,655 quarters at 215 tickers, 29 historical values, 4 labels); C a stored parser evidence signal (schema change; false 'debt unknown' for LULU, VRTX); D the scores' read_debt interest rule per 10-K in history_inputs; E C or D only for filers already marked unknown. Recommendation: E with D (no schema change, matches the scores); it values AXON's FY2016-21 quarters with no debt, which moves AXON's historical value and probably its label: measure before applying.
+Decision: 
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)

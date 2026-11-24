@@ -7,6 +7,7 @@ from src.models.stock_data import StockData
 from src.parsers.annual_snapshots import build_snapshots
 from src.parsers.calculated_metrics import CalculatedMetrics
 from src.parsers.derived_fields import apply_derivations
+from src.parsers.known_facts import facts_known_by
 from src.parsers.share_scale import normalize_share_scale
 from src.parsers.ttm import compute_ttm
 from src.parsers.xbrl_parser import XBRLParser, explain_no_annual_financials, explain_stale_annual_financials
@@ -2307,6 +2308,41 @@ def test_a_year_with_no_10k_yet_stays_on_the_last_10ks_line_basis():
     q1 = ("2026-01-01", "2026-03-31", "10-Q", "2026-04-29", {DDA: 16.0e6, DA: 20.2e6, INTANGIBLES: 4.2e6})
     quarters = XBRLParser().extract_quarterly_financials(_da_filings(before, year, q1))
     assert quarters["2026-03-31"]["depreciation_amortization"] == pytest.approx(16.0e6)
+
+
+#: BUG-338 (code review 29, Minor 1): FY2024's 10-K is read combined (SWK's figures); FY2025's 10-Qs tag DDA, DA and
+#: the amortization (their line shown in the same filing), and its 10-K tags DDA $370M alone.
+_NO_AMORTIZATION_10K = [
+    ("2024-01-01", "2024-12-31", "10-K", "2025-02-24", {DDA: 365.6e6, DA: 512.4e6, INTANGIBLES: 146.8e6}),
+    ("2025-01-01", "2025-03-31", "10-Q", "2025-04-30", {DDA: 91.1e6, DA: 128.4e6, INTANGIBLES: 37.3e6}),
+    ("2025-01-01", "2025-06-30", "10-Q", "2025-07-30", {DDA: 182.0e6, DA: 256.6e6, INTANGIBLES: 74.6e6}),
+    ("2025-01-01", "2025-09-30", "10-Q", "2025-10-29", {DDA: 273.1e6, DA: 385.0e6, INTANGIBLES: 111.9e6}),
+    ("2025-01-01", "2025-12-31", "10-K", "2026-02-24", {DDA: 370.0e6})]
+
+
+def test_a_year_whose_10k_tags_no_amortization_follows_its_own_10k():
+    # The year has a 10-K, read as tagged (the line), so its 10-Qs stay on the line: not FY2024's basis, which moved
+    # them to the total and left the fourth quarter at -$15.0M.
+    quarters = XBRLParser().extract_quarterly_financials(_da_filings(*_NO_AMORTIZATION_10K))
+    assert [round(quarters[end]["depreciation_amortization"] / 1e5) for end in (
+        "2025-03-31", "2025-06-30", "2025-09-30", "2025-12-31")] == [911, 909, 911, 969]
+
+
+def test_before_its_10k_a_year_follows_the_last_10k_and_after_it_its_own():
+    # Known before FY2025's 10-K, the year has none yet and follows FY2024's (the total); from the 10-K's day, its own.
+    facts = _da_filings(*_NO_AMORTIZATION_10K)
+    parser = XBRLParser()
+    before = parser.extract_quarterly_financials(facts_known_by(facts, "2026-02-23"))
+    assert before["2025-09-30"]["depreciation_amortization"] == pytest.approx(128.4e6)
+    after = parser.extract_quarterly_financials(facts_known_by(facts, "2026-02-24"))
+    assert after["2025-09-30"]["depreciation_amortization"] == pytest.approx(91.1e6)
+
+
+def test_a_year_with_no_10k_yet_follows_a_10k_that_tags_no_amortization():
+    # The last 10-K (FY2025's) tags DDA alone, read as tagged: FY2026's 10-Q stays on its line, not on FY2024's total.
+    q1 = ("2026-01-01", "2026-03-31", "10-Q", "2026-04-29", {DDA: 93.0e6, DA: 131.0e6, INTANGIBLES: 38.0e6})
+    quarters = XBRLParser().extract_quarterly_financials(_da_filings(*_NO_AMORTIZATION_10K, q1))
+    assert quarters["2026-03-31"]["depreciation_amortization"] == pytest.approx(93.0e6)
 
 
 def test_a_10k_line_the_guard_keeps_doesnt_move_its_10qs():

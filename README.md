@@ -2224,7 +2224,9 @@ period therefore carries two labels:
   year ending 2023-01-01 is FY2022). January-end retailers (e.g. WMT, Jan 31) keep the end
   year. SEC's `fy` field is deliberately not used — filers mis-stamp it.
   A fiscal year holds one period's figures: the period most of its income and cash-flow
-  figures cover (the later on a tie; with none, its latest balance-sheet date). After a
+  figures cover (the later on a tie; with none, its latest balance-sheet date), and its
+  `period_end` is the end those figures share, not a later filing's figure dated a few days off
+  (LRCX's FY2012 ends 2012-06-24, though its 10-K of 2015 dates that year's cash 2012-06-30). After a
   reverse merger that is the period the later reports present (KDP's 2017 is Keurig's year
   to 2017-09-30, not Dr Pepper Snapple's calendar 2017). Figures of a period ending more
   than a week from it are another period's and aren't read for it: after a change of
