@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 98 · NEEDS-USER 0 · Decided: 9 · Verified: 286
+**Open:** P0 0 · P1 0 · P2 0 · P3 98 · NEEDS-USER 0 · Decided: 8 · Verified: 290
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1612,10 +1612,11 @@ Expected: a failure stored as an N/A reason, or the row marked stale.   Actual: 
 Fix (iteration 196, with BUG-198): a failed scores computation stores a failure row (no score, every N/A reason 'the scores' computation failed: <why>') in place of the previous scores, signs and per-share rows, shown by the existing N/A notes; if that write fails too, the log says the previous scores stay. Residuals: a scores failure isn't reported to callers (the failures dict is valuations-only); a rank-pass failure keeps the old ranks; the failure row's header reads 'fiscal year None'.
 
 ### BUG-203 [P3][DATA] Three tags the mapping doesn't read: lease-inclusive PP&E, the combined debt, and no operating income without a fallback
-Status: OPEN
-Found: code review 16's recommendations, build M2-9 (BUG-189, BUG-191) | Fixed: | Regression test:
+Status: VERIFIED (iteration 221) for lease-inclusive PP&E and the combined debt; the missing operating income is BUG-374
+Found: code review 16's recommendations, build M2-9 (BUG-189, BUG-191) | Fixed: (this commit) | Regression tests: tests/test_fallback_tags.py (new), tests/test_xbrl_parser.py; 43 failing first
 Repro: `src/mappings/canonical.py`: `ppe_net` maps only `PropertyPlantAndEquipmentNet`, so 17 of the 94 Magic Formula candidates have no PP&E (UNP, HD and TSLA tag `PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization`; also META, GOOGL, LOW, T...). 15 tag no `OperatingIncomeLoss` (JNJ, LLY, MRK, PFE, XOM, CVX, IBM, GE, DE, KLAC...), which leaves their Altman Z and Magic Formula rank N/A. PGR files its $8.39B of debt as `DebtLongtermAndShorttermCombinedAmount`, which no field maps (so its debt reads unknown, BUG-189).
 Expected: the tags mapped, with fallbacks, and an EBIT definition chosen for the filers without operating income (GuruFocus uses pretax income + interest expense).   Actual: N/A, with the reason shown (BUG-191).
+Fix (iteration 221, Q20, `qa/evidence/q20-investigation.txt`): fallback tags in canonical.py (long_term_debt: LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities, DebtLongtermAndShorttermCombinedAmount; ppe_net: the lease-inclusive PP&E; short_term_investments: six current-securities tags, MarketableSecurities last) and `_totals_beside_current_debt_set_aside` in `_filer_facts` (a total that includes current debt isn't read on a date its current part is tagged), which also holds per filing date in the as-of snapshots. Banks (stock.sector_class, Q9) don't read MarketableSecurities (`_UNREAD_BY_SECTOR`). Census over 504 filers: annual LTD 59 cells/6 filers, STI 710/105, PP&E 419/94. On DB copies: 0 medians, verdicts, owner-earnings verdicts or labels; 21 historical values within their labels; EPV at 37 (GM 119.77 -> 35.05); NCAV bear at 10; Magic Formula ranked 255 -> 314; 13 composites; 5 new beneish flags; no bank valuation or score row moves. Look-ahead 0; oracles as at HEAD.
 Notes: a mapping change reaches the stored figures only at the next collection, which is live (not in M2's offline backfill). Operating income feeds EBITDA, M1's EV/EBITDA history and the fair-value line, and the screener, so a fallback needs a valuation-policy check first.
 
 ### BUG-204 [P3][UI] The STAT tab's metric cards and its Quality section read a debt-free filer's debt differently
@@ -1750,10 +1751,11 @@ Fix (build iteration 40): `price_suspect()` in `src/ownership/insiders.py` flags
 Evidence: `qa/evidence/bug220-fix-{red,green,mutants,mutants-rerun,realdata,gates-rerun}.txt`
 
 ### BUG-221 [P3][DATA] Five current-securities tags aren't read as short-term investments
-Status: OPEN
-Found: build iteration 42 (M4-1's real-data check) | Fixed: | Regression test:
+Status: VERIFIED (iteration 221)
+Found: build iteration 42 (M4-1's real-data check) | Fixed: (this commit) | Regression tests: tests/test_fallback_tags.py (new), tests/test_xbrl_parser.py; 43 failing first
 Repro: `short_term_investments` maps `ShortTermInvestments`, `MarketableSecuritiesCurrent` and `AvailableForSaleSecuritiesCurrent` only. `unmapped_facts` holds `AvailableForSaleSecuritiesDebtSecuritiesCurrent` for 12 filers (ORCL, PFE, MU, INTC, ANET, AMGN, ADI, CRM, BMY, SYK, NOW, INTU), `MarketableSecurities` for 8 (NVDA's $23.9B at 2024-04-28, KO, MA, INTC, BMY ...), `OtherShortTermInvestments` for 8, `HeldToMaturitySecuritiesCurrent` and `DebtSecuritiesAvailableForSaleExcludingAccruedInterestCurrent` for 2 each. NVDA's FY2026 stores no short-term investments after $34.6B in FY2025; 80 of the 126 latest fiscal years store none.
 Expected: the current securities read (a noncurrent-inclusive `MarketableSecurities` only where no current tag is filed).   Actual: read as missing, so the cash and short-term investments behind net debt, EPV's cash and Graham's net-net are understated. NCAV itself reads current assets and is unaffected.
+Fix (iteration 221, Q20, `qa/evidence/q20-investigation.txt`): fallback tags in canonical.py (long_term_debt: LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities, DebtLongtermAndShorttermCombinedAmount; ppe_net: the lease-inclusive PP&E; short_term_investments: six current-securities tags, MarketableSecurities last) and `_totals_beside_current_debt_set_aside` in `_filer_facts` (a total that includes current debt isn't read on a date its current part is tagged), which also holds per filing date in the as-of snapshots. Banks (stock.sector_class, Q9) don't read MarketableSecurities (`_UNREAD_BY_SECTOR`). Census over 504 filers: annual LTD 59 cells/6 filers, STI 710/105, PP&E 419/94. On DB copies: 0 medians, verdicts, owner-earnings verdicts or labels; 21 historical values within their labels; EPV at 37 (GM 119.77 -> 35.05); NCAV bear at 10; Magic Formula ranked 255 -> 314; 13 composites; 5 new beneish flags; no bank valuation or score row moves. Look-ahead 0; oracles as at HEAD.
 Notes: a mapping change reaches the stored figures only at the next collection. Net debt feeds M1's EV/EBITDA history and fair-value line, M2's Magic Formula and the screener, not the six models' median or the verdicts.
 
 ### BUG-222 [P3][UI] The screener's results table is wider than the page, so its verdict column scrolls out of view
@@ -2389,10 +2391,11 @@ Expected: a two-filing quarter test.   Actual: none.
 Fix (iteration 207, with BUG-360): tests/test_web_gurus.py adds two-filing quarters; the any->all and latest-filing-only mutants are killed.
 
 ### BUG-364 [P3][DATA] GM, AES, TXT and PCAR read no debt line in any year, so their EV/EBITDA counts net debt as 0 and reads low
-Status: OPEN
-Found: BUG-183's worker (iteration 208) | Fixed: | Regression test:
+Status: VERIFIED (iteration 221) for GM (and PGR); AES, TXT and PCAR are BUG-375
+Found: BUG-183's worker (iteration 208) | Fixed: (this commit) | Regression tests: tests/test_fallback_tags.py (new), tests/test_xbrl_parser.py; 43 failing first
 Repro: no annual or TTM row of GM, AES, TXT or PCAR holds a debt figure (a mapping gap, not debt-free companies); the spec counts unknown net debt as 0, so EV/EBITDA reads low: GM 4.88 vs Yahoo 8.96, AES 8.26 vs 12.21. Find the tags they file debt under (likely BUG-203/259 territory).
 Expected: their debt read.   Actual: none.
+Fix (iteration 221, Q20, `qa/evidence/q20-investigation.txt`): fallback tags in canonical.py (long_term_debt: LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities, DebtLongtermAndShorttermCombinedAmount; ppe_net: the lease-inclusive PP&E; short_term_investments: six current-securities tags, MarketableSecurities last) and `_totals_beside_current_debt_set_aside` in `_filer_facts` (a total that includes current debt isn't read on a date its current part is tagged), which also holds per filing date in the as-of snapshots. Banks (stock.sector_class, Q9) don't read MarketableSecurities (`_UNREAD_BY_SECTOR`). Census over 504 filers: annual LTD 59 cells/6 filers, STI 710/105, PP&E 419/94. On DB copies: 0 medians, verdicts, owner-earnings verdicts or labels; 21 historical values within their labels; EPV at 37 (GM 119.77 -> 35.05); NCAV bear at 10; Magic Formula ranked 255 -> 314; 13 composites; 5 new beneish flags; no bank valuation or score row moves. Look-ahead 0; oracles as at HEAD.
 
 ### Q19 [VAL] NEEDS-USER: should a share-count seam that is a real reverse split be folded instead of truncating the history?
 Status: VERIFIED (iteration 219; applied at the user's decision, 2026-11-25)
@@ -2402,10 +2405,11 @@ Decision: USER 2026-11-24: fold a seam that a stored split (or the implied-count
 Fix (iteration 219, `qa/evidence/q19-investigation.txt`): beyond 50x, newest seam first, `_normalize_splits` folds a seam a stored split (or run of splits) explains within 1.25x, else one the implied count explains (`_implied_count_explains`: net income to common where a year has it, else net income, over diluted EPS; within 1.25x, every figure known and nonzero), else truncates as before. EXE's FY2017->FY2018 seam (906M -> 4.546M, Chesapeake's 1:200 of 2020; no split_events row) folds on net income to common (901.4M -> 4.545M; plain net income gives 1:93 and would not). EG no longer has a seam beyond 50x. On DB copies: only EXE moves: dcf growth 0.88% -> 15% (cap), median bear 32.57 -> 35.18, base 38.36, bull 59.00 -> 72.39; no verdict, owner-earnings verdict or label; EXE quality components move, ranks and composite don't. Oracle agrees (L1 0/2034; L2 HLT, RTX lynch as before). Residual: the quarterly path (history_inputs.normalize_share_series) still truncates; its 35 seams beyond 50x over 12 tickers are count glitches, none a split.
 
 ### Q20 [DATA] NEEDS-USER: apply the fallback-tag fix for BUG-364/203/221? It moves 18 historical values (no label), 37 EPV bases and adds 59 Magic Formula ranks
-Status: DECIDED (2026-11-24)
+Status: VERIFIED (iteration 221; applied at the user's decision, 2026-11-24)
 Found: the BUG-364/203/221 worker (iteration 210), prepared in %LOCALAPPDATA%\stockdb-qa\bug364\out (diffs, mutants, census, DB-copy diffs; `qa/evidence/bug364-investigation.txt`) | Fixed: | Regression test:
 What it does: appends fallback tags (long_term_debt: LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities and DebtLongtermAndShorttermCombinedAmount; ppe_net: the lease-inclusive PP&E concept; short_term_investments: six current-securities tags incl. DebtSecuritiesCurrent and MarketableSecurities last) plus an xbrl_parser.py rule (+42/-2, `_totals_beside_current_debt_set_aside` in `_filer_facts`) so a total including current debt isn't read on a date its current part is tagged. GM's debt ($131.6B) and PGR's become read; 102 filers gain PP&E; NVDA-style short-term investments. Census: annual LTD 59 cells/6 filers, STI 756/110, PP&E 418/93 (+quarters, TTM, vintages). Moves on DB copies: 18 historical values within their labels (HUM 319.04->276.76, INTC 23.19->24.55, GM 75.14->76.91, FSLR, KLAC, ORCL, TYL ...), EPV base at 37 (GM 120.02->38.24, ELV 407.34->526.69, VEEV 48.15->79.89), NCAV bear at 10, Magic Formula ranked 256->315, 15 composites by 2, 5 new beneish flags; no median, verdict, owner-earnings verdict or label. Oracles identical. Look-ahead 0. Concerns: MarketableSecurities stores banks' whole securities books as short-term investments (BAC $925.6B; no valuation moves, but FA/exports show it); GM's quarters lose EV (no debt in its 10-Qs); the parser edit must be carried across feat/asof-snapshots (Q18). Recommendation: apply after Q18's merge, dropping MarketableSecurities for banks (sector rule) or leaving it out.
 Decision: USER 2026-11-24: apply on main (after Q18's merge), with MarketableSecurities not used for banks (sector rule). Re-measure on the merged parser before committing.
+Fix (iteration 221, Q20, `qa/evidence/q20-investigation.txt`): fallback tags in canonical.py (long_term_debt: LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities, DebtLongtermAndShorttermCombinedAmount; ppe_net: the lease-inclusive PP&E; short_term_investments: six current-securities tags, MarketableSecurities last) and `_totals_beside_current_debt_set_aside` in `_filer_facts` (a total that includes current debt isn't read on a date its current part is tagged), which also holds per filing date in the as-of snapshots. Banks (stock.sector_class, Q9) don't read MarketableSecurities (`_UNREAD_BY_SECTOR`). Census over 504 filers: annual LTD 59 cells/6 filers, STI 710/105, PP&E 419/94. On DB copies: 0 medians, verdicts, owner-earnings verdicts or labels; 21 historical values within their labels; EPV at 37 (GM 119.77 -> 35.05); NCAV bear at 10; Magic Formula ranked 255 -> 314; 13 composites; 5 new beneish flags; no bank valuation or score row moves. Look-ahead 0; oracles as at HEAD.
 
 ### BUG-365 [P3][REFRESH] A run whose submissions request failed joins an older, given-up gap, so the company is left uncollected
 Status: VERIFIED (iteration 214)
@@ -2460,6 +2464,23 @@ Found: code review 35 (`qa/evidence/review35.txt`, Minor 2; regression from BUG-
 Repro: src/valuation/models.py ~60, ~300-306 (the oracle shares the rule, valuation_oracle.py ~530-542): HEAD's own semiannual test with an interim of 0.3 instead of 0.4: FY2025 reads (1.0, sec) instead of Yahoo's 1.3. Needs a semiannual schedule, an interim under 1/3 of the final, and SEC giving only the final as the year's figure; real count not measured. Probe: test_review35.py.
 Expected: the year's two regular payments (1.3).   Actual: the final only (1.0).
 Fix (iteration 220, `qa/evidence/bug371-investigation.txt`): the 1/3 edge came from BUG-366's size test (0.5 x a two-payment side's median). A payment that isn't a whole one-off now counts if it passes the size test or recurs (`models._recurs`: another payment within 3x of it ex-dated 365 +/- 91 days away, Q3's definitions); an interim comes back each year, an extra doesn't. Only adds counts, so BUG-366's case stays closed. The oracle's regular_beside matches. Census over 419 payers: 61 sides at 18 tickers change count, 8 cross the gate (CRH, SW), neither files a single payment as its SEC figure: 0 years move. DB copies: all 37 tables identical. Residual (unmeasured): Q3's one_off_dividends can call a small-interim payer's final a slot one-off in the second year of a short history.
+### BUG-373 [P3][DATA] A run whose submissions request failed has no sector class, so a bank reads MarketableSecurities as short-term investments
+Status: OPEN
+Found: the Q20 worker (iteration 221, residual) | Fixed: | Regression test:
+Repro: Q20's bank rule reads stock.sector_class, set by classify_submissions; when submissions fail there is no class and `_filer_facts(sector=None)` reads MarketableSecurities, storing a bank's whole securities book (BAC $925.6B) as short-term investments for that run.
+Expected: the stored sector class (as BUG-309's fallback) decides.   Actual: the bank rule is off for that run.
+
+### BUG-374 [P3][DATA] 61 filers tag no operating income, so EBIT-based metrics are empty for them
+Status: OPEN (needs a policy: which EBIT definition to derive)
+Found: split from BUG-203 (iteration 221) | Fixed: | Regression test:
+Repro: Q20's census: 61 filers have no OperatingIncomeLoss in any year; return on capital, EV/EBIT and the Magic Formula skip them.
+Expected: a stated EBIT derivation (e.g. pretax income + interest expense) or an explained N/A.   Actual: blank.
+
+### BUG-375 [P3][DATA] AES, TXT and PCAR file debt only with segment dimensions, so no debt is read
+Status: OPEN
+Found: split from BUG-364 (iteration 221) | Fixed: | Regression test:
+Repro: their companyfacts carry no undimensioned long-term debt in any year; EV/EBITDA counts net debt as 0. Needs the filing's XBRL instance (Q17's reader) summed over the debt segments, or an explained N/A.
+Expected: their debt read, or EV marked unknown.   Actual: net debt 0.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)

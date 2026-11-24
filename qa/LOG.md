@@ -3637,3 +3637,16 @@ Result: BUG-371, BUG-372 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3980 passed, 2 skipped
 Commit: (this commit) fix: a rejected cache file doesn't date the run; a recurring small interim is regular (BUG-371, BUG-372)
 Next: Q20 (worker resumes after the usage limit), the parser P3s.
+
+## Iteration 221: 2026-11-25 02:00: fix (Q20: BUG-364, BUG-203, BUG-221)
+Picked: Q20 per the user's decision (apply on main, MarketableSecurities not for banks); an opus worker ported the
+prepared fix onto the merged parser.
+Did: fallback tags for long-term debt, PP&E and short-term investments; a total including current debt is set
+aside on a date its current part is tagged (latest record and every as-of snapshot); banks skip MarketableSecurities.
+- RED: 43 failed on 547f960; GREEN. 46 of 46 mutants. Look-ahead 0.
+- DB copies (502 re-collected offline per parser): 0 medians, verdicts, owner-earnings verdicts, labels; 21 historical
+  values within labels; EPV 37; Magic Formula ranked 255 -> 314; no bank valuation/score row moves.
+Result: Q20, BUG-221 VERIFIED; BUG-203, BUG-364 VERIFIED in part. New: BUG-373, BUG-374, BUG-375 (P3).
+Gates: ruff ✓ mypy ✓ pytest 4068 passed, 2 skipped
+Commit: (this commit) fix(parser): fallback tags for debt, PP&E and short-term investments; banks skip MarketableSecurities (Q20)
+Next: the parser P3s (BUG-358/359, 293b, 338, 342, 348), BUG-373.

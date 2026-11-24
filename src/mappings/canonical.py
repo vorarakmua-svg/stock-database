@@ -199,7 +199,15 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "short_term_investments", "Short-Term Investments", BALANCE, UNIT_USD, INSTANT,
-        ("ShortTermInvestments", "MarketableSecuritiesCurrent", "AvailableForSaleSecuritiesCurrent"),
+        # Then the current securities other filers tag their line as (ORCL's and PFE's available-for-sale debt
+        # securities, NVDA's FY2026 debt securities, UNP's held to maturity, KO's other short-term investments),
+        # and last the marketable securities in total, which can hold noncurrent ones: read only where no current
+        # tag is filed (BUG-221), and not for a bank, whose MarketableSecurities is its whole securities book
+        # (``xbrl_parser._UNREAD_BY_SECTOR``; Q20).
+        ("ShortTermInvestments", "MarketableSecuritiesCurrent", "AvailableForSaleSecuritiesCurrent",
+         "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
+         "DebtSecuritiesAvailableForSaleExcludingAccruedInterestCurrent", "DebtSecuritiesCurrent",
+         "HeldToMaturitySecuritiesCurrent", "OtherShortTermInvestments", "MarketableSecurities"),
     ),
     CanonicalField(
         "accounts_receivable", "Accounts Receivable", BALANCE, UNIT_USD, INSTANT,
@@ -211,7 +219,9 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "ppe_net", "Property, Plant & Equipment (Net)", BALANCE, UNIT_USD, INSTANT,
-        ("PropertyPlantAndEquipmentNet",),
+        # Then the line with finance-lease right-of-use assets, which UNP, HD and TSLA tag instead (BUG-203).
+        ("PropertyPlantAndEquipmentNet",
+         "PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization"),
     ),
     CanonicalField(
         "goodwill", "Goodwill", BALANCE, UNIT_USD, INSTANT, ("Goodwill",),
@@ -247,9 +257,14 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         # LongTermNotesAndLoans; ``xbrl_parser._long_term_debt_lines``, BUG-171). A figure on a day the filing's
         # balance sheet doesn't show, or under half of another of its kind under a later tag, is a note's or a
         # part, not read (``xbrl_parser._debt_on_balance_sheet_dates``, ``_debt_parts_set_aside``; BUG-319).
+        # Last the totals with current debt of filers that tag no other (GM's
+        # LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities, PGR's
+        # DebtLongtermAndShorttermCombinedAmount), not on a date beside the current debt they hold, which
+        # they would count twice (``xbrl_parser._totals_beside_current_debt_set_aside``; BUG-203, BUG-364).
         ("LongTermDebtNoncurrent", "LongTermDebt", "LongTermDebtAndCapitalLeaseObligations",
          "LongTermNotesPayable", "UnsecuredLongTermDebt", "ConvertibleLongTermNotesPayable",
-         "NotesPayable"),
+         "NotesPayable", "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities",
+         "DebtLongtermAndShorttermCombinedAmount"),
     ),
     CanonicalField(
         "short_term_debt", "Short-Term Debt", BALANCE, UNIT_USD, INSTANT,

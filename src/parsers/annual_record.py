@@ -67,12 +67,13 @@ def clean_annual(annual: Dict[str, Dict[str, Any]], warnings: List[str]) -> Dict
 
 
 def build_annual_record(parser: XBRLParser, facts: Dict[str, Any], *, ticker: str,
-                        years_back: Optional[int]) -> AnnualRecord:
+                        years_back: Optional[int], sector: Optional[str] = None) -> AnnualRecord:
     """*ticker*'s annual record from its companyfacts *facts*: the parser's fiscal years that have ended by the latest
     filing the facts hold (the latest *years_back* of them, or all), cleaned (``clean_annual``). A fiscal year whose
     period ends after that day isn't in the record: a 10-K tagging a figure of the year ahead (BAC's FY2010 10-K, filed
     2011-02-25, a dividend for 2011) opens no year that figure alone holds (BUG-113). A cleaning that fails keeps
-    the periods as it left them and says why ("Data cleaning: ..."), as the run always has.
+    the periods as it left them and says why ("Data cleaning: ..."), as the run always has. *sector* is the filer's
+    sector class, which leaves a bank's securities book unread as short-term investments (``XBRLParser``).
 
     *years_back* trims the years BEFORE the cleaning, so the share scale (which reads a year's neighbours) sees only
     the kept years; ``build_snapshots`` cleans every year and trims after. A *years_back* run's record can so differ
@@ -80,7 +81,7 @@ def build_annual_record(parser: XBRLParser, facts: Dict[str, Any], *, ticker: st
     last = _last_filed(facts)
     annual: Dict[str, Dict[str, Any]] = {}
     unended: List[str] = []
-    for fy, period in parser.extract_annual_financials(facts).items():
+    for fy, period in parser.extract_annual_financials(facts, sector=sector).items():
         end = period.pop("_year_end", None) or period.get("period_end")
         if not end or end <= last:
             annual[fy] = period

@@ -1588,7 +1588,6 @@ def test_a_figure_near_the_year_ends_isnt_its_line():
 @pytest.mark.parametrize("tag", [
     "SeniorNotesCurrent",  # GPC's 10-Qs: the notes due within the year, as large as the noncurrent ones
     "ShortTermBankLoansAndNotesPayable",  # short-term debt's own
-    "DebtLongtermAndShorttermCombinedAmount",  # VTR's 10-Qs: its own total, beside its commercial paper
     "DebtAndCapitalLeaseObligations",  # the filer's debt and leases
     "DebtInstrumentCarryingAmount",  # often one instrument's (BUG-125)
     "LongTermDebtFairValue",  # a note's fair value, at par at the year end
@@ -1599,6 +1598,18 @@ def test_a_figure_that_isnt_a_long_term_debt_line_isnt_read(tag):
         ("10-K", "2026-02-12", "2025-12-31", dict(LongTermDebtNoncurrent=0.250e9)),
         ("10-Q", "2026-04-28", "2025-12-31", {tag: 0.250e9}),
         ("10-Q", "2026-04-28", "2026-03-31", {tag: 0.300e9}))
+    assert _quarter_debt(facts, "2026-03-31") == (None, None)
+
+
+def test_a_10qs_own_total_beside_its_commercial_paper_isnt_read():
+    # VTR's 10-Qs tag their own total, DebtLongtermAndShorttermCombinedAmount, beside the commercial paper it holds:
+    # neither a long-term debt line (BUG-171) nor, beside the paper, a total long-term debt reads (BUG-364). Alone, the
+    # total is read as the filer's debt (tests/test_fallback_tags.py).
+    facts = _balance_sheets(
+        ("10-K", "2026-02-12", "2025-12-31", dict(LongTermDebtNoncurrent=0.250e9)),
+        ("10-Q", "2026-04-28", "2025-12-31", dict(DebtLongtermAndShorttermCombinedAmount=0.250e9)),
+        ("10-Q", "2026-04-28", "2026-03-31", dict(DebtLongtermAndShorttermCombinedAmount=0.300e9,
+                                                  CommercialPaper=0.050e9)))
     assert _quarter_debt(facts, "2026-03-31") == (None, None)
 
 

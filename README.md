@@ -591,9 +591,9 @@ Inputs:
 - **Debt.** A year with no debt tagged and no interest expense is debt-free, outside banks and insurers (ISRG,
   ANET, PANW, PLTR and VRTX tag none): total debt 0, net debt less its cash and short-term investments, and
   ROIC on equity less cash, by `metrics_annual`'s formulas (it leaves all three empty for them). A year that
-  paid interest with no debt tagged has debt the mapping doesn't read (PGR files its $8.4B under a combined
-  tag), so its debt, net debt and ROIC are unknown, and so are its WACC, earnings yield, cash / debt and debt
-  / revenue (BUG-189, BUG-190). A missing interest figure alone proves nothing: many filers with debt tag
+  paid interest with no debt tagged has debt the mapping doesn't read (AES's, under concepts of its own the SEC's
+  company facts don't carry), so its debt, net debt and ROIC are unknown, and so are its WACC, earnings yield,
+  cash / debt and debt / revenue (BUG-189, BUG-190). A missing interest figure alone proves nothing: many filers with debt tag
   their interest under a name not mapped. `metrics_annual` keeps its figures as filed.
 - **CAGRs** over 3, 5 and 10 years (revenue, EPS and EBITDA per share) or 5 (FCF and book value per share):
   `(last / first) ** (1 / years) - 1`, when both ends are positive and the start year is exactly that many
@@ -691,12 +691,14 @@ any run re-ranks everyone.
 - The **Magic Formula rank** (Greenblatt) sums the ranks of the earnings yield (EBIT / EV, EV = market cap +
   net debt) and the return on capital (EBIT / (net working capital + net PP&E), net working capital = current
   assets - cash - (current liabilities - short-term debt), counted as 0 when negative: a business its
-  customers fund, as MA's, V's or BKNG's, ties up only its PP&E). It ranks the companies with both, 61 of the
-  94 outside banks, insurers, utilities and REITs; 1 is best, and a tie goes to the higher earnings yield. The
-  STAT tab says why the others have no rank (BUG-191): for those four sectors the sector rule, whatever input a
-  REIT or a utility misses (BUG-353), and for the rest the missing input: 17 file no `PropertyPlantAndEquipmentNet` (UNP, HD and
-  TSLA tag a lease-inclusive PP&E instead; META, GOOGL, LOW and T are among them) and 15 no operating income
-  (JNJ, LLY, MRK, PFE, XOM, CVX, IBM, GE, DE, KLAC and others), gaps in the tag mapping open as BUG-203.
+  customers fund, as MA's, V's or BKNG's, ties up only its PP&E). It ranks the companies with both, 314 of the
+  389 outside banks, insurers, utilities and REITs in the 2026-11-20 data; 1 is best, and a tie goes to the higher
+  earnings yield. The STAT tab says why the others have no rank (BUG-191): for those four sectors the sector rule,
+  whatever input a REIT or a utility misses (BUG-353), and for the rest the missing input: 61 tag no operating
+  income (JNJ, LLY, MRK, PFE, XOM, CVX, IBM, GE, DE, KLAC and others; no tag holds it, so it needs an EBIT
+  definition, BUG-203), 5 no PP&E (GM, GEHC, GEV, ICE, URI), 3 no current assets or liabilities, 3 a debt the
+  mapping doesn't read and 3 no annual financials. PP&E is the net figure, else the line with finance-lease
+  right-of-use assets that UNP, HD, TSLA, META, GOOGL, LOW and T tag instead (BUG-203).
 
 It is computed with the valuations, after a collection, a web job or `python -m src.valuation.backfill`, into
 three tables (columns and queries are in the [USAGE_GUIDE](USAGE_GUIDE.md#quality-scores)):
@@ -883,9 +885,6 @@ Limitations:
 - An intangible the filing doesn't tag stays in tangible book: a filer that tags no intangibles (KO's trademarks) has
   all of them left in, and one that tags only its finite-lived ones has its indefinite-lived ones left in. 23 of the 127
   have a goodwill or intangibles figure missing, counted as 0 and listed in the row's assumptions.
-- Short-term investments some filers tag under names the mapping doesn't read are missing from EPV's cash and the
-  net-net's: NVDA's FY2026 stores none after $34.6B in FY2025, so its EPV and net-net read low (BUG-221). NCAV itself
-  reads current assets and is unaffected.
 - EPV is a no-growth value on a 5-year mean margin, so a company priced for growth reads far under its price: on
   2026-10-24 only VZ traded under its EPV, and AMD, PANW, PLTR and SNDK read under 5% of theirs. A cyclical whose margin
   is far from its 5-year mean reads high or low accordingly.
@@ -2308,6 +2307,20 @@ numbers SEC filings report:
   line tagged under a concept long-term debt doesn't otherwise read stands in for the total
   where the two lines make it up (Corpay's FY2022: $4.7B of notes beside $2.3B of current
   maturities, total debt $7.0B, not $9.4B).
+- **Totals with current debt.** A filer that tags no long-term debt figure the field reads before has
+  its total with the current maturities read (General Motors': $131.6B for FY2025) or its own total of all
+  its debt (Progressive's $6.9B), but not on a date where a current figure that total holds is tagged beside
+  it, which would count it twice (Travelers' $9.3B beside $0.3B of current debt; Kenvue's): there it stays
+  unread. JPMorgan's long-term debt with its maturities is read beside its short-term borrowings, a line it
+  doesn't hold. A 10-Q that tags neither (General Motors' since 2021) leaves its quarter without long-term
+  debt, so the valuation history has no EV there. The as-of snapshots judge it by the filings known on
+  each day: a total read when filed stays the year's until a later report tags current debt beside it.
+- **Short-term investments.** After the short-term investments and current marketable securities, a
+  filer's current securities are read under the names other filers tag them (available-for-sale or
+  held-to-maturity debt securities, other short-term investments: Oracle's, Pfizer's, NVIDIA's FY2026),
+  and last its marketable securities in total, which can hold noncurrent ones. A bank's (its sector
+  class, as the valuation reads it: a finance SIC with deposits) total is its whole securities book
+  (Bank of America's $925.6B), not short-term investments, so it isn't read for banks.
 - **Long-term debt's own line.** A long-term debt figure a filing tags on a day its balance
   sheet doesn't show is a note's (an issue, a maturity) and isn't the year's (Phillips 66's
   FY2015 10-K tags $1.1B at 2015-03-02 beside its year end's $8.8B). On a balance-sheet date a

@@ -12,6 +12,7 @@ from itertools import combinations
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, DURATION, INSTANT, SIGN_ABS, SIGN_NET
+from ..mappings.sectors import BANK
 from .share_scale import _SCALES, _best_scale
 from .share_scale import _TOLERANCE as _SCALE_TOLERANCE
 
@@ -1239,10 +1240,65 @@ def _iso_date(value: str) -> Optional[date]:
         return None
 
 
-def _filer_facts(facts: Dict[str, Any], view: str) -> Dict[str, Any]:
-    """A filer's us-gaap facts as the extractions of *view* read them, in this order: its dollar filings', the
-    balance-sheet-only tags on their balance sheets' dates, and long-term debt's on its filing's (where it tags its
-    balance sheet, ``_debt_on_balance_sheet_dates``), less the total with restricted cash where a filing's cash
+#: The totals with current debt that long-term debt reads last (``canonical.py``; BUG-364, BUG-203), each with the
+#: current figures it holds: the long-term debt with its current maturities (which a DebtCurrent holds too), and the
+#: filer's own total of all its debt.
+_WITH_MATURITIES = "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"
+_HELD_BY_TOTALS = ((_WITH_MATURITIES, ("DebtCurrent",) + _MATURITIES),
+                   (_OWN_TOTAL, ("DebtCurrent", "ShortTermBorrowings", "CommercialPaper") + _MATURITIES))
+
+
+def _totals_beside_current_debt_set_aside(us_gaap: Dict[str, Any], view: str) -> Dict[str, Any]:
+    """*us_gaap* less a total with current debt (``_HELD_BY_TOTALS``) tagged on a date beside a current figure above
+    zero the total holds: read as long-term debt beside the short-term debt it would count that twice (Kenvue's 10-Q
+    for 2024-09-29: $7.803B with the $750M of maturities its $1.648B of DebtCurrent holds; TRV's FY2025 $9.267B of
+    debt beside its $300M of DebtCurrent). With none beside it the total is the filer's debt: GM's $131.574B, PGR's
+    $6.897B (FY2025), and JPM's long-term debt with its maturities beside its short-term borrowings, which it doesn't
+    hold. A vintage judges by its own filing's figures, so it reads no later filing's; the annual record and the
+    quarterly checkpoints, which can read the short-term debt from another filing, by any of their forms' on the
+    date. Each reads only the facts it is given, so an as-of snapshot judges by the facts known on its day."""
+    forms = _QUARTERLY_FORMS if view == _QUARTERLY_VIEW else _ANNUAL_FORMS
+    aside: Dict[str, Set[Tuple[str, str]]] = {}
+    for total, held in _HELD_BY_TOTALS:
+        if total in us_gaap:
+            beside = {(e.get("accn"), e.get("end")) for tag in held
+                      for e in us_gaap.get(tag, {}).get("units", {}).get("USD", [])
+                      if e.get("form") in forms and not e.get("start") and isinstance(e.get("val"), (int, float))
+                      and e["val"] > 0}
+            ends = {end for _, end in beside}
+            keys = {(accn, end) for accn, end in _by_filing(us_gaap, total)
+                    if ((accn, end) in beside if view == _VINTAGE_VIEW else end in ends)}
+            if keys:
+                aside[total] = keys
+    if not aside:
+        return us_gaap
+    out = dict(us_gaap)
+    for tag, keys in aside.items():
+        units = us_gaap[tag].get("units", {})
+        out[tag] = {**us_gaap[tag], "units": {**units, "USD": [
+            e for e in units.get("USD", []) if (e.get("accn"), e.get("end")) not in keys]}}
+    return out
+
+
+#: The tags a sector's filers don't have read (Q20): a bank's MarketableSecurities is its whole securities book
+#: (BAC's $925.6B for FY2025), not the short-term investments a general company's is (``canonical.py``, BUG-221).
+_UNREAD_BY_SECTOR: Dict[str, Tuple[str, ...]] = {BANK: ("MarketableSecurities",)}
+
+
+def _sector_tags_set_aside(us_gaap: Dict[str, Any], sector: Optional[str]) -> Dict[str, Any]:
+    """*us_gaap* less the tags *sector*'s filers don't have read (``_UNREAD_BY_SECTOR``); as given for any other
+    sector or none."""
+    unread = [tag for tag in _UNREAD_BY_SECTOR.get(sector or "", ()) if tag in us_gaap]
+    if not unread:
+        return us_gaap
+    return {tag: body for tag, body in us_gaap.items() if tag not in unread}
+
+
+def _filer_facts(facts: Dict[str, Any], view: str, sector: Optional[str] = None) -> Dict[str, Any]:
+    """A filer's us-gaap facts as the extractions of *view* read them, in this order: its dollar filings' less the tags
+    its *sector* doesn't have read (``_sector_tags_set_aside``), the balance-sheet-only tags on their balance sheets'
+    dates, and long-term debt's on its filing's (where it tags its balance sheet, ``_debt_on_balance_sheet_dates``),
+    less the total with restricted cash where a filing's cash
     equivalents and restricted cash make it up, less Cash where it is a part of a total without restricted cash, net
     outflows as paid, long-term debt's parts set aside where a filing tags its line beside them
     (``_debt_parts_set_aside``), LongTermDebt set aside where its noncurrent
@@ -1250,14 +1306,15 @@ def _filer_facts(facts: Dict[str, Any], view: str) -> Dict[str, Any]:
     maturities that view's records read as one DebtCurrent where a filing tags none (``_current_debt_combinations``),
     DebtCurrent before a refinancing set aside, 0.0 for the CommercialPaper the short-term total that view's record
     reads on its date holds (those combinations among them), the combinations themselves, a D&A total a filing shows
-    to be another line set aside (``_da_totals_displaced``), and last the depreciation and the amortization of
-    intangibles as one D&A figure where the filing tags no total that can hold them."""
+    to be another line set aside (``_da_totals_displaced``), the depreciation and the amortization of intangibles as
+    one D&A figure where the filing tags no total that can hold them, and last the totals with current debt set aside
+    beside the current figures they hold (``_totals_beside_current_debt_set_aside``)."""
     totals = _debt_totals_set_aside(_debt_parts_set_aside(_net_outflows_as_paid(_cash_parts_set_aside(
         _cash_totals_set_aside(_debt_on_balance_sheet_dates(_on_balance_sheet_dates(_dollar_filings(
-            facts.get("facts", {}).get("us-gaap", {})))))))))
+            _sector_tags_set_aside(facts.get("facts", {}).get("us-gaap", {}), sector)))))))))
     combined, held_by_totals = _current_debt_combinations(totals, view)
-    return _depreciation_combined(_da_totals_displaced(_current_debt_combined(
-        _current_debt_set_aside(totals, view, frozenset(combined)), combined, held_by_totals)))
+    return _totals_beside_current_debt_set_aside(_depreciation_combined(_da_totals_displaced(_current_debt_combined(
+        _current_debt_set_aside(totals, view, frozenset(combined)), combined, held_by_totals))), view)
 
 
 #: The quarterly reports, whose balance sheets are a quarter's: a 10-K's year end is the annual record's.
@@ -1707,6 +1764,7 @@ class XBRLParser:
         self,
         facts: Dict[str, Any],
         years_back: Optional[int] = None,
+        sector: Optional[str] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Extract standardized annual (10-K, 20-F or 40-F) financials, keyed by fiscal year.
@@ -1722,11 +1780,13 @@ class XBRLParser:
             facts: Raw company facts
             years_back: Number of fiscal years to keep (most recent first).
                 ``None`` (default) keeps all available history.
+            sector: The filer's sector class (``mappings.sectors``): a bank's has tags left unread
+                (``_UNREAD_BY_SECTOR``). ``None`` (default) reads every tag.
 
         Returns:
             Dictionary organized by fiscal year (string keys).
         """
-        us_gaap = _filer_facts(facts, _ANNUAL_VIEW)
+        us_gaap = _filer_facts(facts, _ANNUAL_VIEW, sector)
         if not us_gaap:
             return {}
 
@@ -1744,6 +1804,7 @@ class XBRLParser:
         facts: Dict[str, Any],
         years_back: Optional[int] = None,
         keep_year_end: bool = False,
+        sector: Optional[str] = None,
     ) -> Dict[str, Dict[str, Dict[str, Any]]]:
         """Every filing's view of each annual period: ``{fiscal_year: {accn: period}}``.
 
@@ -1753,9 +1814,10 @@ class XBRLParser:
         already-fetched ``companyfacts`` (every historical instance carries its own
         ``accn``/``filed``); no extra network. Annual reports (10-K, 20-F, 40-F) only.
         With *keep_year_end* each view keeps its year's end (``_year_end``, ``_apply_calendar``), so the snapshot
-        builder can drop a view of a year not yet over on its filing's day (BUG-113).
+        builder can drop a view of a year not yet over on its filing's day (BUG-113). *sector* as
+        :meth:`extract_annual_financials` reads it.
         """
-        us_gaap = _filer_facts(facts, _VINTAGE_VIEW)
+        us_gaap = _filer_facts(facts, _VINTAGE_VIEW, sector)
         if not us_gaap:
             return {}
 
@@ -1817,6 +1879,7 @@ class XBRLParser:
         self,
         facts: Dict[str, Any],
         quarters_back: Optional[int] = None,
+        sector: Optional[str] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Extract standardized **discrete** quarterly financials, keyed by period-end.
@@ -1835,11 +1898,12 @@ class XBRLParser:
             facts: Raw company facts
             quarters_back: Number of quarters to keep (most recent first).
                 ``None`` (default) keeps all available history.
+            sector: as :meth:`extract_annual_financials` reads it.
 
         Returns:
             Dictionary organized by period end date.
         """
-        us_gaap = _filer_facts(facts, _QUARTERLY_VIEW)
+        us_gaap = _filer_facts(facts, _QUARTERLY_VIEW, sector)
         if not us_gaap:
             return {}
 

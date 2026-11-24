@@ -243,14 +243,18 @@ class StockDataFetcher:
                 if "company_facts" in sec_data and sec_data["company_facts"]:
                     facts = sec_data["company_facts"]
 
-                    record = build_annual_record(self.xbrl_parser, facts, ticker=ticker, years_back=years_back)
+                    # A bank's securities book isn't read as its short-term investments (Q20): the run's sector
+                    # class, the one the store and the valuation read, decides it.
+                    sector = stock.sector_class
+                    record = build_annual_record(self.xbrl_parser, facts, ticker=ticker, years_back=years_back,
+                                                 sector=sector)
                     annual = record.periods
                     # The parse's warnings here; the cleaning's where the other statements are cleaned.
                     for warning in record.warnings[:record.repairs]:
                         stock.add_warning(warning)
                     annual_warnings = record.warnings[record.repairs:]
                     quarterly = self.xbrl_parser.extract_quarterly_financials(
-                        facts, quarters_back=(years_back * 4 if years_back else None)
+                        facts, quarters_back=(years_back * 4 if years_back else None), sector=sector
                     )
                     split_levels = {end: period.pop("_split_levels") for end, period in quarterly.items()
                                     if "_split_levels" in period}
@@ -259,7 +263,8 @@ class StockDataFetcher:
                     # that fails costs the snapshots alone: the run builds none (financials_annual_known None,
                     # vintages {}), so the store leaves the stored ones as they were, and the record stands.
                     try:
-                        snapshots = build_snapshots(self.xbrl_parser, facts, ticker=ticker, years_back=years_back)
+                        snapshots = build_snapshots(self.xbrl_parser, facts, ticker=ticker, years_back=years_back,
+                                                    sector=sector)
                     except Exception as e:  # noqa: BLE001 - the run's SEC record mustn't go with the snapshots
                         self.logger.error(f"As-of snapshot error for {ticker}: {e}")
                         stock.add_warning(f"SEC EDGAR: {ticker}'s as-of snapshots couldn't be built ({e}): the "
