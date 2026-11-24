@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 98 · NEEDS-USER 2 · Decided: 8 · Verified: 283
+**Open:** P0 0 · P1 0 · P2 0 · P3 100 · NEEDS-USER 0 · Decided: 10 · Verified: 283
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2395,16 +2395,16 @@ Repro: no annual or TTM row of GM, AES, TXT or PCAR holds a debt figure (a mappi
 Expected: their debt read.   Actual: none.
 
 ### Q19 [VAL] NEEDS-USER: should a share-count seam that is a real reverse split be folded instead of truncating the history?
-Status: OPEN (NEEDS-USER)
+Status: DECIDED (2026-11-24)
 Found: BUG-308's worker (iteration 208) | Fixed: | Regression test:
 Context: `inputs._normalize_splits` drops every year older than a share-count seam beyond 50x, calling it a unit/scale break ('no company splits 1:50'). EXE's FY2017->FY2018 seam (906M -> 4.546M diluted) is a real 1:200 reverse split. Truncating leaves EXE's DCF growth at 0.9%; folding the split would make it ~15% (a valuation change). Recommendation: fold a seam when a stored split (or the implied-count test) explains it, keep truncating true unit breaks; measure over the 502 before deciding. EG is the other truncated ticker.
-Decision: 
+Decision: USER 2026-11-24: fold a seam that a stored split (or the implied-count test) explains; keep truncating true unit breaks. Measure the moves over the 502 first and bring them to the user before applying.
 
 ### Q20 [DATA] NEEDS-USER: apply the fallback-tag fix for BUG-364/203/221? It moves 18 historical values (no label), 37 EPV bases and adds 59 Magic Formula ranks
-Status: OPEN (NEEDS-USER)
+Status: DECIDED (2026-11-24)
 Found: the BUG-364/203/221 worker (iteration 210), prepared in %LOCALAPPDATA%\stockdb-qa\bug364\out (diffs, mutants, census, DB-copy diffs; `qa/evidence/bug364-investigation.txt`) | Fixed: | Regression test:
 What it does: appends fallback tags (long_term_debt: LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities and DebtLongtermAndShorttermCombinedAmount; ppe_net: the lease-inclusive PP&E concept; short_term_investments: six current-securities tags incl. DebtSecuritiesCurrent and MarketableSecurities last) plus an xbrl_parser.py rule (+42/-2, `_totals_beside_current_debt_set_aside` in `_filer_facts`) so a total including current debt isn't read on a date its current part is tagged. GM's debt ($131.6B) and PGR's become read; 102 filers gain PP&E; NVDA-style short-term investments. Census: annual LTD 59 cells/6 filers, STI 756/110, PP&E 418/93 (+quarters, TTM, vintages). Moves on DB copies: 18 historical values within their labels (HUM 319.04->276.76, INTC 23.19->24.55, GM 75.14->76.91, FSLR, KLAC, ORCL, TYL ...), EPV base at 37 (GM 120.02->38.24, ELV 407.34->526.69, VEEV 48.15->79.89), NCAV bear at 10, Magic Formula ranked 256->315, 15 composites by 2, 5 new beneish flags; no median, verdict, owner-earnings verdict or label. Oracles identical. Look-ahead 0. Concerns: MarketableSecurities stores banks' whole securities books as short-term investments (BAC $925.6B; no valuation moves, but FA/exports show it); GM's quarters lose EV (no debt in its 10-Qs); the parser edit must be carried across feat/asof-snapshots (Q18). Recommendation: apply after Q18's merge, dropping MarketableSecurities for banks (sector rule) or leaving it out.
-Decision: 
+Decision: USER 2026-11-24: apply on main (after Q18's merge), with MarketableSecurities not used for banks (sector rule). Re-measure on the merged parser before committing.
 
 ### BUG-365 [P3][REFRESH] A run whose submissions request failed joins an older, given-up gap, so the company is left uncollected
 Status: VERIFIED (iteration 214)
@@ -2445,6 +2445,18 @@ Status: OPEN
 Found: the as-of snapshots branch, Task 8 | Fixed: | Regression test:
 Repro: today's financials_annual: BAC FY2011 dividends_per_share $0.01, FAST $0.50, where each year's own 10-K files $0.04 and $0.65: the higher-ranked tag on a dividend dated ahead in the prior 10-K wins. 2 cells over 502.
 Expected: the year's own 10-K figure.   Actual: the prior 10-K's forward-dated one.
+
+### BUG-371 [P3][GATHER] An old-shape cached submissions file is fetched again, but the run is still dated by the file's age
+Status: OPEN
+Found: code review 35 (`qa/evidence/review35.txt`, Minor 1; regression from BUG-296, ecccfdf) | Fixed: | Regression test:
+Repro: src/fetchers/sec_handler.py ~331, ~365, ~688: `_read_payload_cache` records the cached file's timestamp before `get_submissions` rejects it for the missing cache_version; `fetch_all` then sets sec_read_at to that old time. Probe: %LOCALAPPDATA%\stockdb-qa\review35\head\tests\test_review35.py (a 3-day-old unversioned submissions file: both payloads fetched fresh, sec_read_at 3 days old). Effect: one extra collection per such file after the upgrade; no figure wrong.
+Expected: sec_read_at is the time of the fresh read.   Actual: the rejected file's time.
+
+### BUG-372 [P3][VAL] A twice-a-year payer whose interim is under 1/3 of its final no longer counts as semiannual
+Status: OPEN
+Found: code review 35 (`qa/evidence/review35.txt`, Minor 2; regression from BUG-366, c441e02) | Fixed: | Regression test:
+Repro: src/valuation/models.py ~60, ~300-306 (the oracle shares the rule, valuation_oracle.py ~530-542): HEAD's own semiannual test with an interim of 0.3 instead of 0.4: FY2025 reads (1.0, sec) instead of Yahoo's 1.3. Needs a semiannual schedule, an interim under 1/3 of the final, and SEC giving only the final as the year's figure; real count not measured. Probe: test_review35.py.
+Expected: the year's two regular payments (1.3).   Actual: the final only (1.0).
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)

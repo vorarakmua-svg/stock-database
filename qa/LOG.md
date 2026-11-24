@@ -3601,3 +3601,16 @@ filing date (financials_annual_known; lookup-only reader; any-day oracle qa/orac
 Gates: ruff ✓ mypy ✓ pytest 3949 passed, 2 skipped | CI: PR #29
 Commit: (this commit) Merge feat/asof-snapshots: the as-of view is the record as known on the day (Q18)
 Next: merge PR #29 to main; delete merged branches.
+
+## Iteration 218: 2026-11-24: the user's decisions on Q19 and Q20; code review 35
+Picked: resume on main (aa3a49e); branch qa/loop-2. The user decided Q19 (fold a seam a stored split explains; measure
+first and show the moves), Q20 (apply on main, MarketableSecurities not for banks) and that the deploy is done (the
+reinstall and the 502 re-collection). Code review 35 (1214c95..aa3a49e and the merge's conflict resolution); an opus
+reviewer.
+Did: `qa/evidence/review35.txt`; 2 probes failing at HEAD; 15 test files pass (823, 1 skipped); review 34's probes
+pass on HEAD.
+Result: no Critical or Important. Minors -> BUG-371 (BUG-296 regression), BUG-372 (BUG-366 regression), P3. The
+merge kept every qa/full-loop fix (one conflict hunk, to_dict's pops; to_dict works on a deep copy).
+Gates: unchanged (qa/ only)
+Commit: (this commit) chore(qa): Q19 and Q20 decided; code review 35 recorded (BUG-371, BUG-372)
+Next: Q20 and Q19 (workers running), BUG-371/372, the parser P3s.
