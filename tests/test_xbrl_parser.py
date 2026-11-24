@@ -1317,6 +1317,43 @@ def test_borrowings_a_rounding_below_the_maturities_take_the_annual_reports_word
     assert XBRLParser().extract_quarterly_financials(facts)["2025-09-30"]["short_term_debt"] == 0.0014e9
 
 
+_BE_FY2024 = ("10-K", "2025-02-27", "2024-12-31", dict(
+    ShortTermBorrowings=0.1144e9, LongTermDebtCurrent=0.114385e9, LongTermDebtNoncurrent=1.014407e9))
+_BE_Q3_2025 = ("10-Q", "2025-10-28", "2025-09-30", dict(
+    ShortTermBorrowings=0.0014e9, LongTermDebtCurrent=0.001424e9, LongTermDebtNoncurrent=1.130892e9))
+
+
+@pytest.mark.parametrize("other_end", [
+    "2025-01-01",  # an adoption day's opening balance sheet in the same 10-K (BE's 2019-01-01 and 2020-01-01)
+    "2024-12-29",  # a column two days before the year end (CIEN's 2019-10-31 beside 2019-11-02)
+])
+def test_an_annual_balance_sheet_days_from_the_year_end_doesnt_hide_the_annual_reports_word(other_end):
+    # BUG-359: the quarter took any annual-form balance-sheet date as its latest year end, so a 10-K's adoption-day
+    # total (the day after its year end) was one, and the quarter found nothing there: BE's Q3 2025 borrowings and
+    # maturities added up, $2.824M for $1.4M. The dates within a few days of the latest year end are that year end.
+    facts = _filings(_BE_FY2024, ("10-K", "2025-02-27", other_end, {}), _BE_Q3_2025)
+    assert XBRLParser().extract_quarterly_financials(facts)["2025-09-30"]["short_term_debt"] == 0.0014e9
+
+
+def test_an_adoption_day_doesnt_hide_the_annual_reports_debt_current():
+    # BUG-359, PEP's shape: the 10-K tags DebtCurrent the line the 10-Q's year-end column tags as its borrowings; an
+    # opening balance sheet the day after the year end leaves it the quarter's word.
+    facts = _filings(_PEP_FY2010, ("10-K", "2026-02-03", "2025-12-27", dict(DebtCurrent=6.861e9)),
+                     ("10-K", "2026-02-03", "2025-12-28", {}),
+                     ("10-Q", "2026-07-09", "2025-12-27", dict(ShortTermBorrowings=6.861e9)),
+                     ("10-Q", "2026-07-09", "2026-06-13", dict(ShortTermBorrowings=10.602e9,
+                                                               LongTermDebtCurrent=1.6e9)))
+    assert XBRLParser().extract_quarterly_financials(facts)["2026-06-13"]["short_term_debt"] == 10.602e9
+
+
+def test_a_year_end_a_week_on_is_another_year():
+    # Only a few days (_SAME_PERIOD_DAYS) make one year end: an annual balance sheet 8 days after the one that held the
+    # maturities is a year end of its own, which says nothing, so the quarter's lines stay two.
+    facts = _filings(_BE_FY2024, ("10-K", "2025-02-27", "2025-01-08", {}), _BE_Q3_2025)
+    assert XBRLParser().extract_quarterly_financials(facts)["2025-09-30"]["short_term_debt"] == pytest.approx(
+        0.0014e9 + 0.001424e9)
+
+
 def test_a_10qs_year_end_column_takes_the_annual_report_on_that_date():
     # GEHC's 2025-12-31: its FY2025 10-K shows $508M of borrowings beside $502M of maturities, 1.2% apart, which
     # nothing decides; its Q1 2026 10-Q's comparative column the same. The checkpoint reads the date as the annual

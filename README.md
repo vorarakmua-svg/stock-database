@@ -2319,8 +2319,9 @@ numbers SEC filings report:
   filer's current securities are read under the names other filers tag them (available-for-sale or
   held-to-maturity debt securities, other short-term investments: Oracle's, Pfizer's, NVIDIA's FY2026),
   and last its marketable securities in total, which can hold noncurrent ones. A bank's (its sector
-  class, as the valuation reads it: a finance SIC with deposits) total is its whole securities book
-  (Bank of America's $925.6B), not short-term investments, so it isn't read for banks.
+  class, as the valuation reads it: a finance SIC with deposits; the stored record's when the
+  submissions request fails) total is its whole securities book (Bank of America's $925.6B), not
+  short-term investments, so it isn't read for banks.
 - **Long-term debt's own line.** A long-term debt figure a filing tags on a day its balance
   sheet doesn't show is a note's (an issue, a maturity) and isn't the year's (Phillips 66's
   FY2015 10-K tags $1.1B at 2015-03-02 beside its year end's $8.8B). On a balance-sheet date a
@@ -2347,8 +2348,9 @@ numbers SEC filings report:
   taxes (Cooper's FY2016: $1.33B, not $1.54B; PepsiCo's quarters). The latest filing that shows
   the borrowings and the maturities on a date decides it (Howmet's FY2020 10-K shows FY2019's
   borrowings as its maturities: $5.94B, not $6.94B), and a quarter its own figures leave open
-  takes the word of its latest annual report only. A filing's vintage decides its own lines, as
-  known then. Maturities tagged with the finance leases are read too (Union Pacific's, Home
+  takes the word of the annual reports on its latest year end only, an adoption day's opening
+  balance sheet days after it being the same year end (Bloom Energy's 2020-01-01). A filing's
+  vintage decides its own lines, as known then. Maturities tagged with the finance leases are read too (Union Pacific's, Home
   Depot's). Where a filing's debt due within a year is the figure before a refinancing moved
   part of it to long-term debt, the short-term borrowings its balance sheet shows stand
   instead (Chevron's FY2024: $4.4B, not $12.7B, whose other $8.25B its long-term debt holds).

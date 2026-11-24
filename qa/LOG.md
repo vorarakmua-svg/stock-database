@@ -3650,3 +3650,14 @@ Result: Q20, BUG-221 VERIFIED; BUG-203, BUG-364 VERIFIED in part. New: BUG-373, 
 Gates: ruff ✓ mypy ✓ pytest 4068 passed, 2 skipped
 Commit: (this commit) fix(parser): fallback tags for debt, PP&E and short-term investments; banks skip MarketableSecurities (Q20)
 Next: the parser P3s (BUG-358/359, 293b, 338, 342, 348), BUG-373.
+
+## Iteration 222: 2026-11-25 02:45: fix (BUG-358, BUG-359, BUG-373)
+Picked: parser P3s held for the as-of merge, and Q20's residual; an opus worker (nothing moved).
+Did: the current-debt docs say the annual reports' word; an adoption-day balance sheet beside the year end is
+part of that year end; the stored sector decides the bank rule before the parse when submissions fail.
+- RED: 3 failed on dacc05e; GREEN. 8 of 8 mutants; q20's 46 of 46. Look-ahead 0.
+- Census over 502: 0 cells move.
+Result: BUG-358, BUG-359, BUG-373 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4075 passed, 2 skipped
+Commit: (this commit) fix(parser): the year end includes an adoption-day balance sheet; the stored sector before the parse (BUG-358, BUG-359, BUG-373)
+Next: BUG-338, BUG-342, BUG-348, BUG-293b.

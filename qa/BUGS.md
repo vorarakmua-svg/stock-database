@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 98 · NEEDS-USER 0 · Decided: 8 · Verified: 290
+**Open:** P0 0 · P1 0 · P2 0 · P3 95 · NEEDS-USER 0 · Decided: 8 · Verified: 293
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2351,16 +2351,18 @@ Expected: documented beside the other trade fields.   Actual: missing.
 Fix (iteration 204, with BUG-353): `price_footnote` documented in the README's form4 API line and the USAGE_GUIDE.
 
 ### BUG-358 [P3][DOCS] The quarterly current-debt rule's docstring says 'its latest annual report's word'; the code takes any annual report's 'held' on that date
-Status: OPEN
-Found: BUG-288's test-gap worker (iteration 203, `qa/evidence/bug087-investigation.txt`) | Fixed: | Regression test:
+Status: VERIFIED (iteration 222)
+Found: BUG-288's test-gap worker (iteration 203, `qa/evidence/bug087-investigation.txt`) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (docs: no test)
 Repro: src/parsers/xbrl_parser.py, the quarter rule BUG-267/288 cover. (Wait for feat/asof-snapshots: that branch rewrites xbrl_parser.py.)
 Expected: the docstring says what the code does.   Actual: it doesn't.
+Fix (iteration 222, `qa/evidence/bug358-investigation.txt`): `_current_debt_combinations`' docstring and the README now say the quarter takes the annual reports' word on the latest year end (any annual report's held or DebtCurrent), not the latest annual report's. Docs only.
 
 ### BUG-359 [P3][PARSE] An annual-form balance-sheet instant dated the day after a year end (an adoption day) shifts the year end a later quarter consults, so its maturities count twice
-Status: OPEN
-Found: BUG-288's test-gap worker (iteration 203; synthetic, not measured on real filers) | Fixed: | Regression test:
+Status: VERIFIED (iteration 222)
+Found: BUG-288's test-gap worker (iteration 203; synthetic, not measured on real filers) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py; failing first
 Repro: BE-shaped facts: a FY2024 10-K plus a Q3 2025 10-Q with $1.4M borrowings against $1.424M maturities give short_term_debt 1,400,000; adding a 10-K LiabilitiesAndStockholdersEquity instant at 2025-01-01 gives 2,824,000. The code takes any annual-form L&SE instant as a year end (cf. BUG-272's adoption-day instants). (Wait for feat/asof-snapshots: it rewrites xbrl_parser.py.)
 Expected: 1,400,000.   Actual: 2,824,000.
+Fix (iteration 222, `qa/evidence/bug358-investigation.txt`): the latest year end is the latest annual balance-sheet date together with any within `_SAME_PERIOD_DAYS` (7) of it; the quarter takes the annual reports' word on any of them, each paired with the 10-Q's own column on that date (BE's 2020-01-01 adoption balance sheet beside 2019-12-31; CIEN/TSN/JCI, where the later date is the real year end, stay right). Census: 22 filers have annual dates 1-7 days apart; 0 cells move in the quarterly, annual, as-of and vintage records (raw cache and fetch_all offline). Look-ahead 0.
 
 ### BUG-360 [P3][UI] A palette Enter pressed before its results land stays armed while the user keeps typing
 Status: VERIFIED (iteration 207)
@@ -2465,10 +2467,11 @@ Repro: src/valuation/models.py ~60, ~300-306 (the oracle shares the rule, valuat
 Expected: the year's two regular payments (1.3).   Actual: the final only (1.0).
 Fix (iteration 220, `qa/evidence/bug371-investigation.txt`): the 1/3 edge came from BUG-366's size test (0.5 x a two-payment side's median). A payment that isn't a whole one-off now counts if it passes the size test or recurs (`models._recurs`: another payment within 3x of it ex-dated 365 +/- 91 days away, Q3's definitions); an interim comes back each year, an extra doesn't. Only adds counts, so BUG-366's case stays closed. The oracle's regular_beside matches. Census over 419 payers: 61 sides at 18 tickers change count, 8 cross the gate (CRH, SW), neither files a single payment as its SEC figure: 0 years move. DB copies: all 37 tables identical. Residual (unmeasured): Q3's one_off_dividends can call a small-interim payer's final a slot one-off in the second year of a short history.
 ### BUG-373 [P3][DATA] A run whose submissions request failed has no sector class, so a bank reads MarketableSecurities as short-term investments
-Status: OPEN
-Found: the Q20 worker (iteration 221, residual) | Fixed: | Regression test:
+Status: VERIFIED (iteration 222)
+Found: the Q20 worker (iteration 221, residual) | Fixed: (this commit) | Regression tests: tests/test_fetcher_sector.py; failing first
 Repro: Q20's bank rule reads stock.sector_class, set by classify_submissions; when submissions fail there is no class and `_filer_facts(sector=None)` reads MarketableSecurities, storing a bank's whole securities book (BAC $925.6B) as short-term investments for that run.
 Expected: the stored sector class (as BUG-309's fallback) decides.   Actual: the bank rule is off for that run.
+Fix (iteration 222, `qa/evidence/bug358-investigation.txt`): BUG-309's stored-sector fallback runs in the SEC block before the parse when the company facts are present (the later copy removed), so a bank whose submissions request fails still skips MarketableSecurities. Also: a filer with facts but no annual record now takes its stored sector on such a run. Offline re-collection reads cached submissions, so 0 cells move; shown by the unit test only.
 
 ### BUG-374 [P3][DATA] 61 filers tag no operating income, so EBIT-based metrics are empty for them
 Status: OPEN (needs a policy: which EBIT definition to derive)

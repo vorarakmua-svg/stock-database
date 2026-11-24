@@ -237,6 +237,15 @@ class StockDataFetcher:
                         stock.sector_class = stored
                         stock.add_warning(f"SEC EDGAR: sector '{stored}' taken from the stored record "
                                           "(the companyfacts data is unavailable)")
+                # The sector comes from the submissions. When that request failed, the stored record still knows it,
+                # before the parse, which reads it (a bank's securities book, Q20; BUG-373); metrics computed as a
+                # general company's would overwrite every stored year's sector ratios (FFO, net interest margin).
+                if stock.sector_class is None and sec_data.get("company_facts"):
+                    stored = self._stored_sector(ticker)
+                    if stored:
+                        stock.sector_class = stored
+                        stock.add_warning(f"SEC EDGAR: sector '{stored}' taken from the stored record "
+                                          "(the submissions data is unavailable)")
 
                 # Parse XBRL financials if company facts available
                 annual: Dict[str, Any] = {}
@@ -341,16 +350,6 @@ class StockDataFetcher:
         except Exception as e:
             self.logger.warning(f"FRED data error for {ticker}: {e}")
             stock.add_warning(f"FRED: {str(e)}")
-
-        # The sector comes from SEC's submissions data. When that request failed, the
-        # stored record still knows it; metrics computed as a general company's would
-        # overwrite every stored year's sector ratios (FFO, net interest margin).
-        if stock.sector_class is None and stock.financials_annual:
-            stored = self._stored_sector(ticker)
-            if stored:
-                stock.sector_class = stored
-                stock.add_warning(f"SEC EDGAR: sector '{stored}' taken from the stored record "
-                                  "(the submissions data is unavailable)")
 
         # Clean, derive identities, and build the TTM series.
         if stock.financials_annual or stock.financials_quarterly:

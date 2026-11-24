@@ -791,11 +791,13 @@ def _current_debt_combinations(as_filed: Dict[str, Any], view: str) -> Tuple[
     more (IBM's FY2024, and one line tagged as the borrowings, a part of them and the maturities: ICE's FY2015 paper,
     AMD's 2016 line of credit). Borrowings that are their own parts are a line of their own (DOW's FY2022 notes
     payable, $362M beside $362M due within one year, apart in its 10-K's other column). A quarter its own evidence
-    leaves undecided takes its latest annual report's word, on the latest year end at or before its date (IBM's Q1
-    2026 10-Q): an annual report there shows the borrowings holding the maturities, or tags as DebtCurrent the line the
-    10-Q tags as its borrowings there (PEP's 10-Ks since FY2011); no older year's (PEP's quarters took its FY2010 10-K's
-    undecided entry for "separate"), and only where the borrowings can hold them, at least the maturities less
-    ``_MATURITIES_ROUNDING`` (ATO's Q1 FY2019: $0 beside $575M).
+    leaves undecided takes the annual reports' word on the latest year end at or before its date (IBM's Q1 2026 10-Q):
+    any annual report there shows the borrowings holding the maturities, or tags as DebtCurrent the line the 10-Q tags
+    as its borrowings there (PEP's 10-Ks since FY2011). That year end is the latest annual balance-sheet date with those
+    within ``_SAME_PERIOD_DAYS`` of it (BUG-359): an adoption day's opening balance sheet (BE's 2020-01-01) is no year
+    of its own. No older year's word (PEP's quarters took its FY2010 10-K's undecided entry for "separate"), and only
+    where the borrowings can hold them, at least the maturities less ``_MATURITIES_ROUNDING`` (ATO's Q1 FY2019: $0
+    beside $575M).
 
     The annual record and the quarterly checkpoints read several filings: the latest one of the record's forms that
     tags a DebtCurrent, or borrowings with maturities, on a date decides it (HWM's FY2020 10-K, whose borrowings are its
@@ -865,13 +867,16 @@ def _current_debt_combinations(as_filed: Dict[str, Any], view: str) -> Tuple[
         if filings[key[0]][0] in _ANNUAL_FORMS:
             annual_current[key[1]].append(value)
 
+    def end_holds(key: Tuple[str, str], end: str) -> bool:
+        line = borrowings.get((key[0], end))  # this 10-Q's borrowings on that year end
+        return end in annual_held or (line is not None and any(_agree(v, line) for v in annual_current[end]))
+
     def year_end_holds(key: Tuple[str, str]) -> bool:
         ends = [end for end in year_ends if end <= key[1]]
         if not ends:
             return False
-        end = max(ends)
-        line = borrowings.get((key[0], end))  # this 10-Q's borrowings on its latest year end
-        return end in annual_held or (line is not None and any(_agree(v, line) for v in annual_current[end]))
+        latest = max(ends)  # with the dates days from it (an adoption day's opening balance sheet; BUG-359)
+        return any(end_holds(key, end) for end in ends if _same_period(end, latest))
 
     combined: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for key, (held, e, value) in decided.items():
