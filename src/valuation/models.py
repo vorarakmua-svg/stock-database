@@ -53,16 +53,17 @@ ONE_PAYMENT_TOLERANCE = 0.02
 #: A payment in the 365 days before or after a year counts for ``_one_payment``'s gate
 #: (BUG-366) when it isn't a one-off whole (``one_off_dividends``, Q3: a special) and is
 #: at least this share of the median of those 365 days' such payments, itself among them: a small
-#: extra beside an annual payment (0.50 beside 2.95) is no second payment a year, while a
-#: semiannual payer's interim counts down to a third of its final dividend (the median
-#: of two is their mean). Measured within the 365 days, not against the year's own
-#: payments, which specials can hold (TPL's FY2020): its quarters beside them count.
+#: extra beside an annual payment (0.50 beside 2.95) is no second payment a year. Measured within
+#: the 365 days, not against the year's own payments, which specials can hold (TPL's FY2020): its
+#: quarters beside them count. A smaller payment still counts when it recurs (``_recurs``): the
+#: median of two is their mean, so by size alone a semiannual payer's interim under a third of its
+#: final wouldn't count (BUG-372), while an extra doesn't come back a year later.
 REGULAR_PAYMENT_SHARE = 0.5
 
 
 def _one_payment(sec: float, payments: List[float], beside: Sequence[int]) -> bool:
     """Whether SEC's figure for a year holds at most one of its *payments* (ONE_PAYMENT_TOLERANCE), where *beside*
-    counts the regular payments (REGULAR_PAYMENT_SHARE) in the year before it and in the year after it."""
+    counts the regular payments (``_regular_between``) in the year before it and in the year after it."""
     return len(payments) >= 2 and max(beside, default=0) >= 2 and (sec < min(payments) or any(
         abs(sec - paid) <= ONE_PAYMENT_TOLERANCE * paid for paid in payments))
 
@@ -300,10 +301,26 @@ def _annual_dividend_totals(dividends: List[Tuple[str, float]]) -> List[Tuple[in
 def _regular_between(dividends: List[Tuple[str, float]], start: str, end: str,
                      whole: Set[Tuple[str, float]]) -> int:
     """How many payments with ex-dates in (*start*, *end*] are regular (BUG-366): of those that aren't a one-off
-    whole (*whole*, by ex-date and amount), the ones at least REGULAR_PAYMENT_SHARE of their median."""
-    amounts = [amount for day, amount in dividends if start < day[:10] <= end and (day[:10], amount) not in whole]
-    least = REGULAR_PAYMENT_SHARE * statistics.median(amounts) if amounts else 0.0
-    return sum(1 for amount in amounts if amount >= least)
+    whole (*whole*, by ex-date and amount), the ones at least REGULAR_PAYMENT_SHARE of their median, or that
+    recur (``_recurs``, BUG-372)."""
+    paid = [(day[:10], amount) for day, amount in dividends
+            if start < day[:10] <= end and (day[:10], amount) not in whole]
+    least = REGULAR_PAYMENT_SHARE * statistics.median([amount for _, amount in paid]) if paid else 0.0
+    return sum(1 for day, amount in paid if amount >= least or _recurs(dividends, day, amount))
+
+
+def _recurs(dividends: List[Tuple[str, float]], day: str, amount: float) -> bool:
+    """Whether a like payment (within ONE_OFF_MULTIPLE times *amount* either way) is ex-dated within
+    ONE_OFF_SEASON_DAYS of the anniversary a year before or after *day* (BUG-372): a semiannual payer's small
+    interim comes back each year, an extra doesn't. (A one-off whole, over ONE_OFF_MULTIPLE times the payments
+    beside it, is no like payment of one under half the median of its 365 days.)"""
+    paid_on = date.fromisoformat(day)
+    for other_day, other in dividends:
+        apart = abs((date.fromisoformat(other_day[:10]) - paid_on).days)
+        if abs(apart - 365) <= ONE_OFF_SEASON_DAYS and amount <= ONE_OFF_MULTIPLE * other \
+                and other <= ONE_OFF_MULTIPLE * amount:
+            return True
+    return False
 
 
 def dividend_history(inputs: ValuationInputs, anchor: date,
@@ -321,8 +338,8 @@ def dividend_history(inputs: ValuationInputs, anchor: date,
     summed: a filer that tags only point-in-time payments leaves the year empty
     (BUG-013), and one that tags a single payment as the year is no better
     (``_one_payment``, read only where the 365 days before the year or after it
-    hold two or more regular payments, BUG-311, BUG-366). A company without fiscal years (no SEC annual record) uses
-    the complete calendar years before the anchor's, on Yahoo's payments alone. A
+    hold two or more regular payments, BUG-311, BUG-366, BUG-372). A company without fiscal years (no SEC annual
+    record) uses the complete calendar years before the anchor's, on Yahoo's payments alone. A
     year with neither source paid nothing (amount None). Each year's ``one_off`` sums
     the *one_offs* (``one_off_dividends``) ex-dated in it.
     """

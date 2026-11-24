@@ -215,7 +215,8 @@ class SECHandler:
     SEC_BASE_URL = "https://data.sec.gov"
     SEC_WWW_URL = "https://www.sec.gov"
     #: Each thread's ``fetch_all`` in progress: the times its payloads read from the payload cache were cached
-    #: (``cached``, None outside a ``fetch_all``), for the run's ``sec_read_at`` (BUG-232).
+    #: (``cached``, None outside a ``fetch_all``), for the run's ``sec_read_at`` (BUG-232); a file read but then
+    #: fetched again (``get_submissions``' old shape) leaves it (BUG-371).
     _reading = threading.local()
 
     def __init__(
@@ -683,11 +684,15 @@ class SECHandler:
         cik = str(cik).zfill(10)
 
         cache_path = self._payload_cache_path("submissions", cik)
+        reading = getattr(self._reading, "cached", None)
+        read_before = len(reading) if reading is not None else 0
         cached = self._read_payload_cache(cache_path)
         # A file cached in another shape is fetched again (BUG-296: one without latest_report hid a bank's reports).
         if cached is not None and cached.get("cache_version") == SUBMISSIONS_CACHE_VERSION:
             self.logger.debug(f"submissions cache hit for CIK {cik}")
             return {key: value for key, value in cached.items() if key != "cache_version"}
+        if reading is not None:  # nothing of the rejected file is used, so it doesn't date the run (BUG-371)
+            del reading[read_before:]
 
         url = f"{self.SEC_BASE_URL}/submissions/CIK{cik}.json"
         self.logger.debug(f"Fetching submissions from {url}")

@@ -149,6 +149,15 @@ def _annual(extra=()):
     ((("2024-07-15", 1.2),), 2),    # half of it or more: a payment of a payer of two a year
     ((("2024-07-15", 10.0),), 1),   # a one-off whole (over 3x the payments either side)
     ((("2024-07-15", 10.0), ("2024-09-15", 0.5)), 1),   # the one-off isn't measured against either
+    # BUG-372: under half the median, a payment counts when a like one (within 3x) recurs within a quarter of its
+    # anniversary: a sixth of 2.95 within its season, a stray a fifth of it a year on, the same size 460 or 270 days
+    # away don't; the same size a year on does
+    ((("2024-11-20", 0.5),), 1),
+    ((("2024-07-15", 0.5), ("2025-07-10", 0.1)), 1),
+    ((("2023-04-12", 0.5), ("2024-07-15", 0.5)), 1),
+    ((("2024-07-15", 0.5), ("2025-04-11", 0.5)), 1),
+    ((("2024-07-15", 0.5), ("2025-07-10", 0.5)), 2),
+    ((("2023-07-20", 0.5), ("2024-07-15", 0.5)), 2),
 ])
 def test_the_oracles_gate_counts_the_regular_payments_beside_a_year(extra, counted):
     events = _annual(extra)
@@ -158,7 +167,10 @@ def test_the_oracles_gate_counts_the_regular_payments_beside_a_year(extra, count
 def test_the_oracles_gate_counts_a_semiannual_interim_and_quarters_beside_specials():
     semiannual = [(f"{y}-{m}", a) for y in (2023, 2024, 2025) for m, a in (("03-15", 0.4), ("09-15", 1.0))]
     assert oracle.regular_beside(semiannual, oracle.one_offs(semiannual), "2024-12-31", "2025-12-31") == 2
-    tpl = [("2019-03-07", 0.666667), ("2020-03-06", 1.777778), ("2020-12-10", 1.111111), ("2021-03-05", 0.305556),
+    for interim in (0.3, 0.1):  # BUG-372: an interim under a third of the final recurs, so it counts
+        small = [(f"{y}-{m}", a) for y in (2023, 2024, 2025) for m, a in (("03-15", interim), ("09-15", 1.0))]
+        assert oracle.regular_beside(small, oracle.one_offs(small), "2024-12-31", "2025-12-31") == 2
+    tpl =[("2019-03-07", 0.666667), ("2020-03-06", 1.777778), ("2020-12-10", 1.111111), ("2021-03-05", 0.305556),
            ("2021-06-07", 0.305556), ("2021-09-07", 0.305556), ("2021-12-07", 0.305556)]
     assert oracle.regular_beside(tpl, oracle.one_offs(tpl), "2019-12-31", "2020-12-31") == 4
 

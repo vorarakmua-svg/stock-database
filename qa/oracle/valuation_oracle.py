@@ -567,14 +567,22 @@ def regular_beside(events: List[Tuple[str, float]], extra: Dict[str, float], sta
     """BUG-311's gate, counting regular payments only (BUG-366): the larger of the counts of payments in the 365 days
     up to a fiscal year's *start* and in the 365 days after its *end*. Within each side, a payment counts unless it is
     a one-off whole (*extra*, ``one_offs``: its one-off part is the whole amount) or under half the median of that
-    side's other such payments. The 0.5 share is the fix's own heuristic (loop section 7): a small extra beside an
-    annual payment isn't a second payment a year; a semiannual interim down to a third of the final is."""
+    side's other such payments, unless it recurs (BUG-372): any payment within 3x of it either way, ex-dated 365
+    days +/- 91 from it (a quarter either way of its anniversary, as Q3's recurrence). The 0.5 share is the fix's
+    own heuristic (loop section 7): a small extra beside an annual payment isn't a second payment a year; a semiannual
+    interim is, at any size, since it comes back each year (by size alone, only down to a third of the final)."""
     year = datetime.timedelta(days=365)
 
+    def recurs(d: str, a: float) -> bool:
+        for e, b in events:
+            if 365 - 91 <= abs((_day(e) - _day(d)).days) <= 365 + 91 and a <= 3 * b and b <= 3 * a:
+                return True
+        return False
+
     def regular(lo: str, hi: str) -> int:
-        amounts = [a for d, a in events if lo < d <= hi and extra.get(d[:10]) != a]
-        least = 0.5 * median(amounts) if amounts else 0.0
-        return sum(1 for a in amounts if a >= least)
+        kept = [(d, a) for d, a in events if lo < d <= hi and extra.get(d[:10]) != a]
+        least = 0.5 * median([a for _, a in kept]) if kept else 0.0
+        return sum(1 for d, a in kept if a >= least or recurs(d, a))
     return max(regular((_day(start) - year).isoformat(), start), regular(end, (_day(end) + year).isoformat()))
 
 

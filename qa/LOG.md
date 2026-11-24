@@ -3626,3 +3626,14 @@ Result: Q19 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 3964 passed, 2 skipped
 Commit: (this commit) fix(valuation): a share-count seam a split explains folds instead of truncating (Q19)
 Next: BUG-371/372 (ready), Q20 (worker resumes after the usage limit).
+
+## Iteration 220: 2026-11-25 01:30: fix (BUG-371, BUG-372)
+Picked: code review 35's findings; an opus worker (nothing moved, so no user decision).
+Did: a rejected old-shape submissions file no longer dates the run; a recurring small interim counts as a regular
+payment beside the size test.
+- RED: 7 failed on 4482ac4; GREEN. 16 of 16 mutants; BUG-366's 5 re-quoted (5 of 5); q19's 18 of 18.
+- DB copies: all 37 tables identical; the gate census moves 8 sides (CRH, SW), 0 years.
+Result: BUG-371, BUG-372 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3980 passed, 2 skipped
+Commit: (this commit) fix: a rejected cache file doesn't date the run; a recurring small interim is regular (BUG-371, BUG-372)
+Next: Q20 (worker resumes after the usage limit), the parser P3s.

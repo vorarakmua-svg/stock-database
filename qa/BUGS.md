@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 100 · NEEDS-USER 0 · Decided: 9 · Verified: 284
+**Open:** P0 0 · P1 0 · P2 0 · P3 98 · NEEDS-USER 0 · Decided: 9 · Verified: 286
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2448,16 +2448,18 @@ Repro: today's financials_annual: BAC FY2011 dividends_per_share $0.01, FAST $0.
 Expected: the year's own 10-K figure.   Actual: the prior 10-K's forward-dated one.
 
 ### BUG-371 [P3][GATHER] An old-shape cached submissions file is fetched again, but the run is still dated by the file's age
-Status: OPEN
-Found: code review 35 (`qa/evidence/review35.txt`, Minor 1; regression from BUG-296, ecccfdf) | Fixed: | Regression test:
+Status: VERIFIED (iteration 220)
+Found: code review 35 (`qa/evidence/review35.txt`, Minor 1; regression from BUG-296, ecccfdf) | Fixed: (this commit) | Regression tests: tests/test_sec_cache.py; 7 failing first (both bugs)
 Repro: src/fetchers/sec_handler.py ~331, ~365, ~688: `_read_payload_cache` records the cached file's timestamp before `get_submissions` rejects it for the missing cache_version; `fetch_all` then sets sec_read_at to that old time. Probe: %LOCALAPPDATA%\stockdb-qa\review35\head\tests\test_review35.py (a 3-day-old unversioned submissions file: both payloads fetched fresh, sec_read_at 3 days old). Effect: one extra collection per such file after the upgrade; no figure wrong.
 Expected: sec_read_at is the time of the fresh read.   Actual: the rejected file's time.
+Fix (iteration 220, `qa/evidence/bug371-investigation.txt`): `get_submissions` notes how many cached reads were recorded before reading its cache and, when it rejects an old-shape payload, drops the rejected file's time (`del reading[read_before:]`); the companyfacts time read first is kept. No signature changes. DB copies: all 37 tables identical.
 
 ### BUG-372 [P3][VAL] A twice-a-year payer whose interim is under 1/3 of its final no longer counts as semiannual
-Status: OPEN
-Found: code review 35 (`qa/evidence/review35.txt`, Minor 2; regression from BUG-366, c441e02) | Fixed: | Regression test:
+Status: VERIFIED (iteration 220)
+Found: code review 35 (`qa/evidence/review35.txt`, Minor 2; regression from BUG-366, c441e02) | Fixed: (this commit) | Regression tests: tests/test_valuation_models.py, tests/test_valuation_oracle_seam.py; 7 failing first (both bugs)
 Repro: src/valuation/models.py ~60, ~300-306 (the oracle shares the rule, valuation_oracle.py ~530-542): HEAD's own semiannual test with an interim of 0.3 instead of 0.4: FY2025 reads (1.0, sec) instead of Yahoo's 1.3. Needs a semiannual schedule, an interim under 1/3 of the final, and SEC giving only the final as the year's figure; real count not measured. Probe: test_review35.py.
 Expected: the year's two regular payments (1.3).   Actual: the final only (1.0).
+Fix (iteration 220, `qa/evidence/bug371-investigation.txt`): the 1/3 edge came from BUG-366's size test (0.5 x a two-payment side's median). A payment that isn't a whole one-off now counts if it passes the size test or recurs (`models._recurs`: another payment within 3x of it ex-dated 365 +/- 91 days away, Q3's definitions); an interim comes back each year, an extra doesn't. Only adds counts, so BUG-366's case stays closed. The oracle's regular_beside matches. Census over 419 payers: 61 sides at 18 tickers change count, 8 cross the gate (CRH, SW), neither files a single payment as its SEC figure: 0 years move. DB copies: all 37 tables identical. Residual (unmeasured): Q3's one_off_dividends can call a small-interim payer's final a slot one-off in the second year of a short history.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)

@@ -3,7 +3,7 @@
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 import requests
@@ -862,6 +862,36 @@ def test_the_submissions_cache_keeps_its_version_beside_the_submissions(tmp_path
     cached = json.loads(handler._payload_cache_path("submissions", "0000320193").read_text(encoding="utf-8"))
     assert cached == {**submissions, "cache_version": sec_handler.SUBMISSIONS_CACHE_VERSION}
     assert "cache_version" not in submissions and "cache_version" not in handler.get_submissions("0000320193")
+
+
+@pytest.mark.parametrize("facts_age_days", [None, 2])
+def test_submissions_fetched_again_for_their_old_shape_date_the_run_by_what_it_read(tmp_path, monkeypatch,
+                                                                                    facts_age_days):
+    # BUG-371 (code review 35): a submissions file an earlier build cached 3 days ago (no cache_version) is fetched
+    # again, so it doesn't date the run's SEC read (BUG-232): the run is as old as its companyfacts, read from the
+    # cache 2 days ago or asked now (None: no cached file).
+    handler, requested = _successor_handler(tmp_path, monkeypatch, _AAPL)
+    handler.fetch_all("AAPL")
+    path = handler._payload_cache_path("submissions", "0000320193")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("cache_version", None)  # as a build before BUG-296 wrote it
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    three = int(time.time()) - 3 * 86400
+    os.utime(path, (three, three))
+    facts = handler._payload_cache_path("companyfacts", "0000320193")
+    if facts_age_days is None:
+        facts.unlink()
+    else:
+        then = int(time.time()) - facts_age_days * 86400
+        os.utime(facts, (then, then))
+    requested.clear()
+    before = datetime.now() - timedelta(seconds=1)
+    data = handler.fetch_all("AAPL")
+    assert any("submissions/CIK0000320193.json" in url for url in requested), "the old-shape file wasn't fetched again"
+    if facts_age_days is None:
+        assert datetime.fromisoformat(data["sec_read_at"]) >= before, data["sec_read_at"]
+    else:
+        assert data["sec_read_at"] == datetime.fromtimestamp(then).isoformat()
 
 
 def test_the_submissions_cache_version_names_the_submissions_shape(tmp_path, monkeypatch):

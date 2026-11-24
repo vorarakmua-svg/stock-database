@@ -359,6 +359,14 @@ def test_value_ddm_keeps_an_annual_payers_sec_figure_beside_a_slipped_ex_date(mo
     [("2024-07-15", 0.5)],     # an extra under half the median of the year's payments (code review 34's probe)
     [("2024-07-15", 10.0)],    # a special: over 3x the payments either side, not recurring (Q3's one-off)
     [("2024-07-15", 10.0), ("2024-09-15", 0.5)],   # both: the special is no regular payment to measure against
+    # BUG-372: an extra under half the median counts only when a like payment recurs a year from it, within a
+    # quarter; these don't. Within the season of 2024's 2.95, a sixth of it (no like size) ...
+    [("2024-11-20", 0.5)],
+    # ... a fifth of it a year on (no like size: it isn't the same payment) ...
+    [("2024-07-15", 0.5), ("2025-07-10", 0.1)],
+    # ... the same size 460 days before it and 270 days after it (no anniversary)
+    [("2023-04-12", 0.5), ("2024-07-15", 0.5)],
+    [("2024-07-15", 0.5), ("2025-04-11", 0.5)],
 ])
 def test_value_ddm_keeps_an_annual_payers_slipped_year_beside_an_extra_payment(extra):
     # BUG-366: the year before 2025 (the slipped one) holds two payments or more only because of extra ones: the
@@ -384,6 +392,30 @@ def test_a_semiannual_payers_interim_is_a_regular_payment():
     years = _history({2023: 1.4, 2024: 1.4, 2025: 1.0}, divs)
     assert years[2025] == (pytest.approx(1.4), "yahoo")
     assert years[2024] == (pytest.approx(1.4), "sec")
+
+
+@pytest.mark.parametrize("interim", [0.3, 0.1])
+def test_a_semiannual_payers_interim_under_a_third_of_its_final_is_a_regular_payment(interim):
+    # BUG-372 (code review 35): an interim under a third of the final is under half the median of the two, but it
+    # recurs each year (a like payment within a quarter of its anniversary), so it is a regular payment: FY2025,
+    # tagged with the final alone (BUG-020), reads the year's two payments, as before BUG-366. The interim's ex-date
+    # moves by weeks (352 and 384 days apart).
+    divs = [(f"{y}-{m}", amount) for y, interim_on in ((2023, "03-15"), (2024, "03-01"), (2025, "03-20"))
+            for m, amount in ((interim_on, interim), ("09-15", 1.0))]
+    years = _history({2023: 1 + interim, 2024: 1 + interim, 2025: 1.0}, divs)
+    assert years[2025] == (pytest.approx(1 + interim), "yahoo")
+    assert years[2024] == (pytest.approx(1 + interim), "sec")
+
+
+@pytest.mark.parametrize("extra, counted", [
+    (0.5, 1),   # under half the median of 2024's payments (1.725), and not recurring
+    (1.2, 2),   # half of it or more: by size, a payment of a payer of two a year, recurring or not
+])
+def test_the_regular_payments_in_a_side_are_counted_by_size_or_recurrence(extra, counted):
+    from src.valuation.models import _regular_between
+    divs = [("2023-01-15", 2.81), ("2024-01-15", 2.95), ("2024-07-15", extra), ("2025-01-15", 3.10),
+            ("2025-12-30", 3.26)]
+    assert _regular_between(divs, "2023-12-31", "2024-12-31", set()) == counted
 
 
 def test_quarters_beside_a_year_of_specials_are_regular_payments():
