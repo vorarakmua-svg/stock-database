@@ -1,7 +1,8 @@
-"""The valuation oracle's unit-seam rule (BUG-308): ``qa/oracle/valuation_oracle.py`` drops the years before a
-share-count seam beyond 50x, as ``inputs._normalize_splits`` documents it (the spec is silent), so its DCF growth
-window starts where the code's does. And its DDM one-payment gate counts the regular payments beside a year only
-(BUG-366), as ``models.dividend_history`` does.
+"""The valuation oracle's unit-seam rule (BUG-308, Q19): ``qa/oracle/valuation_oracle.py`` drops the years before a
+share-count seam beyond 50x that neither a stored split nor the count EPS implies explains, as
+``inputs._normalize_splits`` documents it (the spec is silent), so its DCF growth window starts where the code's does.
+And its DDM one-payment gate counts the regular payments beside a year only (BUG-366), as ``models.dividend_history``
+does.
 """
 import importlib.util
 import sqlite3
@@ -51,7 +52,9 @@ def test_the_count_is_the_one_eps_divides_by():
     assert oracle.unit_seam([_row(2017, period_end_count=1e9), _row(2018, 5e6)]) == 2017
 
 
-def _db(fcf, counts):
+def _db(fcf, counts, eps_moves=False, to_common=None, splits=()):
+    """EXE's FCF and diluted counts. Its EPS is unknown (no count implied), or with *eps_moves* net income (1e9, or
+    *to_common*'s figure) over the count, the EPS a split restates with it; *splits* are stored."""
     db = sqlite3.connect(":memory:")
     db.executescript(
         "create table market_snapshots (ticker, beta, risk_free_rate, shares_outstanding, current_price, market_cap,"
@@ -59,12 +62,16 @@ def _db(fcf, counts):
         "create table analyst_snapshots (ticker, earnings_growth, collected_at);"
         "create table split_events (ticker, date, ratio);"
         "create table financials_annual (ticker, fiscal_year, period_end, net_income, total_equity,"
-        " shares_outstanding, weighted_avg_shares_diluted, eps_diluted, filed_date, form);"
+        " shares_outstanding, weighted_avg_shares_diluted, eps_diluted, filed_date, form, net_income_to_common);"
         "create table metrics_annual (ticker, fiscal_year, free_cash_flow);")
     db.execute("insert into market_snapshots values ('EXE', 1.0, 0.04, 240e6, 100.0, 24e9, '2026-10-20T00:00:00')")
     for fy, count in counts.items():
-        db.execute("insert into financials_annual values ('EXE', ?, ?, 1e9, 1e10, null, ?, ?, ?, '10-K')",
-                   (fy, f"{fy}-12-31", count, 1e9 / count, f"{fy + 1}-02-20"))
+        common = (to_common or {}).get(fy)
+        eps = ((1e9 if common is None else common) / count) if eps_moves else None
+        db.execute("insert into financials_annual values ('EXE', ?, ?, 1e9, 1e10, null, ?, ?, ?, '10-K', ?)",
+                   (fy, f"{fy}-12-31", count, eps, f"{fy + 1}-02-20", common))
+    for day, ratio in splits:
+        db.execute("insert into split_events values ('EXE', ?, ?)", (day, ratio))
     for fy, value in fcf.items():
         db.execute("insert into metrics_annual values ('EXE', ?, ?)", (fy, value))
     return db
@@ -86,6 +93,37 @@ def test_the_dcf_growth_window_starts_after_the_seam():
     counts_smooth = {**counts, 2016: 4.5e6, 2017: 4.5e6}
     o = oracle.level2(_db(fcf, counts_smooth), "EXE", "dcf", {})
     assert o["inputs"]["hist_cagr"] == pytest.approx((1839 / 475) ** (1 / 8) - 1)
+
+
+def test_a_seam_a_split_explains_folds_and_the_window_reaches_back():
+    # Q19: EXE's 1:200 is a reverse split; with the EPS restated with the count, the seam folds, the years stay and
+    # the DCF's window starts at FY2017's 475M (its first positive year), as the code's records do.
+    fcf = {2016: -1650e6, 2017: 475e6, 2018: 1730e6, 2019: 1623e6, 2020: 22e6, 2022: 2302e6, 2023: 551e6,
+           2024: 8e6, 2025: 1839e6}
+    counts = {2016: 764e6, 2017: 906e6, 2018: 4.546e6, 2019: 8.3e6, 2020: 9.8e6, 2022: 146e6, 2023: 143e6,
+              2024: 157e6, 2025: 240e6}
+    for db in (_db(fcf, counts, eps_moves=True), _db(fcf, counts, splits=[("2020-04-14", 0.005)])):
+        x = oracle.Inputs(db, "EXE")
+        assert x.truncated_at is None
+        assert [row[0] for row in x.annual][0] == 2016
+        o = oracle.level2(db, "EXE", "dcf", {})
+        assert o["inputs"]["hist_cagr"] == pytest.approx((1839 / 475) ** (1 / 8) - 1)
+    # A stored split dated before the older year's end, or far from the seam, explains nothing.
+    for splits in ([("2017-06-01", 0.005)], [("2020-04-14", 0.5)]):
+        assert oracle.Inputs(_db(fcf, counts, splits=splits), "EXE").truncated_at == 2017
+
+
+def test_the_implied_count_reads_net_income_to_common_where_a_year_has_it():
+    rows = [(2017, "2017-12-31", -505e6, None, None, 906e6, -0.70), (2018, "2018-12-31", 226e6, None, None, 4.546e6,
+                                                                    29.26)]
+    assert oracle.unit_seam(rows) == 2017  # net income before preferred dividends implies 1:93
+    assert oracle.unit_seam(rows, to_common={2017: -631e6, 2018: 133e6}) is None  # to common: 1:200
+    assert oracle.unit_seam(rows, to_common={2017: -631e6}) == 2017  # FY2018's net income stands in
+    seam = 4.546e6 / 906e6
+    assert oracle.seam_explained(seam, rows[0], rows[1], to_common={2017: -631e6, 2018: 133e6 * 1.24})
+    assert not oracle.seam_explained(seam, rows[0], rows[1], to_common={2017: -631e6, 2018: 133e6 * 1.3})
+    assert oracle.seam_explained(seam, rows[0], rows[1], splits=[("2019-06-01", 0.1), ("2020-04-14", 0.05)])  # a run
+    assert not oracle.seam_explained(seam, (2017, "2017-12-31", None, None, None, 906e6, None), rows[1])
 
 
 def test_only_the_years_a_valuation_reads_are_searched_for_a_seam():

@@ -3614,3 +3614,15 @@ merge kept every qa/full-loop fix (one conflict hunk, to_dict's pops; to_dict wo
 Gates: unchanged (qa/ only)
 Commit: (this commit) chore(qa): Q19 and Q20 decided; code review 35 recorded (BUG-371, BUG-372)
 Next: Q20 and Q19 (workers running), BUG-371/372, the parser P3s.
+
+## Iteration 219: 2026-11-25 01:30: fix (Q19, the user's decision)
+Picked: Q19, measured and shown to the user, who chose to apply; an opus worker.
+Did: a share-count seam beyond 50x folds when a stored split or the implied count (net income to common / diluted
+EPS) explains it; true unit breaks still truncate. The oracle's unit_seam skips an explained seam.
+- RED: 14 failed on 3750a82; GREEN. 18 of 18 mutants; 4 stale older mutants re-quoted
+  (qa/evidence/q19-requoted-mutants.json), 4 of 4.
+- DB copies: only EXE: dcf growth 0.88% -> 15%, median bear 32.57 -> 35.18, bull 59.00 -> 72.39; 0 verdicts, labels.
+Result: Q19 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3964 passed, 2 skipped
+Commit: (this commit) fix(valuation): a share-count seam a split explains folds instead of truncating (Q19)
+Next: BUG-371/372 (ready), Q20 (worker resumes after the usage limit).

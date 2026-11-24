@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 100 · NEEDS-USER 0 · Decided: 10 · Verified: 283
+**Open:** P0 0 · P1 0 · P2 0 · P3 100 · NEEDS-USER 0 · Decided: 9 · Verified: 284
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2395,10 +2395,11 @@ Repro: no annual or TTM row of GM, AES, TXT or PCAR holds a debt figure (a mappi
 Expected: their debt read.   Actual: none.
 
 ### Q19 [VAL] NEEDS-USER: should a share-count seam that is a real reverse split be folded instead of truncating the history?
-Status: DECIDED (2026-11-24)
-Found: BUG-308's worker (iteration 208) | Fixed: | Regression test:
+Status: VERIFIED (iteration 219; applied at the user's decision, 2026-11-25)
+Found: BUG-308's worker (iteration 208) | Fixed: (this commit) | Regression tests: tests/test_valuation_unit_seams.py (new), tests/test_valuation_oracle_seam.py; 14 failing first
 Context: `inputs._normalize_splits` drops every year older than a share-count seam beyond 50x, calling it a unit/scale break ('no company splits 1:50'). EXE's FY2017->FY2018 seam (906M -> 4.546M diluted) is a real 1:200 reverse split. Truncating leaves EXE's DCF growth at 0.9%; folding the split would make it ~15% (a valuation change). Recommendation: fold a seam when a stored split (or the implied-count test) explains it, keep truncating true unit breaks; measure over the 502 before deciding. EG is the other truncated ticker.
 Decision: USER 2026-11-24: fold a seam that a stored split (or the implied-count test) explains; keep truncating true unit breaks. Measure the moves over the 502 first and bring them to the user before applying.
+Fix (iteration 219, `qa/evidence/q19-investigation.txt`): beyond 50x, newest seam first, `_normalize_splits` folds a seam a stored split (or run of splits) explains within 1.25x, else one the implied count explains (`_implied_count_explains`: net income to common where a year has it, else net income, over diluted EPS; within 1.25x, every figure known and nonzero), else truncates as before. EXE's FY2017->FY2018 seam (906M -> 4.546M, Chesapeake's 1:200 of 2020; no split_events row) folds on net income to common (901.4M -> 4.545M; plain net income gives 1:93 and would not). EG no longer has a seam beyond 50x. On DB copies: only EXE moves: dcf growth 0.88% -> 15% (cap), median bear 32.57 -> 35.18, base 38.36, bull 59.00 -> 72.39; no verdict, owner-earnings verdict or label; EXE quality components move, ranks and composite don't. Oracle agrees (L1 0/2034; L2 HLT, RTX lynch as before). Residual: the quarterly path (history_inputs.normalize_share_series) still truncates; its 35 seams beyond 50x over 12 tickers are count glitches, none a split.
 
 ### Q20 [DATA] NEEDS-USER: apply the fallback-tag fix for BUG-364/203/221? It moves 18 historical values (no label), 37 EPV bases and adds 59 Magic Formula ranks
 Status: DECIDED (2026-11-24)

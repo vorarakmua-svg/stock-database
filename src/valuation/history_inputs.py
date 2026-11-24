@@ -207,7 +207,9 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
       fiscal years also need net income to hold (``inputs._net_income_held``, BUG-247), which a
       quarter's swings too far for: the marks fold the seam of DD's 2019 1:3 reverse split at 2017 Q1,
       net income 52M then 888M. PCG's 2020 exit issuance quarter bears no marks (its EPS changed sign).
-    - A seam beyond MAX_SPLIT_RATIO is a change of units: the older quarters are dropped.
+    - A seam beyond MAX_SPLIT_RATIO is a change of units: the older quarters are dropped. (The fiscal years
+      fold one a stored split or the count EPS implies explains, Q19; on the real copy every quarterly
+      seam beyond it is a glitch or a change of units.)
 
     A gap then carries the count before it. A split after the latest quarter, which no stored quarter
     reflects, applies only when it brings our latest count nearer *yahoo_count* (on the bars' basis).

@@ -12,8 +12,9 @@ matches is reported, so an ambiguity shows up as a note rather than a false alar
 Level 2 ("inputs"): re-derive the inputs from the raw tables per the spec (≤10-FY CAGR windows,
 median 3-yr FCF, CAPM discount, TTM dividends, reported diluted EPS on today's split basis via
 declared split ratios, FY-end prices) and value each model with them. Where the spec is silent, the
-code's documented rule stands in: the years before a share-count seam beyond 50x are dropped
-(`unit_seam`, BUG-308). Rows whose spec inputs are undefined are listed, never skipped silently.
+code's documented rule stands in: the years before a share-count seam beyond 50x that neither a stored
+split nor the count EPS implies explains are dropped (`unit_seam`, BUG-308, Q19). Rows whose spec inputs are
+undefined are listed, never skipped silently.
 Known limitation: per-share history around reverse splits, spin-offs and stock dividends (GE, WDC,
 SCCO) is not modelled, so those need adjudication.
 
@@ -35,7 +36,8 @@ TERMINAL = 0.025
 DISCOUNT_CLAMP = (0.08, 0.14)
 SPREAD_G, SPREAD_R = 0.03, 0.01
 MAX_FY_ROWS = 10  # the fiscal years a valuation reads
-UNIT_SEAM_RATIO = 50.0  # a share-count seam beyond this is a unit break, not a split (BUG-308)
+UNIT_SEAM_RATIO = 50.0  # a share-count seam beyond this is a unit break, unless explained (BUG-308, Q19)
+SEAM_TOLERANCE = 1.25  # how near a stored split, or the count EPS implies, must come to such a seam (Q19)
 
 Triple = Tuple[Optional[float], Optional[float], Optional[float]]
 
@@ -178,20 +180,47 @@ def median(xs: List[float]) -> float:
     return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
 
 
-def unit_seam(rows: List[Tuple]) -> Optional[int]:
-    """The fiscal year before the newest share-count seam beyond UNIT_SEAM_RATIO among *rows* (financials_annual
-    rows, oldest first), or None.
+def seam_explained(ratio: float, older: Tuple, newer: Tuple, splits: List[Tuple] = (),
+                   to_common: Optional[Dict[int, float]] = None) -> bool:
+    """Whether a share-count seam of *ratio* beyond UNIT_SEAM_RATIO between two financials_annual rows is a split
+    (Q19, decided): a stored split, or a run of consecutive ones, dated after the older year's end and within
+    SEAM_TOLERANCE of the seam; else the count each year's EPS divides (net income to common where the year has it,
+    else net income, over diluted EPS; every figure known) moved with it within SEAM_TOLERANCE. A count filed in
+    thousands one year and in units the next leaves EPS alone."""
+    later = sorted((str(d)[:10], r) for d, r in splits if r and r > 0 and older[1] and str(d)[:10] > str(older[1])[:10])
+    for start in range(len(later)):
+        run = 1.0
+        for _, r in later[start:]:
+            run *= r
+            if abs(math.log(ratio / run)) <= math.log(SEAM_TOLERANCE):
+                return True
 
-    The code's documented rule (`inputs._normalize_splits`; the spec is silent): no company splits 50:1 or 1:50 in
-    one step, so such a seam is a unit or scale break and every year before it is dropped, for every model, FCF
-    totals included (BUG-308: EXE's 1:200 FY2017-18 seam, EG's thousands FY2019-20). Each year's count is the one its
-    EPS divides by: diluted weighted shares, else net income / EPS, else the period-end count. Only neighbouring rows
-    that both have one are compared, as the code compares them."""
+    def implied(row: Tuple) -> Optional[float]:
+        income = (to_common or {}).get(row[0])
+        income = row[2] if income is None else income
+        return income / row[6] if income and row[6] else None
+
+    a, b = implied(older), implied(newer)
+    return bool(a and b and b / a > 0 and abs(math.log(b / a / ratio)) <= math.log(SEAM_TOLERANCE))
+
+
+def unit_seam(rows: List[Tuple], splits: List[Tuple] = (), to_common: Optional[Dict[int, float]] = None
+              ) -> Optional[int]:
+    """The fiscal year before the newest share-count seam beyond UNIT_SEAM_RATIO among *rows* (financials_annual
+    rows, oldest first) that nothing explains (`seam_explained`), or None.
+
+    The code's documented rule (`inputs._normalize_splits`; the spec is silent): such a seam is a unit or scale break
+    unless a stored split or the count EPS implies explains it (Q19: EXE's 1:200 FY2017-18 seam is its 2020 reverse
+    split, which its figures to common show), and every year before an unexplained one is dropped, for every model,
+    FCF totals included (BUG-308). Each year's count is the one its EPS divides by: diluted weighted shares, else net
+    income / EPS, else the period-end count. Only neighbouring rows that both have one are compared, as the code
+    compares them. A stored split may explain more than one seam here (the code spends each once)."""
     counts = [r[5] or (r[2] / r[6] if r[2] is not None and r[6] else None) or r[4] for r in rows]
     for i in range(len(rows) - 2, -1, -1):
         older, newer = counts[i], counts[i + 1]
         if older and newer and older > 0 and newer > 0 and not 1 / UNIT_SEAM_RATIO <= newer / older <= UNIT_SEAM_RATIO:
-            return rows[i][0]
+            if not seam_explained(newer / older, rows[i], rows[i + 1], splits, to_common):
+                return rows[i][0]
     return None
 
 
@@ -230,8 +259,15 @@ class Inputs:
                                  "weighted_avg_shares_diluted, eps_diluted from financials_annual where ticker=? "
                                  "order by fiscal_year", (ticker,)).fetchall()
         # BUG-308: the years before a share-count seam beyond 50x are dropped, as the code drops them
-        # (`inputs._normalize_splits`: a unit/scale break, its documented rule; the spec is silent).
-        self.truncated_at = unit_seam([r for r in self.annual if r[0] is not None][-MAX_FY_ROWS:])
+        # (`inputs._normalize_splits`: a unit/scale break, its documented rule; the spec is silent), unless a
+        # stored split or the count EPS implies explains it (Q19).
+        try:
+            to_common = dict(db.execute("select fiscal_year, net_income_to_common from financials_annual where "
+                                        "ticker=? and net_income_to_common is not null", (ticker,)).fetchall())
+        except sqlite3.OperationalError:  # a database from before the figure to common was kept
+            to_common = {}
+        self.truncated_at = unit_seam([r for r in self.annual if r[0] is not None][-MAX_FY_ROWS:], self.splits,
+                                      to_common)
         if self.truncated_at is not None:
             self.annual = [r for r in self.annual if r[0] is not None and r[0] > self.truncated_at]
         row = db.execute("select filed_date, form from financials_annual where ticker=? and fiscal_year is not null "

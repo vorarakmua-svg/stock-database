@@ -28,10 +28,11 @@ DIVIDEND_CHECK_YEARS = 5
 #: years' filings needs no threshold (``_normalize_splits``, BUG-245).
 SPLIT_JUMP_THRESHOLD = 1.5
 
-#: The largest ratio still credible as a real split. No listed company has ever
-#: split 50:1 (or 1:50) in one step, so a seam beyond this is a unit/scale error
-#: in the source data (some fiscal years are filed in thousands, others in
-#: units), not a corporate action.
+#: The largest ratio a seam folds by on the share counts alone. A seam beyond it is
+#: read as a unit/scale error in the source data (some fiscal years are filed in
+#: thousands, others in units) unless a stored split or the count EPS implies
+#: explains it (``_normalize_splits``, Q19): EXE's 1:200 reverse split of 2020 is
+#: a corporate action beyond it.
 MAX_SPLIT_RATIO = 50.0
 
 #: A declared ratio from ``split_events`` replaces a detected share-count jump
@@ -174,8 +175,9 @@ class ValuationInputs:
     dividends: List[Tuple[str, float]] = field(default_factory=list)
     fy_end_prices: Dict[int, float] = field(default_factory=dict)
     as_of: Optional[date] = None
-    #: True when a unit/scale discontinuity in the source share counts forced
-    #: the older fiscal years to be dropped (see ``_normalize_splits``).
+    #: True when a unit/scale discontinuity in the source share counts (a seam
+    #: beyond MAX_SPLIT_RATIO nothing explains) forced the older fiscal years to
+    #: be dropped (see ``_normalize_splits``).
     history_truncated: bool = False
     #: Each fiscal year the dividend completeness check (BUG-012, ``dividend_gaps``) flags as missing Yahoo payments,
     #: over the stored payments and the latest DIVIDEND_CHECK_YEARS fiscal years, as ``(fiscal_year, gap_from,
@@ -213,6 +215,20 @@ def _implied_count_moves(ratio: float, older: "FYRecord", newer: "FYRecord",
     if not (older.net_income and newer.net_income and eps_older and eps_newer):
         return True
     implied = (newer.net_income / eps_newer) / (older.net_income / eps_older)
+    return implied > 0 and abs(math.log(implied / ratio)) <= math.log(DECLARED_SPLIT_TOLERANCE)
+
+
+def _implied_count_explains(ratio: float, income_older: Optional[float], income_newer: Optional[float],
+                            eps_older: Optional[float], eps_newer: Optional[float]) -> bool:
+    """Whether the count each year's EPS divides by (net income to common, else net income, over diluted EPS) moved
+    with a seam of *ratio* beyond MAX_SPLIT_RATIO, within DECLARED_SPLIT_TOLERANCE: a split restates the count and
+    EPS together, while a count filed in thousands one year and in units the next leaves EPS alone. Every figure must
+    be known, nonzero and imply a count above zero: unknown doesn't explain such a seam (Q19). Net income before
+    preferred dividends implies another count: EXE's FY2017-18, 721M then 7.72M shares, a 1:93 move, where its
+    figures to common imply 901M then 4.55M, the 1:200 its diluted counts show."""
+    if not (income_older and income_newer and eps_older and eps_newer):
+        return False
+    implied = (income_newer / eps_newer) / (income_older / eps_older)
     return implied > 0 and abs(math.log(implied / ratio)) <= math.log(DECLARED_SPLIT_TOLERANCE)
 
 
@@ -281,6 +297,7 @@ def _normalize_splits(records: List[FYRecord],
                       detect_filed: Optional[Sequence[Optional[str]]] = None,
                       revenue: Optional[Sequence[Optional[float]]] = None,
                       first_bar: Optional[str] = None,
+                      income_to_common: Optional[Sequence[Optional[float]]] = None,
                       ) -> Tuple[List[FYRecord], bool]:
     """Restate every year's per-share figures onto the current share basis.
 
@@ -309,11 +326,18 @@ def _normalize_splits(records: List[FYRecord],
       first bar and that only a listing's jump folds is marked
       ``private_count``: a merger around the listing jumps the same way (DELL's
       EMC, BUG-188).
-    * beyond ``+/- 50x`` -> not a credible corporate action. The source data
-      mixes units across fiscal years (thousands vs units), so everything older
-      than this seam is on an unknown scale and simply CANNOT be compared to the
-      modern series. Truncate: drop the older records and stop walking. The
-      models' "insufficient history" guards then take over honestly.
+    * beyond ``+/- 50x`` -> folds only when it is explained (Q19): by a stored
+      share split, or run of them, within DECLARED_SPLIT_TOLERANCE of it (as
+      above, each split once and between the two years' filings), else by its
+      own ratio when the count each year's EPS implies moved with it
+      (``_implied_count_explains``, on *income_to_common* where a year has it,
+      else net income; every figure known). EXE's FY2017-18 seam is its 1:200
+      reverse split of 2020, which Yahoo's history lacks. Otherwise it is a unit
+      break: the source data mixes units across fiscal years (thousands vs
+      units), so everything older than this seam is on an unknown scale and
+      CANNOT be compared to the modern series. Truncate: drop the older records
+      and stop walking. The models' "insufficient history" guards then take
+      over honestly.
     * otherwise -> ordinary issuance / buyback; no adjustment.
 
     A filing restates its figures for every share split made before it, so
@@ -351,14 +375,30 @@ def _normalize_splits(records: List[FYRecord],
             ratio = newer / older
             forward = SPLIT_JUMP_THRESHOLD <= ratio <= MAX_SPLIT_RATIO
             reverse = (1.0 / MAX_SPLIT_RATIO) <= ratio <= (1.0 / SPLIT_JUMP_THRESHOLD)
-            if ratio > MAX_SPLIT_RATIO or ratio < 1.0 / MAX_SPLIT_RATIO:
-                # Unit discontinuity: the pre-seam years are uncomparable.
-                return records[i + 1:], True
+            beyond = ratio > MAX_SPLIT_RATIO or ratio < 1.0 / MAX_SPLIT_RATIO
             f_old, f_new = (detect_filed[i], detect_filed[i + 1]) if detect_filed else (None, None)
-            between = _splits_filed_between(unused, f_old, f_new)
+            between = [] if beyond else _splits_filed_between(unused, f_old, f_new)
             between_ratio = math.prod(split_ratio for _, split_ratio in between)
+            if beyond:
+                # A stored split that explains the seam, else the count EPS implies (Q19); else a unit
+                # discontinuity: the pre-seam years are uncomparable.
+                run = _declared_run(ratio, records[i].period_end,
+                                    [split for split in unused
+                                     if _simple_ratio(split[1]) and _filed_between(split, f_old, f_new)])
+                common = income_to_common or [None] * len(records)
+                if run:
+                    unused = [split for split in unused if split not in run]
+                    factor *= math.prod(split_ratio for _, split_ratio in run)
+                elif _implied_count_explains(
+                        ratio,
+                        common[i] if common[i] is not None else records[i].net_income,
+                        common[i + 1] if common[i + 1] is not None else records[i + 1].net_income,
+                        reported_eps[i], reported_eps[i + 1]):
+                    factor *= ratio
+                else:
+                    return records[i + 1:], True
             # The splits filed between the two years made this seam, whatever buybacks or a merger did beside them.
-            if between and abs(math.log(ratio / between_ratio)) < abs(math.log(ratio)):
+            elif between and abs(math.log(ratio / between_ratio)) < abs(math.log(ratio)):
                 unused = [split for split in unused if split not in between]
                 factor *= between_ratio
             elif forward or reverse:
@@ -672,8 +712,12 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
     ).fetchone()
     sector = (row["sector_class"] if row is not None else None) or "general"
 
+    # A database from before net income to common was kept lacks the column (the backfill reads without migrating).
+    to_common = ("fa.net_income_to_common" if any(c[1] == "net_income_to_common" for c in conn.execute(
+        "PRAGMA table_info(financials_annual)")) else "NULL") + " AS net_income_to_common, "
     fy_rows = conn.execute(
-        "SELECT fa.fiscal_year, fa.period_end, fa.filed_date, fa.form, fa.net_income, fa.total_equity, fa.revenue, "
+        "SELECT fa.fiscal_year, fa.period_end, fa.filed_date, fa.form, fa.net_income, " + to_common +
+        "fa.total_equity, fa.revenue, "
         "fa.eps_diluted, fa.weighted_avg_shares_diluted, fa.shares_outstanding, "
         "fa.depreciation_amortization, fa.capex, fa.dividends_per_share, "
         "ma.free_cash_flow, ma.ffo_per_share "
@@ -769,7 +813,8 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
     first_bar = conn.execute("SELECT MIN(date) FROM price_bars WHERE ticker = ?", (ticker,)).fetchone()[0]
     records, history_truncated = _normalize_splits(records, shares_detect, restated, detect_filed,
                                                    [r["revenue"] for r in fy_rows[-max_years:]],
-                                                   str(first_bar)[:10] if first_bar else None)
+                                                   str(first_bar)[:10] if first_bar else None,
+                                                   [r["net_income_to_common"] for r in fy_rows[-max_years:]])
 
     # SELECT *: a database not yet migrated lacks the rate's date and source columns,
     # and the backfill reads it without migrating.
