@@ -496,11 +496,12 @@ def _restated_splits(vintages: Sequence[Sequence],
     less, within RESTATED_SPLIT_TOLERANCE, with a split's marks in the year's EPS and its net income held (the
     rules of an undeclared seam, ``_split_marks`` and ``_net_income_held``, on one year's figures), the filings
     record a split between the two filings. One that a declared share split, or run of them, explains (dated after
-    the earlier filing and up to RESTATED_SPLIT_SLACK_DAYS after the later, within DECLARED_SPLIT_TOLERANCE) is
-    Yahoo's already. A reverse merger restates the year to the acquirer's figures, its net income included (KDP's
-    FY2017: 182.8M and $5.89, then Keurig's 790.5M and $0.47; ECHO's FY2021), and a count filed in thousands one
-    year and in units the next leaves its EPS alone: neither is a split. Each split once, from the earliest filings
-    that show it."""
+    the first filing of the earlier view's count and up to RESTATED_SPLIT_SLACK_DAYS after the later, within
+    DECLARED_SPLIT_TOLERANCE) is Yahoo's already: a 10-K/A repeats its original's figures, so one filed after a split
+    is an unrestated view later than the split, and the split it shows is the declared one (BUG-381). A reverse
+    merger restates the year to the acquirer's figures, its net income included (KDP's FY2017: 182.8M and $5.89,
+    then Keurig's 790.5M and $0.47; ECHO's FY2021), and a count filed in thousands one year and in units the next
+    leaves its EPS alone: neither is a split. Each split once, from the earliest filings that show it."""
     by_year: Dict[int, List[Tuple[str, bool, float, float, Optional[float]]]] = {}
     for fiscal_year, filed, weighted, eps, income in sorted(
             (v for v in vintages if v[0] is not None and v[1]), key=lambda v: (int(v[0]), str(v[1])[:10])):
@@ -510,9 +511,12 @@ def _restated_splits(vintages: Sequence[Sequence],
             by_year.setdefault(int(fiscal_year), []).append((str(filed)[:10], weighted_count, count, eps, income))
     found: List[Tuple[str, str, float]] = []
     for views in by_year.values():
-        for earlier, later in zip(views, views[1:]):
+        for i, (earlier, later) in enumerate(zip(views, views[1:])):
             if earlier[1] != later[1] or earlier[0] == later[0]:
                 continue
+            first = i
+            while first > 0 and abs(math.log(views[first - 1][2] / earlier[2])) <= math.log(RESTATED_SPLIT_TOLERANCE):
+                first -= 1
             moved = later[2] / earlier[2]
             ratio = _nearest_share_split(moved)
             if ratio is None or abs(math.log(moved / ratio)) > math.log(RESTATED_SPLIT_TOLERANCE):
@@ -525,7 +529,7 @@ def _restated_splits(vintages: Sequence[Sequence],
             until = (date.fromisoformat(later[0]) + timedelta(days=RESTATED_SPLIT_SLACK_DAYS)).isoformat()
             near = [(str(when)[:10], split) for when, split in declared
                     if split and split > 0 and _simple_ratio(split) and str(when)[:10] <= until]
-            if _declared_run(moved, earlier[0], sorted(near)):
+            if _declared_run(moved, views[first][0], sorted(near)):
                 continue
             found.append((earlier[0], later[0], ratio))
     splits: List[Tuple[str, str, float]] = []

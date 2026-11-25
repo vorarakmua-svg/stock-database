@@ -3747,3 +3747,13 @@ c614a02; no double-applied or misdated split besides M1; no new look-ahead.
 Gates: unchanged (qa/ only)
 Commit: (this commit) chore(qa): code review 37 recorded (BUG-381)
 Next: BUG-381.
+
+## Iteration 231: 2026-11-25 21:40: fix (BUG-381)
+Picked: code review 37's finding; an opus worker (nothing moved).
+Did: a 10-K/A repeating its original's count doesn't make a declared split look undeclared.
+- RED: 3 failed on ddca624; GREEN. 6 of 6 mutants; bug264's re-quoted (1) and older (133) all killed.
+- split_history census over 502: identical.
+Result: BUG-381 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4209 passed, 2 skipped
+Commit: (this commit) fix(valuation): an amendment repeating its original doesn't copy a declared split (BUG-381)
+Next: BUG-380 (ready).
