@@ -298,6 +298,7 @@ def _normalize_splits(records: List[FYRecord],
                       revenue: Optional[Sequence[Optional[float]]] = None,
                       first_bar: Optional[str] = None,
                       income_to_common: Optional[Sequence[Optional[float]]] = None,
+                      detect_from_eps: Optional[Sequence[bool]] = None,
                       ) -> Tuple[List[FYRecord], bool]:
     """Restate every year's per-share figures onto the current share basis.
 
@@ -331,7 +332,9 @@ def _normalize_splits(records: List[FYRecord],
       above, each split once and between the two years' filings), else by its
       own ratio when the count each year's EPS implies moved with it
       (``_implied_count_explains``, on *income_to_common* where a year has it,
-      else net income; every figure known). EXE's FY2017-18 seam is its 1:200
+      else net income; every figure known), unless both years' detection
+      counts are net income / EPS (*detect_from_eps*): that count is the seam
+      compared with itself (BUG-377). EXE's FY2017-18 seam is its 1:200
       reverse split of 2020, which Yahoo's history lacks. Otherwise it is a unit
       break: the source data mixes units across fiscal years (thousands vs
       units), so everything older than this seam is on an unknown scale and
@@ -386,10 +389,11 @@ def _normalize_splits(records: List[FYRecord],
                                     [split for split in unused
                                      if _simple_ratio(split[1]) and _filed_between(split, f_old, f_new)])
                 common = income_to_common or [None] * len(records)
+                from_eps = detect_from_eps or [False] * len(records)
                 if run:
                     unused = [split for split in unused if split not in run]
                     factor *= math.prod(split_ratio for _, split_ratio in run)
-                elif _implied_count_explains(
+                elif not (from_eps[i] and from_eps[i + 1]) and _implied_count_explains(
                         ratio,
                         common[i] if common[i] is not None else records[i].net_income,
                         common[i + 1] if common[i + 1] is not None else records[i + 1].net_income,
@@ -756,6 +760,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
     records: List[FYRecord] = []
     shares_detect: List[Optional[float]] = []
     detect_filed: List[Optional[str]] = []
+    detect_from_eps: List[bool] = []
     dps_onto_detect: Dict[int, float] = {}
     # The valuations read the latest _MAX_FY_HISTORY years; the quality scores ask for one more (a 10-year
     # CAGR). Splits fold newest first, so an older year never moves a newer one.
@@ -783,6 +788,7 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
             shares *= _restated_between(splits, filed_by_field.get((fiscal_year, "shares_outstanding")),
                                         filed_by_field.get((fiscal_year, "eps_diluted")))
         shares_detect.append(detect)
+        detect_from_eps.append(detect_field == "eps_diluted")
         detect_filed.append(filed_by_field.get((int(r["fiscal_year"]), detect_field)))
         if r["dividends_per_share"] is not None:
             # The year's dividends per share go onto the basis of the share figure the split detection reads, which
@@ -814,7 +820,8 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
     records, history_truncated = _normalize_splits(records, shares_detect, restated, detect_filed,
                                                    [r["revenue"] for r in fy_rows[-max_years:]],
                                                    str(first_bar)[:10] if first_bar else None,
-                                                   [r["net_income_to_common"] for r in fy_rows[-max_years:]])
+                                                   [r["net_income_to_common"] for r in fy_rows[-max_years:]],
+                                                   detect_from_eps)
 
     # SELECT *: a database not yet migrated lacks the rate's date and source columns,
     # and the backfill reads it without migrating.

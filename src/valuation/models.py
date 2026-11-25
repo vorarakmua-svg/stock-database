@@ -55,9 +55,10 @@ ONE_PAYMENT_TOLERANCE = 0.02
 #: at least this share of the median of those 365 days' such payments, itself among them: a small
 #: extra beside an annual payment (0.50 beside 2.95) is no second payment a year. Measured within
 #: the 365 days, not against the year's own payments, which specials can hold (TPL's FY2020): its
-#: quarters beside them count. A smaller payment still counts when it recurs (``_recurs``): the
-#: median of two is their mean, so by size alone a semiannual payer's interim under a third of its
-#: final wouldn't count (BUG-372), while an extra doesn't come back a year later.
+#: quarters beside them count. A smaller payment still counts when it recurs into the year the gate
+#: judges (``_recurs``): the median of two is their mean, so by size alone a semiannual payer's interim
+#: under a third of its final wouldn't count (BUG-372), and it comes back in that year, while an annual
+#: payer's extra, even one paid each year before it, isn't among that year's payments (BUG-376).
 REGULAR_PAYMENT_SHARE = 0.5
 
 
@@ -299,24 +300,27 @@ def _annual_dividend_totals(dividends: List[Tuple[str, float]]) -> List[Tuple[in
 
 
 def _regular_between(dividends: List[Tuple[str, float]], start: str, end: str,
-                     whole: Set[Tuple[str, float]]) -> int:
+                     whole: Set[Tuple[str, float]], toward: int) -> int:
     """How many payments with ex-dates in (*start*, *end*] are regular (BUG-366): of those that aren't a one-off
     whole (*whole*, by ex-date and amount), the ones at least REGULAR_PAYMENT_SHARE of their median, or that
-    recur (``_recurs``, BUG-372)."""
+    recur into the year the gate judges, a year later (*toward* 1) or a year earlier (-1) (``_recurs``, BUG-372,
+    BUG-376)."""
     paid = [(day[:10], amount) for day, amount in dividends
             if start < day[:10] <= end and (day[:10], amount) not in whole]
     least = REGULAR_PAYMENT_SHARE * statistics.median([amount for _, amount in paid]) if paid else 0.0
-    return sum(1 for day, amount in paid if amount >= least or _recurs(dividends, day, amount))
+    return sum(1 for day, amount in paid if amount >= least or _recurs(dividends, day, amount, toward))
 
 
-def _recurs(dividends: List[Tuple[str, float]], day: str, amount: float) -> bool:
+def _recurs(dividends: List[Tuple[str, float]], day: str, amount: float, toward: int) -> bool:
     """Whether a like payment (within ONE_OFF_MULTIPLE times *amount* either way) is ex-dated within
-    ONE_OFF_SEASON_DAYS of the anniversary a year before or after *day* (BUG-372): a semiannual payer's small
-    interim comes back each year, an extra doesn't. (A one-off whole, over ONE_OFF_MULTIPLE times the payments
-    beside it, is no like payment of one under half the median of its 365 days.)"""
+    ONE_OFF_SEASON_DAYS of *day*'s anniversary a year later (*toward* 1) or a year earlier (-1): in the year
+    ``_one_payment``'s gate judges (BUG-372, BUG-376). A semiannual payer's small interim comes back in it; an annual
+    payer's extra that isn't among its payments is no second payment a year there, even when it was paid the year
+    before *day* too, and a second payment in that year is then a slip. (A one-off whole, over ONE_OFF_MULTIPLE
+    times the payments beside it, is no like payment of one under half the median of its 365 days.)"""
     paid_on = date.fromisoformat(day)
     for other_day, other in dividends:
-        apart = abs((date.fromisoformat(other_day[:10]) - paid_on).days)
+        apart = (date.fromisoformat(other_day[:10]) - paid_on).days * toward
         if abs(apart - 365) <= ONE_OFF_SEASON_DAYS and amount <= ONE_OFF_MULTIPLE * other \
                 and other <= ONE_OFF_MULTIPLE * amount:
             return True
@@ -369,9 +373,9 @@ def dividend_history(inputs: ValuationInputs, anchor: date,
             date.fromisoformat(paid[0][0]) - date.fromisoformat(before[-1])).days > DIVIDEND_STALE_DAYS
         one_off = sum(amount for day, amount in one_offs if start < day[:10] <= end)
         beside = (_regular_between(dividends, (date.fromisoformat(start) - timedelta(days=365)).isoformat(), start,
-                                   whole),
+                                   whole, 1),
                   _regular_between(dividends, end, (date.fromisoformat(end) + timedelta(days=365)).isoformat(),
-                                   whole))
+                                   whole, -1))
         if sec is not None and sec > 0 and not _one_payment(sec, payments, beside):
             history.append(DividendYear(year, sec, "sec", payments, restart, one_off))
         elif payments:

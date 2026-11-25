@@ -3683,3 +3683,14 @@ no diluted count). Checked right: Q20's sector threading and set-aside per as-of
 Gates: unchanged (qa/ only)
 Commit: (this commit) chore(qa): code review 36 recorded (BUG-376, BUG-377); Q21 and Q22 decided
 Next: BUG-376/377 + Q21's README, Q22 measured.
+
+## Iteration 225: 2026-11-25 10:30: fix (BUG-376, BUG-377); Q21 documented
+Picked: code review 36's finding and note, and Q21's README; an opus worker (nothing moved).
+Did: a recurring small payment counts only when it recurs into the judged year; an EPS-derived count can't explain
+its own seam; the README explains SEC's shared calendar years.
+- RED: 10 failed on 00fb94f; GREEN. 13 of 13 mutants; 15 older mutants re-quoted (15 of 15).
+- DB copies: all 37 tables identical; census 0 gates, 0 years; 0 seams change.
+Result: BUG-376, BUG-377, Q21 VERIFIED; BUG-348 WONTFIX. New: BUG-378 (P3, residual).
+Gates: ruff ✓ mypy ✓ pytest 4091 passed, 2 skipped
+Commit: (this commit) fix(valuation): a recurring payment counts toward the judged year; an EPS count can't explain its seam (BUG-376, BUG-377, Q21)
+Next: Q22 (measuring).

@@ -367,6 +367,11 @@ def test_value_ddm_keeps_an_annual_payers_sec_figure_beside_a_slipped_ex_date(mo
     # ... the same size 460 days before it and 270 days after it (no anniversary)
     [("2023-04-12", 0.5), ("2024-07-15", 0.5)],
     [("2024-07-15", 0.5), ("2025-04-11", 0.5)],
+    [("2024-02-10", 0.5), ("2025-08-20", 0.5)],   # in the year judged, but 557 days on (past its anniversary's season)
+    # BUG-376 (code review 36): the same extra paid two years running, or three, recurs, but not into 2025, the year
+    # the gate judges: the payer's second payment a year isn't there, so 2025's two are a slip
+    [("2023-07-15", 0.5), ("2024-07-15", 0.5)],
+    [("2022-07-15", 0.5), ("2023-07-15", 0.5), ("2024-07-15", 0.5)],
 ])
 def test_value_ddm_keeps_an_annual_payers_slipped_year_beside_an_extra_payment(extra):
     # BUG-366: the year before 2025 (the slipped one) holds two payments or more only because of extra ones: the
@@ -415,7 +420,30 @@ def test_the_regular_payments_in_a_side_are_counted_by_size_or_recurrence(extra,
     from src.valuation.models import _regular_between
     divs = [("2023-01-15", 2.81), ("2024-01-15", 2.95), ("2024-07-15", extra), ("2025-01-15", 3.10),
             ("2025-12-30", 3.26)]
-    assert _regular_between(divs, "2023-12-31", "2024-12-31", set()) == counted
+    assert _regular_between(divs, "2023-12-31", "2024-12-31", set(), 1) == counted
+
+
+@pytest.mark.parametrize("toward, counted", [
+    (1, 1),    # the year before 2025: the 2024 extra's like payment is a year earlier, not in 2025
+    (-1, 2),   # read as the year after 2023: its like payment is in 2023, the year judged
+])
+def test_a_small_payment_recurs_only_into_the_year_the_gate_judges(toward, counted):
+    # BUG-376: a payment under half its side's median counts when a like payment is ex-dated within a quarter of its
+    # anniversary in the year the gate judges (*toward*: 1 a year later, -1 a year earlier), not any year.
+    from src.valuation.models import _regular_between
+    divs = [("2023-01-15", 2.81), ("2023-07-15", 0.5), ("2024-01-15", 2.95), ("2024-07-15", 0.5),
+            ("2025-01-15", 3.10), ("2025-12-30", 3.26)]
+    assert _regular_between(divs, "2023-12-31", "2024-12-31", set(), toward) == counted
+
+
+def test_a_payer_turned_semiannual_shows_its_small_interim_in_the_year_after():
+    # BUG-376: an annual payer turned semiannual in 2025 (an interim under a third of its final) tags FY2025 with its
+    # final alone (BUG-020). The year before shows one payment; the year after shows two, its interim recurring
+    # into 2025 a year earlier: FY2025 reads the year's two payments.
+    divs = [("2023-09-15", 1.2), ("2024-09-15", 1.2), ("2025-03-15", 0.3), ("2025-09-15", 1.0),
+            ("2026-03-15", 0.3), ("2026-09-15", 1.0)]
+    years = _history({2023: 1.2, 2024: 1.2, 2025: 1.0, 2026: 1.3}, divs, date(2027, 1, 20))
+    assert years[2025] == (pytest.approx(1.3), "yahoo")
 
 
 def test_quarters_beside_a_year_of_specials_are_regular_payments():

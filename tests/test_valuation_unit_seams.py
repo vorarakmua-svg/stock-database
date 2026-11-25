@@ -124,6 +124,21 @@ def test_each_stored_split_explains_one_seam(tmp_path):
     assert {r.fiscal_year: r.split_factor for r in inputs.fy_records}[2017] == pytest.approx(0.005)
 
 
+def test_a_seam_between_two_counts_eps_implies_truncates(tmp_path):
+    # BUG-377: neither year has a diluted weighted count, so each year's detection count is net income / EPS, and the
+    # count EPS implies is the seam itself: it can't tell a reverse split from an EPS filed 1,000x small. Unexplained.
+    rows = [(2016, 0.95e9, None, 0.95, None), (2017, 1.0e9, None, 1.00, None), (2018, 1.1e9, None, 0.0011, None),
+            (2019, 1.2e9, None, 0.0012, None)]
+    inputs = _load(_db(tmp_path, rows))
+    assert inputs.history_truncated is True
+    assert [r.fiscal_year for r in inputs.fy_records] == [2018, 2019]
+    # A diluted count in one of the two years is checked by the count its EPS implies: the seam folds.
+    rows[2] = (2018, 1.1e9, None, 0.0011, 1.0e12)
+    inputs = _load(_db(tmp_path, rows, name="one_count.db"))
+    assert inputs.history_truncated is False
+    assert len(inputs.fy_records) == 4
+
+
 @pytest.mark.parametrize("income_older, income_newer, eps_older, eps_newer, explains", [
     (-631e6, 133e6, -0.70, 29.26, True),        # EXE's: EPS changed sign with income, the counts 901M then 4.5M
     (631e6, 133e6, 0.70, 29.26, True),

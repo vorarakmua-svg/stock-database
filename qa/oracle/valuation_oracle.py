@@ -181,12 +181,13 @@ def median(xs: List[float]) -> float:
 
 
 def seam_explained(ratio: float, older: Tuple, newer: Tuple, splits: List[Tuple] = (),
-                   to_common: Optional[Dict[int, float]] = None) -> bool:
+                   to_common: Optional[Dict[int, float]] = None, counted: bool = True) -> bool:
     """Whether a share-count seam of *ratio* beyond UNIT_SEAM_RATIO between two financials_annual rows is a split
     (Q19, decided): a stored split, or a run of consecutive ones, dated after the older year's end and within
     SEAM_TOLERANCE of the seam; else the count each year's EPS divides (net income to common where the year has it,
     else net income, over diluted EPS; every figure known) moved with it within SEAM_TOLERANCE. A count filed in
-    thousands one year and in units the next leaves EPS alone."""
+    thousands one year and in units the next leaves EPS alone. The implied count explains only where the seam's
+    counts aren't both net income / EPS (*counted*): it would be the seam compared with itself (BUG-377)."""
     later = sorted((str(d)[:10], r) for d, r in splits if r and r > 0 and older[1] and str(d)[:10] > str(older[1])[:10])
     for start in range(len(later)):
         run = 1.0
@@ -201,7 +202,7 @@ def seam_explained(ratio: float, older: Tuple, newer: Tuple, splits: List[Tuple]
         return income / row[6] if income and row[6] else None
 
     a, b = implied(older), implied(newer)
-    return bool(a and b and b / a > 0 and abs(math.log(b / a / ratio)) <= math.log(SEAM_TOLERANCE))
+    return bool(counted and a and b and b / a > 0 and abs(math.log(b / a / ratio)) <= math.log(SEAM_TOLERANCE))
 
 
 def unit_seam(rows: List[Tuple], splits: List[Tuple] = (), to_common: Optional[Dict[int, float]] = None
@@ -214,12 +215,15 @@ def unit_seam(rows: List[Tuple], splits: List[Tuple] = (), to_common: Optional[D
     split, which its figures to common show), and every year before an unexplained one is dropped, for every model,
     FCF totals included (BUG-308). Each year's count is the one its EPS divides by: diluted weighted shares, else net
     income / EPS, else the period-end count. Only neighbouring rows that both have one are compared, as the code
-    compares them. A stored split may explain more than one seam here (the code spends each once)."""
+    compares them. A stored split may explain more than one seam here (the code spends each once). Where both rows'
+    counts are net income / EPS, the count EPS implies is the seam itself and explains nothing (BUG-377)."""
     counts = [r[5] or (r[2] / r[6] if r[2] is not None and r[6] else None) or r[4] for r in rows]
+    from_eps = [not r[5] and bool(r[2] / r[6] if r[2] is not None and r[6] else None) for r in rows]
     for i in range(len(rows) - 2, -1, -1):
         older, newer = counts[i], counts[i + 1]
         if older and newer and older > 0 and newer > 0 and not 1 / UNIT_SEAM_RATIO <= newer / older <= UNIT_SEAM_RATIO:
-            if not seam_explained(newer / older, rows[i], rows[i + 1], splits, to_common):
+            if not seam_explained(newer / older, rows[i], rows[i + 1], splits, to_common,
+                                  not (from_eps[i] and from_eps[i + 1])):
                 return rows[i][0]
     return None
 
@@ -567,23 +571,25 @@ def regular_beside(events: List[Tuple[str, float]], extra: Dict[str, float], sta
     """BUG-311's gate, counting regular payments only (BUG-366): the larger of the counts of payments in the 365 days
     up to a fiscal year's *start* and in the 365 days after its *end*. Within each side, a payment counts unless it is
     a one-off whole (*extra*, ``one_offs``: its one-off part is the whole amount) or under half the median of that
-    side's other such payments, unless it recurs (BUG-372): any payment within 3x of it either way, ex-dated 365
-    days +/- 91 from it (a quarter either way of its anniversary, as Q3's recurrence). The 0.5 share is the fix's
-    own heuristic (loop section 7): a small extra beside an annual payment isn't a second payment a year; a semiannual
-    interim is, at any size, since it comes back each year (by size alone, only down to a third of the final)."""
+    side's other such payments, unless it recurs into the fiscal year judged (BUG-372, BUG-376): any payment within
+    3x of it either way, ex-dated 365 days +/- 91 from it toward that year (a year later for the side before, a year
+    earlier for the side after; a quarter either way of its anniversary, as Q3's recurrence). The 0.5 share is the
+    fix's own heuristic (loop section 7): a small extra beside an annual payment isn't a second payment a year, even
+    one paid the year before too, unless the year judged holds it; a semiannual interim is, at any size, since it
+    comes back in that year (by size alone, only down to a third of the final)."""
     year = datetime.timedelta(days=365)
 
-    def recurs(d: str, a: float) -> bool:
+    def recurs(d: str, a: float, sign: int) -> bool:
         for e, b in events:
-            if 365 - 91 <= abs((_day(e) - _day(d)).days) <= 365 + 91 and a <= 3 * b and b <= 3 * a:
+            if 365 - 91 <= sign * (_day(e) - _day(d)).days <= 365 + 91 and a <= 3 * b and b <= 3 * a:
                 return True
         return False
 
-    def regular(lo: str, hi: str) -> int:
+    def regular(lo: str, hi: str, sign: int) -> int:
         kept = [(d, a) for d, a in events if lo < d <= hi and extra.get(d[:10]) != a]
         least = 0.5 * median([a for _, a in kept]) if kept else 0.0
-        return sum(1 for d, a in kept if a >= least or recurs(d, a))
-    return max(regular((_day(start) - year).isoformat(), start), regular(end, (_day(end) + year).isoformat()))
+        return sum(1 for d, a in kept if a >= least or recurs(d, a, sign))
+    return max(regular((_day(start) - year).isoformat(), start, 1), regular(end, (_day(end) + year).isoformat(), -1))
 
 
 def payment_gaps(db: sqlite3.Connection, ticker: str, splits: List[Tuple[str, float]]) -> List[Tuple[int, str, str]]:

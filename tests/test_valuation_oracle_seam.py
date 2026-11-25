@@ -126,6 +126,16 @@ def test_the_implied_count_reads_net_income_to_common_where_a_year_has_it():
     assert not oracle.seam_explained(seam, (2017, "2017-12-31", None, None, None, 906e6, None), rows[1])
 
 
+def test_a_seam_between_two_counts_eps_implies_is_not_explained_by_them():
+    # BUG-377: neither year has a diluted weighted count, so each year's count is net income / EPS, and the count EPS
+    # implies is the seam itself: nothing independent explains it (an EPS filed 1,000x small one year).
+    rows = [(2017, "2017-12-31", 1.0e9, None, None, None, 1.00), (2018, "2018-12-31", 1.1e9, None, None, None, 0.0011)]
+    assert oracle.unit_seam(rows) == 2017
+    # With a diluted count in either year the implied count checks it (EXE's fold).
+    rows[1] = (2018, "2018-12-31", 1.1e9, None, None, 1.0e12, 0.0011)
+    assert oracle.unit_seam(rows) is None
+
+
 def test_only_the_years_a_valuation_reads_are_searched_for_a_seam():
     # The valuation reads the latest 10 fiscal years: a unit seam older than them (FY2013-14) cuts nothing.
     counts = {fy: (1e6 if fy <= 2013 else 1e9) for fy in range(2012, 2026)}
@@ -157,7 +167,11 @@ def _annual(extra=()):
     ((("2023-04-12", 0.5), ("2024-07-15", 0.5)), 1),
     ((("2024-07-15", 0.5), ("2025-04-11", 0.5)), 1),
     ((("2024-07-15", 0.5), ("2025-07-10", 0.5)), 2),
-    ((("2023-07-20", 0.5), ("2024-07-15", 0.5)), 2),
+    # BUG-376: ... into the year the gate judges (2025 here): the same size a year before, or two years running
+    # before it, is an annual payer's recurring extra, not its second payment a year
+    ((("2023-07-20", 0.5), ("2024-07-15", 0.5)), 1),
+    ((("2022-07-15", 0.5), ("2023-07-20", 0.5), ("2024-07-15", 0.5)), 1),
+    ((("2023-07-20", 0.5), ("2024-07-15", 0.5), ("2025-07-10", 0.5)), 2),
 ])
 def test_the_oracles_gate_counts_the_regular_payments_beside_a_year(extra, counted):
     events = _annual(extra)
@@ -170,6 +184,10 @@ def test_the_oracles_gate_counts_a_semiannual_interim_and_quarters_beside_specia
     for interim in (0.3, 0.1):  # BUG-372: an interim under a third of the final recurs, so it counts
         small = [(f"{y}-{m}", a) for y in (2023, 2024, 2025) for m, a in (("03-15", interim), ("09-15", 1.0))]
         assert oracle.regular_beside(small, oracle.one_offs(small), "2024-12-31", "2025-12-31") == 2
+    # BUG-376: a payer turned semiannual in 2025: the year after shows its interim, recurring into 2025 a year earlier
+    turned = [("2023-09-15", 1.2), ("2024-09-15", 1.2), ("2025-03-15", 0.3), ("2025-09-15", 1.0), ("2026-03-15", 0.3),
+              ("2026-09-15", 1.0)]
+    assert oracle.regular_beside(turned, oracle.one_offs(turned), "2024-12-31", "2025-12-31") == 2
     tpl =[("2019-03-07", 0.666667), ("2020-03-06", 1.777778), ("2020-12-10", 1.111111), ("2021-03-05", 0.305556),
            ("2021-06-07", 0.305556), ("2021-09-07", 0.305556), ("2021-12-07", 0.305556)]
     assert oracle.regular_beside(tpl, oracle.one_offs(tpl), "2019-12-31", "2020-12-31") == 4
