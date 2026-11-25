@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 82 · NEEDS-USER 0 · Decided: 8 · Verified: 312
+**Open:** P0 0 · P1 0 · P2 0 · P3 83 · NEEDS-USER 0 · Decided: 8 · Verified: 312
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2535,6 +2535,11 @@ Status: OPEN
 Found: the BUG-344 worker (iteration 229, residual) | Fixed: | Regression test:
 Repro: after BUG-344 SQLite removes a ticker's periods a complete run no longer produces (e.g. 28 quarters, 32 trailing years over 502), but the JSON export and financial_history.csv merge by period, so they keep them: the three outputs disagree (MATCH-05).
 Expected: the same periods in every output.   Actual: the files keep stale periods.
+### BUG-381 [P3][VAL] A 10-K/A filed after a declared split makes split_history add the split again
+Status: OPEN
+Found: code review 37 (`qa/evidence/review37.txt`, Minor 1; regression from BUG-262, 81d5af4) | Fixed: | Regression test:
+Repro: src/valuation/inputs.py ~486-537, ~561 (`_restated_splits` counts a pair explained only by a split dated after the pair's earlier filing; a 10-K/A filed after Yahoo's split is that earlier filing), ~916 and ~281-302 (`_restated_between` applies both): Yahoo's 4:1 on 2023-06-01, FY2022's 10-K/A 2023-07-15: history [('2023-06-01', 4), ('2024-02-20', 4)]; FY2021-22 read 1.6B shares for 400M (book value per share, the indicators' count change). No real case over 504 filers (KR, DLTR amendments predate their splits). Probe: %LOCALAPPDATA%\stockdb-qa\review37\head\tests\test_review37.py.
+Expected: one split.   Actual: the declared split plus a copy dated on the next 10-K.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)

@@ -3737,3 +3737,13 @@ Result: BUG-344, BUG-168, BUG-165 VERIFIED. New: BUG-380 (P3).
 Gates: ruff ✓ mypy ✓ pytest 4204 passed, 2 skipped
 Commit: (this commit) fix(store): a complete run replaces the periods it no longer gives (BUG-344, BUG-168, BUG-165)
 Next: code review 37 (5 units since review 36).
+
+## Iteration 230: 2026-11-25 18:30: code review 37
+Picked: code review 37 (c0a507c..c614a02: BUG-376/377, Q22, BUG-072/122/129, BUG-264 group, BUG-344 group); an
+opus reviewer.
+Did: `qa/evidence/review37.txt`; 1 probe failing at HEAD; review 36's probe passes. RAM 0.8-2.3 GB: probes only.
+Result: no Critical or Important. Minor -> BUG-381 (BUG-262 regression). Checked right: no data-loss path in
+c614a02; no double-applied or misdated split besides M1; no new look-ahead.
+Gates: unchanged (qa/ only)
+Commit: (this commit) chore(qa): code review 37 recorded (BUG-381)
+Next: BUG-381.
