@@ -3715,3 +3715,14 @@ Result: BUG-072, BUG-122, BUG-129 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4151 passed, 2 skipped
 Commit: (this commit) test: pin the split-day, quarter-length, revenue-gap and migration boundaries (BUG-072, BUG-122, BUG-129)
 Next: STORE 344/168/165 and VAL seams (workers running).
+
+## Iteration 228: 2026-11-25 17:30: fix (BUG-264, BUG-262, BUG-024, BUG-050, BUG-270, BUG-379; the user's decision)
+Picked: the VAL seam group; an opus worker. DD's label moved, so the user decided (apply).
+Did: one split history from Yahoo plus the splits the filings record; mixed split-and-spin-off factors split in
+two; the quarterly undeclared-seam rule gets the implied-count and net-income tests; post-filing factors need a count.
+- RED: 29 failed on bc4e95c; GREEN. 35 of 35 mutants; 133 older re-run/re-quoted, all killed; bug072, bug376 specs.
+- DB copies: 0 medians, verdicts; DD label above -> near; 654 history rows at DD, HLT, LDOS, MSI, WTW.
+Result: BUG-264, 262, 024, 050, 270 VERIFIED; BUG-379 (new) VERIFIED. BUG-266 narrowed (DD's example fixed).
+Gates: ruff ✓ mypy ✓ pytest 4187 passed, 2 skipped
+Commit: (this commit) fix(valuation): one split history with the filings' own splits; mixed spin-off factors split (BUG-264, -262, -024, -050, -270, -379)
+Next: STORE 344/168/165 (ready).

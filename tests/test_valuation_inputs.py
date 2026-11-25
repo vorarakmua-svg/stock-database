@@ -1857,3 +1857,233 @@ def test_payments_a_refresh_stores_close_the_gap(tmp_path):
     from src.valuation.models import value_ddm
 
     assert value_ddm(inputs).assumptions["ttm_dps"] == pytest.approx(3.88)
+
+
+# --- BUG-262: the splits the filings record; BUG-024, BUG-050, BUG-270 -------------------------------------------
+
+#: DD's 10-K views of FY2016-18 as filed (fiscal_year, filed, diluted weighted count, diluted EPS, net income): the
+#: 2020 10-K restates FY2017-18 for the 1:3 reverse split of 2019-06-03 (and for Corteva's discontinued operations).
+DD_VINTAGES = [
+    (2016, "2018-02-15", 1123.2e6, 3.52, 4318e6), (2016, "2019-02-11", 1123.2e6, 3.52, 4318e6),
+    (2017, "2018-02-15", 1598.1e6, 0.91, 1460e6), (2017, "2019-02-11", 1598.1e6, 0.91, 1460e6),
+    (2017, "2020-02-14", 532.7e6, 2.15, 1159e6),
+    (2018, "2019-02-11", 2315.5e6, 1.65, 3844e6), (2018, "2020-02-14", 771.8e6, 4.96, 3845e6),
+]
+#: Yahoo's DD history: Dow Inc's spin-off, the 1:3 mixed with Corteva's spin-off, and a later 1:3.
+DD_YAHOO = [("2019-04-02", 1.487), ("2019-06-03", 0.4725), ("2026-06-24", 1 / 3)]
+
+
+def test_a_split_the_filings_restate_is_taken_out_of_the_factor_yahoo_mixes_it_into():
+    # BUG-262: Yahoo records DD's 1:3 of 2019 only inside the 0.4725 it divides its closes and payments by (the split
+    # times Corteva's 1.4175). The filings record it: FY2017's count went from 1,598.1M to 532.7M between the 2019
+    # and 2020 10-Ks, its EPS the other way, its net income about the same. One split, though two years show it.
+    from src.valuation.inputs import _restated_splits, _with_restated_splits
+    restated = _restated_splits(DD_VINTAGES, DD_YAHOO)
+    assert [(since, day) for since, day, _ in restated] == [("2019-02-11", "2020-02-14")]
+    assert restated[0][2] == pytest.approx(1 / 3)
+    history = _with_restated_splits(DD_YAHOO, restated)
+    assert [day for day, _ in history] == ["2019-04-02", "2019-06-03", "2019-06-03", "2026-06-24"]
+    assert [ratio for _, ratio in history] == pytest.approx([1.487, 1 / 3, 1.4175, 1 / 3])
+
+
+def test_a_split_the_filings_restate_and_yahoo_lacks_is_dated_on_the_first_filing_restated_for_it():
+    # EXE: Chesapeake's 1:200 of 2020 restated FY2018 (909M, $0.15) in the 2021 10-K (4.546M, $29.26); Yahoo's
+    # history starts after it.
+    from src.valuation.inputs import _restated_splits, _with_restated_splits
+    vintages = [(2018, "2020-02-27", 909e6, 0.15, 226e6), (2018, "2021-03-01", 4.546e6, 29.26, 226e6)]
+    restated = _restated_splits(vintages, [])
+    assert _with_restated_splits([], restated) == [("2021-03-01", pytest.approx(1 / 200))]
+
+
+def test_a_restatement_yahoo_declares_is_yahoos_split():
+    # AAPL's 4:1 of 2020-08-31, restated in its FY2020 10-K. A declared split's ex-date can follow that filing by days.
+    from src.valuation.inputs import _restated_splits
+    vintages = [(2019, "2019-10-31", 4648.9e6, 11.89, 55.256e9), (2019, "2020-10-30", 18595.7e6, 2.97, 55.256e9)]
+    assert _restated_splits(vintages, [("2020-08-31", 4.0)]) == []
+    assert _restated_splits(vintages, [("2020-11-15", 4.0)]) == []  # Yahoo's day after the filing restated for it
+    assert _restated_splits(vintages, [("2021-03-01", 4.0)]) != []  # but not long after it
+
+
+@pytest.mark.parametrize("earlier, later", [
+    ((182.8e6, 5.89, 1076e6), (790.5e6, 0.47, 378e6)),   # KDP's FY2017 restated to Keurig's: net income too
+    ((1.0e9, 3.52, 3520e6), (1.0e12, 3.52, 3520e6)),    # a count filed in units after thousands: EPS stays
+    ((1.0e9, 3.52, 3520e6), (1.467e9, 2.40, 3520e6)),   # x1.467: no share split's ratio (TMUS's 2013)
+    ((1.0e9, 3.52, 3520e6), (1.25e9, 2.816, 3520e6)),   # a 5:4: under the 3:2 a split needs, as for a seam
+    ((1.0e9, 3.52, None), (3.0e9, 2.40, None)),         # x3, but EPS moved by less than half of it
+    ((1.0e9, 3.52, 3520e6), (3.0e9, 0.20, 600e6)),      # x3, EPS against it, but net income fell by more than half
+])
+def test_a_restatement_without_a_splits_marks_is_no_split(earlier, later):
+    from src.valuation.inputs import _restated_splits
+    assert _restated_splits([(2016, "2017-02-20", *earlier), (2016, "2018-02-20", *later)], []) == []
+
+
+def test_a_restatement_compares_a_count_with_its_own_kind():
+    # A weighted count in one filing and net income / EPS in the next aren't one count restated.
+    from src.valuation.inputs import _restated_splits
+    vintages = [(2016, "2017-02-20", 1.0e9, 3.0, 3.0e9), (2016, "2018-02-20", None, 1.0, 3.0e9)]
+    assert _restated_splits(vintages, []) == []
+    vintages = [(2016, "2017-02-20", None, 3.0, 3.0e9), (2016, "2018-02-20", None, 1.0, 3.0e9)]
+    assert [ratio for _, _, ratio in _restated_splits(vintages, [])] == [3.0]
+
+
+def _filed_split_db(tmp_path, yahoo):
+    """COO-like (BUG-262): FY2016-2025, each 10-K (filed on February 20 of the next year) reporting FY f-2 to f, with
+    a 4:1 split on 2023-06-01 that the FY2023 10-K and later restate. On the split's basis 400M shares every year and
+    a $0.25 dividend; EPS $0.50, then $0.20 in FY2021 (earnings collapsed: 200M to 80M, across the seam) and $0.60
+    after. Yahoo's split history is *yahoo*; its closes are 10.0 at each year end."""
+    db_path = tmp_path / "filed_split.db"
+    store = SQLiteStore(db_path=db_path)
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('FSP', 'general')")
+    for fy in range(2016, 2026):
+        eps = 0.5 if fy < 2021 else 0.2 if fy == 2021 else 0.6
+        reports = [f"{f + 1}-02-20" for f in range(fy, min(fy + 2, 2025) + 1)]
+        for filed in reports:
+            ratio = 4.0 if filed < "2023-06-01" else 1.0
+            row = (4.0e8 / ratio, eps * ratio, 0.25 * ratio, eps * 4.0e8)
+            conn.execute("INSERT INTO financials_annual_vintages (ticker, fiscal_year, accn, filed_date, period_end, "
+                         "form, weighted_avg_shares_diluted, eps_diluted, dividends_per_share, net_income) "
+                         "VALUES ('FSP', ?, ?, ?, ?, '10-K', ?, ?, ?, ?)",
+                         (fy, f"acc-{filed[:4]}", filed, f"{fy}-12-31", *row))
+        conn.execute("INSERT INTO financials_annual (ticker, fiscal_year, period_end, filed_date, form, "
+                     "weighted_avg_shares_diluted, eps_diluted, dividends_per_share, net_income, total_equity) "
+                     "VALUES ('FSP', ?, ?, ?, '10-K', ?, ?, ?, ?, 1.0e9)", (fy, f"{fy}-12-31", reports[-1], *row))
+        conn.execute("INSERT INTO price_bars (ticker, date, close) VALUES ('FSP', ?, 10.0)", (f"{fy}-12-30",))
+    conn.executemany("INSERT INTO split_events (ticker, date, ratio) VALUES ('FSP', ?, ?)", yahoo)
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def _filed_split_records(db_path):
+    conn = _connect(db_path)
+    inputs = load_inputs(conn, "FSP")
+    conn.close()
+    return {r.fiscal_year: r for r in inputs.fy_records}, inputs.fy_end_prices
+
+
+@pytest.mark.parametrize("yahoo", [
+    [],                         # Yahoo's history lacks it
+    [("2023-06-01", 4.0)],      # declared: the same, and folded once
+    [("2023-06-01", 4.8)],      # recorded mixed with a spin-off's 1.2
+])
+def test_a_split_in_a_year_whose_earnings_collapsed_folds_where_the_filings_restate_it(tmp_path, yahoo):
+    # BUG-262: FY2020 (last filed before the split, EPS $2.00 as filed) to FY2021 (restated, $0.20) bears a split's
+    # marks, but net income fell from 200M to 80M, so an undeclared seam stayed: FY2016-20 read four times off.
+    by_fy, _ = _filed_split_records(_filed_split_db(tmp_path, yahoo))
+    assert [by_fy[fy].split_factor for fy in range(2016, 2026)] == [4.0] * 5 + [1.0] * 5
+    assert [by_fy[fy].eps_diluted for fy in (2019, 2020, 2021, 2022)] == pytest.approx([0.5, 0.5, 0.2, 0.6])
+
+
+def test_a_factor_that_holds_a_split_moves_prices_and_dividends_by_the_rest(tmp_path):
+    # BUG-262: Yahoo divides closes and payments before 2023-06-01 by 4.8, the 4:1 times a spin-off's 1.2. Taken as
+    # a spin-off's factor, the year-end close came back four times high (48.0 for 12.0) and a dividend filed on the
+    # split's basis four times low (0.052 for 0.208).
+    by_fy, prices = _filed_split_records(_filed_split_db(tmp_path, [("2023-06-01", 4.8)]))
+    assert prices[2018] == pytest.approx(12.0)
+    assert prices[2024] == pytest.approx(10.0)
+    assert [by_fy[fy].dividends_per_share for fy in (2018, 2021, 2024)] == pytest.approx([0.25 / 1.2] * 2 + [0.25])
+
+
+def test_a_split_after_the_latest_filing_never_joins_a_seams_run(tmp_path):
+    # BUG-024: a 2:1 split in 2019 with 30% issuance beside it (the seam reads 2.6) and a 3:1 after the latest 10-K.
+    # The 3:1 moves every year once; the seam folds by the 2:1 filed between its two years.
+    shares = {fy: (6.0e8 if fy < 2017 else 7.8e8) for fy in range(2016, 2026)}
+    eps = {fy: 1.0 for fy in range(2016, 2026)}
+    conn = _connect(_restating_filings_db(tmp_path, None, shares, eps, [("2019-06-01", 2.0), ("2026-06-01", 3.0)]))
+    records = load_inputs(conn, "RST").fy_records
+    conn.close()
+    assert [r.split_factor for r in records] == [6.0] + [3.0] * 9
+    assert [r.eps_diluted for r in records] == pytest.approx([1.0] * 10)
+
+
+def test_a_split_after_the_latest_filing_never_explains_a_seam_without_filing_dates(tmp_path):
+    # BUG-024 (code review 2's case): without the vintages' dates, the 3:1 after the latest 10-K is the declared split
+    # nearest the 2.6 seam (1.15x, against the 2:1's 1.3x), and FY2016 moved by 3 x 3 = 9. Offered only the 2:1, which
+    # is too far from it, the seam folds on a split's marks by its own ratio; the 3:1 moves every year once.
+    db = _seam_db(tmp_path, "post_filing_run.db", [
+        (2016, 2.0e8, 2.0, 1.0e8),
+        (2017, 2.6e8, 1.0, 2.6e8),
+        (2018, 2.7e8, 1.04, 2.6e8),
+        (2019, 2.8e8, 1.08, 2.6e8),
+        (2020, 2.9e8, 1.12, 2.6e8),
+    ], splits=[("2017-06-01", 2.0), ("2021-06-01", 3.0)], first_bar="1990-01-02")
+    conn = _connect(db)
+    conn.execute("UPDATE financials_annual SET filed_date = '2021-02-20'")
+    conn.commit()
+    records = load_inputs(conn, "SPL").fy_records
+    conn.close()
+    assert [r.split_factor for r in records] == pytest.approx([7.8, 3.0, 3.0, 3.0, 3.0])
+
+
+def test_a_reverse_split_after_the_latest_filing_moves_every_year(tmp_path):
+    # BUG-024: KLAC-like years filed before a 1:4 reverse split.
+    conn = _connect(_post_filing_split_db(tmp_path, "2026-06-12", 0.25))
+    records = load_inputs(conn, "KLA").fy_records
+    conn.close()
+    assert [r.split_factor for r in records] == [0.25] * 3
+    assert records[-1].eps_diluted == pytest.approx(30.37 * 4)
+
+
+def test_two_splits_after_the_latest_filing_move_every_year_by_both(tmp_path):
+    db_path = _post_filing_split_db(tmp_path, "2026-06-12", 2.0)
+    conn = _connect(db_path)
+    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('KLA', '2026-07-01', 3.0)")
+    conn.commit()
+    records = load_inputs(conn, "KLA").fy_records
+    conn.close()
+    assert [r.split_factor for r in records] == [6.0] * 3
+
+
+@pytest.mark.parametrize("snapshot_shares, factors, factor", [
+    (2.675e8, [1.6], 2.0),          # Yahoo's count shows the 2:1 alone: the 1.6 is a spin-off's price factor
+    (4.28e8, [1.6], 3.2),           # it shows both: the 1.6 changed the count too
+    (None, [1.6], 2.0),             # no count to show the 1.6: refused, while the 2:1 applies
+    (4.5475e8, [1.6, 1.7], 3.4),    # of two such factors, the one the count shows
+])
+def test_each_factor_after_the_latest_filing_is_judged_on_its_own(tmp_path, snapshot_shares, factors, factor):
+    # BUG-050 (M1): a 2:1 split and a 1.6 factor after the latest 10-K were judged together: with Yahoo's count at
+    # 2x, neither applied; without a count, both did.
+    db_path = _post_filing_split_db(tmp_path, "2026-06-12", 2.0, snapshot_shares=snapshot_shares)
+    conn = _connect(db_path)
+    conn.executemany("INSERT INTO split_events (ticker, date, ratio) VALUES ('KLA', ?, ?)",
+                     [(f"2026-07-{1 + 14 * k:02d}", ratio) for k, ratio in enumerate(factors)])
+    conn.commit()
+    latest = load_inputs(conn, "KLA").fy_records[-1]
+    conn.close()
+    assert latest.split_factor == pytest.approx(factor)
+
+
+def test_a_factor_that_isnt_a_split_needs_a_count_to_apply(tmp_path):
+    # BUG-050 (M2): ABT's 2.0842 for AbbVie after the latest 10-K, and no market snapshot (a first run whose quote
+    # failed): it halved every per-share figure. A simple ratio still applies without a count (KLAC).
+    conn = _connect(_post_filing_split_db(tmp_path, "2026-01-02", 2.0842))
+    latest = load_inputs(conn, "KLA").fy_records[-1]
+    conn.close()
+    assert latest.split_factor == 1.0
+    assert latest.eps_diluted == pytest.approx(30.37)
+
+
+def test_restated_between_takes_share_splits_within_the_bounds_a_seam_has():
+    # BUG-270: a 3:2 exactly is a split, a 100:1 in Yahoo's history isn't (MAX_SPLIT_RATIO, as _apply_later_splits
+    # bounds it), and a split on the day the cover count was filed is in that filing already.
+    from src.valuation.inputs import _restated_between
+    assert _restated_between([("2022-07-18", 1.5)], "2022-02-02", "2023-02-03") == 1.5
+    assert _restated_between([("2022-07-18", 50.0)], "2022-02-02", "2023-02-03") == 50.0
+    assert _restated_between([("2022-07-18", 100.0)], "2022-02-02", "2023-02-03") == 1.0
+    assert _restated_between([("2022-07-18", 0.01)], "2022-02-02", "2023-02-03") == 1.0
+    assert _restated_between([("2022-02-02", 2.0)], "2022-02-02", "2023-02-03") == 1.0
+
+
+def test_a_cover_count_the_detection_reads_isnt_restated_again(tmp_path):
+    # BUG-270 (BUG-173's third boundary): without net income, FY2020's detection reads its cover count (0.98B, filed
+    # before the 20:1), and the seam folds it by the split. Putting that count on its EPS's basis as well would count
+    # the split twice (392B shares).
+    db_path = _cover_count_db(tmp_path)
+    conn = _connect(db_path)
+    conn.execute("UPDATE financials_annual SET net_income = NULL WHERE fiscal_year = 2020")
+    conn.commit()
+    by_fy = {r.fiscal_year: r for r in load_inputs(conn, "CVR").fy_records}
+    conn.close()
+    assert (by_fy[2020].split_factor, by_fy[2020].shares) == (20.0, pytest.approx(19.6e9))

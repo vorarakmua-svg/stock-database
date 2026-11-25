@@ -222,3 +222,45 @@ def test_the_oracles_ddm_keeps_an_annual_payers_slipped_year_beside_an_extra_pay
     # BUG-366 through level 2: the extra no longer turns FY2025's SEC figure into Yahoo's two payments (13.7%).
     o = oracle.level2(_dividend_db(0.5), "AAA", "ddm", {"ttm_anchor": "2026-08-04"})
     assert o["inputs"]["hist_cagr"] == pytest.approx(0.05)
+
+
+# --- BUG-262: the oracles' own reading of the splits the filings record ------------------------------------------
+
+#: DD's 10-K views of FY2017-18 (fiscal_year, filed, diluted weighted count, diluted EPS, net income) and Yahoo's DD
+#: history, whose 0.4725 is the 1:3 of 2019 times Corteva's spin-off.
+DD_VINTAGES = [(2017, "2019-02-11", 1598.1e6, 0.91, 1460e6), (2017, "2020-02-14", 532.7e6, 2.15, 1159e6),
+               (2018, "2019-02-11", 2315.5e6, 1.65, 3844e6), (2018, "2020-02-14", 771.8e6, 4.96, 3845e6)]
+DD_YAHOO = [("2019-04-02", 1.487), ("2019-06-03", 0.4725)]
+
+
+def _oracle(name):
+    spec = importlib.util.spec_from_file_location(f"qa_{name}_262", ROOT / "qa" / "oracle" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("name", ["valuation_oracle", "scores_oracle", "history_vs_yahoo"])
+def test_each_oracle_reads_the_split_the_filings_record_out_of_yahoos_mixed_factor(name):
+    history = _oracle(name).filed_splits(DD_VINTAGES, DD_YAHOO)
+    assert [day for day, _ in history] == ["2019-04-02", "2019-06-03", "2019-06-03"]
+    assert sorted(ratio for _, ratio in history) == pytest.approx(sorted([1.487, 1 / 3, 1.4175]))
+    # Chesapeake's 1:200 (EXE), which Yahoo's history lacks, on the first filing restated for it.
+    exe = [(2018, "2020-02-27", 909e6, 0.15, 226e6), (2018, "2021-03-01", 4.546e6, 29.26, 226e6)]
+    assert _oracle(name).filed_splits(exe, []) == [("2021-03-01", pytest.approx(1 / 200))]
+    # A reverse merger restates net income too (KDP's FY2017), and a declared split is Yahoo's already.
+    kdp = [(2017, "2018-02-14", 182.8e6, 5.89, 1076e6), (2017, "2020-02-27", 790.5e6, 0.47, 378e6)]
+    assert _oracle(name).filed_splits(kdp, []) == []
+    aapl = [(2019, "2019-10-31", 4648.9e6, 11.89, 55.256e9), (2019, "2020-10-30", 18595.7e6, 2.97, 55.256e9)]
+    assert _oracle(name).filed_splits(aapl, [("2020-08-31", 4.0)]) == [("2020-08-31", 4.0)]
+
+
+def test_the_valuation_oracle_reads_the_vintages_for_a_tickers_splits():
+    db = sqlite3.connect(":memory:")
+    db.execute("create table financials_annual_vintages (ticker, fiscal_year, filed_date, weighted_avg_shares_diluted,"
+               " eps_diluted, net_income)")
+    db.executemany("insert into financials_annual_vintages values ('DD', ?, ?, ?, ?, ?)", DD_VINTAGES)
+    history = oracle.with_filed_splits(db, "DD", DD_YAHOO)
+    assert sorted(ratio for _, ratio in history) == pytest.approx(sorted([1.487, 1 / 3, 1.4175]))
+    assert oracle.with_filed_splits(sqlite3.connect(":memory:"), "DD", DD_YAHOO) == DD_YAHOO  # no vintages kept

@@ -487,7 +487,9 @@ How it's built:
   restatement: the quarters are the latest *restated* figures, as SEC's company facts give them, and
   revenue was restated by more than 1% in 8% of the years.
 - **Multiples on totals.** Market cap = the close × the spin-off factors after that day × the quarter's
-  share count, put on the price bars' split basis. Dividing a price by a filed EPS would cross split
+  share count, put on the price bars' split basis. Where Yahoo records a reverse split mixed into a spin-off's
+  factor (DD's 0.4725 of 2019 is its 1:3 times Corteva's 1.4175; HLT, LDOS, MSI, WTW), the split the filings
+  record (below) is taken out of it, and the spin-off's part alone is a spin-off factor (BUG-262). Dividing a price by a filed EPS would cross split
   bases. Zero or negative earnings, book, FCF or EBITDA give no multiple, nor does an enterprise value of zero
   or less (net cash at or above the market cap; the N/A reason names it, BUG-367), and the sector rules apply: no
   P/FCF or EV/EBITDA for banks, and P/FFO in place of P/E for REITs. Each month stores the enterprise value
@@ -505,12 +507,18 @@ How it's built:
 - **Share counts.** A filed count jumps where the filings stopped restating it for a split, so a jump
   within 1.25× of a declared split folds by that split. A jump of 1.5× or more that no split explains
   folds by its own ratio only on a split's marks: EPS of one sign moved against the count at least
-  halfway (in log terms), and revenue didn't move with it as far. A merger's or an exchange offer's
-  jump stays (DUK 2012, Citigroup 2009). The quarter of a listing, whose weighted count blends the
-  private one, takes the public count after it. The fiscal years behind the six models and the quality scores
-  follow the same rules, the EPS-implied count (net income / EPS) having to move with the jump too, and net
-  income to keep its sign and move less than halfway, which PCG's 2020 bankruptcy-exit issuance (a shrinking
-  loss) and KDP's 2018 reverse merger don't (BUG-247; a quarter's net income swings too far for that test).
+  halfway (in log terms), and revenue didn't move with it as far; the EPS-implied count (net income / EPS)
+  moved with the jump; and net income kept its sign and moved less than halfway, which PCG's 2020
+  bankruptcy-exit issuance (a shrinking loss) and KDP's 2018 reverse merger don't (BUG-247). A quarter reads
+  its trailing year's net income for that, as one quarter's swings too far (DD's 52M then 888M across its
+  1:3), and its own for the implied count (BUG-264). A merger's or an exchange offer's jump stays (DUK 2012,
+  Citigroup 2009). The quarter of a listing, whose weighted count blends the private one, takes the public
+  count after it. The fiscal years behind the six models and the quality scores follow the same rules. The
+  splits the filings themselves record count as declared ones: a year's count that a later 10-K restates by
+  a share split's ratio (within 1%), its EPS the other way and its net income held, is a split between the two
+  filings, whatever the years around it earned. Yahoo's history lacks five such reverse splits among the 502,
+  mixed into a spin-off's factor (DD, HLT, LDOS, MSI; WTW's 2.649:1 reads as 3:8), and two outright (EXE's
+  1:200, HWM's 1:3) (BUG-262).
   A fiscal year also knows when its count was last filed, so the declared splits dated between two years'
   filings fold their seam whenever it is nearer their product than 1.0, at any ratio: buybacks take a 3:2
   seam under 1.5 (ODFL, PCAR, RJF, ROL, WRB) and a stock-paid merger takes CNC's 2:1 beyond 1.25× (BUG-245).
@@ -582,7 +590,8 @@ Inputs:
   years): a year that isn't stored leaves Piotroski and Beneish N/A ("needs fiscal year 2024, which isn't
   stored") and a sign that needs it unfired, never compared with the year stored before it (BUG-198).
 - **Per-share series** (revenue, EPS, EBITDA, FCF and book value per share) on today's split basis. A
-  share-count jump of 1.5× or more folds into it only for a declared share split, on a split's marks (EPS
+  share-count jump of 1.5× or more folds into it only for a declared share split (or one the filings record by
+  restating a year's count, BUG-262), on a split's marks (EPS
   moved against the count, revenue didn't move with it, the count EPS implies moved with it, net income kept
   its sign and moved less than halfway), or when the older year ends before the listing or in its year (a
   pre-listing count leaves out converted preferred). A declared split dated between two years' filings folds

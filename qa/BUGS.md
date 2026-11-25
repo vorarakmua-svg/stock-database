@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 89 · NEEDS-USER 0 · Decided: 8 · Verified: 303
+**Open:** P0 0 · P1 0 · P2 0 · P3 84 · NEEDS-USER 0 · Decided: 8 · Verified: 309
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -226,12 +226,13 @@ Fix: `_apply_later_splits` applies a post-filing split only when today's share c
 Notes: the historical seams are a separate question: `_normalize_splits` starts from a real share-count jump and can snap a merger seam to a spin-off factor (RTX 2020: observed 1.5717, declared 1.589), which lead L12 covers.
 
 ### BUG-024 [P3][VAL] Post-filing splits are still offered as seam candidates
-Status: OPEN
-Found: iteration 17 by code review 2 | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 228)
+Found: iteration 17 by code review 2 | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py, test_valuation_oracle_seam.py; 29 failing first
 Repro: synthetic: a 2:1 seam with 30% issuance (observed ratio 2.6) and a later post-filing 3:1 split: `_declared_ratio` matches the run 2 × 3, so the older years move ×9 instead of ×6.
 Expected: `_normalize_splits` only sees splits dated on or before the latest `filed_date`; `_apply_later_splits` handles the rest.
 Notes: also add tests for a post-filing reverse split and for two post-filing splits (review 2 checked both by hand).
 
+Fix (iteration 228, `qa/evidence/bug264-investigation.txt`; applied at the user's decision, 2026-11-25, for DD's label): one split history (`inputs.split_history`) for the annual and quarterly paths: Yahoo's split_events plus the splits the filings record (`_restated_splits`: consecutive 10-K vintages of a year whose count moved by a simple ratio of 3:2 or more within 1%, EPS marked, net income held, not explained by a declared split). Yahoo's non-split factor nearest such a ratio between those filings is split into the split and the spin-off remainder (BUG-379). Quarters fold an undeclared seam on the marks plus the implied count plus the trailing year's net income held (BUG-264). Post-filing factors: simple splits apply; of the others, the subset nearest a Yahoo count within 1.25x, none without a count (BUG-050). `_restated_between` takes MAX_SPLIT_RATIO (BUG-270). BUG-024 was fixed in iteration 42; tests added. Filings' splits found: DD 1:3, HLT 1:3, LDOS 1:4, MSI 1:7, WTW 2.649:1 (read 3:8), EXE 1:200, HWM 1:3. DB copies: 0 medians, verdicts, owner-earnings verdicts; DD historical value 133.14 -> 139.45, label above -> near; HLT DDM base 7.50 -> 7.66, historical value within far above; 654 valuation_history rows (market caps before the mixed-factor days corrected, e.g. DD 2016-11 $22.46B -> $61.98B). Oracles agree with the code's split history; valuation oracle L2 loses HLT lynch (the oracle's own error).
 ### BUG-025 [P3][VALID] Edge cases in the dividend completeness check
 Status: OPEN
 Found: iteration 17 by code review 2 | Fixed: — | Regression test: —
@@ -439,11 +440,12 @@ Analysis: three fixes (iterations 16, 25, 31) each patched the count-based readi
 Options: (a) take DDM's growth history from SEC's annual dividends per share (the `dividends_per_share` field, from the 10-K's declared or cash-paid series, restated for splits), keeping Yahoo's payments for the latest rate; it needs a fallback where a filer tags only point-in-time payments (9 such years are empty after BUG-013); (b) keep only the initiation-year rule and accept slip noise of about a point of growth in the shapes above; (c) a fourth patch: count only regular-size payments in the adjacent-year test (the review's trial patch fixes the special case, and no current value moves), leaving the frequency-change shapes. Recommendation: (a). Related: Q3 (specials) and BUG-040.
 
 ### BUG-050 [P3][VAL] Post-filing split factors are judged all or nothing, and a non-simple one applies without any count
-Status: OPEN
-Found: iteration 39 by code review 5 (M1, M2), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 228)
+Found: iteration 39 by code review 5 (M1, M2), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py, test_valuation_oracle_seam.py; 29 failing first
 Repro: (M1, `demo_mixed_post_filing.py`) a 2:1 split plus a 1.6 spin-off factor after the latest 10-K, with Yahoo's counts at 2×: nothing applies (split_factor 1.0, EPS 3.0). (M2) an ABT-like 2.0842 factor with no Yahoo count applies (split_factor 2.0842, EPS 3.00 → 1.439), against the docstring ("applies only when one of Yahoo's counts moved by it"); after BUG-033's fix a first run whose quote failed has no snapshot, so no count.
 Expected: each factor judged on its own; a non-simple factor refused without a count.   Actual: as above. No current case.
 
+Fix (iteration 228, `qa/evidence/bug264-investigation.txt`; applied at the user's decision, 2026-11-25, for DD's label): one split history (`inputs.split_history`) for the annual and quarterly paths: Yahoo's split_events plus the splits the filings record (`_restated_splits`: consecutive 10-K vintages of a year whose count moved by a simple ratio of 3:2 or more within 1%, EPS marked, net income held, not explained by a declared split). Yahoo's non-split factor nearest such a ratio between those filings is split into the split and the spin-off remainder (BUG-379). Quarters fold an undeclared seam on the marks plus the implied count plus the trailing year's net income held (BUG-264). Post-filing factors: simple splits apply; of the others, the subset nearest a Yahoo count within 1.25x, none without a count (BUG-050). `_restated_between` takes MAX_SPLIT_RATIO (BUG-270). BUG-024 was fixed in iteration 42; tests added. Filings' splits found: DD 1:3, HLT 1:3, LDOS 1:4, MSI 1:7, WTW 2.649:1 (read 3:8), EXE 1:200, HWM 1:3. DB copies: 0 medians, verdicts, owner-earnings verdicts; DD historical value 133.14 -> 139.45, label above -> near; HLT DDM base 7.50 -> 7.66, historical value within far above; 654 valuation_history rows (market caps before the mixed-factor days corrected, e.g. DD 2016-11 $22.46B -> $61.98B). Oracles agree with the code's split history; valuation oracle L2 loses HLT lynch (the oracle's own error).
 ### BUG-051 [P3][VAL] BUG-035's 2–5% share-count tiebreaker follows count drift
 Status: VERIFIED (iteration 150: Q7's decision removes the tiebreaker; every class counts beyond 2%)
 Found: iteration 39 by code review 5 (M3), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
@@ -2519,6 +2521,12 @@ Status: OPEN
 Found: the BUG-376 worker (iteration 225, residual) | Fixed: | Regression test:
 Repro: the oracle case (2024-07-15, 2025-07-10) = 2 in tests/test_valuation_oracle_seam.py pins it: the year reads Yahoo's 6.86 instead of SEC's 3.10. Needs the year's payments compared with the side's schedule, not a side count. The census found no such real year.
 Expected: SEC's one-payment figure.   Actual: Yahoo's sum.
+### BUG-379 [P3][VAL] A reverse split Yahoo folds into a spin-off factor is taken back out of every earlier close and dividend
+Status: VERIFIED (iteration 228)
+Found: the BUG-264 worker (iteration 228) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py
+Repro: DD's 0.4725 factor is its 1:3 reverse split times Corteva's spin-off; HLT, LDOS, MSI, WTW likewise. The code treated the whole factor as a spin-off: valuation_history market caps before that day about a third of the truth (DD 2016-11 $22.5B, true $62.0B; MSI 2010 $2.5B, true $17.7B); DDM dividends 3x too high (DD FY2017 9.43, true 3.14; HLT FY2016 1.72, true 0.57).
+Expected: the split applied to the counts, the remainder as the spin-off.   Actual: the split undone in every earlier close.
+Fix: see BUG-264 (iteration 228): the factor nearest a filing-recorded split is split into the two.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
@@ -2589,11 +2597,12 @@ Repro: AXP's FY2009-17 and COF's balance sheets tag their cash line as CashCashE
 Expected: the balance sheet's cash line.   Actual: a component or nothing.
 
 ### BUG-262 [P3][VAL] The net-income test can keep a real split unfolded when Yahoo doesn't declare it in a year whose earnings swung
-Status: OPEN
-Found: iteration 114 (BUG-247's fix, `qa/evidence/bug247-done.txt` section 11b) | Fixed: | Regression test:
+Status: VERIFIED (iteration 228)
+Found: iteration 114 (BUG-247's fix, `qa/evidence/bug247-done.txt` section 11b) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py, test_valuation_oracle_seam.py; 29 failing first
 Repro: since BUG-247 an undeclared seam folds on a split's marks only where net income held (the same sign, a move of less than half the seam's log ratio). A split missing from Yahoo's split_events in a year whose net income moved more than that stays unfolded. 2 of the 42 declared split seams that bear the marks are like that (COO FY2021-22, SRE FY2020-21); they are declared, so nothing moves today.
 Expected: a real split folds whatever the year's earnings did.   Actual: such a year folds only when Yahoo declares the split.
 
+Fix (iteration 228, `qa/evidence/bug264-investigation.txt`; applied at the user's decision, 2026-11-25, for DD's label): one split history (`inputs.split_history`) for the annual and quarterly paths: Yahoo's split_events plus the splits the filings record (`_restated_splits`: consecutive 10-K vintages of a year whose count moved by a simple ratio of 3:2 or more within 1%, EPS marked, net income held, not explained by a declared split). Yahoo's non-split factor nearest such a ratio between those filings is split into the split and the spin-off remainder (BUG-379). Quarters fold an undeclared seam on the marks plus the implied count plus the trailing year's net income held (BUG-264). Post-filing factors: simple splits apply; of the others, the subset nearest a Yahoo count within 1.25x, none without a count (BUG-050). `_restated_between` takes MAX_SPLIT_RATIO (BUG-270). BUG-024 was fixed in iteration 42; tests added. Filings' splits found: DD 1:3, HLT 1:3, LDOS 1:4, MSI 1:7, WTW 2.649:1 (read 3:8), EXE 1:200, HWM 1:3. DB copies: 0 medians, verdicts, owner-earnings verdicts; DD historical value 133.14 -> 139.45, label above -> near; HLT DDM base 7.50 -> 7.66, historical value within far above; 654 valuation_history rows (market caps before the mixed-factor days corrected, e.g. DD 2016-11 $22.46B -> $61.98B). Oracles agree with the code's split history; valuation oracle L2 loses HLT lynch (the oracle's own error).
 ### BUG-263 [P3][VAL] KDP's per-share history splices Dr Pepper Snapple's FY2015-16 onto Keurig's figures, so its 10-year CAGRs compare two companies
 Status: OPEN
 Found: iteration 114 (BUG-247's fix, section 11c) | Fixed: | Regression test:
@@ -2601,11 +2610,12 @@ Repro: KDP's FY2015-16 are Dr Pepper Snapple's figures on its own shares, FY2017
 Expected: the predecessor's years left out of the per-share series, as a private count's are (a design choice).   Actual: a splice.
 
 ### BUG-264 [P3][VAL] The valuation history's undeclared split rule has neither the net-income test nor the implied-count test the fiscal years have
-Status: OPEN
-Found: iteration 114 (BUG-247's fix, section 11d) | Fixed: | Regression test:
+Status: VERIFIED (iteration 228)
+Found: iteration 114 (BUG-247's fix, section 11d) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py, test_valuation_oracle_seam.py; 29 failing first
 Repro: `history_inputs.normalize_share_series` folds an undeclared seam on a split's marks in EPS and revenue alone, so a quarterly issuance in which a loss shrinks without changing sign would fold there (none does in the 502 today: PCG's exit quarter changed EPS's sign). The fiscal years' net-income test can't be copied as it is: a quarter's net income swings too far (it would unfold DD's 2019 1:3 reverse split at 2017 Q1, net income 52M then 888M).
 Expected: a quarterly rule that tells an issuance from a split.   Actual: the marks alone (latent).
 
+Fix (iteration 228, `qa/evidence/bug264-investigation.txt`; applied at the user's decision, 2026-11-25, for DD's label): one split history (`inputs.split_history`) for the annual and quarterly paths: Yahoo's split_events plus the splits the filings record (`_restated_splits`: consecutive 10-K vintages of a year whose count moved by a simple ratio of 3:2 or more within 1%, EPS marked, net income held, not explained by a declared split). Yahoo's non-split factor nearest such a ratio between those filings is split into the split and the spin-off remainder (BUG-379). Quarters fold an undeclared seam on the marks plus the implied count plus the trailing year's net income held (BUG-264). Post-filing factors: simple splits apply; of the others, the subset nearest a Yahoo count within 1.25x, none without a count (BUG-050). `_restated_between` takes MAX_SPLIT_RATIO (BUG-270). BUG-024 was fixed in iteration 42; tests added. Filings' splits found: DD 1:3, HLT 1:3, LDOS 1:4, MSI 1:7, WTW 2.649:1 (read 3:8), EXE 1:200, HWM 1:3. DB copies: 0 medians, verdicts, owner-earnings verdicts; DD historical value 133.14 -> 139.45, label above -> near; HLT DDM base 7.50 -> 7.66, historical value within far above; 654 valuation_history rows (market caps before the mixed-factor days corrected, e.g. DD 2016-11 $22.46B -> $61.98B). Oracles agree with the code's split history; valuation oracle L2 loses HLT lynch (the oracle's own error).
 ### BUG-265 [P3][VAL] CPRT's quarterly history folds two undeclared seams on the marks, 16.06x and 0.2506x, that look like a count glitch
 Status: OPEN
 Found: iteration 114 (BUG-247's fix, section 11e) | Fixed: | Regression test:
@@ -2645,11 +2655,12 @@ Repro: src/validation/integrity.py's _OUTLIER_EXCLUDE holds short_term_debt (BUG
 Expected: a higher threshold for the field, or skipping only the spikes the maturities explain.   Actual: no check.
 
 ### BUG-270 [P3][VAL] `_restated_between` has no maximum split ratio, and three of BUG-173's boundaries are unpinned
-Status: OPEN
-Found: code review 21 (M-6, M-1) | Fixed: | Regression test:
+Status: VERIFIED (iteration 228)
+Found: code review 21 (M-6, M-1) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py, test_valuation_oracle_seam.py; 29 failing first
 Repro: unlike `_normalize_splits` and `_apply_later_splits`, `inputs._restated_between` takes any simple ratio, so a bogus 100:1 in Yahoo's split history would scale a cover count (none in the data). Three of the reviewer's mutants survive: a 3:2 split exactly, a split on the cover count's filing day, and the factor applied when the detection falls back to the cover count.
 Expected: MAX_SPLIT_RATIO's bound, and tests at the three boundaries.   Actual: neither.
 
+Fix (iteration 228, `qa/evidence/bug264-investigation.txt`; applied at the user's decision, 2026-11-25, for DD's label): one split history (`inputs.split_history`) for the annual and quarterly paths: Yahoo's split_events plus the splits the filings record (`_restated_splits`: consecutive 10-K vintages of a year whose count moved by a simple ratio of 3:2 or more within 1%, EPS marked, net income held, not explained by a declared split). Yahoo's non-split factor nearest such a ratio between those filings is split into the split and the spin-off remainder (BUG-379). Quarters fold an undeclared seam on the marks plus the implied count plus the trailing year's net income held (BUG-264). Post-filing factors: simple splits apply; of the others, the subset nearest a Yahoo count within 1.25x, none without a count (BUG-050). `_restated_between` takes MAX_SPLIT_RATIO (BUG-270). BUG-024 was fixed in iteration 42; tests added. Filings' splits found: DD 1:3, HLT 1:3, LDOS 1:4, MSI 1:7, WTW 2.649:1 (read 3:8), EXE 1:200, HWM 1:3. DB copies: 0 medians, verdicts, owner-earnings verdicts; DD historical value 133.14 -> 139.45, label above -> near; HLT DDM base 7.50 -> 7.66, historical value within far above; 654 valuation_history rows (market caps before the mixed-factor days corrected, e.g. DD 2016-11 $22.46B -> $61.98B). Oracles agree with the code's split history; valuation oracle L2 loses HLT lynch (the oracle's own error).
 ### BUG-271 [P2][ASOF] Later 10-Ks' narrow comparatives make the as-of view's debt less than half the annual record's: EXC FY2023 $2.72B for $43.80B
 Status: VERIFIED (iteration 167)
 Found: code review 21 (declined as pre-existing; at 9f536a4 and d5e6ec2 alike) | Fixed: (this commit) | Regression tests: tests/test_asof_reader.py (13 new: ::test_a_later_filings_narrower_debt_figure_leaves_the_balance_sheets, ::test_a_date_reads_its_debt_from_one_filings_view, ::test_a_later_filings_narrower_figure_of_any_field_leaves_the_earlier_one, ::test_a_narrower_figure_just_under_half_is_set_aside, ::test_a_derived_figure_ranks_after_every_tag, ::test_sizes_are_compared_whatever_their_sign, ::test_the_paper_is_read_from_the_filing_whose_short_term_debt_is_read, ::test_a_database_stored_before_the_tags_column_reads_as_before and 5 guards); tests/test_sqlite_store.py::test_a_vintage_keeps_the_tag_each_figure_was_read_from, ::test_a_database_stored_before_the_vintage_tags_gains_them

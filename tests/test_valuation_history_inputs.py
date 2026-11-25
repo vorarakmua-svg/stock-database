@@ -605,3 +605,110 @@ def test_a_database_from_before_net_income_to_common_still_reads(tmp_path):
     for table in ("financials_annual", "financials_quarterly", "financials_ttm", "financials_annual_vintages"):
         assert "net_income_to_common" in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
     assert conn.execute("SELECT count(*), max(net_income) FROM financials_ttm").fetchone() == (5, 4.4e8)
+
+
+# --- BUG-264: the fiscal years' undeclared rule in the quarters; BUG-262: the splits the filings record -----------
+
+def test_an_issuance_while_the_trailing_years_loss_shrinks_stays_organic():
+    # PCG-like (BUG-264): the July 2020 exit issuance took the count 2.38x while the loss shrank, so EPS moved against
+    # the count as across a split; the trailing year's net income (-7,656M to -1,318M), which a split leaves alone,
+    # didn't hold. The marks alone folded it.
+    counts = [528e6, 528e6, 1257e6, 1258e6, 1260e6]
+    eps = [-3.0, -3.0, -1.0, -1.0, -1.0]
+    quarter = [-1584e6, -1584e6, -1257e6, -1258e6, -1260e6]
+    out, _ = normalize_share_series(ENDS, counts, eps, [], net_income=quarter,
+                                    trailing_income=[-7656e6, -7656e6, -1318e6, -1300e6, -1290e6])
+    assert out == pytest.approx(counts)
+    out, _ = normalize_share_series(ENDS, counts, eps, [], net_income=quarter,
+                                    trailing_income=[-1400e6, -1400e6, -1318e6, -1300e6, -1290e6])
+    assert out[:2] == pytest.approx([c * 1257 / 528 for c in counts[:2]])  # held: a split's marks, it folds
+
+
+def test_a_count_that_moves_without_the_count_eps_divides_by_stays_organic():
+    # BX-like (BUG-264): the diluted count took units in (670M to 1,195M), while EPS kept dividing by about 670M:
+    # net income halved with EPS, so the count it implies didn't move.
+    counts = [670e6, 670e6, 1195e6, 1195e6, 1195e6]
+    out, _ = normalize_share_series(ENDS, counts, [2.0, 2.0, 1.0, 1.0, 1.0], [],
+                                    net_income=[1340e6, 1340e6, 670e6, 670e6, 670e6])
+    assert out == pytest.approx(counts)
+
+
+@pytest.mark.parametrize("trailing", [[4300e6, 4300e6, 4100e6, 4200e6, 4250e6], None])
+def test_a_split_whose_quarter_swung_still_folds_on_its_trailing_year(trailing):
+    # DD-like (BUG-264): one quarter's net income went from 52M to 888M across the 1:3 at 2017 Q1, too far for the
+    # fiscal years' test; the trailing year's held. Without trailing years the test doesn't decide.
+    counts = [1106e6, 1106e6, 400e6, 401e6, 402e6]
+    out, _ = normalize_share_series(ENDS, counts, [0.04, 0.04, 2.16, 2.1, 2.2], [],
+                                    net_income=[52e6, 52e6, 888e6, 860e6, 900e6], trailing_income=trailing)
+    assert out[:2] == pytest.approx([400e6, 400e6])
+
+
+#: Quarters 2016 Q1 to 2018 Q4 of a company whose 1:3 reverse split of 2018-06-01 the stored quarters show from
+#: 2017 Q1 (restated) on, with an 8% issuance in that quarter: (period_end, basic count, diluted EPS, net income).
+_SEAM_QUARTERS = [(f"{y}-{md}", (1.2e9 if y < 2017 else 0.432e9), (0.25 if y < 2017 else 0.6944), 3.0e8)
+                  for y in (2016, 2017, 2018) for md in ("03-31", "06-30", "09-30", "12-31")]
+
+
+def _restated_seam_db(tmp_path, yahoo, trailing_income=None):
+    """The quarters above, their trailing years (net income 1.2B, or *trailing_income* by quarter end), FY2016-18
+    10-Ks whose views of FY2017 restate it for the split (the 2018 10-K's: 1.2B weighted and $1.00, then the 2019
+    10-K's 0.4B and $3.00), bars of 10.0 each month from 2015 to 2019, and *yahoo* as the split history."""
+    store = SQLiteStore(db_path=tmp_path / "seam.db")
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('SEA', 'general')")
+    for k, (end, count, eps, income) in enumerate(_SEAM_QUARTERS):
+        conn.execute("INSERT INTO financials_quarterly (ticker, period_end, fiscal_year, fiscal_quarter, "
+                     "weighted_avg_shares_basic, eps_diluted, net_income, revenue) VALUES ('SEA', ?, ?, ?, ?, ?, ?, "
+                     "2.0e9)", (end, int(end[:4]), k % 4 + 1, count, eps, income))
+        conn.execute("INSERT INTO financials_ttm (ticker, period_end, fiscal_year, revenue, net_income, total_equity) "
+                     "VALUES ('SEA', ?, ?, 8.0e9, ?, 5.0e9)",
+                     (end, int(end[:4]), (trailing_income or {}).get(end, 1.2e9)))
+    for fy, filed, count, eps in ((2017, "2018-02-20", 1.2e9, 1.0), (2017, "2019-02-20", 0.4e9, 3.0),
+                                  (2018, "2019-02-20", 0.432e9, 2.78)):
+        conn.execute("INSERT INTO financials_annual_vintages (ticker, fiscal_year, accn, filed_date, period_end, form, "
+                     "weighted_avg_shares_diluted, eps_diluted, net_income) VALUES ('SEA', ?, ?, ?, ?, '10-K', ?, ?, "
+                     "1.2e9)", (fy, f"acc-{filed[:4]}", filed, f"{fy}-12-31", count, eps))
+    for fy in (2016, 2017, 2018):
+        conn.execute("INSERT INTO financials_annual (ticker, fiscal_year, period_end) VALUES ('SEA', ?, ?)",
+                     (fy, f"{fy}-12-31"))
+    conn.executemany("INSERT INTO price_bars (ticker, date, close) VALUES ('SEA', ?, 10.0)",
+                     [(f"{y}-{m:02d}-28",) for y in range(2015, 2020) for m in range(1, 13)])
+    conn.executemany("INSERT INTO split_events (ticker, date, ratio) VALUES ('SEA', ?, ?)", yahoo)
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price, market_cap, shares_outstanding) "
+                 "VALUES ('SEA', '2020-01-05T10:00:00', 10.0, 4.32e9, 4.32e8)")
+    conn.commit()
+    return conn
+
+
+@pytest.mark.parametrize("yahoo", [[], [("2018-06-01", 1.3 / 3)]])
+def test_a_quarterly_seam_folds_by_the_split_the_filings_record(tmp_path, yahoo):
+    # BUG-262 in the history: the 2016 Q4 to 2017 Q1 seam (0.36) is the 1:3 times an 8% issuance. The filings record
+    # the 1:3 (FY2017's count 1.2B, then 0.4B), so the quarters before it go onto its basis by the split, the issuance
+    # left in them, not by the seam's own ratio. Yahoo has no split there, or one factor for it and a spin-off's 1.3.
+    x = load_history_inputs(_restated_seam_db(tmp_path, yahoo), "SEA")
+    by_end = {p.period_end: p.shares for p in x.points}
+    assert by_end["2016-12-31"] == pytest.approx(0.4e9)
+    assert by_end["2017-03-31"] == pytest.approx(0.432e9)
+    assert x.price_factors == ([("2018-06-01", pytest.approx(1.3))] if yahoo else [])
+
+
+def test_the_history_reads_each_quarters_net_income_and_its_trailing_years(tmp_path):
+    # BUG-264: with Yahoo's history and the filings silent (no restated FY2017), an issuance whose trailing net income
+    # moved stays organic, as does a count whose quarter's net income moved with EPS: the seam carries a split's
+    # marks in EPS alone.
+    conn = _restated_seam_db(tmp_path, [], trailing_income={"2016-12-31": 0.3e9})
+    conn.execute("DELETE FROM financials_annual_vintages")
+    conn.commit()
+    x = load_history_inputs(conn, "SEA")
+    assert {p.period_end: p.shares for p in x.points}["2016-12-31"] == pytest.approx(1.2e9)
+    conn.execute("DELETE FROM financials_ttm")
+    conn.execute("INSERT INTO financials_ttm (ticker, period_end, fiscal_year, net_income) "
+                 "SELECT ticker, period_end, fiscal_year, 1.2e9 FROM financials_quarterly")
+    conn.commit()
+    x = load_history_inputs(conn, "SEA")
+    assert {p.period_end: p.shares for p in x.points}["2016-12-31"] == pytest.approx(0.432e9)  # held: its own ratio
+    conn.execute("UPDATE financials_quarterly SET net_income = net_income * 0.36 WHERE period_end >= '2017'")
+    conn.commit()
+    x = load_history_inputs(conn, "SEA")
+    assert {p.period_end: p.shares for p in x.points}["2016-12-31"] == pytest.approx(1.2e9)  # the count EPS implies

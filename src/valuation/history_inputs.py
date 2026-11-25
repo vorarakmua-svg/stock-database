@@ -24,11 +24,14 @@ from .inputs import (
     SPLIT_JUMP_THRESHOLD,
     _dividend_onto,
     _drop_spin_off_dividends,
+    _implied_count_moves,
+    _net_income_held,
     _split_marks,
     _yahoo_dividend_factors,
     bars_to_price_factor,
     is_share_split,
     price_factor_after,
+    split_history,
 )
 
 __all__ = ["is_share_split", "price_factor_after"]  # defined in .inputs, which the multiples band reads too
@@ -191,6 +194,8 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
                            yahoo_count: Optional[float] = None,
                            revenue: Optional[Sequence[Optional[float]]] = None,
                            listed: Optional[str] = None,
+                           net_income: Optional[Sequence[Optional[float]]] = None,
+                           trailing_income: Optional[Sequence[Optional[float]]] = None,
                            ) -> Tuple[List[Optional[float]], List[Tuple[str, float]]]:
     """Every quarter's share count on the bars' split basis, today's, as Yahoo's closes are.
 
@@ -204,11 +209,15 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
       Each declared split explains one seam, and of equal runs the latest a stored quarter can reflect: one
       dated after the latest quarter only if no other fits, as its 10-Q may have been filed after it.
     - An undeclared seam of SPLIT_JUMP_THRESHOLD or more folds by its own ratio after the quarter of the
-      listing on *listed* (LISTING_QUARTER_DAYS), or on a split's marks in EPS and *revenue*
-      (SPLIT_EVIDENCE_SHARE). Otherwise it stays organic, as a merger or an exchange offer does. The
-      fiscal years also need net income to hold (``inputs._net_income_held``, BUG-247), which a
-      quarter's swings too far for: the marks fold the seam of DD's 2019 1:3 reverse split at 2017 Q1,
-      net income 52M then 888M. PCG's 2020 exit issuance quarter bears no marks (its EPS changed sign).
+      listing on *listed* (LISTING_QUARTER_DAYS), or on the fiscal years' rule (``inputs._normalize_splits``):
+      a split's marks in EPS and *revenue* (SPLIT_EVIDENCE_SHARE), the count EPS implies (the quarter's
+      *net_income* over its EPS) moved with it (``inputs._implied_count_moves``), and net income held
+      (``inputs._net_income_held``) where a year's net income is read: the trailing year's at the two
+      quarters (*trailing_income*), as one quarter's swings too far (DD's 52M then 888M across 2017 Q1, a
+      1:3 reverse split) (BUG-264). Otherwise it stays organic, as a merger, an exchange offer, a count
+      that swings alone or an issuance while a loss shrinks does. *splits* holds the share splits the
+      filings record beside Yahoo's (``inputs.split_history``): DD's 1:3, which Yahoo mixes with the
+      Corteva spin-off, folds by its own ratio, the count's drift left in the quarters (BUG-262).
     - A seam beyond MAX_SPLIT_RATIO is a change of units: the older quarters are dropped. (The fiscal years
       fold one a stored split or the count EPS implies explains, Q19; on the real copy every quarterly
       seam beyond it is a glitch or a change of units.)
@@ -254,8 +263,12 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
         elif ratio >= SPLIT_JUMP_THRESHOLD or ratio <= 1.0 / SPLIT_JUMP_THRESHOLD:
             listing = (i == 0 and listed is not None and (date.fromisoformat(str(ends[0])[:10])
                        - timedelta(days=LISTING_QUARTER_DAYS)).isoformat() < listed[:10])
-            if listing or _split_marks(ratio, eps[i], eps[j], revenue[i] if revenue else None,
-                                       revenue[j] if revenue else None):
+            if listing or (_split_marks(ratio, eps[i], eps[j], revenue[i] if revenue else None,
+                                        revenue[j] if revenue else None)
+                           and _implied_count_moves(ratio, net_income[i] if net_income else None,
+                                                    net_income[j] if net_income else None, eps[i], eps[j])
+                           and _net_income_held(ratio, trailing_income[i] if trailing_income else None,
+                                                trailing_income[j] if trailing_income else None)):
                 factor *= ratio
         out[i] = older * factor
     carried: Optional[float] = None
@@ -335,8 +348,8 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
     if not ttm:
         x.na_reason = "no trailing-twelve-month financials"
         return x
-    splits = [(str(r["date"])[:10], float(r["ratio"])) for r in _rows(
-        conn, "SELECT date, ratio FROM split_events WHERE ticker = ? AND ratio > 0 ORDER BY date", (ticker,))]
+    # Yahoo's split history with the share splits the filings record put in, as the fiscal years read it (BUG-262).
+    splits = [(when, float(ratio)) for when, ratio in split_history(conn, ticker) if ratio and ratio > 0]
     x.price_factors = [(when, ratio) for when, ratio in splits if not is_share_split(ratio)]
 
     # Each month's last bar. A bar from yfinance's default history is dividend-adjusted (BUG-075): one
@@ -400,9 +413,11 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
         return x
     ends = [str(q["period_end"])[:10] for q in quarters]
     share_splits = [(when, ratio) for when, ratio in splits if is_share_split(ratio) and when <= x.last_bar]
+    trailing = {str(row["period_end"])[:10]: row.get("net_income") for row in ttm}
     counts, x.splits_applied = normalize_share_series(
         ends, [_share_count(q, x.share_field) for q in quarters], [q.get("eps_diluted") for q in quarters],
-        share_splits, x.yahoo_shares, revenue=[q.get("revenue") for q in quarters], listed=first_bar)
+        share_splits, x.yahoo_shares, revenue=[q.get("revenue") for q in quarters], listed=first_bar,
+        net_income=[q.get("net_income") for q in quarters], trailing_income=[trailing.get(end) for end in ends])
     shares_at = dict(zip(ends, counts))
 
     first_filed: Dict[int, str] = {}

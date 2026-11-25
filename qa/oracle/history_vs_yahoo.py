@@ -57,6 +57,70 @@ def share_split(ratio: float) -> bool:
     return any(abs(float(Fraction(r).limit_denominator(4)) - r) <= 1e-9 * r for r in (ratio, 1 / ratio))
 
 
+def filed_splits(vintages: List[Tuple], splits: List[Tuple]) -> List[Tuple[str, float]]:
+    """Yahoo's split history *splits* with the share splits the filings themselves record put in (BUG-262), this
+    oracle's own reading of *vintages*: every 10-K's view of each fiscal year as (fiscal_year, filed day, diluted
+    weighted count, diluted EPS, net income).
+
+    A filing restates the years it reports for a split made before it, so one year's count (the diluted weighted
+    count, else net income / EPS) in two consecutive vintages moving by a share split's ratio (a simple ratio of 3:2
+    or more, or 2:3 or less, within 1%), with the year's EPS moving the other way by at least half of it (log terms)
+    and its net income keeping its sign and moving by less than half of it, is a split made between the two filings.
+    Unless Yahoo declares one there (a simple ratio, or run of consecutive ones, dated after the earlier filing and at
+    most 92 days after the later, within 1.25x), it is added: on the day of Yahoo's factor that isn't a simple ratio
+    between those dates and nearest it, which is then the split times a spin-off's price factor (DD's 0.4725 = 1/3 x
+    1.4175 for Corteva), else on the later filing's day (EXE's 1:200). A reverse merger restates the year's net income
+    too (KDP's FY2017), and a unit change leaves EPS alone."""
+    from datetime import date as _date
+    from datetime import timedelta as _days
+
+    def simple(x: float) -> bool:
+        return any(abs(v * d - round(v * d)) < 1e-9 * max(1.0, v * d) for v in (x, 1 / x) for d in (1, 2, 3, 4))
+
+    events = [(str(d)[:10], r) for d, r in splits]
+    views: Dict[int, List[Tuple[str, str, float, float, Optional[float]]]] = {}
+    for fy, filed, wd, eps, ni in sorted((v for v in vintages if v[0] is not None and v[1]),
+                                         key=lambda v: (v[0], str(v[1])[:10])):
+        if wd and wd > 0 and eps:
+            views.setdefault(fy, []).append((str(filed)[:10], "wd", wd, eps, ni))
+        elif ni is not None and eps and ni / eps > 0:
+            views.setdefault(fy, []).append((str(filed)[:10], "ni/eps", ni / eps, eps, ni))
+    found: List[Tuple[str, str, float]] = []
+    for seq in views.values():
+        for (d0, k0, c0, e0, n0), (d1, k1, c1, e1, n1) in zip(seq, seq[1:]):
+            if k0 != k1 or d0 == d1:
+                continue
+            r = c1 / c0
+            big = max(r, 1 / r)
+            nearest = min((round(big * den) / den for den in (1, 2, 3, 4) if round(big * den) > den),
+                          key=lambda v: abs(math.log(big / v)), default=1.0)
+            if abs(math.log(big / nearest)) > math.log(1.01) or nearest < 1.5:
+                continue
+            split = nearest if r > 1 else 1 / nearest
+            if not (e0 and e1 and e0 * e1 > 0 and -math.log(e1 / e0) * (1 if r > 1 else -1) >= 0.5 * math.log(big)):
+                continue
+            if n0 and n1 and (n0 * n1 < 0 or abs(math.log(n1 / n0)) >= 0.5 * math.log(big)):
+                continue
+            last = (_date.fromisoformat(d1) + _days(days=92)).isoformat()
+            declared = sorted((d, x) for d, x in events if x and x > 0 and simple(x) and d0 < d <= last)
+            if any(abs(math.log(r / math.prod(x for _, x in declared[a:b + 1]))) <= math.log(1.25)
+                   for a in range(len(declared)) for b in range(a, len(declared))):
+                continue
+            if not any(s == split and abs((_date.fromisoformat(d1) - _date.fromisoformat(w)).days) <= 366
+                       for _, w, s in found):
+                found.append((d0, d1, split))
+    for d0, d1, split in found:
+        last = (_date.fromisoformat(d1) + _days(days=92)).isoformat()
+        mixed = [i for i, (d, x) in enumerate(events) if x and x > 0 and not simple(x) and d0 < d <= last]
+        if mixed:
+            i = min(mixed, key=lambda j: abs(math.log(events[j][1] / split)))
+            day, factor = events.pop(i)
+            events += [(day, split)] + ([(day, factor / split)] if abs(factor / split - 1) > 1e-9 else [])
+        else:
+            events.append((d1, split))
+    return sorted(events)
+
+
 def split_runs(events: List[Tuple[str, float]]) -> List[Tuple[str, str, float]]:
     """Every run of consecutive declared share splits: (first date, last date, the product of the ratios)."""
     s = sorted((d, r) for d, r in events if share_split(r))
@@ -120,6 +184,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     splits: Dict[str, List[Tuple[str, float]]] = {}
     for t, d, r in db.execute("SELECT ticker, substr(date, 1, 10), ratio FROM split_events WHERE ratio > 0"):
         splits.setdefault(t, []).append((d, r))
+    # The share splits each company's filings record beside Yahoo's (BUG-262), as the code reads them.
+    vintages: Dict[str, List[Tuple]] = {}
+    for row in db.execute("SELECT ticker, fiscal_year, substr(filed_date, 1, 10), weighted_avg_shares_diluted, "
+                          "eps_diluted, net_income FROM financials_annual_vintages WHERE fiscal_year IS NOT NULL "
+                          "AND filed_date IS NOT NULL"):
+        vintages.setdefault(row[0], []).append(row[1:])
+    for t, views in vintages.items():
+        found = filed_splits(views, splits.get(t, []))
+        if found != sorted(splits.get(t, [])):
+            splits[t] = found
     latest: Dict[str, Tuple[str, float, float, Optional[float]]] = {}
     for t, d, close, cap, ev in db.execute(
             "SELECT h.ticker, h.date, h.close, h.market_cap, h.enterprise_value FROM valuation_history h JOIN "

@@ -82,11 +82,16 @@ Helpers, each unit-tested:
   (counts_on_bar_basis, applied)`:
   - Drop a one-quarter spike: a move above 15% that comes back within 5%.
   - Walk newest to oldest. A quarter-to-quarter ratio within 1.25x of a run of declared splits dated
-    after the older quarter, and nearer that run than 1.0, folds the run in.
+    after the older quarter, and nearer that run than 1.0, folds the run in. The declared splits include the
+    ones the filings record (`inputs.split_history`, BUG-262), taken out of a Yahoo factor that mixes a reverse
+    split with a spin-off (DD's 0.4725), whose spin-off part alone is then a price factor.
   - An undeclared seam of 1.5x or more folds by its own ratio only on a split's marks (BUG-175):
     - EPS of one sign on both sides moved against the count by at least half the seam's ratio, in
       log terms. A missing or zero EPS, or one that changes sign, says nothing.
     - Revenue, where both quarters have it, didn't move with the count by as much.
+    - The count EPS implies (the quarter's net income / EPS) moved with it, and the trailing year's net income
+      kept its sign and moved by less than half the seam's ratio, as the fiscal years ask (BUG-264): a quarter's
+      own net income swings too far (DD's 52M then 888M across its 1:3 at 2017 Q1).
     - A merger stays organic, as COF's 1.56x and DUK's 1.567x (EPS 0.99 to 0.86, revenue 1.88x)
       do, and so does an exchange offer (Citigroup's 2.242x in 2009, EPS changing sign).
   - The quarter of the listing (the first ending on or after the first bar, within 98 days of it)
