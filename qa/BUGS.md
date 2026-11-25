@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 93 · NEEDS-USER 2 · Decided: 8 · Verified: 295
+**Open:** P0 0 · P1 0 · P2 0 · P3 95 · NEEDS-USER 0 · Decided: 10 · Verified: 295
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2487,16 +2487,27 @@ Found: split from BUG-364 (iteration 221) | Fixed: | Regression test:
 Repro: their companyfacts carry no undimensioned long-term debt in any year; EV/EBITDA counts net debt as 0. Needs the filing's XBRL instance (Q17's reader) summed over the debt segments, or an explained N/A.
 Expected: their debt read, or EV marked unknown.   Actual: net debt 0.
 ### Q21 [DATA] NEEDS-USER: BUG-348's shared calendar years come from SEC's own frames: keep SEC's labels, or assign our own?
-Status: OPEN (NEEDS-USER)
+Status: DECIDED (2026-11-25)
 Found: the BUG-338 worker (iteration 223; `qa/evidence/bug338-investigation.txt`) | Fixed: | Regression test:
 Context: two adjacent fiscal years share a calendar_year because SEC frames both on different concepts (LRCX FY2013: 13 facts framed CY2013; FY2014: 165 framed CY2013; none CY2012; also LRCX FY2024/25, STX FY2023/24). 24 shared calendar years at 8 filers at the June 52/53-week boundary (SYY, LRCX, TPR, WDC, STX, LITE, LHX, SNDK) plus 3 at fiscal-year changes. No valuation reads calendar_year. Options: A keep SEC's labels and document it (BUG-348 WONTFIX); B distinct years by our own rule (contradicts SEC's frame on ~24 rows); C shift only the duplicating year (moves SEC's majority frame). Recommendation: A.
-Decision: 
+Decision: USER 2026-11-25: A, keep SEC's labels and document the shared calendar years in the README; BUG-348 WONTFIX once documented.
 
 ### Q22 [VAL] NEEDS-USER: BUG-293b, telling a debt-free 10-K from one whose debt isn't read
-Status: OPEN (NEEDS-USER)
+Status: DECIDED (2026-11-25)
 Found: the BUG-338 worker (iteration 223; `qa/evidence/bug338-investigation.txt`) | Fixed: | Regression test:
 Context: company facts can't reliably separate them: debt-free filers show debt-like evidence (LULU InterestPaidNet, VRTX leases and interest, AXON FY2016/18 capital leases); unread-debt filers show weak evidence (TXT from FY2022 maturities only, PCAR from FY2012 InterestPaid and debt flows). Among years with no positive debt field: 826 no evidence, 722 interest only; 19 tickers never have a positive debt field (7 carry debt). Options: A today's rule; B the held rule (2,655 quarters at 215 tickers, 29 historical values, 4 labels); C a stored parser evidence signal (schema change; false 'debt unknown' for LULU, VRTX); D the scores' read_debt interest rule per 10-K in history_inputs; E C or D only for filers already marked unknown. Recommendation: E with D (no schema change, matches the scores); it values AXON's FY2016-21 quarters with no debt, which moves AXON's historical value and probably its label: measure before applying.
-Decision: 
+Decision: USER 2026-11-25: E with D, the scores' read_debt interest rule per 10-K in history_inputs, only for filers already marked unknown today; measure first and show the moves (AXON) before applying.
+### BUG-376 [P3][VAL] An annual payer's extra paid two years running counts as a second regular payment
+Status: OPEN
+Found: code review 36 (`qa/evidence/review36.txt`, Minor 1; regression from BUG-372, 547f960) | Fixed: | Regression test:
+Repro: src/valuation/models.py ~301-323 (`_recurs` from `_regular_between`; the oracle shares it, valuation_oracle.py ~576-580): review 34's slipped-year test with the 0.50 extra paid on 2023-07-15 and 2024-07-15: FY2025 reads (6.36, yahoo) instead of SEC's (3.10, sec). Made-up data only; the BUG-372 census moved no real year. Probe: %LOCALAPPDATA%\stockdb-qa\review36\head\tests\test_review36.py.
+Expected: a small echo beside a larger annual payment isn't a regular payment.   Actual: recurrence alone makes it regular.
+
+### BUG-377 [P3][VAL] Q19's implied-count test repeats the seam when both years lack a diluted count
+Status: OPEN
+Found: code review 36 (note, not a finding; filed by the orchestrator) | Fixed: | Regression test:
+Repro: src/valuation/inputs.py `_implied_count_explains`: when neither year has a diluted weighted count, the detected count is already net income / EPS, so the test compares the seam with itself and every such seam beyond 50x folds. On today's data only EXE folds (it has counts).
+Expected: a seam with no independent count to check is not explained by the implied count.   Actual: it always is.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)

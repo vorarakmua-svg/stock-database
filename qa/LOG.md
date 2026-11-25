@@ -3672,3 +3672,14 @@ Result: BUG-338, BUG-342 VERIFIED. BUG-348 -> Q21 (SEC's own frames; recommend k
 Gates: ruff ✓ mypy ✓ pytest 4081 passed, 2 skipped
 Commit: (this commit) fix(parser): a D&A-total 10-K sets its year's basis; period_end is the calendar's year end (BUG-338, BUG-342)
 Next: the user on Q21, Q22; code review 36 (5 units since review 35).
+
+## Iteration 224: 2026-11-25 04:30: code review 36; the user's decisions on Q21, Q22
+Picked: code review 36 (3750a82..c0a507c: Q19, BUG-371/372, Q20, BUG-358/359/373, BUG-338/342); an opus reviewer.
+The user decided Q21 (keep SEC's labels, document), Q22 (the scores' interest rule for filers already unknown,
+measured first) and not to re-collect the live DB now.
+Did: `qa/evidence/review36.txt`; 1 probe failing at HEAD; touched tests pass (707 + 771); review 35's probes pass.
+Result: no Critical or Important. Minor -> BUG-376 (BUG-372 regression). Note -> BUG-377 (Q19's implied count with
+no diluted count). Checked right: Q20's sector threading and set-aside per as-of day; BUG-371, 373, 359, 338, 342.
+Gates: unchanged (qa/ only)
+Commit: (this commit) chore(qa): code review 36 recorded (BUG-376, BUG-377); Q21 and Q22 decided
+Next: BUG-376/377 + Q21's README, Q22 measured.
