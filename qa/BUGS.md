@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 70 · NEEDS-USER 1 · Decided: 8 · Verified: 326
+**Open:** P0 0 · P1 0 · P2 0 · P3 70 · NEEDS-USER 0 · Decided: 9 · Verified: 326
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2557,10 +2557,10 @@ Repro: census over 504 filers at 81b2e8e: long-term debt differs by more than 0.
 Expected: one figure per balance-sheet date.   Actual: two.
 
 ### Q23 [DATA] NEEDS-USER: read a debt total that includes current debt as the total less the current part (KVUE, TRV)?
-Status: OPEN (NEEDS-USER)
+Status: DECIDED (2026-11-26)
 Found: the debt1 worker (iteration 234; BUG-291, BUG-133's TRV) | Fixed: | Regression test:
 Context: Q20 sets aside a total that includes current debt on a date its current part is tagged (tested in tests/test_fallback_tags.py), so KVUE FY2024-25 and TRV have no long-term debt. Options: A read the total less the current figure the same filing tags (KVUE FY2024 7.805 - 0.750 = 7.055; TRV FY2025 9.267 - 0.300 = 8.967; total debt then equals the filer's own total); B a new field for the filer's own total; C leave as Q20 decided. Recommendation: A (moves TRV's EPV and scores; measure first).
-Decision: 
+Decision: USER 2026-11-26: A, the total less the current part the same filing tags; measure over the 502 and show the moves before applying.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
