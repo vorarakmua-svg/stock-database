@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 81 · NEEDS-USER 0 · Decided: 8 · Verified: 314
+**Open:** P0 0 · P1 0 · P2 0 · P3 75 · NEEDS-USER 0 · Decided: 8 · Verified: 320
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -467,17 +467,19 @@ Expected: "Refresh failed: database is locked".   Actual: a success message.
 Fix (iteration 193, BUG-053/237/163 together, `qa/evidence/bug053-investigation.txt`): a failed write reaches its caller and the caller reports it. `SQLiteStore.upsert_quote` logs and re-raises (the transaction rolls back); `refresh_quote` turns it into outcome 'error' with the write's message, counted as that company's error by the web job ('Refresh failed: database is locked') and the CLI quotes step (all failing -> 'every quote failed', no recompute). `compute_and_store(..., failures=)` names each ticker whose valuations weren't stored (reusable, like StoreResult.failed); a rebased refresh whose valuation fails is an error saying the price was stored and the next refresh values it again. Retry: `SQLiteStore.unvalued_factors(T)` lists stored factors dated after the valuation's UTC day, and `refresh_quote` returns 'rebased' while any exists. The CLI headline no longer says 'valued on it' when valuing failed. Real-data copy: unvalued_factors empty for all 502, so no success path changes. Residuals: a factor Yahoo lists late isn't retried by a refresh (the next collection/recompute values it); a ticker never valued gets no refresh retry; a persistent valuation failure is reported at every refresh.
 
 ### BUG-054 [P3][STORE] A priced run without beta writes a NULL beta: the full export carries nothing forward
-Status: OPEN
-Found: iteration 39 by code review 5 (M6), re-run on 98013f4 with Yahoo mocked (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 233)
+Found: iteration 39 by code review 5 (M6), re-run on 98013f4 with Yahoo mocked (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
 Repro (`t_bug033/partial_export.py`): a run whose quote has a price but no beta writes `beta NULL` into the new snapshot; `load_inputs` reads beta None, so valuations fall back to 1.0 (flagged), although the previous snapshot had 1.3. `upsert_quote` carries beta forward; `export` doesn't. Not verified against live Yahoo.
 Expected: the last known beta, flagged as carried, or the same rule in both writers.   Actual: NULL.
 
+Fix (iteration 233, `qa/evidence/store2-investigation.txt`): a collection with a price but no beta stores the last non-NULL beta of an earlier snapshot (a run's own beta wins), the rule refreshes use; applied at the user's decision (2026-11-25). Today INTU and KEYS have NULL betas: at their next collection KEYS's median moves bear 95.09 -> 94.24, base 122.12 -> 122.10; no verdict or label; KEYS composite 56 -> 54, DGX 50 -> 52.
 ### BUG-055 [P3][STORE] An empty-string company field is "missing" to the CSV but a value to JSON and SQLite
-Status: OPEN
-Found: iteration 39 by code review 5 (M7), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 233)
+Found: iteration 39 by code review 5 (M7), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
 Repro (`t_bug034/check_empty_string.py`): a run with `website` = "" stores '' in JSON and SQLite, while the CSV keeps the old URL (`csv_exporter.py` treats "" as missing; the JSON merge and SQLite's COALESCE don't). None of the 146 JSON files has a "" company field today.
 Expected: the three stores agree.   Actual: as above.
 
+Fix (iteration 233, `qa/evidence/store2-investigation.txt`): the companies row stores "" as NULL before its keep-existing upsert; the JSON company_info merge skips "" as it skips None, as the CSV does. No '' in today's DB.
 ### BUG-056 [P3][UI] The refresh-status fragment matches the ticker case-sensitively
 Status: VERIFIED (iteration 188)
 Found: iteration 39 by code review 5 (M8), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_web_api_stocks.py, tests/test_web_quote_refresh.py, tests/test_web_range_anchor.py, tests/test_web_screener_units.py (node); 28 failing first
@@ -799,11 +801,12 @@ Repro: synthetic companyfacts of a CNY 20-F reporter with one dollar-majority 6-
 Expected: the currency named when every annual report is in it.   Actual: as above.
 
 ### BUG-098 [P3][STORE] Two first runs at once after an upgrade: the loser's whole batch fails on a duplicate column, and only a log line says so
-Status: OPEN
-Found: iteration 62 by code review 9 (M4), re-run in iteration 63 (`qa/evidence/iter63-review9-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 233)
+Found: iteration 62 by code review 9 (M4), re-run in iteration 63 (`qa/evidence/iter63-review9-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
 Repro: `_ensure_columns` checks the columns and then ALTERs without a lock, and the user's copy lacks three ordinary columns (`risk_free_rate_date`, `risk_free_rate_source`, `warnings`). Two first exports at once on a pre-flag copy of the user's data: one failed "duplicate column name: risk_free_rate_source" and wrote nothing, 1 of 3 tries on 51091ce (code review 9: 4 of 5, with both versions); the run's summary still counts its tickers successful, and the error is one log line. BUG-083's own migration re-checks under its lock.
 Expected: every ALTER under one `BEGIN IMMEDIATE`, re-checked, so concurrent first runs both write.   Actual: as above.
 
+Fix (iteration 233, `qa/evidence/store2-investigation.txt`): `_ensure_columns` returns at once if nothing is missing; else it takes BEGIN IMMEDIATE, looks again, adds what is still missing and commits (rolls back on error); inside a caller's transaction as before. Covers every caller (universe/sic.py too). The log-only half was fixed by review 19 I-1.
 ### BUG-099 [P2][VALID] Revenue's tag order takes a part of the revenue: AXP's ASC 606 contract revenue, and a figure BLK's next 10-K drops
 Status: VERIFIED (iteration 70)
 Found: iteration 69 via VALID-01 (`qa/evidence/iter69-{revenue,bankfields,sector_rest}.txt`) | Fixed: iteration 70 (see LOG) | Regression tests: `tests/test_xbrl_parser.py::test_the_total_net_of_interest_expense_is_the_revenue_not_its_contract_revenue`, `::test_a_revenues_figure_the_income_statement_doesnt_add_up_to_gives_way`, `::test_a_revenue_figure_below_its_own_cost_of_revenue_gives_way`, `::test_a_figure_below_cost_gives_way_only_to_one_that_isnt`, `::test_a_zero_revenue_gives_way_to_a_positive_one`, `::test_a_fourth_quarter_is_the_years_revenue_less_nine_months`, `::test_a_filings_vintage_takes_the_years_revenue_not_its_part`, `::test_net_revenue_is_no_noninterest_income`, and six guards beside them
@@ -1054,11 +1057,12 @@ Repro: `sqlite_store._moves_per_share` refuses any simple-ratio split "as the va
 Expected: the rule and the message as they are (or the small simple ratios applied by the valuation, a policy question).   Actual: as above.
 
 ### BUG-131 [P3][STORE] BUG-117's fallback still dates payments on a split's day for a collector east of UTC+10:30 whose bar request fails
-Status: OPEN
-Found: iteration 84 by code review 12 (M3), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 233)
+Found: iteration 84 by code review 12 (M3), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
 Repro: a run with neither bars nor a listed split dates its payments the day before the collector's: code review 12's `scen12c.py` on eb0aec3, a UTC+12 collector at local 2026-06-13 00:30 (New York 06-12 08:30, before the open) whose bar request fails, on a ticker that has never split: the payments are dated 2026-06-12, the split's day, and after a later run whose dividend request fails DDM reads 418.38 against 41.84 (median 80.91, upside -20.0%). 6715f99 was as wrong.
 Expected: the day before New York's date (or the collector's day less two).   Actual: the collector's day less one. Impact: none for this user (+0700).
 
+Fix (iteration 233, `qa/evidence/store2-investigation.txt`): `_served_day` for a run without bars: the later of Yahoo's latest listed split and new_york_day(collected_at) minus one day (a naive time read as local). Runs with bars unchanged.
 ### BUG-132 [P3][STORE] The as-of view carries figures across split bases and periods: 35 years mix per-share figures and counts from both sides of a split, 203 figures come from another period's filing
 Status: OPEN
 Found: iteration 84 by code review 12 (M4, M5), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: — | Regression test: —
@@ -1156,11 +1160,12 @@ Repro: at quarterly checkpoints the 10-Qs' LongTermDebt outranks the new noncurr
 Expected: one figure for a year end.   Actual: two.
 
 ### BUG-145 [P3][STORE] A refresh without a stored year carries the previous snapshot's EV family, so a pre-BUG-126 refresh's Yahoo EV stays for good
-Status: OPEN
-Found: iteration 92 by code review 13 (M3), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 233)
+Found: iteration 92 by code review 13 (M3), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
 Repro: `upsert_quote` carries the EV family forward when ours can't be computed (`sqlite_store.py:924-935`); for a ticker with no stored year whose latest snapshot is a pre-fix refresh's, Yahoo's 5,010 and 50.1 are carried on every later refresh (review 13's `bug126_carry.py`). Latent: SPCX, the only ticker without a stored year, has no refresh in the user's copy.
 Expected: carry only a full collection's EV family, or store none.   Actual: Yahoo's, indefinitely.
 
+Fix (iteration 233, `qa/evidence/store2-investigation.txt`): a refresh that can't compute its own EV family carries the latest snapshot that has a collection_runs row (a full collection), or none. No refresh snapshot is a ticker's latest today.
 ### BUG-146 [P3][VALID] BUG-124 reads a 10-Q's trailing-twelve-month span as a year, so the quarter after it can be labelled the next year's first
 Status: OPEN
 Found: iteration 92 by code review 13 (M4), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
@@ -2039,11 +2044,12 @@ Repro: indicators.py ~353 "lowest and highest positive EPS"; USAGE_GUIDE.md ~335
 Expected: they describe the code.   Actual: as above.
 
 ### BUG-307 [P3][STORE] A refresh dates its payments by Yahoo's latest listed split, which can predate a stored split
-Status: OPEN
-Found: code review 24 (Minor 4; unproven: needs Yahoo's list) | Fixed: | Regression test:
+Status: VERIFIED (iteration 233)
+Found: code review 24 (Minor 4; unproven: needs Yahoo's list) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
 Repro: sqlite_store.py ~1476-1478 serves a refresh's payments on `_served_day` with no bars, the latest split Yahoo lists; a stored split dated after it would divide every payment by its ratio (`_dividend_onto`).
 Expected: served on the refresh's own day, as a collection's last bar would be (max(latest listed split, collected_at - 1 day)).   Actual: possibly years earlier.
 
+Fix (iteration 233, `qa/evidence/store2-investigation.txt`): see BUG-131 (iteration 233): a listed split later than the day before the run wins, so payments are never dated before a stored split. No case in today's DB.
 ### BUG-308 [P3][QA] The valuation oracle reads the whole FCF history where the code's is truncated at a share seam: EXE's DCF growth 18.4% against 0.9%
 Status: VERIFIED (iteration 208)
 Found: iteration 144 (Q2/Q5's oracle run) | Fixed: (this commit) | Regression tests: tests/test_valuation_history.py, tests/test_valuation_oracle_seam.py; 6 failing first

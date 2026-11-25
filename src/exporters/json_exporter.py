@@ -213,9 +213,10 @@ class JSONExporter:
         # Merge company info (use new but fill gaps from old)
         if existing.get("company_info") and new.get("company_info"):
             merged_info = existing["company_info"].copy()
-            # Update with new values (new takes precedence)
+            # Update with new values (new takes precedence); an empty string is no value, as the CSV and SQLite
+            # read it (BUG-055)
             for k, v in new["company_info"].items():
-                if v is not None:
+                if v is not None and v != "":
                     merged_info[k] = v
             merged["company_info"] = merged_info
 

@@ -7,7 +7,7 @@ Covers:
 """
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -559,9 +559,10 @@ def test_a_split_yahoo_lists_dates_the_payments_it_adjusted(tmp_path):
 
 
 def test_a_run_without_bars_or_splits_dates_its_payments_the_day_before_its_own(tmp_path):
-    # Yahoo then lists no split, and any it hasn't applied is dated on New York's day or later: never before the
-    # collector's day less one.
-    assert _served_after_one_run(tmp_path, datetime(2026, 6, 12, 8)) == {"2026-06-11"}
+    # Yahoo then lists no split, and any it hasn't applied is dated on New York's day or later: the day before New
+    # York's (BUG-131; 08:00 at +0700 is New York's evening of the 11th).
+    at = datetime(2026, 6, 12, 8, tzinfo=timezone(timedelta(hours=7)))
+    assert _served_after_one_run(tmp_path, at) == {"2026-06-10"}
 
 
 def _pre_served_day_db(tmp_path):

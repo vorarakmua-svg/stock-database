@@ -2614,9 +2614,9 @@ reads of the SEC as tries at a gap (BUG-232, BUG-281).
 `dividend_events` keeps each payment as Yahoo served it,
 split-adjusted as of `served_on`: the collection's day on Yahoo's calendar, its last
 daily bar or the latest split Yahoo listed, whichever is later (the collector's own date
-can run a day ahead of New York's). A saved quote refresh stores them too, by the same
-rule for a run without bars: the latest split Yahoo lists in the refresh's chart, else the day
-before the refresh's own (BUG-160, BUG-258). That chart reaches a week before the earliest of the
+can run a day ahead of New York's). A run without bars (a collection whose bar request failed, a
+saved quote refresh, which stores them too: BUG-160, BUG-258) takes the latest split Yahoo lists
+or the day before New York's at the run, whichever is later (BUG-131, BUG-307). The refresh's chart reaches a week before the earliest of the
 stored price's day, the last collection with Yahoo and the latest payment stored (a month's chart
 for a company collected lately), and over the whole history only for a ticker with none of them
 (BUG-108). The valuation takes each payment to its price's

@@ -3767,3 +3767,15 @@ Result: BUG-380 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4220 passed, 2 skipped
 Commit: (this commit) fix(exporters): the JSON and CSV drop the periods SQLite drops (BUG-380)
 Next: remaining P3s by area.
+
+## Iteration 233: 2026-11-25 23:45: fix (BUG-054, BUG-055, BUG-098, BUG-131, BUG-145, BUG-307)
+Picked: the STORE/refresh group; an opus worker. BUG-054 moves KEYS's median at its next collection: the user
+decided (carry the last beta).
+Did: a collection carries the last beta; "" is missing everywhere; adding columns re-checks under a write lock;
+a barless run's served day is New York's day before, later of Yahoo's split; a refresh carries a full collection's EV.
+- RED: 13 failed on 64c2fef; GREEN. 15 of 15 mutants; 1 re-quoted; bug380's 12 of 12.
+- DB copies (INTU/KEYS beta set as carried): KEYS median bear 95.09 -> 94.24; 0 verdicts, labels.
+Result: BUG-054, 055, 098, 131, 145, 307 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4235 passed, 2 skipped
+Commit: (this commit) fix(store): carry the last beta; empty strings are missing; locked column adds; served day in New York (BUG-054, -055, -098, -131, -145, -307)
+Next: the parser debt fixes (BUG-273, 286, 292).

@@ -20,7 +20,7 @@ import logging
 import sqlite3
 from bisect import bisect_right
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -32,6 +32,7 @@ if TYPE_CHECKING:  # avoid a runtime exporters -> valuation (or ownership) depen
 
 from ..mappings.canonical import CANONICAL_FIELDS
 from ..models.stock_data import StockData
+from ..new_york import new_york_day
 from ..parsers.calculated_metrics import CalculatedMetrics
 from ..universe.industries import normalize_sic, normalize_sic_description
 from ..valuation.inputs import SPLIT_JUMP_THRESHOLD, _simple_ratio
@@ -125,14 +126,20 @@ def _served_day(stock: StockData, collected_at: str) -> str:
     ``served_on`` is dated. The collector's own date runs ahead of New York's east of it: a
     run before the open on a split's day, which Yahoo hadn't applied yet, dated its pre-split
     payments on the split's day, so they read as split, and DDM read ten times its value after
-    a later run whose dividend request failed (BUG-117). A run with neither takes the day
-    before its own: Yahoo listed no split, and one it hasn't applied is dated on New York's
-    day or later, never before the collector's day less one."""
-    days = [str(rec["date"])[:10] for rec in list(stock.price_bars or []) + list(stock.splits or [])
-            if rec.get("date")]
-    if days:
-        return max(days)
-    return (date.fromisoformat(collected_at[:10]) - timedelta(days=1)).isoformat()
+    a later run whose dividend request failed (BUG-117). A run without bars (a quote refresh, a
+    collection whose bar request failed) takes the latest split Yahoo lists or the day before
+    New York's at the run (``new_york_day``; a naive time is this machine's), whichever is
+    later. A split Yahoo hasn't applied is dated on New York's day or later: the collector's
+    own day less one, New York's day east of UTC+10:30 before the open, dated pre-split
+    payments on the split's day (BUG-131). And the latest listed split can be years old,
+    before a split stored since, which then divided payments already on its basis again
+    (BUG-307)."""
+    bars = [str(rec["date"])[:10] for rec in stock.price_bars or [] if rec.get("date")]
+    splits = [str(rec["date"])[:10] for rec in stock.splits or [] if rec.get("date")]
+    if bars:
+        return max(bars + splits)
+    day_before = new_york_day(datetime.fromisoformat(collected_at)) - timedelta(days=1)
+    return max(splits + [day_before.isoformat()])
 
 
 def _cols_ddl(columns: Sequence[str], col_type: str = "REAL") -> str:
@@ -718,11 +725,31 @@ class SQLiteStore:
         or rewrites existing columns, so it is safe to run repeatedly (idempotent)
         and against long-lived production databases created under an older schema.
         ``table`` must be a module-level constant, never user input.
+
+        Outside a transaction, the missing columns are added under the write lock
+        (``BEGIN IMMEDIATE``), looked for again once it is held, and committed: two
+        first runs at once after an upgrade both saw a column missing, and the
+        loser's ALTER failed "duplicate column name", its whole batch with it
+        (BUG-098). Inside one, the caller's transaction holds them.
         """
-        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-        for name, col_type in columns.items():
-            if name not in existing:
+        def missing() -> Dict[str, str]:
+            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            return {name: col_type for name, col_type in columns.items() if name not in existing}
+
+        if not missing():
+            return
+        own = not conn.in_transaction
+        if own:
+            conn.execute("BEGIN IMMEDIATE")
+        try:
+            for name, col_type in missing().items():
                 conn.execute(f'ALTER TABLE {table} ADD COLUMN "{name}" {col_type}')
+            if own:
+                conn.commit()
+        except BaseException:
+            if own:
+                conn.rollback()
+            raise
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         """Add any columns missing from an existing DB (registry grows over time).
@@ -967,8 +994,9 @@ class SQLiteStore:
         submissions = stock.sec_submissions or {}
 
         # companies: the SEC's SIC code and description from the submissions feed (Milestone 5), NULL where the feed
-        # has none; a run without the feed (a failed request) keeps the stored ones, as every field here.
-        self._upsert(conn, "companies", ["ticker"], {
+        # has none; a run without the feed (a failed request) keeps the stored ones, as every field here. An empty
+        # string is no value, as the CSV and the JSON read it (BUG-055).
+        company = {
             "ticker": stock.ticker,
             "cik": stock.cik,
             "company_name": stock.company_name,
@@ -986,7 +1014,9 @@ class SQLiteStore:
             "updated_at": collected_at,
             "sic": normalize_sic(submissions.get("sic")),
             "sic_description": normalize_sic_description(submissions.get("sic_description")),
-        }, keep_existing=True)
+        }
+        self._upsert(conn, "companies", ["ticker"], {k: None if v == "" else v for k, v in company.items()},
+                     keep_existing=True)
 
         # A run that parsed the filer's annual record restates every period it gives: a field its
         # parse leaves empty is cleared, not kept from an earlier parse (BUG-029). A filer with no
@@ -1122,6 +1152,13 @@ class SQLiteStore:
         # price, verdict and upside come from. A Yahoo failure still gets a risk-free rate,
         # and the price history (the moving averages) can work while the quote fails.
         if snapshot.get("current_price") is not None:
+            if snapshot.get("beta") is None:
+                # Yahoo's quote without a beta: the last known one, as a quote refresh carries it (upsert_quote);
+                # stored NULL, the valuations fell back to 1.0 (BUG-054).
+                known = conn.execute("SELECT beta FROM market_snapshots WHERE ticker = ? AND collected_at < ? "
+                                     "AND beta IS NOT NULL ORDER BY collected_at DESC LIMIT 1",
+                                     (stock.ticker, collected_at)).fetchone()
+                snapshot["beta"] = known[0] if known else None
             self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)
 
         # collection_runs
@@ -1600,7 +1637,9 @@ class SQLiteStore:
         ``enterpriseValue`` and ``enterpriseToEbitda`` are another definition,
         more than 5% off ours for 47 of 111 companies, about 2x for the banks, and
         a refresh wrote them into the same columns (BUG-126). Without a market cap
-        or a stored year, the previous snapshot's carry forward.
+        or a stored year, the latest full collection's carry forward (none when it
+        had none): a refresh's from before that fix is Yahoo's, which carried on for
+        good (BUG-145).
 
         A failed write (a locked database, say) is logged and raised: nothing is
         stored (the transaction rolls back), and the caller reports it as the
@@ -1631,8 +1670,14 @@ class SQLiteStore:
                     carried = ["ma_50", "ma_200", "beta", "risk_free_rate", "risk_free_rate_date",
                                "risk_free_rate_source"]
                     if ours is None:
-                        snapshot.update(dict.fromkeys(_EV_FAMILY))
-                        carried += _EV_FAMILY
+                        # The latest full collection's, ours: a refresh's from before BUG-126 is Yahoo's, which
+                        # carried on every refresh of a ticker without a stored year (BUG-145).
+                        collected = conn.execute(
+                            f"SELECT {', '.join(_EV_FAMILY)} FROM market_snapshots s WHERE s.ticker = ? AND EXISTS "
+                            "(SELECT 1 FROM collection_runs r WHERE r.ticker = s.ticker "
+                            "AND r.collected_at = s.collected_at) ORDER BY s.collected_at DESC LIMIT 1",
+                            (ticker,)).fetchone()
+                        snapshot.update(zip(_EV_FAMILY, collected or (None,) * len(_EV_FAMILY)))
                     else:
                         snapshot.update(ours)
                     # Carry the rest forward from the latest prior snapshot when this
@@ -1645,8 +1690,8 @@ class SQLiteStore:
                     self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)
                     self._write_split_events(conn, ticker, splits or [])
                     # Yahoo's payments, from the same chart request, served on the refresh's day by the
-                    # collection's rule (_served_day: the latest split Yahoo lists, else the day before its own)
-                    # (BUG-160, BUG-258).
+                    # collection's rule for a run without bars (_served_day: the latest split Yahoo lists or the
+                    # day before New York's, whichever is later) (BUG-160, BUG-258, BUG-307).
                     if dividends:
                         self._write_dividend_events(conn, ticker, dividends, _served_day(
                             StockData(ticker=ticker, splits=list(quote.get("splits") or [])), collected_at))
