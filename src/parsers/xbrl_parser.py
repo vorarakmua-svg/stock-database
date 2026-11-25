@@ -311,24 +311,36 @@ def _on_balance_sheet_dates(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     return kept
 
 
-#: The figures that date a filing's balance sheet for long-term debt: its total, or its total assets.
+#: The figures that date a filing's balance sheet for long-term debt: its total, else its total assets (a filing that
+#: tags the total tags it on its balance sheet alone; its total assets can stand in a note at an earlier year end).
 _BALANCE_SHEET_DATES = (_BALANCE_SHEET_TOTAL, "Assets")
 
 
 def _debt_on_balance_sheet_dates(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     """*us_gaap* with long-term debt's facts kept on their filing's balance-sheet dates, those it tags
-    ``_BALANCE_SHEET_DATES`` on, where it tags either. A note's figure on another day isn't the year's, and took it
+    ``_BALANCE_SHEET_DATES`` on, where it tags either: the dates of its total where it tags one, else of its total
+    assets. A note's figure on another day isn't the year's, and took it
     from the balance sheet's line under a tag ranked after it: PSX's FY2015 10-K tags LongTermDebt $1.1B at 2015-03-02
     beside its year end's $8.843B; TGT's 10-K for the year to January 2011 LongTermDebtNoncurrent $1.0B at 2010-07-31,
     which took the year to 2010-01-30 ahead of its $10.643B of unsecured debt there;
     ECHO's FY2023 10-K LongTermDebt $1.98B at 2024-11-30, which took FY2024 from its FY2024 10-K's $25.66B (BUG-319).
+    A filing's total assets in a note stand at an earlier year end its balance sheet doesn't show: CHD's FY2023 10-K
+    tags them at 2021-12-31 beside LongTermDebtNoncurrent $2.202B there (its 2023 figure), which took FY2021 from the
+    $1.611B its own balance sheet shows (BUG-273); so a filing that tags its total is dated by it, and by its total
+    assets only days from it (``_SAME_PERIOD_DAYS``: an adoption day's opening balance sheet, CVS's 2019-01-01).
     A filing that tags neither keeps its figures (REG's and MAA's 10-Ks for FY2010-17, whose balance sheets the
     company facts don't carry)."""
-    dates: Dict[str, Set[str]] = {}
+    found: List[Dict[str, Set[str]]] = []
     for tag in _BALANCE_SHEET_DATES:
+        found.append({})
         for entry in us_gaap.get(tag, {}).get("units", {}).get("USD", []):
             if entry.get("accn") and entry.get("end"):
-                dates.setdefault(entry["accn"], set()).add(entry["end"])
+                found[-1].setdefault(entry["accn"], set()).add(entry["end"])
+    totals, assets = found
+    dates = {accn: totals[accn] | {end for end in ends if any(_same_period(end, day) for day in totals[accn])}
+             if accn in totals else ends for accn, ends in assets.items()}
+    for accn, ends in totals.items():
+        dates.setdefault(accn, ends)
     kept = dict(us_gaap)
     for tag in _FIELDS["long_term_debt"].tags:
         if tag in us_gaap:
@@ -786,7 +798,9 @@ def _current_debt_combinations(as_filed: Dict[str, Any], view: str) -> Tuple[
 
     Not where the borrowings hold the maturities: the filer's own total debt is the noncurrent figure and the borrowings
     alone (GL's); the current liabilities can't hold both lines beside the filing's other ones
-    (``_beside_current_debt``: COO's FY2016, PEP's and YUM's quarters, BUG-267); the borrowings are the maturities and
+    (``_beside_current_debt``: COO's FY2016, PEP's and YUM's quarters, BUG-267), where they hold the borrowings beside
+    them: other lines the borrowings alone overflow overlap (a payables line tagged AccountsPayableCurrent with its
+    note's compensation and taxes inside it), and tell nothing (BUG-286); the borrowings are the maturities and
     their own parts (IBM's FY2021 $6.787B, $6.764B and $22M of loans) or the maturities and at most ``_HOLD_MARGIN``
     more (IBM's FY2024, and one line tagged as the borrowings, a part of them and the maturities: ICE's FY2015 paper,
     AMD's 2016 line of credit). Borrowings that are their own parts are a line of their own (DOW's FY2022 notes
@@ -837,8 +851,8 @@ def _current_debt_combinations(as_filed: Dict[str, Any], view: str) -> Tuple[
                 alone, both = abs(total - noncurrent[key] - b), abs(total - noncurrent[key] - b - m)
                 if min(alone, both) <= _AGREE * abs(total) and (both < alone or not both_only):
                     return alone < both
-        if key in beside and b + m + beside[key][1] > beside[key][0] * (1 + _AGREE):
-            return True  # the current liabilities can't hold both lines beside the filing's other ones
+        if key in beside and b + m + beside[key][1] > beside[key][0] * (1 + _AGREE) >= b + beside[key][1]:
+            return True  # the current liabilities can't hold both lines beside the filing's other ones, but hold one
         if parts[key] > 0 and _agree(b, parts[key]):
             if b != m or apart(key):
                 return False  # its own parts: a line of their own
@@ -1410,6 +1424,65 @@ def _long_term_debt_lines(us_gaap: Dict[str, Any], annual: Dict[Any, Dict[str, A
     return {end: (value, tag) for end, (_, value, tag) in found.items()}
 
 
+#: The totals with current debt long-term debt reads last (``_HELD_BY_TOTALS``): a quarter that reads one reads no
+#: current line beside it (``_short_term_debt_lines``).
+_TOTALS_WITH_CURRENT_DEBT = (_WITH_MATURITIES, _OWN_TOTAL)
+
+
+def _current_line_concept(tag: str) -> bool:
+    """Whether *tag* can carry a 10-Q's short-term debt line that short-term debt doesn't read: a current debt concept
+    (``_DEBT_CONCEPT``, "...Current", which "...Noncurrent" isn't), none of the figures about the debt
+    (``_NOT_A_LINE``), and none of short-term debt's own tags. CommercialPaper names no current figure (BUG-143
+    weighs it)."""
+    if tag in _FIELDS["short_term_debt"].tags:
+        return False
+    return tag.endswith("Current") and bool(_DEBT_CONCEPT.search(tag)) and not _NOT_A_LINE.search(tag)
+
+
+def _short_term_debt_lines(us_gaap: Dict[str, Any], annual: Dict[Any, Dict[str, Any]],
+                           quarters: Dict[str, Dict[str, Any]]) -> Dict[str, Tuple[float, str]]:
+    """``{quarter end: (short-term debt, tag)}`` for the quarterly checkpoints with no short-term debt and no commercial
+    paper above zero, and whose long-term debt is no total with current debt that holds the line (ILMN's 10-Qs for
+    2015: its own total, $1.301B, holds the $0.307B of ConvertibleDebtCurrent), from a 10-Q's line under a current
+    debt concept short-term debt doesn't read (``_current_line_concept``): one it tags at its year-end column with the
+    figure an annual report filed there under the tag the annual record reads, which makes it the same line. ORCL's
+    10-Ks tag their current notes as DebtCurrent and NotesPayableCurrent ($7.271B at 2025-05-31), its 10-Qs as
+    NotesPayableCurrent alone ($7.625B at 2026-08-31), so its quarters had no short-term debt (BUG-292).
+    Lines that disagree on the date are no line, and the latest 10-Q whose line shows the date decides it. A year end
+    the annual record has no short-term debt on carries no line."""
+    read = [tag for tag in us_gaap if _current_line_concept(tag)] + [
+        tag for tag in _FIELDS["short_term_debt"].tags if tag in us_gaap]
+    columns: Dict[str, Dict[str, Dict[str, float]]] = defaultdict(dict)  # {accn: {end: {tag: figure}}}
+    for tag in read:
+        for (accn, end), value in _by_filing(us_gaap, tag).items():
+            columns[accn].setdefault(end, {})[tag] = value
+    filings = {e["accn"]: (e.get("form") or "", e.get("filed") or "") for tag in read
+               for e in us_gaap[tag].get("units", {}).get("USD", []) if e.get("accn")}
+    figures: Dict[str, Set[float]] = {}  # each year end's short-term debt as the annual reports filed it
+    for period in annual.values():
+        tag = period.get("_source_tags", {}).get("short_term_debt")
+        if not period.get("short_term_debt") or not tag:
+            continue
+        end = period["period_end"]
+        figures[end] = {cols[end][tag] for accn, cols in columns.items()
+                        if filings[accn][0] in _ANNUAL_FORMS and cols.get(end, {}).get(tag, 0) > 0}
+    found: Dict[str, Tuple[Tuple[str, str], float, str]] = {}
+    for accn in [accn for accn in columns if filings[accn][0] in _QUARTERLY_REPORTS]:
+        cols = columns[accn]
+        lines = {tag for end, col in cols.items() for tag, value in col.items()
+                 if _current_line_concept(tag) and value in figures.get(end, ())}
+        for end in cols.keys() & quarters.keys():
+            col, quarter = cols[end], quarters[end]
+            if quarter.get("short_term_debt") is not None or (quarter.get("commercial_paper") or 0) > 0 or (
+                    quarter.get("_source_tags", {}).get("long_term_debt") in _TOTALS_WITH_CURRENT_DEBT):
+                continue
+            tags = sorted(tag for tag in lines if tag in col)
+            values, filing = {col[tag] for tag in tags}, (filings[accn][1], accn)
+            if len(values) == 1 and filing > found.get(end, (("", ""),))[0]:
+                found[end] = (filing, col[tags[0]], tags[0])
+    return {end: (value, tag) for end, (_, value, tag) in found.items()}
+
+
 #: A later filing's figure for a year can be a tagging error of the figure the earlier
 #: filings agree on: its negative, a zero, or it times 10^3 or more (STX's FY2024 10-K put
 #: FY2022's 2.77 dividend a share at 2,770,000; BUG-061). x10 and x100 are left alone, as
@@ -1903,7 +1976,8 @@ class XBRLParser:
         per-quarter checkpoints. See :meth:`_collect_discrete_flows` /
         :meth:`_collect_instant_checkpoints`. A quarter whose 10-Q tags its long-term
         debt under a concept the field doesn't map reads the 10-Q's line where its
-        year-end column is the annual record's figure (``_long_term_debt_lines``, BUG-171).
+        year-end column is the annual record's figure (``_long_term_debt_lines``, BUG-171), and one whose 10-Q
+        tags its short-term debt so likewise (``_short_term_debt_lines``, BUG-292).
 
         Args:
             facts: Raw company facts
@@ -1936,6 +2010,9 @@ class XBRLParser:
         for end, (value, tag) in _long_term_debt_lines(us_gaap, annual, periods).items():
             periods[end]["long_term_debt"] = value
             periods[end]["_source_tags"]["long_term_debt"] = tag
+        for end, (value, tag) in _short_term_debt_lines(us_gaap, annual, periods).items():
+            periods[end]["short_term_debt"] = value
+            periods[end]["_source_tags"]["short_term_debt"] = tag
         self._collect_discrete_flows(us_gaap, periods, frames, restored, level, self._aside(us_gaap))
         if level is not None:
             self._instants_on_year_basis(periods, instants_filed, level)

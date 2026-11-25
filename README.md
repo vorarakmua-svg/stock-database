@@ -2349,7 +2349,11 @@ numbers SEC filings report:
   short-term investments, so it isn't read for banks.
 - **Long-term debt's own line.** A long-term debt figure a filing tags on a day its balance
   sheet doesn't show is a note's (an issue, a maturity) and isn't the year's (Phillips 66's
-  FY2015 10-K tags $1.1B at 2015-03-02 beside its year end's $8.8B). On a balance-sheet date a
+  FY2015 10-K tags $1.1B at 2015-03-02 beside its year end's $8.8B). A filing's balance-sheet
+  dates are those of its balance sheet's total, and of its total assets only where it tags no
+  such total or days from it (an adoption day's opening balance sheet): a note's total assets at
+  an earlier year end don't make it one (Church & Dwight's FY2023 10-K tags its 2023 debt,
+  $2.2B, at 2021-12-31, whose balance sheet shows $1.6B). On a balance-sheet date a
   figure under half of another of its kind (two noncurrent figures, or two totals) under a tag
   the field reads after it is a part of that line, which is read instead: PulteGroup's 10-Ks
   tag $31-77M as LongTermDebt beside notes payable of $1.6-2.0B. A later filing that repeats the
@@ -2363,14 +2367,20 @@ numbers SEC filings report:
   the 10-K shows without them (Chevron's: $25.6B at 2025-03-31, so total debt $29.7B, not its
   $4.1B of short-term debt alone). A line that may hold them stays unread (Kenvue's 2024 quarters),
   and so does one under the filer's own concept, which the SEC's company facts don't carry
-  (T-Mobile's since 2024, Caterpillar's): such a quarter has no long-term debt.
+  (T-Mobile's since 2024, Caterpillar's): such a quarter has no long-term debt. Short-term debt
+  is read the same way where a quarter has none: a 10-Q's current debt line under a concept the
+  field doesn't map, where its year-end column shows the figure an annual report filed there as
+  short-term debt (Oracle's 10-Qs tag their current notes only as NotesPayableCurrent: $7.6B at
+  2026-08-31, where the quarter had none); not beside commercial paper, nor beside a total with
+  current debt read as long-term debt, which can hold the line.
 - **Short-term debt and commercial paper.** Short-term debt is the balance sheet's debt due
   within a year. Where a filing shows its short-term borrowings and the current maturities of
   long-term debt apart, with no total of them, it is the two together (Verizon's FY2023: $13.0B
   of maturities beside no borrowings, total debt $150.7B, not $137.7B), unless the borrowings
   already hold the maturities (IBM's short-term debt is its maturities and its loans and paper)
   or the current liabilities couldn't hold both lines beside the payables, accruals and income
-  taxes (Cooper's FY2016: $1.33B, not $1.54B; PepsiCo's quarters). The latest filing that shows
+  taxes (Cooper's FY2016: $1.33B, not $1.54B; PepsiCo's quarters), where they hold the borrowings
+  beside those lines (else those lines overlap and tell nothing). The latest filing that shows
   the borrowings and the maturities on a date decides it (Howmet's FY2020 10-K shows FY2019's
   borrowings as its maturities: $5.94B, not $6.94B), and a quarter its own figures leave open
   takes the word of the annual reports on its latest year end only, an adoption day's opening

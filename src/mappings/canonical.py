@@ -275,7 +275,9 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         # maturities on separate lines, without a DebtCurrent, are read as one DebtCurrent unless the
         # borrowings already hold them (IBM's); the maturities a filer tags only as
         # LongTermDebtAndCapitalLeaseObligationsCurrent last (UNP's, HD's;
-        # ``xbrl_parser._current_debt_combined``, BUG-159).
+        # ``xbrl_parser._current_debt_combined``, BUG-159). A 10-Q that tags none of these reads its
+        # current line under another concept where its year-end column shows the annual record's figure
+        # (ORCL's NotesPayableCurrent; ``xbrl_parser._short_term_debt_lines``, BUG-292).
         ("DebtCurrent", "ShortTermBorrowings", "LongTermDebtCurrent", "LongTermDebtAndCapitalLeaseObligationsCurrent"),
         description="Debt due within a year: short-term borrowings and the current maturities of long-term debt.",
     ),

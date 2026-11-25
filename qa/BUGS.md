@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 75 · NEEDS-USER 0 · Decided: 8 · Verified: 320
+**Open:** P0 0 · P1 0 · P2 0 · P3 70 · NEEDS-USER 1 · Decided: 8 · Verified: 326
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1071,11 +1071,12 @@ Expected: carried figures on the answer's basis and period (restated by the spli
 Note (iteration 217): after Q18's merge the as-of view reports what the annual record holds; still OPEN in the record itself.
 
 ### BUG-133 [P3][VALID] Long-term debt is still missing where a filer tags only a total with its current maturities: JPM, USB, MET, TRV, PGR, EQIX
-Status: OPEN
+Status: VERIFIED (iteration 234) for JPM, USB, MET, PGR (by Q20); TRV is Q23, EQIX is BUG-330's kind, DE and BRK-B tag no us-gaap debt line
 Found: iteration 86 while fixing BUG-125 (`qa/evidence/iter86-bug125-realdata.txt`) | Fixed: — | Regression test: —
 Repro: after BUG-125's fix 16 companies' latest year still has no long-term debt. Some have none (ANET, ISRG, PLTR, VRTX); the rest tag only a total that includes the current maturities, which `short_term_debt` may hold too: JPM ($435.2B), USB ($60.8B) and MET ($14.5B) under `LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities`, TRV ($9.3B) and PGR ($6.9B) under `DebtLongtermAndShorttermCombinedAmount`, EQIX ($19.1B with $1.3B current) under `DebtInstrumentCarryingAmount` only, which is too often one instrument's to read (BUG-125); DE's and BRK-B's under none of these.
 Expected: the noncurrent part (the total less the current maturities the filer tags), or the total under a field of its own.   Actual: none; their total debt is the short-term part alone. Impact: the debt metrics of these companies (ROIC and the EV family are suppressed for banks and insurers).
 
+Fix (iteration 234): re-checked on the cache at 81b2e8e.
 ### BUG-134 [P2][VALID] A bank's EV, EV/EBITDA, EV/FCF and FCF yield are computed from the net debt, EBITDA and FCF its sector rules suppress: JPM's EV $1.03T, FCF yield -15%
 Status: VERIFIED (iteration 90)
 Found: iteration 87 while fixing BUG-126 (`qa/evidence/iter87-bug126-realdata.txt`) | Fixed: iteration 90 (see LOG) | Regression tests: `tests/test_sector_metrics.py::test_a_banks_ev_family_goes_with_its_net_debt_ebitda_and_fcf`, `::test_an_insurers_ev_to_ebitda_goes_with_its_ebitda`, `::test_a_reits_fcf_ratios_go_with_its_fcf`; guards `::test_a_general_companys_ev_family_is_computed`, `::test_yearly_metrics_without_a_price_gain_no_ev_keys`
@@ -1154,11 +1155,12 @@ Repro: `calculated_metrics.py:288-300` adds `commercial_paper` to `short_term_de
 Expected: paper added only where the short-term figure is a current-maturities tag that excludes it.   Actual: twice.
 
 ### BUG-144 [P3][VALID] Annual and quarterly long-term debt disagree at 10 year ends (4 before BUG-125): COP's 2019 reads $14.79B a quarter, $18.11B a year
-Status: OPEN
+Status: VERIFIED (iteration 234) for the named cases; the rest is BUG-382
 Found: iteration 92 by code review 13 (M2), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
 Repro: at quarterly checkpoints the 10-Qs' LongTermDebt outranks the new noncurrent tag, while the 10-K carries only the new one: COP 2019 $14.79B against $18.11B, COP 2020 $14.75B against $19.11B, ADI 2021 $6.25B against $6.78B, D 2019 $29.0B against $30.3B (review 13's `ltd_annual_vs_quarter.py`). Same root as BUG-141's tag order.
 Expected: one figure for a year end.   Actual: two.
 
+Fix (iteration 234): re-checked: COP FY2019/20, ADI FY2021, D FY2019 agree between annual and quarterly (by Q20/BUG-359/BUG-342).
 ### BUG-145 [P3][STORE] A refresh without a stored year carries the previous snapshot's EV family, so a pre-BUG-126 refresh's Yahoo EV stays for good
 Status: VERIFIED (iteration 233)
 Found: iteration 92 by code review 13 (M3), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
@@ -2548,6 +2550,17 @@ Found: code review 37 (`qa/evidence/review37.txt`, Minor 1; regression from BUG-
 Repro: src/valuation/inputs.py ~486-537, ~561 (`_restated_splits` counts a pair explained only by a split dated after the pair's earlier filing; a 10-K/A filed after Yahoo's split is that earlier filing), ~916 and ~281-302 (`_restated_between` applies both): Yahoo's 4:1 on 2023-06-01, FY2022's 10-K/A 2023-07-15: history [('2023-06-01', 4), ('2024-02-20', 4)]; FY2021-22 read 1.6B shares for 400M (book value per share, the indicators' count change). No real case over 504 filers (KR, DLTR amendments predate their splits). Probe: %LOCALAPPDATA%\stockdb-qa\review37\head\tests\test_review37.py.
 Expected: one split.   Actual: the declared split plus a copy dated on the next 10-K.
 Fix (iteration 231, `qa/evidence/bug381-investigation.txt`): `_restated_splits` counts a pair as explained by a declared split dated after the first filing of the earlier view's count (walking back over the year's earlier views within 1% of it; a different count stops the walk, so a second real split of the same ratio is still found). split_history identical for all 502 (census head vs fix); the seven real cases unchanged.
+### BUG-382 [P3][VALID] Annual and quarterly debt still disagree at 17 long-term and 23 short-term year ends
+Status: OPEN
+Found: the debt1 worker (iteration 234; split from BUG-144) | Fixed: | Regression test:
+Repro: census over 504 filers at 81b2e8e: long-term debt differs by more than 0.5% between the annual record and the quarter on the same year end at 17 of 7,073 (EXC FY2023-25 largest); short-term at 23 of 5,757. Also BUG-286's shape (b) (review 22 R8).
+Expected: one figure per balance-sheet date.   Actual: two.
+
+### Q23 [DATA] NEEDS-USER: read a debt total that includes current debt as the total less the current part (KVUE, TRV)?
+Status: OPEN (NEEDS-USER)
+Found: the debt1 worker (iteration 234; BUG-291, BUG-133's TRV) | Fixed: | Regression test:
+Context: Q20 sets aside a total that includes current debt on a date its current part is tagged (tested in tests/test_fallback_tags.py), so KVUE FY2024-25 and TRV have no long-term debt. Options: A read the total less the current figure the same filing tags (KVUE FY2024 7.805 - 0.750 = 7.055; TRV FY2025 9.267 - 0.300 = 8.967; total debt then equals the filer's own total); B a new field for the filer's own total; C leave as Q20 decided. Recommendation: A (moves TRV's EPV and scores; measure first).
+Decision: 
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
@@ -2706,17 +2719,19 @@ Also (code review 28, Minor 3): on a database from before the column, a first fi
 Fix (iteration 217, Q18's merge of feat/asof-snapshots): the as-of view no longer ranks stored vintage tags; it reads the stored snapshot of the record.
 
 ### BUG-272 [P3][PARSE] An adoption-day instant becomes a fiscal year's period_end: ICE FY2018 "2019-01-01", FY2019 "2020-01-01"
-Status: OPEN
+Status: VERIFIED (iteration 234; fixed by BUG-342, c0a507c)
 Found: code review 21 (declined as pre-existing) | Fixed: | Regression test:
 Repro: ICE's ASC 842 adoption-day balances (the first day of the next year) become its FY2018 and FY2019 records' period_end, which misled BUG-159's own-total oracle (it looked the total up at the record's period_end).
 Expected: the fiscal year's balance-sheet date.   Actual: the adoption day.
 
+Fix (iteration 234): re-checked: ICE FY2018/FY2019 period_end 2018-12-31/2019-12-31; no snapshot or vintage on 2019-01-01 or 2020-01-01. Left: empty adoption-day rows in ICE's quarterly ladder.
 ### BUG-273 [P3][PARSE] CHD's FY2023 10-K tags its 2023 long-term debt at 2021-12-31, which FY2021's record and as-of windows read
-Status: OPEN
-Found: code review 21 (declined as pre-existing data) | Fixed: | Regression test:
+Status: VERIFIED (iteration 234)
+Found: code review 21 (declined as pre-existing data) | Fixed: (this commit) | Regression tests: tests/test_debt_balance_sheet_lines.py (new); 13 failing first
 Repro: CHD's FY2023 10-K tags its 2023 LongTermDebtNoncurrent ($2.202B) at 2021-12-31, and FY2021's record reads it (total debt $3.154B at d5e6ec2, $2.455B at 9f536a4, the balance sheet's $2.563B). BUG-159 completed the short-term side only.
 Expected: FY2021's own long-term debt.   Actual: a stray later figure.
 
+Fix (iteration 234): a filing that tags its balance-sheet total is dated by that total only; total-assets dates count within 7 days of a total (an adoption-day balance sheet); a filing without a total keeps BUG-319's dating. Holds in the record, quarters, vintages and as-of snapshots. CHD FY2021 1.611 again; BMY 2012-09-30 short-term debt 0.751 -> 1.370 (its balance sheet). Measured (debt1, `qa/evidence/debt1-investigation.txt`): census over 504 filers annual LTD 9 cells/4 filers, quarterly LTD 11, STD 141; DB copies re-collected: 0 medians, verdicts, owner-earnings verdicts, labels; historical values CIEN 89.99 -> 90.03, EQIX 961.99 -> 961.62, ORCL 156.94 -> 156.26; look-ahead 0; oracles as at HEAD.
 ### BUG-274 [P2][VALID] D&A reads a "total" that is the filing's depreciation line where it is larger than the amortization beside it: GE FY2022-25 $0.85B for $1.18-1.22B
 Status: VERIFIED (iteration 171; GE FY2022-25 itself undecidable from the filings: residual)
 Found: iteration 116 (BUG-170's investigation, `qa/evidence/bug170-investigation.txt` R1) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (25 new items, 13 failing first; among them ::test_an_earlier_filings_total_on_another_basis_shows_nothing)
@@ -2804,11 +2819,12 @@ Expected: the latest report of each form looked for in the whole recent feed (te
 Fix (iteration 122, `qa/evidence/bug285-done.txt`): `get_submissions` keeps, beside the newest 100 filings (unchanged for their other readers), `latest_report`: the latest report of the feed's whole "recent" block the handler already fetches (no new request), by BUG-251's rule (`_latest_report`); the check reads both, and a submissions file cached before reads as it did. Offline the flag lists are unchanged (59: BUG-251's 58 and Exxon Mobil Corp's predecessor file); fed their cached filings with the latest report behind them, the banks and DELL are now checked, and Citigroup's companyfacts lack its 2026 10-Qs (BUG-295). P4 notes: the feed's older "files" pages aren't read (a new request, for a filer with no report in a year); the JSON export's sec_submissions now carries latest_report.
 
 ### BUG-286 [P3][PARSE] BUG-267's current-liabilities bound can say "held" falsely where its other lines overlap
-Status: OPEN
-Found: code review 22 (M-1) | Fixed: | Regression test:
+Status: VERIFIED (iteration 234) for review 22's shape (a); shape (b), R8, stays open in BUG-382's note
+Found: code review 22 (M-1) | Fixed: (this commit) | Regression tests: tests/test_debt_balance_sheet_lines.py (new); 13 failing first
 Repro: two made-up balance sheets read $200M of short-term debt for $350M at 8471b61 ($350M before it): a combined payables line tagged AccountsPayableCurrent with a note's compensation and taxes inside it, and taxes inside payables-with-accruals (BUG-267's own residual R8). Neither shape occurs in today's data. Firing the bound only where the borrowings with the other lines fit within the current liabilities changes 0 of the 120 real dates and closes the first.
 Expected: the bound fires only on lines that can't overlap.   Actual: latent false "held".
 
+Fix (iteration 234): the current-liabilities check fires only if the borrowings plus the other lines fit within current liabilities. 0 cells move. Measured (debt1, `qa/evidence/debt1-investigation.txt`): census over 504 filers annual LTD 9 cells/4 filers, quarterly LTD 11, STD 141; DB copies re-collected: 0 medians, verdicts, owner-earnings verdicts, labels; historical values CIEN 89.99 -> 90.03, EQIX 961.99 -> 961.62, ORCL 156.94 -> 156.26; look-ahead 0; oracles as at HEAD.
 ### BUG-287 [P3][STORE] A fill-only run (BUG-179) mixes an older parse's row with a newer one cell by cell
 Status: OPEN
 Found: code review 22 (M-2) | Fixed: | Regression test:
@@ -2847,11 +2863,12 @@ Repro: KVUE's 10-Ks tag their long-term debt under a concept long_term_debt does
 Expected: its balance sheet's long-term debt.   Actual: NULL.
 
 ### BUG-292 [P3][PARSE] ORCL's quarters don't read their current notes (NotesPayableCurrent)
-Status: OPEN
-Found: iteration 121 (BUG-171's investigation) | Fixed: | Regression test:
+Status: VERIFIED (iteration 234)
+Found: iteration 121 (BUG-171's investigation) | Fixed: (this commit) | Regression tests: tests/test_debt_balance_sheet_lines.py (new); 13 failing first
 Repro: ORCL's 10-Qs tag the current portion of its notes as NotesPayableCurrent, which short_term_debt doesn't read in the quarters.
 Expected: a quarter's short-term debt as its balance sheet's.   Actual: short by the current notes.
 
+Fix (iteration 234): a quarter with no short-term debt reads its 10-Q's unmapped current debt line when the same 10-Q tags that line at a year end with the annual record's short-term figure; not with commercial paper, nor where long-term debt comes from a total including current debt (ILMN 2015). ORCL 2026-08-31 none -> 7.625. Measured (debt1, `qa/evidence/debt1-investigation.txt`): census over 504 filers annual LTD 9 cells/4 filers, quarterly LTD 11, STD 141; DB copies re-collected: 0 medians, verdicts, owner-earnings verdicts, labels; historical values CIEN 89.99 -> 90.03, EQIX 961.99 -> 961.62, ORCL 156.94 -> 156.26; look-ahead 0; oracles as at HEAD.
 ### BUG-293 [P3][VAL] The valuation history names unknown debt "EBITDA is zero or negative", and treats AXON's debt-free 2017-22 quarters as unknown debt
 Status: VERIFIED (iteration 226; the second half applied at the user's decision Q22, 2026-11-25)
 Found: iteration 121 (BUG-171's investigation) | Fixed: | Regression test:

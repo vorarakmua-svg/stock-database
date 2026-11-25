@@ -3779,3 +3779,15 @@ Result: BUG-054, 055, 098, 131, 145, 307 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4235 passed, 2 skipped
 Commit: (this commit) fix(store): carry the last beta; empty strings are missing; locked column adds; served day in New York (BUG-054, -055, -098, -131, -145, -307)
 Next: the parser debt fixes (BUG-273, 286, 292).
+
+## Iteration 234: 2026-11-26 00:00: fix (BUG-273, BUG-286, BUG-292); BUG-272, 144, 133 re-checked
+Picked: the parser debt group (14 items); an opus worker did 3, re-checked 3, handed back a policy (Q23).
+Did: a filing tagging a balance-sheet total is dated by it; the current-liabilities bound needs the lines to fit;
+a quarter reads its 10-Q's unmapped current debt line when its year end matches the annual record.
+- RED: 13 failed on 81b2e8e; GREEN. 18 of 18 mutants; q20 46/46, bug358 8/8. Look-ahead 0.
+- DB copies re-collected: 0 medians, verdicts, labels; 3 historical values within labels.
+Result: BUG-273, 286 (a), 292 VERIFIED; BUG-272, 144 (named), 133 (in part) VERIFIED by earlier fixes. New: BUG-382,
+Q23 (NEEDS-USER). Not attempted: BUG-253, 254, 255, 259, 294, 330, 331.
+Gates: ruff ✓ mypy ✓ pytest 4259 passed, 2 skipped
+Commit: (this commit) fix(parser): balance sheets dated by their own total; current debt lines for quarters (BUG-273, BUG-286, BUG-292)
+Next: Q23 to the user; the rest of the debt group.
