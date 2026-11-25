@@ -3726,3 +3726,14 @@ Result: BUG-264, 262, 024, 050, 270 VERIFIED; BUG-379 (new) VERIFIED. BUG-266 na
 Gates: ruff ✓ mypy ✓ pytest 4187 passed, 2 skipped
 Commit: (this commit) fix(valuation): one split history with the filings' own splits; mixed spin-off factors split (BUG-264, -262, -024, -050, -270, -379)
 Next: STORE 344/168/165 (ready).
+
+## Iteration 229: 2026-11-25 17:30: fix (BUG-344, BUG-168, BUG-165)
+Picked: the STORE stale-rows group; an opus worker (sent back once to keep the rows of a step that raised).
+Did: a complete run removes the ticker's stored annual/metrics/quarterly/TTM/unmapped rows it no longer gives;
+partial, fill-only, failed and record-less runs remove nothing; a table whose step raised keeps its rows.
+- RED: 12 failed on 81d5af4; GREEN. 23 of 23 mutants. Look-ahead 0.
+- Re-collection of 502: 28 quarters, 32 trailing years, 667 unmapped tags removed; 0 medians, verdicts, labels.
+Result: BUG-344, BUG-168, BUG-165 VERIFIED. New: BUG-380 (P3).
+Gates: ruff ✓ mypy ✓ pytest 4204 passed, 2 skipped
+Commit: (this commit) fix(store): a complete run replaces the periods it no longer gives (BUG-344, BUG-168, BUG-165)
+Next: code review 37 (5 units since review 36).

@@ -270,7 +270,10 @@ class StockDataFetcher:
                     # The record as known on each filing day (the as-of snapshots) and each filing's views (its
                     # vintages, already normalised), replayed on the same facts with the run's years_back. A build
                     # that fails costs the snapshots alone: the run builds none (financials_annual_known None,
-                    # vintages {}), so the store leaves the stored ones as they were, and the record stands.
+                    # vintages {}), so the store leaves the stored ones as they were, and the record stands. The
+                    # run's years_back goes with its record either way: the store removes a period the run no
+                    # longer gives only within the years it read (BUG-344).
+                    stock.years_back = years_back
                     try:
                         snapshots = build_snapshots(self.xbrl_parser, facts, ticker=ticker, years_back=years_back,
                                                     sector=sector)
@@ -283,7 +286,6 @@ class StockDataFetcher:
                             stock.add_warning(warning)
                         stock.financials_annual_known = snapshots.rows
                         stock.financials_annual_vintages = snapshots.vintages
-                        stock.years_back = years_back
 
                     stock.merge_parsed_financials(annual, quarterly)
 
@@ -358,6 +360,7 @@ class StockDataFetcher:
             except Exception as e:
                 self.logger.warning(f"Data cleaning error for {ticker}: {e}")
                 stock.add_warning(f"Data cleaning: {str(e)}")
+                stock.unbuilt.append("quarterly")
 
         # Calculate derived metrics (generic + sector-aware).
         if stock.financials_annual:
@@ -366,6 +369,7 @@ class StockDataFetcher:
             except Exception as e:
                 self.logger.warning(f"Metrics calculation error for {ticker}: {e}")
                 stock.add_warning(f"Calculated metrics: {str(e)}")
+                stock.unbuilt.append("metrics")
 
         # Assess data quality (sector + integrity checks), now that metrics exist.
         if stock.financials_annual or stock.financials_quarterly:

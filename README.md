@@ -2548,8 +2548,15 @@ columns (P/E, PEG, price/book, debt/equity (Yahoo's, a percent), short interest,
 moving averages, …) — see `SNAPSHOT_SCREEN_COLUMNS` in `src/webapp/screener.py`
 for the subset exposed to the screener. All writes are idempotent upserts, so
 re-runs update in place: a ticker's run that parses its annual record rewrites every period it
-gives, so a figure the current rules leave empty is cleared, while periods it doesn't give and a
-filer with no 10-K yet (a new registrant) keep what's stored. A ticker SEC now maps to a
+gives, so a figure the current rules leave empty is cleared. When it read the filer's whole record
+(no report its companyfacts lacked, no unread predecessor, its submissions read, no SEC error) it also
+removes the ticker's years (with their `metrics_annual`), quarters, trailing years and unmapped tags
+its parse no longer gives, as it replaces the as-of snapshots and vintages; a `--years` run, only
+from the earliest period of each it gives on (the JSON file and `financial_history.csv` still keep
+every year by merging). A run that read part of the record and a filer with no 10-K yet (a new
+registrant) keep what's stored, and so does a table whose building step raised in the run (the
+quarters' cleaning, with the trailing years, or the metrics: the run's warning names it); a year
+whose metrics couldn't be computed keeps its stored ones. A ticker SEC now maps to a
 successor formed to take a registrant's place reads the predecessor's filings too
 (`sec_handler.PREDECESSOR_CIKS`), up to the successor's first report: XOM is ExxonMobil Holdings
 Corp's 10-Qs with Exxon Mobil Corp's history, BLK BlackRock, Inc.'s reports since 2024 with the old

@@ -22,7 +22,7 @@ from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 if TYPE_CHECKING:  # avoid a runtime exporters -> valuation (or ownership) dependency
     from ..ownership.portfolio import Change, GuruQuarters, Position
@@ -148,6 +148,13 @@ def _incomplete(stock: StockData) -> Optional[str]:
     if stock.submissions_error:
         lacked["submissions"] = stock.submissions_error
     return json.dumps(lacked) if lacked else None
+
+
+def _complete_sec_read(stock: StockData) -> bool:
+    """Whether a run read the whole of its filer's SEC record: nothing ``_incomplete`` names (the latest report its
+    companyfacts lacked, its predecessor's filings, its submissions) and no SEC error (a request or a step of the read
+    that failed). Only such a run removes the stored periods and unmapped tags its parse no longer gives (BUG-344)."""
+    return _incomplete(stock) is None and not any(str(error).startswith("SEC EDGAR") for error in stock.errors)
 
 
 def _cols_ddl(columns: Sequence[str], col_type: str = "REAL") -> str:
@@ -1015,6 +1022,11 @@ class SQLiteStore:
         # filers again (BUG-179).
         restated = bool(stock.financials_annual)
         fill = bool(stock.predecessor_error)
+        # And a run that parsed it from a complete read of the filer's filings speaks for the ticker's whole SEC
+        # record, as its snapshots do: a year, quarter, trailing year or unmapped tag its parse no longer gives goes
+        # (BUG-344, BUG-168, BUG-165). A run that read part of the filings removes nothing (_complete_sec_read).
+        if restated and _complete_sec_read(stock):
+            self._clear_absent(conn, stock)
 
         # financials_annual + metrics_annual
         historical = (stock.calculated_metrics or {}).get("historical", {})
@@ -1187,6 +1199,38 @@ class SQLiteStore:
         self._write_price_bars(conn, stock.ticker, stock.price_bars or [])
         self._write_earnings_history(conn, stock.ticker, stock.earnings_history or [])
         self._write_split_events(conn, stock.ticker, stock.splits or [])
+
+    @staticmethod
+    def _clear_absent(conn: sqlite3.Connection, stock: StockData) -> None:
+        """Delete *stock*'s stored periods its run no longer gives, before it writes its own: the fiscal years in
+        ``financials_annual`` and ``metrics_annual``, the quarters and trailing years, and the unmapped tags. With a
+        ``years_back``, the run read its latest years only, so a table's rows before the earliest period it gives
+        stay (none go when it gives none); the unmapped facts, each tag's latest whatever the limit, are all its own.
+        A table whose building step raised (``stock.unbuilt``: the quarters' cleaning and trailing years, the metrics)
+        loses no row: the run's part of it isn't its record. A year in the run keeps its stored metrics either way when
+        its own computation failed (``_write_stock`` writes none over them).
+        """
+        years = {int(fy) for fy in stock.financials_annual if str(fy).isdigit()}
+        tables: List[Tuple[str, str, Set[Any], bool, Optional[str]]] = [
+            ("financials_annual", "fiscal_year", years, True, None),
+            ("metrics_annual", "fiscal_year", years, True, "metrics"),
+            ("financials_quarterly", "period_end", set(stock.financials_quarterly or {}), True, "quarterly"),
+            ("financials_ttm", "period_end", set(stock.financials_ttm or {}), True, "quarterly"),
+            ("unmapped_facts", "tag", {fact.get("tag") for fact in stock.unmapped_facts or []}, False, None),
+        ]
+        for table, key, given, limited, step in tables:
+            if step in stock.unbuilt:
+                continue
+            stored = [row[0] for row in conn.execute(f"SELECT {key} FROM {table} WHERE ticker = ?", (stock.ticker,))]
+            if limited and stock.years_back:
+                if not given:
+                    continue
+                floor = min(given)
+                absent = [k for k in stored if k not in given and k >= floor]
+            else:
+                absent = [k for k in stored if k not in given]
+            conn.executemany(f"DELETE FROM {table} WHERE ticker = ? AND {key} = ?",
+                             [(stock.ticker, k) for k in absent])
 
     @staticmethod
     def _clear_snapshots(conn: sqlite3.Connection, stock: StockData) -> None:

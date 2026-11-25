@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 84 · NEEDS-USER 0 · Decided: 8 · Verified: 309
+**Open:** P0 0 · P1 0 · P2 0 · P3 82 · NEEDS-USER 0 · Decided: 8 · Verified: 312
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1298,11 +1298,12 @@ Expected: one unit for every "%" filter (typed percents converted by kind), or a
 Fix (iteration 188, with BUG-155): every field the screener shows as a percent (37 stored as a fraction, kind `pct`) takes a typed percent; screener.js converts at the filter boundary (typedToStored/storedToTyped), chips and saved-screen names show the typed unit, the popover says 'in %, e.g. 5 for 5%'. URLs, saved screens, presets and GET /api/screen keep the stored unit, so existing screens keep their meaning. debt_to_equity (Yahoo's percent) is typed as stored. Residual: a fraction typed by habit into a % field reads 100x too small (the hint is the only warning).
 
 ### BUG-165 [P3][STORE] A tag the registry now maps stays in `unmapped_facts` after a re-collection: AAPL's restricted-cash total still listed on the Quality page
-Status: OPEN
-Found: iteration 98 by code review 14 (M4), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 229)
+Found: iteration 98 by code review 14 (M4), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_sqlite_store.py, tests/test_fetcher_concurrency.py; 12 failing first
 Repro: on a copy of the user's data, AAPL re-collected SEC-only from the cache with f2271db's code keeps its 2026-08-04 row for CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents (mapped since BUG-139), and the Quality page lists the tag as unmapped: the export upserts a run's unmapped facts and never removes a ticker's earlier ones (`sqlite_store.py`). It is the third most common unmapped tag on the user's copy (121 tickers), and BUG-125's five newly mapped tags add 45 rows (review 14); a fresh collection has 122 fewer rows (28,412 to 28,290). The same class as BUG-029.
 Expected: a run that reads a ticker's SEC facts replaces its unmapped rows.
 
+Fix (iteration 229, `qa/evidence/bug344-investigation.txt`): a run that parsed the filer's annual record and read its filings completely (`_complete_sec_read`: no unrecovered report, unread predecessor, submissions error or SEC error) removes, before writing, the ticker's stored rows it no longer gives (`_clear_absent`): annual years with their metrics, quarters, trailing years, unmapped tags; a --years run only from its earliest period on; a table whose build step raised (`StockData.unbuilt`: quarterly, metrics) keeps its rows; a fill-only, partial, failed, Yahoo-only or record-less run removes nothing; snapshots/vintages as Q18. Re-collection of 502 offline: removed financials_quarterly 28 (23 tickers), financials_ttm 32 (28), unmapped_facts 667 (345; all now-mapped tags, 121 BUG-165's restricted-cash tag); annual 0. 0 medians, verdicts, owner-earnings verdicts, historical values or labels; AZO's 120 valuation_history months move (a stale empty TTM no longer read). ADI's TTM 2011-04-30/07-30 are produced again today, so kept. Oracles identical; look-ahead 0. Residual: BUG-380.
 ### BUG-166 [P3][CLI] `diagnose.py` prints share counts as dollars: "shares_outstanding: $14.77B"
 Status: VERIFIED (iteration 156)
 Found: iteration 98 by code review 14 (M5), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: (this commit) | Regression test: tests/test_cli_small.py::test_diagnose_prints_share_counts_as_counts
@@ -1317,11 +1318,12 @@ Expected: the docstring says what the job does.
 Fix (iteration 198, with BUG-028): the quote-refresh route's, the job submit's and settings' docstrings say what the job does (no 'lightweight quote-only').
 
 ### BUG-168 [P3][STORE] A period a re-parse no longer gives keeps its row: ADI's 2011-04-30 and 2011-07-30 trailing years, six vintages
-Status: OPEN
-Found: iteration 100 while verifying BUG-029's fix (`qa/evidence/bug029-realdata.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 229)
+Found: iteration 100 while verifying BUG-029's fix (`qa/evidence/bug029-realdata.txt`) | Fixed: (this commit) | Regression tests: tests/test_sqlite_store.py, tests/test_fetcher_concurrency.py; 12 failing first
 Repro: the export upserts the periods a run gives and never removes a ticker's others, so rows an older parse made stay after the current rules stop giving them: the user's database, re-collected with BUG-029's fix, still holds ADI's TTM 2011-04-30 and 2011-07-30 and vintages for ETN's FY2014 and FY2017, GS's FY2019 and FY2022, SCCO's FY2015 and SPG's FY2013 (by accession), which a fresh collection of the same filings doesn't have.
 Expected: a run that parsed the filer's annual record removes the ticker's periods it no longer gives (not a run with no annual record, a failed one or a predecessor's: Q6).   Actual: 8 stale rows.
 
+Fix (iteration 229, `qa/evidence/bug344-investigation.txt`): a run that parsed the filer's annual record and read its filings completely (`_complete_sec_read`: no unrecovered report, unread predecessor, submissions error or SEC error) removes, before writing, the ticker's stored rows it no longer gives (`_clear_absent`): annual years with their metrics, quarters, trailing years, unmapped tags; a --years run only from its earliest period on; a table whose build step raised (`StockData.unbuilt`: quarterly, metrics) keeps its rows; a fill-only, partial, failed, Yahoo-only or record-less run removes nothing; snapshots/vintages as Q18. Re-collection of 502 offline: removed financials_quarterly 28 (23 tickers), financials_ttm 32 (28), unmapped_facts 667 (345; all now-mapped tags, 121 BUG-165's restricted-cash tag); annual 0. 0 medians, verdicts, owner-earnings verdicts, historical values or labels; AZO's 120 valuation_history months move (a stale empty TTM no longer read). ADI's TTM 2011-04-30/07-30 are produced again today, so kept. Oracles identical; look-ahead 0. Residual: BUG-380.
 ### BUG-169 [P1][VAL] The DCF's basis took interest off twice: `levered_fcf` subtracted interest expense from OCF - capex
 Status: VERIFIED (build iteration 1)
 Found: the GuruFocus research's inventory (2026-10-21), build task M0-1 | Fixed: (this commit) | Regression test: tests/test_calculated_metrics.py::test_levered_fcf_does_not_subtract_interest_again, tests/test_calculated_metrics.py::test_levered_fcf_without_capex_is_ocf, tests/test_valuation_inputs.py::test_fcf_basis_is_free_cash_flow
@@ -2253,12 +2255,13 @@ Repro: financials_ttm rows get calendar_year / calendar_quarter but no `frame`, 
 Expected: the frame of the TTM's last quarter, or the docs say none.   Actual: none, undocumented.
 
 ### BUG-344 [P3][STORE] The store only upserts annual rows, so years and vintages a newer parse no longer produces stay in an existing database
-Status: OPEN
-Found: the as-of snapshots design's builder check and BUG-341's residual R1 | Fixed: | Regression test:
+Status: VERIFIED (iteration 229)
+Found: the as-of snapshots design's builder check and BUG-341's residual R1 | Fixed: (this commit) | Regression tests: tests/test_sqlite_store.py, tests/test_fetcher_concurrency.py; 12 failing first
 Repro: sqlite_store._write_stock upserts financials_annual and financials_annual_vintages and never deletes, so an existing DB keeps years an older parse made, years from a `years_back` run, and after BUG-341 16 vintages the parser no longer produces (each 1-2 figures from another period, mostly equity or cash at a transition date). The current as-of reader reads them as the latest-filed view (the as-of snapshots plan replaces that reader).
 Expected: a full run's annual rows and vintages are exactly what it parsed.   Actual: leftovers persist.
 Partly fixed (iteration 217, Q18's merge): a run that built snapshots replaces the ticker's vintages, so leftover vintages go at the next collection; still OPEN for financials_annual rows.
 
+Fix (iteration 229, `qa/evidence/bug344-investigation.txt`): a run that parsed the filer's annual record and read its filings completely (`_complete_sec_read`: no unrecovered report, unread predecessor, submissions error or SEC error) removes, before writing, the ticker's stored rows it no longer gives (`_clear_absent`): annual years with their metrics, quarters, trailing years, unmapped tags; a --years run only from its earliest period on; a table whose build step raised (`StockData.unbuilt`: quarterly, metrics) keeps its rows; a fill-only, partial, failed, Yahoo-only or record-less run removes nothing; snapshots/vintages as Q18. Re-collection of 502 offline: removed financials_quarterly 28 (23 tickers), financials_ttm 32 (28), unmapped_facts 667 (345; all now-mapped tags, 121 BUG-165's restricted-cash tag); annual 0. 0 medians, verdicts, owner-earnings verdicts, historical values or labels; AZO's 120 valuation_history months move (a stale empty TTM no longer read). ADI's TTM 2011-04-30/07-30 are produced again today, so kept. Oracles identical; look-ahead 0. Residual: BUG-380.
 ### Q18 [ASOF] NEEDS-USER: merge the as-of snapshots branch? It moves one historical-value label (MCO below -> near) by removing look-ahead
 Status: DECIDED (iteration 217): merged
 Found: as-of snapshots plan (docs/superpowers/specs/2026-11-18-asof-snapshots-design.md, plan docs/superpowers/plans/2026-11-18-asof-snapshots.md), Task 8's downstream diff | Fixed: | Regression test:
@@ -2527,6 +2530,11 @@ Found: the BUG-264 worker (iteration 228) | Fixed: (this commit) | Regression te
 Repro: DD's 0.4725 factor is its 1:3 reverse split times Corteva's spin-off; HLT, LDOS, MSI, WTW likewise. The code treated the whole factor as a spin-off: valuation_history market caps before that day about a third of the truth (DD 2016-11 $22.5B, true $62.0B; MSI 2010 $2.5B, true $17.7B); DDM dividends 3x too high (DD FY2017 9.43, true 3.14; HLT FY2016 1.72, true 0.57).
 Expected: the split applied to the counts, the remainder as the spin-off.   Actual: the split undone in every earlier close.
 Fix: see BUG-264 (iteration 228): the factor nearest a filing-recorded split is split into the two.
+### BUG-380 [P3][MATCH] The JSON file and financial_history.csv keep periods a run no longer gives
+Status: OPEN
+Found: the BUG-344 worker (iteration 229, residual) | Fixed: | Regression test:
+Repro: after BUG-344 SQLite removes a ticker's periods a complete run no longer produces (e.g. 28 quarters, 32 trailing years over 502), but the JSON export and financial_history.csv merge by period, so they keep them: the three outputs disagree (MATCH-05).
+Expected: the same periods in every output.   Actual: the files keep stale periods.
 
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)

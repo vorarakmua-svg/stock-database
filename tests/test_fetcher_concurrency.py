@@ -512,6 +512,65 @@ def test_a_snapshot_build_that_fails_keeps_the_runs_sec_record_and_the_stored_sn
         conn.close()
 
 
+def test_a_years_back_run_carries_its_limit_without_snapshots(tmp_path, monkeypatch):
+    # The store removes a period a run no longer gives only within the years a limited run read (BUG-344): a run
+    # whose snapshot build failed is limited all the same, or it would read as one over the whole history.
+    from src.fetchers import stock_data_fetcher
+
+    fetcher = _sec_only_fetcher(tmp_path, monkeypatch, {
+        "cik": "0001018724", "ticker": "AMZN", "source": "sec_edgar", "company_facts": _split_restated_facts()})
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("snapshot boom")
+
+    monkeypatch.setattr(stock_data_fetcher, "build_snapshots", boom)
+    stock = fetcher.fetch_ticker("AMZN", include_yahoo=False, years_back=1)
+    assert stock.financials_annual and stock.financials_annual_known is None
+    assert stock.years_back == 1
+
+
+@pytest.mark.parametrize("step, unbuilt, kept", [
+    ("_clean_and_derive", "quarterly", {"financials_quarterly", "financials_ttm"}),
+    ("_compute_metrics", "metrics", {"metrics_annual"}),
+])
+def test_a_step_that_raised_keeps_the_stored_rows_of_the_tables_it_builds(tmp_path, monkeypatch, step, unbuilt, kept):
+    # A collection catches a failed cleaning of the quarters (the trailing years with it) or of the metrics as a
+    # warning and goes on: an otherwise complete run, whose part of those tables isn't its record, so the store
+    # removes none of their stored rows (BUG-344), while a year the parse no longer gives goes as before.
+    from src.parsers.calculated_metrics import CalculatedMetrics
+
+    fetcher = _sec_only_fetcher(tmp_path, monkeypatch, {
+        "cik": "0001018724", "ticker": "AMZN", "source": "sec_edgar", "company_facts": _split_restated_facts()})
+    stale = StockData(ticker="AMZN", cik="0001018724", company_name="Amazon")
+    stale.financials_annual = {"1999": {"fiscal_year": 1999, "period_end": "1999-12-31", "revenue": 1.64e9,
+                                        "net_income": -0.72e9, "total_assets": 2.47e9}}
+    stale.financials_quarterly = {"1999-09-30": {"period_end": "1999-09-30", "revenue": 0.36e9}}
+    stale.financials_ttm = {"1999-09-30": {"period_end": "1999-09-30", "revenue": 1.4e9}}
+    stale.calculated_metrics = {"historical": CalculatedMetrics().calculate_historical(stale.financials_annual)}
+    stale.add_source("sec_edgar")
+    fetcher.sqlite_store.export([stale])
+
+    def boom(*args, **kwargs):
+        raise RuntimeError(f"{step} boom")
+
+    monkeypatch.setattr(fetcher, step, boom)
+    stock = fetcher.fetch_ticker("AMZN", include_yahoo=False)
+    assert stock.financials_annual and not stock.errors
+    assert stock.unbuilt == [unbuilt]
+    fetcher.sqlite_store.export([stock])
+    conn = sqlite3.connect(fetcher.sqlite_store.db_path)
+    try:
+        held = {table: conn.execute(f"SELECT count(*) FROM {table} WHERE ticker = 'AMZN' AND {key} = ?",
+                                    (value,)).fetchone()[0]
+                for table, key, value in (("financials_annual", "fiscal_year", 1999),
+                                          ("metrics_annual", "fiscal_year", 1999),
+                                          ("financials_quarterly", "period_end", "1999-09-30"),
+                                          ("financials_ttm", "period_end", "1999-09-30"))}
+    finally:
+        conn.close()
+    assert held == {table: int(table in kept) for table in held}
+
+
 def test_a_successor_registrant_is_noted_with_its_predecessor(tmp_path, monkeypatch):
     # Q6: XOM reads ExxonMobil Holdings Corp with Exxon Mobil Corp's filings; the run says so, where it used to say
     # there were no annual financials.

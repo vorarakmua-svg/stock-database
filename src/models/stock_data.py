@@ -111,7 +111,8 @@ class StockData:
     # (excluded from to_dict/JSON), like the vintages.
     financials_annual_known: Optional[List[Dict[str, Any]]] = None
     # The run's years_back (None: the whole history). A run that kept its latest years only speaks for those years'
-    # snapshots and vintages, so the SQLite store replaces those alone. SQLite-only.
+    # snapshots and vintages, so the SQLite store replaces those alone, and for its periods from the earliest it
+    # gives on, so the store removes a period it no longer gives only there (BUG-344). SQLite-only.
     years_back: Optional[int] = None
 
     # SEC submission data
@@ -143,6 +144,11 @@ class StockData:
     # so that `stock-data refresh` looks for reports filed since then and counts as tries only reads of
     # the SEC (BUG-232, BUG-281). SQLite-only, like the report without facts.
     sec_read_at: Optional[str] = None
+
+    # The steps that build the run's record from its parse which raised (caught as the run's warnings): "quarterly"
+    # (_clean_and_derive: the quarters' cleaning and the trailing years) and "metrics" (each year's metrics). The
+    # SQLite store removes no stored row of a table such a step writes (BUG-344). SQLite-only.
+    unbuilt: List[str] = field(default_factory=list)
 
     # Insider transactions (from SEC Form 4)
     insider_transactions: List[Dict[str, Any]] = field(default_factory=list)
@@ -199,6 +205,7 @@ class StockData:
         data.pop("missing_report", None)
         data.pop("submissions_error", None)
         data.pop("sec_read_at", None)  # SQLite-only too (collection_runs.sec_read_at)
+        data.pop("unbuilt", None)
         # Each figure's filing (the parser's ``_source_filings``) is for the as-of record, not the JSON.
         for attr in ("financials_annual", "financials_quarterly"):
             for period in (data.get(attr) or {}).values():
