@@ -1,12 +1,14 @@
-"""Behaviours no test pinned (BUG-087, BUG-147, BUG-162, BUG-288), found as surviving mutants by code reviews 8, 13, 14
-and 22. Each test says the mutant it kills. Self-contained (no helper imported from another test module)."""
+"""Behaviours no test pinned (BUG-072, BUG-087, BUG-122, BUG-129, BUG-147, BUG-162, BUG-288), found as
+surviving mutants by code reviews 6, 8, 11, 12, 13, 14 and 22. Each test says the mutant it kills.
+Self-contained (no helper imported from another test module)."""
 import sqlite3
 from datetime import datetime
 
 import pytest
 
 import src.refresh
-from src.exporters.sqlite_store import SQLiteStore
+from src.exporters.sqlite_store import SQLiteStore, _moves_per_share
+from src.fetchers.stock_data_fetcher import StockDataFetcher
 from src.models.stock_data import StockData
 from src.parsers.calculated_metrics import CalculatedMetrics
 from src.parsers.xbrl_parser import XBRLParser
@@ -214,3 +216,65 @@ def test_a_general_companys_refresh_has_its_ev_family(tmp_path):
     store = _collected(tmp_path, operating_income=100.0)
     _refresh(store, {"ebitda": 200.0})
     assert _ev_family(tmp_path / "stock.db")[1] == pytest.approx((1260.0, 1260.0 / 120.0, 1260.0 / 60.0, 60.0 / 1010.0))
+
+
+# --- BUG-072: a first filing's date from a truncated list --------------------------------------------------------
+
+
+def _ten_q_only_facts():
+    return {"facts": {"us-gaap": {"Assets": {"units": {"USD": [{"form": "10-Q", "val": 1.0, "end": "2026-03-31"}]}}}}}
+
+
+def _no_annual_note(filings):
+    """The run's note for a filer with only 10-Qs, whose submissions list *filings* (filing dates, newest first as SEC
+    lists them)."""
+    return StockDataFetcher._no_annual_financials("ZZZ", {
+        "cik": "0000000001", "company_facts": _ten_q_only_facts(),
+        "submissions": {"name": "ZZZ Corp", "filings": [{"filingDate": day} for day in filings]}})
+
+
+def _filing_days(count):
+    """*count* distinct filing days, newest first, the oldest 2024-03-01."""
+    from datetime import date, timedelta
+    return [(date(2024, 3, 1) + timedelta(days=n)).isoformat() for n in reversed(range(count))]
+
+
+@pytest.mark.parametrize("count, first_named", [
+    (1, True),
+    (99, True),     # fewer than the 100 SECHandler keeps: the list holds the filer's first filing
+    (100, False),   # 100 is the latest 100 of possibly more: its oldest is not the filer's first
+    (150, False),
+])
+def test_a_first_filing_date_is_named_only_from_a_list_shorter_than_the_100_kept(count, first_named):
+    # BUG-072 (surviving mutant: dropping `len(filings) < 100` made the note claim a first filing date from
+    # SECHandler's 100 latest filings). The date named is the oldest, whatever order the list is in.
+    note = _no_annual_note(_filing_days(count))
+    assert "it has filed no annual report (10-K) yet" in note
+    assert ("(its filings listed from 2024-03-01)" in note) is first_named
+    assert "listed from" not in note or note.endswith("(its filings listed from 2024-03-01)")
+
+
+def test_a_filer_with_no_filings_listed_gets_a_note_without_a_first_filing_date():
+    assert _no_annual_note([]).endswith("it has filed no annual report (10-K) yet")
+
+
+# --- BUG-129: a factor of Yahoo's split history that moves the stored per-share figures -------------------------------
+
+
+@pytest.mark.parametrize("ratio, moves", [
+    (10.0, True), (2.0, True), (1.5, True),
+    (1.25, True),      # 5:4, a simple ratio under 3:2: a share split
+    (0.75, True),      # 3:4
+    (0.1, True),       # 1:10
+    (2.0842, True),    # ABT's factor for AbbVie: 3:2 or more, not simple
+    (0.48, True),      # the reverse of such a factor: 2:3 or less, not simple (code review 12's mutant dropped this)
+    (0.9535, False),   # HON's spin-off factor
+    (1.3, False),      # not simple, under 3:2
+    (0.7, False),      # not simple, over 2:3
+    (1.01, False),     # SCCO's stock dividend
+    (1.0, False), (0.0, False), (-2.0, False),
+])
+def test_a_factor_moves_the_stored_figures_when_it_is_a_share_split_or_3_to_2_or_more(ratio, moves):
+    # BUG-129 (surviving mutant: `_moves_per_share` without the reverse factors' branch: a non-simple factor of 2:3 or
+    # less would stop being refused, or be named "a 3-for-5 split").
+    assert _moves_per_share(ratio) is moves

@@ -3705,3 +3705,13 @@ Result: Q22, BUG-293 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4103 passed, 2 skipped
 Commit: (this commit) fix(history): quarters after a debt-free 10-K are valued (Q22, BUG-293)
 Next: remaining P3s by area.
+
+## Iteration 227: 2026-11-25 15:30: tests (BUG-072, BUG-122, BUG-129)
+Picked: CODE test gaps; a sonnet worker.
+Did: tests pinning a split on the filing/served/price day, a truncated first-filing list, a 17-week quarter,
+revenue's 25% gap, the migration's re-check under the lock, the per-share factor rule, the explorer's dating.
+- Tests only; all pass on HEAD (no defect). 29 of 29 mutants killed.
+Result: BUG-072, BUG-122, BUG-129 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4151 passed, 2 skipped
+Commit: (this commit) test: pin the split-day, quarter-length, revenue-gap and migration boundaries (BUG-072, BUG-122, BUG-129)
+Next: STORE 344/168/165 and VAL seams (workers running).

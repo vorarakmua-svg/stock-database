@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 92 · NEEDS-USER 0 · Decided: 8 · Verified: 300
+**Open:** P0 0 · P1 0 · P2 0 · P3 89 · NEEDS-USER 0 · Decided: 8 · Verified: 303
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -592,12 +592,13 @@ Expected: the same rule as the annual record.   Actual: share-only quarters.
 
 Fix: the quarterly extractor applies BUG-065's reporting-currency rule, like the annual record and the vintages: a CAD reporter keeps no share-only quarters (a mutant without it fails the test).
 ### BUG-072 [P3][CODE] Two test gaps: a split on the filing day, and a first-filing date from a truncated list
-Status: OPEN
-Found: iteration 48 by code review 6 (M7), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 227)
+Found: iteration 48 by code review 6 (M7), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_p3_pins.py, test_ttm.py, test_quote_refresh.py, test_store_migration.py, test_web_api_asof.py, test_xbrl_parser.py, test_valuation_inputs.py
 Repro: on 3eee7b6 both mutants pass the full suite (969 passed each): `<=` → `<` in BUG-047's partition (a split dated on the latest filing's day goes to neither `_normalize_splits` nor `_apply_later_splits`), and dropping `len(filings) < 100` in `_no_annual_financials` (the note would claim a first filing date from SECHandler's 100 latest filings). No test covers an ADR or a convenience-translating reporter either (BUG-065).
 Expected: a test that fails for each.   Actual: none.
 
 Iteration 50: BUG-065's tests now cover an ADR and a convenience-translating reporter; the two surviving mutants remain.
+Fix (iteration 227, `qa/evidence/bug072-investigation.txt`): tests pin every listed behaviour as the code already has it (a split up to and including a filing's own day is restated by it; a first-filing date only from a list under 100 filings; a quarter 80-120 days inclusive, 17 weeks included; revenue figures 25% apart are different things; Yahoo applies a split on its own day; the migration re-checks served_on under the write lock; _moves_per_share's ratios; the explorer dates only carried figures). 29 of 29 mutants killed. No code change, no defect found.
 ### BUG-073 [P3][CODE] Eight fetcher tests make a live SEC request, and the suite never notices
 Status: VERIFIED (iteration 51)
 Found: iteration 51, checking BUG-061's fetcher test (`qa/evidence/iter51-bug073-{netguard,red}.txt`) | Fixed: iteration 51 (see LOG) | Regression test: the autouse `no_network` guard in `tests/conftest.py`, and `tests/test_no_network.py::test_a_connection_off_this_machine_is_refused`
@@ -981,11 +982,12 @@ Code review 12 (M6), re-run in iteration 85: two more after BUG-110's fix, `AsOf
 Fix (iteration 198, with BUG-028): README total_liabilities includes minus minority_interest; quality.py says (A - E - NCI); fetch_quote's and metrics_history_as_of's docstrings say what the code does. The as-of docstring item is the as-of branch's (Q18).
 
 ### BUG-122 [P3][CODE] Four behaviors no test pins: a 17-week quarter, revenue's 25% gap, a split on the served day, the migration's re-check
-Status: OPEN
-Found: iteration 78 by code review 11 (M5), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 227)
+Found: iteration 78 by code review 11 (M5), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_p3_pins.py, test_ttm.py, test_quote_refresh.py, test_store_migration.py, test_web_api_asof.py, test_xbrl_parser.py, test_valuation_inputs.py
 Repro: code review 11's surviving mutants, re-run on a399dc0 with its runner, the whole suite each; all five still survive (1,114 passed each): the parser's and `ttm.py`'s 115-day quarter limit, `_REVENUE_GAP = 1.15`, `day < served` in `_dividend_onto` (a3e9e27's form of the review's mutant) and the migration without its re-check. Their effects (the review's): a 115-day quarter limit in the parser loses six 17-week Q4s (COST 2012-09-02 $32.22B, 2017-09-03, 2023-09-03; PEP's 2011, 2016 and 2022 year-ends), and in `ttm.py` 18 trailing years; `_REVENUE_GAP = 1.15` moves DHR's FY2017-18 revenue from $18.33B and $19.89B to $15.52B and $17.05B; `day < served` makes a run on the split's day whose quote failed read DDM 41.84 beside the $1,008.86 pre-split price (median $490.63, upside -51.4%, against head's 418.38, $526.57 and -47.8%; re-run); without the re-check the loser of two first runs fails "duplicate column name: served_on" 5 of 5 times, where head's both succeed (re-run).
 Expected: a test each.   Actual: none fails.
 
+Fix (iteration 227, `qa/evidence/bug072-investigation.txt`): tests pin every listed behaviour as the code already has it (a split up to and including a filing's own day is restated by it; a first-filing date only from a list under 100 filings; a quarter 80-120 days inclusive, 17 weeks included; revenue figures 25% apart are different things; Yahoo applies a split on its own day; the migration re-checks served_on under the write lock; _moves_per_share's ratios; the explorer dates only carried figures). 29 of 29 mutants killed. No code change, no defect found.
 ### BUG-123 [P3][STORE] A vintage's calendar year depends on the process's hash seed: TJX's and WMT's FY2012 read 2011 or 2012
 Status: VERIFIED (iteration 181)
 Found: iteration 80 while verifying BUG-111: two offline collections of the same cache stored different calendar years for two vintages (`qa/evidence/iter80-bug111-realdata.txt`) | Fixed: (this commit) | Regression tests: tests/test_fiscal_calendar.py (5 new, one under PYTHONHASHSEED 0-7); 5 failing first
@@ -1037,11 +1039,12 @@ Decision (iteration 89): the factor stored and the ticker valued on it, not a to
 Fix: the quote job reads every factor since the last collection (`SQLiteStore.factors_since_collection`: the date rule `splits_since_collection` had, for every ratio but 1.0); the share splits and factors of 3:2 or more among them still refuse the refresh (`splits_since_collection`). Any other, a stock dividend or a spin-off, rebases Yahoo's prices and dividends, which the DDM and the multiples band are built on: the saved refresh stores Yahoo's split history with the price (`upsert_quote(..., splits=)`, one transaction, as a collection stores it) and the job values those tickers on it (`engine.compute_and_store`, never-fail like the collection job's). An ordinary refresh still writes only the snapshot (GATHER-13). Four tests RED on ef7cc76, three guards; eight mutants, each failing a test (`qa/evidence/iter89-bug128-{red,green,mutants}.txt`). Code review 12's fake market through the web app's own refresh route: after GE's 1.253 the refresh reads DDM 333.90, multiples 784.81, median 490.63, upside -39.2%, the full collection's (it read 418.38, 983.37, 526.57, -34.8%); T's 1.324 -35.8% (-31.1%), SPGI's 1.057 -46.1% (-45.0%), SCCO's 1.01 -47.6% (-47.4%), each the full collection's, split_events holding the factor; a 2:1 split still refused (`iter89-bug128-e2e.txt`). On a copy of the user's data a refresh listing each ticker's stored split history finds nothing new for all 127, so nothing more is written; 45 stored factors aren't share splits (SCCO's seven, HON's, GE's, DHR's...) (`iter89-bug128-realdata.txt`).
 Code review 14 (I1), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`): the recompute values DDM's trailing year as of the refresh day on the payments the last collection stored, so after a payment since then it reads low (BUG-160); "as a full collection would" holds only without one.
 ### BUG-129 [P3][CODE] Six behaviors no test pins: a split on the price's day or the bars' last day, the served day's boundary, a non-simple reverse factor, the explorer's date beside a figure the latest filing holds
-Status: OPEN
-Found: iteration 84 by code review 12 (M1, M7), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 227)
+Found: iteration 84 by code review 12 (M1, M7), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_p3_pins.py, test_ttm.py, test_quote_refresh.py, test_store_migration.py, test_web_api_asof.py, test_xbrl_parser.py, test_valuation_inputs.py
 Repro: code review 12's surviving mutants, re-run on eb0aec3 with its runner (the whole suite each): all six still survive (1,131 passed each): `target <= day` and `served < day < target` in `_dividend_onto`, its `day < served`, the reverse factors' branch of `_moves_per_share`, the refusal naming only forward non-simple factors as price adjustments, and the explorer's date beside every figure. Their effects (the review's): `target <= day` (a split on the price's day, a full run) or `served < day < target` (a run that day whose dividend request failed) reads DDM 418.38 against 41.84, median 80.91 against 52.66, upside -20.0% against -47.9%; BUG-117 makes a payment served on a split's day common (whenever a run's latest listed split is later than its last bar), which BUG-122's `day < served` mutant still misses; without the reverse branch a non-simple factor of 2:3 or less would stop being refused, or be named "a 3-for-5 split"; the explorer would show "(filed None)" beside the latest filing's own figures. No current case.
 Expected: a test each.   Actual: none fails.
 
+Fix (iteration 227, `qa/evidence/bug072-investigation.txt`): tests pin every listed behaviour as the code already has it (a split up to and including a filing's own day is restated by it; a first-filing date only from a list under 100 filings; a quarter 80-120 days inclusive, 17 weeks included; revenue figures 25% apart are different things; Yahoo applies a split on its own day; the migration re-checks served_on under the write lock; _moves_per_share's ratios; the explorer dates only carried figures). 29 of 29 mutants killed. No code change, no defect found.
 ### BUG-130 [P3][WEB] A 5:4 or 4:3 split stops a refresh with a promise a full collection doesn't keep: the valuation applies only factors of 3:2 or more
 Status: OPEN
 Found: iteration 84 by code review 12 (M2), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: — | Regression test: —

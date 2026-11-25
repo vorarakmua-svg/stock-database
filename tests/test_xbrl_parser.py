@@ -116,6 +116,32 @@ def test_a_sixteen_week_fourth_quarter_is_derived():
     assert (q["2024-09-01"]["net_income"], q["2024-09-01"]["fiscal_quarter"]) == (170, 4)
 
 
+@pytest.mark.parametrize("fourth_quarter_days, derived", [
+    (119, True),    # 17 weeks: PEP's and COST's longest fourth quarter
+    (120, True),    # the limit, inclusive
+    (121, False),   # a day more: the nine months' rung and the year's are two quarters apart
+])
+def test_a_seventeen_week_fourth_quarter_is_derived_and_a_longer_one_is_not(fourth_quarter_days, derived):
+    # BUG-122 (surviving mutant: _QUARTER_MAX_DAYS 120 -> 115, which lost six 17-week Q4s: COST 2012-09-02,
+    # 2017-09-03, 2023-09-03; PEP's 2011, 2016, 2022). A quarter spans 80 to 120 days; the fourth is the year's
+    # figure less the nine months', so its length is the last rung's step. 119 days (17 weeks) is a quarter.
+    from datetime import date, timedelta
+    s = "2023-01-01"
+    year_end = (date(2023, 9, 2) + timedelta(days=fourth_quarter_days)).isoformat()
+    ladder = [
+        usd(100, s, "2023-03-22", fy=2023, fp="Q1", form="10-Q", filed="2023-04-20"),
+        usd(220, s, "2023-06-12", fy=2023, fp="Q2", form="10-Q", filed="2023-07-20"),
+        usd(330, s, "2023-09-02", fy=2023, fp="Q3", form="10-Q", filed="2023-10-20"),
+        usd(500, s, year_end, fy=2023, fp="FY", form="10-K", filed="2024-02-20"),
+    ]
+    q = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": {"NetIncomeLoss": {"units": {"USD": ladder}}}}})
+    if derived:
+        assert (q[year_end]["net_income"], q[year_end]["fiscal_quarter"]) == (170, 4)
+    else:
+        assert "net_income" not in q.get(year_end, {})
+    assert q["2023-09-02"]["net_income"] == 110  # the rungs before it don't depend on the limit
+
+
 def test_a_missing_rung_derives_no_two_quarter_figure():
     # A quarter runs 12 to 17 weeks: with the half year missing, the nine months less the first quarter is two quarters,
     # no quarter's figure.
@@ -3544,6 +3570,22 @@ def test_revenue_figures_less_than_a_quarter_apart_keep_the_tag_order():
     annual = _annual(*_one_year(2017, "2019-02-26", Revenues=99.279e9, SalesRevenueNet=113.192e9,
                                 OperatingExpenses=105.0e9, OperatingIncomeLoss=8.192e9))
     assert annual["2017"]["revenue"] == 99.279e9
+
+
+@pytest.mark.parametrize("gap, revenue", [
+    (1.20, 100.0e9),   # 20% apart: a restatement or a presentation, the tag order (Revenues first) settles it
+    (1.24, 100.0e9),   # just under the 25%
+    (1.26, 126.0e9),   # just over: the income statement adds up to the other, and the first gives way
+    (1.30, 130.0e9),   # 30% apart
+])
+def test_two_revenue_figures_give_way_to_the_income_statement_only_from_25_percent_apart(gap, revenue):
+    # BUG-122 (surviving mutant: _REVENUE_GAP 1.25 -> 1.15, which moved DHR's FY2017-18 revenue to $15.52B and $17.05B
+    # from $18.33B and $19.89B). Two of a year's revenue figures must be 25% apart to be two things; closer, the tag
+    # order settles it even where the operating income and expenses add up to the second figure.
+    other = 100.0e9 * gap
+    annual = _annual(*_one_year(2017, "2019-02-26", Revenues=100.0e9, SalesRevenueNet=other,
+                                OperatingExpenses=other * 0.9, OperatingIncomeLoss=other * 0.1))
+    assert annual["2017"]["revenue"] == pytest.approx(revenue)
 
 
 def test_a_fourth_quarter_is_the_years_revenue_less_nine_months():

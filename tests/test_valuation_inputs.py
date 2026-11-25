@@ -310,6 +310,7 @@ def test_split_after_the_latest_filing_moves_every_year_to_todays_basis(tmp_path
 
 @pytest.mark.parametrize("split_date, ratio", [
     ("2025-07-15", 10.0),    # between the year end and the filing: the 10-K already restated it
+    ("2025-08-08", 10.0),    # on the filing's day (BUG-072): the 10-K filed that day already restated it
     ("2026-06-29", 0.9535),  # HON's spin-off price factor, not a share split
 ])
 def test_later_split_events_that_are_not_pending_splits_change_nothing(tmp_path, split_date, ratio):
@@ -1026,6 +1027,9 @@ def _with_dividend_served_on(db_path, amount, served_on):
     ("2026-09-01", "2026-10-01", 0.19, 1.9),  # served after a split the price came before: up by it (BUG-078, BUG-094)
     ("2026-06-12", "2026-10-01", 0.19, 0.19),  # served, like the price, after the split: as it is
     ("2026-06-12", "2026-06-12", 0.19, 0.19),  # served on the split's day, which Yahoo has split by then
+    ("2026-09-01", "2026-09-01", 0.19, 1.9),   # served on a later split's own day: up by it (BUG-122)
+    ("2026-08-04", "2026-10-01", 0.19, 0.19),  # a split on the price's day, served after: as it is (BUG-129)
+    ("2026-08-04", "2026-06-01", 1.9, 0.19),   # a split on the price's day, served before: down by it (BUG-129)
 ])
 def test_a_dividend_goes_to_the_prices_basis_from_the_day_yahoo_served_it(tmp_path, split_date, served_on, stored,
                                                                           expected):
@@ -1142,6 +1146,21 @@ def test_a_split_between_two_years_filings_still_explains_their_seam(tmp_path):
         (2019, 2.0), (2020, 2.0), (2021, 1.0), (2022, 1.0)]
 
 
+def test_a_split_dated_on_a_filings_day_explains_the_seam_that_filing_restated(tmp_path):
+    # BUG-072 (surviving mutant: `<=` -> `<` in `_filed_between` and `_splits_filed_between`): a filing restates for the
+    # splits dated up to its own day, so the split of 2024-02-20 is between FY2020's last filing (2023-02-20) and
+    # FY2021's (the 10-K filed 2024-02-20, the day of the split): the same seam, with the same factors, as the split of
+    # 2023-06-01 (test above). It is in no later partition either: `_apply_later_splits` takes only splits after the
+    # latest filing (test_later_split_events_that_are_not_pending_splits_change_nothing, 2025-08-08).
+    shares = {fy: 2.0e8 for fy in range(2016, 2026)}
+    eps = {fy: 0.5 + 0.1 * (fy - 2016) if fy < 2021 else 2.0 + 0.1 * (fy - 2021) for fy in range(2016, 2026)}
+    conn = _connect(_restating_filings_db(tmp_path, "2024-02-20", shares, eps))
+    records = load_inputs(conn, "RST").fy_records
+    conn.close()
+    assert [(r.fiscal_year, r.split_factor) for r in records[3:7]] == [
+        (2019, 2.0), (2020, 2.0), (2021, 1.0), (2022, 1.0)]
+
+
 def test_equal_splits_under_the_jump_threshold_each_fold_the_seam_between_their_filings(tmp_path):
     # BUG-245, WRB-like: 3:2 splits in 2019, 2022 and 2024, and buybacks of 1.5% a year, so each seam reads
     # 1.5 x 0.985 = 1.4775, under the 1.5 a seam had to reach. Each split lies between the filings of one seam's
@@ -1181,6 +1200,28 @@ def test_the_declared_splits_between_two_years_filings_fold_a_seam_nearer_their_
     records, _ = _normalize_splits(_seam_years(seam * 1.0e8), [1.0e8, seam * 1.0e8], splits, _FILED)
     assert [r.split_factor for r in records] == [factor, 1.0]
     assert records[0].eps_diluted == pytest.approx(4.0 / factor)
+
+
+@pytest.mark.parametrize("seam, day, factors, truncated", [
+    (1.493, "2019-02-20", [1.5, 1.0], False),   # on the newer filing's day: that filing restated it, so the seam is its
+    (1.493, "2019-02-21", [1.0, 1.0], False),   # the day after: not in the newer filing
+    (1.493, "2018-02-20", [1.0, 1.0], False),   # on the older filing's day: it restated it too, no seam
+    (1.493, "2018-02-21", [1.5, 1.0], False),   # the day after the older filing: between
+    (60.0, "2019-02-20", [60.0, 1.0], False),   # a seam beyond 50x, the same boundaries
+    (60.0, "2019-02-21", [1.0], True),
+    (60.0, "2018-02-20", [1.0], True),
+])
+def test_a_split_explains_the_seam_between_two_filings_from_the_day_after_the_older_to_the_newers_own(
+        seam, day, factors, truncated):
+    # BUG-072 (surviving mutant: `<=` -> `<` in BUG-047's partition, `_filed_between` and `_splits_filed_between`: a
+    # split dated on the latest filing's day went to neither `_normalize_splits` nor `_apply_later_splits`). A filing
+    # restates for the splits dated up to its own day, so a split explains the seam of two years last filed on
+    # 2018-02-20 and 2019-02-20 when it is dated after the first and no later than the second. The seam is 1.493, a 3:2
+    # buybacks pushed under the 1.5 threshold, or 60x (beyond MAX_SPLIT_RATIO, where only a declared split explains it).
+    from src.valuation.inputs import _normalize_splits
+    ratio = 1.5 if seam < 2 else 60.0
+    records, cut = _normalize_splits(_seam_years(seam * 1.0e8), [1.0e8, seam * 1.0e8], [(day, ratio)], _FILED)
+    assert ([r.split_factor for r in records], cut) == (factors, truncated)
 
 
 def test_a_merger_beside_a_declared_split_folds_the_split_alone():
@@ -1592,6 +1633,25 @@ def test_dividends_served_before_a_split_go_onto_the_basis_of_bars_served_after_
 def test_dividends_on_the_bars_basis_stay_as_they_are(tmp_path):
     # Served with the bars, before a later split: nothing to move.
     assert _payer_after_a_split(tmp_path, "2023-02-01", "2022-12-30") == {2021: 100.0, 2022: 100.0}
+
+
+def test_a_split_on_the_bars_last_day_is_in_a_payment_served_that_day(tmp_path):
+    # BUG-129 (surviving mutant: `target < day` -> `target <= day`): the bars run to 2022-12-30, and Yahoo served them
+    # that day with the split of that day applied (their closes halved), and the payment with it (halved): as it is.
+    assert _payer_after_a_split(tmp_path, "2022-12-30", "2022-12-30", halve=True, bars_too=True) == {
+        2021: 50.0, 2022: 50.0}
+
+
+def test_a_payment_served_before_a_split_on_the_bars_last_day_goes_onto_their_basis(tmp_path):
+    # BUG-129 (surviving mutant: `served < day <= target` -> `served < day < target`): a payment from before the split
+    # of the bars' last day is halved to the bars' basis, which has that day's split.
+    assert _payer_after_a_split(tmp_path, "2022-12-30", "2022-12-01", bars_too=True) == {2021: 50.0, 2022: 50.0}
+
+
+def test_a_payment_served_on_the_day_of_a_split_after_the_bars_goes_onto_the_bars_basis(tmp_path):
+    # BUG-122 (surviving mutant: `day <= served` -> `day < served`): Yahoo served the payment on the split's own day
+    # with the split applied (halved), the bars before it: the payment goes up by the split onto the bars' basis.
+    assert _payer_after_a_split(tmp_path, "2023-02-01", "2023-02-01", halve=True) == {2021: 100.0, 2022: 100.0}
 
 
 def _payer_with_a_factor(tmp_path, ratio, factor_day, served_on, halve=False, bars_before=None):

@@ -91,6 +91,7 @@ def test_the_collected_at_is_naive_local_by_default(tmp_path):
     (1.25, "a 5-for-4 split on 2024-07-01"),
     (0.1, "a 1-for-10 split on 2024-07-01"),
     (2.0842, "a 2.0842 price adjustment (a spin-off or merger) on 2024-07-01"),
+    (0.48, "a 0.48 price adjustment (a spin-off or merger) on 2024-07-01"),  # a reverse factor, BUG-129
 ])
 def test_the_splits_are_named_as_the_web_job_names_them(ratio, named):
     splits = [{"date": "2024-07-01T00:00:00", "ratio": ratio}]

@@ -595,6 +595,47 @@ def test_dividends_stored_before_the_served_day_take_their_series_latest_basis(t
         [("2026-06-13", "2026-08-03")], [("2024-06-05", "2024-06-10")], [("2025-03-01", None)]]
 
 
+def test_the_loser_of_two_first_runs_finds_the_column_the_winner_added(tmp_path, monkeypatch):
+    # BUG-122 (surviving mutant: the migration without its re-check under the write lock): two first runs on a database
+    # from before `served_on` both see no column, one takes the write lock first and adds and dates it; the other, once
+    # it has the lock, must look again, or it fails "duplicate column name: served_on" (5 of 5 on head's two runs).
+    db = _pre_served_day_db(tmp_path)
+    real_connect = SQLiteStore._connect
+
+    class WinnerFirst:
+        """Just after the run read the dividend table's columns, and before it takes the write lock, the other run
+        adds and dates the column."""
+        def __init__(self, conn):
+            self._conn, self._last, self.raced = conn, "", False
+
+        def execute(self, sql, *args):
+            if sql == "BEGIN IMMEDIATE" and "table_info(dividend_events)" in self._last and not self.raced:
+                self.raced = True
+                other = sqlite3.connect(db)
+                other.execute("ALTER TABLE dividend_events ADD COLUMN served_on TEXT")
+                other.execute("UPDATE dividend_events SET served_on = '2026-08-03'")
+                other.commit()
+                other.close()
+            self._last = sql
+            return self._conn.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    racers = []
+
+    def connect(self):
+        racers.append(WinnerFirst(real_connect(self)))
+        return racers[-1]
+
+    monkeypatch.setattr(SQLiteStore, "_connect", connect)
+    result = SQLiteStore(db).write_batch([_stub_stock("ZZZ")])
+    assert result.stored == ["ZZZ"], result  # the batch isn't failed with "duplicate column name: served_on"
+    assert any(racer.raced for racer in racers)  # the race happened
+    monkeypatch.undo()
+    assert _served_days(db, "KO") == [("2026-06-13", "2026-08-03")]  # the winner's days stand
+
+
 def test_a_migration_interrupted_while_dating_dividends_is_undone_whole(tmp_path, monkeypatch):
     # As BUG-083's flags: the column and the days arrive together or not at all, committed before the run writes.
     db = _pre_served_day_db(tmp_path)
