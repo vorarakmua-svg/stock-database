@@ -112,7 +112,8 @@ class StockData:
     financials_annual_known: Optional[List[Dict[str, Any]]] = None
     # The run's years_back (None: the whole history). A run that kept its latest years only speaks for those years'
     # snapshots and vintages, so the SQLite store replaces those alone, and for its periods from the earliest it
-    # gives on, so the store removes a period it no longer gives only there (BUG-344). SQLite-only.
+    # gives on, so the store, the JSON file and financial_history.csv remove a period it no longer gives only there
+    # (BUG-344, BUG-380). Not in to_dict/JSON.
     years_back: Optional[int] = None
 
     # SEC submission data
@@ -147,7 +148,8 @@ class StockData:
 
     # The steps that build the run's record from its parse which raised (caught as the run's warnings): "quarterly"
     # (_clean_and_derive: the quarters' cleaning and the trailing years) and "metrics" (each year's metrics). The
-    # SQLite store removes no stored row of a table such a step writes (BUG-344). SQLite-only.
+    # SQLite store, the JSON file and financial_history.csv remove no stored row of a table such a step writes
+    # (BUG-344, BUG-380). Not in to_dict/JSON.
     unbuilt: List[str] = field(default_factory=list)
 
     # Insider transactions (from SEC Form 4)

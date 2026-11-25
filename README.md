@@ -294,7 +294,8 @@ collected (`price_history_snapshots` files the earlier price statistics under th
 (Yahoo failed, `--no-yahoo`, "quote unavailable") keeps the earlier market data, valuation ratios and the metrics
 priced on the market cap (`enterprise_value`, `ev_to_ebitda`, ...), as the database keeps its latest snapshot. A run
 that couldn't read a successor's predecessor's filings only fills the stored periods, here and in
-`financial_history.csv` as in the database.
+`financial_history.csv` as in the database, and a run that read the filer's whole record removes the periods and
+unmapped tags it no longer gives from both files by the database's rule (below, under the database's tables).
 
 ### CSV Summary Fields
 
@@ -2552,8 +2553,8 @@ gives, so a figure the current rules leave empty is cleared. When it read the fi
 (no report its companyfacts lacked, no unread predecessor, its submissions read, no SEC error) it also
 removes the ticker's years (with their `metrics_annual`), quarters, trailing years and unmapped tags
 its parse no longer gives, as it replaces the as-of snapshots and vintages; a `--years` run, only
-from the earliest period of each it gives on (the JSON file and `financial_history.csv` still keep
-every year by merging). A run that read part of the record and a filer with no 10-K yet (a new
+from the earliest period of each it gives on (the JSON file and `financial_history.csv` remove
+them by the same rule). A run that read part of the record and a filer with no 10-K yet (a new
 registrant) keep what's stored, and so does a table whose building step raised in the run (the
 quarters' cleaning, with the trailing years, or the metrics: the run's warning names it); a year
 whose metrics couldn't be computed keeps its stored ones. A ticker SEC now maps to a

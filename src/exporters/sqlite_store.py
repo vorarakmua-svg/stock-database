@@ -22,7 +22,7 @@ from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
 if TYPE_CHECKING:  # avoid a runtime exporters -> valuation (or ownership) dependency
     from ..ownership.portfolio import Change, GuruQuarters, Position
@@ -35,6 +35,8 @@ from ..models.stock_data import StockData
 from ..parsers.calculated_metrics import CalculatedMetrics
 from ..universe.industries import normalize_sic, normalize_sic_description
 from ..valuation.inputs import SPLIT_JUMP_THRESHOLD, _simple_ratio
+from .record_scope import RECORD_PARTS, absent, speaks_for_record
+from .record_scope import incomplete as _incomplete
 
 # Canonical line-item columns shared by the annual/quarterly financial tables.
 _CANONICAL_COLUMNS = [f.key for f in CANONICAL_FIELDS]
@@ -131,30 +133,6 @@ def _served_day(stock: StockData, collected_at: str) -> str:
     if days:
         return max(days)
     return (date.fromisoformat(collected_at[:10]) - timedelta(days=1)).isoformat()
-
-
-def _incomplete(stock: StockData) -> Optional[str]:
-    """What a run's SEC read lacked, as ``collection_runs.incomplete`` keeps it (JSON): ``report``, the latest report
-    its submissions listed whose facts its companyfacts lacked, the SEC's lag (BUG-251), unless the run read it and
-    every earlier report they lacked from the filings' own XBRL (``recovered``, Q17); ``predecessor``, why its
-    predecessor's filings couldn't be read (BUG-279); ``submissions``, why its submissions request failed, so that it
-    couldn't look for such a report (BUG-282). None for a complete run. ``stock-data refresh``'s SEC step collects a
-    company again whose latest collection with the SEC lacked any."""
-    lacked: Dict[str, Any] = {}
-    if stock.missing_report and not stock.missing_report.get("recovered"):
-        lacked["report"] = stock.missing_report
-    if stock.predecessor_error:
-        lacked["predecessor"] = stock.predecessor_error
-    if stock.submissions_error:
-        lacked["submissions"] = stock.submissions_error
-    return json.dumps(lacked) if lacked else None
-
-
-def _complete_sec_read(stock: StockData) -> bool:
-    """Whether a run read the whole of its filer's SEC record: nothing ``_incomplete`` names (the latest report its
-    companyfacts lacked, its predecessor's filings, its submissions) and no SEC error (a request or a step of the read
-    that failed). Only such a run removes the stored periods and unmapped tags its parse no longer gives (BUG-344)."""
-    return _incomplete(stock) is None and not any(str(error).startswith("SEC EDGAR") for error in stock.errors)
 
 
 def _cols_ddl(columns: Sequence[str], col_type: str = "REAL") -> str:
@@ -1024,8 +1002,9 @@ class SQLiteStore:
         fill = bool(stock.predecessor_error)
         # And a run that parsed it from a complete read of the filer's filings speaks for the ticker's whole SEC
         # record, as its snapshots do: a year, quarter, trailing year or unmapped tag its parse no longer gives goes
-        # (BUG-344, BUG-168, BUG-165). A run that read part of the filings removes nothing (_complete_sec_read).
-        if restated and _complete_sec_read(stock):
+        # (BUG-344, BUG-168, BUG-165). A run that read part of the filings removes nothing (record_scope, the rule
+        # the JSON file and financial_history.csv follow too, BUG-380).
+        if speaks_for_record(stock):
             self._clear_absent(conn, stock)
 
         # financials_annual + metrics_annual
@@ -1210,27 +1189,13 @@ class SQLiteStore:
         loses no row: the run's part of it isn't its record. A year in the run keeps its stored metrics either way when
         its own computation failed (``_write_stock`` writes none over them).
         """
-        years = {int(fy) for fy in stock.financials_annual if str(fy).isdigit()}
-        tables: List[Tuple[str, str, Set[Any], bool, Optional[str]]] = [
-            ("financials_annual", "fiscal_year", years, True, None),
-            ("metrics_annual", "fiscal_year", years, True, "metrics"),
-            ("financials_quarterly", "period_end", set(stock.financials_quarterly or {}), True, "quarterly"),
-            ("financials_ttm", "period_end", set(stock.financials_ttm or {}), True, "quarterly"),
-            ("unmapped_facts", "tag", {fact.get("tag") for fact in stock.unmapped_facts or []}, False, None),
-        ]
-        for table, key, given, limited, step in tables:
-            if step in stock.unbuilt:
-                continue
-            stored = [row[0] for row in conn.execute(f"SELECT {key} FROM {table} WHERE ticker = ?", (stock.ticker,))]
-            if limited and stock.years_back:
-                if not given:
-                    continue
-                floor = min(given)
-                absent = [k for k in stored if k not in given and k >= floor]
-            else:
-                absent = [k for k in stored if k not in given]
-            conn.executemany(f"DELETE FROM {table} WHERE ticker = ? AND {key} = ?",
-                             [(stock.ticker, k) for k in absent])
+        keys = {"financials_annual": "fiscal_year", "metrics_annual": "fiscal_year",
+                "financials_quarterly": "period_end", "financials_ttm": "period_end", "unmapped_facts": "tag"}
+        for table in RECORD_PARTS:
+            stored = [row[0] for row in conn.execute(f"SELECT {keys[table]} FROM {table} WHERE ticker = ?",
+                                                     (stock.ticker,))]
+            conn.executemany(f"DELETE FROM {table} WHERE ticker = ? AND {keys[table]} = ?",
+                             [(stock.ticker, k) for k in absent(stock, table, stored)])
 
     @staticmethod
     def _clear_snapshots(conn: sqlite3.Connection, stock: StockData) -> None:

@@ -3757,3 +3757,13 @@ Result: BUG-381 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4209 passed, 2 skipped
 Commit: (this commit) fix(valuation): an amendment repeating its original doesn't copy a declared split (BUG-381)
 Next: BUG-380 (ready).
+
+## Iteration 232: 2026-11-25 22:00: fix (BUG-380)
+Picked: BUG-344's residual; an opus worker (nothing moved).
+Did: SQLite, the JSON export and financial_history.csv share one rule for the periods a complete run no longer gives.
+- RED: 6 failed on 4592553; GREEN. 12 of 12 mutants; 25 older mutants re-quoted onto the moved rule, all killed.
+- 6 tickers re-collected offline: the JSON matches SQLite's removals.
+Result: BUG-380 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4220 passed, 2 skipped
+Commit: (this commit) fix(exporters): the JSON and CSV drop the periods SQLite drops (BUG-380)
+Next: remaining P3s by area.

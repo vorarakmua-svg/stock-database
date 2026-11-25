@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 82 · NEEDS-USER 0 · Decided: 8 · Verified: 313
+**Open:** P0 0 · P1 0 · P2 0 · P3 81 · NEEDS-USER 0 · Decided: 8 · Verified: 314
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2531,10 +2531,11 @@ Repro: DD's 0.4725 factor is its 1:3 reverse split times Corteva's spin-off; HLT
 Expected: the split applied to the counts, the remainder as the spin-off.   Actual: the split undone in every earlier close.
 Fix: see BUG-264 (iteration 228): the factor nearest a filing-recorded split is split into the two.
 ### BUG-380 [P3][MATCH] The JSON file and financial_history.csv keep periods a run no longer gives
-Status: OPEN
-Found: the BUG-344 worker (iteration 229, residual) | Fixed: | Regression test:
+Status: VERIFIED (iteration 232)
+Found: the BUG-344 worker (iteration 229, residual) | Fixed: (this commit) | Regression tests: tests/test_record_scope.py (new), tests/test_csv_exporter.py; 6 failing first
 Repro: after BUG-344 SQLite removes a ticker's periods a complete run no longer produces (e.g. 28 quarters, 32 trailing years over 502), but the JSON export and financial_history.csv merge by period, so they keep them: the three outputs disagree (MATCH-05).
 Expected: the same periods in every output.   Actual: the files keep stale periods.
+Fix (iteration 232, `qa/evidence/bug380-investigation.txt`): one rule in src/exporters/record_scope.py (`speaks_for_record`, `complete_sec_read`, `absent`: the completeness gate, the unbuilt-step exemption, the --years floor) used by SQLite's `_clear_absent`, the JSON export (removes absent periods and unmapped tags before merging) and financial_history.csv (drops absent years for the run's ticker). Offline re-collection of ABT, BAX, ADI, AZO, AAPL, MCO: the JSON loses exactly what BUG-344 removed from SQLite; CSV identical (no absent year). Nothing reads the exports for valuation: 0 moves. Residual: a --years run's JSON calculated_metrics drops older years SQLite keeps (as at HEAD).
 ### BUG-381 [P3][VAL] A 10-K/A filed after a declared split makes split_history add the split again
 Status: VERIFIED (iteration 231)
 Found: code review 37 (`qa/evidence/review37.txt`, Minor 1; regression from BUG-262, 81d5af4) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py (3 new); 3 failing first

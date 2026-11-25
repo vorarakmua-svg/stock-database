@@ -69,10 +69,13 @@ def test_financial_history_keeps_tickers_from_earlier_runs(tmp_path: Path) -> No
 
 
 def test_financial_history_merges_years_like_the_json_export(tmp_path: Path) -> None:
-    # Same rule as the JSON merge: a new year overwrites the same year, older years are kept.
+    # Same rule as the JSON merge: a new year overwrites the same year, and a run limited to its latest years
+    # (--years) keeps the older ones (a run that speaks for every year removes one it no longer gives, BUG-380).
     exporter = CSVExporter(tmp_path)
     exporter.export_financial_history([_stock("AAA", annual={"2023": {"revenue": 1.0}, "2024": {"revenue": 2.0}})])
-    exporter.export_financial_history([_stock("AAA", annual={"2024": {"revenue": 5.0}, "2025": {"revenue": 6.0}})])
+    limited = _stock("AAA", annual={"2024": {"revenue": 5.0}, "2025": {"revenue": 6.0}})
+    limited.years_back = 2
+    exporter.export_financial_history([limited])
     rows = _rows(tmp_path / "financial_history.csv")
     assert [(r["fiscal_year"], r["revenue"]) for r in rows] == [("2023", "1.0000"), ("2024", "5.0000"),
                                                                 ("2025", "6.0000")]
