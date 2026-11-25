@@ -330,6 +330,82 @@ def test_a_quarter_without_its_long_term_debt_has_no_net_debt(tmp_path):
     assert not by_end["2025-12-31"].debt_missing
 
 
+#: The quarters to 2025-09-30, which the FY2024 10-K (year end 2024-12-31) is the latest before.
+_AFTER_FY2024 = ["2024-12-31", "2025-03-31", "2025-06-30", "2025-09-30"]
+
+
+@pytest.mark.parametrize("fy2024, metrics, missing", [
+    # AXON-like (BUG-293, Q22): no debt tagged and no interest in the 10-K before them: debt-free, as scores read it.
+    ({}, {}, []),
+    # Interest paid with no debt tagged: debt the mapping doesn't read (scores' read_debt), so still unknown.
+    ({"interest_expense": 5.0e7}, {}, _AFTER_FY2024),
+    # A 10-K with long-term debt: its quarters lack it (TMUS), as before.
+    ({"long_term_debt": 9.0e8}, {}, _AFTER_FY2024),
+    # Some debt tagged (short-term debt, paper, or the stored total) but no long-term debt: it may be unread
+    # (BUG-294: DE's FY2022-25 10-Ks read $12.6-17.9B of short-term debt and no long-term), so still unknown.
+    ({"short_term_debt": 1.0e8}, {}, _AFTER_FY2024),
+    ({"commercial_paper": 1.0e8}, {}, _AFTER_FY2024),
+    ({}, {"total_debt": 1.0e8}, _AFTER_FY2024),
+])
+def test_a_quarter_lacks_its_debt_by_the_10k_before_it(tmp_path, fy2024, metrics, missing):
+    # Q22 (BUG-293b): for a company whose 10-Ks report long-term debt (here from FY2025), a quarter without any
+    # has none to lack when the latest 10-K at or before it reads as without debt, as the scores read a year.
+    conn = _db(tmp_path)
+    conn.execute("UPDATE financials_annual SET long_term_debt = 9.0e8 WHERE fiscal_year = 2025")
+    for name, value in fy2024.items():
+        conn.execute(f"UPDATE financials_annual SET {name} = ? WHERE fiscal_year = 2024", (value,))
+    for name, value in metrics.items():
+        conn.execute(f"INSERT INTO metrics_annual (ticker, fiscal_year, {name}) VALUES ('AAA', 2024, ?)", (value,))
+    conn.execute("UPDATE financials_ttm SET long_term_debt = NULL WHERE period_end < '2025-12-31'")
+    by_end = {p.period_end: p for p in load_history_inputs(conn, "AAA").points}
+    assert [end for end, p in sorted(by_end.items()) if p.debt_missing] == missing
+    for end in _AFTER_FY2024:
+        assert by_end[end].net_debt is None  # no debt field in the quarter: none to net, as before
+    assert by_end["2025-12-31"].net_debt == 6.0e8 and not by_end["2025-12-31"].debt_missing  # 9e8 - 3e8 cash
+
+
+def test_an_insurers_10k_without_debt_tags_keeps_its_quarters_unknown(tmp_path):
+    # Q22: the scores keep a bank's or insurer's debt as filed (KKR tags neither its debt nor its interest), so a
+    # 10-K of theirs with no debt tagged isn't read as without debt.
+    conn = _db(tmp_path, sector="insurance")
+    conn.execute("UPDATE financials_annual SET long_term_debt = 9.0e8 WHERE fiscal_year = 2025")
+    conn.execute("UPDATE financials_ttm SET long_term_debt = NULL WHERE period_end < '2025-12-31'")
+    by_end = {p.period_end: p for p in load_history_inputs(conn, "AAA").points}
+    assert [end for end, p in sorted(by_end.items()) if p.debt_missing] == _AFTER_FY2024
+
+
+def test_a_quarter_at_a_10ks_year_end_follows_that_10k(tmp_path):
+    # Q22: debt repaid in FY2025: its 10-K reads none, so its own fourth quarter has none to lack, though the
+    # FY2024 10-K before it reported some.
+    conn = _db(tmp_path)
+    conn.execute("UPDATE financials_annual SET long_term_debt = 9.0e8 WHERE fiscal_year = 2024")
+    conn.execute("UPDATE financials_ttm SET long_term_debt = NULL WHERE period_end >= '2025-09-30'")
+    by_end = {p.period_end: p for p in load_history_inputs(conn, "AAA").points}
+    assert by_end["2025-09-30"].debt_missing and not by_end["2025-12-31"].debt_missing
+
+
+def test_a_company_whose_10ks_never_report_long_term_debt_keeps_its_quarters_valued(tmp_path):
+    # Q22 (option E): the interest rule applies only to companies whose 10-Ks report long-term debt; one that never
+    # does (interest or not) keeps today's EV: no new N/A.
+    conn = _db(tmp_path)
+    conn.execute("UPDATE financials_annual SET interest_expense = 5.0e7")
+    conn.execute("UPDATE financials_ttm SET long_term_debt = NULL")
+    points = load_history_inputs(conn, "AAA").points
+    assert points and not any(p.debt_missing for p in points)
+
+
+@pytest.mark.parametrize("first_10k_debt, missing", [(9.0e8, True), (None, False)])
+def test_a_quarter_before_the_first_10k_follows_it(tmp_path, first_10k_debt, missing):
+    # Q22: with no 10-K at or before it, a quarter follows the first 10-K (FY2025 reports long-term debt).
+    conn = _db(tmp_path)
+    conn.execute("UPDATE financials_annual SET long_term_debt = 9.0e8 WHERE fiscal_year = 2025")
+    conn.execute("UPDATE financials_annual SET long_term_debt = ? WHERE fiscal_year = 2024", (first_10k_debt,))
+    conn.execute("INSERT INTO financials_ttm (ticker, period_end, fiscal_year, revenue) "
+                 "VALUES ('AAA', '2024-09-30', 2024, 1.0e9)")
+    by_end = {p.period_end: p for p in load_history_inputs(conn, "AAA").points}
+    assert by_end["2024-09-30"].debt_missing is missing
+
+
 def _quarter_ends(first_year, last):
     quarters = ((3, 31), (6, 30), (9, 30), (12, 31))
     ends = [date(y, m, d).isoformat() for y in range(first_year, 2030) for m, d in quarters]

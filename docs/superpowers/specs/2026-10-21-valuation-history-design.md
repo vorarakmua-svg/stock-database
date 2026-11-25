@@ -135,7 +135,8 @@ Constants:
 - EV/EBITDA = (mc + (net debt or 0)) / EBITDA, as `calculated_metrics.py:491-511` defines EV.
   The month's stored `enterprise_value` is that numerator, so the two agree (BUG-183): none for a
   bank (its EV family is suppressed, `sector_metrics.SUPPRESSED_BY_SECTOR`) or for a quarter whose
-  long-term debt can't be read (BUG-171).
+  long-term debt can't be read (BUG-171), unless the 10-K before it reads as without debt, as the scores
+  read a year (no debt tagged, no interest paid; `fundamentals.no_debt`, Q22).
 - A denominator of zero or less gives None.
 - Dividend yield = trailing 365-day dividends / close. It is None when no dividends were paid.
 

@@ -560,7 +560,12 @@ Limitations:
   Q7), without trailing years (SPCX), or without a quote with a price to check our share count against.
 - Yahoo normalizes EBITDA, so our EV/EBITDA can read apart from Yahoo's (MRK, PFE). A quarter whose 10-Q
   long-term debt can't be read has no EV: TMUS's and CAT's 10-Qs tag it only under their own concepts, which
-  the SEC's company facts don't carry (BUG-171).
+  the SEC's company facts don't carry (BUG-171). That holds for a company whose 10-Ks report long-term debt,
+  unless the latest 10-K at or before the quarter (the first, for a quarter before any) reads as without debt,
+  as the quality scores read a year: no debt tagged and no interest paid. Then the quarter is valued with none
+  (AXON's FY2016-21, before its December 2022 notes; Q22). A 10-K with interest but no debt tagged, or with
+  short-term debt or paper but no long-term debt, keeps its quarters without EV: its debt may be unread. A
+  company whose 10-Ks never report long-term debt has its quarters valued as tagged.
 
 ### Quality scores
 

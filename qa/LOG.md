@@ -3694,3 +3694,14 @@ Result: BUG-376, BUG-377, Q21 VERIFIED; BUG-348 WONTFIX. New: BUG-378 (P3, resid
 Gates: ruff ✓ mypy ✓ pytest 4091 passed, 2 skipped
 Commit: (this commit) fix(valuation): a recurring payment counts toward the judged year; an EPS count can't explain its seam (BUG-376, BUG-377, Q21)
 Next: Q22 (measuring).
+
+## Iteration 226: 2026-11-25 14:50: fix (Q22, BUG-293's second half; the user's decision)
+Picked: Q22, measured and shown to the user, who chose to apply; an opus worker.
+Did: a quarter after a 10-K the scores read as debt-free is valued, for companies today's rule marks unknown.
+- RED: 3 failed on 418fbe8; GREEN. 16 of 16 mutants. Look-ahead 0 (parser); dated check 0.
+- DB copies (re-collected with HEAD's parser): 771 quarters at 72 tickers; 13 historical values; labels FFIV
+  near -> above, TYL far below -> below; 0 medians, verdicts.
+Result: Q22, BUG-293 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4103 passed, 2 skipped
+Commit: (this commit) fix(history): quarters after a debt-free 10-K are valued (Q22, BUG-293)
+Next: remaining P3s by area.

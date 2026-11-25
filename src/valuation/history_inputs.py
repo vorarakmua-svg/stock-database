@@ -17,6 +17,7 @@ from datetime import date, timedelta
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..parsers.calculated_metrics import CalculatedMetrics
+from ..scores.fundamentals import no_debt
 from .inputs import (
     DECLARED_SPLIT_TOLERANCE,
     MAX_SPLIT_RATIO,
@@ -93,7 +94,8 @@ class TTMPoint:
     ebitda: Optional[float] = None
     net_debt: Optional[float] = None
     ffo: Optional[float] = None
-    #: The quarter lacks the long-term debt its company's 10-Ks report: no net debt, so no enterprise value.
+    #: The quarter lacks the long-term debt its company's 10-Ks report (by the 10-K before it, Q22): no net debt,
+    #: so no enterprise value.
     debt_missing: bool = False
 
     @property
@@ -313,6 +315,13 @@ def _near_year_end(end: str, year_ends: Sequence[date]) -> bool:
     return day is not None and any(abs((day - y).days) <= YEAR_END_DAYS for y in year_ends)
 
 
+def _debt_before(debt_by_year_end: Sequence[Tuple[str, bool]], end: str) -> bool:
+    """Whether the latest 10-K ending on or before *end* (the first, for a quarter before any) has debt a quarter
+    can lack: (year end, has it) in year-end order."""
+    before = [debt for year_end, debt in debt_by_year_end if year_end <= end]
+    return before[-1] if before else bool(debt_by_year_end) and debt_by_year_end[0][1]
+
+
 def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
     """Read the history's inputs for *ticker*. Its ``na_reason`` is set when the history can't run."""
     x = HistoryInputs(ticker=ticker)
@@ -403,12 +412,19 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
             "GROUP BY fiscal_year", (ticker,)):
         if r["fiscal_year"] is not None:
             first_filed[int(r["fiscal_year"])] = str(r["filed"])[:10]
-    annual = _rows(conn, "SELECT period_end, long_term_debt FROM financials_annual WHERE ticker = ? "
-                   "AND period_end IS NOT NULL", (ticker,))
+    annual = _rows(conn, "SELECT a.period_end, a.long_term_debt, a.short_term_debt, a.commercial_paper, "
+                   "a.interest_expense, m.total_debt FROM financials_annual a LEFT JOIN metrics_annual m "
+                   "ON m.ticker = a.ticker AND m.fiscal_year = a.fiscal_year WHERE a.ticker = ? "
+                   "AND a.period_end IS NOT NULL ORDER BY a.period_end", (ticker,))
     year_ends = [d for d in (_day(r["period_end"]) for r in annual) if d is not None]
     # A company whose 10-Ks report long-term debt but whose 10-Q lacks it (TMUS's $81B in 2026's Q1 and Q2)
-    # would read a net debt short by all of it: unknown, then, rather than wrong.
+    # would read a net debt short by all of it: unknown, then, rather than wrong. Unless the latest 10-K at or
+    # before it (the first, for a quarter before any) reads as without debt, as the scores read a year (no debt
+    # tagged and no interest paid, outside banks and insurers; ``no_debt``): the company had none to tag then
+    # (AXON's FY2016-21, before its notes of December 2022; Q22, BUG-293). A 10-K with some debt tagged but no
+    # long-term debt may hold debt the mapping doesn't read (BUG-294), so its quarters stay unknown.
     files_long_term_debt = any((r["long_term_debt"] or 0) > 0 for r in annual)
+    debt_by_year_end = [(str(r["period_end"])[:10], not no_debt(r, x.sector_class)) for r in annual]
     by_end = {str(q["period_end"])[:10]: q for q in quarters}
     calc = CalculatedMetrics()
     for row in ttm:
@@ -420,7 +436,8 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
         fiscal_year = row.get("fiscal_year") or quarter.get("fiscal_year")
         metrics = calc.calculate_all(row, sector=x.sector_class)
         equity = row.get("total_equity")
-        debt_missing = files_long_term_debt and row.get("long_term_debt") is None
+        debt_missing = (files_long_term_debt and row.get("long_term_debt") is None
+                        and _debt_before(debt_by_year_end, end))
         x.points.append(TTMPoint(
             period_end=end,
             known_on=known_on(end, fiscal_quarter,

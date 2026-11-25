@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 93 · NEEDS-USER 0 · Decided: 9 · Verified: 298
+**Open:** P0 0 · P1 0 · P2 0 · P3 92 · NEEDS-USER 0 · Decided: 8 · Verified: 300
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2493,10 +2493,11 @@ Context: two adjacent fiscal years share a calendar_year because SEC frames both
 Decision: USER 2026-11-25: A, keep SEC's labels and document the shared calendar years in the README; BUG-348 WONTFIX once documented.
 
 ### Q22 [VAL] NEEDS-USER: BUG-293b, telling a debt-free 10-K from one whose debt isn't read
-Status: DECIDED (2026-11-25)
-Found: the BUG-338 worker (iteration 223; `qa/evidence/bug338-investigation.txt`) | Fixed: | Regression test:
+Status: VERIFIED (iteration 226; applied at the user's decision, 2026-11-25)
+Found: the BUG-338 worker (iteration 223; `qa/evidence/bug338-investigation.txt`) | Fixed: (this commit) | Regression tests: tests/test_valuation_history_inputs.py, tests/test_scores_fundamentals.py; 3 failing first
 Context: company facts can't reliably separate them: debt-free filers show debt-like evidence (LULU InterestPaidNet, VRTX leases and interest, AXON FY2016/18 capital leases); unread-debt filers show weak evidence (TXT from FY2022 maturities only, PCAR from FY2012 InterestPaid and debt flows). Among years with no positive debt field: 826 no evidence, 722 interest only; 19 tickers never have a positive debt field (7 carry debt). Options: A today's rule; B the held rule (2,655 quarters at 215 tickers, 29 historical values, 4 labels); C a stored parser evidence signal (schema change; false 'debt unknown' for LULU, VRTX); D the scores' read_debt interest rule per 10-K in history_inputs; E C or D only for filers already marked unknown. Recommendation: E with D (no schema change, matches the scores); it values AXON's FY2016-21 quarters with no debt, which moves AXON's historical value and probably its label: measure before applying.
 Decision: USER 2026-11-25: E with D, the scores' read_debt interest rule per 10-K in history_inputs, only for filers already marked unknown today; measure first and show the moves (AXON) before applying.
+Fix (iteration 226, Q22, `qa/evidence/q22-investigation.txt`): for a company today's rule marks (some 10-K reports long-term debt), a quarter without long-term debt stays unknown unless the latest 10-K ending on or before it reads debt-free the way the scores' read_debt reads a year (no positive long-term or short-term debt, paper or total debt, no positive interest expense, not a bank or insurer; shared helper `fundamentals.no_debt`); quarters before the first 10-K follow the first. Short-term-only 10-Ks stay unknown (DE). On DB copies re-collected with HEAD's parser: 771 quarters at 72 tickers valued; 0 medians, verdicts, owner-earnings verdicts; 13 historical values; 2 labels: FFIV near -> above (291.97 -> 269.01 at 312.33), TYL far below -> below (629.94 -> 574.62 at 414.62); AXON unchanged (427.16, below). Residual: false debt-free reads where neither debt nor interest is mapped (F FY2025, EXR, ESS, NVR, KKR, LEN), as the scores already read them; cash isn't netted where no debt field exists.
 ### BUG-376 [P3][VAL] An annual payer's extra paid two years running counts as a second regular payment
 Status: VERIFIED (iteration 225)
 Found: code review 36 (`qa/evidence/review36.txt`, Minor 1; regression from BUG-372, 547f960) | Fixed: (this commit) | Regression tests: tests/test_valuation_models.py, tests/test_valuation_oracle_seam.py; failing first
@@ -2817,10 +2818,11 @@ Repro: ORCL's 10-Qs tag the current portion of its notes as NotesPayableCurrent,
 Expected: a quarter's short-term debt as its balance sheet's.   Actual: short by the current notes.
 
 ### BUG-293 [P3][VAL] The valuation history names unknown debt "EBITDA is zero or negative", and treats AXON's debt-free 2017-22 quarters as unknown debt
-Status: OPEN
+Status: VERIFIED (iteration 226; the second half applied at the user's decision Q22, 2026-11-25)
 Found: iteration 121 (BUG-171's investigation) | Fixed: | Regression test:
 Repro: a month whose quarter has no debt figure reads as an EV/EBITDA N/A with the reason "EBITDA is zero or negative" (TMUS); and M1-4's unknown-debt rule leaves AXON's quarters that tag no debt at all (a debt-free filer) without an EV.
 Expected: an N/A reason that names the missing debt, and a debt-free quarter valued with no debt.   Actual: as above.
+Fix (iteration 226, Q22, `qa/evidence/q22-investigation.txt`): for a company today's rule marks (some 10-K reports long-term debt), a quarter without long-term debt stays unknown unless the latest 10-K ending on or before it reads debt-free the way the scores' read_debt reads a year (no positive long-term or short-term debt, paper or total debt, no positive interest expense, not a bank or insurer; shared helper `fundamentals.no_debt`); quarters before the first 10-K follow the first. Short-term-only 10-Ks stay unknown (DE). On DB copies re-collected with HEAD's parser: 771 quarters at 72 tickers valued; 0 medians, verdicts, owner-earnings verdicts; 13 historical values; 2 labels: FFIV near -> above (291.97 -> 269.01 at 312.33), TYL far below -> below (629.94 -> 574.62 at 414.62); AXON unchanged (427.16, below). Residual: false debt-free reads where neither debt nor interest is mapped (F FY2025, EXR, ESS, NVR, KKR, LEN), as the scores already read them; cash isn't netted where no debt field exists.
 Partly fixed (iteration 211): the N/A reason now says 'no long-term debt in the quarter to <end>, though its 10-Ks report some' (16 ev_ebitda reasons change; test in tests/test_valuation_history.py). Still OPEN: AXON's debt-free quarters. A rule 'unknown only after a 10-K reporting debt' was prepared (%LOCALAPPDATA%\stockdb-qa\bug039\out\held_*_293b.diff) but not applied: the stored data can't tell a debt-free 10-K from one whose debt is unread (BUG-294), so it would cut billions from F, DE, BXP, DLR, EQIX... (2,655 quarters at 215 tickers; 29 historical values, 4 labels incl. AXON near -> far above, BXP far below -> below). Needs a parser signal 'this filing's balance sheet has no debt line' (xbrl_parser.py; after Q18).
 
 ### BUG-294 [P3][PARSE] Quarters whose long-term debt stays unread after BUG-171's fix, and a few short by the tag order
