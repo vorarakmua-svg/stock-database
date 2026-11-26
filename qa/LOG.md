@@ -3820,3 +3820,13 @@ JSON/CSV removal gates, _ensure_columns transactions, _served_day, the beta/EV c
 Gates: unchanged (qa/ only)
 Commit: (this commit) chore(qa): code review 38 recorded (BUG-383, P2)
 Next: BUG-383.
+
+## Iteration 238: 2026-11-26 19:50: fix (BUG-383)
+Picked: code review 38's Important finding (P2); an opus worker.
+Did: a quarter's current notes that fit inside its LongTermDebt/NotesPayable total aren't read again.
+- RED: 5 failed on 73aa910; GREEN. 12 of 12 mutants; debt1 18/18, q23 14/14. Look-ahead 0.
+- DB copies: 0 medians, verdicts, labels; EQIX back to 961.99.
+Result: BUG-383 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4297 passed, 2 skipped
+Commit: (this commit) fix(parser): current notes inside a long-term debt total aren't counted twice (BUG-383)
+Next: remaining P3s.

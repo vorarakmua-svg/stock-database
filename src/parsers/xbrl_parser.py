@@ -1481,6 +1481,11 @@ def _long_term_debt_lines(us_gaap: Dict[str, Any], annual: Dict[Any, Dict[str, A
 #: The totals with current debt long-term debt reads last (``_HELD_BY_TOTALS``): a quarter that reads one reads no
 #: current line beside it (``_short_term_debt_lines``).
 _TOTALS_WITH_CURRENT_DEBT = (_WITH_MATURITIES, _OWN_TOTAL)
+#: Long-term debt's totals (``_DEBT_KINDS``), which can hold the current debt, and the figures a filing can tag beside
+#: one as its noncurrent debt: long-term debt's other figures and the lines it doesn't read (``_DEBT_LINES``). A
+#: quarter reading such a total reads no current line its 10-Q shows inside it (``_short_term_debt_lines``; BUG-383).
+_LONG_TERM_TOTALS = _DEBT_KINDS[1]
+_BESIDE_TOTALS = _DEBT_KINDS[0] + _DEBT_KINDS[1] + _DEBT_LINES
 
 
 def _current_line_concept(tag: str) -> bool:
@@ -1503,7 +1508,15 @@ def _short_term_debt_lines(us_gaap: Dict[str, Any], annual: Dict[Any, Dict[str, 
     10-Ks tag their current notes as DebtCurrent and NotesPayableCurrent ($7.271B at 2025-05-31), its 10-Qs as
     NotesPayableCurrent alone ($7.625B at 2026-08-31), so its quarters had no short-term debt (BUG-292).
     Lines that disagree on the date are no line, and the latest 10-Q whose line shows the date decides it. A year end
-    the annual record has no short-term debt on carries no line."""
+    the annual record has no short-term debt on carries no line. Nor does a quarter whose long-term debt is a
+    LongTermDebt or NotesPayable total (``_LONG_TERM_TOTALS``) that its 10-Q shows holds the line: the line and the
+    largest other debt figure the 10-Q tags there (``_BESIDE_TOTALS``) fit inside the total, within ``_AGREE``
+    (BUG-383: AMGN's 10-Q for 2014-03-31, LongTermDebt $32.024B, its $29.519B of LongTermNotesPayable and the $2.505B
+    of NotesPayableCurrent; EQIX's 2024-26, $17.328B at 2025-09-30 beside $15.789B of SeniorLongTermNotes and
+    $0.699B of SeniorNotesCurrent). The total keeps the line, as BUG-141 keeps a total's maturities where no
+    noncurrent figure stands in its place. One that a figure and the line overflow is a noncurrent figure (BIIB's
+    LongTermDebt, which its NotesPayable total and the current notes make up), and one the 10-Q tags no other figure
+    beside tells nothing: those quarters read the line."""
     read = [tag for tag in us_gaap if _current_line_concept(tag)] + [
         tag for tag in _FIELDS["short_term_debt"].tags if tag in us_gaap]
     columns: Dict[str, Dict[str, Dict[str, float]]] = defaultdict(dict)  # {accn: {end: {tag: figure}}}
@@ -1512,6 +1525,16 @@ def _short_term_debt_lines(us_gaap: Dict[str, Any], annual: Dict[Any, Dict[str, 
             columns[accn].setdefault(end, {})[tag] = value
     filings = {e["accn"]: (e.get("form") or "", e.get("filed") or "") for tag in read
                for e in us_gaap[tag].get("units", {}).get("USD", []) if e.get("accn")}
+    beside = {tag: _by_filing(us_gaap, tag) for tag in _BESIDE_TOTALS if tag in us_gaap}
+
+    def holds(key: Tuple[str, str], quarter: Dict[str, Any], line: float) -> bool:
+        # the quarter's long-term debt is a total the 10-Q *key* shows holding the line beside its other debt figure (a
+        # line of 0.0 counts nothing twice: BIIB's quarters with no current notes keep it)
+        tag = quarter.get("_source_tags", {}).get("long_term_debt")
+        others = [values[key] for other, values in beside.items() if other != tag and values.get(key, 0) > 0]
+        return line > 0 and tag in _LONG_TERM_TOTALS and bool(others) and (
+            max(others) + line <= (1 + _AGREE) * (quarter.get("long_term_debt") or 0))
+
     figures: Dict[str, Set[float]] = {}  # each year end's short-term debt as the annual reports filed it
     for period in annual.values():
         tag = period.get("_source_tags", {}).get("short_term_debt")
@@ -1532,7 +1555,8 @@ def _short_term_debt_lines(us_gaap: Dict[str, Any], annual: Dict[Any, Dict[str, 
                 continue
             tags = sorted(tag for tag in lines if tag in col)
             values, filing = {col[tag] for tag in tags}, (filings[accn][1], accn)
-            if len(values) == 1 and filing > found.get(end, (("", ""),))[0]:
+            if len(values) == 1 and filing > found.get(end, (("", ""),))[0] and not holds(
+                    (accn, end), quarter, col[tags[0]]):
                 found[end] = (filing, col[tags[0]], tags[0])
     return {end: (value, tag) for end, (_, value, tag) in found.items()}
 

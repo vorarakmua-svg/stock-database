@@ -279,7 +279,8 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         # LongTermDebtAndCapitalLeaseObligationsCurrent last (UNP's, HD's;
         # ``xbrl_parser._current_debt_combined``, BUG-159). A 10-Q that tags none of these reads its
         # current line under another concept where its year-end column shows the annual record's figure
-        # (ORCL's NotesPayableCurrent; ``xbrl_parser._short_term_debt_lines``, BUG-292).
+        # (ORCL's NotesPayableCurrent; ``xbrl_parser._short_term_debt_lines``, BUG-292), unless its long-term
+        # debt reads a total the 10-Q shows holding the line (AMGN's 2014-03-31 LongTermDebt; BUG-383).
         ("DebtCurrent", "ShortTermBorrowings", "LongTermDebtCurrent", "LongTermDebtAndCapitalLeaseObligationsCurrent"),
         description="Debt due within a year: short-term borrowings and the current maturities of long-term debt.",
     ),

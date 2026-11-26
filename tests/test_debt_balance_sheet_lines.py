@@ -1,7 +1,8 @@
 """Debt on a filing's own balance sheet (debt1): a note's total assets don't date a balance sheet that the filing's
 total dates (BUG-273), the current-liabilities bound tells nothing where the borrowings alone overflow the other lines
 (BUG-286), and a 10-Q's current notes under a concept short-term debt doesn't read are its short-term debt where its
-year-end column is the annual record's (BUG-292)."""
+year-end column is the annual record's (BUG-292), except beside a long-term debt total that holds
+them (BUG-383)."""
 
 import pytest
 
@@ -179,3 +180,107 @@ def test_a_10ks_note_figure_on_a_quarter_end_is_no_quarters_line():
 def test_the_current_debt_concepts_a_line_can_carry(tag, line):
     from src.parsers.xbrl_parser import _current_line_concept
     assert _current_line_concept(tag) is line
+
+
+# ---------------- BUG-383: a quarter reading a long-term debt total that holds the current line ----------------
+
+def _debt(quarter):
+    return (quarter.get("long_term_debt") or 0) + (quarter.get("short_term_debt") or 0)
+
+
+@pytest.mark.parametrize("total", [91.315e9, 91.0e9])
+def test_a_quarter_reading_a_long_term_debt_total_reads_no_current_line_beside_it(total):
+    # Code review 38's probe: ORCL's shape, with the 10-Q's LongTermDebt total, $91.315B, holding its $9.079B of
+    # NotesPayableCurrent beside its $82.236B of LongTermNotesPayable. Long-term debt reads the total, which holds the
+    # line: read beside it too, the current notes count twice ($100.394B). A total rounded below the two (0.35%) too.
+    quarter = XBRLParser().extract_quarterly_financials(_orcl(LongTermDebt=total))["2025-08-31"]
+    assert _read(quarter, "long_term_debt") == (total, "LongTermDebt")
+    assert _read(quarter, "short_term_debt") == (None, None)
+    assert _debt(quarter) == pytest.approx(total)
+
+
+def test_a_long_term_debt_total_the_10q_tags_no_other_figure_beside_keeps_the_line():
+    # Nothing shows the total holds the current notes: it may be the noncurrent figure, as BIIB's is.
+    facts = _orcl(LongTermDebt=82.236e9)
+    del facts["facts"]["us-gaap"]["LongTermNotesPayable"]
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2025-08-31"]
+    assert _read(quarter, "long_term_debt") == (82.236e9, "LongTermDebt")
+    assert _read(quarter, "short_term_debt") == (9.079e9, "NotesPayableCurrent")
+
+
+def test_amgens_quarter_reads_no_current_notes_beside_its_long_term_debt_total():
+    # AMGN's 10-Q for 2014-03-31: LongTermDebt $32.024B = LongTermNotesPayable $29.519B + NotesPayableCurrent $2.505B;
+    # its 10-K's year end shows the notes as LongTermDebtCurrent, which the 10-Q's year-end column tags them as.
+    facts = _filings(
+        ("10-K", "2014-02-24", "2013-12-31", {**_BS, "LongTermDebtCurrent": 2.505e9,
+                                              "LongTermDebtNoncurrent": 29.623e9}),
+        ("10-Q", "2014-04-30", "2013-12-31", {**_BS, "NotesPayableCurrent": 2.505e9}),
+        ("10-Q", "2014-04-30", "2014-03-31", {**_BS, "NotesPayableCurrent": 2.505e9, "LongTermNotesPayable": 29.519e9,
+                                              "LongTermDebt": 32.024e9}))
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2014-03-31"]
+    assert _read(quarter, "long_term_debt") == (32.024e9, "LongTermDebt")
+    assert _read(quarter, "short_term_debt") == (None, None)
+
+
+def _equinix(**quarter):
+    # EQIX's 10-Ks show its current senior notes as SeniorNotesCurrent, the annual record's LongTermDebtCurrent
+    # ($1.199B at 2024-12-31); its 10-Q for 2025-09-30 tags its note's LongTermDebt total, $17.328B, which holds the
+    # $0.699B of SeniorNotesCurrent beside $15.789B of SeniorLongTermNotes, $0.704B of loans and the rest.
+    return _filings(
+        ("10-K", "2025-02-12", "2024-12-31", {**_BS, "LongTermDebtCurrent": 1.199e9, "SeniorNotesCurrent": 1.199e9,
+                                              "LongTermDebtNoncurrent": 14.135e9}),
+        ("10-Q", "2025-10-29", "2024-12-31", {**_BS, "SeniorNotesCurrent": 1.199e9}),
+        ("10-Q", "2025-10-29", "2025-09-30", {**_BS, "SeniorNotesCurrent": 0.699e9, "SeniorLongTermNotes": 15.789e9,
+                                              "LongTermNotesAndLoans": 0.687e9, **quarter}))
+
+
+@pytest.mark.parametrize("total", ["LongTermDebt", "NotesPayable"])
+def test_equinixs_quarter_reads_no_current_notes_beside_its_debt_total(total):
+    quarter = XBRLParser().extract_quarterly_financials(_equinix(**{total: 17.328e9}))["2025-09-30"]
+    assert _read(quarter, "long_term_debt") == (17.328e9, total)
+    assert _read(quarter, "short_term_debt") == (None, None)
+
+
+def test_a_long_term_debt_total_the_line_and_its_noncurrent_figure_overflow_keeps_the_line():
+    # The 10-Q's noncurrent notes ($16.8B) and the current ones ($0.699B) are more than its $17.328B total: the total
+    # is the noncurrent figure (another of its lines'), which doesn't hold the current notes.
+    quarter = XBRLParser().extract_quarterly_financials(_equinix(
+        LongTermDebt=17.328e9, SeniorLongTermNotes=16.8e9))["2025-09-30"]
+    assert _read(quarter, "short_term_debt") == (0.699e9, "SeniorNotesCurrent")
+
+
+@pytest.mark.parametrize("part", [{}, {"LongTermNotesAndLoans": 1.0e9}])
+def test_biogens_noncurrent_long_term_debt_keeps_its_current_notes(part):
+    # BIIB's 10-Q for 2024-03-31: LongTermDebt $6.290B is the noncurrent notes, NotesPayable $6.540B their total with
+    # the $0.250B of NotesPayableCurrent: the line sits beside the long-term debt, not in it. The largest figure beside
+    # the total decides, not a part of it that the line would fit beside (a $1.0B loan).
+    facts = _filings(
+        ("10-K", "2024-02-14", "2023-12-31", {**_BS, "LongTermDebtCurrent": 1.749e9, "NotesPayableCurrent": 1.749e9,
+                                              "LongTermDebtNoncurrent": 4.543e9}),
+        ("10-Q", "2024-04-24", "2023-12-31", {**_BS, "NotesPayableCurrent": 1.749e9}),
+        ("10-Q", "2024-04-24", "2024-03-31", {**_BS, "NotesPayableCurrent": 0.250e9, "LongTermDebt": 6.2901e9,
+                                              "NotesPayable": 6.5401e9, **part}))
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2024-03-31"]
+    assert _read(quarter, "long_term_debt") == (6.2901e9, "LongTermDebt")
+    assert _read(quarter, "short_term_debt") == (0.250e9, "NotesPayableCurrent")
+
+
+def test_a_noncurrent_long_term_debt_figure_keeps_the_line_whatever_fits_inside_it():
+    # ORCL's quarter reads its LongTermNotesPayable, noncurrent: the current notes fit beside a $1.0B loan inside it,
+    # but a noncurrent figure holds no current debt.
+    quarter = XBRLParser().extract_quarterly_financials(_orcl(LongTermNotesAndLoans=1.0e9))["2025-08-31"]
+    assert _read(quarter, "long_term_debt") == (82.236e9, "LongTermNotesPayable")
+    assert _read(quarter, "short_term_debt") == (9.079e9, "NotesPayableCurrent")
+
+
+def test_a_zero_current_line_beside_a_total_is_still_read():
+    # BIIB's 10-Q for 2020-06-30: no current notes (NotesPayableCurrent $0) beside its LongTermDebt, equal to its
+    # NotesPayable total: a zero counts nothing twice, so the quarter keeps its short-term debt of 0.
+    facts = _filings(
+        ("10-K", "2020-02-06", "2019-12-31", {**_BS, "LongTermDebtCurrent": 1.5e9, "NotesPayableCurrent": 1.5e9,
+                                              "LongTermDebtNoncurrent": 4.459e9}),
+        ("10-Q", "2020-07-22", "2019-12-31", {**_BS, "NotesPayableCurrent": 1.5e9}),
+        ("10-Q", "2020-07-22", "2020-06-30", {**_BS, "NotesPayableCurrent": 0.0, "LongTermDebt": 7.43e9,
+                                              "NotesPayable": 7.43e9}))
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2020-06-30"]
+    assert _read(quarter, "short_term_debt") == (0.0, "NotesPayableCurrent")

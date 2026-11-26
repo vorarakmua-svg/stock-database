@@ -2377,7 +2377,9 @@ numbers SEC filings report:
   field doesn't map, where its year-end column shows the figure an annual report filed there as
   short-term debt (Oracle's 10-Qs tag their current notes only as NotesPayableCurrent: $7.6B at
   2026-08-31, where the quarter had none); not beside commercial paper, nor beside a total with
-  current debt read as long-term debt, which can hold the line.
+  current debt read as long-term debt, which can hold the line, nor beside a long-term debt or
+  notes payable total the 10-Q shows holding it (Amgen's 10-Q for 2014-03-31: $32.0B of debt, its
+  $29.5B of notes and the $2.5B due within a year, which aren't added again).
 - **Short-term debt and commercial paper.** Short-term debt is the balance sheet's debt due
   within a year. Where a filing shows its short-term borrowings and the current maturities of
   long-term debt apart, with no total of them, it is the two together (Verizon's FY2023: $13.0B
