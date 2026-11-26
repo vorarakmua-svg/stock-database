@@ -3811,3 +3811,12 @@ Result: Q23, BUG-291 VERIFIED (BUG-133's TRV with it).
 Gates: ruff ✓ mypy ✓ pytest 4286 passed, 2 skipped
 Commit: (this commit) fix(parser): a debt total beside its current part is read less that part (Q23, BUG-291)
 Next: code review 38 (6 units since review 37).
+
+## Iteration 237: 2026-11-26 19:00: code review 38
+Picked: code review 38 (c614a02..34c87fa: BUG-381, 380, store group, debt 273/286/292, 254, Q23); an opus reviewer.
+Did: `qa/evidence/review38.txt`; 1 probe failing at HEAD; review 37's probes pass.
+Result: Important -> BUG-383 (P2; BUG-292 regression, EQIX/AMGN quarters count current notes twice). Checked right:
+JSON/CSV removal gates, _ensure_columns transactions, _served_day, the beta/EV carries, Q23/254/159 in one filing.
+Gates: unchanged (qa/ only)
+Commit: (this commit) chore(qa): code review 38 recorded (BUG-383, P2)
+Next: BUG-383.

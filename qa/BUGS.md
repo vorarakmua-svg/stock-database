@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 68 · NEEDS-USER 0 · Decided: 8 · Verified: 329
+**Open:** P0 0 · P1 0 · P2 1 · P3 68 · NEEDS-USER 0 · Decided: 8 · Verified: 329
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2555,6 +2555,11 @@ Status: OPEN
 Found: the debt1 worker (iteration 234; split from BUG-144) | Fixed: | Regression test:
 Repro: census over 504 filers at 81b2e8e: long-term debt differs by more than 0.5% between the annual record and the quarter on the same year end at 17 of 7,073 (EXC FY2023-25 largest); short-term at 23 of 5,757. Also BUG-286's shape (b) (review 22 R8).
 Expected: one figure per balance-sheet date.   Actual: two.
+### BUG-383 [P2][VALID] A quarter whose long-term debt is a LongTermDebt total including current notes reads those notes again as short-term debt
+Status: OPEN
+Found: code review 38 (`qa/evidence/review38.txt`, Important 1; regression from BUG-292, 48747b7) | Fixed: | Regression test:
+Repro: src/parsers/xbrl_parser.py ~1483, ~1496-1538 (`_short_term_debt_lines` skips only the two newer current-inclusive totals, not LongTermDebt, which canonical.py ~266 ranks ahead of the noncurrent figures), ~556/581 (`_debt_totals_set_aside` keeps the total when the current notes are NotesPayableCurrent/SeniorNotesCurrent), ~2067. Real: EQIX 9 quarters 2024-03-31..2026-09-30 (2026-09-30: LTD $22.839B + SeniorNotesCurrent $1.665B, about 7% over); AMGN 2014-03-31 (LongTermDebt $32.024B = $29.519B + $2.505B, the $2.505B added again). Census: 26 quarters at 4 filers. Quarterly records only (EV, net debt, ratios); the live DB predates 48747b7. Probe: %LOCALAPPDATA%\stockdb-qa\review38\head\tests\test_review38.py.
+Expected: total debt equals the balance sheet.   Actual: the current notes counted twice.
 
 ### Q23 [DATA] NEEDS-USER: read a debt total that includes current debt as the total less the current part (KVUE, TRV)?
 Status: VERIFIED (iteration 236; applied at the user's decision, 2026-11-26)
