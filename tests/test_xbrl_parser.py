@@ -1528,17 +1528,18 @@ def test_a_10q_line_the_10k_shows_without_its_current_maturities_is_read_beside_
     assert (quarter.get("long_term_debt"), _total_debt(quarter)) == (25.605e9, pytest.approx(29.681e9))
 
 
-def test_a_10q_line_that_can_hold_the_current_maturities_isnt_read_beside_short_term_debt():
+def test_a_10q_line_that_can_hold_the_current_maturities_isnt_read_whole_beside_short_term_debt():
     # Kenvue's 10-Qs tag the same concept as a total: its 2024-09-29 figure, $7.803B, holds $750M of maturities its
     # $1.648B of DebtCurrent holds too (its own total $8.701B). Its year end showed no maturities, and its 10-K's figure
-    # there is a total (LongTermDebt), so nothing tells the line apart from a total: unknown rather than $0.75B high.
+    # there is a total (LongTermDebt), so nothing tells the line apart from a total: not read whole ($0.75B high), but
+    # as the total less the maturities the 10-Q tags beside it (Q23), $7.053B.
     facts = _balance_sheets(
         ("10-K", "2024-03-01", "2023-12-31", dict(LongTermDebt=7.687e9, DebtCurrent=0.599e9, LongTermDebtCurrent=0.0,
                                                   CommercialPaper=0.600e9)),
         ("10-Q", "2024-11-07", "2023-12-31", {_INCLUDING: 7.687e9, "DebtCurrent": 0.599e9, "LongTermDebtCurrent": 0.0}),
         ("10-Q", "2024-11-07", "2024-09-29", {_INCLUDING: 7.803e9, "DebtCurrent": 1.648e9,
                                               "LongTermDebtCurrent": 0.750e9}))
-    assert _quarter_debt(facts, "2024-09-29") == (None, None)
+    assert _quarter_debt(facts, "2024-09-29") == (pytest.approx(7.053e9), _INCLUDING)
 
 
 def test_a_10q_line_beside_a_10k_total_isnt_read_beside_short_term_debt():
@@ -1665,16 +1666,17 @@ def test_a_figure_that_isnt_a_long_term_debt_line_isnt_read(tag):
     assert _quarter_debt(facts, "2026-03-31") == (None, None)
 
 
-def test_a_10qs_own_total_beside_its_commercial_paper_isnt_read():
+def test_a_10qs_own_total_beside_its_commercial_paper_is_read_less_it():
     # VTR's 10-Qs tag their own total, DebtLongtermAndShorttermCombinedAmount, beside the commercial paper it holds:
-    # neither a long-term debt line (BUG-171) nor, beside the paper, a total long-term debt reads (BUG-364). Alone, the
-    # total is read as the filer's debt (tests/test_fallback_tags.py).
+    # no long-term debt line (BUG-171), and beside the paper the total less it (Q23; read whole it counted the paper
+    # twice, BUG-364). Alone, the total is read as the filer's debt (tests/test_fallback_tags.py).
     facts = _balance_sheets(
         ("10-K", "2026-02-12", "2025-12-31", dict(LongTermDebtNoncurrent=0.250e9)),
         ("10-Q", "2026-04-28", "2025-12-31", dict(DebtLongtermAndShorttermCombinedAmount=0.250e9)),
         ("10-Q", "2026-04-28", "2026-03-31", dict(DebtLongtermAndShorttermCombinedAmount=0.300e9,
                                                   CommercialPaper=0.050e9)))
-    assert _quarter_debt(facts, "2026-03-31") == (None, None)
+    assert _quarter_debt(facts, "2026-03-31") == (pytest.approx(0.250e9), "DebtLongtermAndShorttermCombinedAmount")
+    assert _total_debt(XBRLParser().extract_quarterly_financials(facts)["2026-03-31"]) == pytest.approx(0.300e9)
 
 
 def test_lines_that_disagree_on_the_quarter_are_no_line():

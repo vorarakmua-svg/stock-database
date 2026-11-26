@@ -3800,3 +3800,14 @@ Result: BUG-254 VERIFIED. Handed back with options: BUG-330, 331, 253, 255; 259/
 Gates: ruff ✓ mypy ✓ pytest 4272 passed, 2 skipped
 Commit: (this commit) fix(parser): a DebtCurrent holding all the debt is set aside (BUG-254)
 Next: Q23 (the user approved after the measurement).
+
+## Iteration 236: 2026-11-26 18:30: fix (Q23, BUG-291; the user's decision)
+Picked: Q23, measured and shown to the user, who chose to apply.
+Did: a debt total set aside beside its current part is read less that part.
+- RED: 21 failed on 02ad0b3; GREEN. 14 of 14 mutants; q20's re-quoted 46 of 46 (one re-quoted again after BUG-254);
+  bug254's 9 of 9. Look-ahead 0.
+- DB copies: 0 medians, verdicts, labels; 4 historical values within labels; TRV composite 72 -> 66.
+Result: Q23, BUG-291 VERIFIED (BUG-133's TRV with it).
+Gates: ruff ✓ mypy ✓ pytest 4286 passed, 2 skipped
+Commit: (this commit) fix(parser): a debt total beside its current part is read less that part (Q23, BUG-291)
+Next: code review 38 (6 units since review 37).

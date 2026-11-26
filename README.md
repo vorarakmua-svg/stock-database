@@ -2334,12 +2334,16 @@ numbers SEC filings report:
   maturities, total debt $7.0B, not $9.4B).
 - **Totals with current debt.** A filer that tags no long-term debt figure the field reads before has
   its total with the current maturities read (General Motors': $131.6B for FY2025) or its own total of all
-  its debt (Progressive's $6.9B), but not on a date where a current figure that total holds is tagged beside
-  it, which would count it twice (Travelers' $9.3B beside $0.3B of current debt; Kenvue's): there it stays
-  unread. JPMorgan's long-term debt with its maturities is read beside its short-term borrowings, a line it
+  its debt (Progressive's $6.9B). On a date where a current figure that total holds is tagged beside it,
+  which would count it twice, the total is read less the current part the same filing tags there: the
+  maturities of the total with them (Kenvue's FY2024: $7.8B less $0.75B, $7.1B), the short-term debt and the
+  paper no short-term figure holds of the filer's own (Travelers' FY2025: $9.3B less $0.3B of current debt,
+  $9.0B), so total debt is the filer's own total. Where that filing tags no such part (a DebtCurrent alone
+  beside the total with maturities, as it can hold borrowings too) the total stays unread there.
+  JPMorgan's long-term debt with its maturities is read beside its short-term borrowings, a line it
   doesn't hold. A 10-Q that tags neither (General Motors' since 2021) leaves its quarter without long-term
   debt, so the valuation history has no EV there. The as-of snapshots judge it by the filings known on
-  each day: a total read when filed stays the year's until a later report tags current debt beside it.
+  each day: a total read whole when filed stays the year's until a later report tags current debt beside it.
 - **Short-term investments.** After the short-term investments and current marketable securities, a
   filer's current securities are read under the names other filers tag them (available-for-sale or
   held-to-maturity debt securities, other short-term investments: Oracle's, Pfizer's, NVIDIA's FY2026),
@@ -2365,7 +2369,8 @@ numbers SEC filings report:
   LongTermNotesPayable ($117.7B at 2026-08-31, where the quarter had none). Beside the quarter's
   short-term debt only a line that holds no current maturities is read: a noncurrent concept, or one
   the 10-K shows without them (Chevron's: $25.6B at 2025-03-31, so total debt $29.7B, not its
-  $4.1B of short-term debt alone). A line that may hold them stays unread (Kenvue's 2024 quarters),
+  $4.1B of short-term debt alone). A line that may hold them stays unread (Kenvue's 2024 10-Qs' total,
+  which is read less the maturities instead: see the totals with current debt above),
   and so does one under the filer's own concept, which the SEC's company facts don't carry
   (T-Mobile's since 2024, Caterpillar's): such a quarter has no long-term debt. Short-term debt
   is read the same way where a quarter has none: a 10-Q's current debt line under a concept the

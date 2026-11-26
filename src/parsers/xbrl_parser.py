@@ -1300,19 +1300,41 @@ def _iso_date(value: str) -> Optional[date]:
 _WITH_MATURITIES = "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"
 _HELD_BY_TOTALS = ((_WITH_MATURITIES, ("DebtCurrent",) + _MATURITIES),
                    (_OWN_TOTAL, ("DebtCurrent", "ShortTermBorrowings", "CommercialPaper") + _MATURITIES))
+#: The current part of each total, as the filing that tags the total tags it on the date (Q23): the long-term debt's
+#: maturities (the lease-inclusive figure first, as the total is), and the filer's own total's short-term debt in
+#: short_term_debt's order (``canonical.py``; a DebtCurrent here may be the borrowings and maturities combined,
+#: ``_current_debt_combined``) with the commercial paper no short-term figure holds (0.0 where one does).
+_CURRENT_PARTS = {_WITH_MATURITIES: (("LongTermDebtAndCapitalLeaseObligationsCurrent", "LongTermDebtCurrent"),),
+                  _OWN_TOTAL: (("DebtCurrent", "ShortTermBorrowings") + _MATURITIES, ("CommercialPaper",))}
+
+
+def _current_part(figures: Dict[str, Dict[Tuple[str, str], float]], total: str, key: Tuple[str, str]
+                  ) -> Optional[float]:
+    """The current part of *total* (``_CURRENT_PARTS``) the filing tags on the date *key* (``(accn, end)``), from
+    *figures* (``{tag: _by_filing}``): of each group of tags the first it tags there, summed (the paper only above
+    zero: a 0.0 is paper another figure holds); None where it tags none (it shows no current part to take)."""
+    groups = [next((figures[tag][key] for tag in group if key in figures[tag]), None)
+              for group in _CURRENT_PARTS[total]]
+    found = [figure for i, figure in enumerate(groups) if figure is not None and (i == 0 or figure > 0)]
+    return sum(found) if found else None
 
 
 def _totals_beside_current_debt_set_aside(us_gaap: Dict[str, Any], view: str) -> Dict[str, Any]:
-    """*us_gaap* less a total with current debt (``_HELD_BY_TOTALS``) tagged on a date beside a current figure above
-    zero the total holds: read as long-term debt beside the short-term debt it would count that twice (Kenvue's 10-Q
-    for 2024-09-29: $7.803B with the $750M of maturities its $1.648B of DebtCurrent holds; TRV's FY2025 $9.267B of
-    debt beside its $300M of DebtCurrent). With none beside it the total is the filer's debt: GM's $131.574B, PGR's
-    $6.897B (FY2025), and JPM's long-term debt with its maturities beside its short-term borrowings, which it doesn't
-    hold. A vintage judges by its own filing's figures, so it reads no later filing's; the annual record and the
-    quarterly checkpoints, which can read the short-term debt from another filing, by any of their forms' on the
-    date. Each reads only the facts it is given, so an as-of snapshot judges by the facts known on its day."""
+    """*us_gaap* with a total with current debt (``_HELD_BY_TOTALS``) tagged on a date beside a current figure above
+    zero the total holds read as the total less its current part the same filing tags there (``_current_part``; Q23):
+    read whole as long-term debt beside the short-term debt it would count that twice (Kenvue's FY2024 10-K: $7.805B
+    with the $750M of maturities its $1.552B of DebtCurrent holds, read as $7.055B; TRV's FY2025 $9.267B of debt
+    beside its $300M of DebtCurrent, read as $8.967B), so total debt is the filer's own total. Where the filing tags
+    no current part, or one above the total, the total is set aside there (one equal to it leaves long-term debt 0).
+    With no current figure beside it the total is the filer's debt: GM's $131.574B, PGR's $6.897B (FY2025), and
+    JPM's long-term debt with its maturities beside its short-term borrowings, which it doesn't hold. A vintage judges
+    by its own filing's figures, so it reads no later filing's; the annual record and the quarterly checkpoints, which
+    can read the short-term debt from another filing, by any of their forms' on the date. Each reads only the facts
+    it is given, so an as-of snapshot judges by the facts known on its day."""
     forms = _QUARTERLY_FORMS if view == _QUARTERLY_VIEW else _ANNUAL_FORMS
-    aside: Dict[str, Set[Tuple[str, str]]] = {}
+    aside: Dict[str, Dict[Tuple[str, str], Optional[float]]] = {}
+    figures = {tag: _by_filing(us_gaap, tag) for tag in {tag for groups in _CURRENT_PARTS.values()
+                                                         for group in groups for tag in group}}
     for total, held in _HELD_BY_TOTALS:
         if total in us_gaap:
             beside = {(e.get("accn"), e.get("end")) for tag in held
@@ -1320,17 +1342,19 @@ def _totals_beside_current_debt_set_aside(us_gaap: Dict[str, Any], view: str) ->
                       if e.get("form") in forms and not e.get("start") and isinstance(e.get("val"), (int, float))
                       and e["val"] > 0}
             ends = {end for _, end in beside}
-            keys = {(accn, end) for accn, end in _by_filing(us_gaap, total)
+            keys = {(accn, end): value for (accn, end), value in _by_filing(us_gaap, total).items()
                     if ((accn, end) in beside if view == _VINTAGE_VIEW else end in ends)}
             if keys:
-                aside[total] = keys
+                aside[total] = {key: (None if part is None or part > value else value - part)
+                                for key, value in keys.items() for part in (_current_part(figures, total, key),)}
     if not aside:
         return us_gaap
     out = dict(us_gaap)
     for tag, keys in aside.items():
         units = us_gaap[tag].get("units", {})
         out[tag] = {**us_gaap[tag], "units": {**units, "USD": [
-            e for e in units.get("USD", []) if (e.get("accn"), e.get("end")) not in keys]}}
+            e if (e.get("accn"), e.get("end")) not in keys else {**e, "val": keys[(e.get("accn"), e.get("end"))]}
+            for e in units.get("USD", []) if keys.get((e.get("accn"), e.get("end")), 0.0) is not None]}}
     return out
 
 

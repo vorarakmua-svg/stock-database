@@ -82,21 +82,32 @@ def test_a_quarter_and_a_vintage_read_the_total_too():
     assert _read(vintage, "long_term_debt") == (6.897e9, _COMBINED)
 
 
-@pytest.mark.parametrize("current", ["DebtCurrent", "LongTermDebtCurrent",
-                                     "LongTermDebtAndCapitalLeaseObligationsCurrent"])
-def test_a_total_with_maturities_beside_current_debt_that_holds_them_isnt_read(current):
-    # Kenvue's FY2025: $7.821B with the $750M of maturities its $1.453B of DebtCurrent holds; read beside it, total
-    # debt was $9.274B for its own $8.524B. The total stays unread there, as BUG-171 left Kenvue's quarters.
+@pytest.mark.parametrize("current", ["LongTermDebtCurrent", "LongTermDebtAndCapitalLeaseObligationsCurrent"])
+def test_a_total_with_maturities_beside_them_reads_the_total_less_them(current):
+    # Kenvue's FY2025: $7.821B with the $750M of maturities its $1.453B of DebtCurrent holds; read whole beside it,
+    # total debt was $9.274B for its own $8.524B. The total less the maturities the filing tags is the noncurrent
+    # debt (Q23).
     year = _year(**{_WITH_CURRENT: 7.821e9, current: 0.750e9})
+    assert _read(year, "long_term_debt") == (pytest.approx(7.071e9), _WITH_CURRENT)
+    assert CalculatedMetrics().calculate_all(year)["total_debt"] == pytest.approx(7.821e9)
+
+
+def test_a_total_with_maturities_beside_current_debt_alone_isnt_read():
+    # A DebtCurrent can hold borrowings besides the maturities, so it is no current part of the long-term debt to take
+    # from the total: with no maturities tagged the total stays unread there.
+    year = _year(**{_WITH_CURRENT: 7.821e9, "DebtCurrent": 0.750e9})
     assert _read(year, "long_term_debt") == (None, None)
     assert CalculatedMetrics().calculate_all(year)["total_debt"] == pytest.approx(0.750e9)
 
 
 @pytest.mark.parametrize("current", ["DebtCurrent", "ShortTermBorrowings", "CommercialPaper", "LongTermDebtCurrent",
                                      "LongTermDebtAndCapitalLeaseObligationsCurrent"])
-def test_the_combined_debt_beside_any_current_debt_isnt_read(current):
-    # TRV's FY2025: $9.267B of debt, its $300M of DebtCurrent among it.
-    assert _read(_year(**{_COMBINED: 9.267e9, current: 0.300e9}), "long_term_debt") == (None, None)
+def test_the_combined_debt_beside_current_debt_reads_the_total_less_it(current):
+    # TRV's FY2025: $9.267B of debt, its $300M of DebtCurrent among it: $8.967B is the rest (Q23), and total debt is
+    # the filer's own.
+    year = _year(**{_COMBINED: 9.267e9, current: 0.300e9})
+    assert _read(year, "long_term_debt") == (pytest.approx(8.967e9), _COMBINED)
+    assert CalculatedMetrics().calculate_all(year)["total_debt"] == pytest.approx(9.267e9)
 
 
 @pytest.mark.parametrize("total", [_WITH_CURRENT, _COMBINED])
@@ -125,22 +136,138 @@ def _two_10ks(total, later_current):
     return {"facts": {"us-gaap": us_gaap}}
 
 
+#: Each total's long-term debt beside the later 10-K's $0.5B of DebtCurrent on 2024-12-31 (``_two_10ks``): the own
+#: total less it (Q23); the total with maturities stays unread, as a DebtCurrent is no current part of it.
+_LESS_DEBT_CURRENT = {_WITH_CURRENT: None, _COMBINED: 5.5e9}
+
+
 @pytest.mark.parametrize("total", [_WITH_CURRENT, _COMBINED])
 def test_a_date_with_current_debt_in_any_report_leaves_the_records_total_unread_but_not_an_earlier_vintage(total):
     # The annual record reads the short-term debt from whichever report tags it, so a total one report tags alone
-    # would sit beside another report's current debt on the date; a vintage is its own filing's view.
+    # would sit beside another report's current debt on the date; a vintage is its own filing's view. The later
+    # report, which tags its current debt beside the total, has its own total less it read.
     facts = _two_10ks(total, "DebtCurrent")
+    less = _LESS_DEBT_CURRENT[total]
+    assert _read(XBRLParser().extract_annual_financials(facts)["2024"], "long_term_debt") == (
+        (less, total) if less else (None, None))
+    vintages = XBRLParser().extract_annual_vintages(facts)["2024"]
+    assert _read(vintages["2025-02-12"], "long_term_debt") == (6.0e9, total)
+    assert _read(vintages["2026-02-12"], "long_term_debt") == ((less, total) if less else (None, None))
+
+
+@pytest.mark.parametrize("total", [_WITH_CURRENT, _COMBINED])
+def test_a_later_reports_current_debt_of_zero_leaves_the_total_read(total):
+    # Current debt of zero beside a total holds nothing of it, so the earlier report's total is read whole, though
+    # that report tags no current part to take.
+    facts = _two_10ks(total, "DebtCurrent")
+    us_gaap = facts["facts"]["us-gaap"]
+    us_gaap[total]["units"]["USD"].pop()
+    us_gaap["DebtCurrent"]["units"]["USD"][0]["val"] = 0.0
+    assert _read(XBRLParser().extract_annual_financials(facts)["2024"], "long_term_debt") == (6.0e9, total)
+
+
+@pytest.mark.parametrize("total", [_WITH_CURRENT, _COMBINED])
+def test_a_total_whose_filing_tags_no_current_part_stays_unread_beside_anothers(total):
+    # Q23 takes the current part the filing that tags the total tags on the date: the FY2024 10-K's total beside the
+    # FY2025 10-K's current debt (a later report that doesn't repeat the total) is set aside, not read less a figure
+    # another filing tags.
+    facts = _two_10ks(total, "LongTermDebtCurrent")
+    later = facts["facts"]["us-gaap"][total]["units"]["USD"]
+    later[:] = [e for e in later if e["filed"] != _K10["filed"]]
     assert _read(XBRLParser().extract_annual_financials(facts)["2024"], "long_term_debt") == (None, None)
     vintages = XBRLParser().extract_annual_vintages(facts)["2024"]
     assert _read(vintages["2025-02-12"], "long_term_debt") == (6.0e9, total)
-    assert _read(vintages["2026-02-12"], "long_term_debt") == (None, None)
 
 
-def test_a_quarter_with_current_debt_beside_the_total_reads_none():
+def test_a_quarter_with_current_debt_beside_the_total_reads_the_total_less_its_maturities():
+    # Kenvue's 10-Q for 2024-09-29: $7.803B with $750M of maturities, beside $1.648B of DebtCurrent holding them: long-
+    # term debt $7.053B, total debt its own $8.701B.
     facts = _facts(end="2026-03-31", filing=_Q10, **{_WITH_CURRENT: 7.803e9, "LongTermDebtCurrent": 0.750e9,
-                                                      "DebtCurrent": 1.648e9})
+                                                      "DebtCurrent": 1.648e9, _COMBINED: 8.701e9})
     quarter = XBRLParser().extract_quarterly_financials(facts)["2026-03-31"]
-    assert _read(quarter, "long_term_debt") == (None, None)
+    assert _read(quarter, "long_term_debt") == (pytest.approx(7.053e9), _WITH_CURRENT)
+    assert CalculatedMetrics().calculate_all(quarter)["total_debt"] == pytest.approx(8.701e9)
+
+
+# ---------------- Q23: the total less the current part the same filing tags ----------------
+
+def test_kenvues_fy2024_debt_is_its_own_total():
+    # BUG-291: Kenvue's FY2024 10-K tags its long-term debt only with the maturities ($7.805B, $750M of them), beside
+    # $1.552B of DebtCurrent (its $800M of paper and the maturities) and its own total, $8.607B.
+    year = _year(**{_WITH_CURRENT: 7.805e9, "LongTermDebtCurrent": 0.750e9, "DebtCurrent": 1.552e9,
+                    "CommercialPaper": 0.800e9, _COMBINED: 8.607e9})
+    assert _read(year, "long_term_debt") == (pytest.approx(7.055e9), _WITH_CURRENT)
+    assert _read(year, "short_term_debt") == (1.552e9, "DebtCurrent")
+    assert CalculatedMetrics().calculate_all(year)["total_debt"] == pytest.approx(8.607e9)
+
+
+def test_maturities_tagged_as_zero_leave_the_total_whole():
+    # Kenvue's 10-Q for 2026-03-29: $7.072B with maturities of $0 beside $1.589B of DebtCurrent (its paper): the
+    # total is the noncurrent debt.
+    facts = _facts(end="2026-03-31", filing=_Q10, **{_WITH_CURRENT: 7.072e9, "LongTermDebtCurrent": 0.0,
+                                                      "DebtCurrent": 1.589e9, _COMBINED: 8.661e9})
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2026-03-31"]
+    assert _read(quarter, "long_term_debt") == (7.072e9, _WITH_CURRENT)
+    assert CalculatedMetrics().calculate_all(quarter)["total_debt"] == pytest.approx(8.661e9)
+
+
+def test_the_lease_inclusive_maturities_are_the_current_part_of_the_lease_inclusive_total():
+    # The total is LongTermDebtAndCapitalLeaseObligations...IncludingCurrentMaturities, so its current part is the
+    # lease-inclusive maturities where the filing tags both (APD's FY2025: $17.664B, $0.716B of them).
+    year = _year(**{_WITH_CURRENT: 17.664e9, "LongTermDebtAndCapitalLeaseObligationsCurrent": 0.716e9,
+                    "LongTermDebtCurrent": 0.700e9, "ShortTermBorrowings": 0.035e9})
+    assert _read(year, "long_term_debt") == (pytest.approx(16.948e9), _WITH_CURRENT)
+
+
+def test_trvs_combined_debt_less_the_current_debt_holding_its_paper():
+    # TRV's FY2025: $9.267B, $300M of DebtCurrent holding its $100M of paper: long-term debt $8.967B, total debt
+    # $9.267B, the paper counted once.
+    year = _year(**{_COMBINED: 9.267e9, "DebtCurrent": 0.300e9, "CommercialPaper": 0.100e9})
+    assert _read(year, "long_term_debt") == (pytest.approx(8.967e9), _COMBINED)
+    assert CalculatedMetrics().calculate_all(year)["total_debt"] == pytest.approx(9.267e9)
+
+
+def test_the_combined_debt_less_the_short_term_debt_read_not_the_maturities_inside_it():
+    # The own total's current part is its short-term debt as the field reads it, DebtCurrent first, which holds the
+    # maturities (AIG's FY2022 10-K: $27.179B, $1.500B current).
+    year = _year(**{_COMBINED: 27.179e9, "DebtCurrent": 1.500e9, "LongTermDebtCurrent": 0.600e9})
+    assert _read(year, "long_term_debt") == (pytest.approx(25.679e9), _COMBINED)
+    assert CalculatedMetrics().calculate_all(year)["total_debt"] == pytest.approx(27.179e9)
+
+
+def test_the_combined_debt_less_its_current_debt_and_the_paper_none_holds():
+    # A quarter tagging its own total beside its paper alone (VTR's 10-Qs: $12.053B, $305M of paper, 2019-09-30): the
+    # paper is the current part, and total debt the filer's own.
+    facts = _facts(end="2026-03-31", filing=_Q10, **{_COMBINED: 12.053e9, "CommercialPaper": 0.305e9})
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2026-03-31"]
+    assert _read(quarter, "long_term_debt") == (pytest.approx(11.748e9), _COMBINED)
+    assert CalculatedMetrics().calculate_all(quarter)["total_debt"] == pytest.approx(12.053e9)
+
+
+def test_a_combined_debt_all_current_reads_no_long_term_debt():
+    # RMD's 10-Q for 2017-12-31: its $1.019B of debt is all short-term borrowings, so long-term debt is 0.
+    year = _year(**{_COMBINED: 1.019e9, "ShortTermBorrowings": 1.019e9})
+    assert _read(year, "long_term_debt") == (0.0, _COMBINED)
+    assert CalculatedMetrics().calculate_all(year)["total_debt"] == pytest.approx(1.019e9)
+
+
+def test_paper_another_reports_debt_holds_is_no_current_part_of_the_total():
+    # The FY2024 10-K's own total beside its paper; the FY2025 10-K's DebtCurrent on the date holds that paper (read
+    # as 0.0). The earlier filing's paper is no part to take, so its total stays unread beside the later debt.
+    facts = _two_10ks(_COMBINED, "DebtCurrent")
+    us_gaap = facts["facts"]["us-gaap"]
+    us_gaap[_COMBINED]["units"]["USD"].pop()  # the FY2025 10-K doesn't repeat the total
+    us_gaap["CommercialPaper"] = {"units": {"USD": [
+        usd(0.1e9, None, "2024-12-31", fy=2024, fp="FY", form="10-K", filed="2025-02-12")]}}
+    year = XBRLParser().extract_annual_financials(facts)["2024"]
+    assert _read(year, "long_term_debt") == (None, None)
+    assert (year.get("short_term_debt"), year.get("commercial_paper")) == (0.5e9, 0.0)
+
+
+def test_a_current_part_above_the_total_leaves_it_unread():
+    # A current figure above the total it should be part of tells nothing of the long-term debt.
+    year = _year(**{_COMBINED: 1.0e9, "DebtCurrent": 1.2e9})
+    assert _read(year, "long_term_debt") == (None, None)
 
 
 # ---------------- PP&E: the lease-inclusive line, last ----------------
@@ -236,19 +363,29 @@ def test_a_10qs_current_debt_on_the_year_end_leaves_the_annual_records_total():
 @pytest.mark.parametrize("total", [_WITH_CURRENT, _COMBINED])
 def test_an_as_of_snapshot_reads_the_total_until_a_later_report_tags_current_debt_beside_it(total):
     # The as-of view is the record built on the facts known on each filing day (Q18): on the FY2024 10-K's day the
-    # total stands alone and is the year's debt; the FY2025 10-K's column beside it with current debt it holds leaves
-    # it unread from that day, and no earlier day reads the later report's current debt (no look-ahead).
+    # total stands alone and is the year's debt; the FY2025 10-K's column beside it with current debt it holds has it
+    # read less that debt (Q23; unread where that debt is no current part of it) from that day, and no earlier day
+    # reads the later report's current debt (no look-ahead).
     rows = [row for row in build_snapshots(XBRLParser(), _two_10ks(total, "DebtCurrent"), ticker="X",
                                            years_back=None).rows if row["fiscal_year"] == 2024]
+    less = _LESS_DEBT_CURRENT[total]
     assert [(row["known_from"], row.get("long_term_debt"), row["source_tags"].get("long_term_debt"))
-            for row in rows] == [("2025-02-12", 6.0e9, total), ("2026-02-12", None, None)]
+            for row in rows] == [("2025-02-12", 6.0e9, total), ("2026-02-12", less, total if less else None)]
+
+
+def test_an_as_of_snapshot_reads_the_total_less_the_maturities_from_the_day_they_are_filed():
+    rows = [row for row in build_snapshots(XBRLParser(), _two_10ks(_WITH_CURRENT, "LongTermDebtCurrent"), ticker="X",
+                                           years_back=None).rows if row["fiscal_year"] == 2024]
+    assert [(row["known_from"], row.get("long_term_debt"), row.get("short_term_debt")) for row in rows] == [
+        ("2025-02-12", 6.0e9, None), ("2026-02-12", 5.5e9, 0.5e9)]
 
 
 @pytest.mark.parametrize("total", [_WITH_CURRENT, _COMBINED])
 def test_the_snapshots_vintages_judge_the_total_by_their_own_filing(total):
     vintages = build_snapshots(XBRLParser(), _two_10ks(total, "DebtCurrent"), ticker="X", years_back=None).vintages
+    less = _LESS_DEBT_CURRENT[total]
     assert _read(vintages["2024"]["2025-02-12"], "long_term_debt") == (6.0e9, total)
-    assert _read(vintages["2024"]["2026-02-12"], "long_term_debt") == (None, None)
+    assert _read(vintages["2024"]["2026-02-12"], "long_term_debt") == ((less, total) if less else (None, None))
 
 
 # ---------------- a bank's MarketableSecurities: its securities book, not short-term investments (Q20) ----------------

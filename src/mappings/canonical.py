@@ -259,8 +259,10 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         # part, not read (``xbrl_parser._debt_on_balance_sheet_dates``, ``_debt_parts_set_aside``; BUG-319).
         # Last the totals with current debt of filers that tag no other (GM's
         # LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities, PGR's
-        # DebtLongtermAndShorttermCombinedAmount), not on a date beside the current debt they hold, which
-        # they would count twice (``xbrl_parser._totals_beside_current_debt_set_aside``; BUG-203, BUG-364).
+        # DebtLongtermAndShorttermCombinedAmount); on a date beside the current debt they hold, which
+        # they would count twice, less the current part the same filing tags there, and unread where it
+        # tags none (KVUE's, TRV's; ``xbrl_parser._totals_beside_current_debt_set_aside``; BUG-203,
+        # BUG-364, Q23).
         ("LongTermDebtNoncurrent", "LongTermDebt", "LongTermDebtAndCapitalLeaseObligations",
          "LongTermNotesPayable", "UnsecuredLongTermDebt", "ConvertibleLongTermNotesPayable",
          "NotesPayable", "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities",

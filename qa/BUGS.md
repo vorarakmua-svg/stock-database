@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 69 · NEEDS-USER 0 · Decided: 9 · Verified: 327
+**Open:** P0 0 · P1 0 · P2 0 · P3 68 · NEEDS-USER 0 · Decided: 8 · Verified: 329
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2557,11 +2557,12 @@ Repro: census over 504 filers at 81b2e8e: long-term debt differs by more than 0.
 Expected: one figure per balance-sheet date.   Actual: two.
 
 ### Q23 [DATA] NEEDS-USER: read a debt total that includes current debt as the total less the current part (KVUE, TRV)?
-Status: DECIDED (2026-11-26)
+Status: VERIFIED (iteration 236; applied at the user's decision, 2026-11-26)
 Found: the debt1 worker (iteration 234; BUG-291, BUG-133's TRV) | Fixed: | Regression test:
 Context: Q20 sets aside a total that includes current debt on a date its current part is tagged (tested in tests/test_fallback_tags.py), so KVUE FY2024-25 and TRV have no long-term debt. Options: A read the total less the current figure the same filing tags (KVUE FY2024 7.805 - 0.750 = 7.055; TRV FY2025 9.267 - 0.300 = 8.967; total debt then equals the filer's own total); B a new field for the filer's own total; C leave as Q20 decided. Recommendation: A (moves TRV's EPV and scores; measure first).
 Decision: USER 2026-11-26: A, the total less the current part the same filing tags; measure over the 502 and show the moves before applying.
 
+Fix (iteration 236, Q23, `qa/evidence/debt2-investigation.txt`): where Q20 sets a total including current debt aside, long-term debt is the total less the current part the total's own filing tags on that date (a total with maturities: its maturities; a filer's own total: its short-term debt plus paper no short-term figure holds); it stays aside with no current part or a part larger than the total. Annual record, quarters, vintages, as-of snapshots. KVUE FY2024 7.055 (total 8.607), FY2025 7.071; TRV FY2025 8.967. Census: annual 20 cells at APD, ILMN, KVUE, PGR, TRV; quarterly 53 at 8; vintages 41. DB: 0 medians, verdicts, owner-earnings verdicts, labels; historical values APD 194.34 -> 118.35, KVUE 19.41 -> 19.45, RMD 350.24 -> 346.07, VTR 63.34 -> 62.71 (labels kept); EPV APD 98.56 -> 32.80, KVUE 11.41 -> 9.21; TRV composite 72 -> 66. Look-ahead 0; oracles as at HEAD. Applied at the user's decision after the measurement (2026-11-26).
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: the history's P/E on net income to common, as its P/B already is.
@@ -2858,11 +2859,12 @@ For the user: valuation_summary, valuations and warning_signs identical. One his
 Left over: FICO FY2012 still double counts ($0.553B for $0.504B), and Corpay FY2018-20 read no long-term debt.
 
 ### BUG-291 [P3][PARSE] Kenvue's FY2024-25 annual records have no long-term debt
-Status: OPEN
+Status: VERIFIED (iteration 236, by Q23)
 Found: iteration 121 (BUG-171's investigation) | Fixed: | Regression test:
 Repro: KVUE's 10-Ks tag their long-term debt under a concept long_term_debt doesn't read (details in `qa/evidence/bug171-investigation.txt`), so total debt is the short-term figure alone.
 Expected: its balance sheet's long-term debt.   Actual: NULL.
 
+Fix (iteration 236, Q23, `qa/evidence/debt2-investigation.txt`): where Q20 sets a total including current debt aside, long-term debt is the total less the current part the total's own filing tags on that date (a total with maturities: its maturities; a filer's own total: its short-term debt plus paper no short-term figure holds); it stays aside with no current part or a part larger than the total. Annual record, quarters, vintages, as-of snapshots. KVUE FY2024 7.055 (total 8.607), FY2025 7.071; TRV FY2025 8.967. Census: annual 20 cells at APD, ILMN, KVUE, PGR, TRV; quarterly 53 at 8; vintages 41. DB: 0 medians, verdicts, owner-earnings verdicts, labels; historical values APD 194.34 -> 118.35, KVUE 19.41 -> 19.45, RMD 350.24 -> 346.07, VTR 63.34 -> 62.71 (labels kept); EPV APD 98.56 -> 32.80, KVUE 11.41 -> 9.21; TRV composite 72 -> 66. Look-ahead 0; oracles as at HEAD. Applied at the user's decision after the measurement (2026-11-26).
 ### BUG-292 [P3][PARSE] ORCL's quarters don't read their current notes (NotesPayableCurrent)
 Status: VERIFIED (iteration 234)
 Found: iteration 121 (BUG-171's investigation) | Fixed: (this commit) | Regression tests: tests/test_debt_balance_sheet_lines.py (new); 13 failing first
