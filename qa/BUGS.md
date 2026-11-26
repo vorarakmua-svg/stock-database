@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 68 · NEEDS-USER 0 · Decided: 8 · Verified: 330
+**Open:** P0 0 · P1 0 · P2 0 · P3 66 · NEEDS-USER 0 · Decided: 8 · Verified: 331
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -190,7 +190,7 @@ Actual: the raw Yahoo record is shown as a cash dividend. The panel's CAGR uses 
 Notes: cosmetic; the valuation side is fixed (BUG-011). ETN 2001 and ABT 2004 show the same pattern. Review 3: Yahoo also records some spin-offs as dividends only, with no split-history factor, which the two-signal rule can't see: MO 2007 ($21.91) and 2008 ($51.06), MS 2007 ($14.25), C 2002 ($24.15), MRK 2003 ($2.74), PEP 1997 ($3.20), SLB 1999 ($3.29); none is in a current window. A cash special paid on one of SCCO's stock-dividend days would be dropped as a spin-off.
 
 ### BUG-020 [P3][VALID] Some filers tag a quarter's dividend, or a stray figure, as the year's dividends per share
-Status: OPEN
+Status: WONTFIX (iteration 239, the user's decision 2026-11-26): SEC's dividend figures are kept as filed
 Found: iteration 15 while fixing BUG-013 | Fixed: — | Regression test: —
 Repro: cached companyfacts: V tags 0.45/0.52/0.59 under both dividend tags with full-year contexts for FY2023–2025 (it paid 4 × those); CEG tags 0.282/0.3525/0.3878 the same way; PLD tags `CommonStockDividendsPerShareDeclared` 0.01 (FY2024) and 0.03 (FY2025) beside `...CashPaid` 3.84 and 4.04.
 Expected: the year's dividends per share.
@@ -198,6 +198,7 @@ Actual: the parser stores what was filed: V, CEG at a quarter of the year, PLD a
 Notes: not used by the valuations; the exports carry it, and the dividend completeness check (BUG-012) reads it, where a too-low figure can only hide a finding. Options: prefer `CashPaid` when both tags have a full-year fact and they differ more than 2× (PLD); flag a year whose SEC figure is about a quarter of Yahoo's payments (V, CEG); or WONTFIX as the filers' own data.
 
 Iteration 47: the same filer tagging (a quarterly amount in a full-year context) also gives BKNG FY2024-25 (8.75, 9.60), AMAT FY2016-17 (0.10) and NVDA FY2016 (0.115) a quarter of their year's dividend; today's parser reads what was filed (`qa/evidence/iter47-valid-triage.txt`).
+Decision (USER 2026-11-26): keep as filed and document. Census: 63 years at 26 tickers where the two dividend tags differ more than 2x; neither is right throughout (CashPaid at PLD and V, Declared at DOW, SPGI, EOG; scale typos at XYL, BRO). The note "not used by the valuations" is stale: the DDM reads the record, and its one-payment gate (BUG-311) already replaces 47 such years at 15 tickers with Yahoo's payments.
 ### BUG-021 [P1][STORE] The CSV merge silently drops every earlier row when the old file has no `ticker` column
 Status: VERIFIED
 Found: iteration 17 by code review 2; reproduced (`qa/evidence/iter17-review2-checks.txt`) | Fixed: iteration 19 (see LOG) | Regression test: `tests/test_csv_exporter.py::test_a_summary_without_a_ticker_column_is_kept_aside` (`;` separators with a BOM; a header renamed `Ticker`)
@@ -234,11 +235,12 @@ Notes: also add tests for a post-filing reverse split and for two post-filing sp
 
 Fix (iteration 228, `qa/evidence/bug264-investigation.txt`; applied at the user's decision, 2026-11-25, for DD's label): one split history (`inputs.split_history`) for the annual and quarterly paths: Yahoo's split_events plus the splits the filings record (`_restated_splits`: consecutive 10-K vintages of a year whose count moved by a simple ratio of 3:2 or more within 1%, EPS marked, net income held, not explained by a declared split). Yahoo's non-split factor nearest such a ratio between those filings is split into the split and the spin-off remainder (BUG-379). Quarters fold an undeclared seam on the marks plus the implied count plus the trailing year's net income held (BUG-264). Post-filing factors: simple splits apply; of the others, the subset nearest a Yahoo count within 1.25x, none without a count (BUG-050). `_restated_between` takes MAX_SPLIT_RATIO (BUG-270). BUG-024 was fixed in iteration 42; tests added. Filings' splits found: DD 1:3, HLT 1:3, LDOS 1:4, MSI 1:7, WTW 2.649:1 (read 3:8), EXE 1:200, HWM 1:3. DB copies: 0 medians, verdicts, owner-earnings verdicts; DD historical value 133.14 -> 139.45, label above -> near; HLT DDM base 7.50 -> 7.66, historical value within far above; 654 valuation_history rows (market caps before the mixed-factor days corrected, e.g. DD 2016-11 $22.46B -> $61.98B). Oracles agree with the code's split history; valuation oracle L2 loses HLT lynch (the oracle's own error).
 ### BUG-025 [P3][VALID] Edge cases in the dividend completeness check
-Status: OPEN
+Status: OPEN (parts 3 and 4 fixed in iteration 239; parts 1 and 2 decided 2026-11-26: fix, measured first)
 Found: iteration 17 by code review 2 | Fixed: — | Regression test: —
 Repro: (1) the usual interval is the whole-history median, so DIS (94 days overall, 193.5 since 2023) has the gap signal always on; (2) a gap with no later Yahoo payment is never flagged (CB would have passed if collected before 2026-03-13); (3) a malformed date raises `ValueError`, and `_assess`'s catch-all then drops the whole quality report (re-checked: `stock_data_fetcher.py:208-213`); (4) a NaN amount silences the finding.
 Notes: all unlikely with today's inputs (strftime dates, floats).
 
+Fix (iteration 239, parts 3 and 4): `dividend_gaps` leaves out a payment whose date doesn't parse or whose amount isn't finite (NaN, inf as None), and a year whose period_end doesn't parse. Decision (USER 2026-11-26) for parts 1 and 2: a recent median spacing and a schedule closed at the collection day, measured over the 502 and shown before applying (CRH, CTAS, SW, TPL, DIS; SWKS's DDM may go N/A).
 ### BUG-026 [P0][GATHER] An export with `summary.csv` open in Excel crashes the run before the SQLite export
 Status: VERIFIED
 Found: lead L13 (code review 1); reproduced in iteration 17 (`qa/evidence/iter17-l13-check.txt`) | Fixed: iteration 18 (see LOG) | Regression test: `tests/test_fetcher_concurrency.py::test_a_failed_summary_csv_still_writes_the_other_exports`
@@ -1223,7 +1225,7 @@ Repro: MCD 1968-05-21 -50.7% and 1969-06-13 -50.1%, TRV 1986-06-09 -52.1%: each 
 Expected: continuous series.   Actual: vendor gaps shown as moves on MAX charts (1960s-80s, and EQIX's 2001).
 
 ### BUG-154 [P3][MATCH] A dividend stored twice: KO's 2001 payments sum to $0.72 where it paid $0.36
-Status: OPEN
+Status: OPEN (decided 2026-11-26: merge same-amount payments within 7 days in every reader, measured first)
 Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
 Repro: `SELECT date, amount FROM dividend_events WHERE ticker='KO' AND date LIKE '2001%'` (the user's copy) gives 0.09, 0.09, 0.18 (09-10), 0.18 (09-12), 0.09 (09-17), 0.09; the same amount within 7 days also at PGR 2001-09-10/12, HD 2001-11-27/28, AXP 1987-12-31/1988-01-04, and 11 more pairs within 5 days; KO's and PGR's 2001-09-12 has no bar (the market was shut). The DVD tab sums by year, so KO's 2001 reads double.
 Expected: one payment.   Actual: Yahoo's duplicate kept. 4 tickers, historic years.
@@ -2466,11 +2468,12 @@ Repro: since vintages read share scale only from views filed by their day (no lo
 Expected: units.   Actual: thousands.
 
 ### BUG-370 [P3][VALID] BAC's FY2011 and FAST's dividends per share in the record come from the prior 10-K's forward-dated figure
-Status: OPEN
-Found: the as-of snapshots branch, Task 8 | Fixed: | Regression test:
+Status: VERIFIED (iteration 239)
+Found: the as-of snapshots branch, Task 8 | Fixed: (this commit) | Regression tests: tests/test_forward_dated_facts.py (new), test_integrity.py; 11 failing first
 Repro: today's financials_annual: BAC FY2011 dividends_per_share $0.01, FAST $0.50, where each year's own 10-K files $0.04 and $0.65: the higher-ranked tag on a dividend dated ahead in the prior 10-K wins. 2 cells over 502.
 Expected: the year's own 10-K figure.   Actual: the prior 10-K's forward-dated one.
 
+Fix (iteration 239, `qa/evidence/div1-investigation.txt`): a duration fact filed before its period ends is not a figure of that period (`_filed_ahead`: filed < end; filed on the last day still counts), in `_matches_kind` (annual record, vintages, year ends, annual filings) and `_collect_discrete_flows` (quarters); per fact, so the as-of snapshots follow. Census: 104 such facts at 49 filers (84 dividends declared ahead). BAC FY2011 0.01 -> 0.04, FAST FY2011 0.50 -> 0.65; a spurious TEL FY2025 as-of row and SWK's phantom 2015-03-28 quarter gone. DB: 0 medians, verdicts, owner-earnings verdicts, historical values, labels. Look-ahead 0; as-of oracle 0 differences.
 ### BUG-371 [P3][GATHER] An old-shape cached submissions file is fetched again, but the run is still dated by the file's age
 Status: VERIFIED (iteration 220)
 Found: code review 35 (`qa/evidence/review35.txt`, Minor 1; regression from BUG-296, ecccfdf) | Fixed: (this commit) | Regression tests: tests/test_sec_cache.py; 7 failing first (both bugs)
@@ -2528,10 +2531,11 @@ Repro: src/valuation/inputs.py `_implied_count_explains`: when neither year has 
 Expected: a seam with no independent count to check is not explained by the implied count.   Actual: it always is.
 Fix (iteration 225, `qa/evidence/bug376-investigation.txt`): `load_inputs` records whether each year's detection count came from net income / EPS; beyond 50x the implied-count branch is skipped when both years' did, so such a seam truncates unless a stored split explains it. EXE still folds. 0 tickers change.
 ### BUG-378 [P3][VAL] A judged year holding a recurring extra and a slipped payment still opens BUG-311's gate
-Status: OPEN
+Status: OPEN (decided 2026-11-26: option C, the narrow gate)
 Found: the BUG-376 worker (iteration 225, residual) | Fixed: | Regression test:
 Repro: the oracle case (2024-07-15, 2025-07-10) = 2 in tests/test_valuation_oracle_seam.py pins it: the year reads Yahoo's 6.86 instead of SEC's 3.10. Needs the year's payments compared with the side's schedule, not a side count. The census found no such real year.
 Expected: SEC's one-payment figure.   Actual: Yahoo's sum.
+Decision (USER 2026-11-26): C: close the gate only when the year holds more regular payments than the side that opened it and SEC's figure is at least half the side's regular payments (fixes the synthetic case, 0 real years; GPN FY2017 and J FY2020 keep Yahoo's better sum); change the oracle in its own commit first.
 ### BUG-379 [P3][VAL] A reverse split Yahoo folds into a spin-off factor is taken back out of every earlier close and dividend
 Status: VERIFIED (iteration 228)
 Found: the BUG-264 worker (iteration 228) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py

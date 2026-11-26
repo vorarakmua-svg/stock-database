@@ -2254,7 +2254,10 @@ period therefore carries two labels:
   a fiscal year whose end (the end most of its income and cash-flow figures share, else its
   latest balance-sheet date) is after the latest day a fact was filed is dropped, so a 10-K
   that tags a figure of the year ahead opens no year with it until that figure's own date has
-  passed (Bank of America's FY2010 10-K, filed 2011-02-25, tags a $0.01 dividend for all of 2011).
+  passed. An income or cash-flow figure filed before its period ends is never read, for the
+  year or its quarters (BUG-370): Bank of America's FY2010 10-K, filed 2011-02-25, tags a $0.01
+  dividend for all of 2011 and Fastenal's (2011-02-09) $0.50, each under the declared tag that
+  outranked the year's own 10-K figure ($0.04, $0.65, cash paid) once 2011 was over.
   A figure dated inside the year ahead opens that year once its date passes, before the year
   ends (Eli Lilly's FY2013 10-K tags short-term borrowings at 2014-03-31, so FY2014 opens on
   2014-04-28, its first filing after that date, with that figure alone; BUG-113 open). A filing's view of a year (a vintage)

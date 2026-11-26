@@ -1,5 +1,7 @@
 """Tests for XBRLParser — in particular the fiscal-year grouping regression (A1)."""
 
+from datetime import date, timedelta
+
 import pytest
 
 from src.exporters.sqlite_store import SQLiteStore
@@ -2617,7 +2619,8 @@ def test_the_10qs_filed_after_a_10k_dont_judge_it():
 def _outflow_quarters(tag, field, values, start="2008-01-01", ends=("2008-03-31", "2008-06-30", "2008-09-30",
                                                                   "2008-12-31")):
     """An outflow's year-to-date ladder (three 10-Qs, then the 10-K's year), and its derived quarters."""
-    ladder = [usd(v, start, end, fy=int(ends[-1][:4]), fp=fp, form=form, filed=f"{end[:8]}28")
+    ladder = [usd(v, start, end, fy=int(ends[-1][:4]), fp=fp, form=form,
+                  filed=(date.fromisoformat(end) + timedelta(days=28)).isoformat())
               for v, end, fp, form in zip(values, ends, ("Q1", "Q2", "Q3", "FY"), ("10-Q", "10-Q", "10-Q", "10-K"))]
     q = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": {tag: {"units": {"USD": ladder}}}}})
     return [q.get(end, {}).get(field) for end in ends]
@@ -2832,9 +2835,13 @@ def test_a_filer_reporting_in_another_currency_keeps_no_share_only_quarters():
     assert XBRLParser().extract_quarterly_financials(facts) == {}
 
 
-def _filed_years(tag, unit, by_fy, instant=False):
-    """One tag's facts: {fy: [(filed, value), ...]}, each a calendar fiscal year (or its year-end instant)."""
-    return {tag: {"units": {unit: [usd(v, start=None if instant else f"{fy}-01-01", end=f"{fy}-12-31", fy=fy,
+def _filed_years(tag, unit, by_fy, instant=False, year_end="12-31"):
+    """One tag's facts: {fy: [(filed, value), ...]}, each a fiscal year ending on *year_end* (month-day) of *fy*
+    (or its year-end instant). A figure is filed after its year ends (BUG-370)."""
+    def start(fy):
+        return (date.fromisoformat(f"{fy - 1}-{year_end}") + timedelta(days=1)).isoformat()
+
+    return {tag: {"units": {unit: [usd(v, start=None if instant else start(fy), end=f"{fy}-{year_end}", fy=fy,
                                        filed=filed) for fy, filings in by_fy.items() for filed, v in filings]}}}
 
 
@@ -2848,7 +2855,7 @@ def test_a_later_filings_scale_typo_keeps_the_figure_earlier_filings_report():
     annual = _annual(_filed_years("CommonStockDividendsPerShareDeclared", "USD/shares", {
         2021: [("2021-08-06", 2.68)],
         2022: [("2022-08-05", 2.77), ("2023-08-04", 2.77), ("2024-08-02", 2770000.0)],
-        2023: [("2023-08-04", 2.80), ("2024-08-02", 2.80)]}))
+        2023: [("2023-08-04", 2.80), ("2024-08-02", 2.80)]}, year_end="06-30"))
     assert annual["2022"]["dividends_per_share"] == 2.77
     assert [(r["field"], r["kind"], r["dropped"]) for r in annual["2022"]["_repairs"]] == [
         ("dividends_per_share", "scale x10^6", 2770000.0)]
@@ -2859,7 +2866,7 @@ def test_a_restored_figure_names_the_filing_whose_figure_was_kept():
     annual = _annual(_filed_years("CommonStockDividendsPerShareDeclared", "USD/shares", {
         2021: [("2021-08-06", 2.68)],
         2022: [("2022-08-05", 2.77), ("2023-08-04", 2.77), ("2024-08-02", 2770000.0)],
-        2023: [("2023-08-04", 2.80), ("2024-08-02", 2.80)]}))
+        2023: [("2023-08-04", 2.80), ("2024-08-02", 2.80)]}, year_end="06-30"))
     assert annual["2022"]["_source_filings"]["dividends_per_share"] == {
         "accn": "2023-08-04", "filed": "2023-08-04", "form": "10-K"}
     assert annual["2023"]["_source_filings"]["dividends_per_share"]["accn"] == "2024-08-02"
@@ -3013,7 +3020,7 @@ def test_earlier_filings_that_disagree_leave_the_latest_figure():
     annual = _annual(_filed_years("OperatingIncomeLoss", "USD", {
         2011: [("2012-03-27", 1.03e7)],
         2012: [("2012-03-27", -1.66e7), ("2013-04-02", 1.66e7), ("2014-04-01", -1.66e7)],
-        2013: [("2014-04-01", 3.442e9)], 2014: [("2015-03-31", 3.68e9)]}))
+        2013: [("2014-04-01", 3.442e9)], 2014: [("2015-03-31", 3.68e9)]}, year_end="01-28"))
     assert annual["2012"]["operating_income"] == -1.66e7
 
 
@@ -3023,7 +3030,7 @@ def test_a_later_filing_that_misscales_two_years_has_both_put_back():
         2020: [("2020-08-04", 2.58)], 2021: [("2021-08-06", 2.66)],
         2022: [("2022-08-05", 2.77), ("2024-08-02", 2.77e6)],
         2023: [("2023-08-04", 2.80), ("2024-08-02", 2.80e6)],
-        2024: [("2024-08-02", 2.80)], 2025: [("2025-08-01", 2.88)]}))
+        2024: [("2024-08-02", 2.80)], 2025: [("2025-08-01", 2.88)]}, year_end="06-30"))
     assert (annual["2022"]["dividends_per_share"], annual["2023"]["dividends_per_share"]) == (2.77, 2.80)
 
 

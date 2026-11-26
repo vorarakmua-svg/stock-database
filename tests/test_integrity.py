@@ -381,3 +381,29 @@ def test_dividend_check_without_secs_figure_skips_a_split_since_the_year_before(
     splits = [{"date": "2024-05-01", "ratio": 2.0}]
     assert check_dividend_completeness(_declared(y_2024=7.76, y_2025=None), payments, splits, {"2025"}) == []
 
+
+
+def test_dividend_check_skips_a_payment_whose_date_doesnt_parse():
+    # BUG-025 (3): a malformed date raised ValueError, and _assess's catch-all dropped the whole quality report.
+    payments = _payments(lambda ym: 0.97, skip={"2025-09", "2025-12"}) + [{"date": "2025-13-45", "amount": 0.97},
+                                                                          {"date": "n/a", "amount": 0.97}]
+    findings = check_dividend_completeness(_declared(y_2024=3.88, y_2025=3.88), payments, [], {"2024", "2025"})
+    assert [(f.code, f.period) for f in findings] == [("dividend_payments_missing", "2025")]
+
+
+def test_dividend_check_skips_a_year_whose_end_doesnt_parse():
+    payments = _payments(lambda ym: 0.97, skip={"2025-09", "2025-12"})
+    annual = {**_declared(y_2025=3.88), "2024": {"period_end": "2024-12-xx", "dividends_per_share": 3.88}}
+    findings = check_dividend_completeness(annual, payments, [], {"2024", "2025"})
+    assert [(f.code, f.period) for f in findings] == [("dividend_payments_missing", "2025")]
+
+
+def test_dividend_check_reads_a_payment_without_a_finite_amount_as_one_without_an_amount():
+    # BUG-025 (4): a NaN amount made the year's total NaN, and no total under NaN is a shortfall: the finding went
+    # silent. Such a payment is read as one with no amount (left out), as before for None.
+    nan = float("nan")
+    for missing in (None, nan, float("inf")):
+        payments = _payments(lambda ym: missing if ym == "2025-03" else 0.97, skip={"2025-09", "2025-12"})
+        findings = check_dividend_completeness(_declared(y_2024=3.88, y_2025=3.88), payments, [], {"2024", "2025"})
+        assert [(f.code, f.period) for f in findings] == [("dividend_payments_missing", "2025")], missing
+        assert "sum to 0.97/share" in findings[0].message

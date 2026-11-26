@@ -8,6 +8,7 @@ dividend histories missing payments that SEC filings declare. Every check is
 FLAG-ONLY — it emits Findings and never mutates data.
 """
 
+import math
 import statistics
 from datetime import date, timedelta
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Tuple
@@ -282,6 +283,14 @@ def check_ratio_bounds(
                 ))
     return findings
 
+def _iso_day(value: Any) -> Optional[date]:
+    """The day an ISO ``YYYY-MM-DD`` value (or its first ten characters) names, None for one that doesn't parse."""
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
 class DividendGap(NamedTuple):
     """A fiscal year whose Yahoo payments miss what SEC declares (``dividend_gaps``)."""
 
@@ -334,11 +343,16 @@ def dividend_gaps(
     (Q4): ACN's FY2026 has none, and Yahoo lacks its Oct 2025 and Jan 2026 payments (3.26
     against FY2025's 5.92), if Yahoo shows a payment in it. A real cut of more than a fifth
     with a gap is flagged too.
+
+    A payment whose date doesn't parse, or whose amount isn't a finite number (None, NaN), is left out, and a year
+    whose end doesn't parse is skipped (BUG-025): one bad value no longer raises (dropping the run's whole quality
+    report) or makes the year's total NaN (silencing its finding).
     """
     paid = sorted(
-        (str(p["date"])[:10], float(p["amount"]))
+        (day.isoformat(), float(p["amount"]))
         for p in dividend_payments
-        if p.get("date") and isinstance(p.get("amount"), (int, float))
+        for day in [_iso_day(p.get("date"))]
+        if day is not None and isinstance(p.get("amount"), (int, float)) and math.isfinite(p["amount"])
     )
     intervals = [
         (date.fromisoformat(later) - date.fromisoformat(earlier)).days
@@ -357,10 +371,11 @@ def dividend_gaps(
     for year in sorted(set(scored_years)):
         period = annual.get(year) or {}
         declared = _num(period, "dividends_per_share")
-        end = str(period.get("period_end") or "")[:10]
-        if not end:
+        end_day = _iso_day(period.get("period_end"))
+        if end_day is None:
             continue
-        start_day = date.fromisoformat(end) - timedelta(days=365)
+        end = end_day.isoformat()
+        start_day = end_day - timedelta(days=365)
         start = start_day.isoformat()
         whose = "SEC filings declare"
         reference_start = start
@@ -369,11 +384,11 @@ def dividend_gaps(
         # between its 2023 dividend and its 2025 initiation), so it isn't measured against the year before's.
         if declared is None and total > 0 and year.isdigit():
             before = annual.get(str(int(year) - 1)) or {}
-            before_end = str(before.get("period_end") or "")[:10]
-            if before_end and before_end < end:
+            before_end = _iso_day(before.get("period_end"))
+            if before_end is not None and before_end < end_day:
                 declared = _num(before, "dividends_per_share")
                 whose = "SEC filings declare none for the year, and the year before's declared"
-                reference_start = (date.fromisoformat(before_end) - timedelta(days=365)).isoformat()
+                reference_start = (before_end - timedelta(days=365)).isoformat()
         if declared is None or declared <= 0:
             continue
         recent = (start_day - timedelta(days=_DIVIDEND_GAP_FACTOR * usual)).isoformat()

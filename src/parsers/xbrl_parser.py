@@ -1595,6 +1595,16 @@ def _filing_of(entry: Dict[str, Any]) -> Dict[str, str]:
     return {"accn": entry.get("accn") or "", "filed": entry.get("filed") or "", "form": entry.get("form") or ""}
 
 
+def _filed_ahead(entry: Dict[str, Any]) -> bool:
+    """Whether a flow figure was filed before its period ended: no figure of that period, which wasn't over (BUG-370).
+    BAC's FY2010 10-K (filed 2011-02-25) tags a $0.01 dividend for 2011-01-01..2011-12-31, FAST's (2011-02-09) $0.50:
+    under the higher-ranked tag, each outranked the year's own 10-K figure ($0.04, $0.65). The census of the cached
+    filings finds such figures at 49 filers, nearly all dividends declared for the period ahead, the rest misdated.
+    A fact without a filing day or a start decides nothing here; one filed on its last day is over."""
+    filed, end = entry.get("filed"), entry.get("end")
+    return bool(entry.get("start") and filed and end and filed < end)
+
+
 def _same_period(end: Optional[str], year_end: Optional[str]) -> bool:
     """Whether a figure ending *end* is of the period ending *year_end* (``_SAME_PERIOD_DAYS``); a missing date
     decides nothing."""
@@ -1906,14 +1916,15 @@ class XBRLParser:
 
     @staticmethod
     def _matches_kind(field: Any, entry: Dict[str, Any]) -> bool:
-        """A flow (duration) field needs a fact that covers a period.
+        """A flow (duration) field needs a fact that covers a period, filed once it is over.
 
         ``_is_full_year`` accepts instant facts for the balance sheet, but under a
         duration tag an instant is a single event, not the year's value: BAC tags
         each quarterly dividend declaration that way, and the last one (0.24)
-        outranked the full-year 0.92 filed under the fallback tag.
+        outranked the full-year 0.92 filed under the fallback tag. A period filed
+        before its end wasn't over (``_filed_ahead``).
         """
-        return field.kind != DURATION or bool(entry.get("start"))
+        return field.kind != DURATION or (bool(entry.get("start")) and not _filed_ahead(entry))
 
     def _is_quarter(self, entry: Dict[str, Any]) -> bool:
         """True for instant facts and for duration facts spanning ~one quarter."""
@@ -2245,7 +2256,8 @@ class XBRLParser:
         quarter (BUG-111); a net outflow's totals, as paid, difference as filed (BUG-127), but
         a total of payments that falls by half or more gives none (BUG-140). A
         year's ladder is one rung until its second 10-Q, its first quarter's own 3-month
-        figure, which fills that quarter after every ladder (BUG-124).
+        figure, which fills that quarter after every ladder (BUG-124). A figure filed before its
+        period ended is no rung (``_filed_ahead``, BUG-370).
         """
         oracle_rungs: Dict[str, Dict[Tuple[str, str], Any]] = {}  # net income's and EPS's, for the counts' scale
         for field in CANONICAL_FIELDS:
@@ -2259,7 +2271,7 @@ class XBRLParser:
                     if entry.get("form", "") not in _QUARTERLY_FORMS:
                         continue
                     start, end = entry.get("start"), entry.get("end")
-                    if not start or not end or _unread(set_aside, field, tag, entry):
+                    if not start or not end or _unread(set_aside, field, tag, entry) or _filed_ahead(entry):
                         continue
                     span = self._span(start, end)
                     if span is None or span > _FULL_YEAR_MAX_DAYS:

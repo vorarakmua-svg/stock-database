@@ -368,8 +368,9 @@ def test_a_json_only_store_also_keeps_the_sector(tmp_path, monkeypatch):
 
 def test_a_tagging_error_put_right_is_a_warning(tmp_path, monkeypatch):
     def fy(val, year, filed):
-        return {"val": val, "start": f"{year}-01-01", "end": f"{year}-12-31", "fy": year, "fp": "FY", "form": "10-K",
-                "filed": filed, "accn": filed}
+        # STX's fiscal year, to the end of June: each 10-K is filed after its year ends (BUG-370).
+        return {"val": val, "start": f"{year - 1}-07-01", "end": f"{year}-06-30", "fy": year, "fp": "FY",
+                "form": "10-K", "filed": filed, "accn": filed}
 
     dps = [fy(2.68, 2021, "2021-08-06"), fy(2.77, 2022, "2022-08-05"), fy(2.77, 2022, "2023-08-04"),
            fy(2770000.0, 2022, "2024-08-02"), fy(2.80, 2023, "2024-08-02")]

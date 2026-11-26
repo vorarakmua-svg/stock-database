@@ -3830,3 +3830,14 @@ Result: BUG-383 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4297 passed, 2 skipped
 Commit: (this commit) fix(parser): current notes inside a long-term debt total aren't counted twice (BUG-383)
 Next: remaining P3s.
+
+## Iteration 239: 2026-11-26 21:50: fix (BUG-370, BUG-025 parts 3-4); the user's dividend decisions
+Picked: the dividend group (020, 025, 154, 370, 378); an opus worker.
+Did: a duration fact filed before its period ends doesn't speak for it; the gap check skips unparsable payments.
+- RED: 11 failed on 3ab6321; GREEN. 10 of 10 mutants (3 re-quoted); bug383, q23 specs. Look-ahead 0.
+- DB copies (49 tickers re-collected): 0 medians, verdicts, labels; BAC/FAST FY2011 dividends right.
+Result: BUG-370 VERIFIED. User decided: BUG-020 WONTFIX (documented), BUG-025 (1-2) fix measured first, BUG-154
+merge measured first, BUG-378 option C.
+Gates: ruff ✓ mypy ✓ pytest 4308 passed, 2 skipped
+Commit: (this commit) fix(parser): a figure filed before its period ends isn't that period's (BUG-370, BUG-025)
+Next: BUG-025 (1-2), BUG-154, BUG-378; the TTM worker.

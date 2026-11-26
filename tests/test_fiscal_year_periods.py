@@ -198,7 +198,8 @@ def test_a_vintage_knows_only_the_annual_reports_filed_by_its_own(filed_first):
     # A vintage reads the facts of its day: which period is the key's follows the annual reports filed up to its
     # filing, never a later one's (the as-of view replays the pipeline on the facts known at each filing date). The
     # same figures, with the May year's 10-K filed before the vintage's filing or (an artificial order) after it.
-    early, late = ("2016-07-28", "2018-02-23") if filed_first else ("2018-02-23", "2016-07-28")
+    # Both after the calendar years end: a figure filed before its period ends is none (BUG-370).
+    early, late = ("2018-02-23", "2018-07-27") if filed_first else ("2018-07-27", "2018-02-23")
     by_tag = {
         "Revenues": [usd(3370, *CAL_2016, fy=2017, filed=early), usd(3975, *CAL_2017, fy=2017, filed=early),
                      usd(2898, *MAY_2016, fy=2016, filed=late)],
