@@ -154,3 +154,17 @@ def test_an_end_beside_a_gap_in_the_quarters_is_left_as_it_was():
     assert ttm["2017-12-31"]["total_assets"] == 104.0 and "net_income" not in ttm["2017-12-31"]
     assert "net_income" not in ttm["2018-03-31"] and "net_income" not in ttm["2018-06-30"]
 
+
+def test_a_trailing_year_carries_its_latest_quarters_frame():
+    # BUG-343: the rows took calendar_year / calendar_quarter from their latest quarter but not its SEC frame label.
+    q = _quarters()
+    for row in q.values():
+        row["frame"] = "CY%dQ%d" % (row["calendar_year"], row["calendar_quarter"])
+    ttm = compute_ttm(q)
+    assert (ttm["2024-12-31"]["frame"], ttm["2025-03-31"]["frame"]) == ("CY2024Q4", "CY2025Q1")
+
+
+def test_a_trailing_year_whose_latest_quarter_has_no_frame_has_none():
+    q = _quarters()
+    q["2024-12-31"]["frame"] = "CY2024Q4"
+    assert "frame" not in compute_ttm(q)["2025-03-31"]

@@ -1296,7 +1296,8 @@ def scores_fragment(
         {"label": "ROIC - WACC", "value": fmt_pct(w["spread"]),
          "note": w["na_reason"] or f"ROIC {fmt_pct(w['roic'])} against WACC {fmt_pct(w['wacc'])}"},
         {"label": "Predictability", "value": _stars(pred["stars"]),
-         "note": pred["na_reason"] or "10-year consistency of revenue and EBITDA per share"},
+         "note": pred["na_reason"] or pred["note"] or "10-year consistency of revenue and "
+                 f"{'EPS' if 'eps' in (pred['r2'] or {}) else 'EBITDA per share'}"},
         {"label": "Magic Formula rank", "value": str(magic["rank"]) if magic["rank"] is not None else "—",
          "note": f"not ranked: {magic['na_reason']}" if magic["rank"] is None and magic["na_reason"]
                  else f"earnings yield {fmt_pct(magic['earnings_yield'])}, return on capital "

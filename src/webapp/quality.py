@@ -113,7 +113,7 @@ def quality_view(r: Reader, ticker: str) -> Dict[str, Any]:
         "roic_vs_wacc": {"roic": row.get("roic"), "wacc": row.get("wacc"), "spread": row.get("roic_minus_wacc"),
                          "na_reason": na.get("wacc") or na.get("roic")},
         "predictability": {"stars": row.get("predictability_stars"), "r2": _json(row.get("predictability_r2")),
-                           "na_reason": na.get("predictability")},
+                           "na_reason": na.get("predictability"), "note": na.get("predictability_note")},
         "magic_formula": {"rank": row.get("magic_formula_rank"), "earnings_yield": row.get("earnings_yield"),
                           "return_on_capital": row.get("return_on_capital"), "na_reason": magic_reason},
         "ncav_per_share": row.get("ncav_per_share"),

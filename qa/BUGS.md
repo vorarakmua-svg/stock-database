@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 66 · NEEDS-USER 0 · Decided: 8 · Verified: 331
+**Open:** P0 0 · P1 0 · P2 0 · P3 62 · NEEDS-USER 0 · Decided: 8 · Verified: 335
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -917,11 +917,12 @@ Impact: the shown quarterly flows (Financials tab, API, the exports' quarterly r
 Fix: `_collect_discrete_flows` differences an outflow's year-to-date sizes (`abs(val) - abs(prev)`, where it took the size of the difference) and derives no quarter where the size shrinks; a zero quarter stays. The same root put right a year whose filings tag the outflow with both signs, whose quarter took the two totals' sum: LLY's 10-Qs tag its 2008 dividends negative and its 10-K positive (Q4 $3,598.2M, now $515.2M), GE's 2016 buybacks the other way round ($40,725M, now $4,437M), CVX's Q4 2010 dividends $9,902M (now $1,436M): 54 quarters at 27 filers. Two tests RED on 9e99a02 (INTU's Q4 read $15M; LLY's 3,500 against 500), three guards (outflows tagged negative, a quarter without one, a signed flow); six mutants, each failing a test (`qa/evidence/iter80-bug111-{red,green,mutants}.txt`). Offline over the 126 cached filers: 200 quarters no longer derived and 54 corrected, the five outflows only, with 640 trailing-year cells; the annual record, the vintages' figures and the metrics unchanged; the quality sweep loses INTU's five quarterly-sum findings and nothing else (INTU 50 to 100); the valuation reads no quarterly figure (`iter80-bug111-realdata.txt`). Through stock-web on that collection: INTU's Q4 FY2025 capex shows "—" beside Q1-Q3's $33M, $31M and $35M, LLY's Q4 2008 dividends $515.2M, GE's Q4 2016 buybacks $4.437B (`iter80-bug111-e2e.txt`). The user's stored quarters keep the old figures until their next collection (L20).
 Correction (code review 12, I1; re-run in iteration 85, `qa/evidence/iter85-review12-rerun.txt`): the rule is right for the four gross payments, whose negative figures are a sign convention (capex, dividends, buybacks, debt repaid: the 29 changed cells there are right), but acquisitions are net of cash acquired, and a negative year-to-date total there is a net inflow as filed. GE's Q3 2013 $7.80B, cited above as a fall read as an outflow, is a real one (Lufkin and Avio), and 25 of the 54 quarters this fix changed, with 8 it emptied, are acquisitions: BUG-127.
 ### BUG-112 [P3][VALID] The quality score's five years include a year known only from opening balances: GEV and SNDK score 30
-Status: OPEN
-Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 240)
+Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: (this commit) | Regression tests: tests/test_quarterly_eps.py (new), test_ttm.py, test_scores_scores.py, test_scores_store.py, test_web_scores.py, test_web_api_scores.py, test_quality.py, test_fetcher_concurrency.py; 27 failing first
 Repro: the earliest 10-K's equity and cash-flow statements open three years back, so the annual record holds a year with only total equity and/or cash (121 such years at 119 of the 126 cached filers, 119 of them the filer's earliest). `quality.assess_annual` scores the record's latest five years, so for a filer with four years of statements the fifth is that year, and its missing revenue, net income, total assets and liabilities and operating cash flow cost 50 points: GEV scores 30 (FY2021 holds total equity alone), SNDK 30 (FY2022), BLK 0 (FY2021, with Q9's bank fields).
 Expected: the scored years are years the filings report: GEV and SNDK 80 (their FY2022 and FY2023 lack only the balance sheet no 10-K holds).   Actual: 30.
 
+Fix (iteration 240, `qa/evidence/ttm1-investigation.txt`): `validation.quality.scored_years` scores from the record's first year with any income or cash-flow figure (years before hold only opening balances), in assess_annual and the fetcher's integrity checks. GEV, SNDK, FDXF, FERG, Q, SOLV, SW 30 -> 80; RDDT 20 -> 70; SKYD 0 -> 50. EXE stays 70 (a fresh-start year, not opening balances). DB copies (502 re-collected): 0 medians, verdicts, owner-earnings verdicts, historical values, labels; oracles as at HEAD; look-ahead 0.
 ### BUG-113 [P3][STORE] A forward-dated fact opens a vintage of a year that hadn't ended when it was filed: BAC FY2011, LLY FY2014
 Status: OPEN
 Found: iteration 77 via VALID-10 (`qa/evidence/iter77-pit.txt`) | Fixed: — | Regression test: —
@@ -1558,11 +1559,12 @@ Fix (build iteration 35):
 Evidence: `qa/evidence/bug191-{red,green,mutants,realdata}.txt`
 
 ### BUG-192 [P3][SCORES] Predictability's N/A reasons and notes are off
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 240)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression tests: tests/test_quarterly_eps.py (new), test_ttm.py, test_scores_scores.py, test_scores_store.py, test_web_scores.py, test_web_api_scores.py, test_quality.py, test_fetcher_concurrency.py; 27 failing first
 Repro: `scores.py` says "fewer than 10 fiscal years" for 9 of 16 N/As that have 10-11 years but miss a value (GOOGL, AXP, BRK-B, DUK, KKR, NEE, V, CRWD, UBER); the STAT note says "revenue and EBITDA" for banks and insurers, which use EPS; a 1-star result doesn't say whether a loss year or a falling trend gave it.
 Expected: the actual reason.   Actual: a wrong or vague one.
 
+Fix (iteration 240, `qa/evidence/ttm1-investigation.txt`): (partly fixed by BUG-193) `scores.rated()` gives a 1-star note naming the cause (series at or below zero, falling trend, fit below 0.125), EPS named for banks and insurers; stored as predictability_note in na_reasons, served as predictability.note and in the STAT note; a missing year inside a longer record reads "FY2021 of the last 10 fiscal years not stored". 151 rows gain the note; no score changes. DB copies (502 re-collected): 0 medians, verdicts, owner-earnings verdicts, historical values, labels; oracles as at HEAD; look-ahead 0.
 ### BUG-193 [P3][UI] Several N/A scores name no input
 Status: VERIFIED (iteration 201)
 Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression tests: tests/test_scores_*.py, test_web_scores.py, test_web_insiders.py, test_web_screener_quality.py, test_web_workstation.py; 21 failing first
@@ -2205,11 +2207,12 @@ Expected: no short-term debt carried beside a later total that can hold the matu
 Fix (iteration 217, Q18's merge of feat/asof-snapshots): the debt is the record's own (one rule); the maturities are counted once (test on the branch).
 
 ### BUG-335 [P3][TTM] A third quarter's EPS derived as nine months less six carries the halves' rounding: C Q3 2026 2.86 for 2.85
-Status: OPEN
-Found: iteration 178 (Q17's worker, C's recovered quarters) | Fixed: | Regression test:
+Status: VERIFIED (iteration 240)
+Found: iteration 178 (Q17's worker, C's recovered quarters) | Fixed: (this commit) | Regression tests: tests/test_quarterly_eps.py (new), test_ttm.py, test_scores_scores.py, test_scores_store.py, test_web_scores.py, test_web_api_scores.py, test_quality.py, test_fetcher_concurrency.py; 27 failing first
 Repro: C's 10-Q tags Q3 2026 diluted EPS 2.85 and nine months; the quarterly ladder's 9M - 6M gives 2.86; C's companyfacts-based Q3 2025 likewise (1.8600000000000003 for 1.86).
 Expected: the quarter's own 3-month EPS where the filing tags it.   Actual: the difference of rounded year-to-date figures.
 
+Fix (iteration 240, `qa/evidence/ttm1-investigation.txt`): a derived quarter's EPS takes the quarter's own 3-month figure where the two are within 1.5 cents (rounding only; a wider reading pulled in mis-scaled facts). C Q3 2026 2.85. Quarterly EPS moves are noise or at most 1.5 cents. DB copies (502 re-collected): 0 medians, verdicts, owner-earnings verdicts, historical values, labels; oracles as at HEAD; look-ahead 0.
 ### BUG-336 [P3][GATHER] A run that recovered a gap from the filing's XBRL isn't collected again when the SEC's companyfacts catch up
 Status: OPEN
 Found: iteration 178 (Q17's residuals) | Fixed: | Regression test:
@@ -2259,11 +2262,12 @@ Expected: period_end the end most of the record's flow figures share.   Actual: 
 Fix (iteration 223, `qa/evidence/bug338-investigation.txt`): `_apply_calendar` sets period_end to the end it already uses for the year end and calendar_year (the end most of the year's flow figures share, else the latest filed figure's), for every annual record, vintage and as-of snapshot. LRCX FY2012 2012-06-30 -> 2012-06-24. Records whose calendar_year disagrees with SEC's rule on their own period_end: 1 -> 0. DB copies: financials_annual 38 rows at 29 tickers, financials_annual_known 48 at 36, vintages 1 (WSM), period_end only; every other table identical; oracles as at HEAD; look-ahead 0.
 
 ### BUG-343 [P3][TTM] TTM rows carry no SEC frame label
-Status: OPEN
-Found: BUG-277's census (residual 3) | Fixed: | Regression test:
+Status: VERIFIED (iteration 240)
+Found: BUG-277's census (residual 3) | Fixed: (this commit) | Regression tests: tests/test_quarterly_eps.py (new), test_ttm.py, test_scores_scores.py, test_scores_store.py, test_web_scores.py, test_web_api_scores.py, test_quality.py, test_fetcher_concurrency.py; 27 failing first
 Repro: financials_ttm rows get calendar_year / calendar_quarter but no `frame`, unlike the quarters they sum.
 Expected: the frame of the TTM's last quarter, or the docs say none.   Actual: none, undocumented.
 
+Fix (iteration 240, `qa/evidence/ttm1-investigation.txt`): a TTM row carries its latest quarter's frame (JSON export; the tables have no frame column); README documents it. DB copies (502 re-collected): 0 medians, verdicts, owner-earnings verdicts, historical values, labels; oracles as at HEAD; look-ahead 0.
 ### BUG-344 [P3][STORE] The store only upserts annual rows, so years and vintages a newer parse no longer produces stay in an existing database
 Status: VERIFIED (iteration 229)
 Found: the as-of snapshots design's builder check and BUG-341's residual R1 | Fixed: (this commit) | Regression tests: tests/test_sqlite_store.py, tests/test_fetcher_concurrency.py; 12 failing first
@@ -2759,12 +2763,13 @@ Expected: the cash-flow add-back, $3.366B / $3.609B / $3.746B (Yahoo agrees).   
 Fix (iteration 176, `qa/evidence/bug327-investigation.txt`): UPS's new 10-K repeats DA $3.366B/$3.609B and tags DDA $2.8B/$3.0B/$3.0B beside the intangibles' amortization (DDA + amortization within 1% of DA: a note's rounded depreciation). `_da_totals_displaced` (before `_depreciation_combined`): where a filing tags a period's total T below another total U that repeats a figure an earlier filing tagged for the period under U alone, T is a part; from then on, in that filer's filings, T is set aside beside a larger U (no total ranked between them; U above the amortization, else BUG-170 decides), U is entered under T's tag, a later filing's lone T gives way to a larger U filed by then, and a year's 10-Q to-date periods only together; filings filed by then only. Wider than UPS: annual 139 cells at 23 filers, all up (CRM FY2018-26 e.g. $1.0B -> $3.477B, MCD FY2018-25, PCAR FY2013-25, TSLA FY2009-17 $0.769B -> $1.636B, EXC FY2009-22, KEY, ETR, BEN FY2008-20...), each to the cash flow statement's add-back where checked (25 cells match Yahoo; EXC FY2022 $3.533B, its later 10-Ks' figure, beside Yahoo's $2.768B); quarterly 311, TTM 529, vintages 316; no negative; 3 halvings, each repairing a broken ladder (ELV Q3 2023-24, AES Q3 2009). On DB copies: 0 medians, verdicts or owner-earnings verdicts; TSLA's historical-value label far above -> above (284.65 -> 301.49 at $372.22); EV/EBITDA CRM 22.96 -> 18.55, MCD 16.22 -> 14.28, UPS 10.94 -> 10.14. Look-ahead 0; 13 mutants.
 
 ### BUG-275 [P3][TTM] A year's quarters sit on two D&A bases where its 10-Qs tag lines its 10-K doesn't, or the reverse: AVGO's FY2023-24 fourth quarters $3.37B and $9.42B
-Status: OPEN
+Status: OPEN (decided 2026-11-26: option A, measured first)
 Found: iteration 116 (BUG-170's investigation, R2) | Fixed: | Regression test:
 Repro: the fourth quarter is the 10-K's figure less nine months of another basis. 1,140 such lump/hole quarters at HEAD (DHR FY2022-23's among them), 674 with BUG-170's V3 (573 healed, 107 new): AVGO FY2023-24 (its 10-Qs tag no amortization those years; the TTM 2025-02-02 to 2025-08-03 reads $11.9-15.9B for ~$8.6B), GOOGL 2025 (the reverse, +$0.1-0.3B), BR, TTWO, KKR, J, MRSH FY2022-23, EME FY2010-13. The TTM at a fiscal year end equals the annual figure in 6,776 of 6,790 cases.
 Expected: each quarter's D&A on its year's basis.   Actual: a lump or a hole in the fourth quarter and the TTM rows over it.
 Also (iteration 174, BUG-332's residual): where a 10-K is combined (BUG-274) but its 10-Qs carry the line with no evidence, Q4 takes the whole year's amortization: SWK FY2020-23 Q4 about $297M beside about $93M, HD FY2025 $1.289B beside $0.824B, FY2026 $1.515B beside $0.869B; HD's, DVA's and NTAP's latest TTMs hold the prior year's lump.
 
+Decision (USER 2026-11-26): A: spread a year's untagged amortization over Q1-Q3 by days, the rest in Q4, marked derived, so every TTM is on one basis and equals the annual figure at the year end; B (blank Q4's D&A) for the reverse kind (10-Qs carrying more than the 10-K). Measure over the 502 and show the moves before applying. Census at 3ab6321: 134 Q4 lumps and 143 holes at 147 filers, 1,073 TTM rows, the latest TTM of 17 filers.
 ### BUG-276 [P3][VALID] Some filers carry their D&A on tags BUG-170's rule leaves alone: WDAY, MET and VEEV's OtherDepreciationAndAmortization, TXN's capitalized software
 Status: OPEN
 Found: iteration 116 (BUG-170's investigation, R3) | Fixed: | Regression test:

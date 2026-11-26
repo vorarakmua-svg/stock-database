@@ -48,6 +48,12 @@ _FIELDS = {f.key: f for f in CANONICAL_FIELDS}
 _TO_COMMON = "NetIncomeLossAvailableToCommonStockholdersBasic"
 #: The (EPS, weighted count) pairs a filing's figure for common is checked with, basic first (its own).
 _EPS_PAIRS = (("eps_basic", "weighted_avg_shares_basic"), ("eps_diluted", "weighted_avg_shares_diluted"))
+#: The per-share figures a derived quarter takes from its own 3-month fact where the two agree within the rounding of
+#: the year-to-date figures differenced: they are one figure, and the difference carries the halves' rounding (C's
+#: Q3 2026 nine months less six, 2.86, for its 10-Q's 2.85; BUG-335).
+_OWN_QUARTER_EPS = frozenset(key for key, _count in _EPS_PAIRS)
+#: Two year-to-date figures rounded to the cent differ from the quarter's own by up to a cent and a half.
+_EPS_ROUNDING = 0.015 + 1e-9
 
 
 def _fact_key(entry: Dict[str, Any]) -> Tuple[Any, Any, Any]:
@@ -2346,6 +2352,14 @@ class XBRLParser:
                         and _QUARTER_MIN_DAYS <= days <= _QUARTER_MAX_DAYS:
                     own[end] = (val, field.tags[priority], basis.get((start, end)))
 
+            # A quarter's own EPS, the figure its derived one rounds to (BUG-335): {end: (value, tag)}.
+            own_eps: Dict[str, Tuple[float, str]] = {}
+            for (start, end), (priority, _f, val) in chosen.items() if field.key in _OWN_QUARTER_EPS else ():
+                days = self._span(start, end)
+                if isinstance(val, (int, float)) and days is not None \
+                        and _QUARTER_MIN_DAYS <= days <= _QUARTER_MAX_DAYS:
+                    own_eps[end] = (val, field.tags[priority])
+
             def assign(end: str, value: Any, source: str, start: str, ladder_fy: Optional[int],
                        split_level: Optional[float]) -> None:
                 pd_ = periods.setdefault(end, {"period_end": end})
@@ -2410,8 +2424,11 @@ class XBRLParser:
                             discrete, keep = val - prev, False
                         else:
                             discrete, keep = val - prev, True
+                        source = "derived:ytd_diff"
+                        if end in own_eps and abs(own_eps[end][0] - discrete) <= _EPS_ROUNDING:
+                            discrete, source = own_eps[end]
                         if keep:
-                            assign(end, discrete, "derived:ytd_diff", start, ladder_fy, basis.get((start, end)))
+                            assign(end, discrete, source, start, ladder_fy, basis.get((start, end)))
                     prev_end, prev_val = end, val  # (a gap resets the baseline)
             if not shares:
                 # A year's ladder is one rung until its second 10-Q: the first quarter's own

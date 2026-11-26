@@ -76,9 +76,11 @@ def compute_ttm(quarterly: Dict[str, Dict[str, Any]],
     Returns:
         ``{period_end: {flow fields summed over trailing 4 quarters (weighted-average
         share counts averaged), balance-sheet fields as-of, calendar_year,
-        calendar_quarter, fiscal_year, ...}}`` for every quarter-end that has four
+        calendar_quarter, fiscal_year, frame, ...}}`` for every quarter-end that has four
         consecutive quarters behind it. A period end inside a quarter is no quarter of
-        its own: the windows step over it (``_inside_a_quarter``).
+        its own: the windows step over it (``_inside_a_quarter``). The calendar labels
+        are the latest quarter's, its SEC ``frame`` among them (``CY2026Q3``: SEC frames
+        no trailing year of its own; BUG-343).
     """
     ends = sorted(quarterly.keys())
     inside = set(_inside_a_quarter(quarterly, ends))
@@ -97,6 +99,8 @@ def compute_ttm(quarterly: Dict[str, Dict[str, Any]],
             "calendar_quarter": latest.get("calendar_quarter"),
             "fiscal_year": latest.get("fiscal_year"),
         }
+        if latest.get("frame"):
+            row["frame"] = latest["frame"]
 
         # Flow concepts: sum across the trailing 4 quarters (only when all present);
         # share counts: their average.

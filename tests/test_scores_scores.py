@@ -321,7 +321,8 @@ def test_predictability_needs_the_ten_fiscal_years_t_minus_9_to_t():
         row.fiscal_year = 2015 + i + (1 if 2015 + i >= 2021 else 0)
     assert [r.fiscal_year for r in f.rows][-10:] == [2016, 2017, 2018, 2019, 2020, 2022, 2023, 2024, 2025, 2026]
     assert predictability(f) == (None, {})
-    assert compute_scores(f, _market()).na_reasons["predictability"] == "fewer than 10 fiscal years of data"
+    assert compute_scores(f, _market()).na_reasons["predictability"] == (
+        "FY2021 of the last 10 fiscal years not stored")  # BUG-192
     # Without the gap the same rows are rated.
     assert predictability(_steady(years=11))[0] == 5.0
 
@@ -404,3 +405,58 @@ def test_the_magic_formula_gives_the_sector_rule_for_the_sectors_it_leaves_out()
         f = _steady(sector=sector)
         f.rows[-1].figures.update(current_assets=None)
         assert compute_scores(f, _market()).na_reasons["magic_formula"] == "no current assets or liabilities"
+
+
+def test_a_gap_in_the_last_ten_years_names_the_year_not_stored():
+    # BUG-192: eleven stored years with FY2021 missing said "fewer than 10 fiscal years of data".
+    f = _steady(years=11)
+    for i, row in enumerate(f.rows):
+        row.fiscal_year = 2015 + i + (1 if 2015 + i >= 2021 else 0)
+    assert compute_scores(f, _market()).na_reasons["predictability"] == (
+        "FY2021 of the last 10 fiscal years not stored")
+    f = _steady(years=12)
+    f.rows = [r for r in f.rows if r.fiscal_year not in (2020, 2023)]
+    assert compute_scores(f, _market()).na_reasons["predictability"] == (
+        "FY2020, 2023 of the last 10 fiscal years not stored")
+
+
+def test_a_short_record_still_says_fewer_than_ten_years():
+    assert compute_scores(_steady(years=9), _market()).na_reasons["predictability"] == (
+        "fewer than 10 fiscal years of data")
+
+
+def test_a_one_star_rating_says_a_year_at_or_below_zero_gave_it():
+    s = compute_scores(_steady(ebitda=lambda i, r: -5.0 if i in (4, 6) else 0.2 * r), _market())
+    assert s.predictability_stars == 1.0
+    assert s.predictability_note == "1 star: EBITDA per share at or below zero in FY2020, 2022"
+    assert "predictability" not in s.na_reasons
+
+
+def test_a_one_star_rating_says_a_falling_trend_gave_it():
+    s = compute_scores(_steady(growth=-0.05), _market())
+    assert (s.predictability_stars, s.predictability_note) == (
+        1.0, "1 star: a falling trend in revenue per share and EBITDA per share")
+    s = compute_scores(_steady(ebitda=lambda i, r: 200.0 * 0.97 ** i), _market())
+    assert (s.predictability_stars, s.predictability_note) == (1.0, "1 star: a falling trend in EBITDA per share")
+
+
+def test_a_bank_one_star_rating_names_eps():
+    rows = _steady(sector="bank").rows
+    for i, r in enumerate(rows):
+        r.figures["ebitda"] = None
+        r.eps = -1.0 if i == 9 else r.figures["revenue"] * 0.1 / 100.0
+    s = compute_scores(Fundamentals(ticker="BBB", sector_class="bank", rows=rows), _market())
+    assert s.predictability_note == "1 star: EPS at or below zero in FY2025"
+
+
+def test_a_one_star_rating_from_a_weak_fit_says_so():
+    wobble = [1.0, 8.0, 0.3, 6.0, 0.2, 9.0, 0.3, 5.0, 0.4, 3.0]
+    s = compute_scores(_steady(ebitda=lambda i, r: 0.2 * r * wobble[i]), _market())
+    r2 = min(s.predictability_r2.values())
+    assert s.predictability_stars == 1.0 and r2 < 0.125
+    assert s.predictability_note == "1 star: a fit (R²) of %.2f, below the 0.125 that earns 1.5" % r2
+
+
+def test_more_than_one_star_carries_no_note():
+    s = compute_scores(_steady(), _market())
+    assert s.predictability_stars == 5.0 and s.predictability_note is None

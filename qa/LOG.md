@@ -3841,3 +3841,14 @@ merge measured first, BUG-378 option C.
 Gates: ruff ✓ mypy ✓ pytest 4308 passed, 2 skipped
 Commit: (this commit) fix(parser): a figure filed before its period ends isn't that period's (BUG-370, BUG-025)
 Next: BUG-025 (1-2), BUG-154, BUG-378; the TTM worker.
+
+## Iteration 240: 2026-11-27 00:30: fix (BUG-335, BUG-343, BUG-192, BUG-112); BUG-275 decided
+Picked: the TTM and scores group; an opus worker (nothing moved).
+Did: a derived quarter's EPS uses its own figure within rounding; TTM rows carry a frame; predictability says why
+a 1-star rating; the data-quality score starts at the first year with flows.
+- RED: 27 failed on dcaf8c3; GREEN. 29 of 29 mutants; bug193's re-quoted; div1's 10 of 10. Look-ahead 0.
+- DB copies: 0 medians, verdicts, labels; data-quality scores of 9 tickers up.
+Result: BUG-335, 343, 192, 112 VERIFIED. BUG-275 decided by the user: A (spread), measured first.
+Gates: ruff ✓ mypy ✓ pytest 4341 passed, 2 skipped
+Commit: (this commit) fix: quarterly EPS within rounding; TTM frames; predictability notes; quality from the first year with flows (BUG-335, -343, -192, -112)
+Next: BUG-378 (no moves), BUG-154 and BUG-025 (to the user), BUG-275.

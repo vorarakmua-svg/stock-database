@@ -888,3 +888,19 @@ def test_a_collection_whose_submissions_request_failed_is_stored_as_incomplete(t
         with StockDataFetcher(config=config) as fetcher:
             assert fetcher.fetch_and_export(["DLR"], formats=["sqlite"])["stored"] == 1
         assert stored_run(db, "DLR")[1] == expected
+
+
+def test_assess_reads_the_years_the_filings_report(tmp_path, monkeypatch):
+    # BUG-112: the integrity checks read the score's years: FY2021, known only from its opening equity, isn't one.
+    from src.fetchers import stock_data_fetcher
+    seen = []
+    monkeypatch.setattr(stock_data_fetcher, "check_field_outliers", lambda annual, years: seen.append(set(years)) or [])
+    fetcher = _make_fetcher(tmp_path, workers=1)
+    stock = StockData(ticker="GEV", cik="000", company_name="GEV Inc.")
+    base = {"revenue": 1.0e9, "net_income": 1.0e8, "operating_income": 1.5e8, "total_assets": 2.0e9,
+            "total_liabilities": 1.0e9, "total_equity": 1.0e9, "operating_cash_flow": 2.0e8}
+    stock.financials_annual = {str(y): {"fiscal_year": y, **base} for y in (2022, 2023, 2024, 2025)}
+    stock.financials_annual["2021"] = {"fiscal_year": 2021, "total_equity": 1.0e9}
+    fetcher._assess(stock)
+    assert seen == [{"2022", "2023", "2024", "2025"}]
+    assert stock.data_quality["score"] == 100

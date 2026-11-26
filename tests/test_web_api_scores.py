@@ -77,7 +77,8 @@ def test_the_endpoint_gives_the_scores_the_ranks_the_growth_and_the_signs(client
     assert body["beneish"]["variables"]["sgi"] == 1.1
     assert body["sloan"] == {"ratio": 0.12, "zone": "warning", "na_reason": None}
     assert body["roic_vs_wacc"] == {"roic": 0.18, "wacc": 0.09, "spread": 0.09, "na_reason": None}
-    assert body["predictability"] == {"stars": 4.5, "r2": {"revenue": 0.93, "ebitda": 0.88}, "na_reason": None}
+    assert body["predictability"] == {"stars": 4.5, "r2": {"revenue": 0.93, "ebitda": 0.88}, "na_reason": None,
+                                      "note": None}
     assert body["magic_formula"] == {"rank": 4, "earnings_yield": 0.05, "return_on_capital": 0.4,
                                      "na_reason": None}
     assert (body["ncav_per_share"], body["momentum"]) == (-12.0, 0.12)

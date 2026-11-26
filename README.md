@@ -656,6 +656,10 @@ history" for momentum), or the zero total the ratio divides by (BUG-193):
   (a log-linear slope of zero or less in either series), is 1 star. Otherwise
   `stars = 1 + 4 × min(R²_revenue, R²_EBITDA)`, the R² of ln(revenue per share) and ln(EBITDA per share)
   against the year, rounded down to the half star. Banks and insurers use EPS where EBITDA is suppressed.
+  A 1-star rating says why, in `na_reasons` as `predictability_note` (the API's `predictability.note`, the
+  STAT tab's note): the series and years at or below zero, the series whose trend falls, or a fit below
+  the 0.125 that earns 1.5 stars. N/A with a year of the ten not stored names it ("FY2021 of the last 10
+  fiscal years not stored"; BUG-192).
 
 **Warning signs**: twenty published rules. Each that fires is stored with its severity and a message stating
 the figure, the value and the threshold; severe signs come first.
@@ -2224,7 +2228,8 @@ never alter data):
 | Dividend completeness | Yahoo's dividend history missing payments that SEC filings declare: a gap in the payment schedule that begins near the fiscal year, and Yahoo's payments for that year well short of the SEC-declared dividends per share, or of the year before's when the year's 10-K gives none and Yahoo shows a payment in it (a December declaration paid in January, a suspension SEC confirms, a first dividend paid after the year ends, and years before a split are not flagged); the valuation reruns it on the stored payments, and DDM is N/A where it flags payments DDM reads | interval > 1.7× the usual one and payments < 80% of declared | −10 |
 
 Thresholds are deliberately wide (a $1M materiality floor; the most recent 5 fiscal years are
-scored), so clean filings keep a score of 100, unless the dividend-completeness check, which reads Yahoo's dividend
+scored, from the record's first year with a figure for the year: a year before it is known only from the
+earliest 10-K's opening balances, its equity or cash alone, BUG-112), so clean filings keep a score of 100, unless the dividend-completeness check, which reads Yahoo's dividend
 history, flags a year (-10 even for a company with clean filings). Findings appear in `data_quality.findings` and,
 for medium+ severity, in `warnings`.
 
@@ -2296,7 +2301,10 @@ numbers SEC filings report:
   cumulative ladder anchored at the fiscal-year start (`discrete[k] = YTD[k] − YTD[k-1]`),
   which recovers every quarter's standalone performance — including **Q4**, which is never
   filed as a 10-Q (`Q4 = annual − 9-month YTD`). Until a year's second 10-Q, its first
-  quarter is its own 3-month figure. Derived values are tagged in `_source_tags`.
+  quarter is its own 3-month figure. A quarter's EPS and weighted-average share counts are
+  its own 3-month figures where a filing tags them: those aren't differenced (nine months
+  less six of rounded EPS gave Citigroup's Q3 2026 2.86 for its 10-Q's 2.85, BUG-335), so
+  only Q4's are derived. Derived values are tagged in `_source_tags`.
 - **One split basis per year.** A stock split restates only the filings made after it,
   so a year's figures can come from both sides of one. Each quarter's per-share figures
   and share counts are put on the basis of its year's annual figures, as
@@ -2463,7 +2471,9 @@ numbers SEC filings report:
 - **TTM (`financials_ttm`)** — trailing-twelve-month series (rolling 4 discrete quarters
   for flows, their average for weighted share counts, balance sheet as-of, and per-share
   figures and counts on the latest quarter's split basis) for seasonality-free, up-to-date
-  comparison.
+  comparison. Its calendar labels are its latest quarter's: `calendar_year`,
+  `calendar_quarter` and, in the JSON export, that quarter's SEC `frame` (`CY2026Q3`; SEC
+  frames no trailing year, and the tables store no frame for quarters or TTM rows; BUG-343).
 
 ```sql
 -- Discrete quarterly revenue trend for one company (incl. derived Q4):

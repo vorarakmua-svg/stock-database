@@ -31,7 +31,7 @@ from ..validation.integrity import (
     check_quarterly_sums,
     check_ratio_bounds,
 )
-from ..validation.quality import assess_annual, score_for
+from ..validation.quality import assess_annual, score_for, scored_years
 from .fred_handler import FREDHandler
 from .sec_handler import SECHandler
 from .yahoo_handler import YahooHandler
@@ -522,20 +522,20 @@ class StockDataFetcher:
         annual = stock.financials_annual or {}
         quarterly = stock.financials_quarterly or {}
         historical = (stock.calculated_metrics or {}).get("historical", {})
-        scored_years = set(sorted(annual.keys(), reverse=True)[:5])
+        scored = set(scored_years(annual))  # the years the filings report (BUG-112)
 
         report = assess_annual(annual, sector=stock.sector_class)
         if annual:
             # Integrity checks all key off annual data; with no annual financials
             # keep assess_annual's score (0) rather than letting a lone
             # no_financials finding net out to 75.
-            report.findings.extend(check_field_outliers(annual, scored_years))
-            report.findings.extend(check_cashflow_reconciliation(annual, scored_years))
-            report.findings.extend(check_quarterly_sums(annual, quarterly, scored_years))
-            report.findings.extend(check_ratio_bounds(historical, annual, scored_years))
+            report.findings.extend(check_field_outliers(annual, scored))
+            report.findings.extend(check_cashflow_reconciliation(annual, scored))
+            report.findings.extend(check_quarterly_sums(annual, quarterly, scored))
+            report.findings.extend(check_ratio_bounds(historical, annual, scored))
             report.findings.extend(check_dividend_completeness(
                 annual, (stock.dividend_history or {}).get("dividend_payments") or [],
-                stock.splits or [], scored_years))
+                stock.splits or [], scored))
             report.score = score_for(report.findings)
 
         stock.data_quality = report.as_dict()

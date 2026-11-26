@@ -138,3 +138,51 @@ def test_bank_not_required_to_report_noninterest_income():
     report = assess_annual({"2024": period}, sector="bank")
     assert not any(f.code == "missing_field" for f in report.findings)
     assert report.score == 100
+
+
+def _scored(annual):
+    from src.validation.quality import scored_years  # BUG-112's
+    return scored_years(annual)
+
+
+def _gev_shaped():
+    # BUG-112: four years of statements and a fifth the earliest 10-K's equity statement opens with: its equity alone.
+    annual = {str(y): _balanced_year() for y in (2022, 2023, 2024, 2025)}
+    annual["2021"] = {"total_equity": 800.0, "period_end": "2021-12-31", "calendar_year": 2021,
+                      "_source_tags": {"total_equity": "StockholdersEquity"}}
+    return annual
+
+
+def test_a_year_known_only_from_an_opening_balance_is_not_scored():
+    annual = _gev_shaped()
+    assert _scored(annual) == ["2025", "2024", "2023", "2022"]
+    report = assess_annual(annual)
+    assert report.score == 100 and report.findings == []
+
+
+def test_every_opening_balance_year_before_the_first_reported_one_is_set_aside():
+    annual = _gev_shaped()
+    annual["2020"] = {"cash_and_equivalents": 50.0}
+    del annual["2025"]
+    assert _scored(annual) == ["2024", "2023", "2022"]
+
+
+def test_a_later_year_with_balances_alone_stays_scored():
+    # EXE's fresh-start FY2021: its flows lie in two stub periods the record doesn't hold, so its gap is the record's.
+    annual = _gev_shaped()
+    annual["2020"] = _balanced_year()
+    assert _scored(annual) == ["2025", "2024", "2023", "2022", "2021"]
+    assert {f.period for f in assess_annual(annual).findings} == {"2021"}
+
+
+def test_a_year_with_any_flow_figure_is_scored():
+    annual = _gev_shaped()
+    annual["2021"]["weighted_avg_shares_diluted"] = 100.0
+    assert "2021" in _scored(annual)
+    assert assess_annual(annual).score == 100 - 5 * 10  # revenue, net income, assets, liabilities, CFO
+
+
+def test_a_record_of_balances_alone_is_still_scored():
+    annual = {"2024": {"total_assets": 2000.0}, "2023": {"total_assets": 1900.0}}
+    assert _scored(annual) == ["2024", "2023"]
+    assert assess_annual(annual).score < 100
