@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 70 · NEEDS-USER 0 · Decided: 9 · Verified: 326
+**Open:** P0 0 · P1 0 · P2 0 · P3 69 · NEEDS-USER 0 · Decided: 9 · Verified: 327
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2575,11 +2575,12 @@ Repro: where the paper is classified as long-term debt (refinancing intent) and 
 Expected: paper inside long-term debt counted once.   Actual: counted twice in those years.
 
 ### BUG-254 [P3][VALID] HIG's FY2012-13 DebtCurrent is all its debt, so its long-term debt counts twice
-Status: OPEN
-Found: iteration 104 (BUG-142's investigation, section 2.2 and 5) | Fixed: | Regression test:
+Status: VERIFIED (iteration 235)
+Found: iteration 104 (BUG-142's investigation, section 2.2 and 5) | Fixed: (this commit) | Regression tests: tests/test_debt_current_totals.py (new); 9 failing first
 Repro: HIG tags DebtCurrent as its whole debt in FY2012-13 ($7.126B = $0.320B current + $6.806B long-term), and short_term_debt reads it, so total debt is $13.93B for $7.13B.
 Expected: the current part as short-term debt.   Actual: total debt about twice its own.
 
+Fix (iteration 235, `qa/evidence/debt2-investigation.txt`): `_debt_current_totals_set_aside`, per filing: a DebtCurrent equal (within 0.05%; GOOGL FY2015 matches by chance at 0.16%) to the same filing's noncurrent long-term debt plus a current figure above zero it tags there is set aside. HIG FY2012 total debt 13.932 -> 7.126, FY2013 12.650 -> 6.544; IT FY2011-13 and CSCO 2011-01-29 likewise. DB: 0 medians, verdicts, historical values, labels; IT history fair value up to 1.38%. Look-ahead 0; as-of oracle 0 differences.
 ### BUG-255 [P3][VALID] CVX's FY2018 long-term debt is a note's LongTermDebt; the balance sheet's figure is only under an unmapped tag
 Status: OPEN
 Found: iteration 104 (a BUG-141 residual, `qa/evidence/bug142-investigation.txt` section 5) | Fixed: | Regression test:

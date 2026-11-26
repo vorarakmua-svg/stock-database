@@ -524,6 +524,35 @@ def _debt_lines(us_gaap: Dict[str, Any], totals: Dict[Tuple[str, str], float],
     return lines
 
 
+#: How closely a DebtCurrent must equal the noncurrent debt and a current figure together to be their total
+#: (``_debt_current_totals_set_aside``): to the rounding of the figures summed, not ``_AGREE``'s 0.5%, within which
+#: GOOGL's 2015 short-term debt ($3.225B) is its $1.995B of long-term debt and $1.225B of maturities by chance.
+_SUMS_TO = 0.0005
+
+
+def _debt_current_totals_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+    """*us_gaap* less the DebtCurrent a filing tags on a date where it is the noncurrent long-term debt the filing
+    tags there and a current figure above zero it tags there (short-term borrowings or current maturities) together,
+    within rounding (``_SUMS_TO``): the filer's total debt, which short-term debt would read beside the long-term debt
+    it holds. HIG's FY2013 10-K tags $7.126B at 2012-12-31, its $6.806B of long-term debt and $0.320B of
+    borrowings (its FY2014 10-K tags 2013's $6.544B as DebtLongtermAndShorttermCombinedAmount); CSCO's 10-Q for
+    2011-01-29 $15.241B, $12.152B and $3.089B of maturities; Gartner's FY2011-13 10-Ks (BUG-254). Short-term debt
+    then reads the current figure. A DebtCurrent equal to the noncurrent debt alone says nothing of a total."""
+    if "DebtCurrent" not in us_gaap:
+        return us_gaap
+    noncurrent = _noncurrent_debt(us_gaap, ("LongTermDebtNoncurrent",) + _DEBT_NONCURRENT)
+    currents = [_by_filing(us_gaap, tag) for tag in ("ShortTermBorrowings",) + _MATURITIES]
+    aside = {key for key, value in _by_filing(us_gaap, "DebtCurrent").items()
+             if value > 0 and noncurrent.get(key, 0) > 0 and any(
+                 figures.get(key, 0) > 0 and abs(noncurrent[key] + figures[key] - value) <= _SUMS_TO * value
+                 for figures in currents)}
+    if not aside:
+        return us_gaap
+    units = us_gaap["DebtCurrent"].get("units", {})
+    return {**us_gaap, "DebtCurrent": {**us_gaap["DebtCurrent"], "units": {**units, "USD": [
+        e for e in units.get("USD", []) if (e.get("accn"), e.get("end")) not in aside]}}}
+
+
 def _debt_totals_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     """*us_gaap* less the LongTermDebt a filing tags beside a noncurrent figure, where its current
     debt holds the current maturities, so the total would count them twice (BA's FY2025 $53.85B
@@ -1325,7 +1354,8 @@ def _filer_facts(facts: Dict[str, Any], view: str, sector: Optional[str] = None)
     dates, and long-term debt's on its filing's (where it tags its balance sheet, ``_debt_on_balance_sheet_dates``),
     less the total with restricted cash where a filing's cash
     equivalents and restricted cash make it up, less Cash where it is a part of a total without restricted cash, net
-    outflows as paid, long-term debt's parts set aside where a filing tags its line beside them
+    outflows as paid, a DebtCurrent that is the filing's total debt set aside (``_debt_current_totals_set_aside``),
+    long-term debt's parts set aside where a filing tags its line beside them
     (``_debt_parts_set_aside``), LongTermDebt set aside where its noncurrent
     figure should stand (judged on DebtCurrent as filed); then, judged on those facts as filed, the borrowings and the
     maturities that view's records read as one DebtCurrent where a filing tags none (``_current_debt_combinations``),
@@ -1334,9 +1364,9 @@ def _filer_facts(facts: Dict[str, Any], view: str, sector: Optional[str] = None)
     to be another line set aside (``_da_totals_displaced``), the depreciation and the amortization of intangibles as
     one D&A figure where the filing tags no total that can hold them, and last the totals with current debt set aside
     beside the current figures they hold (``_totals_beside_current_debt_set_aside``)."""
-    totals = _debt_totals_set_aside(_debt_parts_set_aside(_net_outflows_as_paid(_cash_parts_set_aside(
-        _cash_totals_set_aside(_debt_on_balance_sheet_dates(_on_balance_sheet_dates(_dollar_filings(
-            _sector_tags_set_aside(facts.get("facts", {}).get("us-gaap", {}), sector)))))))))
+    totals = _debt_totals_set_aside(_debt_parts_set_aside(_debt_current_totals_set_aside(_net_outflows_as_paid(
+        _cash_parts_set_aside(_cash_totals_set_aside(_debt_on_balance_sheet_dates(_on_balance_sheet_dates(
+            _dollar_filings(_sector_tags_set_aside(facts.get("facts", {}).get("us-gaap", {}), sector))))))))))
     combined, held_by_totals = _current_debt_combinations(totals, view)
     return _totals_beside_current_debt_set_aside(_depreciation_combined(_da_totals_displaced(_current_debt_combined(
         _current_debt_set_aside(totals, view, frozenset(combined)), combined, held_by_totals))), view)

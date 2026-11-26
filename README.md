@@ -2389,6 +2389,9 @@ numbers SEC filings report:
   Depot's). Where a filing's debt due within a year is the figure before a refinancing moved
   part of it to long-term debt, the short-term borrowings its balance sheet shows stand
   instead (Chevron's FY2024: $4.4B, not $12.7B, whose other $8.25B its long-term debt holds).
+  Where a filing's debt due within a year is its noncurrent long-term debt and its borrowings or
+  maturities together, to the rounding, it is its total debt and the borrowings or maturities stand
+  instead (Hartford's FY2013 10-K: $0.32B for 2012, not $7.13B; Cisco's 10-Q for January 2011).
   Commercial paper is the paper outside the short-term figure (a line of its own, like Apple's)
   and 0 where the short-term figure holds it, so total debt counts it once (P&G's FY2026: $34.1B,
   not $39.0B); it is read only on balance-sheet dates. Each record judges it by the short-term

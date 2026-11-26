@@ -3791,3 +3791,12 @@ Q23 (NEEDS-USER). Not attempted: BUG-253, 254, 255, 259, 294, 330, 331.
 Gates: ruff ✓ mypy ✓ pytest 4259 passed, 2 skipped
 Commit: (this commit) fix(parser): balance sheets dated by their own total; current debt lines for quarters (BUG-273, BUG-286, BUG-292)
 Next: Q23 to the user; the rest of the debt group.
+
+## Iteration 235: 2026-11-26 08:50: fix (BUG-254)
+Picked: the debt group's second pass; an opus worker (nothing moved).
+Did: a DebtCurrent that is the filing's noncurrent debt plus its current part is set aside.
+- RED: 9 failed on 5b0a205; GREEN. 9 of 9 mutants; debt1's 18 of 18. Look-ahead 0.
+Result: BUG-254 VERIFIED. Handed back with options: BUG-330, 331, 253, 255; 259/294 to be split.
+Gates: ruff ✓ mypy ✓ pytest 4272 passed, 2 skipped
+Commit: (this commit) fix(parser): a DebtCurrent holding all the debt is set aside (BUG-254)
+Next: Q23 (the user approved after the measurement).
