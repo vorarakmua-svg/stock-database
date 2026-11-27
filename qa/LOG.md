@@ -3960,3 +3960,13 @@ Result: BUG-386, BUG-388 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4461 passed, 2 skipped
 Commit: (this commit) fix: an instant dated after its filing makes no quarter; never known before the end (BUG-386, BUG-388)
 Next: BUG-275 without option B (worker stopped at the usage limit); review 41 after it.
+
+## Iteration 252: 2026-11-28: fix (BUG-275; the user's decisions)
+Picked: BUG-275 option A + open-year carry, without B; an opus worker (three rounds, measured each time).
+Did: a 10-K's untagged amortization is spread over the year's quarters by days and carried into the open year.
+- RED: 10 failed on 0bc4f86; GREEN. 26 of 26 mutants; bug386 2/2, bug387 5/5, ttm1 29/29. Look-ahead 0.
+- DB copies: 0 medians, verdicts, labels; 4 historical values within labels; latest TTMs unchanged.
+Result: BUG-275 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4490 passed, 2 skipped
+Commit: (this commit) fix(parser): a 10-K's untagged amortization spread over its quarters and carried into the open year (BUG-275)
+Next: code review 41.

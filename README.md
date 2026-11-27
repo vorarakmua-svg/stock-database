@@ -2328,6 +2328,20 @@ numbers SEC filings report:
   filing tags a year's weighted count a power of 1000 below the one earlier filings agree
   on, the year's shares outstanding can decide: within 10% of the earlier figure, it is
   kept (Hershey's FY2011 10-K tags FY2009-11's counts in thousands).
+- **One D&A basis per year.** Where a year's 10-K gives its D&A beside a smaller figure under the tag
+  its 10-Qs' D&A is read from (or beside its depreciation, where the 10-Qs' figure is theirs), the
+  10-Qs leave out an amortization the 10-K holds, and `Q4 = annual − 9-month YTD` put all of it in
+  the fourth quarter (Broadcom's FY2024: $9.42B beside quarters of $0.14B; BUG-275). Each of Q1-Q3
+  then takes its 10-Q's figure on that basis plus the year's difference by days, and Q4 the rest, so
+  the four add up to the year; they are estimates, tagged `derived:amortization_spread`. Not where
+  the fourth quarter on the 10-Qs' basis would fall below the first three's mean by more than half
+  the difference (the 10-Qs held it after all). The reverse, a year read as the 10-K's depreciation
+  alone beside 10-Qs whose D&A holds more than their own depreciation (Alphabet's 2025), is left as
+  it is: its Q4 is the year less nine months on the 10-Qs' fuller basis. A year whose 10-K isn't filed yet is read as
+  the last 10-K was: after a year spread so, each of its quarters takes its 10-Q's figure on that
+  year's basis plus the last 10-K's difference a day (`derived:amortization_carried`), so the latest
+  trailing year stays on the 10-K's basis; a 10-Q filed before that 10-K, or after a year on one
+  basis, keeps its figures as tagged.
 - **Outflows by size.** Capex, buybacks, debt repaid and dividends paid are stored as
   positive amounts, and filers tag them with either sign, sometimes both within one year.
   Their quarters difference the year-to-date totals' sizes, and a quarter whose total

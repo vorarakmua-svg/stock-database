@@ -1290,6 +1290,23 @@ def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+#: The tag of a year's quarters spread onto its 10-K's D&A basis (BUG-275): each a figure of the filings' plus an
+#: estimate, its share by days of the amortization the 10-Qs' D&A leaves out.
+_DA_SPREAD = "derived:amortization_spread"
+#: The tag of a quarter of a year with no 10-K yet that carries the last spread year's difference a day (BUG-275).
+_DA_CARRIED = "derived:amortization_carried"
+
+
+def _da_as_filed(us_gaap: Dict[str, Any]) -> Dict[Tuple[str, str, str], Dict[str, float]]:
+    """Each filing's D&A figures and amortization as it tags them, by period: ``{(accn, start, end): {tag: value}}``,
+    the facts before any of them is set aside or combined (``_da_totals_displaced``, ``_depreciation_combined``)."""
+    out: Dict[Tuple[str, str, str], Dict[str, float]] = defaultdict(dict)
+    for tag in (*_FIELDS["depreciation_amortization"].tags, *_AMORTIZATION):
+        for key, e in _by_period(us_gaap, tag).items():
+            out[key][tag] = e["val"]
+    return out
+
+
 @lru_cache(maxsize=None)
 def _iso_date(value: str) -> Optional[date]:
     """``value`` (``YYYY-MM-DD``) as a date, or None if it doesn't parse: strptime's answer, kept per string. A
@@ -2121,7 +2138,8 @@ class XBRLParser:
         for end, (value, tag) in _short_term_debt_lines(us_gaap, annual, periods).items():
             periods[end]["short_term_debt"] = value
             periods[end]["_source_tags"]["short_term_debt"] = tag
-        self._collect_discrete_flows(us_gaap, periods, frames, restored, level, self._aside(us_gaap))
+        self._collect_discrete_flows(us_gaap, periods, frames, restored, level, self._aside(us_gaap),
+                                     _da_as_filed(_dollar_filings(facts.get("facts", {}).get("us-gaap", {}))))
         if level is not None:
             self._instants_on_year_basis(periods, instants_filed, level)
         self._apply_quarter_calendar(periods, frames)
@@ -2256,11 +2274,106 @@ class XBRLParser:
                 if scale is not None:
                     chosen[key] = (priority, filed, val * scale)
 
+    def _da_bases(self, start: str, points: List[Tuple[str, Any]],
+                  picked: Dict[Tuple[str, str], Tuple[Dict[str, Any], str]],
+                  as_filed: Dict[Tuple[str, str, str], Dict[str, float]]
+                  ) -> Tuple[Optional[List[Tuple[str, Any]]], Optional[Tuple[float, Optional[str], str]]]:
+        """Whether a year's D&A ladder (*points*, sorted, from *start*) sits on two bases, its 10-K's holding an
+        amortization its 10-Qs' leave out (BUG-275): ``(the ladder on the 10-K's basis, carry)``, else
+        ``(None, None)``; *carry*, for the year after it (``_da_carried``), is the difference a day, the line's tag
+        (None for the depreciation and an amortization read together) and the 10-K's filing day. The fourth quarter is
+        the year less nine months, so a basis apart puts the whole difference in it (AVGO's FY2024: $9.42B beside
+        quarters of $0.14B).
+
+        The test is the filings' tags, never the figures' size, so seasonality and an acquisition move nothing. The
+        10-K tags the year under the nine months' tag (*as_filed*, the facts before D&A's rules set any aside or
+        combine them), below the year's D&A, and at or above the nine months, which the 10-Q tags so: the 10-Qs'
+        figures are that line's, the difference what they leave out. That needs the tag to be the depreciation alone
+        (AVGO's 10-Qs tag Depreciation, its 10-K the amortization of intangibles too), or the 10-Q to tag an
+        amortization apart, with the difference one the 10-K tags for the year or the 10-K's own figure under the tag
+        its depreciation line (BUG-274: SWK's FY2023 $432.4M beside $625.1M, HD's FY2026). Each rung to date goes onto
+        its filing's figure under the tag (HD's FY2025 first quarter, combined with its amortization, onto its line)
+        plus the difference's share by days to its end, so the quarters sum to the year. The reverse, 10-Qs whose D&A
+        holds more than the 10-K's year (GOOGL's 2025: the 10-Qs combined with their amortization, the 10-K tags none),
+        is left as it is: its fourth quarter the year less nine months. Read from the facts given, so a year whose 10-K
+        isn't filed yet has no year here (``_da_carried`` carries the last one's difference)."""
+        if len(points) < 2 or not all(isinstance(val, (int, float)) for _, val in points):
+            return None, None
+        (end_y, year), (end_9, nine) = points[-1], points[-2]
+        (fact_y, _), (fact_9, tag_9) = picked[(start, end_y)], picked[(start, end_9)]
+        if (self._span(start, end_y) or 0) < _FULL_YEAR_MIN_DAYS or not str(fact_y.get("form", "")).startswith("10-K"):
+            return None, None
+        year_filed = as_filed.get((fact_y.get("accn"), start, end_y), {})
+        nine_filed = as_filed.get((fact_9.get("accn"), start, end_9), {})
+
+        def as_tagged(end: str, val: float) -> bool:  # a rung its filing tags so, not one D&A's rules made
+            fact, tag = picked[(start, end)]
+            filed = as_filed.get((fact.get("accn"), start, end), {}).get(tag)
+            return filed is not None and _agree(val, filed)
+
+        def filed(end: str, tag: str) -> Optional[float]:  # a rung's filing's figure under *tag*
+            return as_filed.get((picked[(start, end)][0].get("accn"), start, end), {}).get(tag)
+
+        depreciation_9, depreciation_y = nine_filed.get(_DEPRECIATION), year_filed.get(_DEPRECIATION)
+        line: Optional[float] = None
+        lines: List[Optional[float]] = []
+        basis: Optional[str] = None
+        if as_tagged(end_9, nine):
+            # the 10-Qs' figure under its tag; the depreciation alone where it is the 10-Q's Depreciation too (F's)
+            basis = _DEPRECIATION if depreciation_9 is not None and _agree(nine, depreciation_9) else tag_9
+            line = year_filed.get(basis)
+            lines = [filed(end, basis) for end, _ in points[:-1]]
+        elif depreciation_9 is not None and depreciation_y is not None:
+            # the 10-Qs' depreciation and amortization read together (BUG-170) beside a 10-K total larger than its own
+            # two (SYK's)
+            both = [tag for tag in _AMORTIZATION if tag in nine_filed and tag in year_filed
+                    and _agree(depreciation_9 + nine_filed[tag], nine)]
+            if both:
+                line = depreciation_y + year_filed[both[0]]
+                lines = [val for _, val in points[:-1]]
+        # and the fourth quarter on the 10-Qs' basis no further below the first three's mean than half the difference,
+        # else the 10-Qs were on the 10-K's basis after all (KEY's FY2024: nine months of $68M beside $73M and $91M)
+        if line is not None and None not in lines and year > line and not _agree(year, line) \
+                and (nine <= line or _agree(nine, line)) and line - nine - nine / 3 > -(year - line) / 2:
+            gap, year_days = year - line, self._span(start, end_y) or 1
+            return ([(end, figure + gap * (self._span(start, end) or 0) / year_days)
+                     for (end, _), figure in zip(points[:-1], lines) if figure is not None] + points[-1:],
+                    (gap / year_days, basis, fact_y.get("filed") or ""))
+        return None, None
+
+    def _da_carried(self, start: str, points: List[Tuple[str, Any]],
+                    picked: Dict[Tuple[str, str], Tuple[Dict[str, Any], str]],
+                    as_filed: Dict[Tuple[str, str, str], Dict[str, float]],
+                    carry: Tuple[float, Optional[str], str]) -> Optional[List[Tuple[str, Any]]]:
+        """A year with no 10-K yet after a year ``_da_bases`` spread onto its 10-K's basis (BUG-275): each rung to date
+        (*points*, sorted, from *start*) on that year's line plus the last 10-K's difference a day (*carry*), as a
+        year with no 10-K yet is read as the last 10-K was (BUG-332), so the trailing years stay on one basis (BR's,
+        F's, TTWO's latest). None where a rung's filing came before that 10-K's, so a quarter never reads a 10-K
+        filed after it, or tags no figure on the line."""
+        per_day, basis, since = carry
+        out: List[Tuple[str, Any]] = []
+        for end, val in points:
+            fact, _ = picked[(start, end)]
+            here = as_filed.get((fact.get("accn"), start, end), {})
+            if not isinstance(val, (int, float)) or (fact.get("filed") or "") < since:
+                return None
+            if basis is not None:
+                line = here.get(basis)
+            else:  # the depreciation and an amortization read together (SYK's)
+                depreciation = here.get(_DEPRECIATION)
+                line = val if depreciation is not None and any(
+                    _agree(depreciation + here[tag], val) for tag in _AMORTIZATION if tag in here) else None
+            if line is None:
+                return None
+            out.append((end, line + per_day * (self._span(start, end) or 0)))
+        return out
+
     def _collect_discrete_flows(
         self, us_gaap: Dict[str, Any], periods: Dict[str, Dict[str, Any]],
         frames: Dict[str, set], restored: Dict[Tuple[str, str], Tuple[float, float]],
         level: Optional[Callable[[str], float]] = None,
         set_aside: FrozenSet[Tuple[str, str, Any]] = frozenset(),
+        as_filed: Optional[Dict[Tuple[str, str, str], Dict[str, float]]] = None,
     ) -> None:
         """Discrete quarterly flows via cumulative-ladder differencing.
 
@@ -2278,7 +2391,10 @@ class XBRLParser:
         a total of payments that falls by half or more gives none (BUG-140). A
         year's ladder is one rung until its second 10-Q, its first quarter's own 3-month
         figure, which fills that quarter after every ladder (BUG-124). A figure filed before its
-        period ended is no rung (``_filed_ahead``, BUG-370).
+        period ended is no rung (``_filed_ahead``, BUG-370). A year whose 10-K's D&A and 10-Qs' sit
+        on two bases (*as_filed*, ``_da_bases``) has its quarters on the 10-K's, and the year
+        after one so spread, with no 10-K yet, carries its difference
+        (``_da_carried``) (BUG-275).
         """
         oracle_rungs: Dict[str, Dict[Tuple[str, str], Any]] = {}  # net income's and EPS's, for the counts' scale
         for field in CANONICAL_FIELDS:
@@ -2286,6 +2402,7 @@ class XBRLParser:
                 continue
             # Dedup per (start, end): higher-priority tag, then most-recently-filed.
             chosen: Dict[Tuple[str, str], Tuple[int, str, Any]] = {}
+            picked: Dict[Tuple[str, str], Tuple[Dict[str, Any], str]] = {}  # each figure's fact and tag
             closed: Set[Tuple[str, str]] = set()  # the spans a 10-K reports: periods that are over
             for priority, tag in enumerate(field.tags):
                 for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
@@ -2314,6 +2431,7 @@ class XBRLParser:
                     ):
                         continue
                     chosen[key] = (rank, filed, entry.get("val"))
+                    picked[key] = (entry, tag)
             for (start, end), (priority, filed, val) in list(chosen.items()):
                 fix = restored.get((field.key, end))
                 span = self._span(start, end)
@@ -2401,6 +2519,14 @@ class XBRLParser:
                 if year is not None and after is not None:
                     year_of_start.setdefault(after, year + 1)
 
+            # D&A's years on two bases (BUG-275), and the year after each one spread, which carries its difference
+            bases: Dict[str, Tuple[Optional[List[Tuple[str, Any]]], Optional[Tuple[float, Optional[str], str]]]] = {}
+            if field.key == "depreciation_amortization" and as_filed:
+                for start, points in ladders.items():
+                    points.sort()
+                    bases[start] = self._da_bases(start, points, picked, as_filed)
+            carried = {self._day_after(ladders[start][-1][0]): carry for start, (_, carry) in bases.items()
+                       if carry is not None}
             for start, points in ladders.items():
                 if len(points) < 2:
                     continue  # not a cumulative ladder (isolated 3-month fact)
@@ -2410,6 +2536,16 @@ class XBRLParser:
                 ladder_fy = None if (start, points[-1][0]) in closed else year_of_start.get(start)
                 if ladder_fy is None:
                     ladder_fy = self._fiscal_year_from_end(points[-1][0])
+                # the year's 10-K holds an amortization its 10-Qs' D&A leaves out: each rung to date, on the 10-Qs'
+                # line, takes its share by days, so Q1-Q3 hold their estimate and the fourth quarter the rest
+                spread, _ = bases.get(start, (None, None))
+                derived = _DA_SPREAD
+                if spread is None and start in carried \
+                        and (self._span(start, points[-1][0]) or 0) < _FULL_YEAR_MIN_DAYS:
+                    # a year with no 10-K yet after a spread one: its rungs carry the last 10-K's difference a day
+                    spread, derived = self._da_carried(start, points, picked, as_filed, carried[start]), _DA_CARRIED
+                if spread is not None:
+                    points = spread
                 prev_end, prev_val = start, 0.0
                 for end, val in points:
                     inc_span = self._span(prev_end, end)
@@ -2439,7 +2575,7 @@ class XBRLParser:
                             discrete, keep = val - prev, False
                         else:
                             discrete, keep = val - prev, True
-                        source = "derived:ytd_diff"
+                        source = "derived:ytd_diff" if spread is None else derived
                         if end in own_eps and abs(own_eps[end][0] - discrete) <= _EPS_ROUNDING:
                             discrete, source = own_eps[end]
                         if keep:
@@ -2457,7 +2593,12 @@ class XBRLParser:
                     span = self._span(start, end)
                     if end in periods and isinstance(val, (int, float)) and span is not None \
                             and _QUARTER_MIN_DAYS <= span <= _QUARTER_MAX_DAYS:
-                        assign(end, abs(val) if field.sign == SIGN_ABS else val, field.tags[chosen[(start, end)][0]],
+                        source = field.tags[chosen[(start, end)][0]]
+                        first = self._da_carried(start, points, picked, as_filed, carried[start]) \
+                            if start in carried and as_filed else None
+                        if first is not None:  # a first quarter after a spread year carries its difference too
+                            val, source = first[0][1], _DA_CARRIED
+                        assign(end, abs(val) if field.sign == SIGN_ABS else val, source,
                                start, year_of_start[start], basis.get((start, end)))
             for end, (value, tag, own_level) in own.items():  # quarters no year-to-date ladder reaches
                 if end in periods and field.key not in periods[end]:
