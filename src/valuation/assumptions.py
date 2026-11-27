@@ -79,7 +79,10 @@ def _cagr_from_first_positive(
 ) -> Tuple[Optional[float], Optional[int]]:
     """Q5's fallback: the CAGR from the first positive value to the latest, when at least
     MIN_FYS_FROM_FIRST_POSITIVE values remain from it (DELL's FCF from its first positive year). ``(cagr, start)``,
-    the start index; ``(None, None)`` when there's no such run or the latest isn't positive."""
+    the start index; ``(None, None)`` when there's no such run or the latest isn't positive. Its edges (BUG-315,
+    decided): losses after that year don't restart it (the CAGR runs end to end, as the whole window's does); a window
+    starting on a missing value takes it as one starting on a loss does; and the years counted are values, not
+    calendar years (a gap only lengthens the span)."""
     for k, value in enumerate(hist):
         if value is not None and value > 0:
             if len(hist) - k < MIN_FYS_FROM_FIRST_POSITIVE:
