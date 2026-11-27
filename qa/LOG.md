@@ -3980,3 +3980,12 @@ Result: BUG-280 VERIFIED; BUG-336 WONTFIX (user); BUG-058 decided B (explain).
 Gates: ruff ✓ mypy ✓ pytest 4501 passed, 2 skipped
 Commit: (this commit) fix(gather): an older report the companyfacts lack is read too (BUG-280)
 Next: BUG-058 B; the shares group (running); code review 41.
+
+## Iteration 254: 2026-11-28: fix (BUG-058 option B)
+Picked: BUG-058 per the user's decision; an opus worker.
+Did: a foreign issuer without quarters is told its 6-K interims aren't read.
+- RED: 3 failed on 363cf03; GREEN. 7 of 7 mutants; bug280 16/16.
+Result: BUG-058 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4506 passed, 2 skipped
+Commit: (this commit) fix(gather): a foreign issuer without quarters is told why (BUG-058)
+Next: code review 41 (5 units since review 40); the shares group (paused at the usage limit).

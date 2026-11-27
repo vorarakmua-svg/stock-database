@@ -40,6 +40,8 @@ from .yahoo_handler import YahooHandler
 NO_ANNUAL_FINANCIALS = "SEC EDGAR: no annual financials"
 #: How it begins for a record that stops where the filer's IFRS reports begin.
 STALE_ANNUAL_FINANCIALS = "SEC EDGAR: annual financials stop"
+#: How it begins for a foreign issuer's record without quarters: its interim reports (6-K) aren't read (BUG-058).
+NO_QUARTERLY_FINANCIALS = "SEC EDGAR: no quarterly financials"
 #: How it begins for a report the SEC's submissions list, which its companyfacts lack (BUG-251, BUG-280): the record
 #: stops before it (or lacks it, when they carry a later one), or the run read it from the filing's own XBRL (Q17).
 REPORT_WITHOUT_FACTS = "SEC EDGAR: the companyfacts lack"
@@ -331,6 +333,12 @@ class StockDataFetcher:
                                                             annual[latest].get("period_end"))
                     if stale:
                         stock.add_warning(f"{STALE_ANNUAL_FINANCIALS} at FY{latest} for {ticker}: {stale}")
+                    # And a foreign issuer's has no quarters: its interim reports (6-K) aren't read (BUG-058).
+                    form = self._foreign_annual_form(annual[latest])
+                    if form and not stock.financials_quarterly:
+                        stock.add_warning(f"{NO_QUARTERLY_FINANCIALS} for {ticker}: its annual reports are {form}s, a "
+                                          "foreign issuer's, whose interim reports (6-K) aren't read, so there are no "
+                                          "quarterly or TTM figures")
 
                 # Get insider transactions
                 if stock.cik:
@@ -514,6 +522,14 @@ class StockDataFetcher:
             # Every report read, but the gap's end wasn't reached (sec_handler.report_gap, BUG-337).
             text += "; it found no earlier report they carry, so reports before those may be missing too"
         return f"{text}; the refresh collects {ticker} again"
+
+    @staticmethod
+    def _foreign_annual_form(period: Dict[str, Any]) -> Optional[str]:
+        """The foreign issuer's annual report form (20-F or 40-F) a fiscal year's figures came from (the parse's
+        ``_source_filings``), None for any other filer's year."""
+        forms = sorted({str((filing or {}).get("form") or "")[:4]
+                        for filing in (period.get("_source_filings") or {}).values()} & {"20-F", "40-F"})
+        return forms[0] if forms else None
 
     @staticmethod
     def _no_annual_financials(ticker: str, sec_data: Dict[str, Any]) -> str:

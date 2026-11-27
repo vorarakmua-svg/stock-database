@@ -15,7 +15,12 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from ...fetchers.stock_data_fetcher import NO_ANNUAL_FINANCIALS, REPORT_WITHOUT_FACTS, STALE_ANNUAL_FINANCIALS
+from ...fetchers.stock_data_fetcher import (
+    NO_ANNUAL_FINANCIALS,
+    NO_QUARTERLY_FINANCIALS,
+    REPORT_WITHOUT_FACTS,
+    STALE_ANNUAL_FINANCIALS,
+)
 from ...new_york import taken_before_close
 from ...ownership.portfolio import share_classes
 from ...universe.industries import sic_label
@@ -414,11 +419,13 @@ def _stored_years_note(note: str, ticker: str, years: List[Dict[str, Any]], coll
 
 def _sec_gap_notes(r: Reader, ticker: str) -> List[str]:
     """Why the latest collection got no annual financials from SEC, why they stop
-    years ago (BUG-066), and which report the SEC's companyfacts lack so far (BUG-251, BUG-283), as far as it said:
+    years ago (BUG-066), and which report the SEC's companyfacts lack so far (BUG-251, BUG-283), and why a foreign
+    issuer has no quarters (BUG-058), as far as it said:
     each of them, since one doesn't explain the other (BUG-322). Where years are stored, the first says the figures
     are from earlier collections rather than that there are none (BUG-068)."""
     notes = [w for w in r.latest_run_warnings(ticker)
-             if w.startswith((NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS, REPORT_WITHOUT_FACTS))]
+             if w.startswith((NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS, REPORT_WITHOUT_FACTS,
+                              NO_QUARTERLY_FINANCIALS))]
     if any(n.startswith(NO_ANNUAL_FINANCIALS) for n in notes):
         years = r.annual_financials(ticker)
         if years:

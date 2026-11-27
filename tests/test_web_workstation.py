@@ -999,6 +999,16 @@ def test_the_fa_and_val_tabs_say_when_annual_financials_stop(tmp_path):
         assert str(escape(note)) in client.get(f"/ui/stocks/TSM/{tab}").text, tab
 
 
+def test_the_fa_tab_says_why_a_foreign_issuer_has_no_quarters(tmp_path):
+    # BUG-058: ARM's Quarterly view said "No data available for this period." with no word on why.
+    from markupsafe import escape
+
+    note = ("SEC EDGAR: no quarterly financials for TSM: its annual reports are 20-Fs, a foreign issuer's, whose "
+            "interim reports (6-K) aren't read, so there are no quarterly or TTM figures")
+    client = _client_for(_db_after_a_run_with(tmp_path, [note]))
+    assert str(escape(note)) in client.get("/ui/stocks/TSM/fa").text
+
+
 def test_the_fa_and_val_tabs_keep_the_stale_note_beside_the_sec_lag_note(tmp_path):
     # BUG-322 (code review 27): the collection adds the SEC-lag warning before the stale one, and the tabs showed the
     # first matching warning only, so a run with both lost BUG-066's explanation.

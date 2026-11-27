@@ -430,6 +430,52 @@ def test_a_record_that_stops_where_ifrs_reports_begin_is_a_warning(tmp_path, mon
             "isn't mapped") in stock.warnings
 
 
+# ---- BUG-058: a foreign issuer's interim reports (6-K) aren't read ----
+
+def _arm_facts(annual_form="20-F", quarterly_form="6-K"):
+    """ARM's revenue as a US-GAAP foreign issuer tags it (test figures): two fiscal years from its annual reports
+    (*annual_form*), and the quarters of its interim reports (*quarterly_form*) since."""
+    def entry(val, start, end, fy, fp, form, filed):
+        return {"val": val, "start": start, "end": end, "fy": fy, "fp": fp, "form": form, "filed": filed,
+                "accn": f"0001973239-{filed}"}
+
+    years = [entry(2.68e9, "2023-04-01", "2024-03-31", 2024, "FY", annual_form, "2024-05-29"),
+             entry(4.01e9, "2024-04-01", "2025-03-31", 2025, "FY", annual_form, "2025-05-28")]
+    quarters = [entry(1.05e9, "2025-04-01", "2025-06-30", 2026, "Q1", quarterly_form, "2025-07-30"),
+                entry(1.14e9, "2025-07-01", "2025-09-30", 2026, "Q2", quarterly_form, "2025-11-05")]
+    return {"facts": {"us-gaap": {"Revenues": {"units": {"USD": years + quarters}}}}}
+
+
+def _arm(tmp_path, monkeypatch, facts):
+    return _collect_from_sec(tmp_path, monkeypatch, {
+        "cik": "0001973239", "ticker": "ARM", "source": "sec_edgar", "company_facts": facts,
+        "submissions": {"name": "ARM HOLDINGS PLC /UK", "filings": []}})
+
+
+@pytest.mark.parametrize("form", ["20-F", "40-F"])
+def test_a_foreign_issuer_without_quarters_is_told_its_interim_reports_arent_read(tmp_path, monkeypatch, form):
+    # ARM (BUG-058): six fiscal years from its 20-Fs, its 6-K quarters unread, so no quarterly or TTM rows, and its FA
+    # tab's Quarterly view said "No data available for this period." with no word on why.
+    stock = _arm(tmp_path, monkeypatch, _arm_facts(annual_form=form))
+    assert sorted(stock.financials_annual) == ["2024", "2025"] and not stock.financials_quarterly
+    assert [w for w in stock.warnings if w.startswith("SEC EDGAR: no quarterly financials")] == [
+        f"SEC EDGAR: no quarterly financials for ARM: its annual reports are {form}s, a foreign issuer's, whose "
+        "interim reports (6-K) aren't read, so there are no quarterly or TTM figures"]
+
+
+@pytest.mark.parametrize("annual_form, quarters", [
+    ("10-K", False),  # a domestic filer's record: whatever it lacks, it isn't a foreign issuer's interim reports
+    ("20-F", True),   # a foreign issuer whose record has quarters (from 10-Qs it once filed)
+])
+def test_no_interim_report_note_where_it_doesnt_apply(tmp_path, monkeypatch, annual_form, quarters):
+    if quarters:
+        quarter = {"period_end": "2025-06-30", "revenue": 1.05e9, "calendar_year": 2025, "calendar_quarter": 2}
+        monkeypatch.setattr(XBRLParser, "extract_quarterly_financials", lambda *a, **k: {"2025-06-30": dict(quarter)})
+    stock = _arm(tmp_path, monkeypatch, _arm_facts(annual_form=annual_form))
+    assert stock.financials_annual and bool(stock.financials_quarterly) is quarters
+    assert not [w for w in stock.warnings if w.startswith("SEC EDGAR: no quarterly financials")]
+
+
 def test_a_collected_quarterly_record_and_its_trailing_years_sit_on_one_split_basis(tmp_path, monkeypatch):
     # BUG-082 through a collection: the quarters take their year's basis, a trailing year its latest quarter's, and
     # the bookkeeping that carries each quarter's basis to the trailing years never reaches the stored record.

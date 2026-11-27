@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 47 · NEEDS-USER 0 · Decided: 8 · Verified: 354
+**Open:** P0 0 · P1 0 · P2 0 · P3 46 · NEEDS-USER 0 · Decided: 8 · Verified: 355
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -499,12 +499,13 @@ Expected: the same input gives the same record (prefer the frame matching the pe
 
 Seen again in iteration 88: two offline collections of the same cached data differ in exactly WMT's and TJX's FY2012 vintages' `calendar_year` (2012, then 2011), and 13 vintage periods at 11 filers have candidates in more than one calendar year or quarter, none in the annual or quarterly records (`qa/evidence/iter88-bug127-realdata.txt` sections 5-6).
 ### BUG-058 [P3][GATHER] A 20-F filer's 6-K interim reports aren't read: ARM has no quarterly or TTM rows, and no word on why
-Status: OPEN (decided 2026-11-28: B, explain)
+Status: VERIFIED (iteration 254; option B, the user's decision)
 Found: iteration 40, in BUG-043's live check (`qa/evidence/iter40-bug043-e2e.txt`) | Fixed: — | Regression test: —
 Repro: since BUG-043's fix ARM has six fiscal years, but its interim statements (6-K: 2,756 us-gaap facts) aren't read (`_QUARTERLY_FORMS` holds 10-Q and 10-K), so it stores 0 quarterly and 0 TTM rows, and its FA tab's Quarterly view says "No data available for this period." with no warning.
 Expected: a foreign issuer's interim figures are read when it tags them (6-K ladders, with the 20-F as the year), or the gap is explained.   Actual: empty and unexplained.
 
 Decision (USER 2026-11-28): B: when the annual record comes from a 20-F or 40-F and there are no quarterly rows, the run warns that a foreign issuer's 6-K interim reports aren't read, so there are no quarterly or TTM figures. No universe company files a 20-F/40-F/6-K.
+Fix (iteration 254, `qa/evidence/gather3-investigation.txt`): a run whose latest fiscal year came from a 20-F or 40-F (the parse's `_source_filings`) and that gives no quarterly rows warns "SEC EDGAR: no quarterly financials for X: its annual reports are 20-Fs, a foreign issuer's, whose interim reports (6-K) aren't read, so there are no quarterly or TTM figures" (NO_QUARTERLY_FINANCIALS), shown on the FA and VAL tabs. Regression tests: tests/test_fetcher_concurrency.py, tests/test_web_workstation.py; 3 failing first. No universe filer is affected.
 ### BUG-059 [P2][VAL] A declared split whose own seam lies before the 10-FY window can explain a merger or IPO seam inside it
 Status: VERIFIED (iteration 44)
 Found: iteration 39 by code review 5 (I1's variant); split off in iteration 42 | Fixed: iteration 44 (oracle rule fd449ef, then the fix; see LOG) | Regression tests: `tests/test_valuation_inputs.py::test_a_split_every_stored_year_already_reflects_explains_no_seam`, `::test_a_split_between_two_years_filings_still_explains_their_seam`

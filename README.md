@@ -341,7 +341,10 @@ python diagnose.py AAPL MSFT GOOGL
 
 ### SEC EDGAR
 
-- Official financial statements (10-K, 10-Q, 20-F, 40-F)
+- Official financial statements (10-K, 10-Q, 20-F, 40-F). A foreign issuer's interim reports (6-K) aren't read, so
+  a filer whose annual reports are 20-Fs or 40-Fs has no quarterly or TTM figures; its run says so (`SEC EDGAR: no
+  quarterly financials for ARM: its annual reports are 20-Fs, a foreign issuer's, whose interim reports (6-K) aren't
+  read, ...`), and the FA tab shows it beside the other SEC notes (BUG-058)
 - Complete XBRL data (all US-GAAP tags)
 - Company submissions and filings
 - The SEC's ticker map (`company_tickers.json`), which gives each ticker its CIK: cached for a week, then fetched
