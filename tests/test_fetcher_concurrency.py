@@ -880,6 +880,19 @@ def test_the_runs_warning_says_where_its_figures_of_a_report_the_companyfacts_la
     assert [w for w in stock.warnings if w.startswith("SEC EDGAR: the companyfacts lack")] == [warning]
 
 
+def test_a_report_the_companyfacts_lack_before_one_they_carry_is_named_as_such(tmp_path, monkeypatch):
+    # BUG-280: the figures don't stop before a report the companyfacts lack when they carry a later one; they lack it.
+    q3 = {"accessionNumber": "0001104659-26-110001", "form": "10-Q", "filingDate": "2026-10-30", "isXBRL": 1}
+    q2 = {"accessionNumber": DLR_10Q["accession"], "form": "10-Q", "filingDate": "2026-07-31", "isXBRL": 1}
+    sec = _lagging_dlr(reports_read=[], reports_unread=[_UNREAD_Q2])
+    sec["submissions"] = {**sec["submissions"], "filings": [q3, q2], "reports": [q3, q2], "latest_report": q3}
+    stock = _collect_from_sec(tmp_path, monkeypatch, sec)
+    assert [w for w in stock.warnings if w.startswith("SEC EDGAR: the companyfacts lack")] == [
+        "SEC EDGAR: the companyfacts lack DLR's 10-Q filed 2026-07-31 (0001104659-26-089296), though they carry its "
+        "10-Q filed 2026-10-30, so this run lacks its figures (its own XBRL couldn't be read: HTTP 404 for "
+        "dlr-20260630x10q_htm.xml; HTTP 404 for the filing's index); the refresh collects DLR again"]
+
+
 def test_a_collection_that_read_the_report_from_its_own_xbrl_stores_its_figures_and_is_complete(tmp_path,
                                                                                                monkeypatch):
     # `stock-data`'s collection of DLR while its companyfacts lack the 10-Q of 2026-07-31: the quarter is stored from

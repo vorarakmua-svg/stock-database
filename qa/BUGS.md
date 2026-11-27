@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 49 · NEEDS-USER 0 · Decided: 8 · Verified: 353
+**Open:** P0 0 · P1 0 · P2 0 · P3 47 · NEEDS-USER 0 · Decided: 8 · Verified: 354
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -499,11 +499,12 @@ Expected: the same input gives the same record (prefer the frame matching the pe
 
 Seen again in iteration 88: two offline collections of the same cached data differ in exactly WMT's and TJX's FY2012 vintages' `calendar_year` (2012, then 2011), and 13 vintage periods at 11 filers have candidates in more than one calendar year or quarter, none in the annual or quarterly records (`qa/evidence/iter88-bug127-realdata.txt` sections 5-6).
 ### BUG-058 [P3][GATHER] A 20-F filer's 6-K interim reports aren't read: ARM has no quarterly or TTM rows, and no word on why
-Status: OPEN
+Status: OPEN (decided 2026-11-28: B, explain)
 Found: iteration 40, in BUG-043's live check (`qa/evidence/iter40-bug043-e2e.txt`) | Fixed: — | Regression test: —
 Repro: since BUG-043's fix ARM has six fiscal years, but its interim statements (6-K: 2,756 us-gaap facts) aren't read (`_QUARTERLY_FORMS` holds 10-Q and 10-K), so it stores 0 quarterly and 0 TTM rows, and its FA tab's Quarterly view says "No data available for this period." with no warning.
 Expected: a foreign issuer's interim figures are read when it tags them (6-K ladders, with the 20-F as the year), or the gap is explained.   Actual: empty and unexplained.
 
+Decision (USER 2026-11-28): B: when the annual record comes from a 20-F or 40-F and there are no quarterly rows, the run warns that a foreign issuer's 6-K interim reports aren't read, so there are no quarterly or TTM figures. No universe company files a 20-F/40-F/6-K.
 ### BUG-059 [P2][VAL] A declared split whose own seam lies before the 10-FY window can explain a merger or IPO seam inside it
 Status: VERIFIED (iteration 44)
 Found: iteration 39 by code review 5 (I1's variant); split off in iteration 42 | Fixed: iteration 44 (oracle rule fd449ef, then the fix; see LOG) | Regression tests: `tests/test_valuation_inputs.py::test_a_split_every_stored_year_already_reflects_explains_no_seam`, `::test_a_split_between_two_years_filings_still_explains_their_seam`
@@ -2228,11 +2229,12 @@ Expected: the quarter's own 3-month EPS where the filing tags it.   Actual: the 
 
 Fix (iteration 240, `qa/evidence/ttm1-investigation.txt`): a derived quarter's EPS takes the quarter's own 3-month figure where the two are within 1.5 cents (rounding only; a wider reading pulled in mis-scaled facts). C Q3 2026 2.85. Quarterly EPS moves are noise or at most 1.5 cents. DB copies (502 re-collected): 0 medians, verdicts, owner-earnings verdicts, historical values, labels; oracles as at HEAD; look-ahead 0.
 ### BUG-336 [P3][GATHER] A run that recovered a gap from the filing's XBRL isn't collected again when the SEC's companyfacts catch up
-Status: OPEN
+Status: WONTFIX (iteration 253, the user's decision 2026-11-28)
 Found: iteration 178 (Q17's residuals) | Fixed: | Regression test:
 Repro: since Q17 a fully recovered gap is stored complete, so the refresh doesn't queue it; the companyfacts' version of the report (which may round or restate differently) is read only at the company's next scheduled collection.
 Expected: the company collected again once the companyfacts carry the report.   Actual: it waits for its next report.
 
+Decision (USER 2026-11-28): won't fix: the XBRL read equals the companyfacts (README parity check, 4,084 facts over 8 filings) and the company is collected again at its next report. 31 such runs in the DB.
 ### BUG-337 [P2][GATHER] Q17 marks a gap recovered, and stores the run complete, without reaching a report the companyfacts carry: a gap over 4 reports, or a pre-Q17 submissions cache, leaves reports missing for good
 Status: VERIFIED (iteration 180)
 Found: code review 29 (`qa/evidence/review29.txt`, Important 1; probes fail at HEAD) | Fixed: (this commit) | Regression tests: tests/test_sec_cache.py (3 new, one with 2 cases), tests/test_fetcher_concurrency.py (a warning case); 3 failing first
@@ -2845,11 +2847,12 @@ Repro: `stock-data refresh`'s SEC step counts a run whose predecessor read faile
 Expected: such a company queued again at the next refresh.   Actual: it waits for its next report.
 
 ### BUG-280 [P3][GATHER] Only the latest report is checked for the SEC's lag: NEE's 10-Q of 2026-07-24, also without facts, goes unflagged once a later one has them
-Status: OPEN
-Found: iteration 119 (BUG-251's worker, residuals) | Fixed: | Regression test:
+Status: VERIFIED (iteration 253)
+Found: iteration 119 (BUG-251's worker, residuals) | Fixed: (this commit) | Regression tests: tests/test_sec_cache.py, tests/test_fetcher_concurrency.py; 8 failing first
 Repro: `report_without_facts` looks at the latest report the submissions list. NEE's companyfacts lack its 10-Q of 2026-07-24 as well; once its October 10-Q gets facts, nothing names the earlier gap, and its quarter stays missing.
 Expected: every report since the last complete collection checked.   Actual: the latest only.
 
+Fix (iteration 253, `qa/evidence/gather3-investigation.txt`): the gap is every report among the newest 4 listed that the companyfacts lack, newest first; whole only when the report listed right after its last is carried; a report without its accession ends the search. `report_without_facts` names the first of the gap (read from its XBRL; the run stays incomplete unless the whole gap was read). Cache census: six such gaps (CLX 10-K 2026-08-07, URI and DOW 10-Qs, CAH, EIX, ED 10-Qs). Offline: those six runs stored incomplete; 4 unmapped rows kept; 0 medians, verdicts, owner-earnings verdicts, historical values, labels. A live collection of the six would read the filings (CLX FY2026 etc.); they're stored complete today, so `stock-data CLX CAH EIX ED URI DOW` or their next report picks them up.
 ### BUG-281 [P3][REFRESH] CLI and web collections count toward a gap's three retries though they read the 7-day cache
 Status: VERIFIED (iteration 195)
 Found: iteration 119 (BUG-251's worker, residuals) | Fixed: (this commit) | Regression tests: tests/test_refresh.py, tests/test_sec_cache.py, tests/test_sqlite_store.py (20 new, 2 changed); 19 failing first

@@ -13,8 +13,9 @@ from ..models.stock_data import StockData
 
 
 def incomplete(stock: StockData) -> Optional[str]:
-    """What a run's SEC read lacked, as ``collection_runs.incomplete`` keeps it (JSON): ``report``, the latest report
-    its submissions listed whose facts its companyfacts lacked, the SEC's lag (BUG-251), unless the run read it and
+    """What a run's SEC read lacked, as ``collection_runs.incomplete`` keeps it (JSON): ``report``, the newest report
+    its submissions listed whose facts its companyfacts lacked, the SEC's lag (BUG-251: the latest, or one before it,
+    BUG-280), unless the run read it and
     every earlier report they lacked from the filings' own XBRL (``recovered``, Q17); ``predecessor``, why its
     predecessor's filings couldn't be read (BUG-279); ``submissions``, why its submissions request failed, so that it
     couldn't look for such a report (BUG-282). None for a complete run. ``stock-data refresh``'s SEC step collects a
@@ -30,7 +31,7 @@ def incomplete(stock: StockData) -> Optional[str]:
 
 
 def complete_sec_read(stock: StockData) -> bool:
-    """Whether a run read the whole of its filer's SEC record: nothing ``incomplete`` names (the latest report its
+    """Whether a run read the whole of its filer's SEC record: nothing ``incomplete`` names (the newest report its
     companyfacts lacked, its predecessor's filings, its submissions) and no SEC error (a request or a step of the read
     that failed). Only such a run removes the stored periods and unmapped tags its parse no longer gives (BUG-344)."""
     return incomplete(stock) is None and not any(str(error).startswith("SEC EDGAR") for error in stock.errors)

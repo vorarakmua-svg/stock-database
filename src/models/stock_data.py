@@ -125,9 +125,10 @@ class StockData:
     # vintages (excluded from to_dict/JSON); the run's warning says so.
     predecessor_error: Optional[str] = None
 
-    # The latest report the SEC's submissions list whose facts the run's companyfacts lacked, the SEC's
+    # The newest report the SEC's submissions list whose facts the run's companyfacts lacked, the SEC's
     # lag (sec_handler.report_without_facts: its form, accession and filing date), None when they had
-    # it or there was none to look for: the run's figures stop at the report before (BUG-251), unless
+    # the newest four or there was none to look for: the run's figures stop at the report before
+    # (BUG-251), or lack it when they carry a later one (BUG-280), unless
     # the run read it, and every earlier report they lacked, from the filings' own XBRL ("recovered":
     # True, Q17). SQLite-only, like the predecessor's error: collection_runs.incomplete keeps an
     # unrecovered one, so that `stock-data refresh` collects the company again, and the run's warning
@@ -442,7 +443,7 @@ class StockData:
         # A successor's facts read without its predecessor's (a 503, a 404: "no XBRL data") lack the
         # predecessor's figures: a warning, as the fetcher words it, and the store only fills (BUG-179).
         self.predecessor_error = sec_data.get("predecessor_error")
-        # The latest report the submissions list whose facts the companyfacts lacked (BUG-251): a
+        # The newest report the submissions list whose facts the companyfacts lacked (BUG-251): a
         # warning, as the fetcher words it, and the store keeps it for the refresh.
         self.missing_report = sec_data.get("missing_report")
         # A failed submissions request: the run couldn't look for that report (BUG-282).

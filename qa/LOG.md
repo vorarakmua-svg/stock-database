@@ -3970,3 +3970,13 @@ Result: BUG-275 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4490 passed, 2 skipped
 Commit: (this commit) fix(parser): a 10-K's untagged amortization spread over its quarters and carried into the open year (BUG-275)
 Next: code review 41.
+
+## Iteration 253: 2026-11-28: fix (BUG-280); BUG-336, BUG-058 decided
+Picked: the gather group; an opus worker (BUG-280 moved nothing offline).
+Did: an older report the companyfacts lack, before one they carry, is named, read from its XBRL, and the run is
+incomplete until it is read.
+- RED: 8 failed on b6f596f; GREEN. 16 of 16 mutants (9 older re-written); bug380, bug344-requoted.
+Result: BUG-280 VERIFIED; BUG-336 WONTFIX (user); BUG-058 decided B (explain).
+Gates: ruff ✓ mypy ✓ pytest 4501 passed, 2 skipped
+Commit: (this commit) fix(gather): an older report the companyfacts lack is read too (BUG-280)
+Next: BUG-058 B; the shares group (running); code review 41.

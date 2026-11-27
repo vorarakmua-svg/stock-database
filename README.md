@@ -1811,8 +1811,8 @@ companies on the **collection list**, each with its reason: `quotes`, `bars` and
   runs ahead of it; BUG-350), so a report filed that day counts; a company never collected with the SEC counts every
   report in its feed. A company without a CIK is counted and skipped, and a feed that fails is that company's error.
   - A company also goes on the list when that latest collection's SEC read was incomplete, as its `collection_runs` row
-    says (`incomplete`): it read no facts of the latest report its submissions listed (its companyfacts lacked them,
-    the SEC's lag, BUG-251, and the filing's own XBRL couldn't be read either, or their request failed), it
+    says (`incomplete`): it read no facts of the latest report its submissions listed, or of one of the three before
+    it (BUG-280) (its companyfacts lacked them, the SEC's lag, BUG-251, and the filing's own XBRL couldn't be read either, or their request failed), it
     couldn't read its predecessor's filings (BUG-279), or its submissions request failed, so it couldn't look for such
     a report (`couldn't check for the SEC's lag: its submissions request failed (...)`, BUG-282). A collection that read the report, and every earlier one its
     companyfacts lacked, from the filings' own XBRL isn't incomplete: its figures are whole. It knows so only
@@ -2630,7 +2630,12 @@ submissions list (a 10-K, 10-Q, 20-F or 40-F as filed, with XBRL: an amendment o
 looked for) reads that report, and each report before it back to the latest the companyfacts carry
 (four at most; a run that reaches no report they carry within those, or within the reports its submissions
 list, reads them but is stored as incomplete, its warning saying `it found no earlier report they carry, so
-reports before those may be missing too; the refresh collects ... again`, BUG-337), from the filing's own XBRL instance: EDGAR's extracted instance of an inline filing
+reports before those may be missing too; the refresh collects ... again`, BUG-337), from the filing's own XBRL instance; so is a report among the newest four that the companyfacts lack
+though they carry a later one (BUG-280: on 2026-11-20 they carried CLX's 10-Q of 2026-11-02 but nothing of its 10-K
+of 2026-08-07, so FY2026 was never stored; URI's, DOW's, EIX's and ED's 10-Qs of July and CAH's of April were lacked
+so too), the run named by it, and stored as incomplete unless the gap ends at a report they carry; the warning
+then says `..., though they carry its 10-Q filed ..., so this run lacks its figures` where its XBRL can't be read.
+The instance read: EDGAR's extracted instance of an inline filing
 (`<primary document>_htm.xml`, one more rate-limited request per report), else the instance its
 index names (two). Its facts are read as the companyfacts give a filing's (`parsers/xbrl_instance.py`:
 the non-dimensional numeric facts of us-gaap, ifrs-full, dei, srt and invest; values as filed, at
