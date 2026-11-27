@@ -3852,3 +3852,13 @@ Result: BUG-335, 343, 192, 112 VERIFIED. BUG-275 decided by the user: A (spread)
 Gates: ruff ✓ mypy ✓ pytest 4341 passed, 2 skipped
 Commit: (this commit) fix: quarterly EPS within rounding; TTM frames; predictability notes; quality from the first year with flows (BUG-335, -343, -192, -112)
 Next: BUG-378 (no moves), BUG-154 and BUG-025 (to the user), BUG-275.
+
+## Iteration 241: 2026-11-27 00:20: fix (BUG-378 option C; BUG-020 documented)
+Picked: the user's dividend decisions; an opus worker (BUG-378 moved nothing).
+Did: the oracle first (own commit), then the gate: a slipped year with more payments than its sides keeps SEC's
+figure when it is at least half the side's; the README explains dividends per share as filed.
+- RED: 7 failed on 3b185ce; GREEN. 14 of 14 mutants; 20 re-quoted (20 of 20); ttm1's 29 of 29.
+Result: BUG-378 VERIFIED; BUG-020 documented. The user approved BUG-154 and BUG-025 (1-2) after the measurements.
+Gates: ruff ✓ mypy ✓ pytest 4361 passed, 2 skipped
+Commit: (this commit) fix(valuation): a slipped year with more payments than its sides keeps SEC's figure (BUG-378); dividends as filed documented (BUG-020)
+Next: BUG-154, BUG-025 (1-2), BUG-275.

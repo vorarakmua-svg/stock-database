@@ -172,6 +172,8 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         "eps_diluted", "EPS Diluted", PER_SHARE, UNIT_USD_PER_SHARE, DURATION,
         ("EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"),
     ),
+    # As the filer tagged it: some tag a quarter's rate or a stray figure in a full-year context (V, CEG, BKNG,
+    # PLD's declared 0.01 beside 3.84 paid), kept as filed (BUG-020); DDM's one-payment gate reads around it.
     CanonicalField(
         "dividends_per_share", "Dividends Per Share", PER_SHARE, UNIT_USD_PER_SHARE, DURATION,
         ("CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid"),

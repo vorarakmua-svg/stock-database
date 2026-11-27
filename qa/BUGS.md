@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 62 · NEEDS-USER 0 · Decided: 8 · Verified: 335
+**Open:** P0 0 · P1 0 · P2 0 · P3 61 · NEEDS-USER 0 · Decided: 8 · Verified: 336
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -190,7 +190,7 @@ Actual: the raw Yahoo record is shown as a cash dividend. The panel's CAGR uses 
 Notes: cosmetic; the valuation side is fixed (BUG-011). ETN 2001 and ABT 2004 show the same pattern. Review 3: Yahoo also records some spin-offs as dividends only, with no split-history factor, which the two-signal rule can't see: MO 2007 ($21.91) and 2008 ($51.06), MS 2007 ($14.25), C 2002 ($24.15), MRK 2003 ($2.74), PEP 1997 ($3.20), SLB 1999 ($3.29); none is in a current window. A cash special paid on one of SCCO's stock-dividend days would be dropped as a spin-off.
 
 ### BUG-020 [P3][VALID] Some filers tag a quarter's dividend, or a stray figure, as the year's dividends per share
-Status: WONTFIX (iteration 239, the user's decision 2026-11-26): SEC's dividend figures are kept as filed
+Status: WONTFIX (iteration 239, the user's decision 2026-11-26): SEC's dividend figures are kept as filed; documented in the README ("Dividends per share as filed") at iteration 241
 Found: iteration 15 while fixing BUG-013 | Fixed: — | Regression test: —
 Repro: cached companyfacts: V tags 0.45/0.52/0.59 under both dividend tags with full-year contexts for FY2023–2025 (it paid 4 × those); CEG tags 0.282/0.3525/0.3878 the same way; PLD tags `CommonStockDividendsPerShareDeclared` 0.01 (FY2024) and 0.03 (FY2025) beside `...CashPaid` 3.84 and 4.04.
 Expected: the year's dividends per share.
@@ -2535,11 +2535,12 @@ Repro: src/valuation/inputs.py `_implied_count_explains`: when neither year has 
 Expected: a seam with no independent count to check is not explained by the implied count.   Actual: it always is.
 Fix (iteration 225, `qa/evidence/bug376-investigation.txt`): `load_inputs` records whether each year's detection count came from net income / EPS; beyond 50x the implied-count branch is skipped when both years' did, so such a seam truncates unless a stored split explains it. EXE still folds. 0 tickers change.
 ### BUG-378 [P3][VAL] A judged year holding a recurring extra and a slipped payment still opens BUG-311's gate
-Status: OPEN (decided 2026-11-26: option C, the narrow gate)
-Found: the BUG-376 worker (iteration 225, residual) | Fixed: | Regression test:
+Status: VERIFIED (iteration 241; option C, the user's decision)
+Found: the BUG-376 worker (iteration 225, residual) | Fixed: (this commit; the oracle in the commit before) | Regression tests: tests/test_valuation_models.py, tests/test_valuation_oracle_seam.py; 7 failing first
 Repro: the oracle case (2024-07-15, 2025-07-10) = 2 in tests/test_valuation_oracle_seam.py pins it: the year reads Yahoo's 6.86 instead of SEC's 3.10. Needs the year's payments compared with the side's schedule, not a side count. The census found no such real year.
 Expected: SEC's one-payment figure.   Actual: Yahoo's sum.
 Decision (USER 2026-11-26): C: close the gate only when the year holds more regular payments than the side that opened it and SEC's figure is at least half the side's regular payments (fixes the synthetic case, 0 real years; GPN FY2017 and J FY2020 keep Yahoo's better sum); change the oracle in its own commit first.
+Fix (iteration 241, `qa/evidence/div2-investigation.txt`): BUG-311's gate stays shut when the judged year has more regular payments than every side with two or more (`all`) and SEC's figure is at least 0.5 x that side's regular sum (`models._regular_paid`, `_slipped`, `SLIPPED_YEAR_SHARE`; the year's payments counted by the sides' rule, recurrence either way). The oracle changed first, in its own commit. DB: no table moves; GPN FY2017, J FY2020 keep Yahoo's sum. Residual (synthetic, as at HEAD): a year next to a slipped one holding the extra reads 3.45 for 2.95.
 ### BUG-379 [P3][VAL] A reverse split Yahoo folds into a spin-off factor is taken back out of every earlier close and dividend
 Status: VERIFIED (iteration 228)
 Found: the BUG-264 worker (iteration 228) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py

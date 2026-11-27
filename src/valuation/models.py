@@ -69,6 +69,22 @@ def _one_payment(sec: float, payments: List[float], beside: Sequence[int]) -> bo
         abs(sec - paid) <= ONE_PAYMENT_TOLERANCE * paid for paid in payments))
 
 
+#: BUG-378 (decided 2026-11-26, option C): BUG-311's gate stays shut, SEC's figure the year's, where the year holds
+#: more regular payments than each side counting two or more (``_regular_paid``; the year's own small ones regular
+#: when they recur a year either way) and SEC's figure is at least this share of that side's regular payments: an
+#: annual payer's slipped year beside a recurring extra (3.10, 0.50 and 3.26 beside 2.95 + 0.50; SEC's 3.10 is the
+#: year's). A quarter's rate tagged as the year is under it (GPN's FY2017 0.01, J's FY2020 0.157 beside about 0.47),
+#: so Yahoo's payments still stand in there. The share is the decision's.
+SLIPPED_YEAR_SHARE = 0.5
+
+
+def _slipped(sec: float, own: Sequence[float], sides: Sequence[Sequence[float]]) -> bool:
+    """Whether a year whose SEC figure ``_one_payment`` reads as one payment holds a slipped one instead
+    (SLIPPED_YEAR_SHARE): *own* the year's regular payments, *sides* those of the year before it and after it."""
+    opened = [side for side in sides if len(side) >= 2]
+    return bool(opened) and all(len(own) > len(side) and sec >= SLIPPED_YEAR_SHARE * sum(side) for side in opened)
+
+
 #: Q3 (decided): a payment more than this many times the regular payments on each side of it (the median of the
 #: other payments ex-dated in the year before it, and in the year after it) is outside the regular schedule: a
 #: special (COST's $15 of 2023 beside $1.02 a quarter, PSA's $13.15), unless it recurs (ONE_OFF_RECURS_IN). A
@@ -305,10 +321,18 @@ def _regular_between(dividends: List[Tuple[str, float]], start: str, end: str,
     whole (*whole*, by ex-date and amount), the ones at least REGULAR_PAYMENT_SHARE of their median, or that
     recur into the year the gate judges, a year later (*toward* 1) or a year earlier (-1) (``_recurs``, BUG-372,
     BUG-376)."""
+    return len(_regular_paid(dividends, start, end, whole, (toward,)))
+
+
+def _regular_paid(dividends: List[Tuple[str, float]], start: str, end: str,
+                  whole: Set[Tuple[str, float]], toward: Sequence[int]) -> List[float]:
+    """The amounts of the regular payments ex-dated in (*start*, *end*] (``_regular_between``), a small one regular
+    when it recurs in any of the directions *toward*."""
     paid = [(day[:10], amount) for day, amount in dividends
             if start < day[:10] <= end and (day[:10], amount) not in whole]
     least = REGULAR_PAYMENT_SHARE * statistics.median([amount for _, amount in paid]) if paid else 0.0
-    return sum(1 for day, amount in paid if amount >= least or _recurs(dividends, day, amount, toward))
+    return [amount for day, amount in paid
+            if amount >= least or any(_recurs(dividends, day, amount, way) for way in toward)]
 
 
 def _recurs(dividends: List[Tuple[str, float]], day: str, amount: float, toward: int) -> bool:
@@ -342,7 +366,9 @@ def dividend_history(inputs: ValuationInputs, anchor: date,
     summed: a filer that tags only point-in-time payments leaves the year empty
     (BUG-013), and one that tags a single payment as the year is no better
     (``_one_payment``, read only where the 365 days before the year or after it
-    hold two or more regular payments, BUG-311, BUG-366, BUG-372). A company without fiscal years (no SEC annual
+    hold two or more regular payments, BUG-311, BUG-366, BUG-372, and not where the year
+    holds more of them than such a side, SEC's figure at least half that side's: a slip,
+    ``_slipped``, BUG-378). A company without fiscal years (no SEC annual
     record) uses the complete calendar years before the anchor's, on Yahoo's payments alone. A
     year with neither source paid nothing (amount None). Each year's ``one_off`` sums
     the *one_offs* (``one_off_dividends``) ex-dated in it.
@@ -372,11 +398,13 @@ def dividend_history(inputs: ValuationInputs, anchor: date,
         restart = not paid or not before or (
             date.fromisoformat(paid[0][0]) - date.fromisoformat(before[-1])).days > DIVIDEND_STALE_DAYS
         one_off = sum(amount for day, amount in one_offs if start < day[:10] <= end)
-        beside = (_regular_between(dividends, (date.fromisoformat(start) - timedelta(days=365)).isoformat(), start,
-                                   whole, 1),
-                  _regular_between(dividends, end, (date.fromisoformat(end) + timedelta(days=365)).isoformat(),
-                                   whole, -1))
-        if sec is not None and sec > 0 and not _one_payment(sec, payments, beside):
+        sides = (_regular_paid(dividends, (date.fromisoformat(start) - timedelta(days=365)).isoformat(), start,
+                               whole, (1,)),
+                 _regular_paid(dividends, end, (date.fromisoformat(end) + timedelta(days=365)).isoformat(),
+                               whole, (-1,)))
+        if sec is not None and sec > 0 and (
+                not _one_payment(sec, payments, [len(side) for side in sides])
+                or _slipped(sec, _regular_paid(dividends, start, end, whole, (1, -1)), sides)):
             history.append(DividendYear(year, sec, "sec", payments, restart, one_off))
         elif payments:
             history.append(DividendYear(year, sum(payments), "yahoo", payments, restart, one_off))

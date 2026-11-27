@@ -368,10 +368,15 @@ def test_value_ddm_keeps_an_annual_payers_sec_figure_beside_a_slipped_ex_date(mo
     [("2023-04-12", 0.5), ("2024-07-15", 0.5)],
     [("2024-07-15", 0.5), ("2025-04-11", 0.5)],
     [("2024-02-10", 0.5), ("2025-08-20", 0.5)],   # in the year judged, but 557 days on (past its anniversary's season)
+    [("2024-02-10", 0.5), ("2026-03-01", 0.5)],   # 750 days on, past 2025 (BUG-378 leaves 2025's two payments alone)
     # BUG-376 (code review 36): the same extra paid two years running, or three, recurs, but not into 2025, the year
     # the gate judges: the payer's second payment a year isn't there, so 2025's two are a slip
     [("2023-07-15", 0.5), ("2024-07-15", 0.5)],
     [("2022-07-15", 0.5), ("2023-07-15", 0.5), ("2024-07-15", 0.5)],
+    # BUG-378 (decided 2026-11-26, option C): the extra recurs into 2025, so the year before counts two regular
+    # payments, but 2025 holds three (3.10, 0.50, 3.26: a slip) and SEC's 3.10 is over half the side's 3.45
+    [("2024-07-15", 0.5), ("2025-07-10", 0.5)],
+    [("2023-07-20", 0.5), ("2024-07-15", 0.5), ("2025-07-10", 0.5)],
 ])
 def test_value_ddm_keeps_an_annual_payers_slipped_year_beside_an_extra_payment(extra):
     # BUG-366: the year before 2025 (the slipped one) holds two payments or more only because of extra ones: the
@@ -382,6 +387,42 @@ def test_value_ddm_keeps_an_annual_payers_slipped_year_beside_an_extra_payment(e
     years = {year: (amount, source) for year, amount, source in res.assumptions["dividend_growth_years"]}
     assert years[2025] == (pytest.approx(_true_total(2025)), "sec")
     assert res.assumptions["hist_cagr"] == pytest.approx(0.05)
+
+
+@pytest.mark.parametrize("declared, source", [
+    (3.2578, "sec"),   # one payment, but at least half the regular payments of the side that opened the gate
+    (0.5, "yahoo"),    # under half (2.95 + 0.50): SEC's figure is the extra alone
+])
+def test_a_slipped_years_sec_figure_stands_only_at_half_the_sides_payments(declared, source):
+    # BUG-378: the year holds more regular payments than the side before it (a slip), and SEC's figure is the year's
+    # only when it is at least SLIPPED_YEAR_SHARE of that side's regular payments.
+    divs = _paid_in({y: 1 for y in range(2015, 2027)}, moved=[("2026-01-15", "2025-12-30")],
+                    extra=[("2024-07-15", 0.5), ("2025-07-10", 0.5)])
+    dps = {y: _true_total(y) for y in range(2016, 2026)}
+    dps[2025] = declared
+    years = _history(dps, divs)
+    assert years[2025][1] == source
+
+
+@pytest.mark.parametrize("sides, slipped", [
+    (([2.95, 0.5], []), True),
+    (([2.95, 0.5], [7.0]), True),                   # a side of one opened nothing: it needn't be outnumbered
+    (([2.95, 0.5], [0.85, 0.85, 0.85, 0.85]), False),   # every side of two or more must be
+    (([], []), False),
+])
+def test_a_slip_is_measured_against_each_side_that_opened_the_gate(sides, slipped):
+    from src.valuation.models import _slipped
+    assert _slipped(3.10, [3.10, 0.5, 3.26], sides) is slipped
+
+
+def test_a_quarterly_payers_slipped_year_tagged_with_a_quarters_rate_reads_the_payments():
+    # GPN's FY2017, J's FY2020: a year holding a fifth payment beside quarterly years, SEC tagging a quarter's rate
+    # (BUG-020), is under half the side's payments: Yahoo's payments stand in, as before BUG-378.
+    divs = _paid_in({y: 4 for y in range(2015, 2027)}, moved=[("2026-01-15", "2025-12-30")])
+    dps = {y: _true_total(y) for y in range(2016, 2026)}
+    dps[2025] = _true_total(2025) / 4
+    years = _history(dps, divs)
+    assert years[2025] == (pytest.approx(_true_total(2025) + _true_total(2026) / 4), "yahoo")
 
 
 def _history(dps, divs, anchor=date(2026, 1, 20)):
