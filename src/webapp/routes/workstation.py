@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -22,6 +22,7 @@ from ...universe.industries import sic_label
 from ...valuation.assumptions import DISCOUNT_SPREAD, GROWTH_CAP
 from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
 from ...valuation.history import HISTORICAL_VALUE_CUTOFFS, METRICS, historical_value_label
+from ...valuation.inputs import _drop_spin_off_dividends
 from ...valuation.models import ValuationResult, dcf_per_share
 from ..dependencies import get_job_manager, get_reader, get_settings
 from ..formatting import (
@@ -819,6 +820,17 @@ def _annual_dividend_sums(events: List[Dict[str, Any]]) -> Dict[int, float]:
     return {year: sums.get(year, 0.0) for year in range(min_year, max_year + 1)}
 
 
+def _spin_off_days(events: List[Dict[str, Any]], splits: List[Dict[str, Any]]) -> Set[str]:
+    """The days of *events* whose "dividend" is a spin-off Yahoo records as one (DHR 2016's $24.56 for Fortive): the
+    valuation's rule (``inputs._drop_spin_off_dividends``, BUG-011), which needs the same day's price factor in
+    *splits* too (BUG-019)."""
+    paid = [(str(e["date"])[:10], float(e["amount"])) for e in events
+            if e.get("date") and isinstance(e.get("amount"), (int, float))]
+    kept = {day for day, _ in _drop_spin_off_dividends(paid, [(str(s["date"])[:10], s["ratio"]) for s in splits
+                                                               if s.get("date") and s.get("ratio")])}
+    return {day for day, _ in paid if day not in kept}
+
+
 def _dividend_cagr(annual_sums: Dict[int, float]) -> Optional[float]:
     """Dividend CAGR, using the SAME formula as ``_get_dividend_history``.
 
@@ -880,7 +892,8 @@ def dvd_fragment(
     CAGR/consistency are computed here from ``dividend_events`` with the SAME
     formulas ``yahoo_handler._get_dividend_history`` uses on the raw yfinance
     series (see ``_dividend_cagr``/``_dividend_consistency`` above) — re-derived
-    from what's already in the DB, not re-fetched from Yahoo.
+    from what's already in the DB, not re-fetched from Yahoo, less the spin-offs Yahoo records as
+    dividends (``_spin_off_days``), which the table marks and the totals leave out (BUG-019).
     """
     if r.get_company(ticker) is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
@@ -888,14 +901,17 @@ def dvd_fragment(
     quote = r.quote(ticker) or {}
     events = r.dividend_events(ticker)
     raw_splits = r.split_events(ticker)
-
-    annual_sums = _annual_dividend_sums(events)
+    spin_offs = _spin_off_days(events, raw_splits)
+    # The year totals, CAGR and consistency count cash dividends only, as the valuation does (BUG-011, BUG-019).
+    annual_sums = _annual_dividend_sums([e for e in events if str(e.get("date"))[:10] not in spin_offs])
     cagr = _dividend_cagr(annual_sums)
     consistency = _dividend_consistency(annual_sums)
     years = sorted(annual_sums)
 
     payment_rows = [
-        {"date": e.get("date", ""), "amount": fmt_price(e.get("amount"))}
+        {"date": e.get("date", ""),
+         "amount": fmt_price(e.get("amount")) + (" (spin-off, not a cash dividend)"
+                                                 if str(e.get("date"))[:10] in spin_offs else "")}
         for e in reversed(events)
     ]
     split_rows = [

@@ -510,6 +510,16 @@ class Reader:
         row = cur.fetchone()
         return dict(row) if row is not None else None
 
+    def ranked_sic_codes(self) -> Dict[str, Optional[str]]:
+        """The SIC code of every company with a ``quality_scores`` row, the universe the rank pass groups
+        (``scores.engine.rank_all``), by ticker; {} before either table or the code column exists."""
+        try:
+            cur = self._conn.execute(
+                "SELECT q.ticker, c.sic FROM quality_scores q LEFT JOIN companies c ON c.ticker = q.ticker")
+        except sqlite3.OperationalError:
+            return {}
+        return {row[0]: row[1] for row in cur.fetchall()}
+
     def warning_signs(self, ticker: str) -> List[Dict[str, Any]]:
         """The ticker's ``warning_signs`` rows, the ones that fired. [] before the table exists."""
         try:

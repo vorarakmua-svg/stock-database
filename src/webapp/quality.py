@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional, Tuple
 from ..scores.ranks import RANKS
 from ..scores.scores import BENEISH_FLAG, MAGIC_EXCLUDED, MAGIC_EXCLUDED_REASON, PIOTROSKI_TESTS
 from ..scores.signs import SEVERE, SIGN_CODES, SLOAN_MEDIUM, SLOAN_SEVERE
-from ..universe.industries import MIN_INDUSTRY_SIZE, normalize_sic
+from ..universe.industries import MIN_INDUSTRY_SIZE, industry_groups, normalize_sic
 from .repository import Reader
 
 #: The nine Piotroski tests, in the spec's order.
@@ -58,11 +58,14 @@ def _sign_order(sign: Dict[str, Any]) -> Tuple[int, int]:
             SIGN_CODES.index(code) if code in SIGN_CODES else len(SIGN_CODES))
 
 
-def industry_view(row: Dict[str, Any], sic: Any) -> Dict[str, Any]:
+def industry_view(row: Dict[str, Any], sic: Any, codes: Optional[Dict[str, Optional[str]]] = None,
+                  ticker: Optional[str] = None) -> Dict[str, Any]:
     """The industry block: the company's SIC industry group, its label and size, and the five ranks and the composite
     within it, from its ``quality_scores`` *row*; or why there are none: no code stored (*sic*), a row the rank pass
     hasn't ranked by industry yet (a table from before the industry columns, or not ranked), or an industry with
-    fewer than MIN_INDUSTRY_SIZE companies."""
+    fewer than MIN_INDUSTRY_SIZE companies. A row ranked before its code was filled has no group either: with the
+    *codes* of the ranked companies (ticker to code) and the company's *ticker*, a code that now gives it a group
+    means the codes came after the rank pass, which says so (BUG-236)."""
     code = normalize_sic(sic)
     group = row.get("industry_group")
     if group is not None:
@@ -71,6 +74,8 @@ def industry_view(row: Dict[str, Any], sic: Any) -> Dict[str, Any]:
         reason = "no SIC code stored"
     elif "industry_group" not in row or row.get("ranked_at") is None:
         reason = "industry ranks not computed yet"
+    elif codes is not None and ticker is not None and industry_groups(codes).get(ticker) is not None:
+        reason = "industry ranks not computed yet"  # the codes were filled after the rank pass (BUG-236)
     else:
         reason = f"SIC {code}'s industry has fewer than {MIN_INDUSTRY_SIZE} companies here"
     return {"group": group, "label": row.get("industry_label"), "size": row.get("industry_size"), "sic": code,
@@ -100,7 +105,8 @@ def quality_view(r: Reader, ticker: str) -> Dict[str, Any]:
         "ranked_at": row.get("ranked_at"),
         "composite": {"score": row.get("composite_score"), "weights": "equal",
                       "ranks": {k: row.get(f"rank_{k}") for k in RANKS}},
-        "industry": industry_view(row, company.get("sic")),
+        "industry": industry_view(row, company.get("sic"),
+                                  r.ranked_sic_codes() if row.get("industry_group") is None else None, ticker),
         "piotroski": {"f": row.get("piotroski_f"), "tested": row.get("piotroski_tested"),
                       "tests": [{"code": c, "label": PIOTROSKI_LABELS[c], "passed": tests[c]}
                                 for c in PIOTROSKI_TESTS if c in tests],

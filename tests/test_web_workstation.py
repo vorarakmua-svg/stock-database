@@ -18,6 +18,7 @@ test modules assert exact company counts against it).
 from __future__ import annotations
 
 import html
+import json
 import re
 import sqlite3
 from datetime import date, timedelta
@@ -1212,3 +1213,31 @@ def test_only_the_no_annual_financials_note_is_reworded_for_stored_years(tmp_pat
     client = _client_for(_years_then_a_failed_collection(tmp_path, warnings=(_FAILED_REQUEST, lag, stale)))
     body = client.get("/ui/stocks/AAPL/fa").text
     assert str(escape(lag)) in body and str(escape(stale)) in body and "got no annual financials" in body
+
+
+def _spin_off(db, amount=24.56, day="2023-09-01", ratio=1.319):
+    """A spin-off Yahoo records twice (DHR 2016, BUG-019): a "dividend" and, the same day, a price factor."""
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO dividend_events (ticker, date, amount) VALUES ('AAA', ?, ?)", (day, amount))
+    conn.execute("INSERT INTO split_events (ticker, date, ratio) VALUES ('AAA', ?, ?)", (day, ratio))
+    conn.commit()
+    conn.close()
+
+
+def test_dvd_fragment_does_not_count_a_spin_off_as_a_dividend(client, web_db):
+    # BUG-019: the panel's chart and CAGR read the spin-off's $24.56 as 2023's dividend (0.84 + 24.56).
+    _spin_off(web_db)
+    body = client.get("/ui/stocks/AAA/dvd").text
+    cfg = json.loads(re.search(r"var _dvdCfg = (\{.*?\});", body).group(1))
+    assert cfg == {"years": ["2023", "2024"], "amounts": [pytest.approx(0.84), pytest.approx(0.50)]}
+    assert '<span class="summary-value">-40.5%</span>' in body  # the same CAGR as without the spin-off
+    assert re.search(r"2023-09-01</td>\s*<td class=\"num\">\$24.56 \(spin-off, not a cash dividend\)</td>", body)
+
+
+def test_dvd_fragment_keeps_a_large_special_dividend_on_an_ordinary_day(client, web_db):
+    # Both signals are needed: a big payment without a price factor the same day is a special dividend.
+    _spin_off(web_db, day="2023-09-01", ratio=1.0)  # a 1.0 factor is no factor
+    body = client.get("/ui/stocks/AAA/dvd").text
+    cfg = json.loads(re.search(r"var _dvdCfg = (\{.*?\});", body).group(1))
+    assert cfg["amounts"][0] == pytest.approx(0.84 + 24.56)
+    assert "spin-off" not in body

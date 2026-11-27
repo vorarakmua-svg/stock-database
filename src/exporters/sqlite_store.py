@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
-if TYPE_CHECKING:  # avoid a runtime exporters -> valuation (or ownership) dependency
+if TYPE_CHECKING:  # annotations only: these modules aren't imported at runtime (valuation.inputs below is)
     from ..ownership.portfolio import Change, GuruQuarters, Position
     from ..valuation.history import HistoryResult
     from ..valuation.indicators import IndicatorResult
@@ -35,7 +35,7 @@ from ..models.stock_data import StockData
 from ..new_york import new_york_day
 from ..parsers.calculated_metrics import CalculatedMetrics
 from ..universe.industries import normalize_sic, normalize_sic_description
-from ..valuation.inputs import SPLIT_JUMP_THRESHOLD, _simple_ratio
+from ..valuation.inputs import SPLIT_JUMP_THRESHOLD, is_share_split
 from .record_scope import RECORD_PARTS, absent, speaks_for_record
 from .record_scope import incomplete as _incomplete
 
@@ -115,8 +115,9 @@ def read_only_uri(path: Union[str, Path]) -> str:
 def _moves_per_share(ratio: float) -> bool:
     """A factor of Yahoo's split history that moves the stored per-share figures: a share
     split (a simple ratio, 5:4 or 1:10 too) or any factor of 3:2 or more (ABT's 2.084 for
-    AbbVie), as the valuation reads them (``inputs._apply_later_splits``)."""
-    return ratio > 0 and ratio != 1.0 and (_simple_ratio(ratio) or ratio >= SPLIT_JUMP_THRESHOLD
+    AbbVie). The valuation applies a split after the latest filing from 3:2 up (``inputs._apply_later_splits``); a
+    5:4 or 4:3 is refused all the same, the safe side, and its refusal says what a collection does (BUG-130)."""
+    return ratio > 0 and ratio != 1.0 and (is_share_split(ratio) or ratio >= SPLIT_JUMP_THRESHOLD
                                            or ratio <= 1.0 / SPLIT_JUMP_THRESHOLD)
 
 

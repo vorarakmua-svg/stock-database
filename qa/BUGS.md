@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 59 · NEEDS-USER 0 · Decided: 8 · Verified: 340
+**Open:** P0 0 · P1 0 · P2 0 · P3 56 · NEEDS-USER 0 · Decided: 8 · Verified: 343
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -182,13 +182,14 @@ Fix (iteration 24): `SQLiteStore.export` writes a full-collection snapshot only 
 Notes: the earlier note here ("the JSON also keeps a suspended yield") was wrong: the JSON replaces a section the new run has, and the CSV now does the same. The price-history label issue review 3 raised is BUG-030. Code review 4 (iteration 29): the web quote refresh (`upsert_quote`) and a full export with only price history still write a price-less latest snapshot: BUG-033.
 
 ### BUG-019 [P3][UI] The web dividend panel shows DHR's 2016 spin-off as a $24.56 dividend
-Status: OPEN
-Found: iteration 14 while fixing BUG-011 | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 246)
+Found: iteration 14 while fixing BUG-011 | Fixed: (this commit) | Regression tests: tests/test_quote_refresh.py, test_web_industries.py, test_web_workstation.py; failing first
 Repro: the DVD panel's payments table and annual bar chart for DHR read `dividend_events` as stored, so 2016 shows a $24.56 payment (an annual total of about $25 against $0.44 in the years around it).
 Expected: the spin-off shown as such, or left out the way the valuation now leaves it out.
 Actual: the raw Yahoo record is shown as a cash dividend. The panel's CAGR uses the first and last years of the whole history, so it isn't affected.
 Notes: cosmetic; the valuation side is fixed (BUG-011). ETN 2001 and ABT 2004 show the same pattern. Review 3: Yahoo also records some spin-offs as dividends only, with no split-history factor, which the two-signal rule can't see: MO 2007 ($21.91) and 2008 ($51.06), MS 2007 ($14.25), C 2002 ($24.15), MRK 2003 ($2.74), PEP 1997 ($3.20), SLB 1999 ($3.29); none is in a current window. A cash special paid on one of SCCO's stock-dividend days would be dropped as a spin-off.
 
+Fix (iteration 246, `qa/evidence/web2-investigation.txt`): `dvd_fragment` applies the valuation's BUG-011 rule (`inputs._drop_spin_off_dividends`: over 5x the 400-day median on a day with a 2:3-3:2 price factor): year totals, bars, CAGR and consistency leave such rows out; the Payments table keeps them marked "(spin-off, not a cash dividend)"; CSV and API raw. Real DB: ABT 2004-05-03, CNP 2002-10-01, DHR 2016-07-05, ETN 2001-01-02. Spin-offs Yahoo records with no split factor (MO, MS, C, MRK, PEP, SLB) still show as cash. No stored data or valuation can move.
 ### BUG-020 [P3][VALID] Some filers tag a quarter's dividend, or a stray figure, as the year's dividends per share
 Status: WONTFIX (iteration 239, the user's decision 2026-11-26): SEC's dividend figures are kept as filed; documented in the README ("Dividends per share as filed") at iteration 241
 Found: iteration 15 while fixing BUG-013 | Fixed: — | Regression test: —
@@ -1055,11 +1056,12 @@ Expected: a test each.   Actual: none fails.
 
 Fix (iteration 227, `qa/evidence/bug072-investigation.txt`): tests pin every listed behaviour as the code already has it (a split up to and including a filing's own day is restated by it; a first-filing date only from a list under 100 filings; a quarter 80-120 days inclusive, 17 weeks included; revenue figures 25% apart are different things; Yahoo applies a split on its own day; the migration re-checks served_on under the write lock; _moves_per_share's ratios; the explorer dates only carried figures). 29 of 29 mutants killed. No code change, no defect found.
 ### BUG-130 [P3][WEB] A 5:4 or 4:3 split stops a refresh with a promise a full collection doesn't keep: the valuation applies only factors of 3:2 or more
-Status: OPEN
-Found: iteration 84 by code review 12 (M2), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 246; message only, the user's decision 2026-11-27)
+Found: iteration 84 by code review 12 (M2), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_quote_refresh.py, test_web_industries.py, test_web_workstation.py; failing first
 Repro: `sqlite_store._moves_per_share` refuses any simple-ratio split "as the valuation reads them (`inputs._apply_later_splits`)", but `_apply_later_splits` and `_undo_splits_after_price` take only factors of 3:2 or more (`inputs.py:300-302`, `:354-358`), and the refusal says "Collect FILER in full to update them": after a full collection a 5:4 split still reads Graham 634.76 and Lynch 346.50, pre-split, upside -39.4%, as a 1.253 spin-off does (code review 12's `scen12.py`). Refusing it is the safe side. Also: `sqlite_store.py`'s "avoid a runtime exporters -> valuation dependency" comment sits above a runtime import of `valuation.inputs`, whose private `_simple_ratio` crosses packages (no import cycle today).
 Expected: the rule and the message as they are (or the small simple ratios applied by the valuation, a policy question).   Actual: as above.
 
+Fix (iteration 246, `qa/evidence/web2-investigation.txt`): `quote_refresh.split_refusal` says a full collection doesn't update a split under 3-for-2 and the valuations stay on the old basis until the next report restates; a mixed list promises only the larger splits. sqlite_store and quote_refresh import the public `is_share_split`. Decision (USER 2026-11-27): keep the valuation's 3:2 rule (no 5:4/4:3 post-filing application). No stored data or valuation can move.
 ### BUG-131 [P3][STORE] BUG-117's fallback still dates payments on a split's day for a collector east of UTC+10:30 whose bar request fails
 Status: VERIFIED (iteration 233)
 Found: iteration 84 by code review 12 (M3), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
@@ -1877,11 +1879,12 @@ Expected: the map reloaded once when a ticker misses and the file is over a week
 Fix (iteration 216, with BUG-052): the SEC ticker map expires after 7 days; a failed re-fetch uses the cache with a warning; an unknown ticker triggers one re-fetch per handler.
 
 ### BUG-236 [P3][WEB] A company ranked before its SIC code was filled is told its industry "has fewer than 10 companies here"
-Status: OPEN
-Found: code review 19 (m-3), build M5-6 | Fixed: | Regression test:
+Status: VERIFIED (iteration 246)
+Found: code review 19 (m-3), build M5-6 | Fixed: (this commit) | Regression tests: tests/test_quote_refresh.py, test_web_industries.py, test_web_workstation.py; failing first
 Repro: fill the codes (`python -m src.universe.sic`) with no rank pass after it; the STAT tab and /api/stocks/{t}/scores (src/webapp/quality.py:68-75) give "SIC xxxx's industry has fewer than 10 companies here" for a company in a group of 10 or more.
 Expected: "industry ranks not computed yet" until the next rank pass (any collection, backfill or refresh).   Actual: the wrong reason, until then.
 
+Fix (iteration 246, `qa/evidence/web2-investigation.txt`): `quality.industry_view` runs industry_groups over the ranked universe with the live SIC codes (`Reader.ranked_sic_codes`); if the company would get a group it says "industry ranks not computed yet", else the old message. 151 rows have no group; none is stale today. No stored data or valuation can move.
 ### BUG-237 [P3][REFRESH] A quote whose database write failed is counted as stored
 Status: VERIFIED (iteration 193)
 Found: code review 19 (m-4), build M5-6 | Fixed: (this commit) | Regression tests: tests/test_quote_refresh_failures.py (new), tests/test_quote_refresh.py, tests/test_web_quote_refresh.py; 19 failing first

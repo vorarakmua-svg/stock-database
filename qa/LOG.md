@@ -3900,3 +3900,13 @@ Result: BUG-384, BUG-385 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4387 passed, 2 skipped
 Commit: (this commit) fix: a twice-tagged debt total; the run's yearly dividends count a doubled payment once (BUG-384, BUG-385)
 Next: BUG-275 (measuring), remaining P3s.
+
+## Iteration 246: 2026-11-27 05:00: fix (BUG-019, BUG-130, BUG-236)
+Picked: the web group; a sonnet worker (display only).
+Did: the DVD panel leaves spin-offs out of its sums; the small-split refusal says what a collection does; an
+unranked company is told its industry ranks aren't computed yet.
+- RED: failed on 7964c1c; GREEN. 12 of 12 mutants; store2 15/15, bug385 2/2.
+Result: BUG-019, 130 (message; the user kept the 3:2 rule), 236 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4400 passed, 2 skipped
+Commit: (this commit) fix(web): spin-offs out of the dividend sums; an honest small-split message; unranked industries (BUG-019, -130, -236)
+Next: the val3 fixes (079, 178, 250), BUG-301 (c) measured, BUG-315 pinned, BUG-275 with the open-year carry.
