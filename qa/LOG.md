@@ -3891,3 +3891,12 @@ the collection-day close; BUG-154's readers; the DDM gate code vs oracle; BUG-33
 Gates: unchanged (qa/ only)
 Commit: (this commit) chore(qa): code review 39 recorded (BUG-384, BUG-385)
 Next: BUG-384, BUG-385; BUG-275 (measuring).
+
+## Iteration 245: 2026-11-27 03:00: fix (BUG-384, BUG-385)
+Picked: code review 39's findings; a sonnet worker (nothing moved beyond ORLY's $6K-74K quarterly leases).
+Did: a figure equal to the long-term total isn't an 'other' figure; the collection's yearly dividend sums dedupe.
+- RED: 3 failed on 91c848e; GREEN. 5 of 5 + 2 of 2 mutants; bug383 (re-quoted) 11/11, debt1 18/18, b154r 12/12.
+Result: BUG-384, BUG-385 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4387 passed, 2 skipped
+Commit: (this commit) fix: a twice-tagged debt total; the run's yearly dividends count a doubled payment once (BUG-384, BUG-385)
+Next: BUG-275 (measuring), remaining P3s.

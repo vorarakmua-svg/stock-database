@@ -1522,7 +1522,8 @@ def _short_term_debt_lines(us_gaap: Dict[str, Any], annual: Dict[Any, Dict[str, 
     $0.699B of SeniorNotesCurrent). The total keeps the line, as BUG-141 keeps a total's maturities where no
     noncurrent figure stands in its place. One that a figure and the line overflow is a noncurrent figure (BIIB's
     LongTermDebt, which its NotesPayable total and the current notes make up), and one the 10-Q tags no other figure
-    beside tells nothing: those quarters read the line."""
+    beside tells nothing: those quarters read the line. A figure equal to the total (within ``_AGREE``) is the total
+    tagged twice, no other figure (BUG-384: ORCL's shape with its total also tagged NotesPayable)."""
     read = [tag for tag in us_gaap if _current_line_concept(tag)] + [
         tag for tag in _FIELDS["short_term_debt"].tags if tag in us_gaap]
     columns: Dict[str, Dict[str, Dict[str, float]]] = defaultdict(dict)  # {accn: {end: {tag: figure}}}
@@ -1537,9 +1538,13 @@ def _short_term_debt_lines(us_gaap: Dict[str, Any], annual: Dict[Any, Dict[str, 
         # the quarter's long-term debt is a total the 10-Q *key* shows holding the line beside its other debt figure (a
         # line of 0.0 counts nothing twice: BIIB's quarters with no current notes keep it)
         tag = quarter.get("_source_tags", {}).get("long_term_debt")
-        others = [values[key] for other, values in beside.items() if other != tag and values.get(key, 0) > 0]
+        total = quarter.get("long_term_debt") or 0
+        # a figure equal to the total is the total tagged twice (ORCL's shape with NotesPayable = LongTermDebt), no
+        # other figure beside it (BUG-384)
+        others = [values[key] for other, values in beside.items() if other != tag and values.get(key, 0) > 0
+                  and not _agree(values[key], total)]
         return line > 0 and tag in _LONG_TERM_TOTALS and bool(others) and (
-            max(others) + line <= (1 + _AGREE) * (quarter.get("long_term_debt") or 0))
+            max(others) + line <= (1 + _AGREE) * total)
 
     figures: Dict[str, Set[float]] = {}  # each year end's short-term debt as the annual reports filed it
     for period in annual.values():

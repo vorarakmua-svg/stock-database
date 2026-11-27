@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 import yfinance as yf
 
+from ..dividend_payments import distinct_payments
 from .rate_limiter import RateLimiter
 
 # Known yfinance ``earnings_history`` column names — these vary across yfinance
@@ -828,13 +829,14 @@ class YahooHandler:
 
             # Process dividend history
             if dividends is not None and not dividends.empty:
-                # Convert to list of records
-                div_records = []
-                for date, amount in dividends.items():
-                    div_records.append({
-                        "date": date.strftime("%Y-%m-%d"),
-                        "amount": float(amount)
-                    })
+                # A payment Yahoo serves twice counts once, as in every reader of the payments (BUG-154, BUG-385)
+                div_records = distinct_payments(
+                    [{"date": date.strftime("%Y-%m-%d"), "amount": float(amount)}
+                     for date, amount in dividends.items()],
+                    lambda r: r["date"], lambda r: r["amount"])
+                dividends = pd.Series(
+                    [r["amount"] for r in div_records],
+                    index=pd.DatetimeIndex([r["date"] for r in div_records]), dtype=float)
 
                 result["dividend_payments"] = div_records
                 result["total_payments"] = len(div_records)

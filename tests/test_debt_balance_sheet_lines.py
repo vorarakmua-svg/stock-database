@@ -275,12 +275,43 @@ def test_a_noncurrent_long_term_debt_figure_keeps_the_line_whatever_fits_inside_
 
 def test_a_zero_current_line_beside_a_total_is_still_read():
     # BIIB's 10-Q for 2020-06-30: no current notes (NotesPayableCurrent $0) beside its LongTermDebt, equal to its
-    # NotesPayable total: a zero counts nothing twice, so the quarter keeps its short-term debt of 0.
+    # NotesPayable total, with another debt figure the 10-Q tags: a zero counts nothing
+    # twice, so the quarter keeps its short-term debt of 0.
     facts = _filings(
         ("10-K", "2020-02-06", "2019-12-31", {**_BS, "LongTermDebtCurrent": 1.5e9, "NotesPayableCurrent": 1.5e9,
                                               "LongTermDebtNoncurrent": 4.459e9}),
         ("10-Q", "2020-07-22", "2019-12-31", {**_BS, "NotesPayableCurrent": 1.5e9}),
         ("10-Q", "2020-07-22", "2020-06-30", {**_BS, "NotesPayableCurrent": 0.0, "LongTermDebt": 7.43e9,
-                                              "NotesPayable": 7.43e9}))
+                                              "NotesPayable": 7.43e9, "SeniorLongTermNotes": 5.0e9}))
     quarter = XBRLParser().extract_quarterly_financials(facts)["2020-06-30"]
     assert _read(quarter, "short_term_debt") == (0.0, "NotesPayableCurrent")
+
+
+def test_a_notes_payable_figure_equal_to_the_debt_total_is_no_other_figure_beside_it():
+    # BUG-384: review 38's ORCL shape (LongTermDebt $91.315B = LongTermNotesPayable $82.236B +
+    # NotesPayableCurrent $9.079B), the 10-Q also tagging the same total as NotesPayable. holds() took the largest
+    # figure beside the total, which was the NotesPayable total itself ($91.315B), so line + it overflows and the
+    # current notes are read again beside the total that holds them.
+    facts = _filings(
+        ("10-K", "2025-06-18", "2025-05-31", {**_BS, "DebtCurrent": 7.271e9, "NotesPayableCurrent": 7.271e9,
+                                              "LongTermNotesPayable": 85.297e9}),
+        ("10-Q", "2025-09-10", "2025-05-31", {**_BS, "NotesPayableCurrent": 7.271e9}),
+        ("10-Q", "2025-09-10", "2025-08-31", {**_BS, "NotesPayableCurrent": 9.079e9, "LongTermNotesPayable": 82.236e9,
+                                              "LongTermDebt": 91.315e9, "NotesPayable": 91.315e9}))
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2025-08-31"]
+    debt = (quarter.get("long_term_debt") or 0) + (quarter.get("short_term_debt") or 0)
+    assert abs(debt - 91.315e9) < 1e6, (quarter.get("long_term_debt"), quarter.get("short_term_debt"),
+                                        quarter.get("_source_tags", {}).get("long_term_debt"),
+                                        quarter.get("_source_tags", {}).get("short_term_debt"))
+
+
+def test_a_notes_payable_figure_within_rounding_of_the_debt_total_is_no_other_figure_either():
+    # the total rounded differently in its two tags ($91.315B and $91.4B, within _AGREE): still the total tagged twice
+    facts = _filings(
+        ("10-K", "2025-06-18", "2025-05-31", {**_BS, "DebtCurrent": 7.271e9, "NotesPayableCurrent": 7.271e9,
+                                              "LongTermNotesPayable": 85.297e9}),
+        ("10-Q", "2025-09-10", "2025-05-31", {**_BS, "NotesPayableCurrent": 7.271e9}),
+        ("10-Q", "2025-09-10", "2025-08-31", {**_BS, "NotesPayableCurrent": 9.079e9, "LongTermNotesPayable": 82.236e9,
+                                              "LongTermDebt": 91.315e9, "NotesPayable": 91.4e9}))
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2025-08-31"]
+    assert abs(((quarter.get("long_term_debt") or 0) + (quarter.get("short_term_debt") or 0)) - 91.315e9) < 1e6
