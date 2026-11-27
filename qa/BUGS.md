@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 51 · NEEDS-USER 0 · Decided: 8 · Verified: 349
+**Open:** P0 0 · P1 0 · P2 0 · P3 53 · NEEDS-USER 0 · Decided: 8 · Verified: 349
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1063,6 +1063,7 @@ Repro: `sqlite_store._moves_per_share` refuses any simple-ratio split "as the va
 Expected: the rule and the message as they are (or the small simple ratios applied by the valuation, a policy question).   Actual: as above.
 
 Fix (iteration 246, `qa/evidence/web2-investigation.txt`): `quote_refresh.split_refusal` says a full collection doesn't update a split under 3-for-2 and the valuations stay on the old basis until the next report restates; a mixed list promises only the larger splits. sqlite_store and quote_refresh import the public `is_share_split`. Decision (USER 2026-11-27): keep the valuation's 3:2 rule (no 5:4/4:3 post-filing application). No stored data or valuation can move.
+Note (review 40, unproven): for a non-split factor under 1.5 the message says the next report "restates its figures", which a spin-off's report doesn't.
 ### BUG-131 [P3][STORE] BUG-117's fallback still dates payments on a split's day for a collector east of UTC+10:30 whose bar request fails
 Status: VERIFIED (iteration 233)
 Found: iteration 84 by code review 12 (M3), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
@@ -2600,6 +2601,17 @@ Status: OPEN
 Found: the val3 worker (iteration 247) | Fixed: | Regression test:
 Repro: today's DB: CCI financials_quarterly and financials_ttm 2026-12-31, every field empty but treasury_stock 0.0. The history now ignores a trailing year ending after the collection day (BUG-250's guard), but the parser still stores the row.
 Expected: no row for a period that hasn't ended.   Actual: an empty one.
+### BUG-387 [P3][VALID] BUG-384 drops a real noncurrent figure within 0.5% of the total, so a small current line is read again
+Status: OPEN
+Found: code review 40 (`qa/evidence/review40.txt`, Minor 1; regression from BUG-384, 7964c1c) | Fixed: | Regression test:
+Repro: src/parsers/xbrl_parser.py ~1537-1547 (`holds`, `not _agree(values[key], total)` ~1545): LongTermDebt $91.315B = LongTermNotesPayable $90.915B + NotesPayableCurrent $0.400B reads total debt $91.715B (base $91.315B). At most 0.5% of the total; no census re-run. Probe: %LOCALAPPDATA%\stockdb-qa\review40\head\tests\test_review40.py.
+Expected: a noncurrent figure that plus the line makes the total still shows the total holds the line.   Actual: it is dropped as the total tagged twice.
+
+### BUG-388 [P3][VAL] A trailing year ending on the collection's weekend is known on the Friday before it ends
+Status: OPEN
+Found: code review 40 (`qa/evidence/review40.txt`, Minor 2; regression from BUG-250, fb8a6b0) | Fixed: | Regression test:
+Repro: src/valuation/history_inputs.py ~166-169 (`known_on`'s filed_by), ~461 (`end > collected_on`): known_on('2026-10-24' (Sat), 3, None, 2026-10-25 (Sun)) and known_on('2026-10-25', 4, None, 2026-10-25) return 2026-10-23 (base 2026-10-25); history.py ~192 then reads a year that hadn't ended on Friday's bar (52/53-week filers; stray rows like BUG-386). Probe: %LOCALAPPDATA%\stockdb-qa\review40\head\tests\test_review40.py.
+Expected: a period is never known before it ends.   Actual: the weekday cap can precede the end.
 
 ### Q23 [DATA] NEEDS-USER: read a debt total that includes current debt as the total less the current part (KVUE, TRV)?
 Status: VERIFIED (iteration 236; applied at the user's decision, 2026-11-26)

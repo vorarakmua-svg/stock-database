@@ -3931,3 +3931,12 @@ Result: BUG-301, BUG-315 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4443 passed, 2 skipped
 Commit: (this commit and the one before) BUG-315 pins; fix(valuation): bands of 3-4 years don't reach for outliers (BUG-301)
 Next: code review 40 (5 units since review 39), BUG-275 (open-year carry, measuring).
+
+## Iteration 249: 2026-11-27 19:30: code review 40
+Picked: code review 40 (bef1111..6e7c2c7: BUG-384/385, web 019/130/236, history 079/178/250, 315, 301); an opus reviewer.
+Did: `qa/evidence/review40.txt`; 2 probes failing at HEAD, passing at base; review 39's probes pass.
+Result: no Critical or Important. Minors -> BUG-387 (BUG-384 regression), BUG-388 (BUG-250 regression). Checked
+right: new_york_day_of's forms on 3.9; remaining [:10] truncations decided; BUG-301's band; the DVD spin-off order.
+Gates: unchanged (qa/ only)
+Commit: (this commit) chore(qa): code review 40 recorded (BUG-387, BUG-388)
+Next: BUG-387, BUG-388; BUG-275 (measuring).
