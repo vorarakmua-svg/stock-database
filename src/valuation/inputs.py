@@ -15,6 +15,7 @@ from datetime import date, timedelta
 from fractions import Fraction
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from ..dividend_payments import distinct_payments
 from ..validation.integrity import dividend_gaps
 
 _MAX_FY_HISTORY = 10
@@ -1033,13 +1034,14 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
             pass
     # Yahoo's dividends come to the price's basis from the day Yahoo served them, as the
     # bars do (BUG-103), whatever the SEC record holds (BUG-078). A database from before
-    # the column, read without migrating, keeps every stored split's basis.
+    # the column, read without migrating, keeps every stored split's basis. A payment Yahoo
+    # served twice is read once (BUG-154).
     served_column = "served_on" in {r[1] for r in conn.execute("PRAGMA table_info(dividend_events)")}
-    payments = conn.execute(
+    payments = distinct_payments(conn.execute(
         "SELECT date, amount, " + ("served_on" if served_column else "NULL") + " AS served_on "
         "FROM dividend_events WHERE ticker = ? AND amount IS NOT NULL ORDER BY date ASC",
         (ticker,),
-    ).fetchall()
+    ).fetchall(), lambda r: r["date"], lambda r: r["amount"])
     served_on = {r["date"]: r["served_on"] for r in payments}
     dividends = [(day, amount * _dividend_onto(splits, priced_on, served_on.get(day)))
                  for day, amount in _drop_spin_off_dividends([(r["date"], r["amount"]) for r in payments], splits)]

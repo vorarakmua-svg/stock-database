@@ -300,3 +300,35 @@ def test_the_valuation_oracle_reads_the_vintages_for_a_tickers_splits():
     history = oracle.with_filed_splits(db, "DD", DD_YAHOO)
     assert sorted(ratio for _, ratio in history) == pytest.approx(sorted([1.487, 1 / 3, 1.4175]))
     assert oracle.with_filed_splits(sqlite3.connect(":memory:"), "DD", DD_YAHOO) == DD_YAHOO  # no vintages kept
+
+
+# --- BUG-154: a payment Yahoo served twice ---------------------------------------------------------------------------
+
+def test_the_oracle_reads_a_payment_served_twice_once():
+    ko = [("2001-06-13", 0.09), ("2001-09-10", 0.18), ("2001-09-12", 0.18), ("2001-09-17", 0.09),
+          ("2001-09-18", 0.18)]
+    assert oracle.once_each(ko) == [("2001-06-13", 0.09), ("2001-09-10", 0.18), ("2001-09-17", 0.09),
+                                    ("2001-09-18", 0.18)]
+
+
+def test_the_oracles_completeness_check_reads_a_payment_served_twice_once():
+    # CB's FY2025 without its Sep and Dec payments, and Yahoo's copies of its March and June ones (a week on).
+    db = sqlite3.connect(":memory:")
+    db.executescript("create table dividend_events (ticker, date, amount);"
+                     "create table financials_annual (ticker, fiscal_year, period_end, dividends_per_share);")
+    for year in range(2021, 2027):
+        for month in ("03", "06", "09", "12"):
+            if f"{year}-{month}" not in ("2025-09", "2025-12", "2026-09", "2026-12"):
+                db.execute("insert into dividend_events values ('CB', ?, 0.97)", (f"{year}-{month}-13",))
+    db.executemany("insert into dividend_events values ('CB', ?, 0.97)", [("2025-03-20",), ("2025-06-20",)])
+    db.execute("insert into financials_annual values ('CB', 2025, '2025-12-31', 3.88)")
+    assert oracle.payment_gaps(db, "CB", []) == [(2025, "2025-06-13", "2026-03-13")]
+
+
+def test_the_oracles_ddm_reads_a_payment_served_twice_once():
+    # The TTM's one payment (2025-12-30) served again on 2026-01-02.
+    total_2026 = 2.0 * 1.05 ** 10
+    db = _dividend_db(0.5)
+    db.execute("insert into dividend_events values ('AAA', '2026-01-02', ?)", (total_2026,))
+    o = oracle.level2(db, "AAA", "ddm", {"ttm_anchor": "2026-08-04"})
+    assert o["inputs"]["ttm_dps"] == pytest.approx(total_2026)

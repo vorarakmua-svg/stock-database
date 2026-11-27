@@ -3862,3 +3862,13 @@ Result: BUG-378 VERIFIED; BUG-020 documented. The user approved BUG-154 and BUG-
 Gates: ruff ✓ mypy ✓ pytest 4361 passed, 2 skipped
 Commit: (this commit) fix(valuation): a slipped year with more payments than its sides keeps SEC's figure (BUG-378); dividends as filed documented (BUG-020)
 Next: BUG-154, BUG-025 (1-2), BUG-275.
+
+## Iteration 242: 2026-11-27 01:30: fix (BUG-154; the user's decision)
+Picked: BUG-154, measured and approved by the user; an opus worker (rebased onto 7e4146f).
+Did: every dividend reader treats the same amount within 7 days as one payment.
+- RED: failed on 7e4146f (new module import + 7); GREEN. 12 of 12 mutants; b378's 14 of 14. mypy now covers the new module.
+- DB copies: 12 payments, 48 div_yield rows; 0 medians, verdicts, labels.
+Result: BUG-154 VERIFIED.
+Gates: ruff ✓ mypy ✓ (84 files) pytest 4374 passed, 2 skipped
+Commit: (this commit) fix(dividends): a payment stored twice counts once (BUG-154)
+Next: BUG-025 (1-2), then code review 39.

@@ -324,6 +324,15 @@ def test_dividend_check_flags_payments_yahoo_is_missing():
     assert "2025-06-13" in findings[0].message and "2026-03-13" in findings[0].message
 
 
+def test_dividend_check_reads_a_payment_served_twice_once():
+    # BUG-154: Yahoo's copies of two payments (the same amounts within a week) made FY2025 look paid in full (3.88).
+    payments = _payments(lambda ym: 0.97, skip={"2025-09", "2025-12"})
+    payments += [{"date": "2025-03-18", "amount": 0.97}, {"date": "2025-06-20", "amount": 0.97}]
+    findings = check_dividend_completeness(_declared(y_2025=3.88), payments, [], {"2025"})
+    assert [(f.code, f.period) for f in findings] == [("dividend_payments_missing", "2025")]
+    assert "2025-06-13" in findings[0].message
+
+
 def test_dividend_check_silent_on_a_december_declaration_paid_in_january():
     # PGR: a large variable dividend declared in December goes ex in January, so FY2025's
     # payments (4.90) trail the declared 13.90 with no gap in the schedule.

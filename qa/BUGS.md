@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 61 · NEEDS-USER 0 · Decided: 8 · Verified: 336
+**Open:** P0 0 · P1 0 · P2 0 · P3 60 · NEEDS-USER 0 · Decided: 8 · Verified: 337
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1226,11 +1226,12 @@ Repro: MCD 1968-05-21 -50.7% and 1969-06-13 -50.1%, TRV 1986-06-09 -52.1%: each 
 Expected: continuous series.   Actual: vendor gaps shown as moves on MAX charts (1960s-80s, and EQIX's 2001).
 
 ### BUG-154 [P3][MATCH] A dividend stored twice: KO's 2001 payments sum to $0.72 where it paid $0.36
-Status: OPEN (decided 2026-11-26: merge same-amount payments within 7 days in every reader, measured first)
-Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 242; applied at the user's decision after the measurement, 2026-11-27)
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_dividend_payments.py (new), test_integrity.py, test_valuation_inputs.py, test_valuation_history_inputs.py, test_valuation_oracle_seam.py, test_web_repository.py
 Repro: `SELECT date, amount FROM dividend_events WHERE ticker='KO' AND date LIKE '2001%'` (the user's copy) gives 0.09, 0.09, 0.18 (09-10), 0.18 (09-12), 0.09 (09-17), 0.09; the same amount within 7 days also at PGR 2001-09-10/12, HD 2001-11-27/28, AXP 1987-12-31/1988-01-04, and 11 more pairs within 5 days; KO's and PGR's 2001-09-12 has no bar (the market was shut). The DVD tab sums by year, so KO's 2001 reads double.
 Expected: one payment.   Actual: Yahoo's duplicate kept. 4 tickers, historic years.
 
+Fix (iteration 242, `qa/evidence/div2-investigation.txt`): `src/dividend_payments.distinct_payments` drops a payment with the same amount as a kept one ex-dated 0-7 days earlier; used by load_inputs, history_inputs, Reader.dividend_events (DVD tab, dividends API, dividends.csv), integrity.dividend_gaps and the oracle (once_each). Not in `_yahoo_dividend_factors`. 12 payments drop (ARES, AXP, CHRW, DVN, HD, KO, MDT, NOC, NSC, PCG, PGR, RL); KO 2001 0.72 -> 0.54 (an unadjusted 0.18 remains); 48 valuation_history div_yield rows at ARES, CHRW, NSC, RL; 0 medians, verdicts, owner-earnings verdicts, historical values, labels.
 ### BUG-155 [P3][API] An unknown or lower-case ticker gets `200 []` from the bars API and 404 everywhere else
 Status: VERIFIED (iteration 188)
 Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_web_api_stocks.py, tests/test_web_quote_refresh.py, tests/test_web_range_anchor.py, tests/test_web_screener_units.py (node); 28 failing first

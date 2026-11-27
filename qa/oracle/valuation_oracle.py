@@ -692,6 +692,18 @@ def slipped_year(events: List[Tuple[str, float]], extra: Dict[str, float], start
     return bool(sides) and all(len(own) > len(side) and dps >= 0.5 * sum(side) for side in sides)
 
 
+def once_each(events: List[Tuple[str, float]]) -> List[Tuple[str, float]]:
+    """BUG-154 (decided 2026-11-26): Yahoo serves some payments twice (KO's 2001-09-10 and -12, 0.18 each), and the
+    table keeps both. A payment equal in amount to an earlier one kept within 7 days before it is dropped. The week is
+    the decision's."""
+    out: List[Tuple[str, float]] = []
+    for d, a in events:
+        if any(b == a and 0 <= (_day(d) - _day(e)).days <= 7 for e, b in out):
+            continue
+        out.append((d, a))
+    return out
+
+
 def payment_gaps(db: sqlite3.Connection, ticker: str, splits: List[Tuple[str, float]]) -> List[Tuple[int, str, str]]:
     """BUG-012's completeness check, re-derived for Q4 (decided 2026-11-02, option c), over the latest 5 fiscal
     years as a collection scores them: a gap in Yahoo's stored schedule over 1.7x its median interval, beginning
@@ -699,8 +711,8 @@ def payment_gaps(db: sqlite3.Connection, ticker: str, splits: List[Tuple[str, fl
     payments under 80% of SEC's dividends per share as filed; years with a split after their start skipped. Q4's
     extension: a year without SEC's figure but with a payment is measured against the year before's (ACN FY2026).
     The 1.7 / 0.8 / 4-interval thresholds are BUG-012's heuristics, the extension the fix's own."""
-    paid = [(d[:10], a) for d, a in db.execute("select date, amount from dividend_events where ticker=? and amount is "
-                                               "not null order by date", (ticker,))]
+    paid = once_each([(d[:10], a) for d, a in db.execute("select date, amount from dividend_events where ticker=? and "
+                                                         "amount is not null order by date", (ticker,))])
     intervals = [(_day(b) - _day(a)).days for (a, _), (b, _) in zip(paid, paid[1:])]
     if len(intervals) < 4:
         return []
@@ -762,7 +774,7 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         rows = db.execute("select substr(date,1,10), amount, " + ("served_on" if served else "null") +
                           " from dividend_events where ticker=? and amount is not null order by date",
                           (ticker,)).fetchall()
-        events = [(d, a) for d, a, _ in rows]
+        events = once_each([(d, a) for d, a, _ in rows])
         served_on = {d: s for d, _, s in rows}
         # A spin-off isn't a cash dividend. Yahoo records some twice: a price factor between 2:3 and 3:2 in its
         # split history and, that day, a "dividend" worth the spun-off shares (DHR 2016: 1.319 and $24.56, 228x

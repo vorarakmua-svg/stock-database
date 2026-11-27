@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from ..dividend_payments import distinct_payments
 from ..parsers.calculated_metrics import CalculatedMetrics
 from ..scores.fundamentals import no_debt
 from .inputs import (
@@ -399,8 +400,10 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
     x.collected_on = _day((runs[0]["c"] if runs else None) or snap.get("collected_at") or x.last_bar)
 
     served_column = "served_on" in _columns(conn, "dividend_events")
-    payments = _rows(conn, "SELECT date, amount, " + ("served_on" if served_column else "NULL AS served_on")
-                     + " FROM dividend_events WHERE ticker = ? AND amount > 0 ORDER BY date", (ticker,))
+    payments = distinct_payments(  # a payment Yahoo served twice, once (BUG-154)
+        _rows(conn, "SELECT date, amount, " + ("served_on" if served_column else "NULL AS served_on")
+              + " FROM dividend_events WHERE ticker = ? AND amount > 0 ORDER BY date", (ticker,)),
+        lambda p: p["date"], lambda p: p["amount"])
     served_on = {str(p["date"])[:10]: p["served_on"] for p in payments}
     cash = _drop_spin_off_dividends([(str(p["date"])[:10], float(p["amount"])) for p in payments], splits)
     x.dividends = [(day, amount * _dividend_onto(splits, x.last_bar, served_on.get(day))) for day, amount in cash]

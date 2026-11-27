@@ -2661,7 +2661,12 @@ saved quote refresh, which stores them too: BUG-160, BUG-258) takes the latest s
 or the day before New York's at the run, whichever is later (BUG-131, BUG-307). The refresh's chart reaches a week before the earliest of the
 stored price's day, the last collection with Yahoo and the latest payment stored (a month's chart
 for a company collected lately), and over the whole history only for a ticker with none of them
-(BUG-108). The valuation takes each payment to its price's
+(BUG-108). Yahoo serves some payments twice, the same amount ex-dated a few days apart (KO's and
+PGR's 2001-09-10 and 2001-09-12, NSC's 2015-04-29 and 2015-05-06), and the table keeps both (its key is the
+ex-date); every reader takes a payment of the same amount as one ex-dated up to 7 days before it as that
+payment (BUG-154): the valuation's inputs (DDM, the completeness check), the valuation history, the DVD tab, the
+dividends API and its CSV. Undoing Yahoo's dividend adjustment of old bars (BUG-075) still reads every stored
+payment: it undoes an adjustment Yahoo made with the payments it served. The valuation takes each payment to its price's
 split basis by the splits in between, so a run whose dividend request failed can still
 store a split. A request fails however yfinance reports it: yfinance 1.0 answers a chart request
 that failed (no timezone found, an error or empty answer) with an empty history rather than an

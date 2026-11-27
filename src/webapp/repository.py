@@ -14,6 +14,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple, Union
 
+from ..dividend_payments import distinct_payments
 from ..exporters.sqlite_store import _CANONICAL_COLUMNS, _METRIC_COLUMNS, _SNAPSHOT_COLUMNS, read_only_uri
 from ..ownership.insiders import FILING_OWNER_SQL
 from .screener import SCREEN_COLUMNS, ScreenSpec, build_count_query, build_screen_query
@@ -565,12 +566,13 @@ class Reader:
         return [dict(row) for row in cur.fetchall()]
 
     def dividend_events(self, ticker: str) -> List[Dict[str, Any]]:
-        """All ``dividend_events`` rows ascending by ``date``."""
+        """All ``dividend_events`` rows ascending by ``date``, a payment Yahoo served twice once
+        (``distinct_payments``, BUG-154): the DVD tab, the dividends API and its CSV."""
         cur = self._conn.execute(
             "SELECT * FROM dividend_events WHERE ticker = ? ORDER BY date ASC",
             (ticker,),
         )
-        return [dict(row) for row in cur.fetchall()]
+        return distinct_payments([dict(row) for row in cur.fetchall()], lambda r: r["date"], lambda r: r["amount"])
 
     def split_events(self, ticker: str) -> List[Dict[str, Any]]:
         """All ``split_events`` rows ascending by ``date``."""

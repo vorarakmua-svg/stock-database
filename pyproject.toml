@@ -85,6 +85,7 @@ files = [
     "src/analysis",
     "src/exporters/record_scope.py",
     "src/exporters/sqlite_store.py",
+    "src/dividend_payments.py",
     "src/query/asof.py",
     "src/query/pit_metrics.py",
     "src/webapp",

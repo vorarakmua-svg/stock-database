@@ -250,6 +250,15 @@ def test_load_history_inputs_puts_every_quarter_on_the_bars_basis(tmp_path):
     assert [d for d, _ in x.dividends] == ["2025-03-01", "2025-09-01"]
 
 
+def test_load_history_inputs_reads_a_payment_yahoo_served_twice_once(tmp_path):
+    # BUG-154: the same amount ex-dated within a week is one payment (the trailing year's dividend, the yield).
+    conn = _db(tmp_path)
+    conn.execute("INSERT INTO dividend_events (ticker, date, amount) VALUES ('AAA', '2025-03-04', 0.10)")
+    conn.commit()
+    x = load_history_inputs(conn, "AAA")
+    assert [d for d, _ in x.dividends] == ["2025-03-01", "2025-09-01"]
+
+
 def test_a_month_end_bar_on_an_ex_date_keeps_its_own_dividend(tmp_path):
     # BUG-087's boundary in the valuation history: a bar Yahoo served on an ex-date already carries that day's
     # dividend, so only the dividends after the day are undone (``ex > day``). With a March month end on the 2025-03-01

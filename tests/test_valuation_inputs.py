@@ -349,7 +349,7 @@ def test_a_spin_off_recorded_as_a_dividend_is_not_a_dividend(tmp_path):
 
 
 @pytest.mark.parametrize("extra, splits", [
-    ([("2016-07-05", 0.11)], [("2016-07-05", 1.008)]),  # SCCO: a regular dividend beside a stock dividend
+    ([("2016-07-12", 0.11)], [("2016-07-12", 1.008)]),  # SCCO: a regular dividend beside a stock dividend
     ([("2016-07-05", 7.00)], []),                       # COST: a special dividend, no spin-off that day
 ])
 def test_cash_dividends_stay_even_on_unusual_days(tmp_path, extra, splits):
@@ -1842,6 +1842,20 @@ def test_the_completeness_checks_gaps_come_with_the_inputs(tmp_path):
     res = value_ddm(inputs)
     assert (res.applicable, res.na_reason) == (False, "dividend history incomplete (Yahoo is missing payments in "
                                                       "FY2025)")
+
+
+def test_a_payment_yahoo_served_twice_is_read_once(tmp_path):
+    # BUG-154: Yahoo served CB's 2025-06-13 again on 06-17 and its 2024-03-13 on 03-20 (the same amounts within a
+    # week). Read twice, the second moved the gap's start and added a payment to the year.
+    conn = _connect(_missing_payments_db(tmp_path))
+    conn.executemany("INSERT INTO dividend_events (ticker, date, amount) VALUES ('CB', ?, 0.97)",
+                     [("2025-06-17",), ("2024-03-20",)])
+    conn.commit()
+    inputs = load_inputs(conn, "CB")
+    conn.close()
+    days = [day[:10] for day, _ in inputs.dividends]
+    assert "2025-06-17" not in days and "2024-03-20" not in days and "2025-06-13" in days
+    assert inputs.dividend_gaps == [(2025, "2025-06-13", "2026-03-13")]
 
 
 def test_payments_a_refresh_stores_close_the_gap(tmp_path):

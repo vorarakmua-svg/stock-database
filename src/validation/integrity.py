@@ -13,6 +13,7 @@ import statistics
 from datetime import date, timedelta
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Tuple
 
+from ..dividend_payments import distinct_payments
 from ..mappings.canonical import CANONICAL_FIELDS, CASHFLOW, DURATION, INCOME, UNIT_USD
 from .quality import HIGH, LOW, MEDIUM, Finding, _num
 
@@ -346,14 +347,15 @@ def dividend_gaps(
 
     A payment whose date doesn't parse, or whose amount isn't a finite number (None, NaN), is left out, and a year
     whose end doesn't parse is skipped (BUG-025): one bad value no longer raises (dropping the run's whole quality
-    report) or makes the year's total NaN (silencing its finding).
+    report) or makes the year's total NaN (silencing its finding). A payment Yahoo serves twice (the same amount
+    within a week) is one (``distinct_payments``, BUG-154).
     """
-    paid = sorted(
+    paid = distinct_payments(sorted(
         (day.isoformat(), float(p["amount"]))
         for p in dividend_payments
         for day in [_iso_day(p.get("date"))]
         if day is not None and isinstance(p.get("amount"), (int, float)) and math.isfinite(p["amount"])
-    )
+    ), lambda p: p[0], lambda p: p[1])
     intervals = [
         (date.fromisoformat(later) - date.fromisoformat(earlier)).days
         for (earlier, _), (later, _) in zip(paid, paid[1:])
