@@ -3882,3 +3882,12 @@ Result: BUG-025 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4384 passed, 2 skipped
 Commit: (this commit) fix(dividends): the gap check uses recent spacing and runs to the collection day (BUG-025)
 Next: code review 39 (6 units since review 38).
+
+## Iteration 244: 2026-11-27 02:30: code review 39
+Picked: code review 39 (34c87fa..bef1111: BUG-383, 370/025, ttm1 group, 378/020, 154, 025); an opus reviewer.
+Did: `qa/evidence/review39.txt`; 2 probes failing at HEAD and at base (pre-existing); review 38's probe passes.
+Result: no Critical or Important. Minors -> BUG-384, BUG-385 (P3). Checked right: no look-ahead in _filed_ahead or
+the collection-day close; BUG-154's readers; the DDM gate code vs oracle; BUG-335's EPS basis; scored_years; 3.9 syntax.
+Gates: unchanged (qa/ only)
+Commit: (this commit) chore(qa): code review 39 recorded (BUG-384, BUG-385)
+Next: BUG-384, BUG-385; BUG-275 (measuring).

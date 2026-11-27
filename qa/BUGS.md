@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 59 · NEEDS-USER 0 · Decided: 8 · Verified: 338
+**Open:** P0 0 · P1 0 · P2 0 · P3 61 · NEEDS-USER 0 · Decided: 8 · Verified: 338
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2572,6 +2572,17 @@ Found: code review 38 (`qa/evidence/review38.txt`, Important 1; regression from 
 Repro: src/parsers/xbrl_parser.py ~1483, ~1496-1538 (`_short_term_debt_lines` skips only the two newer current-inclusive totals, not LongTermDebt, which canonical.py ~266 ranks ahead of the noncurrent figures), ~556/581 (`_debt_totals_set_aside` keeps the total when the current notes are NotesPayableCurrent/SeniorNotesCurrent), ~2067. Real: EQIX 9 quarters 2024-03-31..2026-09-30 (2026-09-30: LTD $22.839B + SeniorNotesCurrent $1.665B, about 7% over); AMGN 2014-03-31 (LongTermDebt $32.024B = $29.519B + $2.505B, the $2.505B added again). Census: 26 quarters at 4 filers. Quarterly records only (EV, net debt, ratios); the live DB predates 48747b7. Probe: %LOCALAPPDATA%\stockdb-qa\review38\head\tests\test_review38.py.
 Expected: total debt equals the balance sheet.   Actual: the current notes counted twice.
 Fix (iteration 238, `qa/evidence/bug383-investigation.txt`): a quarter whose long-term debt reads a LongTermDebt or NotesPayable total reads no current line above zero that fits inside it (the line plus the largest other debt figure the 10-Q tags that date is at most the total x (1 + _AGREE)); still read on overflow (BIIB), with no other figure, or a zero line. Skipping, not subtracting: LongTermDebt falls under BUG-141, which no Decision changes. Census: 14 quarterly + 14 TTM records at AMGN, EQIX, ORLY move back to their c614a02 reading; ORCL, KVUE, TRV kept. DB: 0 medians, verdicts, owner-earnings verdicts, labels; EQIX historical value 961.62 -> 961.99 (its pre-48747b7 value), near. Oracles identical.
+### BUG-384 [P3][VALID] A 10-Q tagging its debt total as both LongTermDebt and NotesPayable still reads its current notes again
+Status: OPEN
+Found: code review 39 (`qa/evidence/review39.txt`, Minor 1; BUG-383's remaining shape, pre-existing) | Fixed: | Regression test:
+Repro: src/parsers/xbrl_parser.py ~1536-1542 (`holds`), ~1493 (`_BESIDE_TOTALS`): NotesPayable equal to the LongTermDebt total is the largest other figure, so the check overflows and the line is kept: ORCL shape + NotesPayable $91.315B reads $91.315B + $9.079B. No real filer has the shape (census_383). Probe: %LOCALAPPDATA%\stockdb-qa\review39\head\tests\test_review39.py.
+Expected: a figure equal to the total isn't an 'other' figure.   Actual: it makes the line overflow.
+
+### BUG-385 [P3][MATCH] The collection's yearly dividend sums count a payment Yahoo serves twice
+Status: OPEN
+Found: code review 39 (`qa/evidence/review39.txt`, Minor 2; outside BUG-154's readers, pre-existing) | Fixed: | Regression test:
+Repro: src/fetchers/yahoo_handler.py ~830-872 (`_get_dividend_history`) builds annual_dividends, dividend_cagr, dividend_increases, dividend_consistency, total_payments from Yahoo's raw series; the JSON export writes them (StockData.to_dict, json_exporter.py ~99, ~362). KO 2001 reads 0.90 for 0.72 and 2002's raise becomes a cut. No valuation, score or table reads them; the JSON disagrees with the DVD tab, API and CSV. Probe: %LOCALAPPDATA%\stockdb-qa\review39\head\tests\test_review39.py.
+Expected: distinct_payments applied as everywhere else.   Actual: the raw series.
 
 ### Q23 [DATA] NEEDS-USER: read a debt total that includes current debt as the total less the current part (KVUE, TRV)?
 Status: VERIFIED (iteration 236; applied at the user's decision, 2026-11-26)
