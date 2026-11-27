@@ -72,7 +72,9 @@ Helpers, each unit-tested:
   - Fiscal Q4 is known on the first 10-K `filed_date` in the vintages, when that date is within 120
     days of period end; otherwise on period end + 75 days.
   - Q1-Q3 are known on period end + 45 days.
-  - The result is capped at the latest collection day.
+  - The result is capped at the latest collection day in New York, or the last weekday before it when that
+    falls at a weekend (the SEC takes no filing then; BUG-250).
+  - A trailing year ending after the latest collection day was never filed by it, and is left out.
   - A known row more than 200 days old at a date is stale there.
 - `pick_share_field(rows) -> Optional[str]`: one field per ticker, the first with at least 60%
   coverage, in this order: `weighted_avg_shares_basic`, `shares_outstanding`,

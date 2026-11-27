@@ -3910,3 +3910,14 @@ Result: BUG-019, 130 (message; the user kept the 3:2 rule), 236 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4400 passed, 2 skipped
 Commit: (this commit) fix(web): spin-offs out of the dividend sums; an honest small-split message; unranked industries (BUG-019, -130, -236)
 Next: the val3 fixes (079, 178, 250), BUG-301 (c) measured, BUG-315 pinned, BUG-275 with the open-year carry.
+
+## Iteration 247: 2026-11-27 06:30: fix (BUG-079, BUG-178, BUG-250; the user's decision for CCI's label)
+Picked: the valuation-history group; an opus worker (rebased onto 16de73e).
+Did: price days in New York's calendar; Yahoo's count moves by splits only; a quarter known by the last weekday;
+a trailing year ending after the collection isn't known.
+- RED: 32 failed on 16de73e; GREEN. 16 of 16 mutants; web2 12/12, store2 15/15.
+- DB copies: CCI label None -> below; 0 medians, verdicts.
+Result: BUG-079, 178, 250 VERIFIED; BUG-302 VERIFIED (by Q9). BUG-184 waits for HON's 10-K. New: BUG-386 (P3).
+Gates: ruff ✓ mypy ✓ pytest 4438 passed, 2 skipped
+Commit: (this commit) fix(history): New York price days; splits-only share basis; a future trailing year isn't known (BUG-079, -178, -250)
+Next: BUG-301 (c), BUG-315 pins.

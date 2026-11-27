@@ -17,6 +17,7 @@ from datetime import date, timedelta
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..dividend_payments import distinct_payments
+from ..new_york import new_york_day_of
 from ..parsers.calculated_metrics import CalculatedMetrics
 from ..scores.fundamentals import no_debt
 from .inputs import (
@@ -151,7 +152,9 @@ def known_on(period_end: str, fiscal_quarter: Optional[int], first_annual_filed:
       Q4_FILING_WINDOW_DAYS of the year end, and otherwise after Q4_LAG_DAYS;
     - any other quarter is known after QUARTER_LAG_DAYS.
 
-    The result is capped at *collected_on*: what was stored was known by the day it was collected.
+    The result is capped at *collected_on* (New York's day): what was stored was known by the day it was
+    collected, and by the last weekday on or before it, since the SEC accepts no filing at weekends. So a quarter
+    a Sunday's collection stored is known at Friday's bar, the latest point (BUG-250).
     """
     end = date.fromisoformat(str(period_end)[:10])
     known = end + timedelta(days=QUARTER_LAG_DAYS)
@@ -160,8 +163,10 @@ def known_on(period_end: str, fiscal_quarter: Optional[int], first_annual_filed:
         filed = _day(first_annual_filed)
         if filed is not None and end < filed <= end + timedelta(days=Q4_FILING_WINDOW_DAYS):
             known = filed
-    if collected_on is not None and known > collected_on:
-        known = collected_on
+    if collected_on is not None:
+        filed_by = collected_on - timedelta(days=max(collected_on.weekday() - 4, 0))
+        if known > filed_by:
+            known = filed_by
     return known
 
 
@@ -389,15 +394,19 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
                   "ORDER BY collected_at DESC LIMIT 1", (ticker,))
     snap = snaps[0] if snaps else {}
     x.current_price = snap.get("current_price")
-    x.priced_on = (str(snap["collected_at"])[:10]
+    # The price's day is New York's, on which the splits are dated (BUG-079).
+    x.priced_on = (new_york_day_of(snap["collected_at"])
                    if snap.get("current_price") is not None and snap.get("collected_at") else None)
     x.bars_to_price = bars_to_price_factor(splits, x.priced_on, x.last_bar)
+    # Yahoo's count moves onto the bars' basis by the share splits between them alone: a spin-off's factor moves the
+    # price, not the count (BUG-178).
+    to_bars_count = bars_to_price_factor([s for s in splits if is_share_split(s[1])], x.priced_on, x.last_bar)
     if snap.get("market_cap") and snap.get("current_price"):
-        x.yahoo_shares = snap["market_cap"] / snap["current_price"] * x.bars_to_price
+        x.yahoo_shares = snap["market_cap"] / snap["current_price"] * to_bars_count
     elif snap.get("shares_outstanding"):
-        x.yahoo_shares = snap["shares_outstanding"] * x.bars_to_price
+        x.yahoo_shares = snap["shares_outstanding"] * to_bars_count
     runs = _optional_rows(conn, "SELECT max(collected_at) AS c FROM collection_runs WHERE ticker = ?", (ticker,))
-    x.collected_on = _day((runs[0]["c"] if runs else None) or snap.get("collected_at") or x.last_bar)
+    x.collected_on = _day(new_york_day_of((runs[0]["c"] if runs else None) or snap.get("collected_at")) or x.last_bar)
 
     served_column = "served_on" in _columns(conn, "dividend_events")
     payments = distinct_payments(  # a payment Yahoo served twice, once (BUG-154)
@@ -447,6 +456,10 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
     calc = CalculatedMetrics()
     for row in ttm:
         end = str(row["period_end"])[:10]
+        # A trailing year ending after the collection was never filed by it (CCI's stray 2026-12-31 row, empty but for
+        # its treasury stock): known on no day.
+        if x.collected_on is not None and end > x.collected_on.isoformat():
+            continue
         quarter = by_end.get(end, {})
         fiscal_quarter = quarter.get("fiscal_quarter")
         if fiscal_quarter is None and _near_year_end(end, year_ends):

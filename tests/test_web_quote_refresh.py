@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 
 from src.exporters.sqlite_store import SQLiteStore
 from src.models.stock_data import StockData
+from src.new_york import new_york_day
 from src.webapp import create_app
 from src.webapp.repository import Reader
 from src.webapp.settings import WebSettings
@@ -375,11 +376,16 @@ def test_a_refresh_after_a_split_since_the_last_collection_keeps_the_stored_quot
     assert "Refresh failed" in body and f"10-for-1 split on {split_day}" in body and "Collect AAA in full" in body
 
 
+_PRICE_DAY = new_york_day(datetime(2024, 6, 15)).isoformat()
+
+
 @pytest.mark.parametrize("splits, stored", [
     ([{"date": "2023-06-01", "ratio": 2.0}], []),  # the split the last collection stored
     ([{"date": "2021-03-01", "ratio": 3.0}, {"date": "2023-06-01", "ratio": 2.0}], []),  # one from before it
     ([{"date": "2023-06-01", "ratio": 2.0}, {"date": "2024-01-10", "ratio": 3.0}], []),  # after the last bar, before it
-    ([{"date": "2024-06-15", "ratio": 10.0}], [{"date": "2024-06-15", "ratio": 10.0}]),  # its day's, stored
+    # its day's, stored: the day of AAA's price (stamped at midnight on 2024-06-15, this machine's time) in New York,
+    # where the split is dated (BUG-079)
+    ([{"date": _PRICE_DAY, "ratio": 10.0}], [{"date": _PRICE_DAY, "ratio": 10.0}]),
     ([{"date": "2024-07-01", "ratio": 1.0}], []),  # a 1-for-1 entry, which restates nothing
 ])
 def test_a_refresh_without_a_split_since_the_last_collection_saves_the_quote(

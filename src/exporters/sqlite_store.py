@@ -32,7 +32,7 @@ if TYPE_CHECKING:  # annotations only: these modules aren't imported at runtime 
 
 from ..mappings.canonical import CANONICAL_FIELDS
 from ..models.stock_data import StockData
-from ..new_york import new_york_day
+from ..new_york import new_york_day, new_york_day_of
 from ..parsers.calculated_metrics import CalculatedMetrics
 from ..universe.industries import normalize_sic, normalize_sic_description
 from ..valuation.inputs import SPLIT_JUMP_THRESHOLD, is_share_split
@@ -1543,17 +1543,19 @@ class SQLiteStore:
     @staticmethod
     def _priced_and_collected(conn: sqlite3.Connection, ticker: str) -> Tuple[Optional[str], Optional[str]]:
         """*ticker*'s latest snapshot's day when it has a price (``priced_on``), and the day of its last collection
-        with Yahoo: its run row, else (no such row) its latest price bar, which only Yahoo gives. Either None."""
+        with Yahoo: its run row, else (no such row) its latest price bar, which only Yahoo gives. Either None. The
+        two stamps are read as New York's days, as the engine reads the price's and Yahoo dates its splits
+        (BUG-079)."""
         snap = conn.execute("SELECT collected_at, current_price FROM market_snapshots WHERE ticker = ? "
                             "ORDER BY collected_at DESC LIMIT 1", (ticker,)).fetchone()
-        priced_on = str(snap[0])[:10] if snap and snap[0] and snap[1] is not None else None
+        priced_on = new_york_day_of(snap[0]) if snap and snap[0] and snap[1] is not None else None
         since = None
         for sql in ("SELECT max(collected_at) FROM collection_runs WHERE ticker = ? "
                     "AND data_sources LIKE '%yahoo%'",
                     "SELECT max(date) FROM price_bars WHERE ticker = ?"):
             row = conn.execute(sql, (ticker,)).fetchone()
             if row and row[0]:
-                since = str(row[0])[:10]
+                since = new_york_day_of(row[0])
                 break
         return priced_on, since
 

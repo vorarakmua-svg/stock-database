@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 56 · NEEDS-USER 0 · Decided: 8 · Verified: 343
+**Open:** P0 0 · P1 0 · P2 0 · P3 53 · NEEDS-USER 0 · Decided: 8 · Verified: 347
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -655,12 +655,13 @@ Impact today: none in the user's copy; BUG-048's preconditions for a company wit
 
 Fix: `load_inputs` takes Yahoo's dividends and FY-end bars back to the price's basis by every split dated after the price's day, whether or not the latest annual row has a filing date: the guard 144dcdf left behind is gone, while which of those splits the filed figures restated still goes by the date (BUG-060). The oracle took the same rule first, in its own commit (2d9b9dc): on code review 7's scenario valued by the unfixed code it flags the DDM (41.84 stored, 418.4 derived, from trailing dividends of 21.98 against 2.20), and its output on the real and golden copies valued by 1d762ba and on ten earlier split, ADS and scenario databases is unchanged (`qa/evidence/iter61-bug078-oracle.txt`). Two tests RED, then GREEN: a company with no annual rows, and one whose rows have no filing date. Three mutants each fail a test: the guard back; back for the dividends only; back for the FY-end prices only, which the rows without a date catch. With the fix the scenario's DDM is 418.38, as with its dividends on the price's basis and no split stored, through `python -m src.valuation.backfill`, `/api/stocks/NOFIL/valuation` and the VAL tab of `stock-web` on a scratch copy (port 8765, collection and quote refresh off); 0 of 762 valuation rows and 0 of 127 summaries move on a copy of the user's data, 0 of 114 and 0 of 19 on the fresh golden basket, and the oracle's results there are unchanged (`qa/evidence/iter61-bug078-impact.txt`).
 ### BUG-079 [P3][VAL] The price's day is the collector's local date, while splits are dated in New York
-Status: OPEN
-Found: iteration 51 by code review 7 (M1), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 247)
+Found: iteration 51 by code review 7 (M1), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_valuation_price_day.py (new), test_valuation_history_inputs.py, test_quote_events_window.py, test_web_quote_refresh.py; 32 failing first
 Repro: `priced_on` is the snapshot's `collected_at` date, naive local time (`models/stock_data.py`, `webapp/jobs.py`), and split dates are exchange dates: the golden snapshots were stamped 02:07 on 2026-10-20 in UTC+7, 15:07 on 10-19 in New York. In BUG-048's scenario with the snapshot stamped 02:30 local on a split's ex-date (15:30 the day before in New York, before the split), the split counts as already priced: Graham 45.21, Lynch 24.76, multiples 54.67; stamped with its New York date, 452.06, 247.61 and 546.66. The oracle agrees with the first.
 Expected: the price's day on the exchange's calendar.   Actual: a tenth of those values until the next priced collection.
 Impact today: needs BUG-048's preconditions and a collection in the hours the local date runs ahead of New York's (00:00 to 11:00 in UTC+7 in summer).
 
+Fix (iteration 247, `qa/evidence/val3-investigation.txt`): `src/new_york.new_york_day_of(stamp)` gives a stamp's New York day (naive = this machine's time; 'Z' = UTC for 3.9; a bare date kept); used by load_inputs, load_history_inputs, SQLiteStore._priced_and_collected and the oracle (`exchange_day`). load_inputs' as_of for the dividend check stays local, matching BUG-025. DB copies: 0 medians, verdicts, owner-earnings verdicts; CCI historical value None -> 94.83, label None -> below (its stray 2026-12-31 trailing year no longer read), composites move at CCI, KIM, MAA, O, PSA, TPL; applied at the user's decision (2026-11-27). Oracles as at HEAD.
 ### BUG-080 [P1][STORE] A database path holding '#' or '%xx' breaks every read-only connection: the web app answers 500 and creates an empty file
 Status: VERIFIED (iteration 54)
 Found: iteration 51 by code review 7 (M2, widened in the re-run), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: iteration 54 (see LOG) | Regression tests: `tests/test_web_repository.py::test_a_database_under_any_folder_name_opens_read_only` ('#', '%41', '?' off Windows, and two controls), `::test_the_app_serves_a_database_under_a_hash_folder`, `::test_a_unc_path_keeps_its_form`, `tests/test_asof_reader.py::test_a_database_under_a_hash_folder_opens`, `tests/test_fetcher_concurrency.py::test_the_stored_sector_is_found_under_any_folder_name`
@@ -1441,11 +1442,12 @@ Fix (build iteration 19):
 Evidence: `qa/evidence/review15-bug177-{red,green}.txt`
 
 ### BUG-178 [P3][VAL] A spin-off factor between the last bar and the snapshot shrinks Yahoo's share count in the valuation history's guard
-Status: OPEN
-Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 247)
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: (this commit) | Regression tests: tests/test_valuation_price_day.py (new), test_valuation_history_inputs.py, test_quote_events_window.py, test_web_quote_refresh.py; 32 failing first
 Repro: `history_inputs.load_history_inputs` converts Yahoo's count with `bars_to_price`, which includes non-split factors; a spin-off doesn't change the count. A 1.30 factor on the snapshot's day reads Yahoo's count 23% low (verified on a synthetic DB) and the ticker goes N/A as "another share class or units".
 Notes: the real path is the quote refresh's recompute (BUG-128), which stores the factor and a price but no bars, until the next full collection. Fix: convert the count with a split-only factor.
 
+Fix (iteration 247, `qa/evidence/val3-investigation.txt`): Yahoo's share count moves onto the bars' basis by share splits only, not spin-off factors. DB copies: 0 medians, verdicts, owner-earnings verdicts; CCI historical value None -> 94.83, label None -> below (its stray 2026-12-31 trailing year no longer read), composites move at CCI, KIM, MAA, O, PSA, TPL; applied at the user's decision (2026-11-27). Oracles as at HEAD.
 ### BUG-179 [P2][STORE] A run whose predecessor read failed rewrites the successor's years as if complete, clearing what only the predecessor filed
 Status: VERIFIED (iteration 118)
 Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: (this commit) | Regression tests: tests/test_sqlite_store.py::test_a_run_that_couldnt_read_the_predecessor_keeps_what_only_the_predecessor_filed, ::test_a_run_that_couldnt_read_the_predecessor_keeps_the_figures_it_reads_otherwise, ::test_a_run_that_couldnt_read_the_predecessor_computes_each_years_metrics_on_the_year_as_stored, ::test_a_run_that_couldnt_read_the_predecessor_or_find_an_annual_record_keeps_the_stored_quarters; tests/test_fetcher_concurrency.py::test_a_collection_whose_predecessor_read_failed_keeps_the_predecessors_figures (503, 404); tests/test_web_api_collection.py::test_a_job_keeps_what_a_failed_predecessor_read_cant_give; tests/test_refresh.py::test_the_real_collection_keeps_what_a_failed_predecessor_read_cant_give; guards ::test_a_run_that_couldnt_read_the_predecessor_still_adds_what_it_has, ::test_a_run_that_reads_the_predecessor_again_restates_as_before
@@ -1486,6 +1488,7 @@ Expected: the quarters filed on the split's basis before the split meet closes o
 Notes: one of HON's 121 months in its window. A fix needs the split apart from the factor: the restatement shows it (the same period's count halved between two filings), Yahoo doesn't.
 Also (build iteration 37, M3-5): the gurus' quarter-over-quarter 13F changes adjust shares by `split_events`, so Dodge & Cox's HON reads "reduced" by 50% (8,019 to 4,010 shares) across the same 2026-06-29 split, its CUSIP changing with it (438516106 to 438516205). The same fix would correct it.
 
+Note (iteration 247): still open on HEAD (HON 2026-05-29 market cap $75.5B between $136.1B and $71.1B). BUG-379's mixed-factor split will separate HON's 0.9535 into 0.5 x 1.907 once its FY2026 10-K restating FY2025 is stored (probe: $151.0B); wait for it. The 13F half stays: src/ownership/portfolio.py reads split_events only.
 ### BUG-185 [P2][VAL] The annual share normalization folds share jumps that aren't splits: mergers, swinging counts, spin-off price factors
 Status: VERIFIED (build iteration 24)
 Found: build iteration 24, M2-5's scores oracle | Fixed: (this commit) | Regression test: tests/test_valuation_inputs.py::test_a_spin_off_price_factor_never_explains_a_share_seam, ::test_a_merger_whose_revenue_rose_with_the_count_is_not_a_split, ::test_a_diluted_count_that_swings_alone_is_not_a_split, ::test_years_before_the_listing_take_the_public_count, ::test_a_listing_jump_folds_though_eps_changed_sign
@@ -1975,11 +1978,12 @@ For the user: medians 0, verdicts 0, owner_earnings_verdicts 0. Historical value
 Not run (low RAM): history_vs_yahoo on the copies, lookahead.py. Residuals: 32 balance-sheet-only trailing rows today's code writes are no longer produced (stay in an existing DB); windows still break at 133 pairs of ends (71 near-duplicate ends with flows: ACN, CAH, BBY's 2011).
 
 ### BUG-250 [P3][VAL] The history's latest point misses a quarter a collection stored after the last bar
-Status: OPEN
-Found: build M5-6 (history_vs_yahoo on the S&P 500) | Fixed: | Regression test:
+Status: VERIFIED (iteration 247)
+Found: build M5-6 (history_vs_yahoo on the S&P 500) | Fixed: (this commit) | Regression tests: tests/test_valuation_price_day.py (new), test_valuation_history_inputs.py, test_quote_events_window.py, test_web_quote_refresh.py; 32 failing first
 Repro: src/valuation/history_inputs.py `known_on` makes Q1-Q3 known at period end + 45 days, capped at the collection day; the latest point is the latest bar, which precedes a weekend collection (the live run: bars to Friday 2026-10-23, collected Sunday 10-25). So 40 companies' latest point still uses June's quarter though September's is stored (GE, RTX, TRV of the 127): 11 of the 58 P/E misses against Yahoo, enough to fail the 88% gate (394/452). It clears at the next bar after the collection day. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C5.
 Expected: a quarter known at the latest bar when its 10-Q was filed by then (the quarters store no filing date; capping at the latest bar would count one filed in between).   Measured: with the cap the P/E gate passes (402/452); no valuation, median or verdict.
 
+Fix (iteration 247, `qa/evidence/val3-investigation.txt`): `known_on` caps a quarter at the last weekday on or before the collection day (the SEC accepts no weekend filings); and a trailing year ending after the collection day isn't known (CCI's stray row, BUG-386). DB copies: 0 medians, verdicts, owner-earnings verdicts; CCI historical value None -> 94.83, label None -> below (its stray 2026-12-31 trailing year no longer read), composites move at CCI, KIM, MAA, O, PSA, TPL; applied at the user's decision (2026-11-27). Oracles as at HEAD.
 ### BUG-251 [P2][GATHER] The SEC's companyfacts lacks the latest 10-Q or 10-K of 58 companies, though EDGAR lists it as filed
 Status: VERIFIED (iteration 119)
 Found: build M5-6 (the P/E misses against Yahoo) | Fixed: (this commit) | Regression tests: tests/test_sec_cache.py::test_the_latest_report_the_companyfacts_lack_is_named, ::test_only_a_report_as_filed_with_xbrl_is_looked_for, ::test_an_ifrs_filers_report_is_found_among_its_ifrs_facts; tests/test_fetcher_concurrency.py::test_a_report_the_companyfacts_lack_is_a_warning_naming_it, ::test_a_collection_whose_companyfacts_lack_the_latest_report_stores_it_as_incomplete; tests/test_refresh.py::test_a_company_whose_companyfacts_lacked_its_latest_report_is_collected_again, ::test_a_report_still_without_facts_is_collected_again_three_times_then_left, ::test_the_real_collection_stores_what_the_companyfacts_lack_and_the_sec_step_collects_it_again; tests/test_sqlite_store.py::test_a_runs_table_from_before_the_incomplete_column_gains_it_and_keeps_its_runs; tests/test_web_api_collection.py::test_a_job_stores_what_its_sec_read_lacked, and 24 more (34 with BUG-279's)
@@ -2024,11 +2028,12 @@ Repro: GE's multiples row after BUG-172: band 24.70 / 32.84 / 447.33 over 4 year
 Expected: a bull case one tiny-earnings year doesn't set.   Actual: inclusive quartiles of 4 values still weight it by a quarter.
 
 ### BUG-302 [P3][VAL] HOOD's P/B band median differs from the valuation oracle: 2.14 against 1.69
-Status: OPEN
+Status: VERIFIED (iteration 247; fixed by Q9, iteration 146)
 Found: iteration 135 (BUG-172's oracle run) | Fixed: | Regression test:
 Repro: `qa/oracle/valuation_oracle.py --db <copy>` level 2: HOOD multiples band_median stored 2.1397, oracle 1.6950, on head and with BUG-172 alike (the only multiples mismatch left after it). Not diagnosed: likely the book value per share's count or basis.
 Expected: the oracle's within 0.5%.   Actual: 29% apart on the base.
 
+Fix (iteration 247, `qa/evidence/val3-investigation.txt`): re-checked: HOOD is classed general since Q9, so its band is P/E (N/A: under 3 fiscal years); all 448 multiples bands match the oracle.
 ### BUG-303 [P2][VAL] The band's FY-end close counts a spin-off factor twice where the price and the bars sit on either side of it (since BUG-172)
 Status: VERIFIED (iteration 141)
 Found: code review 24 (`qa/evidence/review24.txt`, Important 1) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py::test_a_price_before_a_spin_off_beside_bars_after_it_reads_the_closes_as_traded, ::test_a_refresh_after_a_spin_off_beside_bars_before_it_reads_the_closes_as_traded
@@ -2588,6 +2593,11 @@ Found: code review 39 (`qa/evidence/review39.txt`, Minor 2; outside BUG-154's re
 Repro: src/fetchers/yahoo_handler.py ~830-872 (`_get_dividend_history`) builds annual_dividends, dividend_cagr, dividend_increases, dividend_consistency, total_payments from Yahoo's raw series; the JSON export writes them (StockData.to_dict, json_exporter.py ~99, ~362). KO 2001 reads 0.90 for 0.72 and 2002's raise becomes a cut. No valuation, score or table reads them; the JSON disagrees with the DVD tab, API and CSV. Probe: %LOCALAPPDATA%\stockdb-qa\review39\head\tests\test_review39.py.
 Expected: distinct_payments applied as everywhere else.   Actual: the raw series.
 Fix (iteration 245, `qa/evidence/bug384-investigation.txt`): `_get_dividend_history` builds its series from `distinct_payments` (BUG-154) and derives every yearly figure from it. KO 2001 0.72, two raises. No valuation, score or table reads these (grep: only yahoo_handler and the workstation route, which re-derives from stored payments).
+### BUG-386 [P3][PARSE] CCI has an empty quarterly and trailing-year row for 2026-12-31, a period after the collection
+Status: OPEN
+Found: the val3 worker (iteration 247) | Fixed: | Regression test:
+Repro: today's DB: CCI financials_quarterly and financials_ttm 2026-12-31, every field empty but treasury_stock 0.0. The history now ignores a trailing year ending after the collection day (BUG-250's guard), but the parser still stores the row.
+Expected: no row for a period that hasn't ended.   Actual: an empty one.
 
 ### Q23 [DATA] NEEDS-USER: read a debt total that includes current debt as the total less the current part (KVUE, TRV)?
 Status: VERIFIED (iteration 236; applied at the user's decision, 2026-11-26)

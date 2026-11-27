@@ -16,6 +16,7 @@ from fractions import Fraction
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..dividend_payments import distinct_payments
+from ..new_york import new_york_day_of
 from ..validation.integrity import dividend_gaps
 
 _MAX_FY_HISTORY = 10
@@ -972,8 +973,10 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
     # later run's quote failed (no new snapshot) but it stored a split made since, that
     # split moves no year (BUG-048), one the latest filing already restated is taken back
     # out (BUG-060), and Yahoo's dividends and price bars, adjusted for every split it
-    # knew, are taken back to the price's basis.
-    priced_on = (str(snap["collected_at"])[:10]
+    # knew, are taken back to the price's basis. The price's day is New York's, as the
+    # splits' are: a quote stamped 02:30 in UTC+7 on a split's day is the day before's,
+    # before the split (BUG-079).
+    priced_on = (new_york_day_of(snap["collected_at"])
                  if snap is not None and snap["current_price"] is not None and snap["collected_at"] else None)
     _apply_later_splits(records, splits, filed, yahoo_counts, priced_on)
     _undo_splits_after_price(records, splits, filed, priced_on)

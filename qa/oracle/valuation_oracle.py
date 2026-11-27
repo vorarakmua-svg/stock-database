@@ -373,7 +373,8 @@ class Inputs:
                         self.filed_by_field[(fy, field)] = filed
         except sqlite3.OperationalError:  # a database from before vintages were kept
             pass
-        self.priced_on = str(collected_at)[:10] if self.price is not None and collected_at else None
+        # The price's day on the exchange's calendar, where the splits are dated (BUG-079).
+        self.priced_on = exchange_day(collected_at) if self.price is not None and collected_at else None
         # Yahoo's dividends and price bars come to the price's split basis from the day Yahoo served them, whatever
         # the SEC record holds (a company without SEC annual financials too; BUG-078): see bars_to_price_basis and
         # dividend_to_price_basis. A share split the latest filing restated after the price's day (BUG-060) is in
@@ -982,6 +983,29 @@ def check_level2(db: sqlite3.Connection, tickers: List[str], tol: float) -> int:
     if skipped:
         print(f"  not derivable from the spec ({len(skipped)}; the code still valued them): {' '.join(skipped)}")
     return bad + len(skipped)
+
+
+def exchange_day(stamp) -> Optional[str]:
+    """A stored time stamp's day in New York (an exchange date, as splits are dated): a naive stamp is this machine's
+    local time, as the collector writes it; a day alone is that day. U.S. daylight saving since 2007: UTC-4 from the
+    second Sunday of March 07:00 UTC to the first Sunday of November 06:00 UTC, else UTC-5 (no import of ``src``)."""
+    text = str(stamp or "").strip()
+    if len(text) <= 10:
+        return text or None
+    try:
+        moment = datetime.datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return text[:10]
+    utc = moment.astimezone(datetime.timezone.utc)
+
+    def sunday(month: int, nth: int) -> int:
+        first = datetime.date(utc.year, month, 1)
+        return 1 + (6 - first.weekday()) % 7 + 7 * (nth - 1)
+
+    edt_from = datetime.datetime(utc.year, 3, sunday(3, 2), 7, tzinfo=datetime.timezone.utc)
+    edt_to = datetime.datetime(utc.year, 11, sunday(11, 1), 6, tzinfo=datetime.timezone.utc)
+    hours = -4 if edt_from <= utc < edt_to else -5
+    return (utc + datetime.timedelta(hours=hours)).date().isoformat()
 
 
 def read_only_uri(path):

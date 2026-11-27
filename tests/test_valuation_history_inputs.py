@@ -217,8 +217,8 @@ def _db(tmp_path, sector="general", yahoo_cap=4.0e9, ttm=True):
     conn.executemany("INSERT INTO dividend_events (ticker, date, amount) VALUES ('AAA', ?, ?)",
                      [("2025-03-01", 0.10), ("2025-09-01", 0.10)])
     conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price, market_cap, "
-                 "shares_outstanding) VALUES ('AAA', '2026-02-25T10:00:00', 21.0, ?, 190e6)", (yahoo_cap,))
-    conn.execute("INSERT INTO collection_runs (ticker, collected_at) VALUES ('AAA', '2026-02-25T10:00:00')")
+                 "shares_outstanding) VALUES ('AAA', '2026-02-25T10:00:00-05:00', 21.0, ?, 190e6)", (yahoo_cap,))
+    conn.execute("INSERT INTO collection_runs (ticker, collected_at) VALUES ('AAA', '2026-02-25T10:00:00-05:00')")
     conn.commit()
     return conn
 
