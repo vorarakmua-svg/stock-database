@@ -3921,3 +3921,13 @@ Result: BUG-079, 178, 250 VERIFIED; BUG-302 VERIFIED (by Q9). BUG-184 waits for 
 Gates: ruff ✓ mypy ✓ pytest 4438 passed, 2 skipped
 Commit: (this commit) fix(history): New York price days; splits-only share basis; a future trailing year isn't known (BUG-079, -178, -250)
 Next: BUG-301 (c), BUG-315 pins.
+
+## Iteration 248: 2026-11-27 18:30: fix (BUG-301 option c, BUG-315 pinned; the user's decisions)
+Picked: the val3 worker's handed-back items, decided and (301) measured.
+Did: a band of 3-4 years stops interpolating toward its extremes; Q5's fallback edges pinned.
+- RED: 2 failed on fb8a6b0 (301); 315 pins pass. 6 + 3 mutants killed; v3r 16/16.
+- DB copies (301): 27 medians bear/bull, AON and KVUE fair -> expensive; 0 labels.
+Result: BUG-301, BUG-315 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4443 passed, 2 skipped
+Commit: (this commit and the one before) BUG-315 pins; fix(valuation): bands of 3-4 years don't reach for outliers (BUG-301)
+Next: code review 40 (5 units since review 39), BUG-275 (open-year carry, measuring).

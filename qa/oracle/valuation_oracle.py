@@ -928,8 +928,16 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         latest = basis_by_fy.get(x.annual[-1][0]) if x.annual else None
         if len(mults) < 3 or not latest or latest <= 0:
             return None
-        # BUG-172 (decided 2026-11-02): the band is the multiples' inclusive quartiles (p25, median, p75).
-        band = (quartile(mults, 0.25), median(mults), quartile(mults, 0.75))
+        # BUG-172 (decided 2026-11-02): the band is the multiples' inclusive quartiles (p25, median, p75). BUG-301
+        # (decided, option c): under 5 years no case interpolates toward an extreme year: four take the 2nd and 3rd
+        # values (and their midpoint), three the median alone.
+        ordered = sorted(mults)
+        if len(ordered) >= 5:
+            band = (quartile(mults, 0.25), median(mults), quartile(mults, 0.75))
+        elif len(ordered) == 4:
+            band = (ordered[1], (ordered[1] + ordered[2]) / 2, ordered[2])
+        else:
+            band = (ordered[1],) * 3
         return {"inputs": {"band_low": band[0], "band_median": band[1], "band_high": band[2], "latest_basis": latest,
                            "n_years": len(mults)}, "values": [m * latest for m in band]}
     return None

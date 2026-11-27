@@ -783,15 +783,27 @@ def test_value_lynch_na_sector_and_history():
 
 # ---- Historical multiples band ----
 def test_value_multiples_pe_band_hand_computed():
-    # FY-end P/E multiples: 10, 12, 14. The band is their inclusive quartiles and median (BUG-172): 11, 12, 13,
-    # times the latest EPS 2.0.
+    # FY-end P/E multiples: 10, 12, 14, 16, 18. The band is their inclusive quartiles and median (BUG-172): 12, 14,
+    # 16, times the latest EPS 2.0.
+    recs = [_fy(fy, eps=2.0) for fy in (2019, 2020, 2021, 2022, 2023)]
+    prices = {2019: 20.0, 2020: 24.0, 2021: 28.0, 2022: 32.0, 2023: 36.0}
+    res = value_multiples(_inputs(fy_records=recs, fy_end_prices=prices))
+    assert res.applicable is True
+    assert res.value_bear == pytest.approx(24.0)
+    assert res.value_base == pytest.approx(28.0)
+    assert res.value_bull == pytest.approx(32.0)
+    assert res.assumptions["multiple_kind"] == "pe"
+    assert (res.assumptions["band_min"], res.assumptions["band_max"]) == (pytest.approx(10.0), pytest.approx(18.0))
+
+
+def test_a_three_year_band_is_its_median():
+    # BUG-301 (c): with three years, quartiles would interpolate halfway toward the extremes (AON's 64x set a bull of
+    # $1,648.09); the band is the median, 12 x the latest EPS 2.0.
     recs = [_fy(2021, eps=2.0), _fy(2022, eps=2.0), _fy(2023, eps=2.0)]
     prices = {2021: 20.0, 2022: 24.0, 2023: 28.0}
     res = value_multiples(_inputs(fy_records=recs, fy_end_prices=prices))
     assert res.applicable is True
-    assert res.value_bear == pytest.approx(22.0)
-    assert res.value_base == pytest.approx(24.0)
-    assert res.value_bull == pytest.approx(26.0)
+    assert (res.value_bear, res.value_base, res.value_bull) == (pytest.approx(24.0),) * 3
     assert res.assumptions["multiple_kind"] == "pe"
     assert (res.assumptions["band_min"], res.assumptions["band_max"]) == (pytest.approx(10.0), pytest.approx(14.0))
 
@@ -806,6 +818,17 @@ def test_one_tiny_earnings_year_cant_stretch_the_band():
     assert res.value_base == pytest.approx(14.0 * 2.0)
     assert res.value_bull == pytest.approx(16.0 * 2.0)
     assert res.assumptions["band_max"] == pytest.approx(1000.0)
+
+
+def test_a_four_year_band_doesnt_reach_toward_an_outlier_year():
+    # BUG-301 (GE): multiples 1000, 10, 12, 14 (one year's tiny EPS): the inclusive p75 was 12 + 0.25 x 986 = 258.5.
+    # Four years take the second and third values, 12 and 14, and their midpoint 13, the median as before.
+    recs = [_fy(fy, eps=e) for fy, e in ((2022, 0.02), (2023, 2.0), (2024, 2.0), (2025, 2.0))]
+    prices = {2022: 20.0, 2023: 20.0, 2024: 24.0, 2025: 28.0}
+    res = value_multiples(_inputs(fy_records=recs, fy_end_prices=prices))
+    assert (res.value_bear, res.value_base, res.value_bull) == (pytest.approx(24.0), pytest.approx(26.0),
+                                                                 pytest.approx(28.0))
+    assert res.assumptions["n_years"] == 4
 
 
 def test_value_multiples_reit_uses_pffo():

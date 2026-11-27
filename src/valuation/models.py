@@ -616,6 +616,25 @@ def _multiple_basis(sector_class: str) -> Tuple[str, Callable[[FYRecord], Option
     return "pe", lambda r: r.eps()
 
 
+#: A band of this many yearly multiples or more takes their inclusive quartiles; a shorter one doesn't interpolate.
+FULL_BAND_YEARS = 5
+
+
+def multiples_band(multiples: Sequence[float]) -> Tuple[float, float, float]:
+    """(bear, base, bull) multiples: the yearly multiples' inclusive quartiles, as the valuation history's ranges are,
+    so one year's tiny earnings can't set the bull case (BUG-172: GE's FY2022 read 1,044x and a bull of $8,498.58).
+    Under FULL_BAND_YEARS no case interpolates toward an extreme year (BUG-301: with four, GE's 1,676x still weighted
+    its bull by a quarter, $3,641.28): four years take the second and third values and their midpoint, three the
+    median alone. The base is the median either way."""
+    s = sorted(multiples)
+    if len(s) >= FULL_BAND_YEARS:
+        low, mid, high = statistics.quantiles(s, n=4, method="inclusive")
+        return low, mid, high
+    if len(s) == 4:
+        return s[1], (s[1] + s[2]) / 2, s[2]
+    return s[1], s[1], s[1]
+
+
 def value_multiples(inputs: ValuationInputs) -> ValuationResult:
     """Price vs the company's own 5-year band of its sector-appropriate multiple."""
     kind, basis_fn = _multiple_basis(inputs.sector_class)
@@ -634,9 +653,7 @@ def value_multiples(inputs: ValuationInputs) -> ValuationResult:
     if latest_basis is None or latest_basis <= 0:
         return _na("multiples", "latest per-share basis is not positive",
                    basis_fy=latest.fiscal_year)
-    # The band is the yearly multiples' inclusive quartiles, as the valuation history's ranges are, so one year's
-    # tiny earnings can't set the bull case (BUG-172: GE's FY2022 read 1,044x and a bull of $8,498.58).
-    band_low, band_mid, band_high = statistics.quantiles(multiples, n=4, method="inclusive")
+    band_low, band_mid, band_high = multiples_band(multiples)
     assumptions: Dict[str, Any] = {
         "multiple_kind": kind,
         "band_low": band_low, "band_median": band_mid, "band_high": band_high,

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 53 · NEEDS-USER 0 · Decided: 8 · Verified: 347
+**Open:** P0 0 · P1 0 · P2 0 · P3 51 · NEEDS-USER 0 · Decided: 8 · Verified: 349
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2022,11 +2022,12 @@ Repro: xbrl_parser.py ~316 `depreciation.get(key) or low[0]`; the docstring stat
 Expected: the README and the code agree, on the cash flow statement's figure.   Actual: as above.
 
 ### BUG-301 [P3][VAL] With four or five years, the band's 75th percentile still interpolates toward an outlier year: GE's bull $3,641 on a 447x multiple
-Status: OPEN
-Found: iteration 135 (BUG-172's measurement) | Fixed: | Regression test:
+Status: VERIFIED (iteration 248; option (c), applied at the user's decision after the measurement, 2026-11-27)
+Found: iteration 135 (BUG-172's measurement) | Fixed: (this commit) | Regression tests: tests/test_valuation_models.py; 2 failing first
 Repro: GE's multiples row after BUG-172: band 24.70 / 32.84 / 447.33 over 4 years, one of them FY2022's 1,676x as traded (diluted EPS $0.05); bull $3,641.28 (was $8,498.58).
 Expected: a bull case one tiny-earnings year doesn't set.   Actual: inclusive quartiles of 4 values still weight it by a quarter.
 
+Fix (iteration 248, `qa/evidence/val3-investigation.txt`): `models.multiples_band`: quartiles at 5 years or more; with 4 years the 2nd and 3rd values and their midpoint; with 3, the median alone; the oracle the same. GE $226.66 / $267.34 / $308.03. DB: 60 multiples rows, 27 summary medians (bear/bull only, no base), 2 verdicts: AON fair -> expensive (bull 888.26 -> 332.78), KVUE fair -> expensive (bull 19.47 -> 18.18); 0 owner-earnings verdicts, historical values, labels.
 ### BUG-302 [P3][VAL] HOOD's P/B band median differs from the valuation oracle: 2.14 against 1.69
 Status: VERIFIED (iteration 247; fixed by Q9, iteration 146)
 Found: iteration 135 (BUG-172's oracle run) | Fixed: | Regression test:
@@ -2112,11 +2113,12 @@ Repro: valuation-layer spec ~63-64 and ~82 (growth_source "analyst"); owner-earn
 Expected: the specs say Q2/Q5's rule; the input dropped or labelled.   Actual: as above.
 
 ### BUG-315 [P3][VAL] Q5's fallback edges: losses after the first positive year, a window starting on a missing value, positions not fiscal years
-Status: OPEN
-Found: code review 25 (Minor 5; not tested, no finding claimed) | Fixed: | Regression test:
+Status: VERIFIED (iteration 248; kept and pinned, the user's decision 2026-11-27)
+Found: code review 25 (Minor 5; not tested, no finding claimed) | Fixed: (this commit) | Regression tests: tests/test_valuation_assumptions.py (3 new); pins, pass on HEAD
 Repro: assumptions._cagr_from_first_positive measures from the first positive value even when losses follow; a window whose first value is missing (a gap, not a loss) takes the fallback; "at least 4 FYs" counts positions.
 Expected: decided edges, with tests.   Actual: as above.
 
+Fix (iteration 248, `qa/evidence/val3-investigation.txt`): three tests pin today's reading and `_cagr_from_first_positive`'s docstring names the edges: losses after the first positive year measure end to end; a window starting on a missing value takes the fallback; the four years are counted as values. No behaviour change.
 ### BUG-316 [P3][PARSE] The restore step can put back a net-income-to-common figure Q16 left unread
 Status: VERIFIED (iteration 160)
 Found: code review 26 (`qa/evidence/review26.txt`, Minor 1; proven by a synthetic test) | Fixed: (this commit) | Regression test: tests/test_xbrl_parser.py::test_a_contradicted_to_common_figure_is_not_put_back_by_the_restore_step

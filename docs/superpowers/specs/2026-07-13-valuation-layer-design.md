@@ -124,8 +124,9 @@ class ValuationResult:
   **P/FFO** (reit, using `metrics_annual.ffo_per_share`).
 - For each of the last ≤ 5 FYs: multiple = FY-end price (nearest `price_bars` close on or
   before fiscal year end) ÷ that FY's per-share basis. Requires ≥ 3 valid FY multiples.
-- Band = (min, median, max) of those multiples; fair value = band × latest FY per-share basis
-  → bear/base/bull.
+- Band = the inclusive quartiles (p25, median, p75) of those multiples (BUG-172); with four multiples the
+  second and third and their midpoint, with three the median alone, so no case interpolates toward an
+  extreme year (BUG-301); fair value = band × latest FY per-share basis → bear/base/bull.
 - **N/A when:** < 3 valid historical multiples (e.g. negative EPS years, missing price bars),
   or latest per-share basis ≤ 0.
 
