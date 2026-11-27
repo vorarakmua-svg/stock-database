@@ -652,19 +652,44 @@ def regular_beside(events: List[Tuple[str, float]], extra: Dict[str, float], sta
     fix's own heuristic (loop section 7): a small extra beside an annual payment isn't a second payment a year, even
     one paid the year before too, unless the year judged holds it; a semiannual interim is, at any size, since it
     comes back in that year (by size alone, only down to a third of the final)."""
+    before, after = sides_regular(events, extra, start, end)
+    return max(len(before), len(after))
+
+
+def regular_payments(events: List[Tuple[str, float]], extra: Dict[str, float], lo: str, hi: str,
+                     signs: Tuple[int, ...]) -> List[float]:
+    """The amounts of the regular payments ex-dated in (*lo*, *hi*] (``regular_beside``'s rule): not a one-off whole,
+    and at least half the median of the others so kept, or recurring (a payment within 3x either way, 365 days +/- 91
+    from it) a year later (sign 1) or a year earlier (-1), for any of *signs*."""
+    def recurs(d: str, a: float) -> bool:
+        return any(365 - 91 <= sign * (_day(e) - _day(d)).days <= 365 + 91 and a <= 3 * b and b <= 3 * a
+                   for e, b in events for sign in signs)
+
+    kept = [(d, a) for d, a in events if lo < d <= hi and extra.get(d[:10]) != a]
+    least = 0.5 * median([a for _, a in kept]) if kept else 0.0
+    return [a for d, a in kept if a >= least or recurs(d, a)]
+
+
+def sides_regular(events: List[Tuple[str, float]], extra: Dict[str, float], start: str,
+                  end: str) -> Tuple[List[float], List[float]]:
+    """The regular payments in the 365 days up to a fiscal year's *start* (recurring a year later, into the year) and
+    in the 365 days after its *end* (recurring a year earlier)."""
     year = datetime.timedelta(days=365)
+    return (regular_payments(events, extra, (_day(start) - year).isoformat(), start, (1,)),
+            regular_payments(events, extra, end, (_day(end) + year).isoformat(), (-1,)))
 
-    def recurs(d: str, a: float, sign: int) -> bool:
-        for e, b in events:
-            if 365 - 91 <= sign * (_day(e) - _day(d)).days <= 365 + 91 and a <= 3 * b and b <= 3 * a:
-                return True
-        return False
 
-    def regular(lo: str, hi: str, sign: int) -> int:
-        kept = [(d, a) for d, a in events if lo < d <= hi and extra.get(d[:10]) != a]
-        least = 0.5 * median([a for _, a in kept]) if kept else 0.0
-        return sum(1 for d, a in kept if a >= least or recurs(d, a, sign))
-    return max(regular((_day(start) - year).isoformat(), start, 1), regular(end, (_day(end) + year).isoformat(), -1))
+def slipped_year(events: List[Tuple[str, float]], extra: Dict[str, float], start: str, end: str,
+                 dps: float) -> bool:
+    """BUG-378 (decided 2026-11-26, option C): BUG-311's gate stays shut, SEC's figure the year's, when the fiscal year
+    holds more regular payments (the same rule, recurring a year either way) than each side counting two or more, and
+    SEC's figure is at least half that side's regular payments: an annual payer whose next payment slipped into the
+    year beside a recurring extra (3.10, 0.50, 3.26 beside 2.95 + 0.50). A quarter's rate tagged as the year (GPN's
+    0.01 beside about 0.04, J's 0.157 beside about 0.47) is under half, so Yahoo's payments still stand in. The 0.5
+    share is the decision's."""
+    sides = [side for side in sides_regular(events, extra, start, end) if len(side) >= 2]
+    own = regular_payments(events, extra, start, end, (1, -1))
+    return bool(sides) and all(len(own) > len(side) and dps >= 0.5 * sum(side) for side in sides)
 
 
 def payment_gaps(db: sqlite3.Connection, ticker: str, splits: List[Tuple[str, float]]) -> List[Tuple[int, str, str]]:
@@ -802,7 +827,8 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
             # payer's year holds two when the next ex-date slips into it, and SEC's figure is then the year's.
             beside = regular_beside(events, extra, start, end)
             one = len(amounts) >= 2 and beside >= 2 and dps is not None and (
-                dps < min(amounts) or any(abs(dps - a) <= 0.02 * a for a in amounts))
+                dps < min(amounts) or any(abs(dps - a) <= 0.02 * a for a in amounts)) \
+                and not slipped_year(events, extra, start, end, dps)
             from_sec = dps is not None and dps > 0 and not one
             value = dps if from_sec else (sum(amounts) if amounts else None)
             years.append((fy, value, restart, from_sec, sum(amounts),

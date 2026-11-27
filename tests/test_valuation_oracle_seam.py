@@ -193,9 +193,9 @@ def test_the_oracles_gate_counts_a_semiannual_interim_and_quarters_beside_specia
     assert oracle.regular_beside(tpl, oracle.one_offs(tpl), "2019-12-31", "2020-12-31") == 4
 
 
-def _dividend_db(extra):
-    """AAA, an annual payer growing 5% (SEC's dividends per share each FY), its 2026 payment ex-dated 2025-12-30, and
-    an *extra* payment on 2024-07-15."""
+def _dividend_db(extra, more=()):
+    """AAA, an annual payer growing 5% (SEC's dividends per share each FY), its 2026 payment ex-dated 2025-12-30, an
+    *extra* payment on 2024-07-15, and *more* (day, amount) payments."""
     db = sqlite3.connect(":memory:")
     db.executescript(
         "create table market_snapshots (ticker, beta, risk_free_rate, shares_outstanding, current_price, market_cap,"
@@ -212,7 +212,7 @@ def _dividend_db(extra):
         db.execute("insert into financials_annual values ('AAA', ?, ?, 1e3, 1e4, 100, 100, 10, ?, '10-K', ?)",
                    (fy, f"{fy}-12-31", f"{fy + 1}-02-20", total[fy]))
     for day, amount in [(f"{y}-01-15", total[y]) for y in range(2015, 2026)] + [("2025-12-30", total[2026]),
-                                                                                ("2024-07-15", extra)]:
+                                                                                ("2024-07-15", extra)] + list(more):
         db.execute("insert into dividend_events values ('AAA', ?, ?)", (day, amount))
     db.execute("insert into price_bars values ('AAA', '2026-08-03', 100.0)")
     return db
@@ -221,6 +221,42 @@ def _dividend_db(extra):
 def test_the_oracles_ddm_keeps_an_annual_payers_slipped_year_beside_an_extra_payment():
     # BUG-366 through level 2: the extra no longer turns FY2025's SEC figure into Yahoo's two payments (13.7%).
     o = oracle.level2(_dividend_db(0.5), "AAA", "ddm", {"ttm_anchor": "2026-08-04"})
+    assert o["inputs"]["hist_cagr"] == pytest.approx(0.05)
+
+
+@pytest.mark.parametrize("extra, dps, slipped", [
+    ((("2024-07-15", 0.5), ("2025-07-10", 0.5)), 3.10, True),   # BUG-378: 3 regular in 2025 beside 2 (3.45) before
+    ((("2023-07-20", 0.5), ("2024-07-15", 0.5), ("2025-07-10", 0.5)), 3.10, True),
+    ((("2024-07-15", 0.5), ("2025-07-10", 0.5)), 1.70, False),  # under half the side before's 3.45
+    ((("2024-07-15", 0.5), ("2025-07-10", 0.5)), 1.73, True),
+    ((("2024-07-15", 1.2),), 3.10, False),   # 2 regular in 2025 (3.10, 3.26) beside 2 before (2.95, 1.2): no slip
+    # each side of two or more must be outnumbered: a quarterly 2026 (4) after it isn't; a side of one needn't be
+    ((("2024-07-15", 0.5), ("2025-07-10", 0.5), ("2026-03-15", 0.85), ("2026-06-15", 0.85), ("2026-09-15", 0.85),
+      ("2026-12-15", 0.85)), 3.10, False),
+    ((("2024-07-15", 0.5), ("2025-07-10", 0.5), ("2026-06-15", 7.0)), 3.10, True),
+    ((), 3.10, False),                       # no side of two
+])
+def test_the_oracles_gate_shuts_for_a_slipped_year_beside_a_recurring_extra(extra, dps, slipped):
+    # BUG-378 (decided 2026-11-26, option C): the year holds more regular payments than the side that opened the
+    # gate, and SEC's figure is at least half that side's regular payments: the figure is the year's.
+    events = _annual(extra)
+    assert oracle.slipped_year(events, oracle.one_offs(events), "2024-12-31", "2025-12-31", dps) is slipped
+
+
+def test_the_oracles_gate_stays_open_for_a_quarters_rate_or_a_semiannual_final():
+    # GPN's / J's shape: a quarterly payer's year holding a fifth payment, SEC tagging a quarter's rate (0.25 against
+    # the side's 1.0): Yahoo's payments still stand in. BUG-372's semiannual payer (0.3 + 1.0, SEC the final alone):
+    # its year holds no more payments than its sides.
+    quarterly = [(f"{y}-{m:02d}-15", 0.25) for y in (2023, 2024, 2025) for m in (1, 4, 7, 10)] + [("2025-12-30", 0.25)]
+    assert not oracle.slipped_year(quarterly, oracle.one_offs(quarterly), "2024-12-31", "2025-12-31", 0.25)
+    small = [(f"{y}-{m}", a) for y in (2023, 2024, 2025, 2026) for m, a in (("03-15", 0.3), ("09-15", 1.0))]
+    assert not oracle.slipped_year(small, oracle.one_offs(small), "2024-12-31", "2025-12-31", 1.0)
+
+
+def test_the_oracles_ddm_keeps_an_annual_payers_slipped_year_beside_a_recurring_extra():
+    # BUG-378 through level 2: the extra paid in 2024 and again in 2025 no longer opens the gate on FY2025 (3.10, 0.50
+    # and 3.26 for SEC's 3.10).
+    o = oracle.level2(_dividend_db(0.5, [("2025-07-10", 0.5)]), "AAA", "ddm", {"ttm_anchor": "2026-08-04"})
     assert o["inputs"]["hist_cagr"] == pytest.approx(0.05)
 
 
