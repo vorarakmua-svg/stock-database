@@ -3951,3 +3951,12 @@ Result: BUG-387 VERIFIED; BUG-130's wording done.
 Gates: ruff ✓ mypy ✓ pytest 4454 passed, 2 skipped
 Commit: (this commit) fix: a noncurrent figure beside its total; a spin-off isn't promised a restatement (BUG-387, BUG-130)
 Next: BUG-386, BUG-388 (measured: nothing moves); BUG-275 without option B.
+
+## Iteration 251: 2026-11-27 22:00: fix (BUG-386, BUG-388)
+Picked: CCI's stray row (parser) and code review 40's M2; an opus worker (measured: nothing moves).
+Did: an instant dated after its filing makes no quarter; a period is never known before it ends.
+- RED: 5 failed on c0e4465; GREEN. bug386 2/2, bug388 5/5, v3r 16/16, div1 10/10, bug387 5/5. Look-ahead 0.
+Result: BUG-386, BUG-388 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4461 passed, 2 skipped
+Commit: (this commit) fix: an instant dated after its filing makes no quarter; never known before the end (BUG-386, BUG-388)
+Next: BUG-275 without option B (worker stopped at the usage limit); review 41 after it.

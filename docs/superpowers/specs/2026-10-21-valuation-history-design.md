@@ -73,8 +73,9 @@ Helpers, each unit-tested:
     days of period end; otherwise on period end + 75 days.
   - Q1-Q3 are known on period end + 45 days.
   - The result is capped at the latest collection day in New York, or the last weekday before it when that
-    falls at a weekend (the SEC takes no filing then; BUG-250).
-  - A trailing year ending after the latest collection day was never filed by it, and is left out.
+    falls at a weekend (the SEC takes no filing then; BUG-250), and is never before the period's end (BUG-388).
+  - A trailing year ending after that weekday was never filed by the collection, and is left out (BUG-388: a
+    year ending on the collection's weekend too).
   - A known row more than 200 days old at a date is stale there.
 - `pick_share_field(rows) -> Optional[str]`: one field per ticker, the first with at least 60%
   coverage, in this order: `weighted_avg_shares_basic`, `shares_outstanding`,

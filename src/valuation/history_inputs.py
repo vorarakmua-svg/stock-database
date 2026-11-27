@@ -143,6 +143,12 @@ def _day(value: Any) -> Optional[date]:
         return None
 
 
+def filed_by(collected_on: date) -> date:
+    """The last day a report a collection on *collected_on* stored can have been filed: that day, or the Friday
+    before a weekend's, since the SEC accepts no filing at weekends (BUG-250)."""
+    return collected_on - timedelta(days=max(collected_on.weekday() - 4, 0))
+
+
 def known_on(period_end: str, fiscal_quarter: Optional[int], first_annual_filed: Optional[str],
              collected_on: Optional[date]) -> date:
     """The day a quarter's trailing year became known.
@@ -153,8 +159,10 @@ def known_on(period_end: str, fiscal_quarter: Optional[int], first_annual_filed:
     - any other quarter is known after QUARTER_LAG_DAYS.
 
     The result is capped at *collected_on* (New York's day): what was stored was known by the day it was
-    collected, and by the last weekday on or before it, since the SEC accepts no filing at weekends. So a quarter
-    a Sunday's collection stored is known at Friday's bar, the latest point (BUG-250).
+    collected, and by the last weekday on or before it, since the SEC accepts no filing at weekends (``filed_by``).
+    So a quarter a Sunday's collection stored is known at Friday's bar, the latest point (BUG-250). A period is
+    never known before it ends: a year ending on the collection's weekend isn't known on the Friday before
+    (BUG-388).
     """
     end = date.fromisoformat(str(period_end)[:10])
     known = end + timedelta(days=QUARTER_LAG_DAYS)
@@ -164,9 +172,7 @@ def known_on(period_end: str, fiscal_quarter: Optional[int], first_annual_filed:
         if filed is not None and end < filed <= end + timedelta(days=Q4_FILING_WINDOW_DAYS):
             known = filed
     if collected_on is not None:
-        filed_by = collected_on - timedelta(days=max(collected_on.weekday() - 4, 0))
-        if known > filed_by:
-            known = filed_by
+        known = max(min(known, filed_by(collected_on)), end)
     return known
 
 
@@ -456,9 +462,10 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
     calc = CalculatedMetrics()
     for row in ttm:
         end = str(row["period_end"])[:10]
-        # A trailing year ending after the collection was never filed by it (CCI's stray 2026-12-31 row, empty but for
-        # its treasury stock): known on no day.
-        if x.collected_on is not None and end > x.collected_on.isoformat():
+        # A trailing year ending after the last day the collection's reports can have been filed was never filed by it
+        # (CCI's stray 2026-12-31 row, empty but for its treasury stock; a year ending on the collection's weekend,
+        # BUG-388): known on no day.
+        if x.collected_on is not None and end > filed_by(x.collected_on).isoformat():
             continue
         quarter = by_end.get(end, {})
         fiscal_quarter = quarter.get("fiscal_quarter")

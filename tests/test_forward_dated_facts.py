@@ -85,3 +85,29 @@ def test_a_figure_filed_on_its_periods_last_day_is_read():
     record = build_annual_record(XBRLParser(), facts, ticker="X", years_back=None)
     assert record.periods["2011"]["_source_tags"]["dividends_per_share"] == DECLARED
     assert record.periods["2011"]["_source_filings"]["dividends_per_share"]["accn"] == "k11a"
+
+
+# ---------------- BUG-386: an instant dated after its filing is no quarter ----------------
+
+
+def _cci(treasury_end: str = "2026-12-31") -> Dict[str, Any]:
+    """CCI's shape: its 10-Q for 2026-06-30 (filed 2026-08-05) tags its balance sheet at 2026-06-30 and treasury stock
+    of 0 at *treasury_end*."""
+    def instant(val: float, end: str) -> Dict[str, Any]:
+        return {"val": val, "end": end, "filed": "2026-08-05", "accn": "q2", "form": "10-Q", "fy": 2026, "fp": "Q2"}
+    return {"cik": 1, "entityName": "X", "facts": {"us-gaap": {
+        "Assets": {"units": {"USD": [instant(3.9e10, "2026-06-30")]}},
+        "TreasuryStockValue": {"units": {"USD": [instant(0, "2026-06-30"), instant(0, treasury_end)]}}}}}
+
+
+def test_an_instant_dated_after_its_filing_makes_no_quarter():
+    # BUG-386: CCI's 10-Qs tag TreasuryStockValue 0 at 2026-12-31, a date that hadn't come: an empty quarter (and
+    # trailing year) for 2026-12-31 with only treasury stock
+    quarters = XBRLParser().extract_quarterly_financials(_cci())
+    assert sorted(quarters) == ["2026-06-30"]
+    assert quarters["2026-06-30"]["total_assets"] == 3.9e10
+
+
+def test_an_instant_dated_on_its_filing_day_is_read():
+    quarters = XBRLParser().extract_quarterly_financials(_cci(treasury_end="2026-08-05"))
+    assert sorted(quarters) == ["2026-06-30", "2026-08-05"]

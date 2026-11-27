@@ -2136,8 +2136,10 @@ class XBRLParser:
         frames: Dict[str, set], restored: Dict[Tuple[str, str], Tuple[float, float]],
     ) -> Dict[Tuple[str, str], str]:
         """Balance-sheet (instant) values at every quarter-end (10-Q and 10-K), with the
-        year-end figures the annual record puts back (*restored*). Returns when each share
-        count was filed: ``{(period end, field): filed}``."""
+        year-end figures the annual record puts back (*restored*). A figure dated after its
+        filing's day is no checkpoint: that date hadn't come (CCI's 10-Qs for 2026 tag treasury
+        stock of 0 at 2026-12-31, which made an empty quarter; BUG-386, as ``_filed_ahead`` for
+        a flow). Returns when each share count was filed: ``{(period end, field): filed}``."""
         best: Dict[Tuple[str, str], Tuple[int, str]] = {}
         for field in CANONICAL_FIELDS:
             if field.kind != INSTANT:
@@ -2149,11 +2151,11 @@ class XBRLParser:
                     if entry.get("start"):  # instant facts have no start
                         continue
                     end = entry.get("end")
-                    if not end:
+                    filed = entry.get("filed") or ""
+                    if not end or (filed and end > filed):
                         continue
                     if entry.get("frame"):
                         frames.setdefault(end, set()).add(entry["frame"])
-                    filed = entry.get("filed") or ""
                     bkey = (end, field.key)
                     cur = best.get(bkey)
                     if cur is not None and not (

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 52 · NEEDS-USER 0 · Decided: 8 · Verified: 350
+**Open:** P0 0 · P1 0 · P2 0 · P3 50 · NEEDS-USER 0 · Decided: 8 · Verified: 352
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2598,10 +2598,11 @@ Repro: src/fetchers/yahoo_handler.py ~830-872 (`_get_dividend_history`) builds a
 Expected: distinct_payments applied as everywhere else.   Actual: the raw series.
 Fix (iteration 245, `qa/evidence/bug384-investigation.txt`): `_get_dividend_history` builds its series from `distinct_payments` (BUG-154) and derives every yearly figure from it. KO 2001 0.72, two raises. No valuation, score or table reads these (grep: only yahoo_handler and the workstation route, which re-derives from stored payments).
 ### BUG-386 [P3][PARSE] CCI has an empty quarterly and trailing-year row for 2026-12-31, a period after the collection
-Status: OPEN
-Found: the val3 worker (iteration 247) | Fixed: | Regression test:
+Status: VERIFIED (iteration 251)
+Found: the val3 worker (iteration 247) | Fixed: (this commit) | Regression tests: tests/test_forward_dated_facts.py; failing first
 Repro: today's DB: CCI financials_quarterly and financials_ttm 2026-12-31, every field empty but treasury_stock 0.0. The history now ignores a trailing year ending after the collection day (BUG-250's guard), but the parser still stores the row.
 Expected: no row for a period that hasn't ended.   Actual: an empty one.
+Fix (iteration 251, `qa/evidence/bug387-investigation.txt`): `_collect_instant_checkpoints`: a balance-sheet figure dated after its filing's day makes no quarter (as `_filed_ahead` for flows). Census: CCI quarterly+TTM 2026-12-31, WMT quarterly 2012-12-31 (cash only), WSM quarterly 2021-03-31 (goodwill only) removed; nothing else. DB: 0 medians, verdicts, owner-earnings verdicts, historical values, labels. Look-ahead 0. Left: `_matches_kind` (yearly) still accepts such instants (would drop one LLY vintage).
 ### BUG-387 [P3][VALID] BUG-384 drops a real noncurrent figure within 0.5% of the total, so a small current line is read again
 Status: VERIFIED (iteration 250)
 Found: code review 40 (`qa/evidence/review40.txt`, Minor 1; regression from BUG-384, 7964c1c) | Fixed: (this commit) | Regression tests: tests/test_debt_balance_sheet_lines.py; 5 failing first
@@ -2610,10 +2611,11 @@ Expected: a noncurrent figure that plus the line makes the total still shows the
 Fix (iteration 250, `qa/evidence/bug387-investigation.txt`): in `holds`, a figure within 0.5% of the total is 'the total tagged twice' when it is another total, or a noncurrent figure the line doesn't make up to the total (|total - figure - line| > line). The orchestrator's first rule (totals' kinds only) would have reverted ORLY, whose LongTermDebtAndCapitalLeaseObligations $1.396B is $3.7M short of its $1.4B total with the $74K line (BUG-384's investigation had ORLY's tags wrong: no NotesPayable). Census over 504 filers: 0 records change; ORLY, EQIX, AMGN, BIIB, ORCL kept.
 
 ### BUG-388 [P3][VAL] A trailing year ending on the collection's weekend is known on the Friday before it ends
-Status: OPEN
-Found: code review 40 (`qa/evidence/review40.txt`, Minor 2; regression from BUG-250, fb8a6b0) | Fixed: | Regression test:
+Status: VERIFIED (iteration 251)
+Found: code review 40 (`qa/evidence/review40.txt`, Minor 2; regression from BUG-250, fb8a6b0) | Fixed: (this commit) | Regression tests: tests/test_valuation_price_day.py; failing first
 Repro: src/valuation/history_inputs.py ~166-169 (`known_on`'s filed_by), ~461 (`end > collected_on`): known_on('2026-10-24' (Sat), 3, None, 2026-10-25 (Sun)) and known_on('2026-10-25', 4, None, 2026-10-25) return 2026-10-23 (base 2026-10-25); history.py ~192 then reads a year that hadn't ended on Friday's bar (52/53-week filers; stray rows like BUG-386). Probe: %LOCALAPPDATA%\stockdb-qa\review40\head\tests\test_review40.py.
 Expected: a period is never known before it ends.   Actual: the weekday cap can precede the end.
+Fix (iteration 251, `qa/evidence/bug387-investigation.txt`): `filed_by(collected_on)` (last weekday on or before the collection); `known_on` = max(min(known, filed_by), end), never before the period ends; the history skips a trailing year ending after filed_by. DB (a Friday collection): all tables identical.
 
 ### Q23 [DATA] NEEDS-USER: read a debt total that includes current debt as the total less the current part (KVUE, TRV)?
 Status: VERIFIED (iteration 236; applied at the user's decision, 2026-11-26)

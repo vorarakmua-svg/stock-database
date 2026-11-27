@@ -485,7 +485,8 @@ How it's built:
 - **No look-ahead.** Each month-end close is paired with the trailing twelve months *known* that month:
   a quarter 45 days after it ends, a fiscal year on its 10-K's first filing day (from the vintages), and
   either by the collection that stored it: by the last weekday on or before its day in New York, as the SEC takes no
-  filing at weekends, so a Sunday's collection puts its new quarter at Friday's bar (BUG-250).
+  filing at weekends, so a Sunday's collection puts its new quarter at Friday's bar (BUG-250), but never before the
+  period ends: a year ending on the collection's weekend isn't read (BUG-388).
   Quarters from before the listing are left out, and windows are trailing only. The one exception is
   restatement: the quarters are the latest *restated* figures, as SEC's company facts give them, and
   revenue was restated by more than 1% in 8% of the years.

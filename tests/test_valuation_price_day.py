@@ -209,3 +209,40 @@ def test_a_trailing_year_ending_on_the_collection_day_is_known(tmp_path):
                  "VALUES ('AAA', '2026-02-25', 2026, 1.0e9)")
     conn.commit()
     assert load_history_inputs(conn, "AAA").points[-1].period_end == "2026-02-25"
+
+
+# ---- BUG-388 ------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("end, quarter, collected", [
+    ("2026-10-24", 3, date(2026, 10, 25)),  # a 52/53-week quarter ending Saturday, collected Sunday
+    ("2026-10-25", 4, date(2026, 10, 25)),  # a year ending Sunday, collected that Sunday
+    ("2026-10-24", 3, date(2026, 10, 24)),  # ending Saturday, collected that Saturday
+])
+def test_a_trailing_year_is_never_known_before_it_ends(end, quarter, collected):
+    # BUG-250's weekday cap put these on Friday 2026-10-23, the day before they ended
+    assert known_on(end, quarter, None, collected) >= date.fromisoformat(end)
+
+
+def test_the_weekday_cap_still_holds_a_quarter_that_ended_before_the_weekend():
+    assert known_on("2026-10-23", 3, None, date(2026, 10, 25)) == date(2026, 10, 23)  # ended Friday: known Friday
+    assert known_on("2026-09-30", 3, None, date(2026, 10, 25)) == date(2026, 10, 23)
+
+
+def test_a_trailing_year_ending_on_the_collections_weekend_isnt_read_by_the_friday_bar(tmp_path):
+    # a Saturday 2026-10-24 row a Sunday collection stored: no 10-Q for it can have been filed by then, so Friday's
+    # bar (the latest point) stays on September's trailing year and no point reads the stray row
+    conn = _db(tmp_path)
+    for end, fq in (("2026-03-31", 1), ("2026-06-30", 2), ("2026-09-30", 3), ("2026-10-24", 4)):
+        conn.execute("INSERT INTO financials_quarterly (ticker, period_end, fiscal_year, fiscal_quarter, "
+                     "weighted_avg_shares_basic, eps_diluted, net_income) VALUES ('AAA', ?, 2026, ?, 200e6, 0.55, "
+                     "110e6)", (end, fq))
+        conn.execute("INSERT INTO financials_ttm (ticker, period_end, fiscal_year, revenue, net_income, total_equity) "
+                     "VALUES ('AAA', ?, 2026, 1.0e9, 4.4e8, 2.0e9)", (end,))
+    conn.execute("INSERT INTO price_bars (ticker, date, close) VALUES ('AAA', '2026-10-23', 22.0)")
+    conn.execute("UPDATE market_snapshots SET collected_at = '2026-10-25T20:00:00-04:00'")
+    conn.execute("UPDATE collection_runs SET collected_at = '2026-10-25T20:00:00-04:00'")
+    conn.commit()
+    x = load_history_inputs(conn, "AAA")
+    assert "2026-10-24" not in [point.period_end for point in x.points]
+    history = compute_history(x)
+    assert (history.rows[-1].date, history.rows[-1].ttm_period_end) == ("2026-10-23", "2026-09-30")
