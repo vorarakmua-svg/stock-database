@@ -3872,3 +3872,13 @@ Result: BUG-154 VERIFIED.
 Gates: ruff ✓ mypy ✓ (84 files) pytest 4374 passed, 2 skipped
 Commit: (this commit) fix(dividends): a payment stored twice counts once (BUG-154)
 Next: BUG-025 (1-2), then code review 39.
+
+## Iteration 243: 2026-11-27 01:45: fix (BUG-025 parts 1-2; the user's decision)
+Picked: BUG-025 (1-2), measured and approved by the user; an opus worker (stacked on BUG-154).
+Did: the dividend-gap check uses a recent median spacing and runs to the collection day.
+- RED: 10 failed on 5b3b544; GREEN. 10 of 10 mutants (1 re-quoted); b154r 12/12, div1 10/10.
+- DB copies: CRH and SW DDM N/A; medians CRH base 66.30 -> 70.35, SW 31.28 -> 30.09; 0 verdicts, labels.
+Result: BUG-025 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4384 passed, 2 skipped
+Commit: (this commit) fix(dividends): the gap check uses recent spacing and runs to the collection day (BUG-025)
+Next: code review 39 (6 units since review 38).

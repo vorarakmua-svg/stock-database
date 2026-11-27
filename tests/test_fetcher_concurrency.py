@@ -4,6 +4,7 @@ import copy
 import json
 import sqlite3
 import time
+from datetime import datetime
 
 import pytest
 
@@ -154,6 +155,28 @@ def test_assess_flags_dividend_payments_missing_from_yahoo(tmp_path):
     findings = [f for f in stock.data_quality["findings"] if f["code"] == "dividend_payments_missing"]
     assert [f["period"] for f in findings] == ["2025"]
     assert any("dividend" in w for w in stock.warnings)
+
+
+def test_assess_ends_the_dividend_schedule_on_the_collection_day(tmp_path):
+    # BUG-025 (2): SWKS's shape, collected 2026-11-20 with nothing since 2026-05-26 (178 days at a usual 91): FY2026
+    # holds three of its four payments, a gap with no payment after it.
+    fetcher = _make_fetcher(tmp_path, workers=1)
+    stock = StockData(ticker="SWKS", cik="000", company_name="SWKS Inc.", collected_at=datetime(2026, 11, 20, 9, 30))
+    stock.financials_annual = {
+        str(y): {"fiscal_year": y, "period_end": f"{y}-10-02", "dividends_per_share": 2.80,
+                 "revenue": 1.0e9, "net_income": 1.0e8, "operating_income": 1.5e8,
+                 "total_assets": 2.0e9, "total_liabilities": 1.0e9, "total_equity": 1.0e9,
+                 "operating_cash_flow": 2.0e8}
+        for y in (2024, 2025, 2026)
+    }
+    stock.dividend_history = {"dividend_payments": [
+        {"date": f"{y}-{m}-15", "amount": 0.70}
+        for y in range(2021, 2027) for m in ("02", "05", "08", "11") if f"{y}-{m}" < "2026-05"
+    ] + [{"date": "2026-05-26", "amount": 0.70}]}
+    fetcher._assess(stock)
+    findings = [f for f in stock.data_quality["findings"] if f["code"] == "dividend_payments_missing"]
+    assert [f["period"] for f in findings] == ["2026"]
+    assert "2026-11-20" in findings[0]["message"]
 
 
 def test_a_failed_summary_csv_still_writes_the_other_exports(tmp_path, monkeypatch):

@@ -332,3 +332,49 @@ def test_the_oracles_ddm_reads_a_payment_served_twice_once():
     db.execute("insert into dividend_events values ('AAA', '2026-01-02', ?)", (total_2026,))
     o = oracle.level2(db, "AAA", "ddm", {"ttm_anchor": "2026-08-04"})
     assert o["inputs"]["ttm_dps"] == pytest.approx(total_2026)
+
+
+# --- BUG-025 (1) and (2): the oracle's completeness check -----------------------------------------------------------
+
+def _gaps_db(payments, years):
+    db = sqlite3.connect(":memory:")
+    db.executescript("create table dividend_events (ticker, date, amount);"
+                     "create table financials_annual (ticker, fiscal_year, period_end, dividends_per_share);")
+    db.executemany("insert into dividend_events values ('AAA', ?, ?)", payments)
+    db.executemany("insert into financials_annual values ('AAA', ?, ?, ?)", years)
+    return db
+
+
+def test_the_oracles_completeness_check_reads_the_recent_schedule():
+    # A payer once a year for decades, quarterly since 2020, missing 2025-08: a gap against the recent 92 days.
+    payments = [(f"{y}-12-01", 2.8) for y in range(1975, 2020)]
+    payments += [(f"{y}-{m}-15", 0.70) for y in range(2020, 2027) for m in ("02", "05", "08", "11") if
+                 f"{y}-{m}" != "2025-08"]
+    assert oracle.payment_gaps(_gaps_db(payments, [(2025, "2025-12-31", 2.80)]), "AAA", []) == [
+        (2025, "2025-05-15", "2025-11-15")]
+    # Quarterly for years, twice a year since 2020: a shortfall alone is no gap.
+    semiannual = [(f"{y}-{m}-15", 0.45) for y in range(2005, 2020) for m in ("02", "05", "08", "11")]
+    semiannual += [(f"{y}-{m}-10", 0.45) for y in range(2020, 2027) for m in ("01", "07")]
+    assert oracle.payment_gaps(_gaps_db(semiannual, [(2025, "2025-12-31", 1.20)]), "AAA", []) == []
+
+
+def test_the_oracles_completeness_check_ends_on_the_collection_day():
+    payments = [(f"{y}-{m}-15", 0.70) for y in range(2021, 2027) for m in ("02", "05", "08", "11")
+                if f"{y}-{m}" < "2026-05"]
+    db = _gaps_db(payments + [("2026-05-26", 0.70)], [(2026, "2026-10-02", 2.80)])
+    assert oracle.payment_gaps(db, "AAA", [], "2026-11-20") == [(2026, "2026-05-26", "2026-11-20")]
+    assert oracle.payment_gaps(db, "AAA", [], "2026-09-20") == []
+    assert oracle.payment_gaps(db, "AAA", []) == []
+
+
+def test_the_oracles_ddm_ends_the_schedule_on_its_anchor():
+    # A quarterly payer whose stored payments stop after 2025-06-15, valued on 2026-08-04: FY2025's two payments
+    # against SEC's year, and no payment since: DDM is N/A (Q4) as the code's is.
+    db = _dividend_db(0.5)
+    db.execute("delete from dividend_events")
+    total = {y: 2.0 * 1.05 ** (y - 2016) for y in range(2015, 2026)}
+    db.executemany("insert into dividend_events values ('AAA', ?, ?)",
+                   [(f"{y}-{m}-15", total[y] / 4) for y in range(2015, 2026) for m in ("03", "06", "09", "12")
+                    if f"{y}-{m}" <= "2025-06"])
+    o = oracle.level2(db, "AAA", "ddm", {"ttm_anchor": "2026-08-04"})
+    assert o["na"] == "dividend history incomplete" and o["inputs"]["gap_years"] == [2025]

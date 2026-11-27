@@ -1,5 +1,9 @@
 """Integrity checks: magnitude outliers, cash reconciliation, quarterly sums, ratio bounds."""
 
+from datetime import date
+
+import pytest
+
 from src.validation.integrity import (
     check_cashflow_reconciliation,
     check_dividend_completeness,
@@ -416,3 +420,44 @@ def test_dividend_check_reads_a_payment_without_a_finite_amount_as_one_without_a
         findings = check_dividend_completeness(_declared(y_2024=3.88, y_2025=3.88), payments, [], {"2024", "2025"})
         assert [(f.code, f.period) for f in findings] == [("dividend_payments_missing", "2025")], missing
         assert "sum to 0.97/share" in findings[0].message
+
+
+# ---- BUG-025 (1) and (2), decided 2026-11-26: a recent usual interval; the schedule ends on the collection day ----
+
+
+def _quarters(first_year, last_year, amount=0.70, day="15", skip=()):
+    return [{"date": f"{y}-{m}-{day}", "amount": amount} for y in range(first_year, last_year + 1)
+            for m in ("02", "05", "08", "11") if f"{y}-{m}" not in skip]
+
+
+def test_dividend_check_measures_the_usual_interval_over_the_recent_payments():
+    # DIS's shape: quarterly for years, twice a year since. Against the whole history's 91 days every half-year
+    # interval was a gap, so a shortfall alone (a December declaration paid in January) was flagged.
+    payments = _quarters(2005, 2019, 0.45) + [{"date": f"{y}-{m}-10", "amount": 0.45}
+                                             for y in range(2020, 2027) for m in ("01", "07")]
+    assert check_dividend_completeness(_declared(y_2025=1.20), payments, [], {"2025"}) == []
+
+
+def test_dividend_check_sees_a_missed_quarter_of_a_payer_that_turned_quarterly():
+    # CTAS's shape: once a year for decades, quarterly since 2020. A missed quarter (182 days) is no gap against the
+    # whole history's 365 days; against the recent 91 it is.
+    payments = [{"date": f"{y}-12-01", "amount": 2.8} for y in range(1975, 2020)]
+    payments += _quarters(2020, 2026, skip={"2025-08"})
+    findings = check_dividend_completeness(_declared(y_2025=2.80), payments, [], {"2025"})
+    assert [(f.code, f.period) for f in findings] == [("dividend_payments_missing", "2025")]
+    assert "2025-05-15 and 2025-11-15" in findings[0].message and "usual interval 92 days" in findings[0].message
+
+
+@pytest.mark.parametrize("collected, flagged", [
+    (date(2026, 11, 20), True),    # SWKS's shape: nothing since 2026-05-26, 178 days at a usual 91
+    (date(2026, 9, 20), False),    # 117 days: under 1.7 intervals, the next payment may still come
+    (None, False),                 # no collection day: the schedule ends at the last payment, as before
+])
+def test_dividend_check_ends_the_schedule_on_the_collection_day(collected, flagged):
+    payments = _quarters(2021, 2026, skip={"2026-08", "2026-11"})
+    payments = [p for p in payments if p["date"] != "2026-05-15"] + [{"date": "2026-05-26", "amount": 0.70}]
+    annual = {"2026": {"period_end": "2026-10-02", "dividends_per_share": 2.80}}
+    findings = check_dividend_completeness(annual, payments, [], {"2026"}, collected)
+    assert [(f.code, f.period) for f in findings] == ([("dividend_payments_missing", "2026")] if flagged else [])
+    if flagged:
+        assert "between 2026-05-26 and 2026-11-20" in findings[0].message

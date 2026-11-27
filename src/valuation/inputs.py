@@ -1046,13 +1046,14 @@ def load_inputs(conn: sqlite3.Connection, ticker: str, max_years: int = _MAX_FY_
     dividends = [(day, amount * _dividend_onto(splits, priced_on, served_on.get(day)))
                  for day, amount in _drop_spin_off_dividends([(r["date"], r["amount"]) for r in payments], splits)]
     # The completeness check as a collection runs it (the latest years, the payments as Yahoo served them, SEC's
-    # figures as filed), on the payments stored now: a refresh stores Yahoo's payments too (BUG-160, BUG-258).
+    # figures as filed, the schedule ending on the snapshot's day, BUG-025), on the payments stored now: a refresh
+    # stores Yahoo's payments too (BUG-160, BUG-258).
     gaps = [(int(gap.year), gap.gap_from, gap.gap_to) for gap in dividend_gaps(
         {str(r["fiscal_year"]): {"period_end": r["period_end"], "dividends_per_share": r["dividends_per_share"]}
          for r in fy_rows},
         [{"date": r["date"], "amount": r["amount"]} for r in payments],
         [{"date": day, "ratio": ratio} for day, ratio in splits],
-        [str(r["fiscal_year"]) for r in fy_rows[-DIVIDEND_CHECK_YEARS:]])]
+        [str(r["fiscal_year"]) for r in fy_rows[-DIVIDEND_CHECK_YEARS:]], as_of)]
 
     # A bar from yfinance's default history is Yahoo's dividend-adjusted price,
     # lower by every dividend paid since (BUG-075): one flagged so, or any bar of a

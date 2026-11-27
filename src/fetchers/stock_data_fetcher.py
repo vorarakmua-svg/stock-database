@@ -5,7 +5,7 @@ import logging
 import os
 import sqlite3
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from datetime import datetime
+from datetime import date, datetime
 from itertools import islice
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
@@ -49,6 +49,16 @@ IN_FLIGHT_PER_WORKER = 2
 #: How long a collection waits for a fetch to finish before it waits again: a timed wait, so Ctrl+C is seen within
 #: this even where a thread's untimed wait doesn't wake for it (Windows).
 POLL_SECONDS = 0.5
+
+
+def _collected_day(stock: StockData) -> Optional[date]:
+    """The day the run collected *stock*: where the dividend completeness check's schedule ends (BUG-025)."""
+    if isinstance(stock.collected_at, datetime):
+        return stock.collected_at.date()
+    try:
+        return date.fromisoformat(str(stock.collected_at)[:10])
+    except ValueError:
+        return None
 
 
 class CollectionInterrupted(KeyboardInterrupt):
@@ -535,7 +545,7 @@ class StockDataFetcher:
             report.findings.extend(check_ratio_bounds(historical, annual, scored))
             report.findings.extend(check_dividend_completeness(
                 annual, (stock.dividend_history or {}).get("dividend_payments") or [],
-                stock.splits or [], scored))
+                stock.splits or [], scored, _collected_day(stock)))
             report.score = score_for(report.findings)
 
         stock.data_quality = report.as_dict()

@@ -1858,6 +1858,17 @@ def test_a_payment_yahoo_served_twice_is_read_once(tmp_path):
     assert inputs.dividend_gaps == [(2025, "2025-06-13", "2026-03-13")]
 
 
+def test_the_completeness_check_ends_the_schedule_on_the_snapshots_day(tmp_path):
+    # BUG-025 (2): Yahoo's payments stop after 2025-06-13 and the snapshot is of 2026-08-04: a gap with no payment
+    # after it, which FY2025's shortfall (1.94 against 3.88) confirms.
+    conn = _connect(_missing_payments_db(tmp_path))
+    conn.execute("DELETE FROM dividend_events WHERE date > '2025-06-13'")
+    conn.commit()
+    inputs = load_inputs(conn, "CB")
+    conn.close()
+    assert inputs.dividend_gaps == [(2025, "2025-06-13", "2026-08-04")]
+
+
 def test_payments_a_refresh_stores_close_the_gap(tmp_path):
     # A refresh stores Yahoo's payments (BUG-160, BUG-258): once it serves the missing ones, DDM values again.
     db_path = _missing_payments_db(tmp_path)

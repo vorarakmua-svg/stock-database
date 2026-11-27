@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 60 · NEEDS-USER 0 · Decided: 8 · Verified: 337
+**Open:** P0 0 · P1 0 · P2 0 · P3 59 · NEEDS-USER 0 · Decided: 8 · Verified: 338
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -235,12 +235,13 @@ Notes: also add tests for a post-filing reverse split and for two post-filing sp
 
 Fix (iteration 228, `qa/evidence/bug264-investigation.txt`; applied at the user's decision, 2026-11-25, for DD's label): one split history (`inputs.split_history`) for the annual and quarterly paths: Yahoo's split_events plus the splits the filings record (`_restated_splits`: consecutive 10-K vintages of a year whose count moved by a simple ratio of 3:2 or more within 1%, EPS marked, net income held, not explained by a declared split). Yahoo's non-split factor nearest such a ratio between those filings is split into the split and the spin-off remainder (BUG-379). Quarters fold an undeclared seam on the marks plus the implied count plus the trailing year's net income held (BUG-264). Post-filing factors: simple splits apply; of the others, the subset nearest a Yahoo count within 1.25x, none without a count (BUG-050). `_restated_between` takes MAX_SPLIT_RATIO (BUG-270). BUG-024 was fixed in iteration 42; tests added. Filings' splits found: DD 1:3, HLT 1:3, LDOS 1:4, MSI 1:7, WTW 2.649:1 (read 3:8), EXE 1:200, HWM 1:3. DB copies: 0 medians, verdicts, owner-earnings verdicts; DD historical value 133.14 -> 139.45, label above -> near; HLT DDM base 7.50 -> 7.66, historical value within far above; 654 valuation_history rows (market caps before the mixed-factor days corrected, e.g. DD 2016-11 $22.46B -> $61.98B). Oracles agree with the code's split history; valuation oracle L2 loses HLT lynch (the oracle's own error).
 ### BUG-025 [P3][VALID] Edge cases in the dividend completeness check
-Status: OPEN (parts 3 and 4 fixed in iteration 239; parts 1 and 2 decided 2026-11-26: fix, measured first)
+Status: VERIFIED (iteration 243; parts 3-4 at 239, parts 1-2 applied at the user's decision after the measurement, 2026-11-27)
 Found: iteration 17 by code review 2 | Fixed: — | Regression test: —
 Repro: (1) the usual interval is the whole-history median, so DIS (94 days overall, 193.5 since 2023) has the gap signal always on; (2) a gap with no later Yahoo payment is never flagged (CB would have passed if collected before 2026-03-13); (3) a malformed date raises `ValueError`, and `_assess`'s catch-all then drops the whole quality report (re-checked: `stock_data_fetcher.py:208-213`); (4) a NaN amount silences the finding.
 Notes: all unlikely with today's inputs (strftime dates, floats).
 
 Fix (iteration 239, parts 3 and 4): `dividend_gaps` leaves out a payment whose date doesn't parse or whose amount isn't finite (NaN, inf as None), and a year whose period_end doesn't parse. Decision (USER 2026-11-26) for parts 1 and 2: a recent median spacing and a schedule closed at the collection day, measured over the 502 and shown before applying (CRH, CTAS, SW, TPL, DIS; SWKS's DDM may go N/A).
+Fix (iteration 243, parts 1-2, `qa/evidence/div2-investigation.txt`): an interval's usual spacing is the median of the 8 intervals before it (the first 8 when fewer than 4 precede it); `dividend_gaps(..., collected)` closes the schedule on the collection day (the fetcher passes collected_at's day, load_inputs as_of, the oracle the same). DB: DDM N/A for CRH and SW (FY2025: Yahoo stores no payment 2025-05-23..2026-03-06 at CRH, 2025-08-15..2026-02-17 at SW); CRH median base 66.30 -> 70.35 (bear 57.87 -> 58.32, bull 82.65 -> 83.94), SW 31.28 -> 30.09 (bear 23.99 -> 20.67, bull 43.22 -> 46.54); 0 verdicts, owner-earnings verdicts, historical values, labels. The collection's quality check finds 13 issues for 11. The oracle flags the same independently.
 ### BUG-026 [P0][GATHER] An export with `summary.csv` open in Excel crashes the run before the SQLite export
 Status: VERIFIED
 Found: lead L13 (code review 1); reproduced in iteration 17 (`qa/evidence/iter17-l13-check.txt`) | Fixed: iteration 18 (see LOG) | Regression test: `tests/test_fetcher_concurrency.py::test_a_failed_summary_csv_still_writes_the_other_exports`

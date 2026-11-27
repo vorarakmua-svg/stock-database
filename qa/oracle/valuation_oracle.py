@@ -704,20 +704,30 @@ def once_each(events: List[Tuple[str, float]]) -> List[Tuple[str, float]]:
     return out
 
 
-def payment_gaps(db: sqlite3.Connection, ticker: str, splits: List[Tuple[str, float]]) -> List[Tuple[int, str, str]]:
+def payment_gaps(db: sqlite3.Connection, ticker: str, splits: List[Tuple[str, float]],
+                 collected: Optional[str] = None) -> List[Tuple[int, str, str]]:
     """BUG-012's completeness check, re-derived for Q4 (decided 2026-11-02, option c), over the latest 5 fiscal
     years as a collection scores them: a gap in Yahoo's stored schedule over 1.7x its median interval, beginning
     no earlier than 1.7 intervals before the year and before its end and ending after its start, with the year's
     payments under 80% of SEC's dividends per share as filed; years with a split after their start skipped. Q4's
     extension: a year without SEC's figure but with a payment is measured against the year before's (ACN FY2026).
-    The 1.7 / 0.8 / 4-interval thresholds are BUG-012's heuristics, the extension the fix's own."""
+    The 1.7 / 0.8 / 4-interval thresholds are BUG-012's heuristics, the extension the fix's own.
+    BUG-025 (decided 2026-11-26): an interval's median is that of the 8 before it (of the first 8 where fewer than 4
+    come before it), and the schedule ends on the *collected* day: no payment since the last one for over 1.7 such
+    medians is a gap from it to that day. The 8 is the fix's own heuristic."""
     paid = once_each([(d[:10], a) for d, a in db.execute("select date, amount from dividend_events where ticker=? and "
                                                          "amount is not null order by date", (ticker,))])
     intervals = [(_day(b) - _day(a)).days for (a, _), (b, _) in zip(paid, paid[1:])]
     if len(intervals) < 4:
         return []
-    usual = median([float(v) for v in intervals])
-    holes = [(paid[i][0], paid[i + 1][0]) for i, v in enumerate(intervals) if v > 1.7 * usual]
+
+    def usual(i: int) -> float:  # the median of the intervals before the i-th
+        window = intervals[max(0, i - 8):i] if i >= 4 else intervals[:8]
+        return median([float(v) for v in window])
+
+    holes = [(paid[i][0], paid[i + 1][0], usual(i)) for i, v in enumerate(intervals) if v > 1.7 * usual(i)]
+    if collected and (_day(collected[:10]) - _day(paid[-1][0])).days > 1.7 * usual(len(intervals)):
+        holes.append((paid[-1][0], collected[:10], usual(len(intervals))))
     rows = db.execute("select fiscal_year, period_end, dividends_per_share from financials_annual where ticker=? "
                       "and fiscal_year is not null order by fiscal_year", (ticker,)).fetchall()
     by_fy = {fy: (pe, dps) for fy, pe, dps in rows}
@@ -734,8 +744,8 @@ def payment_gaps(db: sqlite3.Connection, ticker: str, splits: List[Tuple[str, fl
             since = (_day(by_fy[fy - 1][0]) - datetime.timedelta(days=365)).isoformat()
         if dps is None or dps <= 0 or any(str(d)[:10] > since for d, _ in splits):
             continue
-        recent = (_day(start) - datetime.timedelta(days=1.7 * usual)).isoformat()
-        hole = next(((a, b) for a, b in holes if recent <= a < end and b > start), None)
+        hole = next(((a, b) for a, b, u in holes
+                     if (_day(start) - datetime.timedelta(days=1.7 * u)).isoformat() <= a < end and b > start), None)
         if hole and total < 0.8 * dps:
             found.append((fy, hole[0], hole[1]))
     return found
@@ -863,7 +873,7 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         # Q4: no DDM where Yahoo's missing payments are ones it reads: the gap runs into the TTM, or its year is a
         # growth year taken from Yahoo's payments.
         from_yahoo = {fy for fy, _, _, sec_year, _, _ in kept if not sec_year} if len(window) >= 4 else set()
-        incomplete = [fy for fy, a, b in payment_gaps(db, ticker, list(x.splits))
+        incomplete = [fy for fy, a, b in payment_gaps(db, ticker, list(x.splits), anchor)
                       if fy in from_yahoo or (b > ttm_start and a < anchor[:10])]
         if incomplete:
             return {"na": "dividend history incomplete", "inputs": {"gap_years": incomplete}}

@@ -68,6 +68,11 @@ _QUARTERLY_TOL = 0.01
 _DIVIDEND_GAP_FACTOR = 1.7
 _DIVIDEND_SHORTFALL = 0.8
 _DIVIDEND_MIN_INTERVALS = 4
+# BUG-025 (decided 2026-11-26): the usual interval is the median of the intervals just before
+# the one judged, this many (a quarterly payer's two years), not of the whole history: DIS paid
+# twice a year since 2023 against 94 days overall, CTAS, CRH, SW and TPL four times a year after
+# years of one or two. Where fewer than _DIVIDEND_MIN_INTERVALS come before it, the first ones.
+_DIVIDEND_RECENT_INTERVALS = 8
 
 
 def check_field_outliers(
@@ -309,8 +314,10 @@ def check_dividend_completeness(
     dividend_payments: Iterable[Dict[str, Any]],
     splits: Iterable[Dict[str, Any]],
     scored_years: Iterable[str],
+    collected: Optional[date] = None,
 ) -> List[Finding]:
-    """Flag a fiscal year whose Yahoo dividend payments miss what SEC filings declare (``dividend_gaps``)."""
+    """Flag a fiscal year whose Yahoo dividend payments miss what SEC filings declare (``dividend_gaps``), the
+    schedule ending on the day they were *collected*."""
     return [
         Finding(
             MEDIUM, "dividend_payments_missing",
@@ -319,7 +326,7 @@ def check_dividend_completeness(
             f"interval {gap.usual:.0f} days), so Yahoo's dividend history is likely missing payments.",
             gap.year,
         )
-        for gap in dividend_gaps(annual, dividend_payments, splits, scored_years)
+        for gap in dividend_gaps(annual, dividend_payments, splits, scored_years, collected)
     ]
 
 
@@ -328,6 +335,7 @@ def dividend_gaps(
     dividend_payments: Iterable[Dict[str, Any]],
     splits: Iterable[Dict[str, Any]],
     scored_years: Iterable[str],
+    collected: Optional[date] = None,
 ) -> List[DividendGap]:
     """The fiscal years whose Yahoo dividend payments miss what SEC filings declare.
 
@@ -349,6 +357,12 @@ def dividend_gaps(
     whose end doesn't parse is skipped (BUG-025): one bad value no longer raises (dropping the run's whole quality
     report) or makes the year's total NaN (silencing its finding). A payment Yahoo serves twice (the same amount
     within a week) is one (``distinct_payments``, BUG-154).
+
+    The usual interval is the median of the _DIVIDEND_RECENT_INTERVALS before the one judged (BUG-025):
+    a payer's schedule changes (DIS's semiannual since 2023 against 94 days over its history). The
+    schedule ends on the day the payments were *collected*, when given (the collection's day, the
+    valuation's): a missing payment with none after it is a gap from the last payment to that day
+    (SWKS's last on 2026-05-26, collected 2026-11-20 at a usual 91 days).
     """
     paid = distinct_payments(sorted(
         (day.isoformat(), float(p["amount"]))
@@ -362,12 +376,22 @@ def dividend_gaps(
     ]
     if len(intervals) < _DIVIDEND_MIN_INTERVALS:
         return []
-    usual = statistics.median(intervals)
+
+    def usual_before(i: int) -> float:
+        before = intervals[max(0, i - _DIVIDEND_RECENT_INTERVALS):i]
+        return statistics.median(before if len(before) >= _DIVIDEND_MIN_INTERVALS
+                                 else intervals[:_DIVIDEND_RECENT_INTERVALS])
+
+    # Each gap: the payments either side of it (the last one and the collection day), and its usual interval.
     gaps = [
-        (paid[i][0], paid[i + 1][0])
+        (paid[i][0], paid[i + 1][0], usual_before(i))
         for i, days in enumerate(intervals)
-        if days > _DIVIDEND_GAP_FACTOR * usual
+        if days > _DIVIDEND_GAP_FACTOR * usual_before(i)
     ]
+    if collected is not None:
+        since_last = (collected - date.fromisoformat(paid[-1][0])).days
+        if since_last > _DIVIDEND_GAP_FACTOR * usual_before(len(intervals)):
+            gaps.append((paid[-1][0], collected.isoformat(), usual_before(len(intervals))))
     split_dates = [str(s["date"])[:10] for s in splits if s.get("date")]
     found: List[DividendGap] = []
     for year in sorted(set(scored_years)):
@@ -393,10 +417,11 @@ def dividend_gaps(
                 reference_start = (before_end - timedelta(days=365)).isoformat()
         if declared is None or declared <= 0:
             continue
-        recent = (start_day - timedelta(days=_DIVIDEND_GAP_FACTOR * usual)).isoformat()
         if any(d > reference_start for d in split_dates):
             continue
-        gap = next(((a, b) for a, b in gaps if recent <= a < end and b > start), None)
+        gap = next(((a, b, usual) for a, b, usual in gaps
+                    if (start_day - timedelta(days=_DIVIDEND_GAP_FACTOR * usual)).isoformat() <= a < end
+                    and b > start), None)
         if gap is not None and total < _DIVIDEND_SHORTFALL * declared:
-            found.append(DividendGap(year, gap[0], gap[1], total, declared, whose, usual))
+            found.append(DividendGap(year, gap[0], gap[1], total, declared, whose, gap[2]))
     return found
