@@ -207,3 +207,23 @@ def test_a_split_of_3_for_2_or_more_keeps_the_collection_promise(ratio):
     # The valuation applies 3-for-2 (and its reverse) after the latest filing, and a spin-off factor beyond it.
     said = split_refusal("AAA", [{"date": "2024-07-01", "ratio": ratio}])
     assert said.endswith("Collect AAA in full to update them.")
+
+
+@pytest.mark.parametrize("ratio", [1.253, 1.01, 0.9535])
+def test_a_small_factor_that_isnt_a_split_is_promised_no_restatement(ratio):
+    # BUG-130's note (review 40): a spin-off's next report doesn't restate the figures, so its refusal doesn't say so
+    said = split_refusal("AAA", [{"date": "2024-07-01", "ratio": ratio}])
+    assert "A full collection doesn't update them" in said and "3-for-2" in said
+    assert "restates" not in said and "needn't restate them for a factor that isn't a share split" in said
+
+
+def test_a_refusal_of_a_big_split_and_a_small_factor_promises_only_the_split():
+    said = split_refusal("AAA", [{"date": "2024-07-01", "ratio": 2.0}, {"date": "2024-08-01", "ratio": 1.253}])
+    assert "Collect AAA in full to update the larger" in said
+    assert "restates" not in said and "needn't restate them for a factor that isn't a share split" in said
+
+
+def test_a_small_split_beside_a_small_factor_keeps_the_splits_restatement_only():
+    said = split_refusal("AAA", [{"date": "2024-07-01", "ratio": 1.25}, {"date": "2024-08-01", "ratio": 1.253}])
+    assert "until the company's next report restates its figures for the share splits" in said
+    assert "needn't restate them for a factor that isn't a share split" in said

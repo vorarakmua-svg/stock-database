@@ -72,18 +72,30 @@ def split_refusal(ticker: str, splits: List[Dict[str, Any]]) -> str:
 
     A full collection brings a split over only from 3-for-2 up (the valuation's rule for a split after the latest
     filing): a smaller one stays on the old basis until the company's next report restates its figures, so the
-    refusal doesn't promise the collection's update for it (BUG-130)."""
+    refusal doesn't promise the collection's update for it (BUG-130). A smaller factor that isn't a share split (a
+    spin-off's 1.253) isn't promised that restatement either: a spin-off's next report doesn't restate the figures.
+    """
     said = f"Yahoo shows {describe_splits(splits)} that the stored valuations don't reflect, so the quote wasn't saved."
     small = [s for s in splits if _small_split(float(s["ratio"]))]
     if not small:
         return f"{said} Collect {ticker} in full to update them."
-    smaller = ("a split smaller than 3-for-2 isn't applied to a filing that predates it: the valuations stay on the "
-               "old basis until the company's next report restates its figures")
+    if all(is_share_split(float(s["ratio"])) for s in small):
+        if len(small) == len(splits):
+            return (f"{said} A full collection doesn't update them: the valuation applies a split after the latest "
+                    f"filing from 3-for-2 up only, so they stay on the old basis until the company's next report "
+                    f"restates its figures.")
+        return (f"{said} Collect {ticker} in full to update the larger ones; a split smaller than 3-for-2 isn't "
+                f"applied to a filing that predates it: the valuations stay on the old basis until the company's next "
+                f"report restates its figures.")
+    # a factor that isn't a share split (a spin-off's) under 3-for-2: no later report need restate the figures for it
+    basis = "the old basis" + (" until the company's next report restates its figures for the share splits;" if any(
+        is_share_split(float(s["ratio"])) for s in small) else ", and") + (
+        " a later report needn't restate them for a factor that isn't a share split (a spin-off's)")
     if len(small) == len(splits):
-        return (f"{said} A full collection doesn't update them: the valuation applies a split after the latest filing "
-                f"from 3-for-2 up only, so they stay on the old basis until the company's next report restates its "
-                f"figures.")
-    return f"{said} Collect {ticker} in full to update the larger ones; {smaller}."
+        return (f"{said} A full collection doesn't update them: the valuation applies a factor after the latest filing "
+                f"from 3-for-2 up only, so they stay on {basis}.")
+    return (f"{said} Collect {ticker} in full to update the larger ones; a factor smaller than 3-for-2 isn't applied "
+            f"to a filing that predates it: the valuations stay on {basis}.")
 
 
 def valuation_failure(store: SQLiteStore, refreshed: QuoteRefresh, why: str) -> str:

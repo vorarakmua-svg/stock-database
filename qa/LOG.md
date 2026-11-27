@@ -3940,3 +3940,14 @@ right: new_york_day_of's forms on 3.9; remaining [:10] truncations decided; BUG-
 Gates: unchanged (qa/ only)
 Commit: (this commit) chore(qa): code review 40 recorded (BUG-387, BUG-388)
 Next: BUG-387, BUG-388; BUG-275 (measuring).
+
+## Iteration 250: 2026-11-27 21:30: fix (BUG-387; BUG-130's spin-off wording)
+Picked: code review 40's M1 and note; an opus worker (0 cells move).
+Did: a noncurrent figure that plus the line makes the total still shows the total holds the line; a spin-off factor
+isn't promised a restatement.
+- RED: 5 + 5 failed on 0bc9b9e; GREEN. bug387 5/5, bug384 (re-quoted) 5/5, bug383 11/11, bug130 4/4, web2 13/13.
+- The full suite caught a leftover mutant in the worker's quote_refresh diff (<= on the lower bound); reverted.
+Result: BUG-387 VERIFIED; BUG-130's wording done.
+Gates: ruff ✓ mypy ✓ pytest 4454 passed, 2 skipped
+Commit: (this commit) fix: a noncurrent figure beside its total; a spin-off isn't promised a restatement (BUG-387, BUG-130)
+Next: BUG-386, BUG-388 (measured: nothing moves); BUG-275 without option B.

@@ -315,3 +315,61 @@ def test_a_notes_payable_figure_within_rounding_of_the_debt_total_is_no_other_fi
                                               "LongTermDebt": 91.315e9, "NotesPayable": 91.4e9}))
     quarter = XBRLParser().extract_quarterly_financials(facts)["2025-08-31"]
     assert abs(((quarter.get("long_term_debt") or 0) + (quarter.get("short_term_debt") or 0)) - 91.315e9) < 1e6
+
+
+# ---------------- BUG-387: a noncurrent figure within rounding of the total is no total tagged twice ----------------
+
+
+def _small_line_quarter(noncurrent, **also):
+    # review 40's M1: the ORCL shape with LongTermDebt $91.315B = a noncurrent figure of $90.915B + NotesPayableCurrent
+    # $0.400B to the dollar; the noncurrent figure is within _AGREE (0.44%) of the total
+    facts = _filings(
+        ("10-K", "2025-06-18", "2025-05-31", {**_BS, "DebtCurrent": 7.271e9, "NotesPayableCurrent": 7.271e9,
+                                              "LongTermNotesPayable": 85.297e9}),
+        ("10-Q", "2025-09-10", "2025-05-31", {**_BS, "NotesPayableCurrent": 7.271e9}),
+        ("10-Q", "2025-09-10", "2025-08-31", {**_BS, "NotesPayableCurrent": 0.400e9, noncurrent: 90.915e9,
+                                              "LongTermDebt": 91.315e9, **also}))
+    return XBRLParser().extract_quarterly_financials(facts)["2025-08-31"]
+
+
+@pytest.mark.parametrize("noncurrent", ["LongTermNotesPayable", "SeniorLongTermNotes", "UnsecuredLongTermDebt"])
+def test_a_noncurrent_figure_within_rounding_of_the_total_still_shows_the_total_holds_a_small_line(noncurrent):
+    # BUG-384 took any figure within _AGREE of the total for the total tagged twice, so the $0.400B line was read
+    # again beside the total that holds it ($91.715B for $91.315B)
+    quarter = _small_line_quarter(noncurrent)
+    assert _read(quarter, "long_term_debt") == (91.315e9, "LongTermDebt")
+    assert quarter.get("short_term_debt") is None
+
+
+def test_the_total_tagged_twice_beside_a_noncurrent_figure_within_rounding_still_holds_the_line():
+    # the same with the total also tagged NotesPayable: that one is the total tagged twice, the noncurrent figure isn't
+    quarter = _small_line_quarter("LongTermNotesPayable", NotesPayable=91.315e9)
+    assert _read(quarter, "long_term_debt") == (91.315e9, "LongTermDebt")
+    assert quarter.get("short_term_debt") is None
+
+
+def test_a_noncurrent_figure_near_the_total_the_line_doesnt_make_up_shows_nothing():
+    # ORLY's 10-Q for 2014-03-31: LongTermDebt $1.4B (the notes' principal), LongTermDebtAndCapitalLeaseObligations
+    # $1.396242B and $74K of current capital leases, $3.7M short of the total: the line doesn't make the noncurrent
+    # figure up to the total, so nothing shows the total holds it, and it is read (BUG-384's reading kept)
+    facts = _filings(
+        ("10-K", "2014-02-28", "2013-12-31", {**_BS, "DebtCurrent": 0.093e6, "CapitalLeaseObligationsCurrent": 0.093e6,
+                                              "LongTermDebtNoncurrent": 1.396e9}),
+        ("10-Q", "2014-05-09", "2013-12-31", {**_BS, "CapitalLeaseObligationsCurrent": 0.093e6}),
+        ("10-Q", "2014-05-09", "2014-03-31", {**_BS, "CapitalLeaseObligationsCurrent": 0.074e6, "LongTermDebt": 1.4e9,
+                                              "LongTermDebtAndCapitalLeaseObligations": 1.396242e9}))
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2014-03-31"]
+    assert _read(quarter, "long_term_debt") == (1.4e9, "LongTermDebt")
+    assert _read(quarter, "short_term_debt") == (0.074e6, "CapitalLeaseObligationsCurrent")
+
+
+def test_a_noncurrent_figure_the_line_makes_up_to_the_total_but_for_rounding_still_shows_it_holds():
+    # $90.913B and the $0.400B line are $2M short of $91.315B: the line makes up the gap but for rounding
+    facts = _filings(
+        ("10-K", "2025-06-18", "2025-05-31", {**_BS, "DebtCurrent": 7.271e9, "NotesPayableCurrent": 7.271e9,
+                                              "LongTermNotesPayable": 85.297e9}),
+        ("10-Q", "2025-09-10", "2025-05-31", {**_BS, "NotesPayableCurrent": 7.271e9}),
+        ("10-Q", "2025-09-10", "2025-08-31", {**_BS, "NotesPayableCurrent": 0.400e9, "LongTermNotesPayable": 90.913e9,
+                                              "LongTermDebt": 91.315e9}))
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2025-08-31"]
+    assert quarter.get("short_term_debt") is None

@@ -1523,7 +1523,9 @@ def _short_term_debt_lines(us_gaap: Dict[str, Any], annual: Dict[Any, Dict[str, 
     noncurrent figure stands in its place. One that a figure and the line overflow is a noncurrent figure (BIIB's
     LongTermDebt, which its NotesPayable total and the current notes make up), and one the 10-Q tags no other figure
     beside tells nothing: those quarters read the line. A figure equal to the total (within ``_AGREE``) is the total
-    tagged twice, no other figure (BUG-384: ORCL's shape with its total also tagged NotesPayable)."""
+    tagged twice, no other figure (BUG-384: ORCL's shape with its total also tagged NotesPayable), unless it is a
+    noncurrent figure the line makes up to the total, leaving less of the gap than the line itself (BUG-387: the total
+    less a line under ``_AGREE`` of it)."""
     read = [tag for tag in us_gaap if _current_line_concept(tag)] + [
         tag for tag in _FIELDS["short_term_debt"].tags if tag in us_gaap]
     columns: Dict[str, Dict[str, Dict[str, float]]] = defaultdict(dict)  # {accn: {end: {tag: figure}}}
@@ -1534,15 +1536,21 @@ def _short_term_debt_lines(us_gaap: Dict[str, Any], annual: Dict[Any, Dict[str, 
                for e in us_gaap[tag].get("units", {}).get("USD", []) if e.get("accn")}
     beside = {tag: _by_filing(us_gaap, tag) for tag in _BESIDE_TOTALS if tag in us_gaap}
 
+    def twice(other: str, value: float, total: float, line: float) -> bool:
+        # a figure equal to the total (within _AGREE) is the total tagged twice, no other figure beside it: another
+        # total always (BUG-384: ORCL's shape with NotesPayable = LongTermDebt); a noncurrent figure unless the line
+        # makes it up to the total, leaving less of the gap than the line itself (BUG-387: LongTermNotesPayable
+        # $90.915B and $0.400B of current notes make LongTermDebt's $91.315B; ORLY's 10-Q for 2014-03-31 doesn't:
+        # LongTermDebtAndCapitalLeaseObligations $1.396242B and $74K of current leases are $3.7M short of its $1.4B)
+        return _agree(value, total) and (other in _LONG_TERM_TOTALS or abs(total - value - line) > line)
+
     def holds(key: Tuple[str, str], quarter: Dict[str, Any], line: float) -> bool:
         # the quarter's long-term debt is a total the 10-Q *key* shows holding the line beside its other debt figure (a
         # line of 0.0 counts nothing twice: BIIB's quarters with no current notes keep it)
         tag = quarter.get("_source_tags", {}).get("long_term_debt")
         total = quarter.get("long_term_debt") or 0
-        # a figure equal to the total is the total tagged twice (ORCL's shape with NotesPayable = LongTermDebt), no
-        # other figure beside it (BUG-384)
         others = [values[key] for other, values in beside.items() if other != tag and values.get(key, 0) > 0
-                  and not _agree(values[key], total)]
+                  and not twice(other, values[key], total, line)]
         return line > 0 and tag in _LONG_TERM_TOTALS and bool(others) and (
             max(others) + line <= (1 + _AGREE) * total)
 

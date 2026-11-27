@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 53 · NEEDS-USER 0 · Decided: 8 · Verified: 349
+**Open:** P0 0 · P1 0 · P2 0 · P3 52 · NEEDS-USER 0 · Decided: 8 · Verified: 350
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -1064,6 +1064,7 @@ Expected: the rule and the message as they are (or the small simple ratios appli
 
 Fix (iteration 246, `qa/evidence/web2-investigation.txt`): `quote_refresh.split_refusal` says a full collection doesn't update a split under 3-for-2 and the valuations stay on the old basis until the next report restates; a mixed list promises only the larger splits. sqlite_store and quote_refresh import the public `is_share_split`. Decision (USER 2026-11-27): keep the valuation's 3:2 rule (no 5:4/4:3 post-filing application). No stored data or valuation can move.
 Note (review 40, unproven): for a non-split factor under 1.5 the message says the next report "restates its figures", which a spin-off's report doesn't.
+Fix (iteration 250): a non-split factor under 1.5 (a spin-off's) is no longer promised a restatement; split-only messages unchanged. The worker's diff also closed `_small_split`'s lower bound (<=), a mutant left applied in its tree (web2's m130_bound_lower_closed): it made a 2-for-3 split 'small'; reverted by the orchestrator before commit (test_a_split_of_3_for_2_or_more_keeps_the_collection_promise[2/3] caught it).
 ### BUG-131 [P3][STORE] BUG-117's fallback still dates payments on a split's day for a collector east of UTC+10:30 whose bar request fails
 Status: VERIFIED (iteration 233)
 Found: iteration 84 by code review 12 (M3), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
@@ -2602,10 +2603,11 @@ Found: the val3 worker (iteration 247) | Fixed: | Regression test:
 Repro: today's DB: CCI financials_quarterly and financials_ttm 2026-12-31, every field empty but treasury_stock 0.0. The history now ignores a trailing year ending after the collection day (BUG-250's guard), but the parser still stores the row.
 Expected: no row for a period that hasn't ended.   Actual: an empty one.
 ### BUG-387 [P3][VALID] BUG-384 drops a real noncurrent figure within 0.5% of the total, so a small current line is read again
-Status: OPEN
-Found: code review 40 (`qa/evidence/review40.txt`, Minor 1; regression from BUG-384, 7964c1c) | Fixed: | Regression test:
+Status: VERIFIED (iteration 250)
+Found: code review 40 (`qa/evidence/review40.txt`, Minor 1; regression from BUG-384, 7964c1c) | Fixed: (this commit) | Regression tests: tests/test_debt_balance_sheet_lines.py; 5 failing first
 Repro: src/parsers/xbrl_parser.py ~1537-1547 (`holds`, `not _agree(values[key], total)` ~1545): LongTermDebt $91.315B = LongTermNotesPayable $90.915B + NotesPayableCurrent $0.400B reads total debt $91.715B (base $91.315B). At most 0.5% of the total; no census re-run. Probe: %LOCALAPPDATA%\stockdb-qa\review40\head\tests\test_review40.py.
 Expected: a noncurrent figure that plus the line makes the total still shows the total holds the line.   Actual: it is dropped as the total tagged twice.
+Fix (iteration 250, `qa/evidence/bug387-investigation.txt`): in `holds`, a figure within 0.5% of the total is 'the total tagged twice' when it is another total, or a noncurrent figure the line doesn't make up to the total (|total - figure - line| > line). The orchestrator's first rule (totals' kinds only) would have reverted ORLY, whose LongTermDebtAndCapitalLeaseObligations $1.396B is $3.7M short of its $1.4B total with the $74K line (BUG-384's investigation had ORLY's tags wrong: no NotesPayable). Census over 504 filers: 0 records change; ORLY, EQIX, AMGN, BIIB, ORCL kept.
 
 ### BUG-388 [P3][VAL] A trailing year ending on the collection's weekend is known on the Friday before it ends
 Status: OPEN
