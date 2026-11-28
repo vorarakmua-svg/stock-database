@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 from fractions import Fraction
 from functools import lru_cache
 from itertools import combinations
-from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, DURATION, INSTANT, SIGN_ABS, SIGN_NET
 from ..mappings.sectors import BANK
@@ -1765,35 +1765,87 @@ def _split_restatements(us_gaap: Dict[str, Any]) -> List[Tuple[str, str, float]]
 
     A split restates every share count and per-share figure the filings after it report,
     so a count two filings give for one period at a split's ratio shows one between them.
-    Two such counts in overlapping windows make a split: on the cached filers, 37 of the
-    38 found are Yahoo's splits, and the other is Arconic's 1-for-3 of 2016, which Yahoo's
-    history lacks. A lone ratio is a correction or a mis-tag, which restates nothing else.
+    Two such figures in overlapping windows make a split, one of them a count: on the cached
+    filers, 37 of the 38 the counts alone found are Yahoo's splits, and the other is Arconic's
+    1-for-3 of 2016, which Yahoo's history lacks. A lone ratio is a correction or a mis-tag,
+    which restates nothing else. A per-share figure restated at a split's ratio counts beside
+    a count (GOOGL's 20:1 of 2022 restated one count pair and seven of its diluted EPS, BUG-105),
+    never alone: a restated EPS of a few cents can read as any simple fraction. A later filing
+    that repeats a figure an earlier one gave for its period restated nothing
+    (``_first_filed``): ISRG's FY2021 10-K tags its 2020 quarters' EPS as first filed, before
+    its 3:1 split, beside its 10-Q's restated third quarter, which read as a 1-for-3 after it.
     """
-    pairs: List[Tuple[str, str, float]] = []
+    pairs: List[Tuple[str, str, float, bool]] = []
     for field in CANONICAL_FIELDS:
-        if field.xbrl_unit != "shares":
+        if field.xbrl_unit not in _SPLIT_UNITS:
             continue
+        count = field.xbrl_unit == "shares"
         for tag in field.tags:
             by_period: Dict[Tuple[Any, Any], Dict[str, float]] = defaultdict(dict)
-            for entry in us_gaap.get(tag, {}).get("units", {}).get("shares", []):
+            for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
                 val, filed = entry.get("val"), entry.get("filed")
-                if entry.get("form", "") in _QUARTERLY_FORMS and filed and isinstance(val, (int, float)) and val > 0:
+                if entry.get("form", "") in _QUARTERLY_FORMS and filed and isinstance(val, (int, float)) \
+                        and (val > 0 if count else val != 0):
                     by_period[(entry.get("start"), entry.get("end"))].setdefault(filed, float(val))
             for by_filed in by_period.values():
-                history = sorted(by_filed.items())
+                history: List[Tuple[str, float]] = []
+                for filed, val in sorted(by_filed.items()):
+                    # a figure an earlier filing gave, after another, is on that filing's basis: no restatement
+                    if not history or val == history[-1][1] or all(val != seen for _, seen in history):
+                        history.append((filed, val))
                 for (before, old), (after, new) in zip(history, history[1:]):
-                    ratio = _split_ratio(new / old)
+                    ratio = _split_ratio(new / old if count else old / new)
                     if ratio:
-                        pairs.append((before, after, ratio))
-    splits: List[List[Any]] = []  # [last old-basis filing, first new-basis filing, ratio, counts]
-    for before, after, ratio in sorted(pairs, key=lambda p: (p[1], p[0])):
+                        pairs.append((before, after, ratio, count))
+    splits: List[List[Any]] = []  # [last old-basis filing, first new-basis filing, ratio, figures, counts]
+    for before, after, ratio, count in sorted(pairs, key=lambda p: (p[1], p[0])):
         for split in splits:
             if split[2] == ratio and before < split[1] and split[0] < after:
                 split[0], split[1], split[3] = max(split[0], before), min(split[1], after), split[3] + 1
+                split[4] += count
                 break
         else:
-            splits.append([before, after, ratio, 1])
-    return [(before, after, ratio) for before, after, ratio, counts in splits if counts >= 2]
+            splits.append([before, after, ratio, 1, int(count)])
+    return [(before, after, ratio) for before, after, ratio, figures, counts in splits if figures >= 2 and counts]
+
+
+def _first_filed(us_gaap: Dict[str, Any], field: Any) -> Dict[Tuple[str, Any, Any, float], str]:
+    """The day each figure of *field* was first filed for its period under each of its tags, in a 10-Q or 10-K:
+    ``{(tag, start, end, value): filed}``. A later filing that repeats it is on that day's split basis, not its own
+    (BUG-105): ISRG's FY2021 10-K, after its 3:1 split, tags Q1 2020's diluted EPS at 2.62 as its 10-Q of 2020-04-17
+    did, where the restated figure is 0.87. Another tag's equal figure is no repeat: BF-B's dividends declared in its
+    first quarter of FY2016, 0.315 as restated for its 2:1 split, are the dividends paid as first filed."""
+    first: Dict[Tuple[str, Any, Any, float], str] = {}
+    for tag in field.tags:
+        for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
+            val, filed = entry.get("val"), entry.get("filed")
+            if entry.get("form", "") in _QUARTERLY_FORMS and filed and isinstance(val, (int, float)):
+                key = (tag, entry.get("start"), entry.get("end"), float(val))
+                if filed < first.get(key, "9999"):
+                    first[key] = filed
+    return first
+
+
+#: A per-share figure the splits between two filings move by half a cent or less reads the same restated.
+_SPLIT_UNSEEN = 0.005 + 1e-9
+
+
+def _basis_day(first: Dict[Tuple[str, Any, Any, float], str], tag: str, key: Tuple[Any, Any], filed: str, val: Any,
+               level: Callable[[str], float], windows: Sequence[Tuple[str, str]]) -> str:
+    """The filing day whose split basis a figure filed on *filed* under *tag* for the period *key* (start, end) is
+    on: its first filing's where a later filing repeats it (``_first_filed``, BUG-105), unless that day falls inside
+    a split's window (*windows*: its last filing on the old basis and first on the new, exclusive), whose basis is
+    unknown (NDSN's 10-Q of 2011-06-03 is on the basis after its 2:1 split, which the counts date by 2011-09-09), or
+    the splits since move it by half a cent or less, as they can a per-share figure, which then reads the same restated
+    (SBUX's FY2013 EPS of 0.01, 0.005 after its 2:1)."""
+    if not isinstance(val, (int, float)):
+        return filed
+    day = first.get((tag, key[0], key[1], float(val)), filed)
+    if any(before < day < after for before, after in windows):
+        return filed
+    if abs(val) * abs(1 - level(day) / level(filed)) <= _SPLIT_UNSEEN:
+        return filed
+    return day
 
 
 def explain_no_annual_financials(facts: Optional[Dict[str, Any]],
@@ -2131,7 +2183,8 @@ class XBRLParser:
         level: Optional[Callable[[str], float]] = (
             (lambda filed: math.prod(ratio for _, after, ratio in splits if after <= filed)) if splits else None)
 
-        instants_filed = self._collect_instant_checkpoints(us_gaap, periods, frames, restored)
+        windows = [(before, after) for before, after, _ in splits]
+        instants_filed = self._collect_instant_checkpoints(us_gaap, periods, frames, restored, windows)
         for end, (value, tag) in _long_term_debt_lines(us_gaap, annual, periods).items():
             periods[end]["long_term_debt"] = value
             periods[end]["_source_tags"]["long_term_debt"] = tag
@@ -2139,7 +2192,7 @@ class XBRLParser:
             periods[end]["short_term_debt"] = value
             periods[end]["_source_tags"]["short_term_debt"] = tag
         self._collect_discrete_flows(us_gaap, periods, frames, restored, level, self._aside(us_gaap),
-                                     _da_as_filed(_dollar_filings(facts.get("facts", {}).get("us-gaap", {}))))
+                                     _da_as_filed(_dollar_filings(facts.get("facts", {}).get("us-gaap", {}))), windows)
         if level is not None:
             self._instants_on_year_basis(periods, instants_filed, level)
         self._apply_quarter_calendar(periods, frames)
@@ -2152,12 +2205,15 @@ class XBRLParser:
     def _collect_instant_checkpoints(
         self, us_gaap: Dict[str, Any], periods: Dict[str, Dict[str, Any]],
         frames: Dict[str, set], restored: Dict[Tuple[str, str], Tuple[float, float]],
+        windows: Sequence[Tuple[str, str]] = (),
     ) -> Dict[Tuple[str, str], str]:
         """Balance-sheet (instant) values at every quarter-end (10-Q and 10-K), with the
         year-end figures the annual record puts back (*restored*). A figure dated after its
         filing's day is no checkpoint: that date hadn't come (CCI's 10-Qs for 2026 tag treasury
         stock of 0 at 2026-12-31, which made an empty quarter; BUG-386, as ``_filed_ahead`` for
-        a flow). Returns when each share count was filed: ``{(period end, field): filed}``."""
+        a flow). Returns when each share count was filed, the day it was first filed where a later filing repeats
+        it (``_first_filed``) and that day is in no split's window (*windows*, ``_basis_day``):
+        ``{(period end, field): filed}``."""
         best: Dict[Tuple[str, str], Tuple[int, str]] = {}
         for field in CANONICAL_FIELDS:
             if field.kind != INSTANT:
@@ -2188,8 +2244,17 @@ class XBRLParser:
             value = periods.get(end, {}).get(key)
             if isinstance(value, (int, float)) and _agree(value, dropped):
                 periods[end][key] = kept
-        split_keys = {f.key for f in CANONICAL_FIELDS if f.kind == INSTANT and f.xbrl_unit == "shares"}
-        return {(end, key): filed for (end, key), (_, filed) in best.items() if key in split_keys}
+        # a count a later filing repeats is on its first filing's split basis (_first_filed, BUG-105)
+        split_fields = [f for f in CANONICAL_FIELDS if f.kind == INSTANT and f.xbrl_unit == "shares"]
+        first = {f.key: _first_filed(us_gaap, f) for f in split_fields}
+        out: Dict[Tuple[str, str], str] = {}
+        for (end, key), (_, filed) in best.items():
+            if key in first:
+                value, tag = periods[end].get(key), periods[end]["_source_tags"][key]
+                day = first[key].get((tag, None, end, float(value)), filed) \
+                    if isinstance(value, (int, float)) else filed
+                out[(end, key)] = filed if any(before < day < after for before, after in windows) else day
+        return out
 
     def _instants_on_year_basis(self, periods: Dict[str, Dict[str, Any]],
                                 filed_at: Dict[Tuple[str, str], str], level: Callable[[str], float]) -> None:
@@ -2374,6 +2439,7 @@ class XBRLParser:
         level: Optional[Callable[[str], float]] = None,
         set_aside: FrozenSet[Tuple[str, str, Any]] = frozenset(),
         as_filed: Optional[Dict[Tuple[str, str, str], Dict[str, float]]] = None,
+        windows: Sequence[Tuple[str, str]] = (),
     ) -> None:
         """Discrete quarterly flows via cumulative-ladder differencing.
 
@@ -2397,6 +2463,11 @@ class XBRLParser:
         (``_da_carried``) (BUG-275).
         """
         oracle_rungs: Dict[str, Dict[Tuple[str, str], Any]] = {}  # net income's and EPS's, for the counts' scale
+        # the years a 10-K closes, in any field (BUG-146): a 10-Q's span of a year is one only where a 10-K reports it
+        years_closed = {(entry.get("start"), entry.get("end")) for field in CANONICAL_FIELDS if field.kind == DURATION
+                        for tag in field.tags
+                        for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, [])
+                        if str(entry.get("form", "")).startswith("10-K")}
         for field in CANONICAL_FIELDS:
             if field.kind != DURATION:
                 continue
@@ -2446,14 +2517,18 @@ class XBRLParser:
             # A split restates only the filings after it, so a year's rungs can sit on two
             # bases: AMZN's FY2020 from a 10-K after its 20:1 split, its nine months from a
             # 10-Q before, and Q4 read -25.63 (BUG-082). Each goes onto its year's basis.
+            # A figure a later filing repeats is on its first filing's basis (_first_filed, BUG-105).
             shares = field.xbrl_unit == "shares"
             basis: Dict[Tuple[str, str], float] = {}
             if level is not None and field.xbrl_unit in _SPLIT_UNITS:
-                basis = self._year_basis(chosen, level)
+                first = _first_filed(us_gaap, field)
+                on_basis = {key: (p, _basis_day(first, picked[key][1], key, f, v, level, windows), v)
+                            for key, (p, f, v) in chosen.items()}
+                basis = self._year_basis(on_basis, level)
                 for key, year_level in basis.items():
                     priority, filed, val = chosen[key]
                     if isinstance(val, (int, float)):
-                        moved = year_level / level(filed)
+                        moved = year_level / level(on_basis[key][1])
                         chosen[key] = (priority, filed, val * moved if shares else val / moved)
 
             # A later filing can re-tag a year's count in thousands or millions beside its
@@ -2508,10 +2583,13 @@ class XBRLParser:
             # figure dates it, or the year after the one ending the day before. Its latest end's
             # calendar year put a January year's quarters before its 10-K in the year before theirs,
             # beside that year's own (BUG-124). A period a 10-K closes keeps its end's year, as
-            # before: NOW's July-December 2011 between its June and calendar years.
+            # before: NOW's July-December 2011 between its June and calendar years. A year is one a
+            # 10-K closes (in any field: BXP's 10-Q tags its 2010 dividends a share for the year its 10-K
+            # reports): a 10-Q's trailing twelve months (AMZN's) are no year, and the quarter after them no
+            # year's first (BUG-146).
             year_of_start: Dict[str, Optional[int]] = {}
             year_spans = [(start, end) for start, end in chosen
-                          if (self._span(start, end) or 0) >= _FULL_YEAR_MIN_DAYS]
+                          if (self._span(start, end) or 0) >= _FULL_YEAR_MIN_DAYS and (start, end) in years_closed]
             for start, end in year_spans:
                 year_of_start[start] = self._fiscal_year_from_end(end)
             for start, end in year_spans:
@@ -2550,8 +2628,13 @@ class XBRLParser:
                 for end, val in points:
                     inc_span = self._span(prev_end, end)
                     if end in own:
-                        own_val, own_tag, own_level = own[end]
-                        assign(end, own_val, own_tag, start, ladder_fy, own_level)
+                        # an own count makes a quarter where the ladder steps one quarter, as a derived one does,
+                        # else fills (and dates) only one the filings hold: a 10-K re-dating a year's first quarter
+                        # six days after its 10-Q's (ADI's 2011-02-04 beside 2011-01-29) makes none (BUG-096)
+                        if end in periods or (inc_span is not None
+                                              and _QUARTER_MIN_DAYS <= inc_span <= _QUARTER_MAX_DAYS):
+                            own_val, own_tag, own_level = own[end]
+                            assign(end, own_val, own_tag, start, ladder_fy, own_level)
                     elif isinstance(val, (int, float)) and inc_span is not None \
                             and _QUARTER_MIN_DAYS <= inc_span <= _QUARTER_MAX_DAYS:
                         prev = prev_val if isinstance(prev_val, (int, float)) else 0.0

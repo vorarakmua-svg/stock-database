@@ -3989,3 +3989,15 @@ Result: BUG-058 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4506 passed, 2 skipped
 Commit: (this commit) fix(gather): a foreign issuer without quarters is told why (BUG-058)
 Next: code review 41 (5 units since review 40); the shares group (paused at the usage limit).
+
+## Iteration 255: 2026-11-28: fix (BUG-096, 105, 146, 369); code review 41; decisions on BUG-339, 086, 390
+Picked: the share-count group (an opus worker) and code review 41 (6e7c2c7..d2bead4; an opus reviewer).
+Did: an own 3-month count makes a quarter only on a quarter step; a 10-Q's TTM span isn't a year; repeated figures
+keep their first filing's split basis and restated EPS shows a split; a count no EPS checks follows its checked twin.
+- RED: 12 failed on d2bead4; GREEN. 26 of 26 mutants; bug275's m275_as_filed_off re-quoted (26/26). Look-ahead 0.
+- DB copies: 0 medians, verdicts, labels; quarterly/TTM/history rows move (GOOGL, ROL, HRL, COP, ...).
+Review 41: Minors -> BUG-389 (BUG-387 edge), BUG-390 (BUG-275 spread read early by the history). New P2: BUG-391.
+Result: BUG-096, 105, 146, 369 VERIFIED; BUG-086 WONTFIX (user); BUG-339 decided A; BUG-390 decided (known at the 10-K).
+Gates: ruff ✓ mypy ✓ pytest 4530 passed, 2 skipped
+Commit: (this commit) fix(parser): quarter counts, TTM spans, split bases, vintage share scale (BUG-096, -105, -146, -369); review 41
+Next: BUG-391 (P2), BUG-390, BUG-389, BUG-339 option A.

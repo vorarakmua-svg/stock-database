@@ -2307,16 +2307,24 @@ numbers SEC filings report:
   cumulative ladder anchored at the fiscal-year start (`discrete[k] = YTD[k] − YTD[k-1]`),
   which recovers every quarter's standalone performance — including **Q4**, which is never
   filed as a 10-Q (`Q4 = annual − 9-month YTD`). Until a year's second 10-Q, its first
-  quarter is its own 3-month figure. A quarter's EPS and weighted-average share counts are
+  quarter is its own 3-month figure, the year being the one after a year a 10-K reports (a
+  10-Q's trailing twelve months are none, BUG-146). A quarter's EPS and weighted-average share counts are
   its own 3-month figures where a filing tags them: those aren't differenced (nine months
   less six of rounded EPS gave Citigroup's Q3 2026 2.86 for its 10-Q's 2.85, BUG-335), so
-  only Q4's are derived. Derived values are tagged in `_source_tags`.
+  only Q4's are derived. An own count makes a quarter only one quarter on from its ladder's
+  last rung, else fills one the filings hold: a 10-K re-dating a first quarter six days after
+  its 10-Q's (Analog Devices' 2011-02-04) makes none (BUG-096). Derived values are tagged in `_source_tags`.
 - **One split basis per year.** A stock split restates only the filings made after it,
   so a year's figures can come from both sides of one. Each quarter's per-share figures
   and share counts are put on the basis of its year's annual figures, as
   `financials_annual` has them, before Q4 is derived. The parser reads the splits from
-  the filings themselves: counts that two filings give for the same period at a split's
-  ratio. Years that no filing after a split reports keep their older basis, as in
+  the filings themselves: figures that two filings give for the same period at a split's
+  ratio, a count among them (Alphabet's 20:1 of 2022 restated one count and seven of its
+  EPS, BUG-105). A figure a later filing repeats under the same tag is on the basis of the
+  filing that first gave it (Intuitive Surgical's FY2021 10-K tags its 2020 quarters' EPS as
+  first filed, before its 3:1 split), unless that filing falls between the split's last filing
+  on the old basis and its first on the new, or the split moves the figure by half a cent or
+  less. Years that no filing after a split reports keep their older basis, as in
   `financials_annual`.
 - **One share-count scale per year.** A later filing can tag a year's share count in
   thousands or millions where its other figures are in units. Before Q4 is derived,
@@ -2325,7 +2333,9 @@ numbers SEC filings report:
   A count at or below zero, filed or derived, is left empty.
 - **Share counts no EPS checks.** Across periods, a count goes onto the scale its net
   income and EPS imply; the shares outstanding follow a weighted count only where an EPS
-  checked it. A filed count no EPS checks takes the scale of its own field's neighbouring
+  checked it, and so does the period's other weighted count, no EPS checking it, where that
+  one's own EPS checked it (ConocoPhillips' FY2018 counts, both in thousands, with a basic EPS
+  alone, BUG-369). A filed count no EPS checks takes the scale of its own field's neighbouring
   periods, where two or more agree within a factor of two and it is a power of 1000 from
   them, unless another count of its own period is on its scale. Where a later
   filing tags a year's weighted count a power of 1000 below the one earlier filings agree
@@ -2707,8 +2717,10 @@ for the year are all of another period, such as a recast after a change of fisca
 a year not over on its filing day, has none (see "Fiscal vs calendar year"). A view is read from
 the facts filed on or before its filing day, the as-of view's gate, so its set-asides read no
 later filing (BUG-120), and its share counts take a scale only from the year's views filed by
-then: a count no view filed by then checks stays as filed (ConocoPhillips' FY2018-20 diluted
-counts in thousands). A run that builds the as-of snapshots replaces the ticker's vintages with
+then: a count no view filed by then checks stays as filed (Northern Trust's FY2009 counts in
+its 2011 10-K, BUG-339), and a weighted count no EPS checks follows the view's other one where
+its EPS checks that one (ConocoPhillips' FY2018-20 diluted counts, tagged in thousands,
+BUG-369). A run that builds the as-of snapshots replaces the ticker's vintages with
 its own (a full run all, a `years_back` run those years), so a view an older parse made doesn't
 stay. The as-of explorer's side-by-side table and the valuation's first-filed dates (a year's
 earliest `filed_date`) read them; the as-of view doesn't. Vintages are SQLite-only (not in the
