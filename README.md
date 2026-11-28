@@ -2476,6 +2476,10 @@ numbers SEC filings report:
   filing's Cash gives way to that total too where the filing, or an earlier one, shows the total
   to hold no restricted cash: it agrees with a figure for cash and cash equivalents above Cash on
   one of the filing's dates (Target's FY2025: $4.76B, not a note's $0.28B).
+  A card issuer's or bank's line with its federal funds sold is its cash line, read first, on
+  balance-sheet dates only (American Express's FY2017: $32.93B, not the $33.26B with restricted
+  cash, and its FY2009-16 lines for a note's parts; Capital One's FY2025: $57.43B, not $62.09B,
+  and its FY2008-15 cash, empty before).
 - **Depreciation and amortization.** D&A is the filing's total. Where a filing shows its
   depreciation and its amortization of intangibles on lines of their own, with no total that
   can hold them, it is the two together (AbbVie's FY2025: $8.1B, not its $0.8B of depreciation;

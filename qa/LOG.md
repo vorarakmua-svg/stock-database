@@ -4030,3 +4030,13 @@ Result: BUG-390 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4558 passed, 2 skipped
 Commit: (this commit) fix(valuation): spread quarters wait for their 10-K in the history (BUG-390)
 Since review 41: 4 units (shares e88639d, 339/389, 391, 390) -> review 42 after 1 more.
+
+## Iteration 259: 2026-11-28: fix (BUG-261); BUG-299 already fixed; BUG-276 prepared for the user
+Picked: the dna1 worker's sets (b261, b276).
+Did: AXP's and COF's balance-sheet cash line (CashCashEquivalentsAndFederalFundsSold) is the cash.
+- RED: 5 failed on 7dbc9bb; GREEN. dna1-b261 3/3, requoted bug161/bug142 3/3.
+- BUG-276 measured, held: FLEX owner-earnings verdict fair -> cheap, VEEV N/A -> expensive.
+Result: BUG-261 VERIFIED; BUG-299 VERIFIED (5efa1be).
+Gates: ruff ✓ mypy ✓ pytest 4563 passed, 2 skipped
+Commit: (this commit) fix(parser): a balance sheet's cash line with federal funds sold is the cash (BUG-261)
+Since review 41: 5 units -> review 42 next.

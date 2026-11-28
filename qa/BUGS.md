@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 40 · NEEDS-USER 0 · Decided: 8 · Verified: 363
+**Open:** P0 0 · P1 0 · P2 0 · P3 38 · NEEDS-USER 0 · Decided: 8 · Verified: 365
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2017,11 +2017,12 @@ Repro: a derived fourth quarter of 435M splits the 2015 3:2 seam across two jump
 Expected: the filing-based count.   Actual: as above.
 
 ### BUG-299 [P3][VALID] D&A sets a total aside against AdjustmentForAmortization where that is broader than the amortization of intangibles: ALL's FY2021 vintage $1.69B for $1.09B
-Status: OPEN
-Found: code review 23 (`qa/evidence/review23.txt`, Minor 1) | Fixed: | Regression test:
+Status: VERIFIED (iteration 259; fixed earlier by 5efa1be, BUG-274)
+Found: code review 23 (`qa/evidence/review23.txt`, Minor 1) | Fixed: 5efa1be | Regression tests: tests/test_xbrl_parser.py::test_a_total_that_holds_the_intangibles_amortization_stays_beside_a_broader_cash_flow_figure
 Repro: `_AMORTIZATION` takes the first tag found (xbrl_parser.py ~269, 298-302) and a total at or below it is set aside (311-318). Allstate's 10-K 0000899051-22-000015 FY2021: total $1,086M, Depreciation $411M, AmortizationOfIntangibleAssets $376M, AdjustmentForAmortization $1,281M, so D&A reads 411 + 1,281. The annual record keeps $1,086M (a later 10-K's figure stands); only that vintage moves. The only such period in the cache. A 4-fact test, %LOCALAPPDATA%\stockdb-qa\review23\test_review23_da.py, fails at HEAD.
 Expected: the total kept where it holds the intangibles' amortization.   Actual: $1,692M.
 
+Re-checked (iteration 259, `qa/evidence/dna1-investigation.txt`): review 23's probe passes on 7dbc9bb; ALL FY2021 vintages read $1,086M in all three filings (offline re-collect and stored DB). No diff.
 ### BUG-300 [P3][DOC] D&A's set-aside adds the amortization to the Depreciation fact, the README says to the line set aside: they differ in 40 annual periods at 8 filers
 Status: OPEN
 Found: code review 23 (Minor 2) | Fixed: | Regression test:
@@ -2720,11 +2721,12 @@ Repro: cash_and_equivalents reads Cash ahead of the restricted-cash total. Cash 
 Expected: the balance sheet's cash line.   Actual: a component at CF, TGT, KLAC and GEN.
 
 ### BUG-261 [P3][VALID] AXP's and COF's balance-sheet cash tag, CashCashEquivalentsAndFederalFundsSold, isn't mapped
-Status: OPEN
-Found: iteration 112 (BUG-161's investigation, section 6) | Fixed: | Regression test:
+Status: VERIFIED (iteration 259)
+Found: iteration 112 (BUG-161's investigation, section 6) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (3 new, 1 reshaped); 5 failing first
 Repro: AXP's FY2009-17 and COF's balance sheets tag their cash line as CashCashEquivalentsAndFederalFundsSold (AXP FY2017 $32.927B = cash and due from banks + interest-bearing deposits + equivalents), which canonical.py doesn't map, so their cash reads a component (AXP FY2009-16) or nothing (10 years). Mapping it changes 32 years, 119 quarters and 97 vintages at AXP and COF; read on every date it adds a quarterly row from a cash flow statement and drops two TTM rows, so it needs the balance-sheet-dates filter (BUG-139). Their net debt is suppressed as banks', so it shows in the cash field only.
 Expected: the balance sheet's cash line.   Actual: a component or nothing.
 
+Fix (iteration 259, `qa/evidence/dna1-investigation.txt`, `qa/evidence/b261-verify-mine.txt`): CashCashEquivalentsAndFederalFundsSold ranks first in cash_and_equivalents and is balance-sheet-only (dated). AXP, COF cash only: annual 33, quarterly 121, TTM 119, vintages 61. 0 medians, verdicts, owner-earnings verdicts, labels (net debt is suppressed for banks). Residual: AXP FY2023-25 tag no line and keep the total with restricted cash (~0.4%).
 ### BUG-262 [P3][VAL] The net-income test can keep a real split unfolded when Yahoo doesn't declare it in a year whose earnings swung
 Status: VERIFIED (iteration 228)
 Found: iteration 114 (BUG-247's fix, `qa/evidence/bug247-done.txt` section 11b) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py, test_valuation_oracle_seam.py; 29 failing first

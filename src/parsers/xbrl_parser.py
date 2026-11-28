@@ -290,8 +290,11 @@ def _net_outflows_as_paid(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
 #: total also stands at each earlier year end the statement covers; and a note's commercial
 #: paper on another day isn't the year's (MCO's FY2016 10-K tags $566M at 2017-02-22, which
 #: took FY2017 once its year end's paper was set aside; JNJ's 2024-05-15 made a quarter of its
-#: own; BUG-143).
-_BALANCE_SHEET_ONLY = ("CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "CommercialPaper")
+#: own; BUG-143). The cash line with federal funds sold too: AXP's 10-K of 2019 tags FY2015's
+#: opening balance with restricted cash, $23.239B for its $22.762B line, and COF's of 2012 a day
+#: no balance sheet of it shows, 2011-01-07, which made a quarter of its own (BUG-261).
+_BALANCE_SHEET_ONLY = ("CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "CommercialPaper",
+                       "CashCashEquivalentsAndFederalFundsSold")
 _BALANCE_SHEET_TOTAL = "LiabilitiesAndStockholdersEquity"
 
 

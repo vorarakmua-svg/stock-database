@@ -1822,15 +1822,55 @@ def test_a_later_10ks_note_doesnt_replace_the_years_total():
 
 
 def test_a_cash_lines_smallest_part_gives_way_to_a_later_10ks_total():
-    # AXP's FY2017 10-K tags its balance sheet's cash line, $32.927B, as CashCashEquivalentsAndFederalFundsSold, which
-    # cash doesn't read, over three parts: cash and due from banks, interest-bearing deposits in other banks, and
-    # $0.070B of short-term investment securities it tags CashEquivalentsAtCarryingValue, which the year read; its
-    # FY2018 10-K tags FY2017 with the total, the line and $0.336B of restricted cash.
-    lines = {"CashCashEquivalentsAndFederalFundsSold": 32.927e9, "CashAndDueFromBanks": 5.148e9,
-             "InterestBearingDepositsInBanks": 27.709e9, "RestrictedCashAndCashEquivalents": 0.336e9}
+    # AXP's FY2017 10-K tags its balance sheet's cash line over three parts: cash and due from banks, interest-bearing
+    # deposits in other banks, and $0.070B of short-term investment securities it tags CashEquivalentsAtCarryingValue,
+    # which the year read; its FY2018 10-K tags FY2017 with the total and $0.336B of restricted cash. (The line itself,
+    # where tagged, comes first: BUG-261.)
+    lines = {"CashAndDueFromBanks": 5.148e9, "InterestBearingDepositsInBanks": 27.709e9,
+             "RestrictedCashAndCashEquivalents": 0.336e9}
     facts = _with_later_10k(_debt_filing(**{EQUIVALENTS: 0.070e9, **lines}), "2027-02-12",
                             **{RESTRICTED: 33.263e9, **lines})
     assert _cash(_debt_year(facts)) == (33.263e9, RESTRICTED)
+
+
+FED_FUNDS = "CashCashEquivalentsAndFederalFundsSold"
+
+
+def test_a_balance_sheets_cash_line_with_federal_funds_sold_is_the_cash():
+    # BUG-261: AXP's FY2017 10-K tags its balance sheet's cash line, $32.927B, as
+    # CashCashEquivalentsAndFederalFundsSold, which cash didn't read: the year read a note's $0.070B part, then its
+    # FY2018 10-K's total with restricted cash.
+    lines = {FED_FUNDS: 32.927e9, "CashAndDueFromBanks": 5.148e9, "InterestBearingDepositsInBanks": 27.709e9,
+             "RestrictedCashAndCashEquivalents": 0.336e9}
+    facts = _with_later_10k(_debt_filing(**{EQUIVALENTS: 0.070e9, **lines}), "2027-02-12",
+                            **{RESTRICTED: 33.263e9, **lines})
+    assert _cash_records(facts) == [(32.927e9, FED_FUNDS)] * 3
+
+
+@pytest.mark.parametrize("tagged", [
+    # AXP's 10-K of 2011 tags FY2009's line, $16.599B, beside $4.064B it tags CashAndCashEquivalentsAtCarryingValue,
+    # a part of it
+    {FED_FUNDS: 16.599e9, "CashAndCashEquivalentsAtCarryingValue": 4.064e9, "CashAndDueFromBanks": 1.525e9,
+     "InterestBearingDepositsInBanks": 11.010e9},
+    # COF's FY2025 10-K: its $57.434B line beside the cash flow statement's $62.093B with restricted cash
+    {FED_FUNDS: 57.434e9, RESTRICTED: 62.093e9, "CashAndDueFromBanks": 3.031e9,
+     "InterestBearingDepositsInBanks": 54.403e9},
+    # COF's FY2015 10-K tags nothing else: cash was empty
+    {FED_FUNDS: 8.023e9, "CashAndDueFromBanks": 3.407e9, "InterestBearingDepositsInBanks": 4.577e9},
+])
+def test_the_line_with_federal_funds_sold_outranks_its_parts_and_the_total(tagged):
+    assert _cash_records(_debt_filing(**tagged)) == [(tagged[FED_FUNDS], FED_FUNDS)] * 3
+
+
+def test_the_line_with_federal_funds_sold_isnt_read_from_a_cash_flow_statements_opening_balance():
+    # AXP's 10-K of 2019 tags FY2015's opening balance, $23.239B with restricted cash, on a date its balance sheets
+    # don't cover; COF's of 2012 a day, 2011-01-07, no balance sheet of it shows
+    facts = _debt_filing(**{FED_FUNDS: 27.445e9})
+    facts["facts"]["us-gaap"][FED_FUNDS]["units"]["USD"].append(usd(23.239e9, None, "2023-12-31", **_K10))
+    parser = XBRLParser()
+    assert "2023" not in parser.extract_annual_financials(facts)
+    assert "2023-12-31" not in parser.extract_quarterly_financials(facts)
+    assert _cash_records(facts) == [(27.445e9, FED_FUNDS)] * 3
 
 
 @pytest.mark.parametrize("tagged, line", [

@@ -188,7 +188,11 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "cash_and_equivalents", "Cash and Equivalents", BALANCE, UNIT_USD, INSTANT,
-        ("CashAndCashEquivalentsAtCarryingValue", "Cash",
+        # A card issuer's or bank's balance-sheet line with its federal funds sold first: AXP's FY2017 $32.927B, its
+        # cash and due from banks and interest-bearing deposits, whose CashAndCashEquivalentsAtCarryingValue is a
+        # note's part ($4.064B for FY2009), and COF's line beside its total with restricted cash (BUG-261). Read on
+        # balance-sheet dates only, as its cash flow statements tag it on their opening balances too.
+        ("CashCashEquivalentsAndFederalFundsSold", "CashAndCashEquivalentsAtCarryingValue", "Cash",
          # Then the total with restricted cash: some balance sheets tag nothing else (GE's,
          # CVX's and five more FY2025 10-Ks), and without it net debt was their whole debt
          # (BUG-139). Where a filing tags both, it runs a median 0.4% above the cash line. Read
