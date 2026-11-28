@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 98 · NEEDS-USER 2 · Decided: 8 · Verified: 283
+**Open:** P0 0 · P1 0 · P2 0 · P3 36 · NEEDS-USER 0 · Decided: 8 · Verified: 372
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -182,15 +182,16 @@ Fix (iteration 24): `SQLiteStore.export` writes a full-collection snapshot only 
 Notes: the earlier note here ("the JSON also keeps a suspended yield") was wrong: the JSON replaces a section the new run has, and the CSV now does the same. The price-history label issue review 3 raised is BUG-030. Code review 4 (iteration 29): the web quote refresh (`upsert_quote`) and a full export with only price history still write a price-less latest snapshot: BUG-033.
 
 ### BUG-019 [P3][UI] The web dividend panel shows DHR's 2016 spin-off as a $24.56 dividend
-Status: OPEN
-Found: iteration 14 while fixing BUG-011 | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 246)
+Found: iteration 14 while fixing BUG-011 | Fixed: (this commit) | Regression tests: tests/test_quote_refresh.py, test_web_industries.py, test_web_workstation.py; failing first
 Repro: the DVD panel's payments table and annual bar chart for DHR read `dividend_events` as stored, so 2016 shows a $24.56 payment (an annual total of about $25 against $0.44 in the years around it).
 Expected: the spin-off shown as such, or left out the way the valuation now leaves it out.
 Actual: the raw Yahoo record is shown as a cash dividend. The panel's CAGR uses the first and last years of the whole history, so it isn't affected.
 Notes: cosmetic; the valuation side is fixed (BUG-011). ETN 2001 and ABT 2004 show the same pattern. Review 3: Yahoo also records some spin-offs as dividends only, with no split-history factor, which the two-signal rule can't see: MO 2007 ($21.91) and 2008 ($51.06), MS 2007 ($14.25), C 2002 ($24.15), MRK 2003 ($2.74), PEP 1997 ($3.20), SLB 1999 ($3.29); none is in a current window. A cash special paid on one of SCCO's stock-dividend days would be dropped as a spin-off.
 
+Fix (iteration 246, `qa/evidence/web2-investigation.txt`): `dvd_fragment` applies the valuation's BUG-011 rule (`inputs._drop_spin_off_dividends`: over 5x the 400-day median on a day with a 2:3-3:2 price factor): year totals, bars, CAGR and consistency leave such rows out; the Payments table keeps them marked "(spin-off, not a cash dividend)"; CSV and API raw. Real DB: ABT 2004-05-03, CNP 2002-10-01, DHR 2016-07-05, ETN 2001-01-02. Spin-offs Yahoo records with no split factor (MO, MS, C, MRK, PEP, SLB) still show as cash. No stored data or valuation can move.
 ### BUG-020 [P3][VALID] Some filers tag a quarter's dividend, or a stray figure, as the year's dividends per share
-Status: OPEN
+Status: WONTFIX (iteration 239, the user's decision 2026-11-26): SEC's dividend figures are kept as filed; documented in the README ("Dividends per share as filed") at iteration 241
 Found: iteration 15 while fixing BUG-013 | Fixed: — | Regression test: —
 Repro: cached companyfacts: V tags 0.45/0.52/0.59 under both dividend tags with full-year contexts for FY2023–2025 (it paid 4 × those); CEG tags 0.282/0.3525/0.3878 the same way; PLD tags `CommonStockDividendsPerShareDeclared` 0.01 (FY2024) and 0.03 (FY2025) beside `...CashPaid` 3.84 and 4.04.
 Expected: the year's dividends per share.
@@ -198,6 +199,7 @@ Actual: the parser stores what was filed: V, CEG at a quarter of the year, PLD a
 Notes: not used by the valuations; the exports carry it, and the dividend completeness check (BUG-012) reads it, where a too-low figure can only hide a finding. Options: prefer `CashPaid` when both tags have a full-year fact and they differ more than 2× (PLD); flag a year whose SEC figure is about a quarter of Yahoo's payments (V, CEG); or WONTFIX as the filers' own data.
 
 Iteration 47: the same filer tagging (a quarterly amount in a full-year context) also gives BKNG FY2024-25 (8.75, 9.60), AMAT FY2016-17 (0.10) and NVDA FY2016 (0.115) a quarter of their year's dividend; today's parser reads what was filed (`qa/evidence/iter47-valid-triage.txt`).
+Decision (USER 2026-11-26): keep as filed and document. Census: 63 years at 26 tickers where the two dividend tags differ more than 2x; neither is right throughout (CashPaid at PLD and V, Declared at DOW, SPGI, EOG; scale typos at XYL, BRO). The note "not used by the valuations" is stale: the DDM reads the record, and its one-payment gate (BUG-311) already replaces 47 such years at 15 tickers with Yahoo's payments.
 ### BUG-021 [P1][STORE] The CSV merge silently drops every earlier row when the old file has no `ticker` column
 Status: VERIFIED
 Found: iteration 17 by code review 2; reproduced (`qa/evidence/iter17-review2-checks.txt`) | Fixed: iteration 19 (see LOG) | Regression test: `tests/test_csv_exporter.py::test_a_summary_without_a_ticker_column_is_kept_aside` (`;` separators with a BOM; a header renamed `Ticker`)
@@ -226,18 +228,21 @@ Fix: `_apply_later_splits` applies a post-filing split only when today's share c
 Notes: the historical seams are a separate question: `_normalize_splits` starts from a real share-count jump and can snap a merger seam to a spin-off factor (RTX 2020: observed 1.5717, declared 1.589), which lead L12 covers.
 
 ### BUG-024 [P3][VAL] Post-filing splits are still offered as seam candidates
-Status: OPEN
-Found: iteration 17 by code review 2 | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 228)
+Found: iteration 17 by code review 2 | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py, test_valuation_oracle_seam.py; 29 failing first
 Repro: synthetic: a 2:1 seam with 30% issuance (observed ratio 2.6) and a later post-filing 3:1 split: `_declared_ratio` matches the run 2 × 3, so the older years move ×9 instead of ×6.
 Expected: `_normalize_splits` only sees splits dated on or before the latest `filed_date`; `_apply_later_splits` handles the rest.
 Notes: also add tests for a post-filing reverse split and for two post-filing splits (review 2 checked both by hand).
 
+Fix (iteration 228, `qa/evidence/bug264-investigation.txt`; applied at the user's decision, 2026-11-25, for DD's label): one split history (`inputs.split_history`) for the annual and quarterly paths: Yahoo's split_events plus the splits the filings record (`_restated_splits`: consecutive 10-K vintages of a year whose count moved by a simple ratio of 3:2 or more within 1%, EPS marked, net income held, not explained by a declared split). Yahoo's non-split factor nearest such a ratio between those filings is split into the split and the spin-off remainder (BUG-379). Quarters fold an undeclared seam on the marks plus the implied count plus the trailing year's net income held (BUG-264). Post-filing factors: simple splits apply; of the others, the subset nearest a Yahoo count within 1.25x, none without a count (BUG-050). `_restated_between` takes MAX_SPLIT_RATIO (BUG-270). BUG-024 was fixed in iteration 42; tests added. Filings' splits found: DD 1:3, HLT 1:3, LDOS 1:4, MSI 1:7, WTW 2.649:1 (read 3:8), EXE 1:200, HWM 1:3. DB copies: 0 medians, verdicts, owner-earnings verdicts; DD historical value 133.14 -> 139.45, label above -> near; HLT DDM base 7.50 -> 7.66, historical value within far above; 654 valuation_history rows (market caps before the mixed-factor days corrected, e.g. DD 2016-11 $22.46B -> $61.98B). Oracles agree with the code's split history; valuation oracle L2 loses HLT lynch (the oracle's own error).
 ### BUG-025 [P3][VALID] Edge cases in the dividend completeness check
-Status: OPEN
+Status: VERIFIED (iteration 243; parts 3-4 at 239, parts 1-2 applied at the user's decision after the measurement, 2026-11-27)
 Found: iteration 17 by code review 2 | Fixed: — | Regression test: —
 Repro: (1) the usual interval is the whole-history median, so DIS (94 days overall, 193.5 since 2023) has the gap signal always on; (2) a gap with no later Yahoo payment is never flagged (CB would have passed if collected before 2026-03-13); (3) a malformed date raises `ValueError`, and `_assess`'s catch-all then drops the whole quality report (re-checked: `stock_data_fetcher.py:208-213`); (4) a NaN amount silences the finding.
 Notes: all unlikely with today's inputs (strftime dates, floats).
 
+Fix (iteration 239, parts 3 and 4): `dividend_gaps` leaves out a payment whose date doesn't parse or whose amount isn't finite (NaN, inf as None), and a year whose period_end doesn't parse. Decision (USER 2026-11-26) for parts 1 and 2: a recent median spacing and a schedule closed at the collection day, measured over the 502 and shown before applying (CRH, CTAS, SW, TPL, DIS; SWKS's DDM may go N/A).
+Fix (iteration 243, parts 1-2, `qa/evidence/div2-investigation.txt`): an interval's usual spacing is the median of the 8 intervals before it (the first 8 when fewer than 4 precede it); `dividend_gaps(..., collected)` closes the schedule on the collection day (the fetcher passes collected_at's day, load_inputs as_of, the oracle the same). DB: DDM N/A for CRH and SW (FY2025: Yahoo stores no payment 2025-05-23..2026-03-06 at CRH, 2025-08-15..2026-02-17 at SW); CRH median base 66.30 -> 70.35 (bear 57.87 -> 58.32, bull 82.65 -> 83.94), SW 31.28 -> 30.09 (bear 23.99 -> 20.67, bull 43.22 -> 46.54); 0 verdicts, owner-earnings verdicts, historical values, labels. The collection's quality check finds 13 issues for 11. The oracle flags the same independently.
 ### BUG-026 [P0][GATHER] An export with `summary.csv` open in Excel crashes the run before the SQLite export
 Status: VERIFIED
 Found: lead L13 (code review 1); reproduced in iteration 17 (`qa/evidence/iter17-l13-check.txt`) | Fixed: iteration 18 (see LOG) | Regression test: `tests/test_fetcher_concurrency.py::test_a_failed_summary_csv_still_writes_the_other_exports`
@@ -439,11 +444,12 @@ Analysis: three fixes (iterations 16, 25, 31) each patched the count-based readi
 Options: (a) take DDM's growth history from SEC's annual dividends per share (the `dividends_per_share` field, from the 10-K's declared or cash-paid series, restated for splits), keeping Yahoo's payments for the latest rate; it needs a fallback where a filer tags only point-in-time payments (9 such years are empty after BUG-013); (b) keep only the initiation-year rule and accept slip noise of about a point of growth in the shapes above; (c) a fourth patch: count only regular-size payments in the adjacent-year test (the review's trial patch fixes the special case, and no current value moves), leaving the frequency-change shapes. Recommendation: (a). Related: Q3 (specials) and BUG-040.
 
 ### BUG-050 [P3][VAL] Post-filing split factors are judged all or nothing, and a non-simple one applies without any count
-Status: OPEN
-Found: iteration 39 by code review 5 (M1, M2), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 228)
+Found: iteration 39 by code review 5 (M1, M2), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py, test_valuation_oracle_seam.py; 29 failing first
 Repro: (M1, `demo_mixed_post_filing.py`) a 2:1 split plus a 1.6 spin-off factor after the latest 10-K, with Yahoo's counts at 2×: nothing applies (split_factor 1.0, EPS 3.0). (M2) an ABT-like 2.0842 factor with no Yahoo count applies (split_factor 2.0842, EPS 3.00 → 1.439), against the docstring ("applies only when one of Yahoo's counts moved by it"); after BUG-033's fix a first run whose quote failed has no snapshot, so no count.
 Expected: each factor judged on its own; a non-simple factor refused without a count.   Actual: as above. No current case.
 
+Fix (iteration 228, `qa/evidence/bug264-investigation.txt`; applied at the user's decision, 2026-11-25, for DD's label): one split history (`inputs.split_history`) for the annual and quarterly paths: Yahoo's split_events plus the splits the filings record (`_restated_splits`: consecutive 10-K vintages of a year whose count moved by a simple ratio of 3:2 or more within 1%, EPS marked, net income held, not explained by a declared split). Yahoo's non-split factor nearest such a ratio between those filings is split into the split and the spin-off remainder (BUG-379). Quarters fold an undeclared seam on the marks plus the implied count plus the trailing year's net income held (BUG-264). Post-filing factors: simple splits apply; of the others, the subset nearest a Yahoo count within 1.25x, none without a count (BUG-050). `_restated_between` takes MAX_SPLIT_RATIO (BUG-270). BUG-024 was fixed in iteration 42; tests added. Filings' splits found: DD 1:3, HLT 1:3, LDOS 1:4, MSI 1:7, WTW 2.649:1 (read 3:8), EXE 1:200, HWM 1:3. DB copies: 0 medians, verdicts, owner-earnings verdicts; DD historical value 133.14 -> 139.45, label above -> near; HLT DDM base 7.50 -> 7.66, historical value within far above; 654 valuation_history rows (market caps before the mixed-factor days corrected, e.g. DD 2016-11 $22.46B -> $61.98B). Oracles agree with the code's split history; valuation oracle L2 loses HLT lynch (the oracle's own error).
 ### BUG-051 [P3][VAL] BUG-035's 2–5% share-count tiebreaker follows count drift
 Status: VERIFIED (iteration 150: Q7's decision removes the tiebreaker; every class counts beyond 2%)
 Found: iteration 39 by code review 5 (M3), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
@@ -465,17 +471,19 @@ Expected: "Refresh failed: database is locked".   Actual: a success message.
 Fix (iteration 193, BUG-053/237/163 together, `qa/evidence/bug053-investigation.txt`): a failed write reaches its caller and the caller reports it. `SQLiteStore.upsert_quote` logs and re-raises (the transaction rolls back); `refresh_quote` turns it into outcome 'error' with the write's message, counted as that company's error by the web job ('Refresh failed: database is locked') and the CLI quotes step (all failing -> 'every quote failed', no recompute). `compute_and_store(..., failures=)` names each ticker whose valuations weren't stored (reusable, like StoreResult.failed); a rebased refresh whose valuation fails is an error saying the price was stored and the next refresh values it again. Retry: `SQLiteStore.unvalued_factors(T)` lists stored factors dated after the valuation's UTC day, and `refresh_quote` returns 'rebased' while any exists. The CLI headline no longer says 'valued on it' when valuing failed. Real-data copy: unvalued_factors empty for all 502, so no success path changes. Residuals: a factor Yahoo lists late isn't retried by a refresh (the next collection/recompute values it); a ticker never valued gets no refresh retry; a persistent valuation failure is reported at every refresh.
 
 ### BUG-054 [P3][STORE] A priced run without beta writes a NULL beta: the full export carries nothing forward
-Status: OPEN
-Found: iteration 39 by code review 5 (M6), re-run on 98013f4 with Yahoo mocked (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 233)
+Found: iteration 39 by code review 5 (M6), re-run on 98013f4 with Yahoo mocked (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
 Repro (`t_bug033/partial_export.py`): a run whose quote has a price but no beta writes `beta NULL` into the new snapshot; `load_inputs` reads beta None, so valuations fall back to 1.0 (flagged), although the previous snapshot had 1.3. `upsert_quote` carries beta forward; `export` doesn't. Not verified against live Yahoo.
 Expected: the last known beta, flagged as carried, or the same rule in both writers.   Actual: NULL.
 
+Fix (iteration 233, `qa/evidence/store2-investigation.txt`): a collection with a price but no beta stores the last non-NULL beta of an earlier snapshot (a run's own beta wins), the rule refreshes use; applied at the user's decision (2026-11-25). Today INTU and KEYS have NULL betas: at their next collection KEYS's median moves bear 95.09 -> 94.24, base 122.12 -> 122.10; no verdict or label; KEYS composite 56 -> 54, DGX 50 -> 52.
 ### BUG-055 [P3][STORE] An empty-string company field is "missing" to the CSV but a value to JSON and SQLite
-Status: OPEN
-Found: iteration 39 by code review 5 (M7), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 233)
+Found: iteration 39 by code review 5 (M7), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
 Repro (`t_bug034/check_empty_string.py`): a run with `website` = "" stores '' in JSON and SQLite, while the CSV keeps the old URL (`csv_exporter.py` treats "" as missing; the JSON merge and SQLite's COALESCE don't). None of the 146 JSON files has a "" company field today.
 Expected: the three stores agree.   Actual: as above.
 
+Fix (iteration 233, `qa/evidence/store2-investigation.txt`): the companies row stores "" as NULL before its keep-existing upsert; the JSON company_info merge skips "" as it skips None, as the CSV does. No '' in today's DB.
 ### BUG-056 [P3][UI] The refresh-status fragment matches the ticker case-sensitively
 Status: VERIFIED (iteration 188)
 Found: iteration 39 by code review 5 (M8), re-run on 98013f4 (`qa/evidence/iter39-review5-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_web_api_stocks.py, tests/test_web_quote_refresh.py, tests/test_web_range_anchor.py, tests/test_web_screener_units.py (node); 28 failing first
@@ -491,11 +499,13 @@ Expected: the same input gives the same record (prefer the frame matching the pe
 
 Seen again in iteration 88: two offline collections of the same cached data differ in exactly WMT's and TJX's FY2012 vintages' `calendar_year` (2012, then 2011), and 13 vintage periods at 11 filers have candidates in more than one calendar year or quarter, none in the annual or quarterly records (`qa/evidence/iter88-bug127-realdata.txt` sections 5-6).
 ### BUG-058 [P3][GATHER] A 20-F filer's 6-K interim reports aren't read: ARM has no quarterly or TTM rows, and no word on why
-Status: OPEN
+Status: VERIFIED (iteration 254; option B, the user's decision)
 Found: iteration 40, in BUG-043's live check (`qa/evidence/iter40-bug043-e2e.txt`) | Fixed: — | Regression test: —
 Repro: since BUG-043's fix ARM has six fiscal years, but its interim statements (6-K: 2,756 us-gaap facts) aren't read (`_QUARTERLY_FORMS` holds 10-Q and 10-K), so it stores 0 quarterly and 0 TTM rows, and its FA tab's Quarterly view says "No data available for this period." with no warning.
 Expected: a foreign issuer's interim figures are read when it tags them (6-K ladders, with the 20-F as the year), or the gap is explained.   Actual: empty and unexplained.
 
+Decision (USER 2026-11-28): B: when the annual record comes from a 20-F or 40-F and there are no quarterly rows, the run warns that a foreign issuer's 6-K interim reports aren't read, so there are no quarterly or TTM figures. No universe company files a 20-F/40-F/6-K.
+Fix (iteration 254, `qa/evidence/gather3-investigation.txt`): a run whose latest fiscal year came from a 20-F or 40-F (the parse's `_source_filings`) and that gives no quarterly rows warns "SEC EDGAR: no quarterly financials for X: its annual reports are 20-Fs, a foreign issuer's, whose interim reports (6-K) aren't read, so there are no quarterly or TTM figures" (NO_QUARTERLY_FINANCIALS), shown on the FA and VAL tabs. Regression tests: tests/test_fetcher_concurrency.py, tests/test_web_workstation.py; 3 failing first. No universe filer is affected.
 ### BUG-059 [P2][VAL] A declared split whose own seam lies before the 10-FY window can explain a merger or IPO seam inside it
 Status: VERIFIED (iteration 44)
 Found: iteration 39 by code review 5 (I1's variant); split off in iteration 42 | Fixed: iteration 44 (oracle rule fd449ef, then the fix; see LOG) | Regression tests: `tests/test_valuation_inputs.py::test_a_split_every_stored_year_already_reflects_explains_no_seam`, `::test_a_split_between_two_years_filings_still_explains_their_seam`
@@ -530,11 +540,12 @@ Expected: a year's figures consistent with one another (for instance each statem
 Impact: older years' identities and ratios; no valuation input in the window.
 
 ### BUG-063 [P3][VALID] `minority_interest` misses common non-controlling-interest tags (BX)
-Status: OPEN
-Found: iteration 47 via VALID-02 (`qa/evidence/iter47-{valid-sweep-real,vintage-flips,valid-triage}.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 261)
+Found: iteration 47 via VALID-02 (`qa/evidence/iter47-{valid-sweep-real,vintage-flips,valid-triage}.txt`) | Fixed: (this commit) | Regression tests: tests/test_noncontrolling_interest.py, tests/test_quality_filed_lines.py, tests/test_integrity.py; 24 failing first
 Repro: BX tags its non-controlling interests as `NonredeemableNoncontrollingInterest` ($6.15B at 2024-12-31), `MinorityInterestInOperatingPartnerships` ($4.33B) and `RedeemableNoncontrollingInterestEquityCarryingAmount` ($0.80B); `minority_interest` is stored empty, so its balance sheet misses assets = liabilities + equity + NCI by 25-30% in every year since FY2018 (SO FY2018 and UBER likewise, by less).
 Expected: those tags resolve to `minority_interest` (redeemable NCI and other temporary equity are a separate line that no canonical field covers yet, which explains most of the remaining 1-4% gaps: AMT, SPGI, TSLA, WELL, PGR, UBER).   Actual: empty. No valuation input uses it.
 
+Fix (iteration 261, `qa/evidence/valid1-investigation.txt`, `qa/evidence/valid1-verify-mine.txt`): one set for BUG-063/114/115/269. minority_interest: where an annual report tags no MinorityInterest, equity including NCI less parent equity from the same report, kept only where liabilities + it + temporary equity match the total within 1% and closer than parent equity alone (10-Qs give none); redeemable NCI is temporary equity, never minority_interest. The identity check adds temporary equity read from the run's companyfacts (nothing stored); the gross-profit check subtracts the year's OtherCostOfOperatingRevenue (MO excise); short_term_debt back in the outlier check, a spike excused when no larger than the long-term debt of the year before, same or after. Measured on all 502: 115 annual minority_interest cells empty -> value (BX FY2018-25 7.23-11.84B, MS, BXP, EXR, ...), 79 MEDIUM warnings removed, none added, 25 tickers' quality scores up (SPGI 50 -> 100, MO 85 -> 100, ...); 0 medians, verdicts, owner-earnings verdicts, labels; valuation tables identical. Residuals: AFL/GL FY2021 LDTI mix, ARES FY2021-24, BLK FY2025 non-us-gaap tag, HUBB FY2023; new BUG-392..394.
 ### BUG-064 [P1][GATHER] A failed SEC submissions request wipes a bank's, insurer's or REIT's stored sector ratios
 Status: VERIFIED (iteration 49)
 Found: iteration 48 by code review 6 (I2), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: iteration 49 (see LOG) | Regression tests: `tests/test_fetcher_concurrency.py::test_a_failed_submissions_request_keeps_the_stored_sector`, `::test_a_json_only_store_also_keeps_the_sector`
@@ -592,12 +603,13 @@ Expected: the same rule as the annual record.   Actual: share-only quarters.
 
 Fix: the quarterly extractor applies BUG-065's reporting-currency rule, like the annual record and the vintages: a CAD reporter keeps no share-only quarters (a mutant without it fails the test).
 ### BUG-072 [P3][CODE] Two test gaps: a split on the filing day, and a first-filing date from a truncated list
-Status: OPEN
-Found: iteration 48 by code review 6 (M7), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 227)
+Found: iteration 48 by code review 6 (M7), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_p3_pins.py, test_ttm.py, test_quote_refresh.py, test_store_migration.py, test_web_api_asof.py, test_xbrl_parser.py, test_valuation_inputs.py
 Repro: on 3eee7b6 both mutants pass the full suite (969 passed each): `<=` → `<` in BUG-047's partition (a split dated on the latest filing's day goes to neither `_normalize_splits` nor `_apply_later_splits`), and dropping `len(filings) < 100` in `_no_annual_financials` (the note would claim a first filing date from SECHandler's 100 latest filings). No test covers an ADR or a convenience-translating reporter either (BUG-065).
 Expected: a test that fails for each.   Actual: none.
 
 Iteration 50: BUG-065's tests now cover an ADR and a convenience-translating reporter; the two surviving mutants remain.
+Fix (iteration 227, `qa/evidence/bug072-investigation.txt`): tests pin every listed behaviour as the code already has it (a split up to and including a filing's own day is restated by it; a first-filing date only from a list under 100 filings; a quarter 80-120 days inclusive, 17 weeks included; revenue figures 25% apart are different things; Yahoo applies a split on its own day; the migration re-checks served_on under the write lock; _moves_per_share's ratios; the explorer dates only carried figures). 29 of 29 mutants killed. No code change, no defect found.
 ### BUG-073 [P3][CODE] Eight fetcher tests make a live SEC request, and the suite never notices
 Status: VERIFIED (iteration 51)
 Found: iteration 51, checking BUG-061's fetcher test (`qa/evidence/iter51-bug073-{netguard,red}.txt`) | Fixed: iteration 51 (see LOG) | Regression test: the autouse `no_network` guard in `tests/conftest.py`, and `tests/test_no_network.py::test_a_connection_off_this_machine_is_refused`
@@ -646,12 +658,13 @@ Impact today: none in the user's copy; BUG-048's preconditions for a company wit
 
 Fix: `load_inputs` takes Yahoo's dividends and FY-end bars back to the price's basis by every split dated after the price's day, whether or not the latest annual row has a filing date: the guard 144dcdf left behind is gone, while which of those splits the filed figures restated still goes by the date (BUG-060). The oracle took the same rule first, in its own commit (2d9b9dc): on code review 7's scenario valued by the unfixed code it flags the DDM (41.84 stored, 418.4 derived, from trailing dividends of 21.98 against 2.20), and its output on the real and golden copies valued by 1d762ba and on ten earlier split, ADS and scenario databases is unchanged (`qa/evidence/iter61-bug078-oracle.txt`). Two tests RED, then GREEN: a company with no annual rows, and one whose rows have no filing date. Three mutants each fail a test: the guard back; back for the dividends only; back for the FY-end prices only, which the rows without a date catch. With the fix the scenario's DDM is 418.38, as with its dividends on the price's basis and no split stored, through `python -m src.valuation.backfill`, `/api/stocks/NOFIL/valuation` and the VAL tab of `stock-web` on a scratch copy (port 8765, collection and quote refresh off); 0 of 762 valuation rows and 0 of 127 summaries move on a copy of the user's data, 0 of 114 and 0 of 19 on the fresh golden basket, and the oracle's results there are unchanged (`qa/evidence/iter61-bug078-impact.txt`).
 ### BUG-079 [P3][VAL] The price's day is the collector's local date, while splits are dated in New York
-Status: OPEN
-Found: iteration 51 by code review 7 (M1), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 247)
+Found: iteration 51 by code review 7 (M1), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_valuation_price_day.py (new), test_valuation_history_inputs.py, test_quote_events_window.py, test_web_quote_refresh.py; 32 failing first
 Repro: `priced_on` is the snapshot's `collected_at` date, naive local time (`models/stock_data.py`, `webapp/jobs.py`), and split dates are exchange dates: the golden snapshots were stamped 02:07 on 2026-10-20 in UTC+7, 15:07 on 10-19 in New York. In BUG-048's scenario with the snapshot stamped 02:30 local on a split's ex-date (15:30 the day before in New York, before the split), the split counts as already priced: Graham 45.21, Lynch 24.76, multiples 54.67; stamped with its New York date, 452.06, 247.61 and 546.66. The oracle agrees with the first.
 Expected: the price's day on the exchange's calendar.   Actual: a tenth of those values until the next priced collection.
 Impact today: needs BUG-048's preconditions and a collection in the hours the local date runs ahead of New York's (00:00 to 11:00 in UTC+7 in summer).
 
+Fix (iteration 247, `qa/evidence/val3-investigation.txt`): `src/new_york.new_york_day_of(stamp)` gives a stamp's New York day (naive = this machine's time; 'Z' = UTC for 3.9; a bare date kept); used by load_inputs, load_history_inputs, SQLiteStore._priced_and_collected and the oracle (`exchange_day`). load_inputs' as_of for the dividend check stays local, matching BUG-025. DB copies: 0 medians, verdicts, owner-earnings verdicts; CCI historical value None -> 94.83, label None -> below (its stray 2026-12-31 trailing year no longer read), composites move at CCI, KIM, MAA, O, PSA, TPL; applied at the user's decision (2026-11-27). Oracles as at HEAD.
 ### BUG-080 [P1][STORE] A database path holding '#' or '%xx' breaks every read-only connection: the web app answers 500 and creates an empty file
 Status: VERIFIED (iteration 54)
 Found: iteration 51 by code review 7 (M2, widened in the re-run), re-run in iteration 52 (`qa/evidence/iter52-review7-rerun.txt`) | Fixed: iteration 54 (see LOG) | Regression tests: `tests/test_web_repository.py::test_a_database_under_any_folder_name_opens_read_only` ('#', '%41', '?' off Windows, and two controls), `::test_the_app_serves_a_database_under_a_hash_folder`, `::test_a_unc_path_keeps_its_form`, `tests/test_asof_reader.py::test_a_database_under_a_hash_folder_opens`, `tests/test_fetcher_concurrency.py::test_the_stored_sector_is_found_under_any_folder_name`
@@ -707,7 +720,7 @@ Re-run in iteration 93 (code review 13's M7): BUG-127 reads vintages as filed, s
 Fix (iteration 217, Q18's merge of feat/asof-snapshots): the as-of view serves the record as our rules read it on the day; a later filing's flip shows from its day.
 
 ### BUG-086 [P3][VALID] BUG-061 misses a tagging error every later filing repeats: BRK-B's FY2009 basic shares
-Status: OPEN
+Status: WONTFIX (iteration 255, the user's decision 2026-11-28): the latest record is right (BUG-329 pass 4); BRK-B's as-of snapshots 2011-02-28..2013-02-28 read x10^6, a known limit (BRK tags no annual EPS)
 Found: iteration 58 by code review 8 (M2), re-run in iteration 59 (`qa/evidence/iter59-review8-rerun.txt`) | Fixed: — | Regression test: —
 Repro: BRK-B's original FY2009 filing (2010) gives 1,551,174 weighted basic shares and its 2011 and 2012 10-Ks 1.551e12, so "every earlier filing agrees" never holds, and FY2009 has no EPS for the share-scale step; now FY2008 is put right, FY2009 stands alone at x10^6 (2007 1,545,751; 2008 1,548,960; 2009 1,551,174,000,000; 2010 1,635,661). The only such case in the cache.
 Expected: a figure the years around side with is kept against a later value however many filings repeat it.   Actual: as above.
@@ -784,11 +797,12 @@ Impact today: both tickers' Q4s and every TTM row in the statements tab, the API
 
 Fix: a quarter runs up to 120 days in the ladder and in the trailing years' step (`_QUARTER_MAX_DAYS`, both modules), which takes a 17-week quarter and still leaves out two quarters, a gap in the rungs, at 160 days or more; the cached filers' only quarters of 101 to 130 days are COST's and PEP's. Two tests RED on 8c34a86 (the 16-week Q4, the trailing year across it); a third guards a missing rung from becoming a two-quarter figure; and the existing gap test, whose assertion could never fail (a window can't end on the third quarter-end left), now pins the window that spans the gap. Four mutants, each failing a test (`qa/evidence/iter68-bug095-{red,green,mutants}.txt`). Over the 126 cached filers collected offline, only COST and PEP change: 17 and 18 fourth quarters where there were none, 64 and 68 trailing years with net income where there were none, and their FY2023-25 quarters' net income adding up to each year's exactly (`qa/evidence/iter68-bug095-impact.txt`).
 ### BUG-096 [P3][VALID] A quarter's own 3-month count can make a share-only quarter (BUG-074), which costs ADI two trailing years
-Status: OPEN
-Found: iteration 62 by code review 9 (M2), re-run in iteration 63 (`qa/evidence/iter63-review9-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 255)
+Found: iteration 62 by code review 9 (M2), re-run in iteration 63 (`qa/evidence/iter63-review9-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_quarter_own_counts.py, test_quarter_year_starts.py, test_split_repeats.py, test_vintage_share_scale.py (new); 12 failing first
 Repro: `assign` makes a period for an own 3-month count no flow ladder reaches. ADI's FY2012 10-K re-dates fiscal Q1 2011 to end 2011-02-04, beside the 10-Q's 2011-01-29, so on 51091ce 2011-02-04 is a quarter of share counts only, the TTM rows of 2011-04-30 and 2011-07-30 (net income 888.4M and 908.9M on fea2b70) are gone, and 2011-10-29's net income is blank; code review 9 counts four such quarters (ADI 2011-02-04, GS 2008-05-30, RTX and SYK 2008-06-30). A regression of 2bb2a24.
 Expected: an own figure fills only a quarter that exists, as the fill loop does.   Actual: as above.
 
+Fix (iteration 255, `qa/evidence/shares1-investigation.txt`): an own 3-month share count makes a quarter only where its ladder steps one quarter (80-100 days); otherwise it fills and dates a quarter the filings hold. Share-only quarters removed: ADI 2011-02-04, GS 2008-05-30, IP/PNC/RTX/SYK 2008-06-30, WAT 2018-09-30 (ADI's TTMs were restored by BUG-249). DB copies (502 re-collected): financials_annual, the as-of snapshots, valuations, metrics, per-share, scores identical; 0 medians, verdicts, owner-earnings verdicts, historical values, labels. Look-ahead 0.
 ### BUG-097 [P3][VALID] The empty-record explanation loses the currency when one filing isn't in it (BUG-077)
 Status: OPEN
 Found: iteration 62 by code review 9 (M3), re-run in iteration 63 (`qa/evidence/iter63-review9-rerun.txt`) | Fixed: — | Regression test: —
@@ -796,11 +810,12 @@ Repro: synthetic companyfacts of a CNY 20-F reporter with one dollar-majority 6-
 Expected: the currency named when every annual report is in it.   Actual: as above.
 
 ### BUG-098 [P3][STORE] Two first runs at once after an upgrade: the loser's whole batch fails on a duplicate column, and only a log line says so
-Status: OPEN
-Found: iteration 62 by code review 9 (M4), re-run in iteration 63 (`qa/evidence/iter63-review9-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 233)
+Found: iteration 62 by code review 9 (M4), re-run in iteration 63 (`qa/evidence/iter63-review9-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
 Repro: `_ensure_columns` checks the columns and then ALTERs without a lock, and the user's copy lacks three ordinary columns (`risk_free_rate_date`, `risk_free_rate_source`, `warnings`). Two first exports at once on a pre-flag copy of the user's data: one failed "duplicate column name: risk_free_rate_source" and wrote nothing, 1 of 3 tries on 51091ce (code review 9: 4 of 5, with both versions); the run's summary still counts its tickers successful, and the error is one log line. BUG-083's own migration re-checks under its lock.
 Expected: every ALTER under one `BEGIN IMMEDIATE`, re-checked, so concurrent first runs both write.   Actual: as above.
 
+Fix (iteration 233, `qa/evidence/store2-investigation.txt`): `_ensure_columns` returns at once if nothing is missing; else it takes BEGIN IMMEDIATE, looks again, adds what is still missing and commits (rolls back on error); inside a caller's transaction as before. Covers every caller (universe/sic.py too). The log-only half was fixed by review 19 I-1.
 ### BUG-099 [P2][VALID] Revenue's tag order takes a part of the revenue: AXP's ASC 606 contract revenue, and a figure BLK's next 10-K drops
 Status: VERIFIED (iteration 70)
 Found: iteration 69 via VALID-01 (`qa/evidence/iter69-{revenue,bankfields,sector_rest}.txt`) | Fixed: iteration 70 (see LOG) | Regression tests: `tests/test_xbrl_parser.py::test_the_total_net_of_interest_expense_is_the_revenue_not_its_contract_revenue`, `::test_a_revenues_figure_the_income_statement_doesnt_add_up_to_gives_way`, `::test_a_revenue_figure_below_its_own_cost_of_revenue_gives_way`, `::test_a_figure_below_cost_gives_way_only_to_one_that_isnt`, `::test_a_zero_revenue_gives_way_to_a_positive_one`, `::test_a_fourth_quarter_is_the_years_revenue_less_nine_months`, `::test_a_filings_vintage_takes_the_years_revenue_not_its_part`, `::test_net_revenue_is_no_noninterest_income`, and six guards beside them
@@ -853,12 +868,13 @@ Impact today: transitional: bars stored before BUG-075's fix (all of the user's,
 
 Fix: the rebuild puts each payment onto the stored bars' split basis before solving its factor, from the day Yahoo served it (`dividend_events.served_on`, BUG-103's) to the bars' last day, by the splits in between (`_yahoo_dividend_factors` with `_dividend_onto`, the price's rule now taking any day's basis); a payment without a served day is on every stored split's basis, as for the price. The oracle took the same rule first, in its own commit (5c5f7c3): on code review 10's two KO databases, valued by the unfixed code (6715f99), the old oracle passes the multiples band and the new one flags it (37.51 stored against 38.47, and 75.03 against 76.94), and its output is unchanged on 14 other databases (`qa/evidence/iter75-oracle-rebuild-basis.txt`). Three tests RED on 6715f99, both directions (FY2021 rebuilt at 98.02 for 100 with post-split amounts against pre-split closes, 51.98 for 50 the other way), one guard; four mutants, each failing a test (`iter75-bug104-{red,green,mutants}.txt`). Code review 10's scenario on fresh copies of the user's data now rebuilds KO's FY2016-25 prices exactly (+0.00% with and without the quote), and the band reads 38.47 and 76.939, as expected; the oracle finds nothing beyond 0.5% (`iter75-bug104-e2e.txt`; the quote case's DDM -24.52% is the simulation's, which adds no September payment). On fresh copies of the user's data and the golden basket, unmigrated and migrated, 0 of 762 and 0 of 114 valuation rows move (`iter75-bug104-impact.txt`).
 ### BUG-105 [P3][VALID] BUG-082 reads unrestated post-split figures as restated, and misses GOOGL's split
-Status: OPEN
-Found: iteration 70 by code review 10 (M1), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 255)
+Found: iteration 70 by code review 10 (M1), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_quarter_own_counts.py, test_quarter_year_starts.py, test_split_repeats.py, test_vintage_share_scale.py (new); 12 failing first
 Repro: `review10/scripts/stale_after_split.py` over the cached filers: of the 28 whose splits the parser detects, 4 have 16 chosen quarterly rungs filed after a split that repeat an earlier filing's old-basis value. ISRG's FY2021 10-K tags the 2020 quarters' EPS at the old values (diluted 2.62, 0.57, 2.60, 3.02), HWM's 2016-18 filings its 2014-16 dividends a share, SBUX's and C's one cent either way. On 8c34a86 (code review 10) ISRG's Q1 2020 EPS reads 2.62 beside 359.4M shares (net income / count gives 0.87) and its Q2 -1.557 on +$68M of net income, and HWM's dividends a share -0.15 (Q4 2014) and -0.06 (Q3 2015). GOOGL's 20:1 split has one restated count pair (and 7 diluted EPS pairs), so the two-count rule misses it: its quarter-end counts read 664.7M, 13,242M, 658.8M, 13,078M (a fresh offline collection with 679a35d). Converting a rung across a split also multiplies the later filing's rounding (BKNG's Q1 2025 EPS 10.00 against the filed 10.07).
 Expected: a figure filed after a split that repeats an earlier filing's value for the same period is on the old basis; restated EPS pairs count toward detection.   Actual: as above.
 Impact today: the next collection's quarterly and TTM rows (statements tab, API, exports); no valuation.
 
+Fix (iteration 255, `qa/evidence/shares1-investigation.txt`): restated EPS pairs count toward a split beside at least one restated share count; a figure a later filing repeats under the same tag is on the basis of its first filing day (not inside a split's window, NDSN; not a move of half a cent or less, SBUX). GOOGL's 2022 20:1 and ROL's 2015 3:2 now detected (splits 152 -> 154); GOOGL Q2 2021 diluted EPS -23.61 -> 1.36. DB copies (502 re-collected): financials_annual, the as-of snapshots, valuations, metrics, per-share, scores identical; 0 medians, verdicts, owner-earnings verdicts, historical values, labels. Look-ahead 0.
 ### BUG-106 [P2][UI] A quote refresh is refused for a stock dividend or a spin-off factor, called a split: SCCO's after nearly every quarter
 Status: VERIFIED (iteration 76)
 Found: iteration 70 by code review 10 (M2), re-run in iteration 71 (`qa/evidence/iter71-review10-rerun.txt`) | Fixed: iteration 76 (see LOG) | Regression tests: `tests/test_web_quote_refresh.py::test_a_stock_dividend_or_a_spin_off_factor_doesnt_stop_a_refresh` (three cases), `::test_a_split_or_a_large_price_factor_is_refused_by_its_name` (three cases)
@@ -909,11 +925,12 @@ Impact: the shown quarterly flows (Financials tab, API, the exports' quarterly r
 Fix: `_collect_discrete_flows` differences an outflow's year-to-date sizes (`abs(val) - abs(prev)`, where it took the size of the difference) and derives no quarter where the size shrinks; a zero quarter stays. The same root put right a year whose filings tag the outflow with both signs, whose quarter took the two totals' sum: LLY's 10-Qs tag its 2008 dividends negative and its 10-K positive (Q4 $3,598.2M, now $515.2M), GE's 2016 buybacks the other way round ($40,725M, now $4,437M), CVX's Q4 2010 dividends $9,902M (now $1,436M): 54 quarters at 27 filers. Two tests RED on 9e99a02 (INTU's Q4 read $15M; LLY's 3,500 against 500), three guards (outflows tagged negative, a quarter without one, a signed flow); six mutants, each failing a test (`qa/evidence/iter80-bug111-{red,green,mutants}.txt`). Offline over the 126 cached filers: 200 quarters no longer derived and 54 corrected, the five outflows only, with 640 trailing-year cells; the annual record, the vintages' figures and the metrics unchanged; the quality sweep loses INTU's five quarterly-sum findings and nothing else (INTU 50 to 100); the valuation reads no quarterly figure (`iter80-bug111-realdata.txt`). Through stock-web on that collection: INTU's Q4 FY2025 capex shows "—" beside Q1-Q3's $33M, $31M and $35M, LLY's Q4 2008 dividends $515.2M, GE's Q4 2016 buybacks $4.437B (`iter80-bug111-e2e.txt`). The user's stored quarters keep the old figures until their next collection (L20).
 Correction (code review 12, I1; re-run in iteration 85, `qa/evidence/iter85-review12-rerun.txt`): the rule is right for the four gross payments, whose negative figures are a sign convention (capex, dividends, buybacks, debt repaid: the 29 changed cells there are right), but acquisitions are net of cash acquired, and a negative year-to-date total there is a net inflow as filed. GE's Q3 2013 $7.80B, cited above as a fall read as an outflow, is a real one (Lufkin and Avio), and 25 of the 54 quarters this fix changed, with 8 it emptied, are acquisitions: BUG-127.
 ### BUG-112 [P3][VALID] The quality score's five years include a year known only from opening balances: GEV and SNDK score 30
-Status: OPEN
-Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 240)
+Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: (this commit) | Regression tests: tests/test_quarterly_eps.py (new), test_ttm.py, test_scores_scores.py, test_scores_store.py, test_web_scores.py, test_web_api_scores.py, test_quality.py, test_fetcher_concurrency.py; 27 failing first
 Repro: the earliest 10-K's equity and cash-flow statements open three years back, so the annual record holds a year with only total equity and/or cash (121 such years at 119 of the 126 cached filers, 119 of them the filer's earliest). `quality.assess_annual` scores the record's latest five years, so for a filer with four years of statements the fifth is that year, and its missing revenue, net income, total assets and liabilities and operating cash flow cost 50 points: GEV scores 30 (FY2021 holds total equity alone), SNDK 30 (FY2022), BLK 0 (FY2021, with Q9's bank fields).
 Expected: the scored years are years the filings report: GEV and SNDK 80 (their FY2022 and FY2023 lack only the balance sheet no 10-K holds).   Actual: 30.
 
+Fix (iteration 240, `qa/evidence/ttm1-investigation.txt`): `validation.quality.scored_years` scores from the record's first year with any income or cash-flow figure (years before hold only opening balances), in assess_annual and the fetcher's integrity checks. GEV, SNDK, FDXF, FERG, Q, SOLV, SW 30 -> 80; RDDT 20 -> 70; SKYD 0 -> 50. EXE stays 70 (a fresh-start year, not opening balances). DB copies (502 re-collected): 0 medians, verdicts, owner-earnings verdicts, historical values, labels; oracles as at HEAD; look-ahead 0.
 ### BUG-113 [P3][STORE] A forward-dated fact opens a vintage of a year that hadn't ended when it was filed: BAC FY2011, LLY FY2014
 Status: OPEN
 Found: iteration 77 via VALID-10 (`qa/evidence/iter77-pit.txt`) | Fixed: — | Regression test: —
@@ -922,17 +939,19 @@ Expected: a filing's vintages are the years ended by its filing date.   Actual: 
 Narrowed (iteration 217, Q18's merge): a year not yet ended at the latest filing is dropped from the record and from vintages; still OPEN: a forward-dated figure opens its year once its own date passes (LLY FY2014 from 2014-04-28, TEL FY2025).
 
 ### BUG-114 [P3][VALID] The balance-sheet identity has no term for temporary equity: SPGI scores 50
-Status: OPEN
-Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 261)
+Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: (this commit) | Regression tests: tests/test_noncontrolling_interest.py, tests/test_quality_filed_lines.py, tests/test_integrity.py; 24 failing first
 Repro: the quality pass checks assets = liabilities + equity + non-controlling interest, but redeemable non-controlling interests and redeemable preferred stock sit between liabilities and equity (temporary equity), which no canonical field holds, so a filer with them misses the identity by that amount: SPGI FY2021-25 (FY2025 $4.917B, `RedeemableNoncontrollingInterestEquityCarryingAmount`), UBER FY2021-23 (with BUG-063's unmapped NCI), WDC FY2023 ($0.876B, its convertible preferred) and BLK FY2025 ($5.427B, tagged outside us-gaap): 10 of the sweep's 15 imbalance findings (BX's five are BUG-063's).
 Expected: temporary equity counted in the identity.   Actual: a MEDIUM finding a year (SPGI 50, UBER 70, WDC 90).
 
+Fix (iteration 261): see BUG-063's entry (one set).
 ### BUG-115 [P3][VALID] The gross-profit identity misses excise taxes filed apart from cost of sales: MO
-Status: OPEN
-Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 261)
+Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: (this commit) | Regression tests: tests/test_noncontrolling_interest.py, tests/test_quality_filed_lines.py, tests/test_integrity.py; 24 failing first
 Repro: MO deducts both cost of sales and excise taxes on products (`OtherCostOfOperatingRevenue`) from net revenues to reach gross profit, and `cost_of_revenue` takes cost of sales alone, so revenue less cost of revenue overshoots MO's gross profit by the excise taxes ($3.574B FY2024, $3.140B FY2025) and the check fires for FY2021-25 (score 85).
 Expected: the identity holds where a filed cost line explains the gap (or excise taxes count in cost of revenue).   Actual: five LOW findings.
 
+Fix (iteration 261): see BUG-063's entry (one set).
 ### BUG-116 [P3][STORE] The as-of view and the annual record choose between filings by different rules: a later filing's fallback tag beats an earlier one's preferred tag
 Status: VERIFIED (iteration 217)
 Found: iteration 78 while verifying BUG-110 (`qa/evidence/iter78-bug110-realdata.txt`) | Fixed: the as-of snapshots merge (iteration 217) | Regression tests: tests/test_asof_reader.py, tests/test_annual_snapshots.py, qa/oracle/asof_oracle.py
@@ -981,11 +1000,12 @@ Code review 12 (M6), re-run in iteration 85: two more after BUG-110's fix, `AsOf
 Fix (iteration 198, with BUG-028): README total_liabilities includes minus minority_interest; quality.py says (A - E - NCI); fetch_quote's and metrics_history_as_of's docstrings say what the code does. The as-of docstring item is the as-of branch's (Q18).
 
 ### BUG-122 [P3][CODE] Four behaviors no test pins: a 17-week quarter, revenue's 25% gap, a split on the served day, the migration's re-check
-Status: OPEN
-Found: iteration 78 by code review 11 (M5), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 227)
+Found: iteration 78 by code review 11 (M5), re-run in iteration 79 (`qa/evidence/iter79-review11-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_p3_pins.py, test_ttm.py, test_quote_refresh.py, test_store_migration.py, test_web_api_asof.py, test_xbrl_parser.py, test_valuation_inputs.py
 Repro: code review 11's surviving mutants, re-run on a399dc0 with its runner, the whole suite each; all five still survive (1,114 passed each): the parser's and `ttm.py`'s 115-day quarter limit, `_REVENUE_GAP = 1.15`, `day < served` in `_dividend_onto` (a3e9e27's form of the review's mutant) and the migration without its re-check. Their effects (the review's): a 115-day quarter limit in the parser loses six 17-week Q4s (COST 2012-09-02 $32.22B, 2017-09-03, 2023-09-03; PEP's 2011, 2016 and 2022 year-ends), and in `ttm.py` 18 trailing years; `_REVENUE_GAP = 1.15` moves DHR's FY2017-18 revenue from $18.33B and $19.89B to $15.52B and $17.05B; `day < served` makes a run on the split's day whose quote failed read DDM 41.84 beside the $1,008.86 pre-split price (median $490.63, upside -51.4%, against head's 418.38, $526.57 and -47.8%; re-run); without the re-check the loser of two first runs fails "duplicate column name: served_on" 5 of 5 times, where head's both succeed (re-run).
 Expected: a test each.   Actual: none fails.
 
+Fix (iteration 227, `qa/evidence/bug072-investigation.txt`): tests pin every listed behaviour as the code already has it (a split up to and including a filing's own day is restated by it; a first-filing date only from a list under 100 filings; a quarter 80-120 days inclusive, 17 weeks included; revenue figures 25% apart are different things; Yahoo applies a split on its own day; the migration re-checks served_on under the write lock; _moves_per_share's ratios; the explorer dates only carried figures). 29 of 29 mutants killed. No code change, no defect found.
 ### BUG-123 [P3][STORE] A vintage's calendar year depends on the process's hash seed: TJX's and WMT's FY2012 read 2011 or 2012
 Status: VERIFIED (iteration 181)
 Found: iteration 80 while verifying BUG-111: two offline collections of the same cache stored different calendar years for two vintages (`qa/evidence/iter80-bug111-realdata.txt`) | Fixed: (this commit) | Regression tests: tests/test_fiscal_calendar.py (5 new, one under PYTHONHASHSEED 0-7); 5 failing first
@@ -1037,23 +1057,28 @@ Decision (iteration 89): the factor stored and the ticker valued on it, not a to
 Fix: the quote job reads every factor since the last collection (`SQLiteStore.factors_since_collection`: the date rule `splits_since_collection` had, for every ratio but 1.0); the share splits and factors of 3:2 or more among them still refuse the refresh (`splits_since_collection`). Any other, a stock dividend or a spin-off, rebases Yahoo's prices and dividends, which the DDM and the multiples band are built on: the saved refresh stores Yahoo's split history with the price (`upsert_quote(..., splits=)`, one transaction, as a collection stores it) and the job values those tickers on it (`engine.compute_and_store`, never-fail like the collection job's). An ordinary refresh still writes only the snapshot (GATHER-13). Four tests RED on ef7cc76, three guards; eight mutants, each failing a test (`qa/evidence/iter89-bug128-{red,green,mutants}.txt`). Code review 12's fake market through the web app's own refresh route: after GE's 1.253 the refresh reads DDM 333.90, multiples 784.81, median 490.63, upside -39.2%, the full collection's (it read 418.38, 983.37, 526.57, -34.8%); T's 1.324 -35.8% (-31.1%), SPGI's 1.057 -46.1% (-45.0%), SCCO's 1.01 -47.6% (-47.4%), each the full collection's, split_events holding the factor; a 2:1 split still refused (`iter89-bug128-e2e.txt`). On a copy of the user's data a refresh listing each ticker's stored split history finds nothing new for all 127, so nothing more is written; 45 stored factors aren't share splits (SCCO's seven, HON's, GE's, DHR's...) (`iter89-bug128-realdata.txt`).
 Code review 14 (I1), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`): the recompute values DDM's trailing year as of the refresh day on the payments the last collection stored, so after a payment since then it reads low (BUG-160); "as a full collection would" holds only without one.
 ### BUG-129 [P3][CODE] Six behaviors no test pins: a split on the price's day or the bars' last day, the served day's boundary, a non-simple reverse factor, the explorer's date beside a figure the latest filing holds
-Status: OPEN
-Found: iteration 84 by code review 12 (M1, M7), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 227)
+Found: iteration 84 by code review 12 (M1, M7), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_p3_pins.py, test_ttm.py, test_quote_refresh.py, test_store_migration.py, test_web_api_asof.py, test_xbrl_parser.py, test_valuation_inputs.py
 Repro: code review 12's surviving mutants, re-run on eb0aec3 with its runner (the whole suite each): all six still survive (1,131 passed each): `target <= day` and `served < day < target` in `_dividend_onto`, its `day < served`, the reverse factors' branch of `_moves_per_share`, the refusal naming only forward non-simple factors as price adjustments, and the explorer's date beside every figure. Their effects (the review's): `target <= day` (a split on the price's day, a full run) or `served < day < target` (a run that day whose dividend request failed) reads DDM 418.38 against 41.84, median 80.91 against 52.66, upside -20.0% against -47.9%; BUG-117 makes a payment served on a split's day common (whenever a run's latest listed split is later than its last bar), which BUG-122's `day < served` mutant still misses; without the reverse branch a non-simple factor of 2:3 or less would stop being refused, or be named "a 3-for-5 split"; the explorer would show "(filed None)" beside the latest filing's own figures. No current case.
 Expected: a test each.   Actual: none fails.
 
+Fix (iteration 227, `qa/evidence/bug072-investigation.txt`): tests pin every listed behaviour as the code already has it (a split up to and including a filing's own day is restated by it; a first-filing date only from a list under 100 filings; a quarter 80-120 days inclusive, 17 weeks included; revenue figures 25% apart are different things; Yahoo applies a split on its own day; the migration re-checks served_on under the write lock; _moves_per_share's ratios; the explorer dates only carried figures). 29 of 29 mutants killed. No code change, no defect found.
 ### BUG-130 [P3][WEB] A 5:4 or 4:3 split stops a refresh with a promise a full collection doesn't keep: the valuation applies only factors of 3:2 or more
-Status: OPEN
-Found: iteration 84 by code review 12 (M2), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 246; message only, the user's decision 2026-11-27)
+Found: iteration 84 by code review 12 (M2), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_quote_refresh.py, test_web_industries.py, test_web_workstation.py; failing first
 Repro: `sqlite_store._moves_per_share` refuses any simple-ratio split "as the valuation reads them (`inputs._apply_later_splits`)", but `_apply_later_splits` and `_undo_splits_after_price` take only factors of 3:2 or more (`inputs.py:300-302`, `:354-358`), and the refusal says "Collect FILER in full to update them": after a full collection a 5:4 split still reads Graham 634.76 and Lynch 346.50, pre-split, upside -39.4%, as a 1.253 spin-off does (code review 12's `scen12.py`). Refusing it is the safe side. Also: `sqlite_store.py`'s "avoid a runtime exporters -> valuation dependency" comment sits above a runtime import of `valuation.inputs`, whose private `_simple_ratio` crosses packages (no import cycle today).
 Expected: the rule and the message as they are (or the small simple ratios applied by the valuation, a policy question).   Actual: as above.
 
+Fix (iteration 246, `qa/evidence/web2-investigation.txt`): `quote_refresh.split_refusal` says a full collection doesn't update a split under 3-for-2 and the valuations stay on the old basis until the next report restates; a mixed list promises only the larger splits. sqlite_store and quote_refresh import the public `is_share_split`. Decision (USER 2026-11-27): keep the valuation's 3:2 rule (no 5:4/4:3 post-filing application). No stored data or valuation can move.
+Note (review 40, unproven): for a non-split factor under 1.5 the message says the next report "restates its figures", which a spin-off's report doesn't.
+Fix (iteration 250): a non-split factor under 1.5 (a spin-off's) is no longer promised a restatement; split-only messages unchanged. The worker's diff also closed `_small_split`'s lower bound (<=), a mutant left applied in its tree (web2's m130_bound_lower_closed): it made a 2-for-3 split 'small'; reverted by the orchestrator before commit (test_a_split_of_3_for_2_or_more_keeps_the_collection_promise[2/3] caught it).
 ### BUG-131 [P3][STORE] BUG-117's fallback still dates payments on a split's day for a collector east of UTC+10:30 whose bar request fails
-Status: OPEN
-Found: iteration 84 by code review 12 (M3), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 233)
+Found: iteration 84 by code review 12 (M3), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
 Repro: a run with neither bars nor a listed split dates its payments the day before the collector's: code review 12's `scen12c.py` on eb0aec3, a UTC+12 collector at local 2026-06-13 00:30 (New York 06-12 08:30, before the open) whose bar request fails, on a ticker that has never split: the payments are dated 2026-06-12, the split's day, and after a later run whose dividend request fails DDM reads 418.38 against 41.84 (median 80.91, upside -20.0%). 6715f99 was as wrong.
 Expected: the day before New York's date (or the collector's day less two).   Actual: the collector's day less one. Impact: none for this user (+0700).
 
+Fix (iteration 233, `qa/evidence/store2-investigation.txt`): `_served_day` for a run without bars: the later of Yahoo's latest listed split and new_york_day(collected_at) minus one day (a naive time read as local). Runs with bars unchanged.
 ### BUG-132 [P3][STORE] The as-of view carries figures across split bases and periods: 35 years mix per-share figures and counts from both sides of a split, 203 figures come from another period's filing
 Status: OPEN
 Found: iteration 84 by code review 12 (M4, M5), re-run in iteration 85 (`qa/evidence/iter85-review12-rerun.txt`) | Fixed: — | Regression test: —
@@ -1062,11 +1087,12 @@ Expected: carried figures on the answer's basis and period (restated by the spli
 Note (iteration 217): after Q18's merge the as-of view reports what the annual record holds; still OPEN in the record itself.
 
 ### BUG-133 [P3][VALID] Long-term debt is still missing where a filer tags only a total with its current maturities: JPM, USB, MET, TRV, PGR, EQIX
-Status: OPEN
+Status: VERIFIED (iteration 234) for JPM, USB, MET, PGR (by Q20); TRV is Q23, EQIX is BUG-330's kind, DE and BRK-B tag no us-gaap debt line
 Found: iteration 86 while fixing BUG-125 (`qa/evidence/iter86-bug125-realdata.txt`) | Fixed: — | Regression test: —
 Repro: after BUG-125's fix 16 companies' latest year still has no long-term debt. Some have none (ANET, ISRG, PLTR, VRTX); the rest tag only a total that includes the current maturities, which `short_term_debt` may hold too: JPM ($435.2B), USB ($60.8B) and MET ($14.5B) under `LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities`, TRV ($9.3B) and PGR ($6.9B) under `DebtLongtermAndShorttermCombinedAmount`, EQIX ($19.1B with $1.3B current) under `DebtInstrumentCarryingAmount` only, which is too often one instrument's to read (BUG-125); DE's and BRK-B's under none of these.
 Expected: the noncurrent part (the total less the current maturities the filer tags), or the total under a field of its own.   Actual: none; their total debt is the short-term part alone. Impact: the debt metrics of these companies (ROIC and the EV family are suppressed for banks and insurers).
 
+Fix (iteration 234): re-checked on the cache at 81b2e8e.
 ### BUG-134 [P2][VALID] A bank's EV, EV/EBITDA, EV/FCF and FCF yield are computed from the net debt, EBITDA and FCF its sector rules suppress: JPM's EV $1.03T, FCF yield -15%
 Status: VERIFIED (iteration 90)
 Found: iteration 87 while fixing BUG-126 (`qa/evidence/iter87-bug126-realdata.txt`) | Fixed: iteration 90 (see LOG) | Regression tests: `tests/test_sector_metrics.py::test_a_banks_ev_family_goes_with_its_net_debt_ebitda_and_fcf`, `::test_an_insurers_ev_to_ebitda_goes_with_its_ebitda`, `::test_a_reits_fcf_ratios_go_with_its_fcf`; guards `::test_a_general_companys_ev_family_is_computed`, `::test_yearly_metrics_without_a_price_gain_no_ev_keys`
@@ -1145,23 +1171,26 @@ Repro: `calculated_metrics.py:288-300` adds `commercial_paper` to `short_term_de
 Expected: paper added only where the short-term figure is a current-maturities tag that excludes it.   Actual: twice.
 
 ### BUG-144 [P3][VALID] Annual and quarterly long-term debt disagree at 10 year ends (4 before BUG-125): COP's 2019 reads $14.79B a quarter, $18.11B a year
-Status: OPEN
+Status: VERIFIED (iteration 234) for the named cases; the rest is BUG-382
 Found: iteration 92 by code review 13 (M2), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
 Repro: at quarterly checkpoints the 10-Qs' LongTermDebt outranks the new noncurrent tag, while the 10-K carries only the new one: COP 2019 $14.79B against $18.11B, COP 2020 $14.75B against $19.11B, ADI 2021 $6.25B against $6.78B, D 2019 $29.0B against $30.3B (review 13's `ltd_annual_vs_quarter.py`). Same root as BUG-141's tag order.
 Expected: one figure for a year end.   Actual: two.
 
+Fix (iteration 234): re-checked: COP FY2019/20, ADI FY2021, D FY2019 agree between annual and quarterly (by Q20/BUG-359/BUG-342).
 ### BUG-145 [P3][STORE] A refresh without a stored year carries the previous snapshot's EV family, so a pre-BUG-126 refresh's Yahoo EV stays for good
-Status: OPEN
-Found: iteration 92 by code review 13 (M3), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 233)
+Found: iteration 92 by code review 13 (M3), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
 Repro: `upsert_quote` carries the EV family forward when ours can't be computed (`sqlite_store.py:924-935`); for a ticker with no stored year whose latest snapshot is a pre-fix refresh's, Yahoo's 5,010 and 50.1 are carried on every later refresh (review 13's `bug126_carry.py`). Latent: SPCX, the only ticker without a stored year, has no refresh in the user's copy.
 Expected: carry only a full collection's EV family, or store none.   Actual: Yahoo's, indefinitely.
 
+Fix (iteration 233, `qa/evidence/store2-investigation.txt`): a refresh that can't compute its own EV family carries the latest snapshot that has a collection_runs row (a full collection), or none. No refresh snapshot is a ticker's latest today.
 ### BUG-146 [P3][VALID] BUG-124 reads a 10-Q's trailing-twelve-month span as a year, so the quarter after it can be labelled the next year's first
-Status: OPEN
-Found: iteration 92 by code review 13 (M4), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 255)
+Found: iteration 92 by code review 13 (M4), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_quarter_own_counts.py, test_quarter_year_starts.py, test_split_repeats.py, test_vintage_share_scale.py (new); 12 failing first
 Repro: `year_spans` takes any 350-380-day span from any form (`xbrl_parser.py:837-845`); a three-month figure starting the day after a TTM's end, in a field whose ladder misses that quarter, reads as the next year's Q1: review 13's synthetic case gives 2025-09-30 an OCF of 120 labelled FY2026 Q1 (empty before BUG-124), re-run at HEAD. Latent: AMZN is the only cached filer with TTM spans (13 fields), and its ladders reach every quarter first.
 Expected: `year_of_start` from the years a 10-K closes.   Actual: from any year-long span.
 
+Fix (iteration 255, `qa/evidence/shares1-investigation.txt`): a span counts as a year only if some 10-K reports that span in any field (filer-wide; per-field lost BXP's and LEN's Q1 dividends). DB copies (502 re-collected): financials_annual, the as-of snapshots, valuations, metrics, per-share, scores identical; 0 medians, verdicts, owner-earnings verdicts, historical values, labels. Look-ahead 0.
 ### BUG-147 [P3][CODE] Two branches no test pins: a lone first quarter's 80-day floor and a refresh's Yahoo-EBITDA fallback
 Status: VERIFIED (iteration 203)
 Found: iteration 92 by code review 13 (M5), re-run in iteration 93 (`qa/evidence/iter93-review13-rerun.txt`) | Fixed: (this commit, tests only) | Regression tests: tests/test_p3_pins.py and the valuation input tests
@@ -1211,11 +1240,12 @@ Repro: MCD 1968-05-21 -50.7% and 1969-06-13 -50.1%, TRV 1986-06-09 -52.1%: each 
 Expected: continuous series.   Actual: vendor gaps shown as moves on MAX charts (1960s-80s, and EQIX's 2001).
 
 ### BUG-154 [P3][MATCH] A dividend stored twice: KO's 2001 payments sum to $0.72 where it paid $0.36
-Status: OPEN
-Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 242; applied at the user's decision after the measurement, 2026-11-27)
+Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_dividend_payments.py (new), test_integrity.py, test_valuation_inputs.py, test_valuation_history_inputs.py, test_valuation_oracle_seam.py, test_web_repository.py
 Repro: `SELECT date, amount FROM dividend_events WHERE ticker='KO' AND date LIKE '2001%'` (the user's copy) gives 0.09, 0.09, 0.18 (09-10), 0.18 (09-12), 0.09 (09-17), 0.09; the same amount within 7 days also at PGR 2001-09-10/12, HD 2001-11-27/28, AXP 1987-12-31/1988-01-04, and 11 more pairs within 5 days; KO's and PGR's 2001-09-12 has no bar (the market was shut). The DVD tab sums by year, so KO's 2001 reads double.
 Expected: one payment.   Actual: Yahoo's duplicate kept. 4 tickers, historic years.
 
+Fix (iteration 242, `qa/evidence/div2-investigation.txt`): `src/dividend_payments.distinct_payments` drops a payment with the same amount as a kept one ex-dated 0-7 days earlier; used by load_inputs, history_inputs, Reader.dividend_events (DVD tab, dividends API, dividends.csv), integrity.dividend_gaps and the oracle (once_each). Not in `_yahoo_dividend_factors`. 12 payments drop (ARES, AXP, CHRW, DVN, HD, KO, MDT, NOC, NSC, PCG, PGR, RL); KO 2001 0.72 -> 0.54 (an unadjusted 0.18 remains); 48 valuation_history div_yield rows at ARES, CHRW, NSC, RL; 0 medians, verdicts, owner-earnings verdicts, historical values, labels.
 ### BUG-155 [P3][API] An unknown or lower-case ticker gets `200 []` from the bars API and 404 everywhere else
 Status: VERIFIED (iteration 188)
 Found: iteration 91 via MATCH-04 (a worker's sweep, reported in iteration 94: `qa/evidence/iter91-match04-report.md`), re-run in iteration 95 (`qa/evidence/iter95-match04-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_web_api_stocks.py, tests/test_web_quote_refresh.py, tests/test_web_range_anchor.py, tests/test_web_screener_units.py (node); 28 failing first
@@ -1293,11 +1323,12 @@ Expected: one unit for every "%" filter (typed percents converted by kind), or a
 Fix (iteration 188, with BUG-155): every field the screener shows as a percent (37 stored as a fraction, kind `pct`) takes a typed percent; screener.js converts at the filter boundary (typedToStored/storedToTyped), chips and saved-screen names show the typed unit, the popover says 'in %, e.g. 5 for 5%'. URLs, saved screens, presets and GET /api/screen keep the stored unit, so existing screens keep their meaning. debt_to_equity (Yahoo's percent) is typed as stored. Residual: a fraction typed by habit into a % field reads 100x too small (the hint is the only warning).
 
 ### BUG-165 [P3][STORE] A tag the registry now maps stays in `unmapped_facts` after a re-collection: AAPL's restricted-cash total still listed on the Quality page
-Status: OPEN
-Found: iteration 98 by code review 14 (M4), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 229)
+Found: iteration 98 by code review 14 (M4), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: (this commit) | Regression tests: tests/test_sqlite_store.py, tests/test_fetcher_concurrency.py; 12 failing first
 Repro: on a copy of the user's data, AAPL re-collected SEC-only from the cache with f2271db's code keeps its 2026-08-04 row for CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents (mapped since BUG-139), and the Quality page lists the tag as unmapped: the export upserts a run's unmapped facts and never removes a ticker's earlier ones (`sqlite_store.py`). It is the third most common unmapped tag on the user's copy (121 tickers), and BUG-125's five newly mapped tags add 45 rows (review 14); a fresh collection has 122 fewer rows (28,412 to 28,290). The same class as BUG-029.
 Expected: a run that reads a ticker's SEC facts replaces its unmapped rows.
 
+Fix (iteration 229, `qa/evidence/bug344-investigation.txt`): a run that parsed the filer's annual record and read its filings completely (`_complete_sec_read`: no unrecovered report, unread predecessor, submissions error or SEC error) removes, before writing, the ticker's stored rows it no longer gives (`_clear_absent`): annual years with their metrics, quarters, trailing years, unmapped tags; a --years run only from its earliest period on; a table whose build step raised (`StockData.unbuilt`: quarterly, metrics) keeps its rows; a fill-only, partial, failed, Yahoo-only or record-less run removes nothing; snapshots/vintages as Q18. Re-collection of 502 offline: removed financials_quarterly 28 (23 tickers), financials_ttm 32 (28), unmapped_facts 667 (345; all now-mapped tags, 121 BUG-165's restricted-cash tag); annual 0. 0 medians, verdicts, owner-earnings verdicts, historical values or labels; AZO's 120 valuation_history months move (a stale empty TTM no longer read). ADI's TTM 2011-04-30/07-30 are produced again today, so kept. Oracles identical; look-ahead 0. Residual: BUG-380.
 ### BUG-166 [P3][CLI] `diagnose.py` prints share counts as dollars: "shares_outstanding: $14.77B"
 Status: VERIFIED (iteration 156)
 Found: iteration 98 by code review 14 (M5), re-run in iteration 99 (`qa/evidence/iter99-review14-rerun.txt`) | Fixed: (this commit) | Regression test: tests/test_cli_small.py::test_diagnose_prints_share_counts_as_counts
@@ -1312,11 +1343,12 @@ Expected: the docstring says what the job does.
 Fix (iteration 198, with BUG-028): the quote-refresh route's, the job submit's and settings' docstrings say what the job does (no 'lightweight quote-only').
 
 ### BUG-168 [P3][STORE] A period a re-parse no longer gives keeps its row: ADI's 2011-04-30 and 2011-07-30 trailing years, six vintages
-Status: OPEN
-Found: iteration 100 while verifying BUG-029's fix (`qa/evidence/bug029-realdata.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 229)
+Found: iteration 100 while verifying BUG-029's fix (`qa/evidence/bug029-realdata.txt`) | Fixed: (this commit) | Regression tests: tests/test_sqlite_store.py, tests/test_fetcher_concurrency.py; 12 failing first
 Repro: the export upserts the periods a run gives and never removes a ticker's others, so rows an older parse made stay after the current rules stop giving them: the user's database, re-collected with BUG-029's fix, still holds ADI's TTM 2011-04-30 and 2011-07-30 and vintages for ETN's FY2014 and FY2017, GS's FY2019 and FY2022, SCCO's FY2015 and SPG's FY2013 (by accession), which a fresh collection of the same filings doesn't have.
 Expected: a run that parsed the filer's annual record removes the ticker's periods it no longer gives (not a run with no annual record, a failed one or a predecessor's: Q6).   Actual: 8 stale rows.
 
+Fix (iteration 229, `qa/evidence/bug344-investigation.txt`): a run that parsed the filer's annual record and read its filings completely (`_complete_sec_read`: no unrecovered report, unread predecessor, submissions error or SEC error) removes, before writing, the ticker's stored rows it no longer gives (`_clear_absent`): annual years with their metrics, quarters, trailing years, unmapped tags; a --years run only from its earliest period on; a table whose build step raised (`StockData.unbuilt`: quarterly, metrics) keeps its rows; a fill-only, partial, failed, Yahoo-only or record-less run removes nothing; snapshots/vintages as Q18. Re-collection of 502 offline: removed financials_quarterly 28 (23 tickers), financials_ttm 32 (28), unmapped_facts 667 (345; all now-mapped tags, 121 BUG-165's restricted-cash tag); annual 0. 0 medians, verdicts, owner-earnings verdicts, historical values or labels; AZO's 120 valuation_history months move (a stale empty TTM no longer read). ADI's TTM 2011-04-30/07-30 are produced again today, so kept. Oracles identical; look-ahead 0. Residual: BUG-380.
 ### BUG-169 [P1][VAL] The DCF's basis took interest off twice: `levered_fcf` subtracted interest expense from OCF - capex
 Status: VERIFIED (build iteration 1)
 Found: the GuruFocus research's inventory (2026-10-21), build task M0-1 | Fixed: (this commit) | Regression test: tests/test_calculated_metrics.py::test_levered_fcf_does_not_subtract_interest_again, tests/test_calculated_metrics.py::test_levered_fcf_without_capex_is_ocf, tests/test_valuation_inputs.py::test_fcf_basis_is_free_cash_flow
@@ -1420,11 +1452,12 @@ Fix (build iteration 19):
 Evidence: `qa/evidence/review15-bug177-{red,green}.txt`
 
 ### BUG-178 [P3][VAL] A spin-off factor between the last bar and the snapshot shrinks Yahoo's share count in the valuation history's guard
-Status: OPEN
-Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 247)
+Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: (this commit) | Regression tests: tests/test_valuation_price_day.py (new), test_valuation_history_inputs.py, test_quote_events_window.py, test_web_quote_refresh.py; 32 failing first
 Repro: `history_inputs.load_history_inputs` converts Yahoo's count with `bars_to_price`, which includes non-split factors; a spin-off doesn't change the count. A 1.30 factor on the snapshot's day reads Yahoo's count 23% low (verified on a synthetic DB) and the ticker goes N/A as "another share class or units".
 Notes: the real path is the quote refresh's recompute (BUG-128), which stores the factor and a price but no bars, until the next full collection. Fix: convert the count with a split-only factor.
 
+Fix (iteration 247, `qa/evidence/val3-investigation.txt`): Yahoo's share count moves onto the bars' basis by share splits only, not spin-off factors. DB copies: 0 medians, verdicts, owner-earnings verdicts; CCI historical value None -> 94.83, label None -> below (its stray 2026-12-31 trailing year no longer read), composites move at CCI, KIM, MAA, O, PSA, TPL; applied at the user's decision (2026-11-27). Oracles as at HEAD.
 ### BUG-179 [P2][STORE] A run whose predecessor read failed rewrites the successor's years as if complete, clearing what only the predecessor filed
 Status: VERIFIED (iteration 118)
 Found: code review 15 (opus, 16f3005..a3c8a77), build M1-9 | Fixed: (this commit) | Regression tests: tests/test_sqlite_store.py::test_a_run_that_couldnt_read_the_predecessor_keeps_what_only_the_predecessor_filed, ::test_a_run_that_couldnt_read_the_predecessor_keeps_the_figures_it_reads_otherwise, ::test_a_run_that_couldnt_read_the_predecessor_computes_each_years_metrics_on_the_year_as_stored, ::test_a_run_that_couldnt_read_the_predecessor_or_find_an_annual_record_keeps_the_stored_quarters; tests/test_fetcher_concurrency.py::test_a_collection_whose_predecessor_read_failed_keeps_the_predecessors_figures (503, 404); tests/test_web_api_collection.py::test_a_job_keeps_what_a_failed_predecessor_read_cant_give; tests/test_refresh.py::test_the_real_collection_keeps_what_a_failed_predecessor_read_cant_give; guards ::test_a_run_that_couldnt_read_the_predecessor_still_adds_what_it_has, ::test_a_run_that_reads_the_predecessor_again_restates_as_before
@@ -1465,6 +1498,7 @@ Expected: the quarters filed on the split's basis before the split meet closes o
 Notes: one of HON's 121 months in its window. A fix needs the split apart from the factor: the restatement shows it (the same period's count halved between two filings), Yahoo doesn't.
 Also (build iteration 37, M3-5): the gurus' quarter-over-quarter 13F changes adjust shares by `split_events`, so Dodge & Cox's HON reads "reduced" by 50% (8,019 to 4,010 shares) across the same 2026-06-29 split, its CUSIP changing with it (438516106 to 438516205). The same fix would correct it.
 
+Note (iteration 247): still open on HEAD (HON 2026-05-29 market cap $75.5B between $136.1B and $71.1B). BUG-379's mixed-factor split will separate HON's 0.9535 into 0.5 x 1.907 once its FY2026 10-K restating FY2025 is stored (probe: $151.0B); wait for it. The 13F half stays: src/ownership/portfolio.py reads split_events only.
 ### BUG-185 [P2][VAL] The annual share normalization folds share jumps that aren't splits: mergers, swinging counts, spin-off price factors
 Status: VERIFIED (build iteration 24)
 Found: build iteration 24, M2-5's scores oracle | Fixed: (this commit) | Regression test: tests/test_valuation_inputs.py::test_a_spin_off_price_factor_never_explains_a_share_seam, ::test_a_merger_whose_revenue_rose_with_the_count_is_not_a_split, ::test_a_diluted_count_that_swings_alone_is_not_a_split, ::test_years_before_the_listing_take_the_public_count, ::test_a_listing_jump_folds_though_eps_changed_sign
@@ -1542,11 +1576,12 @@ Fix (build iteration 35):
 Evidence: `qa/evidence/bug191-{red,green,mutants,realdata}.txt`
 
 ### BUG-192 [P3][SCORES] Predictability's N/A reasons and notes are off
-Status: OPEN
-Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: | Regression test:
+Status: VERIFIED (iteration 240)
+Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression tests: tests/test_quarterly_eps.py (new), test_ttm.py, test_scores_scores.py, test_scores_store.py, test_web_scores.py, test_web_api_scores.py, test_quality.py, test_fetcher_concurrency.py; 27 failing first
 Repro: `scores.py` says "fewer than 10 fiscal years" for 9 of 16 N/As that have 10-11 years but miss a value (GOOGL, AXP, BRK-B, DUK, KKR, NEE, V, CRWD, UBER); the STAT note says "revenue and EBITDA" for banks and insurers, which use EPS; a 1-star result doesn't say whether a loss year or a falling trend gave it.
 Expected: the actual reason.   Actual: a wrong or vague one.
 
+Fix (iteration 240, `qa/evidence/ttm1-investigation.txt`): (partly fixed by BUG-193) `scores.rated()` gives a 1-star note naming the cause (series at or below zero, falling trend, fit below 0.125), EPS named for banks and insurers; stored as predictability_note in na_reasons, served as predictability.note and in the STAT note; a missing year inside a longer record reads "FY2021 of the last 10 fiscal years not stored". 151 rows gain the note; no score changes. DB copies (502 re-collected): 0 medians, verdicts, owner-earnings verdicts, historical values, labels; oracles as at HEAD; look-ahead 0.
 ### BUG-193 [P3][UI] Several N/A scores name no input
 Status: VERIFIED (iteration 201)
 Found: code review 16 (opus, a3c8a77..0356db8, and 707c06b), build M2-9 | Fixed: (this commit) | Regression tests: tests/test_scores_*.py, test_web_scores.py, test_web_insiders.py, test_web_screener_quality.py, test_web_workstation.py; 21 failing first
@@ -1612,10 +1647,11 @@ Expected: a failure stored as an N/A reason, or the row marked stale.   Actual: 
 Fix (iteration 196, with BUG-198): a failed scores computation stores a failure row (no score, every N/A reason 'the scores' computation failed: <why>') in place of the previous scores, signs and per-share rows, shown by the existing N/A notes; if that write fails too, the log says the previous scores stay. Residuals: a scores failure isn't reported to callers (the failures dict is valuations-only); a rank-pass failure keeps the old ranks; the failure row's header reads 'fiscal year None'.
 
 ### BUG-203 [P3][DATA] Three tags the mapping doesn't read: lease-inclusive PP&E, the combined debt, and no operating income without a fallback
-Status: OPEN
-Found: code review 16's recommendations, build M2-9 (BUG-189, BUG-191) | Fixed: | Regression test:
+Status: VERIFIED (iteration 221) for lease-inclusive PP&E and the combined debt; the missing operating income is BUG-374
+Found: code review 16's recommendations, build M2-9 (BUG-189, BUG-191) | Fixed: (this commit) | Regression tests: tests/test_fallback_tags.py (new), tests/test_xbrl_parser.py; 43 failing first
 Repro: `src/mappings/canonical.py`: `ppe_net` maps only `PropertyPlantAndEquipmentNet`, so 17 of the 94 Magic Formula candidates have no PP&E (UNP, HD and TSLA tag `PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization`; also META, GOOGL, LOW, T...). 15 tag no `OperatingIncomeLoss` (JNJ, LLY, MRK, PFE, XOM, CVX, IBM, GE, DE, KLAC...), which leaves their Altman Z and Magic Formula rank N/A. PGR files its $8.39B of debt as `DebtLongtermAndShorttermCombinedAmount`, which no field maps (so its debt reads unknown, BUG-189).
 Expected: the tags mapped, with fallbacks, and an EBIT definition chosen for the filers without operating income (GuruFocus uses pretax income + interest expense).   Actual: N/A, with the reason shown (BUG-191).
+Fix (iteration 221, Q20, `qa/evidence/q20-investigation.txt`): fallback tags in canonical.py (long_term_debt: LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities, DebtLongtermAndShorttermCombinedAmount; ppe_net: the lease-inclusive PP&E; short_term_investments: six current-securities tags, MarketableSecurities last) and `_totals_beside_current_debt_set_aside` in `_filer_facts` (a total that includes current debt isn't read on a date its current part is tagged), which also holds per filing date in the as-of snapshots. Banks (stock.sector_class, Q9) don't read MarketableSecurities (`_UNREAD_BY_SECTOR`). Census over 504 filers: annual LTD 59 cells/6 filers, STI 710/105, PP&E 419/94. On DB copies: 0 medians, verdicts, owner-earnings verdicts or labels; 21 historical values within their labels; EPV at 37 (GM 119.77 -> 35.05); NCAV bear at 10; Magic Formula ranked 255 -> 314; 13 composites; 5 new beneish flags; no bank valuation or score row moves. Look-ahead 0; oracles as at HEAD.
 Notes: a mapping change reaches the stored figures only at the next collection, which is live (not in M2's offline backfill). Operating income feeds EBITDA, M1's EV/EBITDA history and the fair-value line, and the screener, so a fallback needs a valuation-policy check first.
 
 ### BUG-204 [P3][UI] The STAT tab's metric cards and its Quality section read a debt-free filer's debt differently
@@ -1750,10 +1786,11 @@ Fix (build iteration 40): `price_suspect()` in `src/ownership/insiders.py` flags
 Evidence: `qa/evidence/bug220-fix-{red,green,mutants,mutants-rerun,realdata,gates-rerun}.txt`
 
 ### BUG-221 [P3][DATA] Five current-securities tags aren't read as short-term investments
-Status: OPEN
-Found: build iteration 42 (M4-1's real-data check) | Fixed: | Regression test:
+Status: VERIFIED (iteration 221)
+Found: build iteration 42 (M4-1's real-data check) | Fixed: (this commit) | Regression tests: tests/test_fallback_tags.py (new), tests/test_xbrl_parser.py; 43 failing first
 Repro: `short_term_investments` maps `ShortTermInvestments`, `MarketableSecuritiesCurrent` and `AvailableForSaleSecuritiesCurrent` only. `unmapped_facts` holds `AvailableForSaleSecuritiesDebtSecuritiesCurrent` for 12 filers (ORCL, PFE, MU, INTC, ANET, AMGN, ADI, CRM, BMY, SYK, NOW, INTU), `MarketableSecurities` for 8 (NVDA's $23.9B at 2024-04-28, KO, MA, INTC, BMY ...), `OtherShortTermInvestments` for 8, `HeldToMaturitySecuritiesCurrent` and `DebtSecuritiesAvailableForSaleExcludingAccruedInterestCurrent` for 2 each. NVDA's FY2026 stores no short-term investments after $34.6B in FY2025; 80 of the 126 latest fiscal years store none.
 Expected: the current securities read (a noncurrent-inclusive `MarketableSecurities` only where no current tag is filed).   Actual: read as missing, so the cash and short-term investments behind net debt, EPV's cash and Graham's net-net are understated. NCAV itself reads current assets and is unaffected.
+Fix (iteration 221, Q20, `qa/evidence/q20-investigation.txt`): fallback tags in canonical.py (long_term_debt: LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities, DebtLongtermAndShorttermCombinedAmount; ppe_net: the lease-inclusive PP&E; short_term_investments: six current-securities tags, MarketableSecurities last) and `_totals_beside_current_debt_set_aside` in `_filer_facts` (a total that includes current debt isn't read on a date its current part is tagged), which also holds per filing date in the as-of snapshots. Banks (stock.sector_class, Q9) don't read MarketableSecurities (`_UNREAD_BY_SECTOR`). Census over 504 filers: annual LTD 59 cells/6 filers, STI 710/105, PP&E 419/94. On DB copies: 0 medians, verdicts, owner-earnings verdicts or labels; 21 historical values within their labels; EPV at 37 (GM 119.77 -> 35.05); NCAV bear at 10; Magic Formula ranked 255 -> 314; 13 composites; 5 new beneish flags; no bank valuation or score row moves. Look-ahead 0; oracles as at HEAD.
 Notes: a mapping change reaches the stored figures only at the next collection. Net debt feeds M1's EV/EBITDA history and fair-value line, M2's Magic Formula and the screener, not the six models' median or the verdicts.
 
 ### BUG-222 [P3][UI] The screener's results table is wider than the page, so its verdict column scrolls out of view
@@ -1855,11 +1892,12 @@ Expected: the map reloaded once when a ticker misses and the file is over a week
 Fix (iteration 216, with BUG-052): the SEC ticker map expires after 7 days; a failed re-fetch uses the cache with a warning; an unknown ticker triggers one re-fetch per handler.
 
 ### BUG-236 [P3][WEB] A company ranked before its SIC code was filled is told its industry "has fewer than 10 companies here"
-Status: OPEN
-Found: code review 19 (m-3), build M5-6 | Fixed: | Regression test:
+Status: VERIFIED (iteration 246)
+Found: code review 19 (m-3), build M5-6 | Fixed: (this commit) | Regression tests: tests/test_quote_refresh.py, test_web_industries.py, test_web_workstation.py; failing first
 Repro: fill the codes (`python -m src.universe.sic`) with no rank pass after it; the STAT tab and /api/stocks/{t}/scores (src/webapp/quality.py:68-75) give "SIC xxxx's industry has fewer than 10 companies here" for a company in a group of 10 or more.
 Expected: "industry ranks not computed yet" until the next rank pass (any collection, backfill or refresh).   Actual: the wrong reason, until then.
 
+Fix (iteration 246, `qa/evidence/web2-investigation.txt`): `quality.industry_view` runs industry_groups over the ranked universe with the live SIC codes (`Reader.ranked_sic_codes`); if the company would get a group it says "industry ranks not computed yet", else the old message. 151 rows have no group; none is stale today. No stored data or valuation can move.
 ### BUG-237 [P3][REFRESH] A quote whose database write failed is counted as stored
 Status: VERIFIED (iteration 193)
 Found: code review 19 (m-4), build M5-6 | Fixed: (this commit) | Regression tests: tests/test_quote_refresh_failures.py (new), tests/test_quote_refresh.py, tests/test_web_quote_refresh.py; 19 failing first
@@ -1950,11 +1988,12 @@ For the user: medians 0, verdicts 0, owner_earnings_verdicts 0. Historical value
 Not run (low RAM): history_vs_yahoo on the copies, lookahead.py. Residuals: 32 balance-sheet-only trailing rows today's code writes are no longer produced (stay in an existing DB); windows still break at 133 pairs of ends (71 near-duplicate ends with flows: ACN, CAH, BBY's 2011).
 
 ### BUG-250 [P3][VAL] The history's latest point misses a quarter a collection stored after the last bar
-Status: OPEN
-Found: build M5-6 (history_vs_yahoo on the S&P 500) | Fixed: | Regression test:
+Status: VERIFIED (iteration 247)
+Found: build M5-6 (history_vs_yahoo on the S&P 500) | Fixed: (this commit) | Regression tests: tests/test_valuation_price_day.py (new), test_valuation_history_inputs.py, test_quote_events_window.py, test_web_quote_refresh.py; 32 failing first
 Repro: src/valuation/history_inputs.py `known_on` makes Q1-Q3 known at period end + 45 days, capped at the collection day; the latest point is the latest bar, which precedes a weekend collection (the live run: bars to Friday 2026-10-23, collected Sunday 10-25). So 40 companies' latest point still uses June's quarter though September's is stored (GE, RTX, TRV of the 127): 11 of the 58 P/E misses against Yahoo, enough to fail the 88% gate (394/452). It clears at the next bar after the collection day. Evidence: `qa/evidence/close-m5-6-misses-done.txt` (probes under %LOCALAPPDATA%\stockdb-qa\build\m56\misses\), C5.
 Expected: a quarter known at the latest bar when its 10-Q was filed by then (the quarters store no filing date; capping at the latest bar would count one filed in between).   Measured: with the cap the P/E gate passes (402/452); no valuation, median or verdict.
 
+Fix (iteration 247, `qa/evidence/val3-investigation.txt`): `known_on` caps a quarter at the last weekday on or before the collection day (the SEC accepts no weekend filings); and a trailing year ending after the collection day isn't known (CCI's stray row, BUG-386). DB copies: 0 medians, verdicts, owner-earnings verdicts; CCI historical value None -> 94.83, label None -> below (its stray 2026-12-31 trailing year no longer read), composites move at CCI, KIM, MAA, O, PSA, TPL; applied at the user's decision (2026-11-27). Oracles as at HEAD.
 ### BUG-251 [P2][GATHER] The SEC's companyfacts lacks the latest 10-Q or 10-K of 58 companies, though EDGAR lists it as filed
 Status: VERIFIED (iteration 119)
 Found: build M5-6 (the P/E misses against Yahoo) | Fixed: (this commit) | Regression tests: tests/test_sec_cache.py::test_the_latest_report_the_companyfacts_lack_is_named, ::test_only_a_report_as_filed_with_xbrl_is_looked_for, ::test_an_ifrs_filers_report_is_found_among_its_ifrs_facts; tests/test_fetcher_concurrency.py::test_a_report_the_companyfacts_lack_is_a_warning_naming_it, ::test_a_collection_whose_companyfacts_lack_the_latest_report_stores_it_as_incomplete; tests/test_refresh.py::test_a_company_whose_companyfacts_lacked_its_latest_report_is_collected_again, ::test_a_report_still_without_facts_is_collected_again_three_times_then_left, ::test_the_real_collection_stores_what_the_companyfacts_lack_and_the_sec_step_collects_it_again; tests/test_sqlite_store.py::test_a_runs_table_from_before_the_incomplete_column_gains_it_and_keeps_its_runs; tests/test_web_api_collection.py::test_a_job_stores_what_its_sec_read_lacked, and 24 more (34 with BUG-279's)
@@ -1981,11 +2020,12 @@ Repro: a derived fourth quarter of 435M splits the 2015 3:2 seam across two jump
 Expected: the filing-based count.   Actual: as above.
 
 ### BUG-299 [P3][VALID] D&A sets a total aside against AdjustmentForAmortization where that is broader than the amortization of intangibles: ALL's FY2021 vintage $1.69B for $1.09B
-Status: OPEN
-Found: code review 23 (`qa/evidence/review23.txt`, Minor 1) | Fixed: | Regression test:
+Status: VERIFIED (iteration 259; fixed earlier by 5efa1be, BUG-274)
+Found: code review 23 (`qa/evidence/review23.txt`, Minor 1) | Fixed: 5efa1be | Regression tests: tests/test_xbrl_parser.py::test_a_total_that_holds_the_intangibles_amortization_stays_beside_a_broader_cash_flow_figure
 Repro: `_AMORTIZATION` takes the first tag found (xbrl_parser.py ~269, 298-302) and a total at or below it is set aside (311-318). Allstate's 10-K 0000899051-22-000015 FY2021: total $1,086M, Depreciation $411M, AmortizationOfIntangibleAssets $376M, AdjustmentForAmortization $1,281M, so D&A reads 411 + 1,281. The annual record keeps $1,086M (a later 10-K's figure stands); only that vintage moves. The only such period in the cache. A 4-fact test, %LOCALAPPDATA%\stockdb-qa\review23\test_review23_da.py, fails at HEAD.
 Expected: the total kept where it holds the intangibles' amortization.   Actual: $1,692M.
 
+Re-checked (iteration 259, `qa/evidence/dna1-investigation.txt`): review 23's probe passes on 7dbc9bb; ALL FY2021 vintages read $1,086M in all three filings (offline re-collect and stored DB). No diff.
 ### BUG-300 [P3][DOC] D&A's set-aside adds the amortization to the Depreciation fact, the README says to the line set aside: they differ in 40 annual periods at 8 filers
 Status: OPEN
 Found: code review 23 (Minor 2) | Fixed: | Regression test:
@@ -1993,17 +2033,19 @@ Repro: xbrl_parser.py ~316 `depreciation.get(key) or low[0]`; the docstring stat
 Expected: the README and the code agree, on the cash flow statement's figure.   Actual: as above.
 
 ### BUG-301 [P3][VAL] With four or five years, the band's 75th percentile still interpolates toward an outlier year: GE's bull $3,641 on a 447x multiple
-Status: OPEN
-Found: iteration 135 (BUG-172's measurement) | Fixed: | Regression test:
+Status: VERIFIED (iteration 248; option (c), applied at the user's decision after the measurement, 2026-11-27)
+Found: iteration 135 (BUG-172's measurement) | Fixed: (this commit) | Regression tests: tests/test_valuation_models.py; 2 failing first
 Repro: GE's multiples row after BUG-172: band 24.70 / 32.84 / 447.33 over 4 years, one of them FY2022's 1,676x as traded (diluted EPS $0.05); bull $3,641.28 (was $8,498.58).
 Expected: a bull case one tiny-earnings year doesn't set.   Actual: inclusive quartiles of 4 values still weight it by a quarter.
 
+Fix (iteration 248, `qa/evidence/val3-investigation.txt`): `models.multiples_band`: quartiles at 5 years or more; with 4 years the 2nd and 3rd values and their midpoint; with 3, the median alone; the oracle the same. GE $226.66 / $267.34 / $308.03. DB: 60 multiples rows, 27 summary medians (bear/bull only, no base), 2 verdicts: AON fair -> expensive (bull 888.26 -> 332.78), KVUE fair -> expensive (bull 19.47 -> 18.18); 0 owner-earnings verdicts, historical values, labels.
 ### BUG-302 [P3][VAL] HOOD's P/B band median differs from the valuation oracle: 2.14 against 1.69
-Status: OPEN
+Status: VERIFIED (iteration 247; fixed by Q9, iteration 146)
 Found: iteration 135 (BUG-172's oracle run) | Fixed: | Regression test:
 Repro: `qa/oracle/valuation_oracle.py --db <copy>` level 2: HOOD multiples band_median stored 2.1397, oracle 1.6950, on head and with BUG-172 alike (the only multiples mismatch left after it). Not diagnosed: likely the book value per share's count or basis.
 Expected: the oracle's within 0.5%.   Actual: 29% apart on the base.
 
+Fix (iteration 247, `qa/evidence/val3-investigation.txt`): re-checked: HOOD is classed general since Q9, so its band is P/E (N/A: under 3 fiscal years); all 448 multiples bands match the oracle.
 ### BUG-303 [P2][VAL] The band's FY-end close counts a spin-off factor twice where the price and the bars sit on either side of it (since BUG-172)
 Status: VERIFIED (iteration 141)
 Found: code review 24 (`qa/evidence/review24.txt`, Important 1) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py::test_a_price_before_a_spin_off_beside_bars_after_it_reads_the_closes_as_traded, ::test_a_refresh_after_a_spin_off_beside_bars_before_it_reads_the_closes_as_traded
@@ -2030,11 +2072,12 @@ Repro: indicators.py ~353 "lowest and highest positive EPS"; USAGE_GUIDE.md ~335
 Expected: they describe the code.   Actual: as above.
 
 ### BUG-307 [P3][STORE] A refresh dates its payments by Yahoo's latest listed split, which can predate a stored split
-Status: OPEN
-Found: code review 24 (Minor 4; unproven: needs Yahoo's list) | Fixed: | Regression test:
+Status: VERIFIED (iteration 233)
+Found: code review 24 (Minor 4; unproven: needs Yahoo's list) | Fixed: (this commit) | Regression tests: tests/test_store_carry_and_served_day.py (new); 13 failing first
 Repro: sqlite_store.py ~1476-1478 serves a refresh's payments on `_served_day` with no bars, the latest split Yahoo lists; a stored split dated after it would divide every payment by its ratio (`_dividend_onto`).
 Expected: served on the refresh's own day, as a collection's last bar would be (max(latest listed split, collected_at - 1 day)).   Actual: possibly years earlier.
 
+Fix (iteration 233, `qa/evidence/store2-investigation.txt`): see BUG-131 (iteration 233): a listed split later than the day before the run wins, so payments are never dated before a stored split. No case in today's DB.
 ### BUG-308 [P3][QA] The valuation oracle reads the whole FCF history where the code's is truncated at a share seam: EXE's DCF growth 18.4% against 0.9%
 Status: VERIFIED (iteration 208)
 Found: iteration 144 (Q2/Q5's oracle run) | Fixed: (this commit) | Regression tests: tests/test_valuation_history.py, tests/test_valuation_oracle_seam.py; 6 failing first
@@ -2081,11 +2124,12 @@ Repro: valuation-layer spec ~63-64 and ~82 (growth_source "analyst"); owner-earn
 Expected: the specs say Q2/Q5's rule; the input dropped or labelled.   Actual: as above.
 
 ### BUG-315 [P3][VAL] Q5's fallback edges: losses after the first positive year, a window starting on a missing value, positions not fiscal years
-Status: OPEN
-Found: code review 25 (Minor 5; not tested, no finding claimed) | Fixed: | Regression test:
+Status: VERIFIED (iteration 248; kept and pinned, the user's decision 2026-11-27)
+Found: code review 25 (Minor 5; not tested, no finding claimed) | Fixed: (this commit) | Regression tests: tests/test_valuation_assumptions.py (3 new); pins, pass on HEAD
 Repro: assumptions._cagr_from_first_positive measures from the first positive value even when losses follow; a window whose first value is missing (a gap, not a loss) takes the fallback; "at least 4 FYs" counts positions.
 Expected: decided edges, with tests.   Actual: as above.
 
+Fix (iteration 248, `qa/evidence/val3-investigation.txt`): three tests pin today's reading and `_cagr_from_first_positive`'s docstring names the edges: losses after the first positive year measure end to end; a window starting on a missing value takes the fallback; the four years are counted as values. No behaviour change.
 ### BUG-316 [P3][PARSE] The restore step can put back a net-income-to-common figure Q16 left unread
 Status: VERIFIED (iteration 160)
 Found: code review 26 (`qa/evidence/review26.txt`, Minor 1; proven by a synthetic test) | Fixed: (this commit) | Regression test: tests/test_xbrl_parser.py::test_a_contradicted_to_common_figure_is_not_put_back_by_the_restore_step
@@ -2186,17 +2230,19 @@ Expected: no short-term debt carried beside a later total that can hold the matu
 Fix (iteration 217, Q18's merge of feat/asof-snapshots): the debt is the record's own (one rule); the maturities are counted once (test on the branch).
 
 ### BUG-335 [P3][TTM] A third quarter's EPS derived as nine months less six carries the halves' rounding: C Q3 2026 2.86 for 2.85
-Status: OPEN
-Found: iteration 178 (Q17's worker, C's recovered quarters) | Fixed: | Regression test:
+Status: VERIFIED (iteration 240)
+Found: iteration 178 (Q17's worker, C's recovered quarters) | Fixed: (this commit) | Regression tests: tests/test_quarterly_eps.py (new), test_ttm.py, test_scores_scores.py, test_scores_store.py, test_web_scores.py, test_web_api_scores.py, test_quality.py, test_fetcher_concurrency.py; 27 failing first
 Repro: C's 10-Q tags Q3 2026 diluted EPS 2.85 and nine months; the quarterly ladder's 9M - 6M gives 2.86; C's companyfacts-based Q3 2025 likewise (1.8600000000000003 for 1.86).
 Expected: the quarter's own 3-month EPS where the filing tags it.   Actual: the difference of rounded year-to-date figures.
 
+Fix (iteration 240, `qa/evidence/ttm1-investigation.txt`): a derived quarter's EPS takes the quarter's own 3-month figure where the two are within 1.5 cents (rounding only; a wider reading pulled in mis-scaled facts). C Q3 2026 2.85. Quarterly EPS moves are noise or at most 1.5 cents. DB copies (502 re-collected): 0 medians, verdicts, owner-earnings verdicts, historical values, labels; oracles as at HEAD; look-ahead 0.
 ### BUG-336 [P3][GATHER] A run that recovered a gap from the filing's XBRL isn't collected again when the SEC's companyfacts catch up
-Status: OPEN
+Status: WONTFIX (iteration 253, the user's decision 2026-11-28)
 Found: iteration 178 (Q17's residuals) | Fixed: | Regression test:
 Repro: since Q17 a fully recovered gap is stored complete, so the refresh doesn't queue it; the companyfacts' version of the report (which may round or restate differently) is read only at the company's next scheduled collection.
 Expected: the company collected again once the companyfacts carry the report.   Actual: it waits for its next report.
 
+Decision (USER 2026-11-28): won't fix: the XBRL read equals the companyfacts (README parity check, 4,084 facts over 8 filings) and the company is collected again at its next report. 31 such runs in the DB.
 ### BUG-337 [P2][GATHER] Q17 marks a gap recovered, and stores the run complete, without reaching a report the companyfacts carry: a gap over 4 reports, or a pre-Q17 submissions cache, leaves reports missing for good
 Status: VERIFIED (iteration 180)
 Found: code review 29 (`qa/evidence/review29.txt`, Important 1; probes fail at HEAD) | Fixed: (this commit) | Regression tests: tests/test_sec_cache.py (3 new, one with 2 cases), tests/test_fetcher_concurrency.py (a warning case); 3 failing first
@@ -2205,18 +2251,21 @@ Expected: `recovered` only when the walk stopped at an accession the companyfact
 Fix (iteration 180, `qa/evidence/bug337-investigation.txt`): a new `report_gap(submissions, facts) -> (gap, whole)` walks as before but says whether it stopped at an accession the companyfacts carry (checked before the cap, so four lacked reports whose listed fifth is carried are whole); `reports_without_facts` returns its gap; `_read_gap` sets `recovered` only when every report was read and the gap is whole, else the run stays incomplete and the refresh collects it again. The run's warning adds "it found no earlier report they carry, so reports before those may be missing too". The same reports are read and merged, so no figure moves; the stored DB (2026-10-25) predates Q17 (no `incomplete` column, 0 runs read a filing's XBRL), so no stored row changes. Residuals: a gap whose carried fifth report is listed nowhere stays incomplete (safe side); a filer whose companyfacts carry none of its reports is retried INCOMPLETE_RETRIES times; refresh._lacking's wording ("read no facts of its 10-Q") is unchanged for this case; a gap over four re-reads the same four on each retry (from the per-filing cache). BUG-336 not worsened.
 
 ### BUG-338 [P3][TTM] BUG-332's fallback reads a year whose 10-K tags no amortization as a year with no 10-K yet
-Status: OPEN
-Found: code review 29 (Minor 1; synthetic, a regression against 33d60b1; no real case among 17 candidate filers) | Fixed: | Regression test:
+Status: VERIFIED (iteration 223)
+Found: code review 29 (Minor 1; synthetic, a regression against 33d60b1; no real case among 17 candidate filers) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (3 new); failing first
 Repro: xbrl_parser.py ~1179-1189: `latest` holds only annual keys in `final` (periods with an amortization fact), so year_read_so() takes the year before for a year whose 10-K tags DDA alone; its 10-Qs follow the earlier 10-K's basis and Q4 can go negative (synthetic SWK-shaped: Q4 -15.0M for 96.9M at 33d60b1). Candidates (AMAT, WFC, PFE, O, CCL, LMT, NTAP, EBAY, CRM, EXC, CBOE, KKR, PM, XYZ, ETN, ICE, HLT): only CRM and EXC differ, both from BUG-327 and better. Probe: %LOCALAPPDATA%\stockdb-qa\review29\head\tests\test_review29.py::test_a_year_whose_10k_tags_no_amortization_follows_its_own_10k.
 Expected: "has a 10-K" decided from the year's annual D&A facts on a 10-K.   Actual: from `final`.
+Fix (iteration 223, `qa/evidence/bug338-investigation.txt`): in `_depreciation_combined` any year-long D&A fact (a total or Depreciation) means the year has a 10-K; with no amortization it is read as tagged (setdefault, so a 10-K with amortization still decides), and a following year with no 10-K yet follows it. The SWK-shaped case reads 91.1/90.9/91.1/96.9 (was 128.4/128.2/128.4/-15.0). As-of: quarters follow the year before until the 10-K is filed. 0 cells move over 504 cached filers (no real case, as review 29 found).
 
 ### BUG-339 [P3][VALID] After BUG-329 a vintage's shares outstanding and weighted counts sit on different scales in one filing's view: NTRS FY2009 241.7M beside 235.5 trillion
-Status: OPEN
-Found: code review 29 (Minor 2; values improve, not a regression) | Fixed: | Regression test:
+Status: VERIFIED (iteration 256; option A, the user's decision)
+Found: code review 29 (Minor 2; values improve, not a regression) | Fixed: (this commit) | Regression tests: tests/test_vintage_share_scale.py; 5 failing first
 Repro: share_scale pass 3 (shares outstanding follow only an EPS-checked count) with pass 4 off for vintages (stock_data_fetcher.py ~439): 10 vintage cells move shares outstanding to units while the weighted counts stay mis-scaled: HST FY2021 714.1M beside 710.3, NTRS FY2009 241.7M beside 235.5T, AMT FY2015 423.9M beside 419,000, DLR FY2022 291.1M beside 286,334, FITB FY2010-11 beside 791/906, HSY FY2009-11. Wider than BUG-329's stated residual (HSY only). Nothing found that reads a vintage's two counts together.
 Expected: one scale per vintage view.   Actual: a 10^3 or 10^6 seam.
 Note (iteration 217): unchanged by Q18's merge; still OPEN.
 
+Decision (USER 2026-11-28): option A, prepared and measured (`opt339_*.diff` in stockdb-qa\shares1\out): when net income / EPS misses a count by more than 10%, the count takes the power of 1000 that brings it within x2 of that figure; A2: shares outstanding may follow either EPS-checked weighted count; record and vintages only (not quarters: BE, HAL, ICE broke). 20 vintage cells (NTRS, HST, DLR, FITB, AMT, CPAY, TER) and 4 as-of cells; nothing downstream.
+Fix (iteration 256, `qa/evidence/shares1-round2-investigation.txt`): when net income / EPS misses a count by more than 10%, the count takes the power of 1000 that brings it within x2 of that figure (`loose`); shares outstanding may follow either EPS-checked weighted count; record and vintages only. (The first opt339 diff overwrote its own flag and missed 8 cells; fixed before applying.) Vintages 20 cells (AMT, CPAY, DLR, FITB, HST, NTRS, TER), as-of 4; vintage seams 13 -> 5. Everything downstream identical.
 ### BUG-340 [P3][GATHER] Q17's per-filing XBRL cache never expires and its version isn't tied to the reader's rules
 Status: VERIFIED (iteration 209)
 Found: code review 29 (Minor 3; robustness, suspected) | Fixed: (this commit) | Regression tests: 8 test files (fetcher, refresh, sec cache, xbrl instance, yahoo); 21 failing first
@@ -2232,24 +2281,27 @@ Expected: one record per fiscal year, each of one period's figures (a transition
 Fix (iteration 182, `qa/evidence/bug341-investigation.txt`): a fiscal-year key's record holds one period, the end most of its full-year flow fields share (the later on a tie; with no flow figure the latest end); figures more than 7 days (`_SAME_PERIOD_DAYS`) from it are not read for the key. Applied in `_annual_periods` (resolve and restore), `_revenue_set_aside` and `extract_annual_vintages`; a vintage holds the period the record held on its filing day from the reports filed by then (a pure function of the facts). No key renumbering; transition periods still make no record (their balance sheets no longer leak into the old year); README says a transition step spans more than 12 months and CAGRs count it as one year. Decisions (orchestrator): KDP 2017 takes Keurig's year to 2017-09-30 (majority rule; the 'own year' variant broke the oracle on KDP), no transition-period records. Census over 504: annual 69 records moved, vintages 118 moved / 16 no longer produced, quarterly and TTM 0. DB copies over 502: financials_annual 87 rows, vintages 133, metrics 20, per-share 9, quality 5, valuations 5 (DDM TEL base 37.00 -> 37.83; Lynch GPN base 86.70 -> 70.91, FY2016 EPS 1.37 -> 2.04); 0 medians, verdicts, owner-earnings verdicts, historical values or labels; valuation oracle identical to HEAD. Look-ahead 0. Residuals: two companies' balance sheets on one date and ASC 606/842 opening balances within 7 days still mix; some years lose a balance sheet borrowed from another date (MS 2008, NOW 2011, KDP 2017); BUG-342 partly resolved (far strays no longer set period_end); stale vintages stay in an existing DB (BUG-344).
 
 ### BUG-342 [P3][VALID] A record's period_end isn't always its own end: a stray later-filed fact sets it
-Status: OPEN
-Found: BUG-277's census (residual 2) | Fixed: | Regression test:
+Status: VERIFIED (iteration 223)
+Found: BUG-277's census (residual 2) | Fixed: (this commit) | Regression tests: tests/test_fiscal_year_periods.py (3 new); failing first
 Repro: annual records take period_end from the latest-filed contributing fact, which can be a stray (LRCX FY2012 2012-06-30 for its year to 2012-06-24; TER, LULU); vintages take it from their first fact (LHX's FY2019 vintages say 2019-06-28 but hold the year to 2020-01-03). Since BUG-277 calendar_year no longer follows period_end, so 6 annual records' calendar_year differs from SEC's rule on their own period_end.
 Expected: period_end the end most of the record's flow figures share.   Actual: a stray's.
+Fix (iteration 223, `qa/evidence/bug338-investigation.txt`): `_apply_calendar` sets period_end to the end it already uses for the year end and calendar_year (the end most of the year's flow figures share, else the latest filed figure's), for every annual record, vintage and as-of snapshot. LRCX FY2012 2012-06-30 -> 2012-06-24. Records whose calendar_year disagrees with SEC's rule on their own period_end: 1 -> 0. DB copies: financials_annual 38 rows at 29 tickers, financials_annual_known 48 at 36, vintages 1 (WSM), period_end only; every other table identical; oracles as at HEAD; look-ahead 0.
 
 ### BUG-343 [P3][TTM] TTM rows carry no SEC frame label
-Status: OPEN
-Found: BUG-277's census (residual 3) | Fixed: | Regression test:
+Status: VERIFIED (iteration 240)
+Found: BUG-277's census (residual 3) | Fixed: (this commit) | Regression tests: tests/test_quarterly_eps.py (new), test_ttm.py, test_scores_scores.py, test_scores_store.py, test_web_scores.py, test_web_api_scores.py, test_quality.py, test_fetcher_concurrency.py; 27 failing first
 Repro: financials_ttm rows get calendar_year / calendar_quarter but no `frame`, unlike the quarters they sum.
 Expected: the frame of the TTM's last quarter, or the docs say none.   Actual: none, undocumented.
 
+Fix (iteration 240, `qa/evidence/ttm1-investigation.txt`): a TTM row carries its latest quarter's frame (JSON export; the tables have no frame column); README documents it. DB copies (502 re-collected): 0 medians, verdicts, owner-earnings verdicts, historical values, labels; oracles as at HEAD; look-ahead 0.
 ### BUG-344 [P3][STORE] The store only upserts annual rows, so years and vintages a newer parse no longer produces stay in an existing database
-Status: OPEN
-Found: the as-of snapshots design's builder check and BUG-341's residual R1 | Fixed: | Regression test:
+Status: VERIFIED (iteration 229)
+Found: the as-of snapshots design's builder check and BUG-341's residual R1 | Fixed: (this commit) | Regression tests: tests/test_sqlite_store.py, tests/test_fetcher_concurrency.py; 12 failing first
 Repro: sqlite_store._write_stock upserts financials_annual and financials_annual_vintages and never deletes, so an existing DB keeps years an older parse made, years from a `years_back` run, and after BUG-341 16 vintages the parser no longer produces (each 1-2 figures from another period, mostly equity or cash at a transition date). The current as-of reader reads them as the latest-filed view (the as-of snapshots plan replaces that reader).
 Expected: a full run's annual rows and vintages are exactly what it parsed.   Actual: leftovers persist.
 Partly fixed (iteration 217, Q18's merge): a run that built snapshots replaces the ticker's vintages, so leftover vintages go at the next collection; still OPEN for financials_annual rows.
 
+Fix (iteration 229, `qa/evidence/bug344-investigation.txt`): a run that parsed the filer's annual record and read its filings completely (`_complete_sec_read`: no unrecovered report, unread predecessor, submissions error or SEC error) removes, before writing, the ticker's stored rows it no longer gives (`_clear_absent`): annual years with their metrics, quarters, trailing years, unmapped tags; a --years run only from its earliest period on; a table whose build step raised (`StockData.unbuilt`: quarterly, metrics) keeps its rows; a fill-only, partial, failed, Yahoo-only or record-less run removes nothing; snapshots/vintages as Q18. Re-collection of 502 offline: removed financials_quarterly 28 (23 tickers), financials_ttm 32 (28), unmapped_facts 667 (345; all now-mapped tags, 121 BUG-165's restricted-cash tag); annual 0. 0 medians, verdicts, owner-earnings verdicts, historical values or labels; AZO's 120 valuation_history months move (a stale empty TTM no longer read). ADI's TTM 2011-04-30/07-30 are produced again today, so kept. Oracles identical; look-ahead 0. Residual: BUG-380.
 ### Q18 [ASOF] NEEDS-USER: merge the as-of snapshots branch? It moves one historical-value label (MCO below -> near) by removing look-ahead
 Status: DECIDED (iteration 217): merged
 Found: as-of snapshots plan (docs/superpowers/specs/2026-11-18-asof-snapshots-design.md, plan docs/superpowers/plans/2026-11-18-asof-snapshots.md), Task 8's downstream diff | Fixed: | Regression test:
@@ -2280,7 +2332,7 @@ Expected: as the README's rules say.   Actual: as listed.
 Fix (iteration 192, `qa/evidence/bug347-investigation.txt`): `ceo_or_cfo` marks retired / ex- as not in office, assistant / asst. / regional / divisional as under the chief, a bracket after the name holding retired/former/ex- as past; after a comma or semicolon principal, board, member and corporate secretary/controller/treasurer/counsel are the same person's other roles; a unit 'the Company/Corporation/Registrant' is the company. Census: 0 of 3,556 distinct real titles (DB and 105,042 cached Form 4s) change reading; 0 stored rows differ. Residuals: free-text units ('Taco Bell, CEO'); '(Elect)'/'(Designate)' brackets; a unit named 'Principal ...' after a comma would read as the chief (none in the data). Side note: 109 stored (ticker, title) flags predate BUG-206's rule until the next insiders collection.
 
 ### BUG-348 [P3][PARSE] Two fiscal years can share a calendar_year at the 52/53-week boundary around June 30
-Status: OPEN
+Status: WONTFIX (iteration 225, Q21): the shared calendar years are SEC's own frames; documented in the README
 Found: code review 30 (Minor 4; not a regression: 45f43b5 gives the same at LRCX and STX) | Fixed: | Regression test:
 Repro: SEC gives one of two adjacent years no frame and the rule (end less 180 days) hands it its neighbour's year: LRCX FY2024/FY2025 both 2024; STX, WDC FY2023/FY2024 both 2023. README ~2130 calls the fallback 'SEC's own rule'. Only coverage.py and the DB indexes read calendar_year. Probe: %LOCALAPPDATA%\stockdb-qa\review30\head\tests\test_review30.py.
 Expected: distinct calendar years for distinct fiscal years.   Actual: a duplicate.
@@ -2349,16 +2401,18 @@ Expected: documented beside the other trade fields.   Actual: missing.
 Fix (iteration 204, with BUG-353): `price_footnote` documented in the README's form4 API line and the USAGE_GUIDE.
 
 ### BUG-358 [P3][DOCS] The quarterly current-debt rule's docstring says 'its latest annual report's word'; the code takes any annual report's 'held' on that date
-Status: OPEN
-Found: BUG-288's test-gap worker (iteration 203, `qa/evidence/bug087-investigation.txt`) | Fixed: | Regression test:
+Status: VERIFIED (iteration 222)
+Found: BUG-288's test-gap worker (iteration 203, `qa/evidence/bug087-investigation.txt`) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (docs: no test)
 Repro: src/parsers/xbrl_parser.py, the quarter rule BUG-267/288 cover. (Wait for feat/asof-snapshots: that branch rewrites xbrl_parser.py.)
 Expected: the docstring says what the code does.   Actual: it doesn't.
+Fix (iteration 222, `qa/evidence/bug358-investigation.txt`): `_current_debt_combinations`' docstring and the README now say the quarter takes the annual reports' word on the latest year end (any annual report's held or DebtCurrent), not the latest annual report's. Docs only.
 
 ### BUG-359 [P3][PARSE] An annual-form balance-sheet instant dated the day after a year end (an adoption day) shifts the year end a later quarter consults, so its maturities count twice
-Status: OPEN
-Found: BUG-288's test-gap worker (iteration 203; synthetic, not measured on real filers) | Fixed: | Regression test:
+Status: VERIFIED (iteration 222)
+Found: BUG-288's test-gap worker (iteration 203; synthetic, not measured on real filers) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py; failing first
 Repro: BE-shaped facts: a FY2024 10-K plus a Q3 2025 10-Q with $1.4M borrowings against $1.424M maturities give short_term_debt 1,400,000; adding a 10-K LiabilitiesAndStockholdersEquity instant at 2025-01-01 gives 2,824,000. The code takes any annual-form L&SE instant as a year end (cf. BUG-272's adoption-day instants). (Wait for feat/asof-snapshots: it rewrites xbrl_parser.py.)
 Expected: 1,400,000.   Actual: 2,824,000.
+Fix (iteration 222, `qa/evidence/bug358-investigation.txt`): the latest year end is the latest annual balance-sheet date together with any within `_SAME_PERIOD_DAYS` (7) of it; the quarter takes the annual reports' word on any of them, each paired with the 10-Q's own column on that date (BE's 2020-01-01 adoption balance sheet beside 2019-12-31; CIEN/TSN/JCI, where the later date is the real year end, stay right). Census: 22 filers have annual dates 1-7 days apart; 0 cells move in the quarterly, annual, as-of and vintage records (raw cache and fetch_all offline). Look-ahead 0.
 
 ### BUG-360 [P3][UI] A palette Enter pressed before its results land stays armed while the user keeps typing
 Status: VERIFIED (iteration 207)
@@ -2389,22 +2443,25 @@ Expected: a two-filing quarter test.   Actual: none.
 Fix (iteration 207, with BUG-360): tests/test_web_gurus.py adds two-filing quarters; the any->all and latest-filing-only mutants are killed.
 
 ### BUG-364 [P3][DATA] GM, AES, TXT and PCAR read no debt line in any year, so their EV/EBITDA counts net debt as 0 and reads low
-Status: OPEN
-Found: BUG-183's worker (iteration 208) | Fixed: | Regression test:
+Status: VERIFIED (iteration 221) for GM (and PGR); AES, TXT and PCAR are BUG-375
+Found: BUG-183's worker (iteration 208) | Fixed: (this commit) | Regression tests: tests/test_fallback_tags.py (new), tests/test_xbrl_parser.py; 43 failing first
 Repro: no annual or TTM row of GM, AES, TXT or PCAR holds a debt figure (a mapping gap, not debt-free companies); the spec counts unknown net debt as 0, so EV/EBITDA reads low: GM 4.88 vs Yahoo 8.96, AES 8.26 vs 12.21. Find the tags they file debt under (likely BUG-203/259 territory).
 Expected: their debt read.   Actual: none.
+Fix (iteration 221, Q20, `qa/evidence/q20-investigation.txt`): fallback tags in canonical.py (long_term_debt: LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities, DebtLongtermAndShorttermCombinedAmount; ppe_net: the lease-inclusive PP&E; short_term_investments: six current-securities tags, MarketableSecurities last) and `_totals_beside_current_debt_set_aside` in `_filer_facts` (a total that includes current debt isn't read on a date its current part is tagged), which also holds per filing date in the as-of snapshots. Banks (stock.sector_class, Q9) don't read MarketableSecurities (`_UNREAD_BY_SECTOR`). Census over 504 filers: annual LTD 59 cells/6 filers, STI 710/105, PP&E 419/94. On DB copies: 0 medians, verdicts, owner-earnings verdicts or labels; 21 historical values within their labels; EPV at 37 (GM 119.77 -> 35.05); NCAV bear at 10; Magic Formula ranked 255 -> 314; 13 composites; 5 new beneish flags; no bank valuation or score row moves. Look-ahead 0; oracles as at HEAD.
 
 ### Q19 [VAL] NEEDS-USER: should a share-count seam that is a real reverse split be folded instead of truncating the history?
-Status: OPEN (NEEDS-USER)
-Found: BUG-308's worker (iteration 208) | Fixed: | Regression test:
+Status: VERIFIED (iteration 219; applied at the user's decision, 2026-11-25)
+Found: BUG-308's worker (iteration 208) | Fixed: (this commit) | Regression tests: tests/test_valuation_unit_seams.py (new), tests/test_valuation_oracle_seam.py; 14 failing first
 Context: `inputs._normalize_splits` drops every year older than a share-count seam beyond 50x, calling it a unit/scale break ('no company splits 1:50'). EXE's FY2017->FY2018 seam (906M -> 4.546M diluted) is a real 1:200 reverse split. Truncating leaves EXE's DCF growth at 0.9%; folding the split would make it ~15% (a valuation change). Recommendation: fold a seam when a stored split (or the implied-count test) explains it, keep truncating true unit breaks; measure over the 502 before deciding. EG is the other truncated ticker.
-Decision: 
+Decision: USER 2026-11-24: fold a seam that a stored split (or the implied-count test) explains; keep truncating true unit breaks. Measure the moves over the 502 first and bring them to the user before applying.
+Fix (iteration 219, `qa/evidence/q19-investigation.txt`): beyond 50x, newest seam first, `_normalize_splits` folds a seam a stored split (or run of splits) explains within 1.25x, else one the implied count explains (`_implied_count_explains`: net income to common where a year has it, else net income, over diluted EPS; within 1.25x, every figure known and nonzero), else truncates as before. EXE's FY2017->FY2018 seam (906M -> 4.546M, Chesapeake's 1:200 of 2020; no split_events row) folds on net income to common (901.4M -> 4.545M; plain net income gives 1:93 and would not). EG no longer has a seam beyond 50x. On DB copies: only EXE moves: dcf growth 0.88% -> 15% (cap), median bear 32.57 -> 35.18, base 38.36, bull 59.00 -> 72.39; no verdict, owner-earnings verdict or label; EXE quality components move, ranks and composite don't. Oracle agrees (L1 0/2034; L2 HLT, RTX lynch as before). Residual: the quarterly path (history_inputs.normalize_share_series) still truncates; its 35 seams beyond 50x over 12 tickers are count glitches, none a split.
 
 ### Q20 [DATA] NEEDS-USER: apply the fallback-tag fix for BUG-364/203/221? It moves 18 historical values (no label), 37 EPV bases and adds 59 Magic Formula ranks
-Status: OPEN (NEEDS-USER)
+Status: VERIFIED (iteration 221; applied at the user's decision, 2026-11-24)
 Found: the BUG-364/203/221 worker (iteration 210), prepared in %LOCALAPPDATA%\stockdb-qa\bug364\out (diffs, mutants, census, DB-copy diffs; `qa/evidence/bug364-investigation.txt`) | Fixed: | Regression test:
 What it does: appends fallback tags (long_term_debt: LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities and DebtLongtermAndShorttermCombinedAmount; ppe_net: the lease-inclusive PP&E concept; short_term_investments: six current-securities tags incl. DebtSecuritiesCurrent and MarketableSecurities last) plus an xbrl_parser.py rule (+42/-2, `_totals_beside_current_debt_set_aside` in `_filer_facts`) so a total including current debt isn't read on a date its current part is tagged. GM's debt ($131.6B) and PGR's become read; 102 filers gain PP&E; NVDA-style short-term investments. Census: annual LTD 59 cells/6 filers, STI 756/110, PP&E 418/93 (+quarters, TTM, vintages). Moves on DB copies: 18 historical values within their labels (HUM 319.04->276.76, INTC 23.19->24.55, GM 75.14->76.91, FSLR, KLAC, ORCL, TYL ...), EPV base at 37 (GM 120.02->38.24, ELV 407.34->526.69, VEEV 48.15->79.89), NCAV bear at 10, Magic Formula ranked 256->315, 15 composites by 2, 5 new beneish flags; no median, verdict, owner-earnings verdict or label. Oracles identical. Look-ahead 0. Concerns: MarketableSecurities stores banks' whole securities books as short-term investments (BAC $925.6B; no valuation moves, but FA/exports show it); GM's quarters lose EV (no debt in its 10-Qs); the parser edit must be carried across feat/asof-snapshots (Q18). Recommendation: apply after Q18's merge, dropping MarketableSecurities for banks (sector rule) or leaving it out.
-Decision: 
+Decision: USER 2026-11-24: apply on main (after Q18's merge), with MarketableSecurities not used for banks (sector rule). Re-measure on the merged parser before committing.
+Fix (iteration 221, Q20, `qa/evidence/q20-investigation.txt`): fallback tags in canonical.py (long_term_debt: LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities, DebtLongtermAndShorttermCombinedAmount; ppe_net: the lease-inclusive PP&E; short_term_investments: six current-securities tags, MarketableSecurities last) and `_totals_beside_current_debt_set_aside` in `_filer_facts` (a total that includes current debt isn't read on a date its current part is tagged), which also holds per filing date in the as-of snapshots. Banks (stock.sector_class, Q9) don't read MarketableSecurities (`_UNREAD_BY_SECTOR`). Census over 504 filers: annual LTD 59 cells/6 filers, STI 710/105, PP&E 419/94. On DB copies: 0 medians, verdicts, owner-earnings verdicts or labels; 21 historical values within their labels; EPV at 37 (GM 119.77 -> 35.05); NCAV bear at 10; Magic Formula ranked 255 -> 314; 13 composites; 5 new beneish flags; no bank valuation or score row moves. Look-ahead 0; oracles as at HEAD.
 
 ### BUG-365 [P3][REFRESH] A run whose submissions request failed joins an older, given-up gap, so the company is left uncollected
 Status: VERIFIED (iteration 214)
@@ -2435,17 +2492,204 @@ Expected: as the call says.   Actual: any amendment stating 0 clears.
 Fix (iteration 214, with BUG-365; orchestrator's call): a NEW HOLDINGS 13F-HR/A stating none omitted no longer clears its filer's flag (amendment_type already stored); a RESTATEMENT or untyped amendment still does. Real data: Berkshire 2025-03-31 shows the note again, 2025-06-30 the prior-quarter note.
 
 ### BUG-369 [P3][VALID] COP's FY2018-20 vintages hold the diluted share count in thousands
-Status: OPEN
-Found: the as-of snapshots branch, Task 6/8 (feat/asof-snapshots task reports) | Fixed: | Regression test:
+Status: VERIFIED (iteration 255)
+Found: the as-of snapshots branch, Task 6/8 (feat/asof-snapshots task reports) | Fixed: (this commit) | Regression tests: tests/test_quarter_own_counts.py, test_quarter_year_starts.py, test_split_repeats.py, test_vintage_share_scale.py (new); 12 failing first
 Repro: since vintages read share scale only from views filed by their day (no look-ahead), COP's FY2018-20 views keep the diluted count as filed in thousands (1.12e6 for 1.12e9); no earlier sibling's EPS checks it.
 Expected: units.   Actual: thousands.
 
+Fix (iteration 255, `qa/evidence/shares1-investigation.txt`): share-scale pass 1b: a weighted count no EPS checked takes the scale of its period's other weighted count an EPS did check, within 10% (anchor at least 100,000 shares; DXCM guard); in the record, every as-of record and every vintage. COP FY2018-19 vintage diluted counts x1000. DB copies (502 re-collected): financials_annual, the as-of snapshots, valuations, metrics, per-share, scores identical; 0 medians, verdicts, owner-earnings verdicts, historical values, labels. Look-ahead 0.
 ### BUG-370 [P3][VALID] BAC's FY2011 and FAST's dividends per share in the record come from the prior 10-K's forward-dated figure
-Status: OPEN
-Found: the as-of snapshots branch, Task 8 | Fixed: | Regression test:
+Status: VERIFIED (iteration 239)
+Found: the as-of snapshots branch, Task 8 | Fixed: (this commit) | Regression tests: tests/test_forward_dated_facts.py (new), test_integrity.py; 11 failing first
 Repro: today's financials_annual: BAC FY2011 dividends_per_share $0.01, FAST $0.50, where each year's own 10-K files $0.04 and $0.65: the higher-ranked tag on a dividend dated ahead in the prior 10-K wins. 2 cells over 502.
 Expected: the year's own 10-K figure.   Actual: the prior 10-K's forward-dated one.
 
+Fix (iteration 239, `qa/evidence/div1-investigation.txt`): a duration fact filed before its period ends is not a figure of that period (`_filed_ahead`: filed < end; filed on the last day still counts), in `_matches_kind` (annual record, vintages, year ends, annual filings) and `_collect_discrete_flows` (quarters); per fact, so the as-of snapshots follow. Census: 104 such facts at 49 filers (84 dividends declared ahead). BAC FY2011 0.01 -> 0.04, FAST FY2011 0.50 -> 0.65; a spurious TEL FY2025 as-of row and SWK's phantom 2015-03-28 quarter gone. DB: 0 medians, verdicts, owner-earnings verdicts, historical values, labels. Look-ahead 0; as-of oracle 0 differences.
+### BUG-371 [P3][GATHER] An old-shape cached submissions file is fetched again, but the run is still dated by the file's age
+Status: VERIFIED (iteration 220)
+Found: code review 35 (`qa/evidence/review35.txt`, Minor 1; regression from BUG-296, ecccfdf) | Fixed: (this commit) | Regression tests: tests/test_sec_cache.py; 7 failing first (both bugs)
+Repro: src/fetchers/sec_handler.py ~331, ~365, ~688: `_read_payload_cache` records the cached file's timestamp before `get_submissions` rejects it for the missing cache_version; `fetch_all` then sets sec_read_at to that old time. Probe: %LOCALAPPDATA%\stockdb-qa\review35\head\tests\test_review35.py (a 3-day-old unversioned submissions file: both payloads fetched fresh, sec_read_at 3 days old). Effect: one extra collection per such file after the upgrade; no figure wrong.
+Expected: sec_read_at is the time of the fresh read.   Actual: the rejected file's time.
+Fix (iteration 220, `qa/evidence/bug371-investigation.txt`): `get_submissions` notes how many cached reads were recorded before reading its cache and, when it rejects an old-shape payload, drops the rejected file's time (`del reading[read_before:]`); the companyfacts time read first is kept. No signature changes. DB copies: all 37 tables identical.
+
+### BUG-372 [P3][VAL] A twice-a-year payer whose interim is under 1/3 of its final no longer counts as semiannual
+Status: VERIFIED (iteration 220)
+Found: code review 35 (`qa/evidence/review35.txt`, Minor 2; regression from BUG-366, c441e02) | Fixed: (this commit) | Regression tests: tests/test_valuation_models.py, tests/test_valuation_oracle_seam.py; 7 failing first (both bugs)
+Repro: src/valuation/models.py ~60, ~300-306 (the oracle shares the rule, valuation_oracle.py ~530-542): HEAD's own semiannual test with an interim of 0.3 instead of 0.4: FY2025 reads (1.0, sec) instead of Yahoo's 1.3. Needs a semiannual schedule, an interim under 1/3 of the final, and SEC giving only the final as the year's figure; real count not measured. Probe: test_review35.py.
+Expected: the year's two regular payments (1.3).   Actual: the final only (1.0).
+Fix (iteration 220, `qa/evidence/bug371-investigation.txt`): the 1/3 edge came from BUG-366's size test (0.5 x a two-payment side's median). A payment that isn't a whole one-off now counts if it passes the size test or recurs (`models._recurs`: another payment within 3x of it ex-dated 365 +/- 91 days away, Q3's definitions); an interim comes back each year, an extra doesn't. Only adds counts, so BUG-366's case stays closed. The oracle's regular_beside matches. Census over 419 payers: 61 sides at 18 tickers change count, 8 cross the gate (CRH, SW), neither files a single payment as its SEC figure: 0 years move. DB copies: all 37 tables identical. Residual (unmeasured): Q3's one_off_dividends can call a small-interim payer's final a slot one-off in the second year of a short history.
+### BUG-373 [P3][DATA] A run whose submissions request failed has no sector class, so a bank reads MarketableSecurities as short-term investments
+Status: VERIFIED (iteration 222)
+Found: the Q20 worker (iteration 221, residual) | Fixed: (this commit) | Regression tests: tests/test_fetcher_sector.py; failing first
+Repro: Q20's bank rule reads stock.sector_class, set by classify_submissions; when submissions fail there is no class and `_filer_facts(sector=None)` reads MarketableSecurities, storing a bank's whole securities book (BAC $925.6B) as short-term investments for that run.
+Expected: the stored sector class (as BUG-309's fallback) decides.   Actual: the bank rule is off for that run.
+Fix (iteration 222, `qa/evidence/bug358-investigation.txt`): BUG-309's stored-sector fallback runs in the SEC block before the parse when the company facts are present (the later copy removed), so a bank whose submissions request fails still skips MarketableSecurities. Also: a filer with facts but no annual record now takes its stored sector on such a run. Offline re-collection reads cached submissions, so 0 cells move; shown by the unit test only.
+
+### BUG-374 [P3][DATA] 61 filers tag no operating income, so EBIT-based metrics are empty for them
+Status: OPEN (needs a policy: which EBIT definition to derive)
+Found: split from BUG-203 (iteration 221) | Fixed: | Regression test:
+Repro: Q20's census: 61 filers have no OperatingIncomeLoss in any year; return on capital, EV/EBIT and the Magic Formula skip them.
+Expected: a stated EBIT derivation (e.g. pretax income + interest expense) or an explained N/A.   Actual: blank.
+
+### BUG-375 [P3][DATA] AES, TXT and PCAR file debt only with segment dimensions, so no debt is read
+Status: OPEN
+Found: split from BUG-364 (iteration 221) | Fixed: | Regression test:
+Repro: their companyfacts carry no undimensioned long-term debt in any year; EV/EBITDA counts net debt as 0. Needs the filing's XBRL instance (Q17's reader) summed over the debt segments, or an explained N/A.
+Expected: their debt read, or EV marked unknown.   Actual: net debt 0.
+### Q21 [DATA] NEEDS-USER: BUG-348's shared calendar years come from SEC's own frames: keep SEC's labels, or assign our own?
+Status: VERIFIED (iteration 225): documented in the README's "Fiscal vs calendar year"
+Found: the BUG-338 worker (iteration 223; `qa/evidence/bug338-investigation.txt`) | Fixed: | Regression test:
+Context: two adjacent fiscal years share a calendar_year because SEC frames both on different concepts (LRCX FY2013: 13 facts framed CY2013; FY2014: 165 framed CY2013; none CY2012; also LRCX FY2024/25, STX FY2023/24). 24 shared calendar years at 8 filers at the June 52/53-week boundary (SYY, LRCX, TPR, WDC, STX, LITE, LHX, SNDK) plus 3 at fiscal-year changes. No valuation reads calendar_year. Options: A keep SEC's labels and document it (BUG-348 WONTFIX); B distinct years by our own rule (contradicts SEC's frame on ~24 rows); C shift only the duplicating year (moves SEC's majority frame). Recommendation: A.
+Decision: USER 2026-11-25: A, keep SEC's labels and document the shared calendar years in the README; BUG-348 WONTFIX once documented.
+
+### Q22 [VAL] NEEDS-USER: BUG-293b, telling a debt-free 10-K from one whose debt isn't read
+Status: VERIFIED (iteration 226; applied at the user's decision, 2026-11-25)
+Found: the BUG-338 worker (iteration 223; `qa/evidence/bug338-investigation.txt`) | Fixed: (this commit) | Regression tests: tests/test_valuation_history_inputs.py, tests/test_scores_fundamentals.py; 3 failing first
+Context: company facts can't reliably separate them: debt-free filers show debt-like evidence (LULU InterestPaidNet, VRTX leases and interest, AXON FY2016/18 capital leases); unread-debt filers show weak evidence (TXT from FY2022 maturities only, PCAR from FY2012 InterestPaid and debt flows). Among years with no positive debt field: 826 no evidence, 722 interest only; 19 tickers never have a positive debt field (7 carry debt). Options: A today's rule; B the held rule (2,655 quarters at 215 tickers, 29 historical values, 4 labels); C a stored parser evidence signal (schema change; false 'debt unknown' for LULU, VRTX); D the scores' read_debt interest rule per 10-K in history_inputs; E C or D only for filers already marked unknown. Recommendation: E with D (no schema change, matches the scores); it values AXON's FY2016-21 quarters with no debt, which moves AXON's historical value and probably its label: measure before applying.
+Decision: USER 2026-11-25: E with D, the scores' read_debt interest rule per 10-K in history_inputs, only for filers already marked unknown today; measure first and show the moves (AXON) before applying.
+Fix (iteration 226, Q22, `qa/evidence/q22-investigation.txt`): for a company today's rule marks (some 10-K reports long-term debt), a quarter without long-term debt stays unknown unless the latest 10-K ending on or before it reads debt-free the way the scores' read_debt reads a year (no positive long-term or short-term debt, paper or total debt, no positive interest expense, not a bank or insurer; shared helper `fundamentals.no_debt`); quarters before the first 10-K follow the first. Short-term-only 10-Ks stay unknown (DE). On DB copies re-collected with HEAD's parser: 771 quarters at 72 tickers valued; 0 medians, verdicts, owner-earnings verdicts; 13 historical values; 2 labels: FFIV near -> above (291.97 -> 269.01 at 312.33), TYL far below -> below (629.94 -> 574.62 at 414.62); AXON unchanged (427.16, below). Residual: false debt-free reads where neither debt nor interest is mapped (F FY2025, EXR, ESS, NVR, KKR, LEN), as the scores already read them; cash isn't netted where no debt field exists.
+### BUG-376 [P3][VAL] An annual payer's extra paid two years running counts as a second regular payment
+Status: VERIFIED (iteration 225)
+Found: code review 36 (`qa/evidence/review36.txt`, Minor 1; regression from BUG-372, 547f960) | Fixed: (this commit) | Regression tests: tests/test_valuation_models.py, tests/test_valuation_oracle_seam.py; failing first
+Repro: src/valuation/models.py ~301-323 (`_recurs` from `_regular_between`; the oracle shares it, valuation_oracle.py ~576-580): review 34's slipped-year test with the 0.50 extra paid on 2023-07-15 and 2024-07-15: FY2025 reads (6.36, yahoo) instead of SEC's (3.10, sec). Made-up data only; the BUG-372 census moved no real year. Probe: %LOCALAPPDATA%\stockdb-qa\review36\head\tests\test_review36.py.
+Expected: a small echo beside a larger annual payment isn't a regular payment.   Actual: recurrence alone makes it regular.
+Fix (iteration 225, `qa/evidence/bug376-investigation.txt`): a payment that counts only because it recurs must recur into the fiscal year the gate judges (`_recurs(..., toward)`: the side before needs its like payment a year later, the side after a year earlier; the oracle's sign the same). BUG-372's interims still count; an extra paid two or three years running doesn't. Census (419 payers): 12 side counts move at 7 tickers, 0 gates, 0 years. DB copies: all 37 tables identical. Residual: BUG-378.
+
+### BUG-377 [P3][VAL] Q19's implied-count test repeats the seam when both years lack a diluted count
+Status: VERIFIED (iteration 225)
+Found: code review 36 (note, not a finding; filed by the orchestrator) | Fixed: (this commit) | Regression tests: tests/test_valuation_unit_seams.py, tests/test_valuation_oracle_seam.py; failing first
+Repro: src/valuation/inputs.py `_implied_count_explains`: when neither year has a diluted weighted count, the detected count is already net income / EPS, so the test compares the seam with itself and every such seam beyond 50x folds. On today's data only EXE folds (it has counts).
+Expected: a seam with no independent count to check is not explained by the implied count.   Actual: it always is.
+Fix (iteration 225, `qa/evidence/bug376-investigation.txt`): `load_inputs` records whether each year's detection count came from net income / EPS; beyond 50x the implied-count branch is skipped when both years' did, so such a seam truncates unless a stored split explains it. EXE still folds. 0 tickers change.
+### BUG-378 [P3][VAL] A judged year holding a recurring extra and a slipped payment still opens BUG-311's gate
+Status: VERIFIED (iteration 241; option C, the user's decision)
+Found: the BUG-376 worker (iteration 225, residual) | Fixed: (this commit; the oracle in the commit before) | Regression tests: tests/test_valuation_models.py, tests/test_valuation_oracle_seam.py; 7 failing first
+Repro: the oracle case (2024-07-15, 2025-07-10) = 2 in tests/test_valuation_oracle_seam.py pins it: the year reads Yahoo's 6.86 instead of SEC's 3.10. Needs the year's payments compared with the side's schedule, not a side count. The census found no such real year.
+Expected: SEC's one-payment figure.   Actual: Yahoo's sum.
+Decision (USER 2026-11-26): C: close the gate only when the year holds more regular payments than the side that opened it and SEC's figure is at least half the side's regular payments (fixes the synthetic case, 0 real years; GPN FY2017 and J FY2020 keep Yahoo's better sum); change the oracle in its own commit first.
+Fix (iteration 241, `qa/evidence/div2-investigation.txt`): BUG-311's gate stays shut when the judged year has more regular payments than every side with two or more (`all`) and SEC's figure is at least 0.5 x that side's regular sum (`models._regular_paid`, `_slipped`, `SLIPPED_YEAR_SHARE`; the year's payments counted by the sides' rule, recurrence either way). The oracle changed first, in its own commit. DB: no table moves; GPN FY2017, J FY2020 keep Yahoo's sum. Residual (synthetic, as at HEAD): a year next to a slipped one holding the extra reads 3.45 for 2.95.
+### BUG-379 [P3][VAL] A reverse split Yahoo folds into a spin-off factor is taken back out of every earlier close and dividend
+Status: VERIFIED (iteration 228)
+Found: the BUG-264 worker (iteration 228) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py
+Repro: DD's 0.4725 factor is its 1:3 reverse split times Corteva's spin-off; HLT, LDOS, MSI, WTW likewise. The code treated the whole factor as a spin-off: valuation_history market caps before that day about a third of the truth (DD 2016-11 $22.5B, true $62.0B; MSI 2010 $2.5B, true $17.7B); DDM dividends 3x too high (DD FY2017 9.43, true 3.14; HLT FY2016 1.72, true 0.57).
+Expected: the split applied to the counts, the remainder as the spin-off.   Actual: the split undone in every earlier close.
+Fix: see BUG-264 (iteration 228): the factor nearest a filing-recorded split is split into the two.
+### BUG-380 [P3][MATCH] The JSON file and financial_history.csv keep periods a run no longer gives
+Status: VERIFIED (iteration 232)
+Found: the BUG-344 worker (iteration 229, residual) | Fixed: (this commit) | Regression tests: tests/test_record_scope.py (new), tests/test_csv_exporter.py; 6 failing first
+Repro: after BUG-344 SQLite removes a ticker's periods a complete run no longer produces (e.g. 28 quarters, 32 trailing years over 502), but the JSON export and financial_history.csv merge by period, so they keep them: the three outputs disagree (MATCH-05).
+Expected: the same periods in every output.   Actual: the files keep stale periods.
+Fix (iteration 232, `qa/evidence/bug380-investigation.txt`): one rule in src/exporters/record_scope.py (`speaks_for_record`, `complete_sec_read`, `absent`: the completeness gate, the unbuilt-step exemption, the --years floor) used by SQLite's `_clear_absent`, the JSON export (removes absent periods and unmapped tags before merging) and financial_history.csv (drops absent years for the run's ticker). Offline re-collection of ABT, BAX, ADI, AZO, AAPL, MCO: the JSON loses exactly what BUG-344 removed from SQLite; CSV identical (no absent year). Nothing reads the exports for valuation: 0 moves. Residual: a --years run's JSON calculated_metrics drops older years SQLite keeps (as at HEAD).
+### BUG-381 [P3][VAL] A 10-K/A filed after a declared split makes split_history add the split again
+Status: VERIFIED (iteration 231)
+Found: code review 37 (`qa/evidence/review37.txt`, Minor 1; regression from BUG-262, 81d5af4) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py (3 new); 3 failing first
+Repro: src/valuation/inputs.py ~486-537, ~561 (`_restated_splits` counts a pair explained only by a split dated after the pair's earlier filing; a 10-K/A filed after Yahoo's split is that earlier filing), ~916 and ~281-302 (`_restated_between` applies both): Yahoo's 4:1 on 2023-06-01, FY2022's 10-K/A 2023-07-15: history [('2023-06-01', 4), ('2024-02-20', 4)]; FY2021-22 read 1.6B shares for 400M (book value per share, the indicators' count change). No real case over 504 filers (KR, DLTR amendments predate their splits). Probe: %LOCALAPPDATA%\stockdb-qa\review37\head\tests\test_review37.py.
+Expected: one split.   Actual: the declared split plus a copy dated on the next 10-K.
+Fix (iteration 231, `qa/evidence/bug381-investigation.txt`): `_restated_splits` counts a pair as explained by a declared split dated after the first filing of the earlier view's count (walking back over the year's earlier views within 1% of it; a different count stops the walk, so a second real split of the same ratio is still found). split_history identical for all 502 (census head vs fix); the seven real cases unchanged.
+### BUG-382 [P3][VALID] Annual and quarterly debt still disagree at 17 long-term and 23 short-term year ends
+Status: OPEN
+Found: the debt1 worker (iteration 234; split from BUG-144) | Fixed: | Regression test:
+Repro: census over 504 filers at 81b2e8e: long-term debt differs by more than 0.5% between the annual record and the quarter on the same year end at 17 of 7,073 (EXC FY2023-25 largest); short-term at 23 of 5,757. Also BUG-286's shape (b) (review 22 R8).
+Expected: one figure per balance-sheet date.   Actual: two.
+### BUG-383 [P2][VALID] A quarter whose long-term debt is a LongTermDebt total including current notes reads those notes again as short-term debt
+Status: VERIFIED (iteration 238)
+Found: code review 38 (`qa/evidence/review38.txt`, Important 1; regression from BUG-292, 48747b7) | Fixed: (this commit) | Regression tests: tests/test_debt_balance_sheet_lines.py (11 new); 5 failing first
+Repro: src/parsers/xbrl_parser.py ~1483, ~1496-1538 (`_short_term_debt_lines` skips only the two newer current-inclusive totals, not LongTermDebt, which canonical.py ~266 ranks ahead of the noncurrent figures), ~556/581 (`_debt_totals_set_aside` keeps the total when the current notes are NotesPayableCurrent/SeniorNotesCurrent), ~2067. Real: EQIX 9 quarters 2024-03-31..2026-09-30 (2026-09-30: LTD $22.839B + SeniorNotesCurrent $1.665B, about 7% over); AMGN 2014-03-31 (LongTermDebt $32.024B = $29.519B + $2.505B, the $2.505B added again). Census: 26 quarters at 4 filers. Quarterly records only (EV, net debt, ratios); the live DB predates 48747b7. Probe: %LOCALAPPDATA%\stockdb-qa\review38\head\tests\test_review38.py.
+Expected: total debt equals the balance sheet.   Actual: the current notes counted twice.
+Fix (iteration 238, `qa/evidence/bug383-investigation.txt`): a quarter whose long-term debt reads a LongTermDebt or NotesPayable total reads no current line above zero that fits inside it (the line plus the largest other debt figure the 10-Q tags that date is at most the total x (1 + _AGREE)); still read on overflow (BIIB), with no other figure, or a zero line. Skipping, not subtracting: LongTermDebt falls under BUG-141, which no Decision changes. Census: 14 quarterly + 14 TTM records at AMGN, EQIX, ORLY move back to their c614a02 reading; ORCL, KVUE, TRV kept. DB: 0 medians, verdicts, owner-earnings verdicts, labels; EQIX historical value 961.62 -> 961.99 (its pre-48747b7 value), near. Oracles identical.
+### BUG-384 [P3][VALID] A 10-Q tagging its debt total as both LongTermDebt and NotesPayable still reads its current notes again
+Status: VERIFIED (iteration 245)
+Found: code review 39 (`qa/evidence/review39.txt`, Minor 1; BUG-383's remaining shape, pre-existing) | Fixed: (this commit) | Regression tests: tests/test_debt_balance_sheet_lines.py (2 new); failing first
+Repro: src/parsers/xbrl_parser.py ~1536-1542 (`holds`), ~1493 (`_BESIDE_TOTALS`): NotesPayable equal to the LongTermDebt total is the largest other figure, so the check overflows and the line is kept: ORCL shape + NotesPayable $91.315B reads $91.315B + $9.079B. No real filer has the shape (census_383). Probe: %LOCALAPPDATA%\stockdb-qa\review39\head\tests\test_review39.py.
+Expected: a figure equal to the total isn't an 'other' figure.   Actual: it makes the line overflow.
+Fix (iteration 245, `qa/evidence/bug384-investigation.txt`): in `holds`, figures within _AGREE of the long-term total are dropped from the others. Census over 504 filers: 8 records move, all ORLY (quarterly and TTM 2014-03-31, 06-30, 09-30, 2015-03-31: short-term debt none -> $6K-$74K of current leases its $1.4B LongTermDebt and equal NotesPayable don't hold, as BUG-292 intends). No annual or vintage record moves. Look-ahead 0. bug383's spec re-quoted (m383_self_included dropped as now equivalent).
+
+### BUG-385 [P3][MATCH] The collection's yearly dividend sums count a payment Yahoo serves twice
+Status: VERIFIED (iteration 245)
+Found: code review 39 (`qa/evidence/review39.txt`, Minor 2; outside BUG-154's readers, pre-existing) | Fixed: (this commit) | Regression tests: tests/test_yahoo_dividend_history.py (new); failing first
+Repro: src/fetchers/yahoo_handler.py ~830-872 (`_get_dividend_history`) builds annual_dividends, dividend_cagr, dividend_increases, dividend_consistency, total_payments from Yahoo's raw series; the JSON export writes them (StockData.to_dict, json_exporter.py ~99, ~362). KO 2001 reads 0.90 for 0.72 and 2002's raise becomes a cut. No valuation, score or table reads them; the JSON disagrees with the DVD tab, API and CSV. Probe: %LOCALAPPDATA%\stockdb-qa\review39\head\tests\test_review39.py.
+Expected: distinct_payments applied as everywhere else.   Actual: the raw series.
+Fix (iteration 245, `qa/evidence/bug384-investigation.txt`): `_get_dividend_history` builds its series from `distinct_payments` (BUG-154) and derives every yearly figure from it. KO 2001 0.72, two raises. No valuation, score or table reads these (grep: only yahoo_handler and the workstation route, which re-derives from stored payments).
+### BUG-386 [P3][PARSE] CCI has an empty quarterly and trailing-year row for 2026-12-31, a period after the collection
+Status: VERIFIED (iteration 251)
+Found: the val3 worker (iteration 247) | Fixed: (this commit) | Regression tests: tests/test_forward_dated_facts.py; failing first
+Repro: today's DB: CCI financials_quarterly and financials_ttm 2026-12-31, every field empty but treasury_stock 0.0. The history now ignores a trailing year ending after the collection day (BUG-250's guard), but the parser still stores the row.
+Expected: no row for a period that hasn't ended.   Actual: an empty one.
+Fix (iteration 251, `qa/evidence/bug387-investigation.txt`): `_collect_instant_checkpoints`: a balance-sheet figure dated after its filing's day makes no quarter (as `_filed_ahead` for flows). Census: CCI quarterly+TTM 2026-12-31, WMT quarterly 2012-12-31 (cash only), WSM quarterly 2021-03-31 (goodwill only) removed; nothing else. DB: 0 medians, verdicts, owner-earnings verdicts, historical values, labels. Look-ahead 0. Left: `_matches_kind` (yearly) still accepts such instants (would drop one LLY vintage).
+### BUG-387 [P3][VALID] BUG-384 drops a real noncurrent figure within 0.5% of the total, so a small current line is read again
+Status: VERIFIED (iteration 250)
+Found: code review 40 (`qa/evidence/review40.txt`, Minor 1; regression from BUG-384, 7964c1c) | Fixed: (this commit) | Regression tests: tests/test_debt_balance_sheet_lines.py; 5 failing first
+Repro: src/parsers/xbrl_parser.py ~1537-1547 (`holds`, `not _agree(values[key], total)` ~1545): LongTermDebt $91.315B = LongTermNotesPayable $90.915B + NotesPayableCurrent $0.400B reads total debt $91.715B (base $91.315B). At most 0.5% of the total; no census re-run. Probe: %LOCALAPPDATA%\stockdb-qa\review40\head\tests\test_review40.py.
+Expected: a noncurrent figure that plus the line makes the total still shows the total holds the line.   Actual: it is dropped as the total tagged twice.
+Fix (iteration 250, `qa/evidence/bug387-investigation.txt`): in `holds`, a figure within 0.5% of the total is 'the total tagged twice' when it is another total, or a noncurrent figure the line doesn't make up to the total (|total - figure - line| > line). The orchestrator's first rule (totals' kinds only) would have reverted ORLY, whose LongTermDebtAndCapitalLeaseObligations $1.396B is $3.7M short of its $1.4B total with the $74K line (BUG-384's investigation had ORLY's tags wrong: no NotesPayable). Census over 504 filers: 0 records change; ORLY, EQIX, AMGN, BIIB, ORCL kept.
+
+### BUG-388 [P3][VAL] A trailing year ending on the collection's weekend is known on the Friday before it ends
+Status: VERIFIED (iteration 251)
+Found: code review 40 (`qa/evidence/review40.txt`, Minor 2; regression from BUG-250, fb8a6b0) | Fixed: (this commit) | Regression tests: tests/test_valuation_price_day.py; failing first
+Repro: src/valuation/history_inputs.py ~166-169 (`known_on`'s filed_by), ~461 (`end > collected_on`): known_on('2026-10-24' (Sat), 3, None, 2026-10-25 (Sun)) and known_on('2026-10-25', 4, None, 2026-10-25) return 2026-10-23 (base 2026-10-25); history.py ~192 then reads a year that hadn't ended on Friday's bar (52/53-week filers; stray rows like BUG-386). Probe: %LOCALAPPDATA%\stockdb-qa\review40\head\tests\test_review40.py.
+Expected: a period is never known before it ends.   Actual: the weekday cap can precede the end.
+Fix (iteration 251, `qa/evidence/bug387-investigation.txt`): `filed_by(collected_on)` (last weekday on or before the collection); `known_on` = max(min(known, filed_by), end), never before the period ends; the history skips a trailing year ending after filed_by. DB (a Friday collection): all tables identical.
+### BUG-389 [P3][VALID] BUG-387's rule reads a noncurrent figure equal to the total as outside it
+Status: VERIFIED (iteration 256)
+Found: code review 41 (`qa/evidence/review41.txt`, Minor 1; regression from BUG-387, c0e4465) | Fixed: (this commit) | Regression tests: tests/test_debt_balance_sheet_lines.py (3 new); 2 failing first
+Repro: src/parsers/xbrl_parser.py ~1556-1572 (`twice`): |total - value - line| = line is not > line, so LongTermNotesPayable equal to LongTermDebt $91.315B is kept as another figure and NotesPayableCurrent $0.400B is dropped (base reads it). No cached filer has the shape (census 0 cells). Probe: %LOCALAPPDATA%\stockdb-qa\review41\head\tests\test_review41.py.
+Expected: the line read.   Actual: dropped.
+
+Fix (iteration 256, `qa/evidence/shares1-round2-investigation.txt`): in `twice()`, a noncurrent figure is one the line makes up to the total only when the two miss the total by at most half the line; a figure equal to the total leaves the line read. BUG-387's shapes kept; census 0 cells.
+### BUG-390 [P3][VAL] BUG-275's spread quarters are read by the valuation history before their 10-K is filed
+Status: VERIFIED (iteration 258; main fix applied at the user's decision, 2026-11-28)
+Found: code review 41 (`qa/evidence/review41.txt`, Minor 2; regression from BUG-275, b6f596f) | Fixed: (this commit) | Regression tests: tests/test_valuation_spread_known.py; 15 failing first
+Repro: history_inputs ~358, ~463-484, known_on ~168 read the latest stored quarters with a lag rule: AVGO's FY2024 Q3 (2024-08-04) is known on 2024-09-18 holding $2,428M (derived:amortization_spread) where the facts known that day give $149M. About three quarters of the 460 spread cells at 51 filers, EV/EBITDA and owner-earnings history points. The carry is not affected. Probe: %LOCALAPPDATA%\stockdb-qa\review41\head\tests\test_review41.py.
+Expected: no 10-K figure before its filing day.   Actual: the spread read at end + 45 days.
+Decision (USER 2026-11-28): known at the 10-K: such a trailing year is known on its 10-K's first filing day; before that the history uses the previous known figures; measure and show the moves first.
+
+Prepared (iteration 256, stockdb-qa\bug390\out, NOT applied: labels move): a new financials_quarterly.source_tags column (+100 MB) marks spread quarters; a trailing year holding them is known from their 10-K's first filing day. Look-ahead months 984 -> 0. 0 medians, verdicts; 24 historical values; labels BEN above -> near, GWW far above -> above, MET near -> above, PKG far above -> above, TPR above -> far above; 506 months empty while a year waits (variant alt_variant_over_fix.diff avoids most, changes STALE_DAYS). Awaiting the user.
+Fix (iteration 258, `qa/evidence/bug390-investigation.txt`, `qa/evidence/bug390-verify-mine.txt`): the main fix as prepared (not the STALE_DAYS variant), after the user approved the measured moves: financials_quarterly.source_tags (+100 MB); a trailing year holding a spread quarter is known from its 10-K's first filing day; look-ahead months 984 -> 0; labels BEN, GWW, MET, PKG, TPR as listed; 506 months empty while a year waits for its 10-K; 0 medians, verdicts. A DB collected before the column keeps the early reading until its next collection.
+### BUG-391 [P2][VALID] The quarterly share-scale pass 2 rescales correct diluted counts from a mis-scaled EPS
+Status: VERIFIED (iteration 257; applied at the user's decision, 2026-11-28)
+Found: the shares1 worker (iteration 255, residual) | Fixed: (this commit) | Regression tests: tests/test_share_scale_mis_scaled_eps.py; 3 failing first
+Repro: quarterly share-scale pass 2 starts from a mis-scaled EPS or overrides a count its own EPS confirms (DXCM 2012-14; HAL's ~870 for about 870M). On the fix copy, 113 quarterly diluted, 32 basic and 49 shares-outstanding cells hold under 100,000 shares, mostly HAL, HIG, DXCM, VTRS.
+Expected: counts on their filing's scale.   Actual: some rescaled by 10^6 or 1000.
+
+Prepared (iteration 256, stockdb-qa\shares1\out\b391, NOT applied: HAL's label moves): an EPS implying under 100,000 shares rescales and confirms nothing; pass 2 never rescales a count pass 1 checked. HAL 101, HIG 17, DXCM 20, ICE 4 quarterly cells right; HAL historical value None -> 38.94, label none -> below at 31.07; HAL ranked, APA/EOG/FANG/XOM composites -2; 0 medians, verdicts. Awaiting the user.
+Fix (iteration 257, `qa/evidence/shares1-round2-investigation.txt`, `qa/evidence/b391-verify-mine.txt`): applied as prepared after the user approved the measured moves (HAL label none -> below, HAL ranked, APA/EOG/FANG/XOM composites -2, 0 medians, verdicts). BUG-369's pass-1b floor folded into pass 1; its mutant m369_no_floor retired from shares1-mutants.json (covered by m391_no_floor).
+### BUG-392 [P2][VALID] NTAP's revenue reads `Revenues` at about 90% of its revenue for FY2024-26
+Status: VERIFIED (iteration 262)
+Found: the valid1 worker (iteration 260, gross-profit sweep, `qa/evidence/valid1-investigation.txt` sec. 8); confirmed by the orchestrator on the live DB | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (9 new, 3 reshaped to two filings); 6 failing first
+Repro: financials_annual NTAP FY2024 revenue 5.657B, gross profit 4.433B, cost of revenue 1.835B: gross profit + cost of revenue = 6.268B, which NetApp tags as RevenueFromContractWithCustomerExcludingAssessedTax. FY2025 5.907B and FY2026 6.237B likewise low. Revenue feeds P/S, growth and margins, so valuations may move.
+Expected: the total revenue (6.268B FY2024).   Actual: `Revenues` 5.657B (a part).
+
+Fix (iteration 262, `qa/evidence/bug392-investigation.txt`, `qa/evidence/bug392-verify-mine.txt`): xbrl_parser._revenue_parts_shown (in `_aside`): a revenue figure is not read where the same filing tags, for the same period, another revenue figure its own cost of revenue + gross profit (or operating income + operating expenses) add up to within _AGREE, and the figure is more than _AGREE below it (larger figures stay: SNA, CAT). Census 72 records at 7 filers (NTAP, BSX, GEN, XYL, TRGP, JCI, YUM); 8 Yahoo-covered NTAP cells now exact (0 before). On DB copies: 0 medians, verdicts, owner-earnings verdicts, labels (GEN historical value 40.67 -> 40.36, still below); NTAP P/S 4.733 -> 4.264 (Yahoo 4.273), composite 62 -> 64. Three existing single-filing tests reshaped to the two-filing cases they came from (GE, DELL, 25% gap). Residual: BUG-396 (YUM FY2015).
+### BUG-393 [P3][VALID] CNC's cost_of_revenue holds only product cost beside its medical costs
+Status: OPEN
+Found: the valid1 worker (iteration 260, `qa/evidence/valid1-investigation.txt` sec. 8) | Fixed: | Regression test:
+Repro: CNC FY2021-25 cost_of_revenue about 2.7B (product cost) beside about 146B of medical costs (managed care), so revenue less cost of revenue is far above any gross profit and the gross-profit check fires.
+Expected: managed-care cost of revenue that includes medical costs, or the check aware of it.   Actual: product cost alone.
+
+### BUG-394 [P3][VALID] SNPS FY2022 cost of revenue comes from an older filing than its revenue and gross profit
+Status: OPEN
+Found: the valid1 worker (iteration 260, `qa/evidence/valid1-investigation.txt` sec. 8; BUG-062's kind) | Fixed: | Regression test:
+Repro: SNPS FY2022 cost of revenue 898M from an earlier vintage beside a restated revenue and gross profit (implying 1,363.8M).
+Expected: one filing's figures for the year.   Actual: mixed vintages; the gross-profit check fires.
+### BUG-395 [P3][VAL] BUG-390 dates a spread quarter by its year's first 10-K, but the spread can come from a later 10-K: AVGO's FY2023-24 are read a year early
+Status: VERIFIED (iteration 263; applied at the user's decision, 2026-11-28)
+Found: code review 42 (`qa/evidence/review42.txt`, Minor 1; BUG-390's fix incomplete, not a regression) | Fixed: (this commit) | Regression tests: tests/test_valuation_spread_known.py (review 42's probe adopted); 10 failing first
+Repro: history_inputs ~477-486 date a spread quarter by the vintages' MIN(filed_date) for its year; `_da_bases` spreads from the latest 10-K's year figure. AVGO's FY2024 amortization ($9,267M) is first tagged in the 10-K of 2025-12-18 (vintages: 593M at 2024-12-20, 9,860M at 2025-12-18). Its trailing years to 2024-02-04/05-05/08-04 are read from 2024-12-20 with D&A of $5.4B/$6.9B/$8.4B where the facts known that day give $0.51B/$0.53B/$0.56B. SWK's 2020 trailing years read $608-709M for $372M from 2021-02-18, a year before its 10-K of 2022-02-22. Cache census: 171 of 464 spread quarters (37 filers) are not spread on their year's first 10-K day; 44 trailing years at 14 filers are more than 5% off what was known on the day read (AVGO, GE, SPGI, SWK, MTD, ...). Probe: %LOCALAPPDATA%\stockdb-qa\review42\head\tests\test_review42.py.
+Expected: no 10-K figure before its filing day (BUG-390's own Expected).   Actual: the amortization of a later 10-K is read from the year's first 10-K.
+Fix direction: known from the first vintage whose D&A agrees with the year's stored quarters (or store the parser's fact_y filed day), else known on no day; measure the moves first.
+Fix (iteration 263, `qa/evidence/bug395-investigation.txt`, `qa/evidence/bug395-verify-mine.txt`): direction (b) done properly ((a) measured and rejected: 20 of 123 spread years still early). `_da_bases` names the supplier, the first 10-K for the year giving every D&A figure the spread's own 10-K gives (within _AGREE); stored in the new financials_quarterly.source_filings (464 quarters, 47 KB); the history dates the quarter from it (a DB from between 7dbc9bb and this keeps BUG-390's date until its next collection). Spread look-ahead 139 -> 58 trailing years; standard look-ahead 0. User approved the moves: 0 medians, verdicts, owner-earnings verdicts; label SWK below -> above (140.65 -> 85.27); 244 months empty at 24 tickers. Residuals: KKR/BR/MRSH/TTWO 10-Q comparatives (11 trailing years), AXON FY2023 (4; needs a per-day re-parse).
+### BUG-396 [P3][VALID] YUM FY2015 pairs the restated post-spin revenue with pre-spin cost of revenue: gross margin -45.8%
+Status: OPEN
+Found: the bug392 worker (iteration 262, residual R1; BUG-062's kind) | Fixed: | Regression test:
+Repro: since BUG-392 YUM FY2015 revenue reads the 2017 10-K's restated 6.418B (after the Yum China spin-off; before it read company sales 11.145B, a part of 13.105B), while cost of revenue keeps the pre-spin 9.359B, so derived gross profit is -2.941B and gross margin -45.8%. No valuation moves.
+Expected: one filing's figures for the year.   Actual: per-field latest values from filings on different bases.
+### Q23 [DATA] NEEDS-USER: read a debt total that includes current debt as the total less the current part (KVUE, TRV)?
+Status: VERIFIED (iteration 236; applied at the user's decision, 2026-11-26)
+Found: the debt1 worker (iteration 234; BUG-291, BUG-133's TRV) | Fixed: | Regression test:
+Context: Q20 sets aside a total that includes current debt on a date its current part is tagged (tested in tests/test_fallback_tags.py), so KVUE FY2024-25 and TRV have no long-term debt. Options: A read the total less the current figure the same filing tags (KVUE FY2024 7.805 - 0.750 = 7.055; TRV FY2025 9.267 - 0.300 = 8.967; total debt then equals the filer's own total); B a new field for the filer's own total; C leave as Q20 decided. Recommendation: A (moves TRV's EPV and scores; measure first).
+Decision: USER 2026-11-26: A, the total less the current part the same filing tags; measure over the 502 and show the moves before applying.
+
+Fix (iteration 236, Q23, `qa/evidence/debt2-investigation.txt`): where Q20 sets a total including current debt aside, long-term debt is the total less the current part the total's own filing tags on that date (a total with maturities: its maturities; a filer's own total: its short-term debt plus paper no short-term figure holds); it stays aside with no current part or a part larger than the total. Annual record, quarters, vintages, as-of snapshots. KVUE FY2024 7.055 (total 8.607), FY2025 7.071; TRV FY2025 8.967. Census: annual 20 cells at APD, ILMN, KVUE, PGR, TRV; quarterly 53 at 8; vintages 41. DB: 0 medians, verdicts, owner-earnings verdicts, labels; historical values APD 194.34 -> 118.35, KVUE 19.41 -> 19.45, RMD 350.24 -> 346.07, VTR 63.34 -> 62.71 (labels kept); EPV APD 98.56 -> 32.80, KVUE 11.41 -> 9.21; TRV composite 72 -> 66. Look-ahead 0; oracles as at HEAD. Applied at the user's decision after the measurement (2026-11-26).
 ### Q16 [VAL] NEEDS-USER: should the history's P/E use net income to common?
 Status: VERIFIED (iteration 157; regression tests: 13 items in tests/test_xbrl_parser.py, tests/test_valuation_history*.py)
 Decision: Decided 2026-11-02 (the user: "use your recommendation for questions"): implement as a P2: the history's P/E on net income to common, as its P/B already is.
@@ -2459,11 +2703,12 @@ Repro: where the paper is classified as long-term debt (refinancing intent) and 
 Expected: paper inside long-term debt counted once.   Actual: counted twice in those years.
 
 ### BUG-254 [P3][VALID] HIG's FY2012-13 DebtCurrent is all its debt, so its long-term debt counts twice
-Status: OPEN
-Found: iteration 104 (BUG-142's investigation, section 2.2 and 5) | Fixed: | Regression test:
+Status: VERIFIED (iteration 235)
+Found: iteration 104 (BUG-142's investigation, section 2.2 and 5) | Fixed: (this commit) | Regression tests: tests/test_debt_current_totals.py (new); 9 failing first
 Repro: HIG tags DebtCurrent as its whole debt in FY2012-13 ($7.126B = $0.320B current + $6.806B long-term), and short_term_debt reads it, so total debt is $13.93B for $7.13B.
 Expected: the current part as short-term debt.   Actual: total debt about twice its own.
 
+Fix (iteration 235, `qa/evidence/debt2-investigation.txt`): `_debt_current_totals_set_aside`, per filing: a DebtCurrent equal (within 0.05%; GOOGL FY2015 matches by chance at 0.16%) to the same filing's noncurrent long-term debt plus a current figure above zero it tags there is set aside. HIG FY2012 total debt 13.932 -> 7.126, FY2013 12.650 -> 6.544; IT FY2011-13 and CSCO 2011-01-29 likewise. DB: 0 medians, verdicts, historical values, labels; IT history fair value up to 1.38%. Look-ahead 0; as-of oracle 0 differences.
 ### BUG-255 [P3][VALID] CVX's FY2018 long-term debt is a note's LongTermDebt; the balance sheet's figure is only under an unmapped tag
 Status: OPEN
 Found: iteration 104 (a BUG-141 residual, `qa/evidence/bug142-investigation.txt` section 5) | Fixed: | Regression test:
@@ -2509,17 +2754,19 @@ Repro: cash_and_equivalents reads Cash ahead of the restricted-cash total. Cash 
 Expected: the balance sheet's cash line.   Actual: a component at CF, TGT, KLAC and GEN.
 
 ### BUG-261 [P3][VALID] AXP's and COF's balance-sheet cash tag, CashCashEquivalentsAndFederalFundsSold, isn't mapped
-Status: OPEN
-Found: iteration 112 (BUG-161's investigation, section 6) | Fixed: | Regression test:
+Status: VERIFIED (iteration 259)
+Found: iteration 112 (BUG-161's investigation, section 6) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (3 new, 1 reshaped); 5 failing first
 Repro: AXP's FY2009-17 and COF's balance sheets tag their cash line as CashCashEquivalentsAndFederalFundsSold (AXP FY2017 $32.927B = cash and due from banks + interest-bearing deposits + equivalents), which canonical.py doesn't map, so their cash reads a component (AXP FY2009-16) or nothing (10 years). Mapping it changes 32 years, 119 quarters and 97 vintages at AXP and COF; read on every date it adds a quarterly row from a cash flow statement and drops two TTM rows, so it needs the balance-sheet-dates filter (BUG-139). Their net debt is suppressed as banks', so it shows in the cash field only.
 Expected: the balance sheet's cash line.   Actual: a component or nothing.
 
+Fix (iteration 259, `qa/evidence/dna1-investigation.txt`, `qa/evidence/b261-verify-mine.txt`): CashCashEquivalentsAndFederalFundsSold ranks first in cash_and_equivalents and is balance-sheet-only (dated). AXP, COF cash only: annual 33, quarterly 121, TTM 119, vintages 61. 0 medians, verdicts, owner-earnings verdicts, labels (net debt is suppressed for banks). Residual: AXP FY2023-25 tag no line and keep the total with restricted cash (~0.4%).
 ### BUG-262 [P3][VAL] The net-income test can keep a real split unfolded when Yahoo doesn't declare it in a year whose earnings swung
-Status: OPEN
-Found: iteration 114 (BUG-247's fix, `qa/evidence/bug247-done.txt` section 11b) | Fixed: | Regression test:
+Status: VERIFIED (iteration 228)
+Found: iteration 114 (BUG-247's fix, `qa/evidence/bug247-done.txt` section 11b) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py, test_valuation_oracle_seam.py; 29 failing first
 Repro: since BUG-247 an undeclared seam folds on a split's marks only where net income held (the same sign, a move of less than half the seam's log ratio). A split missing from Yahoo's split_events in a year whose net income moved more than that stays unfolded. 2 of the 42 declared split seams that bear the marks are like that (COO FY2021-22, SRE FY2020-21); they are declared, so nothing moves today.
 Expected: a real split folds whatever the year's earnings did.   Actual: such a year folds only when Yahoo declares the split.
 
+Fix (iteration 228, `qa/evidence/bug264-investigation.txt`; applied at the user's decision, 2026-11-25, for DD's label): one split history (`inputs.split_history`) for the annual and quarterly paths: Yahoo's split_events plus the splits the filings record (`_restated_splits`: consecutive 10-K vintages of a year whose count moved by a simple ratio of 3:2 or more within 1%, EPS marked, net income held, not explained by a declared split). Yahoo's non-split factor nearest such a ratio between those filings is split into the split and the spin-off remainder (BUG-379). Quarters fold an undeclared seam on the marks plus the implied count plus the trailing year's net income held (BUG-264). Post-filing factors: simple splits apply; of the others, the subset nearest a Yahoo count within 1.25x, none without a count (BUG-050). `_restated_between` takes MAX_SPLIT_RATIO (BUG-270). BUG-024 was fixed in iteration 42; tests added. Filings' splits found: DD 1:3, HLT 1:3, LDOS 1:4, MSI 1:7, WTW 2.649:1 (read 3:8), EXE 1:200, HWM 1:3. DB copies: 0 medians, verdicts, owner-earnings verdicts; DD historical value 133.14 -> 139.45, label above -> near; HLT DDM base 7.50 -> 7.66, historical value within far above; 654 valuation_history rows (market caps before the mixed-factor days corrected, e.g. DD 2016-11 $22.46B -> $61.98B). Oracles agree with the code's split history; valuation oracle L2 loses HLT lynch (the oracle's own error).
 ### BUG-263 [P3][VAL] KDP's per-share history splices Dr Pepper Snapple's FY2015-16 onto Keurig's figures, so its 10-year CAGRs compare two companies
 Status: OPEN
 Found: iteration 114 (BUG-247's fix, section 11c) | Fixed: | Regression test:
@@ -2527,11 +2774,12 @@ Repro: KDP's FY2015-16 are Dr Pepper Snapple's figures on its own shares, FY2017
 Expected: the predecessor's years left out of the per-share series, as a private count's are (a design choice).   Actual: a splice.
 
 ### BUG-264 [P3][VAL] The valuation history's undeclared split rule has neither the net-income test nor the implied-count test the fiscal years have
-Status: OPEN
-Found: iteration 114 (BUG-247's fix, section 11d) | Fixed: | Regression test:
+Status: VERIFIED (iteration 228)
+Found: iteration 114 (BUG-247's fix, section 11d) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py, test_valuation_oracle_seam.py; 29 failing first
 Repro: `history_inputs.normalize_share_series` folds an undeclared seam on a split's marks in EPS and revenue alone, so a quarterly issuance in which a loss shrinks without changing sign would fold there (none does in the 502 today: PCG's exit quarter changed EPS's sign). The fiscal years' net-income test can't be copied as it is: a quarter's net income swings too far (it would unfold DD's 2019 1:3 reverse split at 2017 Q1, net income 52M then 888M).
 Expected: a quarterly rule that tells an issuance from a split.   Actual: the marks alone (latent).
 
+Fix (iteration 228, `qa/evidence/bug264-investigation.txt`; applied at the user's decision, 2026-11-25, for DD's label): one split history (`inputs.split_history`) for the annual and quarterly paths: Yahoo's split_events plus the splits the filings record (`_restated_splits`: consecutive 10-K vintages of a year whose count moved by a simple ratio of 3:2 or more within 1%, EPS marked, net income held, not explained by a declared split). Yahoo's non-split factor nearest such a ratio between those filings is split into the split and the spin-off remainder (BUG-379). Quarters fold an undeclared seam on the marks plus the implied count plus the trailing year's net income held (BUG-264). Post-filing factors: simple splits apply; of the others, the subset nearest a Yahoo count within 1.25x, none without a count (BUG-050). `_restated_between` takes MAX_SPLIT_RATIO (BUG-270). BUG-024 was fixed in iteration 42; tests added. Filings' splits found: DD 1:3, HLT 1:3, LDOS 1:4, MSI 1:7, WTW 2.649:1 (read 3:8), EXE 1:200, HWM 1:3. DB copies: 0 medians, verdicts, owner-earnings verdicts; DD historical value 133.14 -> 139.45, label above -> near; HLT DDM base 7.50 -> 7.66, historical value within far above; 654 valuation_history rows (market caps before the mixed-factor days corrected, e.g. DD 2016-11 $22.46B -> $61.98B). Oracles agree with the code's split history; valuation oracle L2 loses HLT lynch (the oracle's own error).
 ### BUG-265 [P3][VAL] CPRT's quarterly history folds two undeclared seams on the marks, 16.06x and 0.2506x, that look like a count glitch
 Status: OPEN
 Found: iteration 114 (BUG-247's fix, section 11e) | Fixed: | Regression test:
@@ -2565,17 +2813,19 @@ Expected: provenance that says how a figure was made (a pseudo-tag or a note).  
 Note (iteration 217): unchanged by Q18's merge; still OPEN.
 
 ### BUG-269 [P3][VALID] The integrity outlier check skips short_term_debt entirely since BUG-159, so a real scale error in it passes
-Status: OPEN
-Found: code review 21 (M-4) | Fixed: | Regression test:
+Status: VERIFIED (iteration 261)
+Found: code review 21 (M-4) | Fixed: (this commit) | Regression tests: tests/test_noncontrolling_interest.py, tests/test_quality_filed_lines.py, tests/test_integrity.py; 24 failing first
 Repro: src/validation/integrity.py's _OUTLIER_EXCLUDE holds short_term_debt (BUG-159, for maturities that come and go), so a genuine 10^3-10^6 unit error in the field is no longer flagged.
 Expected: a higher threshold for the field, or skipping only the spikes the maturities explain.   Actual: no check.
 
+Fix (iteration 261): see BUG-063's entry (one set).
 ### BUG-270 [P3][VAL] `_restated_between` has no maximum split ratio, and three of BUG-173's boundaries are unpinned
-Status: OPEN
-Found: code review 21 (M-6, M-1) | Fixed: | Regression test:
+Status: VERIFIED (iteration 228)
+Found: code review 21 (M-6, M-1) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py, test_valuation_oracle_seam.py; 29 failing first
 Repro: unlike `_normalize_splits` and `_apply_later_splits`, `inputs._restated_between` takes any simple ratio, so a bogus 100:1 in Yahoo's split history would scale a cover count (none in the data). Three of the reviewer's mutants survive: a 3:2 split exactly, a split on the cover count's filing day, and the factor applied when the detection falls back to the cover count.
 Expected: MAX_SPLIT_RATIO's bound, and tests at the three boundaries.   Actual: neither.
 
+Fix (iteration 228, `qa/evidence/bug264-investigation.txt`; applied at the user's decision, 2026-11-25, for DD's label): one split history (`inputs.split_history`) for the annual and quarterly paths: Yahoo's split_events plus the splits the filings record (`_restated_splits`: consecutive 10-K vintages of a year whose count moved by a simple ratio of 3:2 or more within 1%, EPS marked, net income held, not explained by a declared split). Yahoo's non-split factor nearest such a ratio between those filings is split into the split and the spin-off remainder (BUG-379). Quarters fold an undeclared seam on the marks plus the implied count plus the trailing year's net income held (BUG-264). Post-filing factors: simple splits apply; of the others, the subset nearest a Yahoo count within 1.25x, none without a count (BUG-050). `_restated_between` takes MAX_SPLIT_RATIO (BUG-270). BUG-024 was fixed in iteration 42; tests added. Filings' splits found: DD 1:3, HLT 1:3, LDOS 1:4, MSI 1:7, WTW 2.649:1 (read 3:8), EXE 1:200, HWM 1:3. DB copies: 0 medians, verdicts, owner-earnings verdicts; DD historical value 133.14 -> 139.45, label above -> near; HLT DDM base 7.50 -> 7.66, historical value within far above; 654 valuation_history rows (market caps before the mixed-factor days corrected, e.g. DD 2016-11 $22.46B -> $61.98B). Oracles agree with the code's split history; valuation oracle L2 loses HLT lynch (the oracle's own error).
 ### BUG-271 [P2][ASOF] Later 10-Ks' narrow comparatives make the as-of view's debt less than half the annual record's: EXC FY2023 $2.72B for $43.80B
 Status: VERIFIED (iteration 167)
 Found: code review 21 (declined as pre-existing; at 9f536a4 and d5e6ec2 alike) | Fixed: (this commit) | Regression tests: tests/test_asof_reader.py (13 new: ::test_a_later_filings_narrower_debt_figure_leaves_the_balance_sheets, ::test_a_date_reads_its_debt_from_one_filings_view, ::test_a_later_filings_narrower_figure_of_any_field_leaves_the_earlier_one, ::test_a_narrower_figure_just_under_half_is_set_aside, ::test_a_derived_figure_ranks_after_every_tag, ::test_sizes_are_compared_whatever_their_sign, ::test_the_paper_is_read_from_the_filing_whose_short_term_debt_is_read, ::test_a_database_stored_before_the_tags_column_reads_as_before and 5 guards); tests/test_sqlite_store.py::test_a_vintage_keeps_the_tag_each_figure_was_read_from, ::test_a_database_stored_before_the_vintage_tags_gains_them
@@ -2600,17 +2850,19 @@ Also (code review 28, Minor 3): on a database from before the column, a first fi
 Fix (iteration 217, Q18's merge of feat/asof-snapshots): the as-of view no longer ranks stored vintage tags; it reads the stored snapshot of the record.
 
 ### BUG-272 [P3][PARSE] An adoption-day instant becomes a fiscal year's period_end: ICE FY2018 "2019-01-01", FY2019 "2020-01-01"
-Status: OPEN
+Status: VERIFIED (iteration 234; fixed by BUG-342, c0a507c)
 Found: code review 21 (declined as pre-existing) | Fixed: | Regression test:
 Repro: ICE's ASC 842 adoption-day balances (the first day of the next year) become its FY2018 and FY2019 records' period_end, which misled BUG-159's own-total oracle (it looked the total up at the record's period_end).
 Expected: the fiscal year's balance-sheet date.   Actual: the adoption day.
 
+Fix (iteration 234): re-checked: ICE FY2018/FY2019 period_end 2018-12-31/2019-12-31; no snapshot or vintage on 2019-01-01 or 2020-01-01. Left: empty adoption-day rows in ICE's quarterly ladder.
 ### BUG-273 [P3][PARSE] CHD's FY2023 10-K tags its 2023 long-term debt at 2021-12-31, which FY2021's record and as-of windows read
-Status: OPEN
-Found: code review 21 (declined as pre-existing data) | Fixed: | Regression test:
+Status: VERIFIED (iteration 234)
+Found: code review 21 (declined as pre-existing data) | Fixed: (this commit) | Regression tests: tests/test_debt_balance_sheet_lines.py (new); 13 failing first
 Repro: CHD's FY2023 10-K tags its 2023 LongTermDebtNoncurrent ($2.202B) at 2021-12-31, and FY2021's record reads it (total debt $3.154B at d5e6ec2, $2.455B at 9f536a4, the balance sheet's $2.563B). BUG-159 completed the short-term side only.
 Expected: FY2021's own long-term debt.   Actual: a stray later figure.
 
+Fix (iteration 234): a filing that tags its balance-sheet total is dated by that total only; total-assets dates count within 7 days of a total (an adoption-day balance sheet); a filing without a total keeps BUG-319's dating. Holds in the record, quarters, vintages and as-of snapshots. CHD FY2021 1.611 again; BMY 2012-09-30 short-term debt 0.751 -> 1.370 (its balance sheet). Measured (debt1, `qa/evidence/debt1-investigation.txt`): census over 504 filers annual LTD 9 cells/4 filers, quarterly LTD 11, STD 141; DB copies re-collected: 0 medians, verdicts, owner-earnings verdicts, labels; historical values CIEN 89.99 -> 90.03, EQIX 961.99 -> 961.62, ORCL 156.94 -> 156.26; look-ahead 0; oracles as at HEAD.
 ### BUG-274 [P2][VALID] D&A reads a "total" that is the filing's depreciation line where it is larger than the amortization beside it: GE FY2022-25 $0.85B for $1.18-1.22B
 Status: VERIFIED (iteration 171; GE FY2022-25 itself undecidable from the filings: residual)
 Found: iteration 116 (BUG-170's investigation, `qa/evidence/bug170-investigation.txt` R1) | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (25 new items, 13 failing first; among them ::test_an_earlier_filings_total_on_another_basis_shows_nothing)
@@ -2626,18 +2878,21 @@ Expected: the cash-flow add-back, $3.366B / $3.609B / $3.746B (Yahoo agrees).   
 Fix (iteration 176, `qa/evidence/bug327-investigation.txt`): UPS's new 10-K repeats DA $3.366B/$3.609B and tags DDA $2.8B/$3.0B/$3.0B beside the intangibles' amortization (DDA + amortization within 1% of DA: a note's rounded depreciation). `_da_totals_displaced` (before `_depreciation_combined`): where a filing tags a period's total T below another total U that repeats a figure an earlier filing tagged for the period under U alone, T is a part; from then on, in that filer's filings, T is set aside beside a larger U (no total ranked between them; U above the amortization, else BUG-170 decides), U is entered under T's tag, a later filing's lone T gives way to a larger U filed by then, and a year's 10-Q to-date periods only together; filings filed by then only. Wider than UPS: annual 139 cells at 23 filers, all up (CRM FY2018-26 e.g. $1.0B -> $3.477B, MCD FY2018-25, PCAR FY2013-25, TSLA FY2009-17 $0.769B -> $1.636B, EXC FY2009-22, KEY, ETR, BEN FY2008-20...), each to the cash flow statement's add-back where checked (25 cells match Yahoo; EXC FY2022 $3.533B, its later 10-Ks' figure, beside Yahoo's $2.768B); quarterly 311, TTM 529, vintages 316; no negative; 3 halvings, each repairing a broken ladder (ELV Q3 2023-24, AES Q3 2009). On DB copies: 0 medians, verdicts or owner-earnings verdicts; TSLA's historical-value label far above -> above (284.65 -> 301.49 at $372.22); EV/EBITDA CRM 22.96 -> 18.55, MCD 16.22 -> 14.28, UPS 10.94 -> 10.14. Look-ahead 0; 13 mutants.
 
 ### BUG-275 [P3][TTM] A year's quarters sit on two D&A bases where its 10-Qs tag lines its 10-K doesn't, or the reverse: AVGO's FY2023-24 fourth quarters $3.37B and $9.42B
-Status: OPEN
-Found: iteration 116 (BUG-170's investigation, R2) | Fixed: | Regression test:
+Status: VERIFIED (iteration 252; option A with the open-year carry, without B; the user's decisions 2026-11-26/27)
+Found: iteration 116 (BUG-170's investigation, R2) | Fixed: (this commit) | Regression tests: tests/test_da_bases.py (new, 29); 10 failing first
 Repro: the fourth quarter is the 10-K's figure less nine months of another basis. 1,140 such lump/hole quarters at HEAD (DHR FY2022-23's among them), 674 with BUG-170's V3 (573 healed, 107 new): AVGO FY2023-24 (its 10-Qs tag no amortization those years; the TTM 2025-02-02 to 2025-08-03 reads $11.9-15.9B for ~$8.6B), GOOGL 2025 (the reverse, +$0.1-0.3B), BR, TTWO, KKR, J, MRSH FY2022-23, EME FY2010-13. The TTM at a fiscal year end equals the annual figure in 6,776 of 6,790 cases.
 Expected: each quarter's D&A on its year's basis.   Actual: a lump or a hole in the fourth quarter and the TTM rows over it.
 Also (iteration 174, BUG-332's residual): where a 10-K is combined (BUG-274) but its 10-Qs carry the line with no evidence, Q4 takes the whole year's amortization: SWK FY2020-23 Q4 about $297M beside about $93M, HD FY2025 $1.289B beside $0.824B, FY2026 $1.515B beside $0.869B; HD's, DVA's and NTAP's latest TTMs hold the prior year's lump.
 
+Decision (USER 2026-11-26): A: spread a year's untagged amortization over Q1-Q3 by days, the rest in Q4, marked derived, so every TTM is on one basis and equals the annual figure at the year end; B (blank Q4's D&A) for the reverse kind (10-Qs carrying more than the 10-K). Measure over the 502 and show the moves before applying. Census at 3ab6321: 134 Q4 lumps and 143 holes at 147 filers, 1,073 TTM rows, the latest TTM of 17 filers.
+Fix (iteration 252, `qa/evidence/bug275-investigation.txt`): `XBRLParser._da_bases`/`_da_carried`: by the filings' tags (never a ratio), where the 10-Qs' D&A is their own figure (or BUG-170's combination) and the year's 10-K tags that basis below its D&A, each rung goes onto its filing's line plus the difference's share by days, Q4 the rest, tagged derived:amortization_spread (nine-months and hole guards); a year with no 10-K yet after a spread year carries the last 10-K's per-day difference (derived:amortization_carried; never a 10-K filed after the quarter). Option B (blank) dropped at the user's choice: the reverse kind stays as before. DB (502 re-collected): financials_quarterly 478 and TTM 456 rows at 51 filers, D&A only; AVGO FY2024 quarters 139/149/149/9,423M -> 2,568/2,428/2,428/2,435M; 0 medians, verdicts, owner-earnings verdicts, labels; historical values BR 264.51 -> 259.06, CME 293.25 -> 291.85, EBAY 84.38 -> 84.30, LHX 315.13 -> 318.05; every latest-TTM D&A unchanged. Q4 lumps/holes 134+143 -> 72+143. Look-ahead 0; quarterly as-of check 0 cells using an unfiled 10-K. Residual: the reverse kind (GOOGL 2025 Q4, EME FY2012).
 ### BUG-276 [P3][VALID] Some filers carry their D&A on tags BUG-170's rule leaves alone: WDAY, MET and VEEV's OtherDepreciationAndAmortization, TXN's capitalized software
-Status: OPEN
-Found: iteration 116 (BUG-170's investigation, R3) | Fixed: | Regression test:
+Status: VERIFIED (iteration 260; applied at the user's decision, 2026-11-28; TXN left as is)
+Found: iteration 116 (BUG-170's investigation, R3) | Fixed: (this commit) | Regression tests: tests/test_da_other_lines.py (19); 9 failing first
 Repro: depreciation-alone filers whose D&A sits on tags whose meaning varies by filer: WDAY, MET, VEEV (OtherDepreciationAndAmortization is their whole D&A, the depreciation a part), TXN (capitalized software amortization, a cash flow line of its own), MTD (AmortizationOfDeferredCharges is its amortization line), FLEX (OtherDepreciationAndAmortization is its amortization), ITW, TSLA, AON FY2022-25, CINF, ABNB (no us-gaap tag at all). HEAD and V3 read the depreciation alone there.
 Expected: the filing's D&A add-back.   Actual: the depreciation alone.
 
+Fix (iteration 260, `qa/evidence/dna1-investigation.txt`, `qa/evidence/b276-verify-mine.txt`): xbrl_parser._da_other_lines, rules proved by the filing (R1 OtherDepreciationAndAmortization >= depreciation + amortization is the D&A; R2 below depreciation and >= amortization is the amortization line; R3 no depreciation tagged: the D&A only after a filing where R1 held; R4 MTD's AmortizationOfDeferredCharges from the filing where it equals its parts). 8 filers (ABNB AMD FLEX MET MTD SWKS VEEV WDAY); 22/22 Yahoo-covered annual cells now exact. User approved the moves: owner-earnings verdict FLEX fair -> cheap, VEEV N/A -> expensive; 0 medians, verdicts, labels. Residuals: TXN (user: leave), ITW/TSLA/ABNB FY2025/AON/CINF on custom tags, MRVL/FISV/ELV/AMD later unprovable.
 ### BUG-277 [P3][PARSE] `XBRLParser._calendar_from_frames` takes the first frame from a set, so calendar_year follows Python's string-hash order: GPN FY2016, TEL FY2025, LHX FY2019
 Status: VERIFIED (iteration 181)
 Found: iteration 118 (BUG-179's worker; its out\hash_order_check.txt) | Fixed: (this commit) | Regression tests: tests/test_fiscal_calendar.py (5 new, one under PYTHONHASHSEED 0-7); 5 failing first
@@ -2659,11 +2914,12 @@ Repro: `stock-data refresh`'s SEC step counts a run whose predecessor read faile
 Expected: such a company queued again at the next refresh.   Actual: it waits for its next report.
 
 ### BUG-280 [P3][GATHER] Only the latest report is checked for the SEC's lag: NEE's 10-Q of 2026-07-24, also without facts, goes unflagged once a later one has them
-Status: OPEN
-Found: iteration 119 (BUG-251's worker, residuals) | Fixed: | Regression test:
+Status: VERIFIED (iteration 253)
+Found: iteration 119 (BUG-251's worker, residuals) | Fixed: (this commit) | Regression tests: tests/test_sec_cache.py, tests/test_fetcher_concurrency.py; 8 failing first
 Repro: `report_without_facts` looks at the latest report the submissions list. NEE's companyfacts lack its 10-Q of 2026-07-24 as well; once its October 10-Q gets facts, nothing names the earlier gap, and its quarter stays missing.
 Expected: every report since the last complete collection checked.   Actual: the latest only.
 
+Fix (iteration 253, `qa/evidence/gather3-investigation.txt`): the gap is every report among the newest 4 listed that the companyfacts lack, newest first; whole only when the report listed right after its last is carried; a report without its accession ends the search. `report_without_facts` names the first of the gap (read from its XBRL; the run stays incomplete unless the whole gap was read). Cache census: six such gaps (CLX 10-K 2026-08-07, URI and DOW 10-Qs, CAH, EIX, ED 10-Qs). Offline: those six runs stored incomplete; 4 unmapped rows kept; 0 medians, verdicts, owner-earnings verdicts, historical values, labels. A live collection of the six would read the filings (CLX FY2026 etc.); they're stored complete today, so `stock-data CLX CAH EIX ED URI DOW` or their next report picks them up.
 ### BUG-281 [P3][REFRESH] CLI and web collections count toward a gap's three retries though they read the 7-day cache
 Status: VERIFIED (iteration 195)
 Found: iteration 119 (BUG-251's worker, residuals) | Fixed: (this commit) | Regression tests: tests/test_refresh.py, tests/test_sec_cache.py, tests/test_sqlite_store.py (20 new, 2 changed); 19 failing first
@@ -2698,11 +2954,12 @@ Expected: the latest report of each form looked for in the whole recent feed (te
 Fix (iteration 122, `qa/evidence/bug285-done.txt`): `get_submissions` keeps, beside the newest 100 filings (unchanged for their other readers), `latest_report`: the latest report of the feed's whole "recent" block the handler already fetches (no new request), by BUG-251's rule (`_latest_report`); the check reads both, and a submissions file cached before reads as it did. Offline the flag lists are unchanged (59: BUG-251's 58 and Exxon Mobil Corp's predecessor file); fed their cached filings with the latest report behind them, the banks and DELL are now checked, and Citigroup's companyfacts lack its 2026 10-Qs (BUG-295). P4 notes: the feed's older "files" pages aren't read (a new request, for a filer with no report in a year); the JSON export's sec_submissions now carries latest_report.
 
 ### BUG-286 [P3][PARSE] BUG-267's current-liabilities bound can say "held" falsely where its other lines overlap
-Status: OPEN
-Found: code review 22 (M-1) | Fixed: | Regression test:
+Status: VERIFIED (iteration 234) for review 22's shape (a); shape (b), R8, stays open in BUG-382's note
+Found: code review 22 (M-1) | Fixed: (this commit) | Regression tests: tests/test_debt_balance_sheet_lines.py (new); 13 failing first
 Repro: two made-up balance sheets read $200M of short-term debt for $350M at 8471b61 ($350M before it): a combined payables line tagged AccountsPayableCurrent with a note's compensation and taxes inside it, and taxes inside payables-with-accruals (BUG-267's own residual R8). Neither shape occurs in today's data. Firing the bound only where the borrowings with the other lines fit within the current liabilities changes 0 of the 120 real dates and closes the first.
 Expected: the bound fires only on lines that can't overlap.   Actual: latent false "held".
 
+Fix (iteration 234): the current-liabilities check fires only if the borrowings plus the other lines fit within current liabilities. 0 cells move. Measured (debt1, `qa/evidence/debt1-investigation.txt`): census over 504 filers annual LTD 9 cells/4 filers, quarterly LTD 11, STD 141; DB copies re-collected: 0 medians, verdicts, owner-earnings verdicts, labels; historical values CIEN 89.99 -> 90.03, EQIX 961.99 -> 961.62, ORCL 156.94 -> 156.26; look-ahead 0; oracles as at HEAD.
 ### BUG-287 [P3][STORE] A fill-only run (BUG-179) mixes an older parse's row with a newer one cell by cell
 Status: OPEN
 Found: code review 22 (M-2) | Fixed: | Regression test:
@@ -2735,22 +2992,25 @@ For the user: valuation_summary, valuations and warning_signs identical. One his
 Left over: FICO FY2012 still double counts ($0.553B for $0.504B), and Corpay FY2018-20 read no long-term debt.
 
 ### BUG-291 [P3][PARSE] Kenvue's FY2024-25 annual records have no long-term debt
-Status: OPEN
+Status: VERIFIED (iteration 236, by Q23)
 Found: iteration 121 (BUG-171's investigation) | Fixed: | Regression test:
 Repro: KVUE's 10-Ks tag their long-term debt under a concept long_term_debt doesn't read (details in `qa/evidence/bug171-investigation.txt`), so total debt is the short-term figure alone.
 Expected: its balance sheet's long-term debt.   Actual: NULL.
 
+Fix (iteration 236, Q23, `qa/evidence/debt2-investigation.txt`): where Q20 sets a total including current debt aside, long-term debt is the total less the current part the total's own filing tags on that date (a total with maturities: its maturities; a filer's own total: its short-term debt plus paper no short-term figure holds); it stays aside with no current part or a part larger than the total. Annual record, quarters, vintages, as-of snapshots. KVUE FY2024 7.055 (total 8.607), FY2025 7.071; TRV FY2025 8.967. Census: annual 20 cells at APD, ILMN, KVUE, PGR, TRV; quarterly 53 at 8; vintages 41. DB: 0 medians, verdicts, owner-earnings verdicts, labels; historical values APD 194.34 -> 118.35, KVUE 19.41 -> 19.45, RMD 350.24 -> 346.07, VTR 63.34 -> 62.71 (labels kept); EPV APD 98.56 -> 32.80, KVUE 11.41 -> 9.21; TRV composite 72 -> 66. Look-ahead 0; oracles as at HEAD. Applied at the user's decision after the measurement (2026-11-26).
 ### BUG-292 [P3][PARSE] ORCL's quarters don't read their current notes (NotesPayableCurrent)
-Status: OPEN
-Found: iteration 121 (BUG-171's investigation) | Fixed: | Regression test:
+Status: VERIFIED (iteration 234)
+Found: iteration 121 (BUG-171's investigation) | Fixed: (this commit) | Regression tests: tests/test_debt_balance_sheet_lines.py (new); 13 failing first
 Repro: ORCL's 10-Qs tag the current portion of its notes as NotesPayableCurrent, which short_term_debt doesn't read in the quarters.
 Expected: a quarter's short-term debt as its balance sheet's.   Actual: short by the current notes.
 
+Fix (iteration 234): a quarter with no short-term debt reads its 10-Q's unmapped current debt line when the same 10-Q tags that line at a year end with the annual record's short-term figure; not with commercial paper, nor where long-term debt comes from a total including current debt (ILMN 2015). ORCL 2026-08-31 none -> 7.625. Measured (debt1, `qa/evidence/debt1-investigation.txt`): census over 504 filers annual LTD 9 cells/4 filers, quarterly LTD 11, STD 141; DB copies re-collected: 0 medians, verdicts, owner-earnings verdicts, labels; historical values CIEN 89.99 -> 90.03, EQIX 961.99 -> 961.62, ORCL 156.94 -> 156.26; look-ahead 0; oracles as at HEAD.
 ### BUG-293 [P3][VAL] The valuation history names unknown debt "EBITDA is zero or negative", and treats AXON's debt-free 2017-22 quarters as unknown debt
-Status: OPEN
+Status: VERIFIED (iteration 226; the second half applied at the user's decision Q22, 2026-11-25)
 Found: iteration 121 (BUG-171's investigation) | Fixed: | Regression test:
 Repro: a month whose quarter has no debt figure reads as an EV/EBITDA N/A with the reason "EBITDA is zero or negative" (TMUS); and M1-4's unknown-debt rule leaves AXON's quarters that tag no debt at all (a debt-free filer) without an EV.
 Expected: an N/A reason that names the missing debt, and a debt-free quarter valued with no debt.   Actual: as above.
+Fix (iteration 226, Q22, `qa/evidence/q22-investigation.txt`): for a company today's rule marks (some 10-K reports long-term debt), a quarter without long-term debt stays unknown unless the latest 10-K ending on or before it reads debt-free the way the scores' read_debt reads a year (no positive long-term or short-term debt, paper or total debt, no positive interest expense, not a bank or insurer; shared helper `fundamentals.no_debt`); quarters before the first 10-K follow the first. Short-term-only 10-Ks stay unknown (DE). On DB copies re-collected with HEAD's parser: 771 quarters at 72 tickers valued; 0 medians, verdicts, owner-earnings verdicts; 13 historical values; 2 labels: FFIV near -> above (291.97 -> 269.01 at 312.33), TYL far below -> below (629.94 -> 574.62 at 414.62); AXON unchanged (427.16, below). Residual: false debt-free reads where neither debt nor interest is mapped (F FY2025, EXR, ESS, NVR, KKR, LEN), as the scores already read them; cash isn't netted where no debt field exists.
 Partly fixed (iteration 211): the N/A reason now says 'no long-term debt in the quarter to <end>, though its 10-Ks report some' (16 ev_ebitda reasons change; test in tests/test_valuation_history.py). Still OPEN: AXON's debt-free quarters. A rule 'unknown only after a 10-K reporting debt' was prepared (%LOCALAPPDATA%\stockdb-qa\bug039\out\held_*_293b.diff) but not applied: the stored data can't tell a debt-free 10-K from one whose debt is unread (BUG-294), so it would cut billions from F, DE, BXP, DLR, EQIX... (2,655 quarters at 215 tickers; 29 historical values, 4 labels incl. AXON near -> far above, BXP far below -> below). Needs a parser signal 'this filing's balance sheet has no debt line' (xbrl_parser.py; after Q18).
 
 ### BUG-294 [P3][PARSE] Quarters whose long-term debt stays unread after BUG-171's fix, and a few short by the tag order

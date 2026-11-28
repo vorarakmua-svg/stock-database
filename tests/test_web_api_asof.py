@@ -304,6 +304,15 @@ def test_asof_result_fragment_dates_a_figure_last_filed_earlier(tmp_path: Path) 
     assert "(filed 2018-08-03)" in html
 
 
+def test_asof_result_fragment_dates_only_the_figures_the_latest_filing_leaves_out(tmp_path: Path) -> None:
+    # BUG-129 (surviving mutant: the date beside every figure): a figure the latest filing holds has no date beside it,
+    # and no "(filed None)": only the revenue and the net income, carried from the FY2018 10-K, are dated.
+    html = _partial_refilings_client(tmp_path).get(
+        "/ui/asof/result", params={"ticker": "MSFT", "fiscal_year": 2016, "date": "2026-01-01"}).text
+    assert html.count("(filed ") == 2
+    assert "(filed None)" not in html and "(filed )" not in html
+
+
 # ---------------------------------------------------------------------------
 # A ticker whose as-of data isn't built (collected before the snapshots)
 # ---------------------------------------------------------------------------

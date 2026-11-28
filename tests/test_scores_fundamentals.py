@@ -194,8 +194,10 @@ def test_interest_paid_with_no_debt_tagged_leaves_the_debt_unknown():
     assert figures["total_debt"] is None and figures["net_debt"] is None and figures["roic"] is None
 
 
-def test_tagged_debt_stays_as_filed():
-    figures = _no_debt(total_debt=500.0, net_debt=0.0, roic=0.12, long_term_debt=500.0)
+@pytest.mark.parametrize("interest", [None, 30.0])
+def test_tagged_debt_stays_as_filed(interest):
+    # With its interest too (Q22: the tag is read before the interest).
+    figures = _no_debt(total_debt=500.0, net_debt=0.0, roic=0.12, long_term_debt=500.0, interest_expense=interest)
     before = dict(figures)
     assert read_debt(figures, "general") is False and figures == before
 

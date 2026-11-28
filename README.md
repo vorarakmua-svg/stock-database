@@ -294,7 +294,8 @@ collected (`price_history_snapshots` files the earlier price statistics under th
 (Yahoo failed, `--no-yahoo`, "quote unavailable") keeps the earlier market data, valuation ratios and the metrics
 priced on the market cap (`enterprise_value`, `ev_to_ebitda`, ...), as the database keeps its latest snapshot. A run
 that couldn't read a successor's predecessor's filings only fills the stored periods, here and in
-`financial_history.csv` as in the database.
+`financial_history.csv` as in the database, and a run that read the filer's whole record removes the periods and
+unmapped tags it no longer gives from both files by the database's rule (below, under the database's tables).
 
 ### CSV Summary Fields
 
@@ -340,13 +341,16 @@ python diagnose.py AAPL MSFT GOOGL
 
 ### SEC EDGAR
 
-- Official financial statements (10-K, 10-Q, 20-F, 40-F)
+- Official financial statements (10-K, 10-Q, 20-F, 40-F). A foreign issuer's interim reports (6-K) aren't read, so
+  a filer whose annual reports are 20-Fs or 40-Fs has no quarterly or TTM figures; its run says so (`SEC EDGAR: no
+  quarterly financials for ARM: its annual reports are 20-Fs, a foreign issuer's, whose interim reports (6-K) aren't
+  read, ...`), and the FA tab shows it beside the other SEC notes (BUG-058)
 - Complete XBRL data (all US-GAAP tags)
 - Company submissions and filings
 - The SEC's ticker map (`company_tickers.json`), which gives each ticker its CIK: cached for a week, then fetched
   again (a stale copy stands, with a warning, when the SEC can't be reached); a ticker the cached map lacks has it
   fetched again once a run (BUG-235). Cached submissions carry the version of their shape and are fetched again when
-  an earlier build wrote them (BUG-296)
+  an earlier build wrote them (BUG-296), and such a file then doesn't date the run's SEC read (BUG-371)
 - Insider transactions (Form 4): each filing's XML for the last 3 years, parsed (see
   [SEC ownership](#sec-ownership-insiders-and-gurus))
 - Institutional holdings reports (13F-HR) of 34 gurus, from each filing's full submission text
@@ -411,10 +415,10 @@ five sector-aware models per ticker, each producing a bear/base/bull per-share r
 | Model | Applies to | Basis |
 |---|---|---|
 | **DCF** (two-stage FCF) | general, utility, energy | Median 3-year FCF, growth = the historical CAGR clamped to 0-15% (from the first positive year when the window starts on a loss and at least 4 years remain from it, else 0%; Yahoo's quarterly "earnings growth" is no forecast and takes no part), CAPM discount rate |
-| **DDM** (multi-stage Gordon) | any steady dividend payer | Trailing-12-month dividend (Yahoo's payments); dividend CAGR over up to 10 fiscal years of SEC's dividends per share (the 10-K's declared, else cash-paid, figure, on today's split basis and, across a spin-off, on the basis of Yahoo's payments), with the payments ex-dated in the year where SEC has no figure or one that holds a single payment (read so only where the year before or after it holds two or more regular payments: an annual payer's year holds two when the next ex-date slips into it, BUG-311; a one-off, or a payment under half the median of the payments in those 365 days, such as a small extra beside an annual dividend, isn't regular, BUG-366); a year in which the dividend started or restarted (none paid in the 15 months before) doesn't open the window, and fewer than 4 years measure no CAGR. A company without SEC fiscal years uses calendar years of payments. A one-off payment (over 3× the regular payments on each side of it; the latest payment never is one, since it can be a raise) leaves the trailing-12-month dividend and the CAGR's first and last years, and only its excess when it came in place of a regular payment; a variable dividend that recurs (a payment that large within a quarter of the same date in 2 of the 3 years before, such as PGR's each January) stays. N/A ("dividend history incomplete") where the dividend completeness check finds Yahoo missing payments DDM reads: a gap that runs into the trailing 12 months, or a growth year taken from Yahoo's payments |
+| **DDM** (multi-stage Gordon) | any steady dividend payer | Trailing-12-month dividend (Yahoo's payments); dividend CAGR over up to 10 fiscal years of SEC's dividends per share (the 10-K's declared, else cash-paid, figure, on today's split basis and, across a spin-off, on the basis of Yahoo's payments), with the payments ex-dated in the year where SEC has no figure or one that holds a single payment (read so only where the year before or after it holds two or more regular payments: an annual payer's year holds two when the next ex-date slips into it, BUG-311; a one-off, or a payment under half the median of the payments in those 365 days, such as a small extra beside an annual dividend, isn't regular, BUG-366, unless a payment within 3× of it is ex-dated within a quarter of its anniversary in the year judged (a year after it for the year before, a year before it for the year after), as a semiannual payer's small interim is, BUG-372; an extra paid the year before it too isn't, when the year judged doesn't hold it, BUG-376; and not where the year holds more regular payments than each such side and SEC's figure is at least half that side's regular payments: a slip, the figure the year's, as an annual payer's beside a recurring extra, BUG-378); a year in which the dividend started or restarted (none paid in the 15 months before) doesn't open the window, and fewer than 4 years measure no CAGR. A company without SEC fiscal years uses calendar years of payments. A one-off payment (over 3× the regular payments on each side of it; the latest payment never is one, since it can be a raise) leaves the trailing-12-month dividend and the CAGR's first and last years, and only its excess when it came in place of a regular payment; a variable dividend that recurs (a payment that large within a quarter of the same date in 2 of the 3 years before, such as PGR's each January) stays. N/A ("dividend history incomplete") where the dividend completeness check finds Yahoo missing payments DDM reads: a gap that runs into the trailing 12 months, or a growth year taken from Yahoo's payments |
 | **Graham Number** | any company with positive EPS + book value in its latest fiscal year (N/A if that year lacks either); the bear, on the lowest EPS of 3 FYs, is N/A with a loss year among them | `sqrt(22.5 × EPS × BVPS)` |
 | **Peter Lynch fair value** | general, utility, energy | Growth-rate-as-fair-P/E × EPS |
-| **Historical multiples band** | all sectors (sector-appropriate multiple: P/E, P/B for banks/insurers, P/FFO for REITs) | Company's own 5-year multiples, each on its fiscal-year-end close as traded (spin-off factors undone): bear, base and bull at their 25th percentile, median and 75th percentile (inclusive quartiles), so one year can't set a case |
+| **Historical multiples band** | all sectors (sector-appropriate multiple: P/E, P/B for banks/insurers, P/FFO for REITs) | Company's own 5-year multiples, each on its fiscal-year-end close as traded (spin-off factors undone): bear, base and bull at their 25th percentile, median and 75th percentile (inclusive quartiles), so one year can't set a case; with four years, the second and third values and their midpoint, with three the median alone, so none interpolates toward an extreme year (BUG-301) |
 
 A model that doesn't fit a company's sector or lacks the data it needs (e.g. DCF/Lynch
 for banks and REITs, DDM for non-payers) reports `applicable=false` with a plain-English
@@ -482,12 +486,26 @@ Beside the models, `src/valuation/history.py` keeps each company's **valuation h
 
 How it's built:
 - **No look-ahead.** Each month-end close is paired with the trailing twelve months *known* that month:
-  a quarter 45 days after it ends, a fiscal year on its 10-K's first filing day (from the vintages).
+  a quarter 45 days after it ends, a fiscal year on its 10-K's first filing day (from the vintages), and
+  either by the collection that stored it: by the last weekday on or before its day in New York, as the SEC takes no
+  filing at weekends, so a Sunday's collection puts its new quarter at Friday's bar (BUG-250), but never before the
+  period ends: a year ending on the collection's weekend isn't read (BUG-388). A trailing year holding a quarter whose
+  D&A was spread onto its year's 10-K's basis (`derived:amortization_spread`, below) is known from the filing day of
+  the 10-K that supplies the spread, as the quarter holds a share of an amortization only that 10-K tags: the first of
+  the year's 10-Ks to give the year every D&A figure the spread read, which can be a later one than the year's first
+  (Broadcom's FY2024 amortization, first tagged by its 10-K of 2025-12-18; BUG-395). Before it the month reads the
+  trailing year known before, or none where that has gone stale (BUG-390). `financials_quarterly.source_tags` (JSON,
+  each figure's tag, as the vintages keep theirs) marks such a quarter, and `financials_quarterly.source_filings`
+  (JSON, the filing of each figure the parser names one for: accession, filing day, form) names that 10-K; a quarter
+  stored before the columns has neither until the next collection, and one stored with tags but no filing is dated
+  by its year's first 10-K.
   Quarters from before the listing are left out, and windows are trailing only. The one exception is
   restatement: the quarters are the latest *restated* figures, as SEC's company facts give them, and
   revenue was restated by more than 1% in 8% of the years.
 - **Multiples on totals.** Market cap = the close × the spin-off factors after that day × the quarter's
-  share count, put on the price bars' split basis. Dividing a price by a filed EPS would cross split
+  share count, put on the price bars' split basis. Where Yahoo records a reverse split mixed into a spin-off's
+  factor (DD's 0.4725 of 2019 is its 1:3 times Corteva's 1.4175; HLT, LDOS, MSI, WTW), the split the filings
+  record (below) is taken out of it, and the spin-off's part alone is a spin-off factor (BUG-262). Dividing a price by a filed EPS would cross split
   bases. Zero or negative earnings, book, FCF or EBITDA give no multiple, nor does an enterprise value of zero
   or less (net cash at or above the market cap; the N/A reason names it, BUG-367), and the sector rules apply: no
   P/FCF or EV/EBITDA for banks, and P/FFO in place of P/E for REITs. Each month stores the enterprise value
@@ -505,12 +523,18 @@ How it's built:
 - **Share counts.** A filed count jumps where the filings stopped restating it for a split, so a jump
   within 1.25× of a declared split folds by that split. A jump of 1.5× or more that no split explains
   folds by its own ratio only on a split's marks: EPS of one sign moved against the count at least
-  halfway (in log terms), and revenue didn't move with it as far. A merger's or an exchange offer's
-  jump stays (DUK 2012, Citigroup 2009). The quarter of a listing, whose weighted count blends the
-  private one, takes the public count after it. The fiscal years behind the six models and the quality scores
-  follow the same rules, the EPS-implied count (net income / EPS) having to move with the jump too, and net
-  income to keep its sign and move less than halfway, which PCG's 2020 bankruptcy-exit issuance (a shrinking
-  loss) and KDP's 2018 reverse merger don't (BUG-247; a quarter's net income swings too far for that test).
+  halfway (in log terms), and revenue didn't move with it as far; the EPS-implied count (net income / EPS)
+  moved with the jump; and net income kept its sign and moved less than halfway, which PCG's 2020
+  bankruptcy-exit issuance (a shrinking loss) and KDP's 2018 reverse merger don't (BUG-247). A quarter reads
+  its trailing year's net income for that, as one quarter's swings too far (DD's 52M then 888M across its
+  1:3), and its own for the implied count (BUG-264). A merger's or an exchange offer's jump stays (DUK 2012,
+  Citigroup 2009). The quarter of a listing, whose weighted count blends the private one, takes the public
+  count after it. The fiscal years behind the six models and the quality scores follow the same rules. The
+  splits the filings themselves record count as declared ones: a year's count that a later 10-K restates by
+  a share split's ratio (within 1%), its EPS the other way and its net income held, is a split between the two
+  filings, whatever the years around it earned. Yahoo's history lacks five such reverse splits among the 502,
+  mixed into a spin-off's factor (DD, HLT, LDOS, MSI; WTW's 2.649:1 reads as 3:8), and two outright (EXE's
+  1:200, HWM's 1:3) (BUG-262).
   A fiscal year also knows when its count was last filed, so the declared splits dated between two years'
   filings fold their seam whenever it is nearer their product than 1.0, at any ratio: buybacks take a 3:2
   seam under 1.5 (ODFL, PCAR, RJF, ROL, WRB) and a stock-paid merger takes CNC's 2:1 beyond 1.25× (BUG-245).
@@ -560,7 +584,12 @@ Limitations:
   Q7), without trailing years (SPCX), or without a quote with a price to check our share count against.
 - Yahoo normalizes EBITDA, so our EV/EBITDA can read apart from Yahoo's (MRK, PFE). A quarter whose 10-Q
   long-term debt can't be read has no EV: TMUS's and CAT's 10-Qs tag it only under their own concepts, which
-  the SEC's company facts don't carry (BUG-171).
+  the SEC's company facts don't carry (BUG-171). That holds for a company whose 10-Ks report long-term debt,
+  unless the latest 10-K at or before the quarter (the first, for a quarter before any) reads as without debt,
+  as the quality scores read a year: no debt tagged and no interest paid. Then the quarter is valued with none
+  (AXON's FY2016-21, before its December 2022 notes; Q22). A 10-K with interest but no debt tagged, or with
+  short-term debt or paper but no long-term debt, keeps its quarters without EV: its debt may be unread. A
+  company whose 10-Ks never report long-term debt has its quarters valued as tagged.
 
 ### Quality scores
 
@@ -577,7 +606,8 @@ Inputs:
   years): a year that isn't stored leaves Piotroski and Beneish N/A ("needs fiscal year 2024, which isn't
   stored") and a sign that needs it unfired, never compared with the year stored before it (BUG-198).
 - **Per-share series** (revenue, EPS, EBITDA, FCF and book value per share) on today's split basis. A
-  share-count jump of 1.5× or more folds into it only for a declared share split, on a split's marks (EPS
+  share-count jump of 1.5× or more folds into it only for a declared share split (or one the filings record by
+  restating a year's count, BUG-262), on a split's marks (EPS
   moved against the count, revenue didn't move with it, the count EPS implies moved with it, net income kept
   its sign and moved less than halfway), or when the older year ends before the listing or in its year (a
   pre-listing count leaves out converted preferred). A declared split dated between two years' filings folds
@@ -591,9 +621,9 @@ Inputs:
 - **Debt.** A year with no debt tagged and no interest expense is debt-free, outside banks and insurers (ISRG,
   ANET, PANW, PLTR and VRTX tag none): total debt 0, net debt less its cash and short-term investments, and
   ROIC on equity less cash, by `metrics_annual`'s formulas (it leaves all three empty for them). A year that
-  paid interest with no debt tagged has debt the mapping doesn't read (PGR files its $8.4B under a combined
-  tag), so its debt, net debt and ROIC are unknown, and so are its WACC, earnings yield, cash / debt and debt
-  / revenue (BUG-189, BUG-190). A missing interest figure alone proves nothing: many filers with debt tag
+  paid interest with no debt tagged has debt the mapping doesn't read (AES's, under concepts of its own the SEC's
+  company facts don't carry), so its debt, net debt and ROIC are unknown, and so are its WACC, earnings yield,
+  cash / debt and debt / revenue (BUG-189, BUG-190). A missing interest figure alone proves nothing: many filers with debt tag
   their interest under a name not mapped. `metrics_annual` keeps its figures as filed.
 - **CAGRs** over 3, 5 and 10 years (revenue, EPS and EBITDA per share) or 5 (FCF and book value per share):
   `(last / first) ** (1 / years) - 1`, when both ends are positive and the start year is exactly that many
@@ -641,6 +671,10 @@ history" for momentum), or the zero total the ratio divides by (BUG-193):
   (a log-linear slope of zero or less in either series), is 1 star. Otherwise
   `stars = 1 + 4 × min(R²_revenue, R²_EBITDA)`, the R² of ln(revenue per share) and ln(EBITDA per share)
   against the year, rounded down to the half star. Banks and insurers use EPS where EBITDA is suppressed.
+  A 1-star rating says why, in `na_reasons` as `predictability_note` (the API's `predictability.note`, the
+  STAT tab's note): the series and years at or below zero, the series whose trend falls, or a fit below
+  the 0.125 that earns 1.5 stars. N/A with a year of the ten not stored names it ("FY2021 of the last 10
+  fiscal years not stored"; BUG-192).
 
 **Warning signs**: twenty published rules. Each that fires is stored with its severity and a message stating
 the figure, the value and the threshold; severe signs come first.
@@ -691,12 +725,14 @@ any run re-ranks everyone.
 - The **Magic Formula rank** (Greenblatt) sums the ranks of the earnings yield (EBIT / EV, EV = market cap +
   net debt) and the return on capital (EBIT / (net working capital + net PP&E), net working capital = current
   assets - cash - (current liabilities - short-term debt), counted as 0 when negative: a business its
-  customers fund, as MA's, V's or BKNG's, ties up only its PP&E). It ranks the companies with both, 61 of the
-  94 outside banks, insurers, utilities and REITs; 1 is best, and a tie goes to the higher earnings yield. The
-  STAT tab says why the others have no rank (BUG-191): for those four sectors the sector rule, whatever input a
-  REIT or a utility misses (BUG-353), and for the rest the missing input: 17 file no `PropertyPlantAndEquipmentNet` (UNP, HD and
-  TSLA tag a lease-inclusive PP&E instead; META, GOOGL, LOW and T are among them) and 15 no operating income
-  (JNJ, LLY, MRK, PFE, XOM, CVX, IBM, GE, DE, KLAC and others), gaps in the tag mapping open as BUG-203.
+  customers fund, as MA's, V's or BKNG's, ties up only its PP&E). It ranks the companies with both, 314 of the
+  389 outside banks, insurers, utilities and REITs in the 2026-11-20 data; 1 is best, and a tie goes to the higher
+  earnings yield. The STAT tab says why the others have no rank (BUG-191): for those four sectors the sector rule,
+  whatever input a REIT or a utility misses (BUG-353), and for the rest the missing input: 61 tag no operating
+  income (JNJ, LLY, MRK, PFE, XOM, CVX, IBM, GE, DE, KLAC and others; no tag holds it, so it needs an EBIT
+  definition, BUG-203), 5 no PP&E (GM, GEHC, GEV, ICE, URI), 3 no current assets or liabilities, 3 a debt the
+  mapping doesn't read and 3 no annual financials. PP&E is the net figure, else the line with finance-lease
+  right-of-use assets that UNP, HD, TSLA, META, GOOGL, LOW and T tag instead (BUG-203).
 
 It is computed with the valuations, after a collection, a web job or `python -m src.valuation.backfill`, into
 three tables (columns and queries are in the [USAGE_GUIDE](USAGE_GUIDE.md#quality-scores)):
@@ -883,9 +919,6 @@ Limitations:
 - An intangible the filing doesn't tag stays in tangible book: a filer that tags no intangibles (KO's trademarks) has
   all of them left in, and one that tags only its finite-lived ones has its indefinite-lived ones left in. 23 of the 127
   have a goodwill or intangibles figure missing, counted as 0 and listed in the row's assumptions.
-- Short-term investments some filers tag under names the mapping doesn't read are missing from EPV's cash and the
-  net-net's: NVDA's FY2026 stores none after $34.6B in FY2025, so its EPV and net-net read low (BUG-221). NCAV itself
-  reads current assets and is unaffected.
 - EPV is a no-growth value on a 5-year mean margin, so a company priced for growth reads far under its price: on
   2026-10-24 only VZ traded under its EPV, and AMD, PANW, PLTR and SNDK read under 5% of theirs. A cyclical whose margin
   is far from its 5-year mean reads high or low accordingly.
@@ -1790,8 +1823,8 @@ companies on the **collection list**, each with its reason: `quotes`, `bars` and
   runs ahead of it; BUG-350), so a report filed that day counts; a company never collected with the SEC counts every
   report in its feed. A company without a CIK is counted and skipped, and a feed that fails is that company's error.
   - A company also goes on the list when that latest collection's SEC read was incomplete, as its `collection_runs` row
-    says (`incomplete`): it read no facts of the latest report its submissions listed (its companyfacts lacked them,
-    the SEC's lag, BUG-251, and the filing's own XBRL couldn't be read either, or their request failed), it
+    says (`incomplete`): it read no facts of the latest report its submissions listed, or of one of the three before
+    it (BUG-280) (its companyfacts lacked them, the SEC's lag, BUG-251, and the filing's own XBRL couldn't be read either, or their request failed), it
     couldn't read its predecessor's filings (BUG-279), or its submissions request failed, so it couldn't look for such
     a report (`couldn't check for the SEC's lag: its submissions request failed (...)`, BUG-282). A collection that read the report, and every earlier one its
     companyfacts lacked, from the filings' own XBRL isn't incomplete: its figures are whole. It knows so only
@@ -2133,7 +2166,10 @@ came from.
 Every company is scored by a **sector-aware** data-quality pass
 (`src/validation/quality.py`) that checks required fields, accounting identities
 (Assets = Liabilities + Equity + non-controlling interest, Gross Profit = Revenue −
-COGS), sign conventions, and year-over-year continuity. The result is stored under
+COGS; where the record's figures miss, the lines no canonical field holds count too, read from the run's
+companyfacts as the year's 10-K gives them: temporary equity between liabilities and equity, redeemable
+non-controlling interests and preferred stock (S&P Global's $4.9B, BUG-114), and a cost deducted beside cost of
+revenue (Altria's excise taxes, BUG-115)), sign conventions, and year-over-year continuity. The result is stored under
 `data_quality` (score 0–100 + findings) and surfaced by `python diagnose.py TICKER`.
 
 ### Cross-sector coverage
@@ -2203,14 +2239,15 @@ never alter data):
 
 | Check | Catches | Threshold | Penalty |
 |---|---|---|---|
-| Magnitude outlier | a recurring USD field that spikes then reverts — a one-off filing/tag error (persistent M&A step-changes, and event-driven flows like debt issuance, buybacks, M&A, and impairments, are not flagged) | spike ≥ 100× both adjacent years | −25 |
+| Magnitude outlier | a recurring USD field that spikes then reverts — a one-off filing/tag error (persistent M&A step-changes, and event-driven flows like debt issuance, buybacks, M&A, and impairments, are not flagged, nor a short-term debt spike no larger than the long-term debt of the year before, the year or the year after: maturities coming due, BUG-269) | spike ≥ 100× both adjacent years | −25 |
 | Cash-flow consistency | the cash-flow statement's reported net change != its own sections + FX effect (a continuing-only statement reconciles once the separately-reported `cash_from_discontinued_operations` line is added) | residual > 1% both bases | −10 |
 | Quarterly-sum | discrete quarters that don't sum to the annual figure; event-driven flows (debt issuance/repayment, buybacks, M&A, impairments/restructuring) are excluded, as for the magnitude-outlier check | per-field > 1% | −10 |
 | Ratio bounds | a computed metric outside its plausible range (e.g. >100% gross margin); roe/roic are not flagged when the equity base is negligible or negative (a buyback-depleted denominator makes the ratio meaningless, not wrong) | impossibility bounds | −3 |
-| Dividend completeness | Yahoo's dividend history missing payments that SEC filings declare: a gap in the payment schedule that begins near the fiscal year, and Yahoo's payments for that year well short of the SEC-declared dividends per share, or of the year before's when the year's 10-K gives none and Yahoo shows a payment in it (a December declaration paid in January, a suspension SEC confirms, a first dividend paid after the year ends, and years before a split are not flagged); the valuation reruns it on the stored payments, and DDM is N/A where it flags payments DDM reads | interval > 1.7× the usual one and payments < 80% of declared | −10 |
+| Dividend completeness | Yahoo's dividend history missing payments that SEC filings declare: a gap in the payment schedule that begins near the fiscal year (the schedule ends on the collection's day, the valuation's snapshot day when it reruns the check, so a missing payment with none after it is a gap from the last one; BUG-025), and Yahoo's payments for that year well short of the SEC-declared dividends per share, or of the year before's when the year's 10-K gives none and Yahoo shows a payment in it (a December declaration paid in January, a suspension SEC confirms, a first dividend paid after the year ends, and years before a split are not flagged); the valuation reruns it on the stored payments, and DDM is N/A where it flags payments DDM reads | interval > 1.7× the usual one (the median of the 8 intervals before it: a schedule changes, BUG-025) and payments < 80% of declared | −10 |
 
 Thresholds are deliberately wide (a $1M materiality floor; the most recent 5 fiscal years are
-scored), so clean filings keep a score of 100, unless the dividend-completeness check, which reads Yahoo's dividend
+scored, from the record's first year with a figure for the year: a year before it is known only from the
+earliest 10-K's opening balances, its equity or cash alone, BUG-112), so clean filings keep a score of 100, unless the dividend-completeness check, which reads Yahoo's dividend
 history, flags a year (-10 even for a company with clean filings). Findings appear in `data_quality.findings` and,
 for medium+ severity, in `warnings`.
 
@@ -2225,7 +2262,9 @@ period therefore carries two labels:
   year ending 2023-01-01 is FY2022). January-end retailers (e.g. WMT, Jan 31) keep the end
   year. SEC's `fy` field is deliberately not used — filers mis-stamp it.
   A fiscal year holds one period's figures: the period most of its income and cash-flow
-  figures cover (the later on a tie; with none, its latest balance-sheet date). After a
+  figures cover (the later on a tie; with none, its latest balance-sheet date), and its
+  `period_end` is the end those figures share, not a later filing's figure dated a few days off
+  (LRCX's FY2012 ends 2012-06-24, though its 10-K of 2015 dates that year's cash 2012-06-30). After a
   reverse merger that is the period the later reports present (KDP's 2017 is Keurig's year
   to 2017-09-30, not Dr Pepper Snapple's calendar 2017). Figures of a period ending more
   than a week from it are another period's and aren't read for it: after a change of
@@ -2238,7 +2277,10 @@ period therefore carries two labels:
   a fiscal year whose end (the end most of its income and cash-flow figures share, else its
   latest balance-sheet date) is after the latest day a fact was filed is dropped, so a 10-K
   that tags a figure of the year ahead opens no year with it until that figure's own date has
-  passed (Bank of America's FY2010 10-K, filed 2011-02-25, tags a $0.01 dividend for all of 2011).
+  passed. An income or cash-flow figure filed before its period ends is never read, for the
+  year or its quarters (BUG-370): Bank of America's FY2010 10-K, filed 2011-02-25, tags a $0.01
+  dividend for all of 2011 and Fastenal's (2011-02-09) $0.50, each under the declared tag that
+  outranked the year's own 10-K figure ($0.04, $0.65, cash paid) once 2011 was over.
   A figure dated inside the year ahead opens that year once its date passes, before the year
   ends (Eli Lilly's FY2013 10-K tags short-term borrowings at 2014-03-31, so FY2014 opens on
   2014-04-28, its first filing after that date, with that figure alone; BUG-113 open). A filing's view of a year (a vintage)
@@ -2255,6 +2297,14 @@ period therefore carries two labels:
   frame. Where no fact carries one, SEC's own rule gives it: the calendar year holding the
   end less 180 days, the quarter holding the end less 45 days (Seagate's year to 2019-06-28
   is 2018, a quarter to 2024-10-05 is Q3), which matches every frame in the cached filings.
+  Two adjacent fiscal years can therefore share a `calendar_year`, and a calendar year can have no row, because
+  SEC's frames label them so: by SEC's rule a 52/53-week year ending a day or two before June 30 falls in the
+  calendar year before its end, while one ending on or after June 30 falls in its end's own, and SEC frames each
+  concept's fact once per calendar year, so both years carry the same frame on different concepts (Lam Research's
+  FY2013, to 2013-06-30, and FY2014, to 2014-06-29, are both 2013, and none is 2012). The filers at that June
+  52/53-week boundary are SYY, LRCX, TPR, WDC, STX, LITE, LHX and SNDK; a change of fiscal year-end does the same
+  (DECK, TTWO, WDAY). The labels are SEC's and are kept (Q21). No valuation reads `calendar_year`; a query that
+  aligns companies on it sees such a filer with two rows in one calendar year and none in another.
 
 **Always compare across companies with `calendar_year`, not `fiscal_year`.**
 
@@ -2269,13 +2319,24 @@ numbers SEC filings report:
   cumulative ladder anchored at the fiscal-year start (`discrete[k] = YTD[k] − YTD[k-1]`),
   which recovers every quarter's standalone performance — including **Q4**, which is never
   filed as a 10-Q (`Q4 = annual − 9-month YTD`). Until a year's second 10-Q, its first
-  quarter is its own 3-month figure. Derived values are tagged in `_source_tags`.
+  quarter is its own 3-month figure, the year being the one after a year a 10-K reports (a
+  10-Q's trailing twelve months are none, BUG-146). A quarter's EPS and weighted-average share counts are
+  its own 3-month figures where a filing tags them: those aren't differenced (nine months
+  less six of rounded EPS gave Citigroup's Q3 2026 2.86 for its 10-Q's 2.85, BUG-335), so
+  only Q4's are derived. An own count makes a quarter only one quarter on from its ladder's
+  last rung, else fills one the filings hold: a 10-K re-dating a first quarter six days after
+  its 10-Q's (Analog Devices' 2011-02-04) makes none (BUG-096). Derived values are tagged in `_source_tags`.
 - **One split basis per year.** A stock split restates only the filings made after it,
   so a year's figures can come from both sides of one. Each quarter's per-share figures
   and share counts are put on the basis of its year's annual figures, as
   `financials_annual` has them, before Q4 is derived. The parser reads the splits from
-  the filings themselves: counts that two filings give for the same period at a split's
-  ratio. Years that no filing after a split reports keep their older basis, as in
+  the filings themselves: figures that two filings give for the same period at a split's
+  ratio, a count among them (Alphabet's 20:1 of 2022 restated one count and seven of its
+  EPS, BUG-105). A figure a later filing repeats under the same tag is on the basis of the
+  filing that first gave it (Intuitive Surgical's FY2021 10-K tags its 2020 quarters' EPS as
+  first filed, before its 3:1 split), unless that filing falls between the split's last filing
+  on the old basis and its first on the new, or the split moves the figure by half a cent or
+  less. Years that no filing after a split reports keep their older basis, as in
   `financials_annual`.
 - **One share-count scale per year.** A later filing can tag a year's share count in
   thousands or millions where its other figures are in units. Before Q4 is derived,
@@ -2283,13 +2344,33 @@ numbers SEC filings report:
   another of the year's counts agrees; otherwise it follows the year's checked counts.
   A count at or below zero, filed or derived, is left empty.
 - **Share counts no EPS checks.** Across periods, a count goes onto the scale its net
-  income and EPS imply; the shares outstanding follow a weighted count only where an EPS
-  checked it. A filed count no EPS checks takes the scale of its own field's neighbouring
+  income and EPS imply, unless they imply fewer than 100,000 shares: then the EPS is the
+  mis-scaled figure and decides nothing (DexCom's 10-Qs tag Q1 2012's EPS as -210,000), and a
+  count its own EPS confirms as filed keeps its scale (BUG-391); the shares outstanding follow a weighted count only where an EPS
+  checked it, and so does the period's other weighted count, no EPS checking it, where that
+  one's own EPS checked it (ConocoPhillips' FY2018 counts, both in thousands, with a basic EPS
+  alone, BUG-369). A filed count no EPS checks takes the scale of its own field's neighbouring
   periods, where two or more agree within a factor of two and it is a power of 1000 from
   them, unless another count of its own period is on its scale. Where a later
   filing tags a year's weighted count a power of 1000 below the one earlier filings agree
   on, the year's shares outstanding can decide: within 10% of the earlier figure, it is
   kept (Hershey's FY2011 10-K tags FY2009-11's counts in thousands).
+- **One D&A basis per year.** Where a year's 10-K gives its D&A beside a smaller figure under the tag
+  its 10-Qs' D&A is read from (or beside its depreciation, where the 10-Qs' figure is theirs), the
+  10-Qs leave out an amortization the 10-K holds, and `Q4 = annual − 9-month YTD` put all of it in
+  the fourth quarter (Broadcom's FY2024: $9.42B beside quarters of $0.14B; BUG-275). Each of Q1-Q3
+  then takes its 10-Q's figure on that basis plus the year's difference by days, and Q4 the rest, so
+  the four add up to the year; they are estimates, tagged `derived:amortization_spread`. Not where
+  the fourth quarter on the 10-Qs' basis would fall below the first three's mean by more than half
+  the difference (the 10-Qs held it after all). The reverse, a year read as the 10-K's depreciation
+  alone beside 10-Qs whose D&A holds more than their own depreciation (Alphabet's 2025), is left as
+  it is: its Q4 is the year less nine months on the 10-Qs' fuller basis. A year whose 10-K isn't filed yet is read as
+  the last 10-K was: after a year spread so, each of its quarters takes its 10-Q's figure on that
+  year's basis plus the last 10-K's difference a day (`derived:amortization_carried`), so the latest
+  trailing year stays on the 10-K's basis; a 10-Q filed before that 10-K, or after a year on one
+  basis, keeps its figures as tagged. The valuation history reads a trailing year over a spread quarter only from the
+  filing day of the 10-K that supplies the spread (each spread quarter's `_source_filings`), the first of the year's
+  10-Ks to give the year every D&A figure the spread read (BUG-390, BUG-395).
 - **Outflows by size.** Capex, buybacks, debt repaid and dividends paid are stored as
   positive amounts, and filers tag them with either sign, sometimes both within one year.
   Their quarters difference the year-to-date totals' sizes, and a quarter whose total
@@ -2301,6 +2382,15 @@ numbers SEC filings report:
   year-to-date totals as they are, so a year's quarters add up to its figure; but a total
   of payments that falls by half or more is two bases (a restated year beside nine months
   as first filed), and that quarter is left empty.
+- **Dividends per share as filed.** `dividends_per_share` is the 10-K's declared figure, else its
+  cash-paid one, as the filer tagged it, and some filers tag a quarter's rate or a stray figure in a
+  full-year context: Visa's FY2019-26, Constellation's FY2023-25, Booking's FY2024-25, Applied
+  Materials' FY2014-17 and NVIDIA's FY2016 hold one quarter's dividend, Prologis' declared 0.01 and 0.03
+  (FY2024-25) sit beside 3.84 and 4.04 paid. The record keeps the filers' figures (BUG-020): where the two
+  tags differ more than 2x (63 years at 26 filers) neither is right throughout. The figure isn't only
+  exported: DDM's growth years read it, and its one-payment gate takes Yahoo's payments for a year whose
+  figure holds one of them (BUG-311; 47 such years at 15 filers on the data of 2026-11-26), and the dividend
+  completeness check measures Yahoo's payments against it, where a figure too low can only hide a finding.
 - **Long-term debt beside current debt.** Long-term debt is the balance sheet's noncurrent
   figure where the filing's short-term debt holds the current maturities (Boeing's FY2025:
   $45.6B beside $8.5B of current debt, not its $53.8B total, which counted them twice), and
@@ -2308,9 +2398,32 @@ numbers SEC filings report:
   line tagged under a concept long-term debt doesn't otherwise read stands in for the total
   where the two lines make it up (Corpay's FY2022: $4.7B of notes beside $2.3B of current
   maturities, total debt $7.0B, not $9.4B).
+- **Totals with current debt.** A filer that tags no long-term debt figure the field reads before has
+  its total with the current maturities read (General Motors': $131.6B for FY2025) or its own total of all
+  its debt (Progressive's $6.9B). On a date where a current figure that total holds is tagged beside it,
+  which would count it twice, the total is read less the current part the same filing tags there: the
+  maturities of the total with them (Kenvue's FY2024: $7.8B less $0.75B, $7.1B), the short-term debt and the
+  paper no short-term figure holds of the filer's own (Travelers' FY2025: $9.3B less $0.3B of current debt,
+  $9.0B), so total debt is the filer's own total. Where that filing tags no such part (a DebtCurrent alone
+  beside the total with maturities, as it can hold borrowings too) the total stays unread there.
+  JPMorgan's long-term debt with its maturities is read beside its short-term borrowings, a line it
+  doesn't hold. A 10-Q that tags neither (General Motors' since 2021) leaves its quarter without long-term
+  debt, so the valuation history has no EV there. The as-of snapshots judge it by the filings known on
+  each day: a total read whole when filed stays the year's until a later report tags current debt beside it.
+- **Short-term investments.** After the short-term investments and current marketable securities, a
+  filer's current securities are read under the names other filers tag them (available-for-sale or
+  held-to-maturity debt securities, other short-term investments: Oracle's, Pfizer's, NVIDIA's FY2026),
+  and last its marketable securities in total, which can hold noncurrent ones. A bank's (its sector
+  class, as the valuation reads it: a finance SIC with deposits; the stored record's when the
+  submissions request fails) total is its whole securities book (Bank of America's $925.6B), not
+  short-term investments, so it isn't read for banks.
 - **Long-term debt's own line.** A long-term debt figure a filing tags on a day its balance
   sheet doesn't show is a note's (an issue, a maturity) and isn't the year's (Phillips 66's
-  FY2015 10-K tags $1.1B at 2015-03-02 beside its year end's $8.8B). On a balance-sheet date a
+  FY2015 10-K tags $1.1B at 2015-03-02 beside its year end's $8.8B). A filing's balance-sheet
+  dates are those of its balance sheet's total, and of its total assets only where it tags no
+  such total or days from it (an adoption day's opening balance sheet): a note's total assets at
+  an earlier year end don't make it one (Church & Dwight's FY2023 10-K tags its 2023 debt,
+  $2.2B, at 2021-12-31, whose balance sheet shows $1.6B). On a balance-sheet date a
   figure under half of another of its kind (two noncurrent figures, or two totals) under a tag
   the field reads after it is a part of that line, which is read instead: PulteGroup's 10-Ks
   tag $31-77M as LongTermDebt beside notes payable of $1.6-2.0B. A later filing that repeats the
@@ -2322,23 +2435,36 @@ numbers SEC filings report:
   LongTermNotesPayable ($117.7B at 2026-08-31, where the quarter had none). Beside the quarter's
   short-term debt only a line that holds no current maturities is read: a noncurrent concept, or one
   the 10-K shows without them (Chevron's: $25.6B at 2025-03-31, so total debt $29.7B, not its
-  $4.1B of short-term debt alone). A line that may hold them stays unread (Kenvue's 2024 quarters),
+  $4.1B of short-term debt alone). A line that may hold them stays unread (Kenvue's 2024 10-Qs' total,
+  which is read less the maturities instead: see the totals with current debt above),
   and so does one under the filer's own concept, which the SEC's company facts don't carry
-  (T-Mobile's since 2024, Caterpillar's): such a quarter has no long-term debt.
+  (T-Mobile's since 2024, Caterpillar's): such a quarter has no long-term debt. Short-term debt
+  is read the same way where a quarter has none: a 10-Q's current debt line under a concept the
+  field doesn't map, where its year-end column shows the figure an annual report filed there as
+  short-term debt (Oracle's 10-Qs tag their current notes only as NotesPayableCurrent: $7.6B at
+  2026-08-31, where the quarter had none); not beside commercial paper, nor beside a total with
+  current debt read as long-term debt, which can hold the line, nor beside a long-term debt or
+  notes payable total the 10-Q shows holding it (Amgen's 10-Q for 2014-03-31: $32.0B of debt, its
+  $29.5B of notes and the $2.5B due within a year, which aren't added again).
 - **Short-term debt and commercial paper.** Short-term debt is the balance sheet's debt due
   within a year. Where a filing shows its short-term borrowings and the current maturities of
   long-term debt apart, with no total of them, it is the two together (Verizon's FY2023: $13.0B
   of maturities beside no borrowings, total debt $150.7B, not $137.7B), unless the borrowings
   already hold the maturities (IBM's short-term debt is its maturities and its loans and paper)
   or the current liabilities couldn't hold both lines beside the payables, accruals and income
-  taxes (Cooper's FY2016: $1.33B, not $1.54B; PepsiCo's quarters). The latest filing that shows
+  taxes (Cooper's FY2016: $1.33B, not $1.54B; PepsiCo's quarters), where they hold the borrowings
+  beside those lines (else those lines overlap and tell nothing). The latest filing that shows
   the borrowings and the maturities on a date decides it (Howmet's FY2020 10-K shows FY2019's
   borrowings as its maturities: $5.94B, not $6.94B), and a quarter its own figures leave open
-  takes the word of its latest annual report only. A filing's vintage decides its own lines, as
-  known then. Maturities tagged with the finance leases are read too (Union Pacific's, Home
+  takes the word of the annual reports on its latest year end only, an adoption day's opening
+  balance sheet days after it being the same year end (Bloom Energy's 2020-01-01). A filing's
+  vintage decides its own lines, as known then. Maturities tagged with the finance leases are read too (Union Pacific's, Home
   Depot's). Where a filing's debt due within a year is the figure before a refinancing moved
   part of it to long-term debt, the short-term borrowings its balance sheet shows stand
   instead (Chevron's FY2024: $4.4B, not $12.7B, whose other $8.25B its long-term debt holds).
+  Where a filing's debt due within a year is its noncurrent long-term debt and its borrowings or
+  maturities together, to the rounding, it is its total debt and the borrowings or maturities stand
+  instead (Hartford's FY2013 10-K: $0.32B for 2012, not $7.13B; Cisco's 10-Q for January 2011).
   Commercial paper is the paper outside the short-term figure (a line of its own, like Apple's)
   and 0 where the short-term figure holds it, so total debt counts it once (P&G's FY2026: $34.1B,
   not $39.0B); it is read only on balance-sheet dates. Each record judges it by the short-term
@@ -2349,6 +2475,16 @@ numbers SEC filings report:
   FY2020 10-K shows it inside its borrowings). A vintage that shows no short-term figure on the
   date reads its paper beside the latest earlier annual report's (Qualcomm's FY2016 10-K tags as
   paper the line its FY2015 10-K tags as borrowings).
+- **Non-controlling interests.** `minority_interest` is the MinorityInterest a filing tags; where an annual
+  report tags none on a balance-sheet date, it is the report's equity including the interests less its parent's
+  equity, where its balance sheet closes with them (liabilities, that equity and its temporary equity make the
+  total within 1%, nearer than with the parent's equity alone): Blackstone tags its interests in two parts ($6.2B
+  and $4.3B at 2024-12-31), Boston Properties, Extra Space and Mid-America in theirs (BUG-063). The equity
+  including the interests is often tagged for another figure (Agilent's -$226M beside its $6.7B equity), and a
+  report whose balance sheet doesn't close with it, or tags no liabilities, gets none; a 10-Q's equities make none
+  (Teledyne's 2016 10-Qs tag another figure as the parent's equity), so a quarter has the figure on a year end
+  only, where the 10-K gives it. Redeemable interests are temporary equity, in neither equity, and no field holds
+  them.
 - **Cash.** Cash is the balance sheet's cash and cash equivalents. Where a filing tags it only
   with the total that includes restricted cash, that total is read (GE's FY2025: $12.4B), on
   balance-sheet dates only, and before a note's cash equivalents, a part of the cash line (P&G's
@@ -2358,6 +2494,10 @@ numbers SEC filings report:
   filing's Cash gives way to that total too where the filing, or an earlier one, shows the total
   to hold no restricted cash: it agrees with a figure for cash and cash equivalents above Cash on
   one of the filing's dates (Target's FY2025: $4.76B, not a note's $0.28B).
+  A card issuer's or bank's line with its federal funds sold is its cash line, read first, on
+  balance-sheet dates only (American Express's FY2017: $32.93B, not the $33.26B with restricted
+  cash, and its FY2009-16 lines for a note's parts; Capital One's FY2025: $57.43B, not $62.09B,
+  and its FY2008-15 cash, empty before).
 - **Depreciation and amortization.** D&A is the filing's total. Where a filing shows its
   depreciation and its amortization of intangibles on lines of their own, with no total that
   can hold them, it is the two together (AbbVie's FY2025: $8.1B, not its $0.8B of depreciation;
@@ -2384,8 +2524,17 @@ numbers SEC filings report:
   to more than the line. The result enters under the line's tag, so a later filing's figure
   stands over an earlier one's. Only filings filed by then are read, so each vintage is as known
   then; a year's 10-Qs are read so only where its latest 10-K is, and a year with no 10-K yet
-  as the last 10-K before it was, so its quarters and the trailing year stay on one basis. No other amortization (capitalized software, finance leases) is added: it lies
-  inside the depreciation at one filer and apart at another. A total above the amortization
+  as the last 10-K before it was, so its quarters and the trailing year stay on one basis. No other amortization (capitalized software, finance leases) is added on its own: it lies
+  inside the depreciation at one filer and apart at another. With no total, a filing's
+  OtherDepreciationAndAmortization is its D&A where it is at least the depreciation and the
+  amortization of intangibles together (Workday's FY2026: $347M, not its $237M of depreciation;
+  MetLife's FY2025: $753M), and its amortization line, added to the depreciation, where it is
+  below the depreciation and at least the intangibles' amortization (Flex's FY2026: $563M, not
+  $525M); between the two it is left unread. A filing that tags no depreciation reads it as the
+  D&A only where a filing of the filer, by then, showed it so (Veeva's FY2025: $39.4M, empty
+  before). Amortization of deferred charges the filings show to be the intangibles' and the
+  capitalized software's together is the amortization line too (Mettler-Toledo's FY2025:
+  $125.6M, not $79.6M). A total above the amortization
   that nothing in the filings contradicts is read as the D&A, though it can be the depreciation
   line: GE's FY2025 total is $0.86B beside $0.36B of amortization, which Yahoo reads as $1.22B
   together. A total the filer's filings show to be a part of its D&A is set aside from then on:
@@ -2400,7 +2549,9 @@ numbers SEC filings report:
 - **TTM (`financials_ttm`)** — trailing-twelve-month series (rolling 4 discrete quarters
   for flows, their average for weighted share counts, balance sheet as-of, and per-share
   figures and counts on the latest quarter's split basis) for seasonality-free, up-to-date
-  comparison.
+  comparison. Its calendar labels are its latest quarter's: `calendar_year`,
+  `calendar_quarter` and, in the JSON export, that quarter's SEC `frame` (`CY2026Q3`; SEC
+  frames no trailing year, and the tables store no frame for quarters or TTM rows; BUG-343).
 
 ```sql
 -- Discrete quarterly revenue trend for one company (incl. derived Q4):
@@ -2426,7 +2577,11 @@ pipeline is designed so this never breaks ingestion or silently loses data:
   and sales tags). Of two figures for a year 25% or more apart, one the year's income
   statement doesn't add up to (operating income plus operating expenses, or cost of revenue
   plus gross profit) gives way to one it does; where it adds up to neither, a zero gives way
-  to a positive figure, and one below the year's cost of revenue to one that isn't. Revenue
+  to a positive figure, and one below the year's cost of revenue to one that isn't. Whatever
+  the gap, a figure more than 0.5% below another revenue figure its own filing tags for the
+  period, one that filing's cost of revenue plus gross profit (or operating income plus
+  operating expenses) add up to, is a part of the revenue and isn't read (NTAP's `Revenues`
+  of $5.66B for FY2024 beside its $6.27B). Revenue
   including excise taxes only fills a year with no other figure. A revenue figure under 0.8
   of the net interest income plus the noninterest income its own filing tags for the period
   is a part of a bank's revenue (the contract revenue of some of its fees) and isn't read:
@@ -2509,8 +2664,15 @@ columns (P/E, PEG, price/book, debt/equity (Yahoo's, a percent), short interest,
 moving averages, …) — see `SNAPSHOT_SCREEN_COLUMNS` in `src/webapp/screener.py`
 for the subset exposed to the screener. All writes are idempotent upserts, so
 re-runs update in place: a ticker's run that parses its annual record rewrites every period it
-gives, so a figure the current rules leave empty is cleared, while periods it doesn't give and a
-filer with no 10-K yet (a new registrant) keep what's stored. A ticker SEC now maps to a
+gives, so a figure the current rules leave empty is cleared. When it read the filer's whole record
+(no report its companyfacts lacked, no unread predecessor, its submissions read, no SEC error) it also
+removes the ticker's years (with their `metrics_annual`), quarters, trailing years and unmapped tags
+its parse no longer gives, as it replaces the as-of snapshots and vintages; a `--years` run, only
+from the earliest period of each it gives on (the JSON file and `financial_history.csv` remove
+them by the same rule). A run that read part of the record and a filer with no 10-K yet (a new
+registrant) keep what's stored, and so does a table whose building step raised in the run (the
+quarters' cleaning, with the trailing years, or the metrics: the run's warning names it); a year
+whose metrics couldn't be computed keeps its stored ones. A ticker SEC now maps to a
 successor formed to take a registrant's place reads the predecessor's filings too
 (`sec_handler.PREDECESSOR_CIKS`), up to the successor's first report: XOM is ExxonMobil Holdings
 Corp's 10-Qs with Exxon Mobil Corp's history, BLK BlackRock, Inc.'s reports since 2024 with the old
@@ -2524,7 +2686,12 @@ submissions list (a 10-K, 10-Q, 20-F or 40-F as filed, with XBRL: an amendment o
 looked for) reads that report, and each report before it back to the latest the companyfacts carry
 (four at most; a run that reaches no report they carry within those, or within the reports its submissions
 list, reads them but is stored as incomplete, its warning saying `it found no earlier report they carry, so
-reports before those may be missing too; the refresh collects ... again`, BUG-337), from the filing's own XBRL instance: EDGAR's extracted instance of an inline filing
+reports before those may be missing too; the refresh collects ... again`, BUG-337), from the filing's own XBRL instance; so is a report among the newest four that the companyfacts lack
+though they carry a later one (BUG-280: on 2026-11-20 they carried CLX's 10-Q of 2026-11-02 but nothing of its 10-K
+of 2026-08-07, so FY2026 was never stored; URI's, DOW's, EIX's and ED's 10-Qs of July and CAH's of April were lacked
+so too), the run named by it, and stored as incomplete unless the gap ends at a report they carry; the warning
+then says `..., though they carry its 10-Q filed ..., so this run lacks its figures` where its XBRL can't be read.
+The instance read: EDGAR's extracted instance of an inline filing
 (`<primary document>_htm.xml`, one more rate-limited request per report), else the instance its
 index names (two). Its facts are read as the companyfacts give a filing's (`parsers/xbrl_instance.py`:
 the non-dimensional numeric facts of us-gaap, ifrs-full, dei, srt and invest; values as filed, at
@@ -2567,12 +2734,17 @@ reads of the SEC as tries at a gap (BUG-232, BUG-281).
 `dividend_events` keeps each payment as Yahoo served it,
 split-adjusted as of `served_on`: the collection's day on Yahoo's calendar, its last
 daily bar or the latest split Yahoo listed, whichever is later (the collector's own date
-can run a day ahead of New York's). A saved quote refresh stores them too, by the same
-rule for a run without bars: the latest split Yahoo lists in the refresh's chart, else the day
-before the refresh's own (BUG-160, BUG-258). That chart reaches a week before the earliest of the
+can run a day ahead of New York's). A run without bars (a collection whose bar request failed, a
+saved quote refresh, which stores them too: BUG-160, BUG-258) takes the latest split Yahoo lists
+or the day before New York's at the run, whichever is later (BUG-131, BUG-307). The refresh's chart reaches a week before the earliest of the
 stored price's day, the last collection with Yahoo and the latest payment stored (a month's chart
 for a company collected lately), and over the whole history only for a ticker with none of them
-(BUG-108). The valuation takes each payment to its price's
+(BUG-108). Yahoo serves some payments twice, the same amount ex-dated a few days apart (KO's and
+PGR's 2001-09-10 and 2001-09-12, NSC's 2015-04-29 and 2015-05-06), and the table keeps both (its key is the
+ex-date); every reader takes a payment of the same amount as one ex-dated up to 7 days before it as that
+payment (BUG-154): the valuation's inputs (DDM, the completeness check), the valuation history, the DVD tab, the
+dividends API and its CSV. Undoing Yahoo's dividend adjustment of old bars (BUG-075) still reads every stored
+payment: it undoes an adjustment Yahoo made with the payments it served. The valuation takes each payment to its price's
 split basis by the splits in between, so a run whose dividend request failed can still
 store a split. A request fails however yfinance reports it: yfinance 1.0 answers a chart request
 that failed (no timezone found, an error or empty answer) with an empty history rather than an
@@ -2588,8 +2760,12 @@ for the year are all of another period, such as a recast after a change of fisca
 a year not over on its filing day, has none (see "Fiscal vs calendar year"). A view is read from
 the facts filed on or before its filing day, the as-of view's gate, so its set-asides read no
 later filing (BUG-120), and its share counts take a scale only from the year's views filed by
-then: a count no view filed by then checks stays as filed (ConocoPhillips' FY2018-20 diluted
-counts in thousands). A run that builds the as-of snapshots replaces the ticker's vintages with
+then: a count its net income over EPS misses by preferred dividends or a rounded EPS takes the
+scale that puts it within a factor of two of that figure (Northern Trust's FY2009 counts in its
+2011 10-K, BUG-339), a count nothing checks stays as filed (Hershey's FY2009-11 in its 2012
+10-K), and a weighted count no EPS checks follows the view's other one where
+its EPS checks that one (ConocoPhillips' FY2018-20 diluted counts, tagged in thousands,
+BUG-369). A run that builds the as-of snapshots replaces the ticker's vintages with
 its own (a full run all, a `years_back` run those years), so a view an older parse made doesn't
 stay. The as-of explorer's side-by-side table and the valuation's first-filed dates (a year's
 earliest `filed_date`) read them; the as-of view doesn't. Vintages are SQLite-only (not in the
@@ -2796,7 +2972,7 @@ The server binds to `127.0.0.1` by default (localhost only).
 - **Cross-company screener** — filter by any fundamental metric (ROIC, net margin, debt/EBITDA, …) *or* market/valuation column (P/E, dividend yield, PEG, short interest, …) *or* the valuation layer's Upside % / verdict *or* the quality scores (Piotroski F, Altman Z, the ranks and composite, …, with five preset screens) *or* the other valuation indicators (the reverse DCF's implied growth, the upsides to the EPV, the median P/S value and the tangible Graham number, price / net-net working capital) *or* the insiders' open-market trades and the gurus' holdings (`ins_*`, `gurus_holding`, `gurus_buying`) *or* the SEC's industry (a SIC prefix filter) and the ranks within it (`ind_*`), sort, paginate, compare selected companies side-by-side, and download results as CSV.
 - **Screener units** — a value typed in the filter box is in the unit the field is shown in: a percent for every field shown as a % (`insider_percent`, `short_percent_of_float`, `roic`, the margins, the upsides, the percentiles, … stored as fractions, so *Insider % > 5* is `insider_percent_gt=0.05`) and for Debt / equity (%), which is Yahoo's percent as stored (100 is 1x); a plain number for the rest. The script converts when a filter is added and shows a chip in the typed unit; the URL (`/screener?insider_percent_gt=0.05`), the saved screens (browser storage), the presets and `GET /api/screen` stay in the stored unit, so none of them changes meaning.
 - **Point-in-time (as-of) explorer** — look up what financials and ratios looked like as of any historical date (before later restatements), and browse vintage side-by-side tables.
-- **On-demand quote refresh** — re-fetch a single ticker's live price/market snapshot from the workstation without running a full collection (see `STOCK_WEB_ALLOW_QUOTE_REFRESH` below). After a stock split the stored valuations don't reflect (one dated after the stored price, as after a collection whose Yahoo quote failed, or one not yet stored since the ticker's last collection with Yahoo), the refresh isn't saved, because those valuations are on the pre-split basis; its status asks for a full collection of the ticker instead. Nor is a refresh whose split history Yahoo didn't serve (yfinance's empty answer to a failed request): it can't tell a split, so its status says so (BUG-107). A split here is a share split (a simple ratio such as 2:1, 5:4 or 1:10) or any price factor of 3:2 or more. The stock dividends and smaller spin-off factors Yahoo also lists don't stop a refresh: it stores them with the price and values the ticker again, so its DDM and multiples band move onto the new price's basis, as a full collection would put them. Every saved refresh also stores Yahoo's dividend payments, from the request that serves its split history (Yahoo's chart since the last collection, not the whole daily history, BUG-108), as a collection stores them, so a valuation after it counts DDM's trailing year, which ends on the refresh's day, on the payments a full collection would have (BUG-160). A saved refresh recomputes the snapshot's enterprise value, EV/EBITDA, EV/FCF and FCF yield as a full collection does (its new market cap with the latest year's net debt, EBITDA and FCF), so the columns keep one definition; Yahoo's own enterprise value stays in the JSON's `valuation` section.
+- **On-demand quote refresh** — re-fetch a single ticker's live price/market snapshot from the workstation without running a full collection (see `STOCK_WEB_ALLOW_QUOTE_REFRESH` below). After a stock split the stored valuations don't reflect (one dated after the stored price's day in New York, where splits are dated, as after a collection whose Yahoo quote failed, or one not yet stored since the ticker's last collection with Yahoo), the refresh isn't saved, because those valuations are on the pre-split basis; its status asks for a full collection of the ticker instead. Nor is a refresh whose split history Yahoo didn't serve (yfinance's empty answer to a failed request): it can't tell a split, so its status says so (BUG-107). A split here is a share split (a simple ratio such as 2:1, 5:4 or 1:10) or any price factor of 3:2 or more. The stock dividends and smaller spin-off factors Yahoo also lists don't stop a refresh: it stores them with the price and values the ticker again, so its DDM and multiples band move onto the new price's basis, as a full collection would put them. Every saved refresh also stores Yahoo's dividend payments, from the request that serves its split history (Yahoo's chart since the last collection, not the whole daily history, BUG-108), as a collection stores them, so a valuation after it counts DDM's trailing year, which ends on the refresh's day, on the payments a full collection would have (BUG-160). A saved refresh recomputes the snapshot's enterprise value, EV/EBITDA, EV/FCF and FCF yield as a full collection does (its new market cap with the latest year's net debt, EBITDA and FCF), so the columns keep one definition; Yahoo's own enterprise value stays in the JSON's `valuation` section.
 - **CSV export** — download annual financials, annual metrics, or screener results as CSV from any company page or screener view.
 
 ### Terminal command bar

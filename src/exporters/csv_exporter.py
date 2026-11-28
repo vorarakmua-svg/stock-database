@@ -16,6 +16,7 @@ from ..models.stock_data import (
     fill,
     got_price,
 )
+from .record_scope import absent
 
 
 def _year(value: Any) -> Optional[int]:
@@ -225,7 +226,9 @@ class CSVExporter:
 
         Creates a time-series CSV with annual financials. Like the JSON merge,
         a ticker-year in ``data`` replaces the same ticker-year; all other rows
-        (other tickers, older years) are kept. A run that couldn't read its
+        (other tickers, older years) are kept, except a year a run that speaks
+        for the ticker's record no longer gives, which goes as it goes from the
+        database (``record_scope.absent``, BUG-380). A run that couldn't read its
         predecessor's filings only fills the ticker-years it gives, as the
         database does (BUG-179, BUG-278).
 
@@ -263,6 +266,10 @@ class CSVExporter:
             # This run's ticker-years replace the same ticker-years from earlier runs, or only fill them
             existing_columns, existing_rows = self._read_existing(filepath)
             merged = {(row["ticker"], row.get("fiscal_year", "")): row for row in existing_rows}
+            for stock in data:
+                years = [year for ticker, year in merged if ticker == stock.ticker]
+                for year in absent(stock, "financials_annual", years):
+                    del merged[(stock.ticker, year)]
             for row in rows:
                 key = (str(row["ticker"]), str(row["fiscal_year"]))
                 new_row = self._clean_for_csv(row)

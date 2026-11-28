@@ -115,3 +115,32 @@ def test_growth_scenarios_spread_and_clamps():
     assert bear == 0.0
     bear, base, bull = growth_scenarios(0.14)
     assert bull == 0.15
+
+
+# ---- BUG-315 (decided: today's reading, pinned) ----
+def test_losses_after_the_first_positive_year_leave_the_cagr_on_its_endpoints():
+    # Q5's fallback measures from the first positive year to the latest, as the whole window's CAGR measures from
+    # end to end: the loss between (FY2023's) doesn't restart it (COP, CVX, DVN and 46 more rows on the real copy).
+    growth, meta = derive_growth([-1.0, 2.0, -3.0, 1.0, 4.0], periods=[2021, 2022, 2023, 2024, 2025])
+    assert meta["growth_source"] == "hist_from_first_positive"
+    assert meta["hist_cagr"] == pytest.approx((4.0 / 2.0) ** (1 / 3) - 1)
+    assert meta["cagr_years"] == 3
+
+
+def test_a_window_starting_on_a_missing_value_measures_from_the_first_known_positive_year():
+    # A gap (no value), not a loss, takes the same fallback: from the first positive value known.
+    growth, meta = derive_growth([None, 1.0, 2.0, 3.0, 4.0], periods=[2020, 2021, 2022, 2023, 2024])
+    assert meta["growth_source"] == "hist_from_first_positive"
+    assert meta["hist_cagr"] == pytest.approx(4.0 ** (1 / 3) - 1)
+    assert meta["cagr_years"] == 3
+
+
+def test_the_four_years_from_the_first_positive_are_values_not_calendar_years():
+    # Three values from the first positive year are too few, though they span four calendar years (gaps only lengthen
+    # the span, so counting values is the stricter reading); four values over a gap measure on the calendar span.
+    _, meta = derive_growth([-1.0, 1.0, 2.0, 4.0], periods=[2016, 2019, 2021, 2023])
+    assert meta["growth_source"] == "none"
+    _, meta = derive_growth([-1.0, 1.0, 2.0, 3.0, 4.0], periods=[2016, 2017, 2019, 2021, 2023])
+    assert meta["growth_source"] == "hist_from_first_positive"
+    assert meta["hist_cagr"] == pytest.approx(4.0 ** (1 / 6) - 1)
+    assert meta["cagr_years"] == 6

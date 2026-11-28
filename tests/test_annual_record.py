@@ -9,7 +9,8 @@ from tests.test_fetcher_concurrency import _collect_from_sec
 
 
 def _fy(val, year, filed):
-    return {"val": val, "start": f"{year}-01-01", "end": f"{year}-12-31", "fy": year, "fp": "FY", "form": "10-K",
+    # STX's fiscal year, to the end of June: each 10-K is filed after its year ends (BUG-370).
+    return {"val": val, "start": f"{year - 1}-07-01", "end": f"{year}-06-30", "fy": year, "fp": "FY", "form": "10-K",
             "filed": filed, "accn": filed}
 
 
@@ -109,18 +110,37 @@ def test_a_forward_dated_dividend_opens_no_year():
     assert record.periods["2010"]["dividends_per_share"] == 0.04
 
 
+def _balance_ahead(facts):
+    # The same 10-K also tags a balance dated 2011-12-31, ahead of its day: an instant opens its year once the facts
+    # reach its end (BUG-113). A flow filed ahead of its period's end is never read (BUG-370).
+    facts["facts"]["us-gaap"]["Assets"] = {"units": {"USD": [
+        {"val": 2.0e12, "end": "2011-12-31", "fy": 2010, "fp": "FY", "form": "10-K", "filed": "2011-02-25",
+         "accn": "0000070858-11-000135"}]}}
+    return facts
+
+
 def test_a_year_ended_on_its_filing_day_stays():
     # A 10-Q filed 2011-12-31: the facts reach FY2011's end, so the year is no longer ahead of them.
     q3 = {"val": 2.0e10, "start": "2011-07-01", "end": "2011-09-30", "fy": 2011, "fp": "Q3", "form": "10-Q",
           "filed": "2011-12-31", "accn": "0000070858-11-000999"}
-    record = build_annual_record(XBRLParser(), _bac_fy2010(q3), ticker="BAC", years_back=None)
+    record = build_annual_record(XBRLParser(), _balance_ahead(_bac_fy2010(q3)), ticker="BAC", years_back=None)
     assert sorted(record.periods) == ["2010", "2011"]
-    assert record.periods["2011"]["dividends_per_share"] == 0.01
+    assert record.periods["2011"]["total_assets"] == 2.0e12
+    assert "dividends_per_share" not in record.periods["2011"]
+
+
+def test_a_flow_filed_ahead_of_its_year_opens_it_on_no_day():
+    # BUG-370: once the facts reach FY2011's end, the dividend the FY2010 10-K filed for it is still no figure of it.
+    q3 = {"val": 2.0e10, "start": "2011-07-01", "end": "2011-09-30", "fy": 2011, "fp": "Q3", "form": "10-Q",
+          "filed": "2011-12-31", "accn": "0000070858-11-000999"}
+    record = build_annual_record(XBRLParser(), _bac_fy2010(q3), ticker="BAC", years_back=None)
+    assert sorted(record.periods) == ["2010"]
+    assert record.unended == []
 
 
 def test_any_taxonomys_filing_dates_the_facts():
     # The latest filing day is every fact's: a dei cover-page fact filed 2012-02-23 says the facts reach FY2011's end.
-    facts = _bac_fy2010()
+    facts = _balance_ahead(_bac_fy2010())
     facts["facts"]["dei"] = {"EntityCommonStockSharesOutstanding": {"units": {"shares": [
         {"val": 1.0e10, "end": "2012-01-31", "fy": 2011, "fp": "FY", "form": "10-K", "filed": "2012-02-23",
          "accn": "0000070858-12-000089"}]}}}

@@ -3,7 +3,7 @@
 The as-of view of a ticker on day D must be exactly the annual record our code builds from the facts filed on or
 before D. For N random (ticker, D) pairs, D drawn uniformly over the ticker's filing span (any day, not only a filing
 day), this compares what the stored view reads (``AsOfReader.history_as_of``, so every year's ``as_of_annual``) with
-a fresh ``build_annual_record(facts_known_by(facts, D))``:
+a fresh ``build_annual_record(facts_known_by(facts, D))`` (with the ticker's stored sector class, as the run read it):
 
 - the same fiscal years;
 - every canonical figure (NaN and None are one: SQLite stores NaN as NULL), ``period_end``, ``calendar_year``,
@@ -109,12 +109,13 @@ def _day_in_span(facts: Dict[str, Any], u: float) -> Optional[str]:
 
 
 def _check(ticker: str, day: str, facts: Dict[str, Any], reader: AsOfReader,
-           parser: XBRLParser) -> Tuple[List[str], int, int]:
+           parser: XBRLParser, sector: Optional[str] = None) -> Tuple[List[str], int, int]:
     """Every difference between the stored view of *ticker* on *day* and the record built on the facts known then,
     with the fiscal years and the cells compared."""
     diffs: List[str] = []
     years = cells = 0
-    record = build_annual_record(parser, facts_known_by(facts, day), ticker=ticker, years_back=None).periods
+    record = build_annual_record(parser, facts_known_by(facts, day), ticker=ticker, years_back=None,
+                                 sector=sector).periods
     stored = reader.history_as_of(ticker, day)
     want_years = {int(fy) for fy in record}
     if set(stored) != want_years:
@@ -165,12 +166,15 @@ def _run(args: Tuple[str, str, str, List[Pick]]) -> List[Result]:
     parser = XBRLParser()
     out = []
     with AsOfReader(db) as reader:
+        # the run's sector class, which leaves a bank's securities book unread (Q20)
+        found = reader.conn.execute("SELECT sector_class FROM companies WHERE ticker = ?", (ticker,)).fetchone()
+        sector = found[0] if found else None
         for i, _, u in picks:
             day = u if isinstance(u, str) else _day_in_span(facts, u)
             if day is None:
                 out.append((i, ticker, "", ["no dated fact"], False, 0, 0))
                 continue
-            diffs, years, cells = _check(ticker, day, facts, reader, parser)
+            diffs, years, cells = _check(ticker, day, facts, reader, parser, sector)
             out.append((i, ticker, day, diffs, day in days, years, cells))
     return out
 

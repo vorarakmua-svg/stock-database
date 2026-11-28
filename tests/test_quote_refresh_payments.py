@@ -146,10 +146,11 @@ def test_the_refreshs_recompute_values_ddm_as_a_full_collection_that_day_would(t
     assert got["values"] == pytest.approx(oracle["values"])
 
 
-@pytest.mark.parametrize("factor, served", [(True, "2024-08-01"), (False, "2021-06-01")])
+@pytest.mark.parametrize("factor, served", [(True, "2024-09-19"), (False, "2024-09-19")])
 def test_a_refresh_dates_yahoos_payments_as_a_collection_would(tmp_path, factor, served):
     # The collection's rule (_served_day) on a run without bars: the latest split Yahoo lists, every one of which its
-    # payments are adjusted for; a split it doesn't list yet isn't (BUG-117).
+    # payments are adjusted for, or the day before New York's (local 19:51 is New York's morning, before the open),
+    # whichever is later; a split it doesn't list yet isn't (BUG-117, BUG-131, BUG-307).
     db = _collect(tmp_path / "stock.db", COLLECTED, factor=factor)
     result = refresh_quote(_Handler(_quote(REFRESHED, factor=factor)), SQLiteStore(db), "ZZZ",
                            f"{REFRESHED}T19:51:00")

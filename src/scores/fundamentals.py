@@ -8,7 +8,7 @@ adjusting. See docs/superpowers/specs/2026-10-21-quality-scores-design.md.
 
 import sqlite3
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..parsers.calculated_metrics import CalculatedMetrics
 from ..valuation.inputs import load_inputs
@@ -154,6 +154,20 @@ def load_fundamentals(conn: sqlite3.Connection, ticker: str) -> Fundamentals:
     return f
 
 
+def no_debt(figures: Mapping[str, Optional[float]], sector_class: str) -> bool:
+    """``read_debt``'s year without debt: no debt tag (nor the stored total debt) holds a positive amount, no
+    interest was paid, and the company isn't a bank or insurer (theirs stays as filed). The valuation history
+    reads a 10-K by it (Q22)."""
+    return (sector_class not in DEBT_AS_FILED and not _debt_tagged(figures)
+            and not (figures.get("interest_expense") or 0.0) > 0)
+
+
+def _debt_tagged(figures: Mapping[str, Optional[float]]) -> bool:
+    """A debt tag, or the stored total debt, holds a positive amount."""
+    tags = [figures.get(name) for name in DEBT_FIELDS + ("total_debt",)]
+    return any(v is not None and v > 0 for v in tags)
+
+
 def read_debt(figures: Dict[str, Optional[float]], sector_class: str) -> bool:
     """Settle a year's debt where no debt tag holds a positive amount; True when it's unknown (BUG-189, BUG-190).
 
@@ -164,13 +178,12 @@ def read_debt(figures: Dict[str, Optional[float]], sector_class: str) -> bool:
     missing interest figure alone says nothing: filers with debt often tag their interest under a name not
     mapped (AAPL, MSFT). The stored metrics stay as they are, for the screener and the history.
     """
-    tags = [figures.get(name) for name in DEBT_FIELDS + ("total_debt",)]
-    if any(v is not None and v > 0 for v in tags):
+    if _debt_tagged(figures):
         return False
     if (figures.get("interest_expense") or 0.0) > 0:
         figures.update(total_debt=None, net_debt=None, roic=None)
         return True
-    if sector_class in DEBT_AS_FILED:
+    if not no_debt(figures, sector_class):  # a bank or insurer
         return False
     cash = (figures.get("cash_and_equivalents") or 0.0) + (figures.get("short_term_investments") or 0.0)
     figures["total_debt"], figures["net_debt"] = 0.0, -cash

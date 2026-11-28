@@ -10,18 +10,24 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from ...fetchers.stock_data_fetcher import NO_ANNUAL_FINANCIALS, REPORT_WITHOUT_FACTS, STALE_ANNUAL_FINANCIALS
+from ...fetchers.stock_data_fetcher import (
+    NO_ANNUAL_FINANCIALS,
+    NO_QUARTERLY_FINANCIALS,
+    REPORT_WITHOUT_FACTS,
+    STALE_ANNUAL_FINANCIALS,
+)
 from ...new_york import taken_before_close
 from ...ownership.portfolio import share_classes
 from ...universe.industries import sic_label
 from ...valuation.assumptions import DISCOUNT_SPREAD, GROWTH_CAP
 from ...valuation.engine import VERDICT_LABELS, owner_earnings_verdict, upside_pct, verdict
 from ...valuation.history import HISTORICAL_VALUE_CUTOFFS, METRICS, historical_value_label
+from ...valuation.inputs import _drop_spin_off_dividends
 from ...valuation.models import ValuationResult, dcf_per_share
 from ..dependencies import get_job_manager, get_reader, get_settings
 from ..formatting import (
@@ -413,11 +419,13 @@ def _stored_years_note(note: str, ticker: str, years: List[Dict[str, Any]], coll
 
 def _sec_gap_notes(r: Reader, ticker: str) -> List[str]:
     """Why the latest collection got no annual financials from SEC, why they stop
-    years ago (BUG-066), and which report the SEC's companyfacts lack so far (BUG-251, BUG-283), as far as it said:
+    years ago (BUG-066), and which report the SEC's companyfacts lack so far (BUG-251, BUG-283), and why a foreign
+    issuer has no quarters (BUG-058), as far as it said:
     each of them, since one doesn't explain the other (BUG-322). Where years are stored, the first says the figures
     are from earlier collections rather than that there are none (BUG-068)."""
     notes = [w for w in r.latest_run_warnings(ticker)
-             if w.startswith((NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS, REPORT_WITHOUT_FACTS))]
+             if w.startswith((NO_ANNUAL_FINANCIALS, STALE_ANNUAL_FINANCIALS, REPORT_WITHOUT_FACTS,
+                              NO_QUARTERLY_FINANCIALS))]
     if any(n.startswith(NO_ANNUAL_FINANCIALS) for n in notes):
         years = r.annual_financials(ticker)
         if years:
@@ -819,6 +827,17 @@ def _annual_dividend_sums(events: List[Dict[str, Any]]) -> Dict[int, float]:
     return {year: sums.get(year, 0.0) for year in range(min_year, max_year + 1)}
 
 
+def _spin_off_days(events: List[Dict[str, Any]], splits: List[Dict[str, Any]]) -> Set[str]:
+    """The days of *events* whose "dividend" is a spin-off Yahoo records as one (DHR 2016's $24.56 for Fortive): the
+    valuation's rule (``inputs._drop_spin_off_dividends``, BUG-011), which needs the same day's price factor in
+    *splits* too (BUG-019)."""
+    paid = [(str(e["date"])[:10], float(e["amount"])) for e in events
+            if e.get("date") and isinstance(e.get("amount"), (int, float))]
+    kept = {day for day, _ in _drop_spin_off_dividends(paid, [(str(s["date"])[:10], s["ratio"]) for s in splits
+                                                               if s.get("date") and s.get("ratio")])}
+    return {day for day, _ in paid if day not in kept}
+
+
 def _dividend_cagr(annual_sums: Dict[int, float]) -> Optional[float]:
     """Dividend CAGR, using the SAME formula as ``_get_dividend_history``.
 
@@ -880,7 +899,8 @@ def dvd_fragment(
     CAGR/consistency are computed here from ``dividend_events`` with the SAME
     formulas ``yahoo_handler._get_dividend_history`` uses on the raw yfinance
     series (see ``_dividend_cagr``/``_dividend_consistency`` above) — re-derived
-    from what's already in the DB, not re-fetched from Yahoo.
+    from what's already in the DB, not re-fetched from Yahoo, less the spin-offs Yahoo records as
+    dividends (``_spin_off_days``), which the table marks and the totals leave out (BUG-019).
     """
     if r.get_company(ticker) is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
@@ -888,14 +908,17 @@ def dvd_fragment(
     quote = r.quote(ticker) or {}
     events = r.dividend_events(ticker)
     raw_splits = r.split_events(ticker)
-
-    annual_sums = _annual_dividend_sums(events)
+    spin_offs = _spin_off_days(events, raw_splits)
+    # The year totals, CAGR and consistency count cash dividends only, as the valuation does (BUG-011, BUG-019).
+    annual_sums = _annual_dividend_sums([e for e in events if str(e.get("date"))[:10] not in spin_offs])
     cagr = _dividend_cagr(annual_sums)
     consistency = _dividend_consistency(annual_sums)
     years = sorted(annual_sums)
 
     payment_rows = [
-        {"date": e.get("date", ""), "amount": fmt_price(e.get("amount"))}
+        {"date": e.get("date", ""),
+         "amount": fmt_price(e.get("amount")) + (" (spin-off, not a cash dividend)"
+                                                 if str(e.get("date"))[:10] in spin_offs else "")}
         for e in reversed(events)
     ]
     split_rows = [
@@ -1296,7 +1319,8 @@ def scores_fragment(
         {"label": "ROIC - WACC", "value": fmt_pct(w["spread"]),
          "note": w["na_reason"] or f"ROIC {fmt_pct(w['roic'])} against WACC {fmt_pct(w['wacc'])}"},
         {"label": "Predictability", "value": _stars(pred["stars"]),
-         "note": pred["na_reason"] or "10-year consistency of revenue and EBITDA per share"},
+         "note": pred["na_reason"] or pred["note"] or "10-year consistency of revenue and "
+                 f"{'EPS' if 'eps' in (pred['r2'] or {}) else 'EBITDA per share'}"},
         {"label": "Magic Formula rank", "value": str(magic["rank"]) if magic["rank"] is not None else "—",
          "note": f"not ranked: {magic['na_reason']}" if magic["rank"] is None and magic["na_reason"]
                  else f"earnings yield {fmt_pct(magic['earnings_yield'])}, return on capital "

@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from ..models.stock_data import PRICED_METRICS, QUOTE_SECTIONS, StockData, fill, got_price
 from ..parsers.calculated_metrics import CalculatedMetrics
+from .record_scope import absent
 
 #: A run's own diagnostics: always the latest run's when merging, even when empty.
 _RUN_FIELDS = frozenset({"collected_at", "data_sources", "errors", "warnings"})
@@ -102,7 +103,7 @@ class JSONExporter:
                 try:
                     with open(filepath, 'r', encoding='utf-8') as f:
                         existing_data = json.load(f)
-                    new_data = self._merge_data(existing_data, new_data,
+                    new_data = self._merge_data(self._without_absent(existing_data, stock), new_data,
                                                 fill_only=bool(stock.predecessor_error))
                     self.logger.info(f"Merged new data with existing {stock.ticker} data")
                 except Exception as e:
@@ -118,6 +119,24 @@ class JSONExporter:
             self.logger.error(f"Error exporting {stock.ticker} to JSON: {e}")
             return None
 
+    @staticmethod
+    def _without_absent(existing: Dict[str, Any], stock: StockData) -> Dict[str, Any]:
+        """*existing* without the periods and unmapped tags *stock*'s run no longer gives and speaks for, as the
+        database removes them (``record_scope.absent``: a complete read of a filer with an annual record, within its
+        years_back, a part whose building step raised kept), so the merge keeps only what the run still gives
+        (BUG-380)."""
+        kept = dict(existing)
+        for section in ("financials_annual", "financials_quarterly", "financials_ttm"):
+            periods = existing.get(section)
+            if isinstance(periods, dict) and periods:
+                gone = set(absent(stock, section, periods))
+                kept[section] = {key: value for key, value in periods.items() if key not in gone}
+        facts = existing.get("unmapped_facts")
+        if isinstance(facts, list) and facts:
+            gone = set(absent(stock, "unmapped_facts", {fact.get("tag") for fact in facts}))
+            kept["unmapped_facts"] = [fact for fact in facts if fact.get("tag") not in gone]
+        return kept
+
     def _merge_data(
         self,
         existing: Dict[str, Any],
@@ -130,6 +149,8 @@ class JSONExporter:
         Merge strategy:
         - financials_annual: Keep all years from both (union)
         - financials_quarterly: Keep all quarters from both (union)
+        (``_export_single`` first takes out of *existing* the periods and unmapped tags a run that speaks for
+        the ticker's record no longer gives, as the database does: BUG-380)
         - insider_transactions: Merge and deduplicate
         - price_history: Keep both old and new, store history
         - market_data, valuation, shareholders: Use latest (new)
@@ -192,9 +213,10 @@ class JSONExporter:
         # Merge company info (use new but fill gaps from old)
         if existing.get("company_info") and new.get("company_info"):
             merged_info = existing["company_info"].copy()
-            # Update with new values (new takes precedence)
+            # Update with new values (new takes precedence); an empty string is no value, as the CSV and SQLite
+            # read it (BUG-055)
             for k, v in new["company_info"].items():
-                if v is not None:
+                if v is not None and v != "":
                     merged_info[k] = v
             merged["company_info"] = merged_info
 

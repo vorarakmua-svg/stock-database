@@ -94,7 +94,9 @@ def compute_ticker(conn: sqlite3.Connection, ticker: str) -> Tuple[Dict[str, Any
         "momentum": mom,
         "components": json.dumps(components(f, s, g, history, mom)),
         "warning_count": len(signs),
-        "na_reasons": json.dumps(s.na_reasons),
+        # Why a 1-star rating is 1 star, beside the reasons (BUG-192): not a score of its own, so no column.
+        "na_reasons": json.dumps({**s.na_reasons, **({"predictability_note": s.predictability_note}
+                                                      if s.predictability_note else {})}),
     }
     return row, per_share_rows(f), signs
 

@@ -153,3 +153,20 @@ def test_a_reits_or_a_banks_stored_input_reason_gives_way_to_the_sector_rule(cli
           ranks={"magic_formula_rank": None})
     assert client.get("/api/stocks/AAA/scores").json()["magic_formula"]["na_reason"] == "no net PP&E figure"
     assert "not ranked: no net PP&amp;E figure" in client.get("/ui/stocks/AAA/scores").text
+
+
+def test_a_one_star_rating_shows_why(client, web_db):
+    # BUG-192: a 1-star result didn't say whether a loss year or a falling trend gave it.
+    note = "1 star: a falling trend in EBITDA per share"
+    _seed(web_db, row=_row(predictability_stars=1.0, na_reasons=json.dumps({"predictability_note": note})))
+    assert note in client.get("/ui/stocks/AAA/scores").text
+    assert client.get("/api/stocks/AAA/scores").json()["predictability"]["note"] == note
+
+
+def test_a_banks_predictability_note_names_eps_not_ebitda(client, web_db):
+    # BUG-192: the STAT note said "revenue and EBITDA" for banks and insurers, which are rated on EPS.
+    _seed(web_db, ticker="BBB", row=_row(predictability_r2=json.dumps({"revenue": 0.9, "eps": 0.8})))
+    html = client.get("/ui/stocks/BBB/scores").text
+    assert "10-year consistency of revenue and EPS" in html and "revenue and EBITDA" not in html
+    _seed(web_db)
+    assert "10-year consistency of revenue and EBITDA per share" in client.get("/ui/stocks/AAA/scores").text

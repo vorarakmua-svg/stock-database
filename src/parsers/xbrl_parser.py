@@ -9,9 +9,10 @@ from datetime import date, datetime, timedelta
 from fractions import Fraction
 from functools import lru_cache
 from itertools import combinations
-from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, DURATION, INSTANT, SIGN_ABS, SIGN_NET
+from ..mappings.sectors import BANK
 from .share_scale import _SCALES, _best_scale
 from .share_scale import _TOLERANCE as _SCALE_TOLERANCE
 
@@ -47,6 +48,12 @@ _FIELDS = {f.key: f for f in CANONICAL_FIELDS}
 _TO_COMMON = "NetIncomeLossAvailableToCommonStockholdersBasic"
 #: The (EPS, weighted count) pairs a filing's figure for common is checked with, basic first (its own).
 _EPS_PAIRS = (("eps_basic", "weighted_avg_shares_basic"), ("eps_diluted", "weighted_avg_shares_diluted"))
+#: The per-share figures a derived quarter takes from its own 3-month fact where the two agree within the rounding of
+#: the year-to-date figures differenced: they are one figure, and the difference carries the halves' rounding (C's
+#: Q3 2026 nine months less six, 2.86, for its 10-Q's 2.85; BUG-335).
+_OWN_QUARTER_EPS = frozenset(key for key, _count in _EPS_PAIRS)
+#: Two year-to-date figures rounded to the cent differ from the quarter's own by up to a cent and a half.
+_EPS_ROUNDING = 0.015 + 1e-9
 
 
 def _fact_key(entry: Dict[str, Any]) -> Tuple[Any, Any, Any]:
@@ -134,14 +141,42 @@ def _bank_revenue_parts(us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, An
     return frozenset(parts)
 
 
+def _revenue_parts_shown(us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
+    """The revenue figures, as ``("revenue", tag, (accn, start, end))``, that their own filing shows are a part of its
+    revenue for the period (BUG-392): below, by more than ``_AGREE``, another revenue figure the filing tags for the
+    period that its cost of revenue plus gross profit, or its operating income plus operating expenses, add up to.
+    Revenue doesn't read them, whatever the gap: NTAP's FY2026 10-K tags `Revenues` of $5.657B for FY2024 beside
+    contract revenue of $6.268B, its cost of revenue and gross profit making the second (and its 10-Qs likewise).
+    Only below: a larger figure can be a total with revenue outside the gross profit (SNA's and CAT's `Revenues`
+    with their financial services revenue, beside net sales). Contract revenue including excise taxes shows nothing
+    and is shown nothing, as it only fills a period with no other figure (BUG-119). One filing's figures alone, so a
+    restatement in another filing stays with the tag order (``_revenue_set_aside``), and no record reads a later
+    filing's evidence."""
+    figures = {tag: _by_fact(us_gaap, "revenue", (tag,)) for tag in _FIELDS["revenue"].tags
+               if tag != _REVENUE_WITH_TAXES}
+    cost, gross, income, expenses = (_by_fact(us_gaap, key, _FIELDS[key].tags) for key in (
+        "cost_of_revenue", "gross_profit", "operating_income", "operating_expenses"))
+    parts: Set[Tuple[str, str, Any]] = set()
+    for key in set().union(*figures.values()):
+        by_tag = {tag: by_key[key] for tag, by_key in figures.items() if key in by_key}
+        totals = [a[key] + b[key] for a, b in ((cost, gross), (income, expenses)) if key in a and key in b]
+        shown = [value for value in by_tag.values() if any(_agree(value, total) for total in totals)]
+        if not shown:
+            continue
+        revenue = max(shown)
+        parts.update(("revenue", tag, key) for tag, value in by_tag.items()
+                     if value < revenue and not _agree(value, revenue))
+    return frozenset(parts)
+
+
 #: The fields some of whose figures aren't read at all (``_unread``).
 _UNREAD_FIELDS = frozenset({_TO_COMMON_FIELD, "revenue"})
 
 
 def _unread(unread: FrozenSet[Tuple[str, str, Any]], field: Any, tag: str, entry: Dict[str, Any]) -> bool:
     """Whether *entry*, a fact under *tag*, is one *field* doesn't read (``_to_common_contradicted``,
-    ``_bank_revenue_parts``). Net income's set-aside figures (``_to_common_set_aside``) are keyed alike: they rank
-    last, and are still read; revenue's (``_revenue_set_aside``) are keyed by fiscal year."""
+    ``_bank_revenue_parts``, ``_revenue_parts_shown``). Net income's set-aside figures (``_to_common_set_aside``) are
+    keyed alike: they rank last, and are still read; revenue's (``_revenue_set_aside``) are keyed by fiscal year."""
     return field.key in _UNREAD_FIELDS and (field.key, tag, _fact_key(entry)) in unread
 
 
@@ -239,6 +274,96 @@ def _dollar_filings(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     return kept
 
 
+#: Temporary equity, between liabilities and equity, which no canonical field holds: redeemable non-controlling
+#: interests and redeemable preferred stock (SPGI's $4.917B of redeemable interests at 2025-12-31, WDC's $0.876B
+#: convertible preferred at 2023-06-30). Its total with the interests, else the parent's part and the interests' (their
+#: total, else their parts); ``temporary_equity``.
+_TEMPORARY_EQUITY_TOTAL = ("TemporaryEquityCarryingAmountIncludingPortionAttributableToNoncontrollingInterests",)
+_TEMPORARY_EQUITY_PARENT = ("TemporaryEquityCarryingAmountAttributableToParent", "TemporaryEquityCarryingAmount")
+_TEMPORARY_EQUITY_NCI = ("RedeemableNoncontrollingInterestEquityCarryingAmount",
+                         "TemporaryEquityCarryingAmountAttributableToNoncontrollingInterest")
+_TEMPORARY_EQUITY_NCI_PARTS = ("RedeemableNoncontrollingInterestEquityCommonCarryingAmount",
+                               "RedeemableNoncontrollingInterestEquityPreferredCarryingAmount",
+                               "RedeemableNoncontrollingInterestEquityOtherCarryingAmount")
+_TEMPORARY_EQUITY_TAGS = (_TEMPORARY_EQUITY_TOTAL + _TEMPORARY_EQUITY_PARENT + _TEMPORARY_EQUITY_NCI
+                          + _TEMPORARY_EQUITY_NCI_PARTS)
+
+
+def temporary_equity(figure: Callable[[Tuple[str, ...]], Optional[float]]) -> float:
+    """The temporary equity a balance sheet gives (0.0 for none), *figure* giving its figure under the first of some
+    tags with one: the total with the redeemable non-controlling interests, else the parent's part plus the interests'
+    (their total, else their parts). One figure tagged as both parts is one figure (KKR's 2023 10-K tags $615M under
+    each)."""
+    total = figure(_TEMPORARY_EQUITY_TOTAL)
+    if total is not None:
+        return total
+    parent = figure(_TEMPORARY_EQUITY_PARENT)
+    interests = figure(_TEMPORARY_EQUITY_NCI)
+    if interests is None:
+        parts = [part for part in (figure((tag,)) for tag in _TEMPORARY_EQUITY_NCI_PARTS) if part is not None]
+        interests = sum(parts) if parts else None
+    if parent is not None and parent == interests:
+        return parent
+    return (parent or 0.0) + (interests or 0.0)
+
+
+#: minority_interest's tag, the two equities the non-controlling interests are the difference of, and the balance
+#: sheet's figures that prove the difference (BUG-063): its total (else its total assets) and its liabilities.
+_NCI = "MinorityInterest"
+_PARENT_EQUITY = "StockholdersEquity"
+_EQUITY_WITH_NCI = "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"
+_NCI_PROOF = ("LiabilitiesAndStockholdersEquity", "Assets", "Liabilities") + _TEMPORARY_EQUITY_TAGS
+#: The share of the balance sheet's total its liabilities, equity with the interests and temporary equity may miss it
+#: by and still prove the interests (where they miss it by less than the figures without them do).
+_NCI_CLOSE = 0.01
+
+
+def _noncontrolling_interest_derived(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+    """*us_gaap* with a MinorityInterest fact, the equity including the non-controlling interests less the parent's
+    equity, for each annual report and balance-sheet date it gives both on, where they differ, it tags no
+    MinorityInterest on that date, and its balance sheet closes with them: its liabilities, that equity and its
+    temporary equity (``temporary_equity``) make its total within ``_NCI_CLOSE``, nearer than with the parent's equity
+    (BUG-063). A filer that tags its interests in parts (BX: $6.155B and $4.326B at 2024-12-31; BXP, EXR, MAA) or under
+    no tag minority_interest read left it empty, and the balance sheet missed assets = liabilities + equity + NCI by
+    them. The equity with the interests is often tagged for another figure (Agilent's -$226M at 2025-10-31 beside its
+    $6.741B equity; JPM's FY2010 10-K, its 2009 equity before a restatement beside the restated one), which the balance
+    sheet doesn't close with, or closes with less nearly than without; one that tags no liabilities proves nothing and
+    gets none. A 10-Q's parent equity can be another figure too, which its equity with the interests then closes the
+    balance sheet beside (Teledyne's 10-Qs of 2016-17: -$0.4B beside $1.3B), so a 10-Q's figures make none. Every
+    figure is the filing's, so the fact is too (its accession and filing day): each vintage and as-of record reads it
+    as filed."""
+    def facts(tag: str) -> List[Dict[str, Any]]:
+        return [entry for entry in us_gaap.get(tag, {}).get("units", {}).get("USD", []) if not entry.get("start")]
+
+    tagged = {(entry.get("accn"), entry.get("end")) for entry in facts(_NCI)}
+    filed: Dict[str, Dict[Tuple[Any, Any], Any]] = {
+        tag: {(entry.get("accn"), entry.get("end")): entry.get("val") for entry in facts(tag)}
+        for tag in (_PARENT_EQUITY,) + _NCI_PROOF}
+    derived: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
+    for entry in facts(_EQUITY_WITH_NCI):
+        key = (entry.get("accn"), entry.get("end"))
+        if not key[0] or key in tagged or entry.get("form") not in _ANNUAL_FORMS:
+            continue
+
+        def figure(tags: Tuple[str, ...]) -> Optional[float]:
+            return next((float(filed[tag][key]) for tag in tags if isinstance(filed[tag].get(key), (int, float))),
+                        None)
+
+        total, own = entry.get("val"), figure((_PARENT_EQUITY,))
+        sheet, liabilities = figure(_NCI_PROOF[:2]), figure(_NCI_PROOF[2:3])
+        if not isinstance(total, (int, float)) or own is None or total == own or not sheet or liabilities is None:
+            continue
+        missed = sheet - liabilities - total - temporary_equity(figure)  # with the interests; without: + them
+        if abs(missed) > _NCI_CLOSE * abs(sheet) or abs(missed) >= abs(missed + total - own):
+            continue
+        derived[key] = {**{k: v for k, v in entry.items() if k != "frame"}, "val": total - own}
+    if not derived:
+        return us_gaap
+    body = us_gaap.get(_NCI, {})
+    units = body.get("units", {})
+    return {**us_gaap, _NCI: {**body, "units": {**units, "USD": units.get("USD", []) + list(derived.values())}}}
+
+
 def _net_outflows_as_paid(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     """*us_gaap* with its net outflows (``SIGN_NET``: acquisitions, net of the cash acquired)
     as paid: positive a payment, negative cash brought in, as the taxonomy has them. A filing
@@ -283,8 +408,11 @@ def _net_outflows_as_paid(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
 #: total also stands at each earlier year end the statement covers; and a note's commercial
 #: paper on another day isn't the year's (MCO's FY2016 10-K tags $566M at 2017-02-22, which
 #: took FY2017 once its year end's paper was set aside; JNJ's 2024-05-15 made a quarter of its
-#: own; BUG-143).
-_BALANCE_SHEET_ONLY = ("CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "CommercialPaper")
+#: own; BUG-143). The cash line with federal funds sold too: AXP's 10-K of 2019 tags FY2015's
+#: opening balance with restricted cash, $23.239B for its $22.762B line, and COF's of 2012 a day
+#: no balance sheet of it shows, 2011-01-07, which made a quarter of its own (BUG-261).
+_BALANCE_SHEET_ONLY = ("CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "CommercialPaper",
+                       "CashCashEquivalentsAndFederalFundsSold")
 _BALANCE_SHEET_TOTAL = "LiabilitiesAndStockholdersEquity"
 
 
@@ -310,24 +438,36 @@ def _on_balance_sheet_dates(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     return kept
 
 
-#: The figures that date a filing's balance sheet for long-term debt: its total, or its total assets.
+#: The figures that date a filing's balance sheet for long-term debt: its total, else its total assets (a filing that
+#: tags the total tags it on its balance sheet alone; its total assets can stand in a note at an earlier year end).
 _BALANCE_SHEET_DATES = (_BALANCE_SHEET_TOTAL, "Assets")
 
 
 def _debt_on_balance_sheet_dates(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     """*us_gaap* with long-term debt's facts kept on their filing's balance-sheet dates, those it tags
-    ``_BALANCE_SHEET_DATES`` on, where it tags either. A note's figure on another day isn't the year's, and took it
+    ``_BALANCE_SHEET_DATES`` on, where it tags either: the dates of its total where it tags one, else of its total
+    assets. A note's figure on another day isn't the year's, and took it
     from the balance sheet's line under a tag ranked after it: PSX's FY2015 10-K tags LongTermDebt $1.1B at 2015-03-02
     beside its year end's $8.843B; TGT's 10-K for the year to January 2011 LongTermDebtNoncurrent $1.0B at 2010-07-31,
     which took the year to 2010-01-30 ahead of its $10.643B of unsecured debt there;
     ECHO's FY2023 10-K LongTermDebt $1.98B at 2024-11-30, which took FY2024 from its FY2024 10-K's $25.66B (BUG-319).
+    A filing's total assets in a note stand at an earlier year end its balance sheet doesn't show: CHD's FY2023 10-K
+    tags them at 2021-12-31 beside LongTermDebtNoncurrent $2.202B there (its 2023 figure), which took FY2021 from the
+    $1.611B its own balance sheet shows (BUG-273); so a filing that tags its total is dated by it, and by its total
+    assets only days from it (``_SAME_PERIOD_DAYS``: an adoption day's opening balance sheet, CVS's 2019-01-01).
     A filing that tags neither keeps its figures (REG's and MAA's 10-Ks for FY2010-17, whose balance sheets the
     company facts don't carry)."""
-    dates: Dict[str, Set[str]] = {}
+    found: List[Dict[str, Set[str]]] = []
     for tag in _BALANCE_SHEET_DATES:
+        found.append({})
         for entry in us_gaap.get(tag, {}).get("units", {}).get("USD", []):
             if entry.get("accn") and entry.get("end"):
-                dates.setdefault(entry["accn"], set()).add(entry["end"])
+                found[-1].setdefault(entry["accn"], set()).add(entry["end"])
+    totals, assets = found
+    dates = {accn: totals[accn] | {end for end in ends if any(_same_period(end, day) for day in totals[accn])}
+             if accn in totals else ends for accn, ends in assets.items()}
+    for accn, ends in totals.items():
+        dates.setdefault(accn, ends)
     kept = dict(us_gaap)
     for tag in _FIELDS["long_term_debt"].tags:
         if tag in us_gaap:
@@ -509,6 +649,35 @@ def _debt_lines(us_gaap: Dict[str, Any], totals: Dict[Tuple[str, str], float],
             if any(figures.get(key, 0) > 0 and _agree(e["val"] + figures[key], totals[key]) for figures in currents):
                 lines[key] = e
     return lines
+
+
+#: How closely a DebtCurrent must equal the noncurrent debt and a current figure together to be their total
+#: (``_debt_current_totals_set_aside``): to the rounding of the figures summed, not ``_AGREE``'s 0.5%, within which
+#: GOOGL's 2015 short-term debt ($3.225B) is its $1.995B of long-term debt and $1.225B of maturities by chance.
+_SUMS_TO = 0.0005
+
+
+def _debt_current_totals_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+    """*us_gaap* less the DebtCurrent a filing tags on a date where it is the noncurrent long-term debt the filing
+    tags there and a current figure above zero it tags there (short-term borrowings or current maturities) together,
+    within rounding (``_SUMS_TO``): the filer's total debt, which short-term debt would read beside the long-term debt
+    it holds. HIG's FY2013 10-K tags $7.126B at 2012-12-31, its $6.806B of long-term debt and $0.320B of
+    borrowings (its FY2014 10-K tags 2013's $6.544B as DebtLongtermAndShorttermCombinedAmount); CSCO's 10-Q for
+    2011-01-29 $15.241B, $12.152B and $3.089B of maturities; Gartner's FY2011-13 10-Ks (BUG-254). Short-term debt
+    then reads the current figure. A DebtCurrent equal to the noncurrent debt alone says nothing of a total."""
+    if "DebtCurrent" not in us_gaap:
+        return us_gaap
+    noncurrent = _noncurrent_debt(us_gaap, ("LongTermDebtNoncurrent",) + _DEBT_NONCURRENT)
+    currents = [_by_filing(us_gaap, tag) for tag in ("ShortTermBorrowings",) + _MATURITIES]
+    aside = {key for key, value in _by_filing(us_gaap, "DebtCurrent").items()
+             if value > 0 and noncurrent.get(key, 0) > 0 and any(
+                 figures.get(key, 0) > 0 and abs(noncurrent[key] + figures[key] - value) <= _SUMS_TO * value
+                 for figures in currents)}
+    if not aside:
+        return us_gaap
+    units = us_gaap["DebtCurrent"].get("units", {})
+    return {**us_gaap, "DebtCurrent": {**us_gaap["DebtCurrent"], "units": {**units, "USD": [
+        e for e in units.get("USD", []) if (e.get("accn"), e.get("end")) not in aside]}}}
 
 
 def _debt_totals_set_aside(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
@@ -785,16 +954,20 @@ def _current_debt_combinations(as_filed: Dict[str, Any], view: str) -> Tuple[
 
     Not where the borrowings hold the maturities: the filer's own total debt is the noncurrent figure and the borrowings
     alone (GL's); the current liabilities can't hold both lines beside the filing's other ones
-    (``_beside_current_debt``: COO's FY2016, PEP's and YUM's quarters, BUG-267); the borrowings are the maturities and
+    (``_beside_current_debt``: COO's FY2016, PEP's and YUM's quarters, BUG-267), where they hold the borrowings beside
+    them: other lines the borrowings alone overflow overlap (a payables line tagged AccountsPayableCurrent with its
+    note's compensation and taxes inside it), and tell nothing (BUG-286); the borrowings are the maturities and
     their own parts (IBM's FY2021 $6.787B, $6.764B and $22M of loans) or the maturities and at most ``_HOLD_MARGIN``
     more (IBM's FY2024, and one line tagged as the borrowings, a part of them and the maturities: ICE's FY2015 paper,
     AMD's 2016 line of credit). Borrowings that are their own parts are a line of their own (DOW's FY2022 notes
     payable, $362M beside $362M due within one year, apart in its 10-K's other column). A quarter its own evidence
-    leaves undecided takes its latest annual report's word, on the latest year end at or before its date (IBM's Q1
-    2026 10-Q): an annual report there shows the borrowings holding the maturities, or tags as DebtCurrent the line the
-    10-Q tags as its borrowings there (PEP's 10-Ks since FY2011); no older year's (PEP's quarters took its FY2010 10-K's
-    undecided entry for "separate"), and only where the borrowings can hold them, at least the maturities less
-    ``_MATURITIES_ROUNDING`` (ATO's Q1 FY2019: $0 beside $575M).
+    leaves undecided takes the annual reports' word on the latest year end at or before its date (IBM's Q1 2026 10-Q):
+    any annual report there shows the borrowings holding the maturities, or tags as DebtCurrent the line the 10-Q tags
+    as its borrowings there (PEP's 10-Ks since FY2011). That year end is the latest annual balance-sheet date with those
+    within ``_SAME_PERIOD_DAYS`` of it (BUG-359): an adoption day's opening balance sheet (BE's 2020-01-01) is no year
+    of its own. No older year's word (PEP's quarters took its FY2010 10-K's undecided entry for "separate"), and only
+    where the borrowings can hold them, at least the maturities less ``_MATURITIES_ROUNDING`` (ATO's Q1 FY2019: $0
+    beside $575M).
 
     The annual record and the quarterly checkpoints read several filings: the latest one of the record's forms that
     tags a DebtCurrent, or borrowings with maturities, on a date decides it (HWM's FY2020 10-K, whose borrowings are its
@@ -834,8 +1007,8 @@ def _current_debt_combinations(as_filed: Dict[str, Any], view: str) -> Tuple[
                 alone, both = abs(total - noncurrent[key] - b), abs(total - noncurrent[key] - b - m)
                 if min(alone, both) <= _AGREE * abs(total) and (both < alone or not both_only):
                     return alone < both
-        if key in beside and b + m + beside[key][1] > beside[key][0] * (1 + _AGREE):
-            return True  # the current liabilities can't hold both lines beside the filing's other ones
+        if key in beside and b + m + beside[key][1] > beside[key][0] * (1 + _AGREE) >= b + beside[key][1]:
+            return True  # the current liabilities can't hold both lines beside the filing's other ones, but hold one
         if parts[key] > 0 and _agree(b, parts[key]):
             if b != m or apart(key):
                 return False  # its own parts: a line of their own
@@ -864,13 +1037,16 @@ def _current_debt_combinations(as_filed: Dict[str, Any], view: str) -> Tuple[
         if filings[key[0]][0] in _ANNUAL_FORMS:
             annual_current[key[1]].append(value)
 
+    def end_holds(key: Tuple[str, str], end: str) -> bool:
+        line = borrowings.get((key[0], end))  # this 10-Q's borrowings on that year end
+        return end in annual_held or (line is not None and any(_agree(v, line) for v in annual_current[end]))
+
     def year_end_holds(key: Tuple[str, str]) -> bool:
         ends = [end for end in year_ends if end <= key[1]]
         if not ends:
             return False
-        end = max(ends)
-        line = borrowings.get((key[0], end))  # this 10-Q's borrowings on its latest year end
-        return end in annual_held or (line is not None and any(_agree(v, line) for v in annual_current[end]))
+        latest = max(ends)  # with the dates days from it (an adoption day's opening balance sheet; BUG-359)
+        return any(end_holds(key, end) for end in ends if _same_period(end, latest))
 
     combined: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for key, (held, e, value) in decided.items():
@@ -1015,6 +1191,85 @@ def _da_totals_displaced(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+#: A D&A line whose meaning varies by filer: its whole D&A (WDAY's, MET's, VEEV's), or a line beside its depreciation
+#: (FLEX's amortization) (``_da_other_lines``, BUG-276).
+_OTHER_DA = "OtherDepreciationAndAmortization"
+#: An amortization line that is the cash flow statement's where it is the intangibles' and the capitalized software's
+#: amortization together (MTD's), and those software figures.
+_DEFERRED_CHARGES = "AmortizationOfDeferredCharges"
+_SOFTWARE = ("CapitalizedComputerSoftwareAmortization1", "CapitalizedComputerSoftwareAmortization")
+
+
+def _da_other_lines(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+    """*us_gaap* with a DepreciationAndAmortization fact on each period a filing tags no D&A total but carries its D&A
+    on a line the filing itself shows to be it, or to be the amortization beside its depreciation (BUG-276).
+
+    OtherDepreciationAndAmortization no smaller than the filing's depreciation and its amortization of intangibles
+    (``_AMORTIZATION``, where tagged) together holds them: it is the D&A (WDAY's FY2026 $347M beside $237M of
+    depreciation; MET's $753M beside $117M and $83M). Below the depreciation and no smaller than that amortization, it
+    is the amortization line beside the depreciation, and the D&A is the two (FLEX's FY2026 $457M and $106M, beside
+    $68M of intangibles' amortization). Between the two, or below the depreciation with no amortization tagged, it shows
+    nothing and stays unread. A filing that tags no depreciation has the line read as its D&A only where a filing of the
+    filer filed by then showed it so and it is no smaller than the amortization (VEEV's FY2025 $39.4M beside $19M; not
+    MTB's, never shown). AmortizationOfDeferredCharges equal to the intangibles' and the capitalized software's
+    amortization together is the amortization line too (MTD's FY2025 $74.5M, $28.5M and $45.8M, beside $51.1M of
+    depreciation). Each filing's periods are judged alone, as ``_depreciation_combined`` judges them; only filings
+    filed by then are read."""
+    other, charges = _by_period(us_gaap, _OTHER_DA), _by_period(us_gaap, _DEFERRED_CHARGES)
+    if not other and not charges:
+        return us_gaap
+    totals: Set[Tuple[str, str, str]] = set()
+    for tag in _DA_TOTALS:
+        totals.update(_by_period(us_gaap, tag))
+    depreciation = _by_period(us_gaap, _DEPRECIATION)
+    amortization: Dict[Tuple[str, str, str], float] = {}
+    for tag in _AMORTIZATION:
+        for key, e in _by_period(us_gaap, tag).items():
+            amortization.setdefault(key, e["val"])
+    software: Dict[Tuple[str, str, str], float] = {}
+    for tag in _SOFTWARE:
+        for key, e in _by_period(us_gaap, tag).items():
+            software.setdefault(key, e["val"])
+    added: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    shown: List[str] = []  # the filing days the line was shown to be the D&A
+    for key, e in other.items():
+        dep, part = depreciation.get(key), max(amortization.get(key, 0.0), 0.0)
+        if key in totals or e["val"] <= 0 or dep is None:
+            continue
+        both = dep["val"] + part
+        if e["val"] >= both or _agree(e["val"], both):
+            added[key] = dict(e)
+            shown.append(e.get("filed") or "")
+        elif part > 0 and e["val"] < dep["val"] and not _agree(e["val"], dep["val"]) and (
+                e["val"] >= part or _agree(e["val"], part)):
+            added[key] = {**e, "val": dep["val"] + e["val"]}
+    since = min(shown, default=None)
+    for key, e in other.items():
+        part = amortization.get(key, 0.0)
+        if key in totals or key in depreciation or since is None or (e.get("filed") or "") < since:
+            continue
+        if part > 0 and (e["val"] >= part or _agree(e["val"], part)):
+            added[key] = dict(e)
+    # the deferred charges' amortization shown to be the amortization line, the intangibles' and the software's
+    # together (MTD's 10-Q to March 2019: $12.222M, $3.7M and $8.5M), is that line from then on wherever it holds the
+    # intangibles' (the two are a note's, rounded: its 10-Q to June 2019 tags $24.548M, $7.4M and $17.0M; its 10-Q of
+    # 2021 to September 2020 no software)
+    since = min((e.get("filed") or "" for key, e in charges.items() if key in depreciation and key not in totals
+                 and amortization.get(key, 0.0) > 0 and software.get(key, 0.0) > 0
+                 and _agree(e["val"], amortization[key] + software[key])), default=None)
+    for key, e in charges.items():
+        dep, part = depreciation.get(key), amortization.get(key, 0.0)
+        if key in totals or key in added or dep is None or part <= 0 or since is None or (e.get("filed") or "") < since:
+            continue
+        if e["val"] >= part or _agree(e["val"], part):
+            added[key] = {**e, "val": dep["val"] + e["val"]}
+    if not added:
+        return us_gaap
+    body = us_gaap.get(_DA_COMBINED, {"units": {}})
+    units = body.get("units", {})
+    return {**us_gaap, _DA_COMBINED: {**body, "units": {**units, "USD": units.get("USD", []) + list(added.values())}}}
+
+
 def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     """*us_gaap* with one DepreciationAndAmortization fact of a filing's depreciation and its amortization of
     intangibles on each period it tags them on lines of their own, with no total that can hold them.
@@ -1027,7 +1282,8 @@ def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     total's tag (CME's $107.5M beside $223.4M of amortization; EME's, equal to its depreciation), and is set aside, so
     another total of the filing that can hold it is read (MCK's), and with none the D&A is the depreciation, else that
     line, plus the amortization. No other amortization joins: capitalized software's is inside the depreciation at one
-    filer (EXPE's) and apart at another. Each filing's periods are judged alone, so the annual record, the quarters
+    filer (EXPE's) and apart at another (it enters only inside a line the filing shows to hold it,
+    ``_da_other_lines``). Each filing's periods are judged alone, so the annual record, the quarters
     (the 10-Qs' figures to date) and each vintage read the same figures.
 
     Where both amortizations are tagged and no total exceeds the cash flow statement's, the intangibles' is the test:
@@ -1059,7 +1315,8 @@ def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     one's as for any restatement (DDOG's FY2021 $22.9M over its first 10-K's $18.5M line). A year's 10-Qs are read so
     only where its latest 10-K is, as that 10-K is finally read, so its quarters stay on one basis (PSTG's FY2022);
     a year with no 10-K yet, as the last 10-K before it was, so the trailing year stays on one basis too (SWK's 10-Q
-    of April 2026: $113.0M, beside FY2025's quarters on its 10-K's total; BUG-332)."""
+    of April 2026: $113.0M, beside FY2025's quarters on its 10-K's total; BUG-332). A year whose 10-K tags its D&A
+    but no amortization has a 10-K, read as tagged, so its 10-Qs aren't read so (BUG-338)."""
     amortization: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
     figures: Dict[Tuple[str, str, str], List[float]] = defaultdict(list)
     for tag in _AMORTIZATION:
@@ -1187,6 +1444,11 @@ def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
         when = amortization[key].get("filed") or ""
         if _span_at_least_a_year(key) and when >= latest.get(key[1], ("", False))[0]:
             latest[key[1]] = (when, bool(lines))
+    # a year whose 10-K tags its D&A but no amortization has its 10-K, read as tagged: not the year before's (BUG-338)
+    for by_key in (*totals.values(), depreciation):
+        for key in by_key:
+            if _span_at_least_a_year(key):
+                latest.setdefault(key[1], ("", False))
 
     def year_read_so(start: str) -> bool:
         if start in latest:
@@ -1229,6 +1491,42 @@ def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+#: The tag of a year's quarters spread onto its 10-K's D&A basis (BUG-275): each a figure of the filings' plus an
+#: estimate, its share by days of the amortization the 10-Qs' D&A leaves out.
+_DA_SPREAD = "derived:amortization_spread"
+#: The tag of a quarter of a year with no 10-K yet that carries the last spread year's difference a day (BUG-275).
+_DA_CARRIED = "derived:amortization_carried"
+#: The tags a year's D&A and its spread are read from (BUG-170, BUG-275, BUG-276): a 10-K giving the year every figure
+#: the latest 10-K gives under them supplies the spread (``_da_year_filings``, BUG-395).
+_DA_INPUTS = (*_FIELDS["depreciation_amortization"].tags, *_AMORTIZATION, _OTHER_DA, _DEFERRED_CHARGES, *_SOFTWARE)
+
+
+def _da_year_filings(us_gaap: Dict[str, Any]) -> Dict[Tuple[str, str], List[Tuple[Dict[str, str], Dict[str, float]]]]:
+    """Each year's 10-Ks with their D&A figures for it as tagged (``_DA_INPUTS``), first filed first:
+    ``{(start, end): [(filing, {tag: value})]}``, the filing as ``_filing_of`` names it."""
+    views: Dict[Tuple[str, str, str], Tuple[Dict[str, str], Dict[str, float]]] = {}
+    for tag in _DA_INPUTS:
+        for key, e in _by_period(us_gaap, tag).items():
+            if str(e.get("form", "")).startswith("10-K") and _span_at_least_a_year(key):
+                views.setdefault(key, (_filing_of(e), {}))[1][tag] = e["val"]
+    out: Dict[Tuple[str, str], List[Tuple[Dict[str, str], Dict[str, float]]]] = defaultdict(list)
+    for (_, start, end), view in views.items():
+        out[(start, end)].append(view)
+    for filings in out.values():
+        filings.sort(key=lambda view: (view[0]["filed"], view[0]["accn"]))
+    return dict(out)
+
+
+def _da_as_filed(us_gaap: Dict[str, Any]) -> Dict[Tuple[str, str, str], Dict[str, float]]:
+    """Each filing's D&A figures and amortization as it tags them, by period: ``{(accn, start, end): {tag: value}}``,
+    the facts before any of them is set aside or combined (``_da_totals_displaced``, ``_depreciation_combined``)."""
+    out: Dict[Tuple[str, str, str], Dict[str, float]] = defaultdict(dict)
+    for tag in (*_FIELDS["depreciation_amortization"].tags, *_AMORTIZATION):
+        for key, e in _by_period(us_gaap, tag).items():
+            out[key][tag] = e["val"]
+    return out
+
+
 @lru_cache(maxsize=None)
 def _iso_date(value: str) -> Optional[date]:
     """``value`` (``YYYY-MM-DD``) as a date, or None if it doesn't parse: strptime's answer, kept per string. A
@@ -1239,25 +1537,110 @@ def _iso_date(value: str) -> Optional[date]:
         return None
 
 
-def _filer_facts(facts: Dict[str, Any], view: str) -> Dict[str, Any]:
-    """A filer's us-gaap facts as the extractions of *view* read them, in this order: its dollar filings', the
-    balance-sheet-only tags on their balance sheets' dates, and long-term debt's on its filing's (where it tags its
-    balance sheet, ``_debt_on_balance_sheet_dates``), less the total with restricted cash where a filing's cash
-    equivalents and restricted cash make it up, less Cash where it is a part of a total without restricted cash, net
-    outflows as paid, long-term debt's parts set aside where a filing tags its line beside them
+#: The totals with current debt that long-term debt reads last (``canonical.py``; BUG-364, BUG-203), each with the
+#: current figures it holds: the long-term debt with its current maturities (which a DebtCurrent holds too), and the
+#: filer's own total of all its debt.
+_WITH_MATURITIES = "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"
+_HELD_BY_TOTALS = ((_WITH_MATURITIES, ("DebtCurrent",) + _MATURITIES),
+                   (_OWN_TOTAL, ("DebtCurrent", "ShortTermBorrowings", "CommercialPaper") + _MATURITIES))
+#: The current part of each total, as the filing that tags the total tags it on the date (Q23): the long-term debt's
+#: maturities (the lease-inclusive figure first, as the total is), and the filer's own total's short-term debt in
+#: short_term_debt's order (``canonical.py``; a DebtCurrent here may be the borrowings and maturities combined,
+#: ``_current_debt_combined``) with the commercial paper no short-term figure holds (0.0 where one does).
+_CURRENT_PARTS = {_WITH_MATURITIES: (("LongTermDebtAndCapitalLeaseObligationsCurrent", "LongTermDebtCurrent"),),
+                  _OWN_TOTAL: (("DebtCurrent", "ShortTermBorrowings") + _MATURITIES, ("CommercialPaper",))}
+
+
+def _current_part(figures: Dict[str, Dict[Tuple[str, str], float]], total: str, key: Tuple[str, str]
+                  ) -> Optional[float]:
+    """The current part of *total* (``_CURRENT_PARTS``) the filing tags on the date *key* (``(accn, end)``), from
+    *figures* (``{tag: _by_filing}``): of each group of tags the first it tags there, summed (the paper only above
+    zero: a 0.0 is paper another figure holds); None where it tags none (it shows no current part to take)."""
+    groups = [next((figures[tag][key] for tag in group if key in figures[tag]), None)
+              for group in _CURRENT_PARTS[total]]
+    found = [figure for i, figure in enumerate(groups) if figure is not None and (i == 0 or figure > 0)]
+    return sum(found) if found else None
+
+
+def _totals_beside_current_debt_set_aside(us_gaap: Dict[str, Any], view: str) -> Dict[str, Any]:
+    """*us_gaap* with a total with current debt (``_HELD_BY_TOTALS``) tagged on a date beside a current figure above
+    zero the total holds read as the total less its current part the same filing tags there (``_current_part``; Q23):
+    read whole as long-term debt beside the short-term debt it would count that twice (Kenvue's FY2024 10-K: $7.805B
+    with the $750M of maturities its $1.552B of DebtCurrent holds, read as $7.055B; TRV's FY2025 $9.267B of debt
+    beside its $300M of DebtCurrent, read as $8.967B), so total debt is the filer's own total. Where the filing tags
+    no current part, or one above the total, the total is set aside there (one equal to it leaves long-term debt 0).
+    With no current figure beside it the total is the filer's debt: GM's $131.574B, PGR's $6.897B (FY2025), and
+    JPM's long-term debt with its maturities beside its short-term borrowings, which it doesn't hold. A vintage judges
+    by its own filing's figures, so it reads no later filing's; the annual record and the quarterly checkpoints, which
+    can read the short-term debt from another filing, by any of their forms' on the date. Each reads only the facts
+    it is given, so an as-of snapshot judges by the facts known on its day."""
+    forms = _QUARTERLY_FORMS if view == _QUARTERLY_VIEW else _ANNUAL_FORMS
+    aside: Dict[str, Dict[Tuple[str, str], Optional[float]]] = {}
+    figures = {tag: _by_filing(us_gaap, tag) for tag in {tag for groups in _CURRENT_PARTS.values()
+                                                         for group in groups for tag in group}}
+    for total, held in _HELD_BY_TOTALS:
+        if total in us_gaap:
+            beside = {(e.get("accn"), e.get("end")) for tag in held
+                      for e in us_gaap.get(tag, {}).get("units", {}).get("USD", [])
+                      if e.get("form") in forms and not e.get("start") and isinstance(e.get("val"), (int, float))
+                      and e["val"] > 0}
+            ends = {end for _, end in beside}
+            keys = {(accn, end): value for (accn, end), value in _by_filing(us_gaap, total).items()
+                    if ((accn, end) in beside if view == _VINTAGE_VIEW else end in ends)}
+            if keys:
+                aside[total] = {key: (None if part is None or part > value else value - part)
+                                for key, value in keys.items() for part in (_current_part(figures, total, key),)}
+    if not aside:
+        return us_gaap
+    out = dict(us_gaap)
+    for tag, keys in aside.items():
+        units = us_gaap[tag].get("units", {})
+        out[tag] = {**us_gaap[tag], "units": {**units, "USD": [
+            e if (e.get("accn"), e.get("end")) not in keys else {**e, "val": keys[(e.get("accn"), e.get("end"))]}
+            for e in units.get("USD", []) if keys.get((e.get("accn"), e.get("end")), 0.0) is not None]}}
+    return out
+
+
+#: The tags a sector's filers don't have read (Q20): a bank's MarketableSecurities is its whole securities book
+#: (BAC's $925.6B for FY2025), not the short-term investments a general company's is (``canonical.py``, BUG-221).
+_UNREAD_BY_SECTOR: Dict[str, Tuple[str, ...]] = {BANK: ("MarketableSecurities",)}
+
+
+def _sector_tags_set_aside(us_gaap: Dict[str, Any], sector: Optional[str]) -> Dict[str, Any]:
+    """*us_gaap* less the tags *sector*'s filers don't have read (``_UNREAD_BY_SECTOR``); as given for any other
+    sector or none."""
+    unread = [tag for tag in _UNREAD_BY_SECTOR.get(sector or "", ()) if tag in us_gaap]
+    if not unread:
+        return us_gaap
+    return {tag: body for tag, body in us_gaap.items() if tag not in unread}
+
+
+def _filer_facts(facts: Dict[str, Any], view: str, sector: Optional[str] = None) -> Dict[str, Any]:
+    """A filer's us-gaap facts as the extractions of *view* read them, in this order: its dollar filings' less the tags
+    its *sector* doesn't have read (``_sector_tags_set_aside``), with the non-controlling interests a filing gives only
+    as the difference of its two equities (``_noncontrolling_interest_derived``), the balance-sheet-only tags on their
+    balance sheets' dates, and long-term debt's on its filing's (where it tags its balance sheet,
+    ``_debt_on_balance_sheet_dates``), less the total with restricted cash where a filing's cash equivalents and
+    restricted cash make it up, less Cash where it is a part of a total without restricted cash, net
+    outflows as paid, a DebtCurrent that is the filing's total debt set aside (``_debt_current_totals_set_aside``),
+    long-term debt's parts set aside where a filing tags its line beside them
     (``_debt_parts_set_aside``), LongTermDebt set aside where its noncurrent
     figure should stand (judged on DebtCurrent as filed); then, judged on those facts as filed, the borrowings and the
     maturities that view's records read as one DebtCurrent where a filing tags none (``_current_debt_combinations``),
     DebtCurrent before a refinancing set aside, 0.0 for the CommercialPaper the short-term total that view's record
     reads on its date holds (those combinations among them), the combinations themselves, a D&A total a filing shows
-    to be another line set aside (``_da_totals_displaced``), and last the depreciation and the amortization of
-    intangibles as one D&A figure where the filing tags no total that can hold them."""
-    totals = _debt_totals_set_aside(_debt_parts_set_aside(_net_outflows_as_paid(_cash_parts_set_aside(
-        _cash_totals_set_aside(_debt_on_balance_sheet_dates(_on_balance_sheet_dates(_dollar_filings(
-            facts.get("facts", {}).get("us-gaap", {})))))))))
+    to be another line set aside (``_da_totals_displaced``), a D&A the filing carries on a line it shows to be its
+    D&A or its amortization line (``_da_other_lines``), the depreciation and the amortization of intangibles as
+    one D&A figure where the filing tags no total that can hold them, and last the totals with current debt set aside
+    beside the current figures they hold (``_totals_beside_current_debt_set_aside``)."""
+    totals = _debt_totals_set_aside(_debt_parts_set_aside(_debt_current_totals_set_aside(_net_outflows_as_paid(
+        _cash_parts_set_aside(_cash_totals_set_aside(_debt_on_balance_sheet_dates(_on_balance_sheet_dates(
+            _noncontrolling_interest_derived(_dollar_filings(_sector_tags_set_aside(
+                facts.get("facts", {}).get("us-gaap", {}), sector)))))))))))
     combined, held_by_totals = _current_debt_combinations(totals, view)
-    return _depreciation_combined(_da_totals_displaced(_current_debt_combined(
-        _current_debt_set_aside(totals, view, frozenset(combined)), combined, held_by_totals)))
+    return _totals_beside_current_debt_set_aside(_depreciation_combined(_da_other_lines(_da_totals_displaced(
+        _current_debt_combined(_current_debt_set_aside(totals, view, frozenset(combined)), combined, held_by_totals)))),
+        view)
 
 
 #: The quarterly reports, whose balance sheets are a quarter's: a 10-K's year end is the annual record's.
@@ -1342,6 +1725,103 @@ def _long_term_debt_lines(us_gaap: Dict[str, Any], annual: Dict[Any, Dict[str, A
     return {end: (value, tag) for end, (_, value, tag) in found.items()}
 
 
+#: The totals with current debt long-term debt reads last (``_HELD_BY_TOTALS``): a quarter that reads one reads no
+#: current line beside it (``_short_term_debt_lines``).
+_TOTALS_WITH_CURRENT_DEBT = (_WITH_MATURITIES, _OWN_TOTAL)
+#: Long-term debt's totals (``_DEBT_KINDS``), which can hold the current debt, and the figures a filing can tag beside
+#: one as its noncurrent debt: long-term debt's other figures and the lines it doesn't read (``_DEBT_LINES``). A
+#: quarter reading such a total reads no current line its 10-Q shows inside it (``_short_term_debt_lines``; BUG-383).
+_LONG_TERM_TOTALS = _DEBT_KINDS[1]
+_BESIDE_TOTALS = _DEBT_KINDS[0] + _DEBT_KINDS[1] + _DEBT_LINES
+
+
+def _current_line_concept(tag: str) -> bool:
+    """Whether *tag* can carry a 10-Q's short-term debt line that short-term debt doesn't read: a current debt concept
+    (``_DEBT_CONCEPT``, "...Current", which "...Noncurrent" isn't), none of the figures about the debt
+    (``_NOT_A_LINE``), and none of short-term debt's own tags. CommercialPaper names no current figure (BUG-143
+    weighs it)."""
+    if tag in _FIELDS["short_term_debt"].tags:
+        return False
+    return tag.endswith("Current") and bool(_DEBT_CONCEPT.search(tag)) and not _NOT_A_LINE.search(tag)
+
+
+def _short_term_debt_lines(us_gaap: Dict[str, Any], annual: Dict[Any, Dict[str, Any]],
+                           quarters: Dict[str, Dict[str, Any]]) -> Dict[str, Tuple[float, str]]:
+    """``{quarter end: (short-term debt, tag)}`` for the quarterly checkpoints with no short-term debt and no commercial
+    paper above zero, and whose long-term debt is no total with current debt that holds the line (ILMN's 10-Qs for
+    2015: its own total, $1.301B, holds the $0.307B of ConvertibleDebtCurrent), from a 10-Q's line under a current
+    debt concept short-term debt doesn't read (``_current_line_concept``): one it tags at its year-end column with the
+    figure an annual report filed there under the tag the annual record reads, which makes it the same line. ORCL's
+    10-Ks tag their current notes as DebtCurrent and NotesPayableCurrent ($7.271B at 2025-05-31), its 10-Qs as
+    NotesPayableCurrent alone ($7.625B at 2026-08-31), so its quarters had no short-term debt (BUG-292).
+    Lines that disagree on the date are no line, and the latest 10-Q whose line shows the date decides it. A year end
+    the annual record has no short-term debt on carries no line. Nor does a quarter whose long-term debt is a
+    LongTermDebt or NotesPayable total (``_LONG_TERM_TOTALS``) that its 10-Q shows holds the line: the line and the
+    largest other debt figure the 10-Q tags there (``_BESIDE_TOTALS``) fit inside the total, within ``_AGREE``
+    (BUG-383: AMGN's 10-Q for 2014-03-31, LongTermDebt $32.024B, its $29.519B of LongTermNotesPayable and the $2.505B
+    of NotesPayableCurrent; EQIX's 2024-26, $17.328B at 2025-09-30 beside $15.789B of SeniorLongTermNotes and
+    $0.699B of SeniorNotesCurrent). The total keeps the line, as BUG-141 keeps a total's maturities where no
+    noncurrent figure stands in its place. One that a figure and the line overflow is a noncurrent figure (BIIB's
+    LongTermDebt, which its NotesPayable total and the current notes make up), and one the 10-Q tags no other figure
+    beside tells nothing: those quarters read the line. A figure equal to the total (within ``_AGREE``) is the total
+    tagged twice, no other figure (BUG-384: ORCL's shape with its total also tagged NotesPayable), unless it is a
+    noncurrent figure the line makes up to the total, missing it by under half the line (BUG-387: the total less a
+    line under ``_AGREE`` of it); one equal to the total holds no current debt, so the line is outside it (BUG-389)."""
+    read = [tag for tag in us_gaap if _current_line_concept(tag)] + [
+        tag for tag in _FIELDS["short_term_debt"].tags if tag in us_gaap]
+    columns: Dict[str, Dict[str, Dict[str, float]]] = defaultdict(dict)  # {accn: {end: {tag: figure}}}
+    for tag in read:
+        for (accn, end), value in _by_filing(us_gaap, tag).items():
+            columns[accn].setdefault(end, {})[tag] = value
+    filings = {e["accn"]: (e.get("form") or "", e.get("filed") or "") for tag in read
+               for e in us_gaap[tag].get("units", {}).get("USD", []) if e.get("accn")}
+    beside = {tag: _by_filing(us_gaap, tag) for tag in _BESIDE_TOTALS if tag in us_gaap}
+
+    def twice(other: str, value: float, total: float, line: float) -> bool:
+        # a figure equal to the total (within _AGREE) is the total tagged twice, no other figure beside it: another
+        # total always (BUG-384: ORCL's shape with NotesPayable = LongTermDebt); a noncurrent figure unless the line
+        # makes it up to the total, missing it by under half the line (BUG-387: LongTermNotesPayable $90.915B and
+        # $0.400B of current notes make LongTermDebt's $91.315B; ORLY's 10-Q for 2014-03-31 doesn't:
+        # LongTermDebtAndCapitalLeaseObligations $1.396242B and $74K of current leases are $3.7M short of its $1.4B).
+        # A figure equal to the total misses it by the whole line: no current debt in it, so the line is read (BUG-389)
+        return _agree(value, total) and (other in _LONG_TERM_TOTALS or abs(total - value - line) > line / 2)
+
+    def holds(key: Tuple[str, str], quarter: Dict[str, Any], line: float) -> bool:
+        # the quarter's long-term debt is a total the 10-Q *key* shows holding the line beside its other debt figure (a
+        # line of 0.0 counts nothing twice: BIIB's quarters with no current notes keep it)
+        tag = quarter.get("_source_tags", {}).get("long_term_debt")
+        total = quarter.get("long_term_debt") or 0
+        others = [values[key] for other, values in beside.items() if other != tag and values.get(key, 0) > 0
+                  and not twice(other, values[key], total, line)]
+        return line > 0 and tag in _LONG_TERM_TOTALS and bool(others) and (
+            max(others) + line <= (1 + _AGREE) * total)
+
+    figures: Dict[str, Set[float]] = {}  # each year end's short-term debt as the annual reports filed it
+    for period in annual.values():
+        tag = period.get("_source_tags", {}).get("short_term_debt")
+        if not period.get("short_term_debt") or not tag:
+            continue
+        end = period["period_end"]
+        figures[end] = {cols[end][tag] for accn, cols in columns.items()
+                        if filings[accn][0] in _ANNUAL_FORMS and cols.get(end, {}).get(tag, 0) > 0}
+    found: Dict[str, Tuple[Tuple[str, str], float, str]] = {}
+    for accn in [accn for accn in columns if filings[accn][0] in _QUARTERLY_REPORTS]:
+        cols = columns[accn]
+        lines = {tag for end, col in cols.items() for tag, value in col.items()
+                 if _current_line_concept(tag) and value in figures.get(end, ())}
+        for end in cols.keys() & quarters.keys():
+            col, quarter = cols[end], quarters[end]
+            if quarter.get("short_term_debt") is not None or (quarter.get("commercial_paper") or 0) > 0 or (
+                    quarter.get("_source_tags", {}).get("long_term_debt") in _TOTALS_WITH_CURRENT_DEBT):
+                continue
+            tags = sorted(tag for tag in lines if tag in col)
+            values, filing = {col[tag] for tag in tags}, (filings[accn][1], accn)
+            if len(values) == 1 and filing > found.get(end, (("", ""),))[0] and not holds(
+                    (accn, end), quarter, col[tags[0]]):
+                found[end] = (filing, col[tags[0]], tags[0])
+    return {end: (value, tag) for end, (_, value, tag) in found.items()}
+
+
 #: A later filing's figure for a year can be a tagging error of the figure the earlier
 #: filings agree on: its negative, a zero, or it times 10^3 or more (STX's FY2024 10-K put
 #: FY2022's 2.77 dividend a share at 2,770,000; BUG-061). x10 and x100 are left alone, as
@@ -1374,6 +1854,16 @@ def _agree(a: float, b: float) -> bool:
 def _filing_of(entry: Dict[str, Any]) -> Dict[str, str]:
     """The filing a fact came from, as a period's ``_source_filings`` names it: its accession, filing day and form."""
     return {"accn": entry.get("accn") or "", "filed": entry.get("filed") or "", "form": entry.get("form") or ""}
+
+
+def _filed_ahead(entry: Dict[str, Any]) -> bool:
+    """Whether a flow figure was filed before its period ended: no figure of that period, which wasn't over (BUG-370).
+    BAC's FY2010 10-K (filed 2011-02-25) tags a $0.01 dividend for 2011-01-01..2011-12-31, FAST's (2011-02-09) $0.50:
+    under the higher-ranked tag, each outranked the year's own 10-K figure ($0.04, $0.65). The census of the cached
+    filings finds such figures at 49 filers, nearly all dividends declared for the period ahead, the rest misdated.
+    A fact without a filing day or a start decides nothing here; one filed on its last day is over."""
+    filed, end = entry.get("filed"), entry.get("end")
+    return bool(entry.get("start") and filed and end and filed < end)
 
 
 def _same_period(end: Optional[str], year_end: Optional[str]) -> bool:
@@ -1500,35 +1990,87 @@ def _split_restatements(us_gaap: Dict[str, Any]) -> List[Tuple[str, str, float]]
 
     A split restates every share count and per-share figure the filings after it report,
     so a count two filings give for one period at a split's ratio shows one between them.
-    Two such counts in overlapping windows make a split: on the cached filers, 37 of the
-    38 found are Yahoo's splits, and the other is Arconic's 1-for-3 of 2016, which Yahoo's
-    history lacks. A lone ratio is a correction or a mis-tag, which restates nothing else.
+    Two such figures in overlapping windows make a split, one of them a count: on the cached
+    filers, 37 of the 38 the counts alone found are Yahoo's splits, and the other is Arconic's
+    1-for-3 of 2016, which Yahoo's history lacks. A lone ratio is a correction or a mis-tag,
+    which restates nothing else. A per-share figure restated at a split's ratio counts beside
+    a count (GOOGL's 20:1 of 2022 restated one count pair and seven of its diluted EPS, BUG-105),
+    never alone: a restated EPS of a few cents can read as any simple fraction. A later filing
+    that repeats a figure an earlier one gave for its period restated nothing
+    (``_first_filed``): ISRG's FY2021 10-K tags its 2020 quarters' EPS as first filed, before
+    its 3:1 split, beside its 10-Q's restated third quarter, which read as a 1-for-3 after it.
     """
-    pairs: List[Tuple[str, str, float]] = []
+    pairs: List[Tuple[str, str, float, bool]] = []
     for field in CANONICAL_FIELDS:
-        if field.xbrl_unit != "shares":
+        if field.xbrl_unit not in _SPLIT_UNITS:
             continue
+        count = field.xbrl_unit == "shares"
         for tag in field.tags:
             by_period: Dict[Tuple[Any, Any], Dict[str, float]] = defaultdict(dict)
-            for entry in us_gaap.get(tag, {}).get("units", {}).get("shares", []):
+            for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
                 val, filed = entry.get("val"), entry.get("filed")
-                if entry.get("form", "") in _QUARTERLY_FORMS and filed and isinstance(val, (int, float)) and val > 0:
+                if entry.get("form", "") in _QUARTERLY_FORMS and filed and isinstance(val, (int, float)) \
+                        and (val > 0 if count else val != 0):
                     by_period[(entry.get("start"), entry.get("end"))].setdefault(filed, float(val))
             for by_filed in by_period.values():
-                history = sorted(by_filed.items())
+                history: List[Tuple[str, float]] = []
+                for filed, val in sorted(by_filed.items()):
+                    # a figure an earlier filing gave, after another, is on that filing's basis: no restatement
+                    if not history or val == history[-1][1] or all(val != seen for _, seen in history):
+                        history.append((filed, val))
                 for (before, old), (after, new) in zip(history, history[1:]):
-                    ratio = _split_ratio(new / old)
+                    ratio = _split_ratio(new / old if count else old / new)
                     if ratio:
-                        pairs.append((before, after, ratio))
-    splits: List[List[Any]] = []  # [last old-basis filing, first new-basis filing, ratio, counts]
-    for before, after, ratio in sorted(pairs, key=lambda p: (p[1], p[0])):
+                        pairs.append((before, after, ratio, count))
+    splits: List[List[Any]] = []  # [last old-basis filing, first new-basis filing, ratio, figures, counts]
+    for before, after, ratio, count in sorted(pairs, key=lambda p: (p[1], p[0])):
         for split in splits:
             if split[2] == ratio and before < split[1] and split[0] < after:
                 split[0], split[1], split[3] = max(split[0], before), min(split[1], after), split[3] + 1
+                split[4] += count
                 break
         else:
-            splits.append([before, after, ratio, 1])
-    return [(before, after, ratio) for before, after, ratio, counts in splits if counts >= 2]
+            splits.append([before, after, ratio, 1, int(count)])
+    return [(before, after, ratio) for before, after, ratio, figures, counts in splits if figures >= 2 and counts]
+
+
+def _first_filed(us_gaap: Dict[str, Any], field: Any) -> Dict[Tuple[str, Any, Any, float], str]:
+    """The day each figure of *field* was first filed for its period under each of its tags, in a 10-Q or 10-K:
+    ``{(tag, start, end, value): filed}``. A later filing that repeats it is on that day's split basis, not its own
+    (BUG-105): ISRG's FY2021 10-K, after its 3:1 split, tags Q1 2020's diluted EPS at 2.62 as its 10-Q of 2020-04-17
+    did, where the restated figure is 0.87. Another tag's equal figure is no repeat: BF-B's dividends declared in its
+    first quarter of FY2016, 0.315 as restated for its 2:1 split, are the dividends paid as first filed."""
+    first: Dict[Tuple[str, Any, Any, float], str] = {}
+    for tag in field.tags:
+        for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
+            val, filed = entry.get("val"), entry.get("filed")
+            if entry.get("form", "") in _QUARTERLY_FORMS and filed and isinstance(val, (int, float)):
+                key = (tag, entry.get("start"), entry.get("end"), float(val))
+                if filed < first.get(key, "9999"):
+                    first[key] = filed
+    return first
+
+
+#: A per-share figure the splits between two filings move by half a cent or less reads the same restated.
+_SPLIT_UNSEEN = 0.005 + 1e-9
+
+
+def _basis_day(first: Dict[Tuple[str, Any, Any, float], str], tag: str, key: Tuple[Any, Any], filed: str, val: Any,
+               level: Callable[[str], float], windows: Sequence[Tuple[str, str]]) -> str:
+    """The filing day whose split basis a figure filed on *filed* under *tag* for the period *key* (start, end) is
+    on: its first filing's where a later filing repeats it (``_first_filed``, BUG-105), unless that day falls inside
+    a split's window (*windows*: its last filing on the old basis and first on the new, exclusive), whose basis is
+    unknown (NDSN's 10-Q of 2011-06-03 is on the basis after its 2:1 split, which the counts date by 2011-09-09), or
+    the splits since move it by half a cent or less, as they can a per-share figure, which then reads the same restated
+    (SBUX's FY2013 EPS of 0.01, 0.005 after its 2:1)."""
+    if not isinstance(val, (int, float)):
+        return filed
+    day = first.get((tag, key[0], key[1], float(val)), filed)
+    if any(before < day < after for before, after in windows):
+        return filed
+    if abs(val) * abs(1 - level(day) / level(filed)) <= _SPLIT_UNSEEN:
+        return filed
+    return day
 
 
 def explain_no_annual_financials(facts: Optional[Dict[str, Any]],
@@ -1687,14 +2229,15 @@ class XBRLParser:
 
     @staticmethod
     def _matches_kind(field: Any, entry: Dict[str, Any]) -> bool:
-        """A flow (duration) field needs a fact that covers a period.
+        """A flow (duration) field needs a fact that covers a period, filed once it is over.
 
         ``_is_full_year`` accepts instant facts for the balance sheet, but under a
         duration tag an instant is a single event, not the year's value: BAC tags
         each quarterly dividend declaration that way, and the last one (0.24)
-        outranked the full-year 0.92 filed under the fallback tag.
+        outranked the full-year 0.92 filed under the fallback tag. A period filed
+        before its end wasn't over (``_filed_ahead``).
         """
-        return field.kind != DURATION or bool(entry.get("start"))
+        return field.kind != DURATION or (bool(entry.get("start")) and not _filed_ahead(entry))
 
     def _is_quarter(self, entry: Dict[str, Any]) -> bool:
         """True for instant facts and for duration facts spanning ~one quarter."""
@@ -1707,6 +2250,7 @@ class XBRLParser:
         self,
         facts: Dict[str, Any],
         years_back: Optional[int] = None,
+        sector: Optional[str] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Extract standardized annual (10-K, 20-F or 40-F) financials, keyed by fiscal year.
@@ -1722,11 +2266,13 @@ class XBRLParser:
             facts: Raw company facts
             years_back: Number of fiscal years to keep (most recent first).
                 ``None`` (default) keeps all available history.
+            sector: The filer's sector class (``mappings.sectors``): a bank's has tags left unread
+                (``_UNREAD_BY_SECTOR``). ``None`` (default) reads every tag.
 
         Returns:
             Dictionary organized by fiscal year (string keys).
         """
-        us_gaap = _filer_facts(facts, _ANNUAL_VIEW)
+        us_gaap = _filer_facts(facts, _ANNUAL_VIEW, sector)
         if not us_gaap:
             return {}
 
@@ -1744,6 +2290,7 @@ class XBRLParser:
         facts: Dict[str, Any],
         years_back: Optional[int] = None,
         keep_year_end: bool = False,
+        sector: Optional[str] = None,
     ) -> Dict[str, Dict[str, Dict[str, Any]]]:
         """Every filing's view of each annual period: ``{fiscal_year: {accn: period}}``.
 
@@ -1753,9 +2300,10 @@ class XBRLParser:
         already-fetched ``companyfacts`` (every historical instance carries its own
         ``accn``/``filed``); no extra network. Annual reports (10-K, 20-F, 40-F) only.
         With *keep_year_end* each view keeps its year's end (``_year_end``, ``_apply_calendar``), so the snapshot
-        builder can drop a view of a year not yet over on its filing's day (BUG-113).
+        builder can drop a view of a year not yet over on its filing's day (BUG-113). *sector* as
+        :meth:`extract_annual_financials` reads it.
         """
-        us_gaap = _filer_facts(facts, _VINTAGE_VIEW)
+        us_gaap = _filer_facts(facts, _VINTAGE_VIEW, sector)
         if not us_gaap:
             return {}
 
@@ -1817,6 +2365,7 @@ class XBRLParser:
         self,
         facts: Dict[str, Any],
         quarters_back: Optional[int] = None,
+        sector: Optional[str] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Extract standardized **discrete** quarterly financials, keyed by period-end.
@@ -1829,17 +2378,19 @@ class XBRLParser:
         per-quarter checkpoints. See :meth:`_collect_discrete_flows` /
         :meth:`_collect_instant_checkpoints`. A quarter whose 10-Q tags its long-term
         debt under a concept the field doesn't map reads the 10-Q's line where its
-        year-end column is the annual record's figure (``_long_term_debt_lines``, BUG-171).
+        year-end column is the annual record's figure (``_long_term_debt_lines``, BUG-171), and one whose 10-Q
+        tags its short-term debt so likewise (``_short_term_debt_lines``, BUG-292).
 
         Args:
             facts: Raw company facts
             quarters_back: Number of quarters to keep (most recent first).
                 ``None`` (default) keeps all available history.
+            sector: as :meth:`extract_annual_financials` reads it.
 
         Returns:
             Dictionary organized by period end date.
         """
-        us_gaap = _filer_facts(facts, _QUARTERLY_VIEW)
+        us_gaap = _filer_facts(facts, _QUARTERLY_VIEW, sector)
         if not us_gaap:
             return {}
 
@@ -1857,11 +2408,17 @@ class XBRLParser:
         level: Optional[Callable[[str], float]] = (
             (lambda filed: math.prod(ratio for _, after, ratio in splits if after <= filed)) if splits else None)
 
-        instants_filed = self._collect_instant_checkpoints(us_gaap, periods, frames, restored)
+        windows = [(before, after) for before, after, _ in splits]
+        instants_filed = self._collect_instant_checkpoints(us_gaap, periods, frames, restored, windows)
         for end, (value, tag) in _long_term_debt_lines(us_gaap, annual, periods).items():
             periods[end]["long_term_debt"] = value
             periods[end]["_source_tags"]["long_term_debt"] = tag
-        self._collect_discrete_flows(us_gaap, periods, frames, restored, level, self._aside(us_gaap))
+        for end, (value, tag) in _short_term_debt_lines(us_gaap, annual, periods).items():
+            periods[end]["short_term_debt"] = value
+            periods[end]["_source_tags"]["short_term_debt"] = tag
+        dollars = _dollar_filings(facts.get("facts", {}).get("us-gaap", {}))
+        self._collect_discrete_flows(us_gaap, periods, frames, restored, level, self._aside(us_gaap),
+                                     _da_as_filed(dollars), windows, _da_year_filings(dollars))
         if level is not None:
             self._instants_on_year_basis(periods, instants_filed, level)
         self._apply_quarter_calendar(periods, frames)
@@ -1874,10 +2431,15 @@ class XBRLParser:
     def _collect_instant_checkpoints(
         self, us_gaap: Dict[str, Any], periods: Dict[str, Dict[str, Any]],
         frames: Dict[str, set], restored: Dict[Tuple[str, str], Tuple[float, float]],
+        windows: Sequence[Tuple[str, str]] = (),
     ) -> Dict[Tuple[str, str], str]:
         """Balance-sheet (instant) values at every quarter-end (10-Q and 10-K), with the
-        year-end figures the annual record puts back (*restored*). Returns when each share
-        count was filed: ``{(period end, field): filed}``."""
+        year-end figures the annual record puts back (*restored*). A figure dated after its
+        filing's day is no checkpoint: that date hadn't come (CCI's 10-Qs for 2026 tag treasury
+        stock of 0 at 2026-12-31, which made an empty quarter; BUG-386, as ``_filed_ahead`` for
+        a flow). Returns when each share count was filed, the day it was first filed where a later filing repeats
+        it (``_first_filed``) and that day is in no split's window (*windows*, ``_basis_day``):
+        ``{(period end, field): filed}``."""
         best: Dict[Tuple[str, str], Tuple[int, str]] = {}
         for field in CANONICAL_FIELDS:
             if field.kind != INSTANT:
@@ -1889,11 +2451,11 @@ class XBRLParser:
                     if entry.get("start"):  # instant facts have no start
                         continue
                     end = entry.get("end")
-                    if not end:
+                    filed = entry.get("filed") or ""
+                    if not end or (filed and end > filed):
                         continue
                     if entry.get("frame"):
                         frames.setdefault(end, set()).add(entry["frame"])
-                    filed = entry.get("filed") or ""
                     bkey = (end, field.key)
                     cur = best.get(bkey)
                     if cur is not None and not (
@@ -1908,8 +2470,17 @@ class XBRLParser:
             value = periods.get(end, {}).get(key)
             if isinstance(value, (int, float)) and _agree(value, dropped):
                 periods[end][key] = kept
-        split_keys = {f.key for f in CANONICAL_FIELDS if f.kind == INSTANT and f.xbrl_unit == "shares"}
-        return {(end, key): filed for (end, key), (_, filed) in best.items() if key in split_keys}
+        # a count a later filing repeats is on its first filing's split basis (_first_filed, BUG-105)
+        split_fields = [f for f in CANONICAL_FIELDS if f.kind == INSTANT and f.xbrl_unit == "shares"]
+        first = {f.key: _first_filed(us_gaap, f) for f in split_fields}
+        out: Dict[Tuple[str, str], str] = {}
+        for (end, key), (_, filed) in best.items():
+            if key in first:
+                value, tag = periods[end].get(key), periods[end]["_source_tags"][key]
+                day = first[key].get((tag, None, end, float(value)), filed) \
+                    if isinstance(value, (int, float)) else filed
+                out[(end, key)] = filed if any(before < day < after for before, after in windows) else day
+        return out
 
     def _instants_on_year_basis(self, periods: Dict[str, Dict[str, Any]],
                                 filed_at: Dict[Tuple[str, str], str], level: Callable[[str], float]) -> None:
@@ -1994,11 +2565,118 @@ class XBRLParser:
                 if scale is not None:
                     chosen[key] = (priority, filed, val * scale)
 
+    def _da_bases(self, start: str, points: List[Tuple[str, Any]],
+                  picked: Dict[Tuple[str, str], Tuple[Dict[str, Any], str]],
+                  as_filed: Dict[Tuple[str, str, str], Dict[str, float]],
+                  year_filings: Optional[Dict[Tuple[str, str], List[Tuple[Dict[str, str], Dict[str, float]]]]] = None
+                  ) -> Tuple[Optional[List[Tuple[str, Any]]], Optional[Tuple[float, Optional[str], str]],
+                             Optional[Dict[str, str]]]:
+        """Whether a year's D&A ladder (*points*, sorted, from *start*) sits on two bases, its 10-K's holding an
+        amortization its 10-Qs' leave out (BUG-275): ``(the ladder on the 10-K's basis, carry, supplier)``, else
+        ``(None, None, None)``; *carry*, for the year after it (``_da_carried``), is the difference a day, the line's
+        tag (None for the depreciation and an amortization read together) and the 10-K's filing day. *supplier* is the
+        10-K that supplies the spread (BUG-395): the first of the year's 10-Ks (*year_filings*, ``_da_year_filings``)
+        to give the year every D&A figure the 10-K read gives it, so the amortization or the line one first tags (AVGO's
+        FY2024 amortization, first in its 10-K of 2025-12-18; SWK's FY2020 DepreciationDepletionAndAmortization line,
+        first in its 10-K of 2023-02-23) and not merely the year's first 10-K; that 10-K's filing where none is listed.
+        The fourth quarter is the year less nine months, so a basis apart puts the whole difference in it (AVGO's
+        FY2024: $9.42B beside quarters of $0.14B).
+
+        The test is the filings' tags, never the figures' size, so seasonality and an acquisition move nothing. The
+        10-K tags the year under the nine months' tag (*as_filed*, the facts before D&A's rules set any aside or
+        combine them), below the year's D&A, and at or above the nine months, which the 10-Q tags so: the 10-Qs'
+        figures are that line's, the difference what they leave out. That needs the tag to be the depreciation alone
+        (AVGO's 10-Qs tag Depreciation, its 10-K the amortization of intangibles too), or the 10-Q to tag an
+        amortization apart, with the difference one the 10-K tags for the year or the 10-K's own figure under the tag
+        its depreciation line (BUG-274: SWK's FY2023 $432.4M beside $625.1M, HD's FY2026). Each rung to date goes onto
+        its filing's figure under the tag (HD's FY2025 first quarter, combined with its amortization, onto its line)
+        plus the difference's share by days to its end, so the quarters sum to the year. The reverse, 10-Qs whose D&A
+        holds more than the 10-K's year (GOOGL's 2025: the 10-Qs combined with their amortization, the 10-K tags none),
+        is left as it is: its fourth quarter the year less nine months. Read from the facts given, so a year whose 10-K
+        isn't filed yet has no year here (``_da_carried`` carries the last one's difference)."""
+        if len(points) < 2 or not all(isinstance(val, (int, float)) for _, val in points):
+            return None, None, None
+        (end_y, year), (end_9, nine) = points[-1], points[-2]
+        (fact_y, _), (fact_9, tag_9) = picked[(start, end_y)], picked[(start, end_9)]
+        if (self._span(start, end_y) or 0) < _FULL_YEAR_MIN_DAYS or not str(fact_y.get("form", "")).startswith("10-K"):
+            return None, None, None
+        year_filed = as_filed.get((fact_y.get("accn"), start, end_y), {})
+        nine_filed = as_filed.get((fact_9.get("accn"), start, end_9), {})
+
+        def as_tagged(end: str, val: float) -> bool:  # a rung its filing tags so, not one D&A's rules made
+            fact, tag = picked[(start, end)]
+            filed = as_filed.get((fact.get("accn"), start, end), {}).get(tag)
+            return filed is not None and _agree(val, filed)
+
+        def filed(end: str, tag: str) -> Optional[float]:  # a rung's filing's figure under *tag*
+            return as_filed.get((picked[(start, end)][0].get("accn"), start, end), {}).get(tag)
+
+        depreciation_9, depreciation_y = nine_filed.get(_DEPRECIATION), year_filed.get(_DEPRECIATION)
+        line: Optional[float] = None
+        lines: List[Optional[float]] = []
+        basis: Optional[str] = None
+        if as_tagged(end_9, nine):
+            # the 10-Qs' figure under its tag; the depreciation alone where it is the 10-Q's Depreciation too (F's)
+            basis = _DEPRECIATION if depreciation_9 is not None and _agree(nine, depreciation_9) else tag_9
+            line = year_filed.get(basis)
+            lines = [filed(end, basis) for end, _ in points[:-1]]
+        elif depreciation_9 is not None and depreciation_y is not None:
+            # the 10-Qs' depreciation and amortization read together (BUG-170) beside a 10-K total larger than its own
+            # two (SYK's)
+            both = [tag for tag in _AMORTIZATION if tag in nine_filed and tag in year_filed
+                    and _agree(depreciation_9 + nine_filed[tag], nine)]
+            if both:
+                line = depreciation_y + year_filed[both[0]]
+                lines = [val for _, val in points[:-1]]
+        # and the fourth quarter on the 10-Qs' basis no further below the first three's mean than half the difference,
+        # else the 10-Qs were on the 10-K's basis after all (KEY's FY2024: nine months of $68M beside $73M and $91M)
+        if line is not None and None not in lines and year > line and not _agree(year, line) \
+                and (nine <= line or _agree(nine, line)) and line - nine - nine / 3 > -(year - line) / 2:
+            gap, year_days = year - line, self._span(start, end_y) or 1
+            filings = (year_filings or {}).get((start, end_y), [])
+            read = next((view for filing, view in filings if filing["accn"] == fact_y.get("accn")), None)
+            supplier = next((filing for filing, view in filings if read is not None and all(
+                tag in view and _agree(view[tag], value) for tag, value in read.items())), _filing_of(fact_y))
+            return ([(end, figure + gap * (self._span(start, end) or 0) / year_days)
+                     for (end, _), figure in zip(points[:-1], lines) if figure is not None] + points[-1:],
+                    (gap / year_days, basis, fact_y.get("filed") or ""), supplier)
+        return None, None, None
+
+    def _da_carried(self, start: str, points: List[Tuple[str, Any]],
+                    picked: Dict[Tuple[str, str], Tuple[Dict[str, Any], str]],
+                    as_filed: Dict[Tuple[str, str, str], Dict[str, float]],
+                    carry: Tuple[float, Optional[str], str]) -> Optional[List[Tuple[str, Any]]]:
+        """A year with no 10-K yet after a year ``_da_bases`` spread onto its 10-K's basis (BUG-275): each rung to date
+        (*points*, sorted, from *start*) on that year's line plus the last 10-K's difference a day (*carry*), as a
+        year with no 10-K yet is read as the last 10-K was (BUG-332), so the trailing years stay on one basis (BR's,
+        F's, TTWO's latest). None where a rung's filing came before that 10-K's, so a quarter never reads a 10-K
+        filed after it, or tags no figure on the line."""
+        per_day, basis, since = carry
+        out: List[Tuple[str, Any]] = []
+        for end, val in points:
+            fact, _ = picked[(start, end)]
+            here = as_filed.get((fact.get("accn"), start, end), {})
+            if not isinstance(val, (int, float)) or (fact.get("filed") or "") < since:
+                return None
+            if basis is not None:
+                line = here.get(basis)
+            else:  # the depreciation and an amortization read together (SYK's)
+                depreciation = here.get(_DEPRECIATION)
+                line = val if depreciation is not None and any(
+                    _agree(depreciation + here[tag], val) for tag in _AMORTIZATION if tag in here) else None
+            if line is None:
+                return None
+            out.append((end, line + per_day * (self._span(start, end) or 0)))
+        return out
+
     def _collect_discrete_flows(
         self, us_gaap: Dict[str, Any], periods: Dict[str, Dict[str, Any]],
         frames: Dict[str, set], restored: Dict[Tuple[str, str], Tuple[float, float]],
         level: Optional[Callable[[str], float]] = None,
         set_aside: FrozenSet[Tuple[str, str, Any]] = frozenset(),
+        as_filed: Optional[Dict[Tuple[str, str, str], Dict[str, float]]] = None,
+        windows: Sequence[Tuple[str, str]] = (),
+        year_filings: Optional[Dict[Tuple[str, str], List[Tuple[Dict[str, str], Dict[str, float]]]]] = None,
     ) -> None:
         """Discrete quarterly flows via cumulative-ladder differencing.
 
@@ -2015,21 +2693,32 @@ class XBRLParser:
         quarter (BUG-111); a net outflow's totals, as paid, difference as filed (BUG-127), but
         a total of payments that falls by half or more gives none (BUG-140). A
         year's ladder is one rung until its second 10-Q, its first quarter's own 3-month
-        figure, which fills that quarter after every ladder (BUG-124).
+        figure, which fills that quarter after every ladder (BUG-124). A figure filed before its
+        period ended is no rung (``_filed_ahead``, BUG-370). A year whose 10-K's D&A and 10-Qs' sit
+        on two bases (*as_filed*, ``_da_bases``) has its quarters on the 10-K's, each naming the
+        10-K that supplies the spread (*year_filings*) in its ``_source_filings`` (BUG-395), and
+        the year after one so spread, with no 10-K yet, carries its difference
+        (``_da_carried``) (BUG-275).
         """
         oracle_rungs: Dict[str, Dict[Tuple[str, str], Any]] = {}  # net income's and EPS's, for the counts' scale
+        # the years a 10-K closes, in any field (BUG-146): a 10-Q's span of a year is one only where a 10-K reports it
+        years_closed = {(entry.get("start"), entry.get("end")) for field in CANONICAL_FIELDS if field.kind == DURATION
+                        for tag in field.tags
+                        for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, [])
+                        if str(entry.get("form", "")).startswith("10-K")}
         for field in CANONICAL_FIELDS:
             if field.kind != DURATION:
                 continue
             # Dedup per (start, end): higher-priority tag, then most-recently-filed.
             chosen: Dict[Tuple[str, str], Tuple[int, str, Any]] = {}
+            picked: Dict[Tuple[str, str], Tuple[Dict[str, Any], str]] = {}  # each figure's fact and tag
             closed: Set[Tuple[str, str]] = set()  # the spans a 10-K reports: periods that are over
             for priority, tag in enumerate(field.tags):
                 for entry in us_gaap.get(tag, {}).get("units", {}).get(field.xbrl_unit, []):
                     if entry.get("form", "") not in _QUARTERLY_FORMS:
                         continue
                     start, end = entry.get("start"), entry.get("end")
-                    if not start or not end or _unread(set_aside, field, tag, entry):
+                    if not start or not end or _unread(set_aside, field, tag, entry) or _filed_ahead(entry):
                         continue
                     span = self._span(start, end)
                     if span is None or span > _FULL_YEAR_MAX_DAYS:
@@ -2051,6 +2740,7 @@ class XBRLParser:
                     ):
                         continue
                     chosen[key] = (rank, filed, entry.get("val"))
+                    picked[key] = (entry, tag)
             for (start, end), (priority, filed, val) in list(chosen.items()):
                 fix = restored.get((field.key, end))
                 span = self._span(start, end)
@@ -2065,14 +2755,18 @@ class XBRLParser:
             # A split restates only the filings after it, so a year's rungs can sit on two
             # bases: AMZN's FY2020 from a 10-K after its 20:1 split, its nine months from a
             # 10-Q before, and Q4 read -25.63 (BUG-082). Each goes onto its year's basis.
+            # A figure a later filing repeats is on its first filing's basis (_first_filed, BUG-105).
             shares = field.xbrl_unit == "shares"
             basis: Dict[Tuple[str, str], float] = {}
             if level is not None and field.xbrl_unit in _SPLIT_UNITS:
-                basis = self._year_basis(chosen, level)
+                first = _first_filed(us_gaap, field)
+                on_basis = {key: (p, _basis_day(first, picked[key][1], key, f, v, level, windows), v)
+                            for key, (p, f, v) in chosen.items()}
+                basis = self._year_basis(on_basis, level)
                 for key, year_level in basis.items():
                     priority, filed, val = chosen[key]
                     if isinstance(val, (int, float)):
-                        moved = year_level / level(filed)
+                        moved = year_level / level(on_basis[key][1])
                         chosen[key] = (priority, filed, val * moved if shares else val / moved)
 
             # A later filing can re-tag a year's count in thousands or millions beside its
@@ -2104,14 +2798,24 @@ class XBRLParser:
                         and _QUARTER_MIN_DAYS <= days <= _QUARTER_MAX_DAYS:
                     own[end] = (val, field.tags[priority], basis.get((start, end)))
 
+            # A quarter's own EPS, the figure its derived one rounds to (BUG-335): {end: (value, tag)}.
+            own_eps: Dict[str, Tuple[float, str]] = {}
+            for (start, end), (priority, _f, val) in chosen.items() if field.key in _OWN_QUARTER_EPS else ():
+                days = self._span(start, end)
+                if isinstance(val, (int, float)) and days is not None \
+                        and _QUARTER_MIN_DAYS <= days <= _QUARTER_MAX_DAYS:
+                    own_eps[end] = (val, field.tags[priority])
+
             def assign(end: str, value: Any, source: str, start: str, ladder_fy: Optional[int],
-                       split_level: Optional[float]) -> None:
+                       split_level: Optional[float], filing: Optional[Dict[str, str]] = None) -> None:
                 pd_ = periods.setdefault(end, {"period_end": end})
                 if field.key not in pd_:
                     pd_[field.key] = value
                     pd_.setdefault("_source_tags", {})[field.key] = source
                     if split_level is not None:
                         pd_.setdefault("_split_levels", {})[field.key] = split_level
+                    if filing is not None:  # a spread's supplying 10-K, which dates it in the history (BUG-395)
+                        pd_.setdefault("_source_filings", {})[field.key] = dict(filing)
                 pd_.setdefault("fiscal_quarter", self._fiscal_quarter_from_span(self._span(start, end)))
                 pd_.setdefault("fiscal_year", ladder_fy)
 
@@ -2119,10 +2823,13 @@ class XBRLParser:
             # figure dates it, or the year after the one ending the day before. Its latest end's
             # calendar year put a January year's quarters before its 10-K in the year before theirs,
             # beside that year's own (BUG-124). A period a 10-K closes keeps its end's year, as
-            # before: NOW's July-December 2011 between its June and calendar years.
+            # before: NOW's July-December 2011 between its June and calendar years. A year is one a
+            # 10-K closes (in any field: BXP's 10-Q tags its 2010 dividends a share for the year its 10-K
+            # reports): a 10-Q's trailing twelve months (AMZN's) are no year, and the quarter after them no
+            # year's first (BUG-146).
             year_of_start: Dict[str, Optional[int]] = {}
             year_spans = [(start, end) for start, end in chosen
-                          if (self._span(start, end) or 0) >= _FULL_YEAR_MIN_DAYS]
+                          if (self._span(start, end) or 0) >= _FULL_YEAR_MIN_DAYS and (start, end) in years_closed]
             for start, end in year_spans:
                 year_of_start[start] = self._fiscal_year_from_end(end)
             for start, end in year_spans:
@@ -2130,6 +2837,15 @@ class XBRLParser:
                 if year is not None and after is not None:
                     year_of_start.setdefault(after, year + 1)
 
+            # D&A's years on two bases (BUG-275), and the year after each one spread, which carries its difference
+            bases: Dict[str, Tuple[Optional[List[Tuple[str, Any]]], Optional[Tuple[float, Optional[str], str]],
+                                   Optional[Dict[str, str]]]] = {}
+            if field.key == "depreciation_amortization" and as_filed:
+                for start, points in ladders.items():
+                    points.sort()
+                    bases[start] = self._da_bases(start, points, picked, as_filed, year_filings)
+            carried = {self._day_after(ladders[start][-1][0]): carry for start, (_, carry, _) in bases.items()
+                       if carry is not None}
             for start, points in ladders.items():
                 if len(points) < 2:
                     continue  # not a cumulative ladder (isolated 3-month fact)
@@ -2139,12 +2855,27 @@ class XBRLParser:
                 ladder_fy = None if (start, points[-1][0]) in closed else year_of_start.get(start)
                 if ladder_fy is None:
                     ladder_fy = self._fiscal_year_from_end(points[-1][0])
+                # the year's 10-K holds an amortization its 10-Qs' D&A leaves out: each rung to date, on the 10-Qs'
+                # line, takes its share by days, so Q1-Q3 hold their estimate and the fourth quarter the rest
+                spread, _, supplier = bases.get(start, (None, None, None))
+                derived = _DA_SPREAD
+                if spread is None and start in carried \
+                        and (self._span(start, points[-1][0]) or 0) < _FULL_YEAR_MIN_DAYS:
+                    # a year with no 10-K yet after a spread one: its rungs carry the last 10-K's difference a day
+                    spread, derived = self._da_carried(start, points, picked, as_filed, carried[start]), _DA_CARRIED
+                if spread is not None:
+                    points = spread
                 prev_end, prev_val = start, 0.0
                 for end, val in points:
                     inc_span = self._span(prev_end, end)
                     if end in own:
-                        own_val, own_tag, own_level = own[end]
-                        assign(end, own_val, own_tag, start, ladder_fy, own_level)
+                        # an own count makes a quarter where the ladder steps one quarter, as a derived one does,
+                        # else fills (and dates) only one the filings hold: a 10-K re-dating a year's first quarter
+                        # six days after its 10-Q's (ADI's 2011-02-04 beside 2011-01-29) makes none (BUG-096)
+                        if end in periods or (inc_span is not None
+                                              and _QUARTER_MIN_DAYS <= inc_span <= _QUARTER_MAX_DAYS):
+                            own_val, own_tag, own_level = own[end]
+                            assign(end, own_val, own_tag, start, ladder_fy, own_level)
                     elif isinstance(val, (int, float)) and inc_span is not None \
                             and _QUARTER_MIN_DAYS <= inc_span <= _QUARTER_MAX_DAYS:
                         prev = prev_val if isinstance(prev_val, (int, float)) else 0.0
@@ -2168,8 +2899,11 @@ class XBRLParser:
                             discrete, keep = val - prev, False
                         else:
                             discrete, keep = val - prev, True
+                        source = "derived:ytd_diff" if spread is None else derived
+                        if end in own_eps and abs(own_eps[end][0] - discrete) <= _EPS_ROUNDING:
+                            discrete, source = own_eps[end]
                         if keep:
-                            assign(end, discrete, "derived:ytd_diff", start, ladder_fy, basis.get((start, end)))
+                            assign(end, discrete, source, start, ladder_fy, basis.get((start, end)), supplier)
                     prev_end, prev_val = end, val  # (a gap resets the baseline)
             if not shares:
                 # A year's ladder is one rung until its second 10-Q: the first quarter's own
@@ -2183,7 +2917,12 @@ class XBRLParser:
                     span = self._span(start, end)
                     if end in periods and isinstance(val, (int, float)) and span is not None \
                             and _QUARTER_MIN_DAYS <= span <= _QUARTER_MAX_DAYS:
-                        assign(end, abs(val) if field.sign == SIGN_ABS else val, field.tags[chosen[(start, end)][0]],
+                        source = field.tags[chosen[(start, end)][0]]
+                        first = self._da_carried(start, points, picked, as_filed, carried[start]) \
+                            if start in carried and as_filed else None
+                        if first is not None:  # a first quarter after a spread year carries its difference too
+                            val, source = first[0][1], _DA_CARRIED
+                        assign(end, abs(val) if field.sign == SIGN_ABS else val, source,
                                start, year_of_start[start], basis.get((start, end)))
             for end, (value, tag, own_level) in own.items():  # quarters no year-to-date ladder reaches
                 if end in periods and field.key not in periods[end]:
@@ -2417,8 +3156,9 @@ class XBRLParser:
 
     def _aside(self, us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
         """``_set_aside``'s figures and the ones not read at all (``_to_common_contradicted``,
-        ``_bank_revenue_parts``)."""
-        return self._set_aside(us_gaap) | _to_common_contradicted(us_gaap) | _bank_revenue_parts(us_gaap)
+        ``_bank_revenue_parts``, ``_revenue_parts_shown``)."""
+        return (self._set_aside(us_gaap) | _to_common_contradicted(us_gaap) | _bank_revenue_parts(us_gaap)
+                | _revenue_parts_shown(us_gaap))
 
     def _set_aside(self, us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
         """The figures that rank after every other tag of their field: ``_revenue_set_aside``'s and
@@ -2547,13 +3287,14 @@ class XBRLParser:
     def _apply_calendar(self, data: Dict[Any, Dict[str, Any]],
                         period_frames: Dict[Any, Set[Tuple[str, str]]],
                         flow_ends: Dict[Any, Dict[str, str]]) -> None:
-        """Set SEC-authoritative ``calendar_year`` (+frame) on each annual period.
+        """Set SEC-authoritative ``calendar_year`` (+frame) and the ``period_end`` on each annual period.
 
         A year's calendar is that of the fiscal year its figures cover: the end most of its
         full-year flow figures share (*flow_ends*: ``{field: end}``; the later end on a tie),
         else, with none (a balance sheet can stand on any day: EXE's fresh start of
-        2021-02-09), its ``period_end``. That end, not ``period_end``, which a stray later
-        filed figure can set (LRCX's FY2012 reads 2012-06-30 for its year to 2012-06-24). It
+        2021-02-09), the end of its latest filed figure. That end is the period's ``period_end``
+        too, not a stray later filed figure's (LRCX's FY2012 is its year to 2012-06-24, not the
+        2012-06-30 of the cash and equity its 10-K of 2015 tags; BUG-342). It
         takes the SEC's full-year frame on a fact ending there (a January year-end maps to the
         prior calendar year), else the frame SEC's rule gives that end (``_frame_of_end``);
         never a frame of another end (a 52-week figure to March in TEL's September year), nor
@@ -2565,6 +3306,7 @@ class XBRLParser:
             ends = Counter(e for e in flow_ends.get(period, {}).values() if e)
             end = max(ends, key=lambda e: (ends[e], e)) if ends else period_dict.get("period_end")
             period_dict["_year_end"] = end
+            period_dict["period_end"] = end
             year, _, chosen = self._calendar_from_frames(
                 {frame for at, frame in period_frames.get(period, set()) if at == end}, end, quarterly=False)
             period_dict["calendar_year"] = year

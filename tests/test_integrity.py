@@ -1,5 +1,9 @@
 """Integrity checks: magnitude outliers, cash reconciliation, quarterly sums, ratio bounds."""
 
+from datetime import date
+
+import pytest
+
 from src.validation.integrity import (
     check_cashflow_reconciliation,
     check_dividend_completeness,
@@ -174,14 +178,49 @@ def test_outlier_excludes_event_driven_lumpy_flows():
 def test_outlier_skips_short_term_debt_whose_maturities_come_and_go():
     # BUG-159: short-term debt holds the current maturities of long-term debt, due one year and not the next: NKE's
     # FY2024 $1.006B ($6M of notes payable and $1.0B of notes due within the year) between years of $6M and $5M is
-    # no filing error (VMC's FY2024 likewise).
+    # no filing error (VMC's FY2024 likewise). Its long-term debt the year before, $8.927B, held them (BUG-269).
     annual = {
-        "2023": {"short_term_debt": 6.0e6},
-        "2024": {"short_term_debt": 1.006e9},
-        "2025": {"short_term_debt": 5.0e6},
-        "2026": {"short_term_debt": 2.0e9},
+        "2023": {"short_term_debt": 6.0e6, "long_term_debt": 8.927e9},
+        "2024": {"short_term_debt": 1.006e9, "long_term_debt": 7.903e9},
+        "2025": {"short_term_debt": 5.0e6, "long_term_debt": 7.961e9},
+        "2026": {"short_term_debt": 2.0e9, "long_term_debt": 5.942e9},
     }
     assert check_field_outliers(annual, {"2023", "2024", "2025", "2026"}) == []
+
+
+def test_outlier_flags_a_short_term_debt_spike_no_long_term_debt_could_have_come_due_from():
+    # BUG-269 (code review 21): $6M of notes payable filed in thousands as $6B is more than any long-term debt around
+    # it, so no maturities explain it: a scale error, flagged as any field's.
+    annual = {
+        "2023": {"short_term_debt": 6.0e6, "long_term_debt": 4.927e9},
+        "2024": {"short_term_debt": 6.0e9, "long_term_debt": 4.903e9},
+        "2025": {"short_term_debt": 5.0e6, "long_term_debt": 4.961e9},
+        "2026": {"short_term_debt": 5.0e6, "long_term_debt": 4.942e9},
+    }
+    findings = check_field_outliers(annual, {"2023", "2024", "2025", "2026"})
+    assert [(f.code, f.period, f.severity) for f in findings] == [("magnitude_outlier", "2024", "high")]
+    assert "'short_term_debt' = 6,000,000,000" in findings[0].message
+
+
+def test_outlier_flags_a_short_term_debt_spike_without_long_term_debt():
+    annual = {"2023": {"short_term_debt": 6.0e6}, "2024": {"short_term_debt": 6.0e9},
+              "2025": {"short_term_debt": 5.0e6}}
+    assert [f.period for f in check_field_outliers(annual, {"2023", "2024", "2025"})] == ["2024"]
+
+
+@pytest.mark.parametrize("ltd", [
+    # The year before's long-term debt held the maturities (APA's FY2021 $215M beside FY2020's $8.77B).
+    {"2023": 8.77e9, "2024": None, "2025": None},
+    # The year's own, beside it.
+    {"2023": None, "2024": 0.301e9, "2025": None},
+    # Or the year after's: a revolver drawn and refinanced long-term (RMD's FY2013 $300M, its FY2014 long-term debt
+    # $301M), or notes the filer tags as long-term debt only after (GILD's FY2010 $646M due 2011).
+    {"2023": 0.0, "2024": 0.0, "2025": 7.606e9},
+])
+def test_outlier_skips_a_short_term_debt_spike_the_long_term_debt_around_it_holds(ltd):
+    annual = {year: {"short_term_debt": std, **({"long_term_debt": ltd[year]} if ltd[year] is not None else {})}
+              for year, std in (("2023", 2.0e6), ("2024", 0.3e9), ("2025", 2.0e6))}
+    assert check_field_outliers(annual, {"2023", "2024", "2025"}) == []
 
 
 def test_cashflow_imbalance_silent_when_residual_immaterial_to_gross():
@@ -324,6 +363,15 @@ def test_dividend_check_flags_payments_yahoo_is_missing():
     assert "2025-06-13" in findings[0].message and "2026-03-13" in findings[0].message
 
 
+def test_dividend_check_reads_a_payment_served_twice_once():
+    # BUG-154: Yahoo's copies of two payments (the same amounts within a week) made FY2025 look paid in full (3.88).
+    payments = _payments(lambda ym: 0.97, skip={"2025-09", "2025-12"})
+    payments += [{"date": "2025-03-18", "amount": 0.97}, {"date": "2025-06-20", "amount": 0.97}]
+    findings = check_dividend_completeness(_declared(y_2025=3.88), payments, [], {"2025"})
+    assert [(f.code, f.period) for f in findings] == [("dividend_payments_missing", "2025")]
+    assert "2025-06-13" in findings[0].message
+
+
 def test_dividend_check_silent_on_a_december_declaration_paid_in_january():
     # PGR: a large variable dividend declared in December goes ex in January, so FY2025's
     # payments (4.90) trail the declared 13.90 with no gap in the schedule.
@@ -381,3 +429,70 @@ def test_dividend_check_without_secs_figure_skips_a_split_since_the_year_before(
     splits = [{"date": "2024-05-01", "ratio": 2.0}]
     assert check_dividend_completeness(_declared(y_2024=7.76, y_2025=None), payments, splits, {"2025"}) == []
 
+
+
+def test_dividend_check_skips_a_payment_whose_date_doesnt_parse():
+    # BUG-025 (3): a malformed date raised ValueError, and _assess's catch-all dropped the whole quality report.
+    payments = _payments(lambda ym: 0.97, skip={"2025-09", "2025-12"}) + [{"date": "2025-13-45", "amount": 0.97},
+                                                                          {"date": "n/a", "amount": 0.97}]
+    findings = check_dividend_completeness(_declared(y_2024=3.88, y_2025=3.88), payments, [], {"2024", "2025"})
+    assert [(f.code, f.period) for f in findings] == [("dividend_payments_missing", "2025")]
+
+
+def test_dividend_check_skips_a_year_whose_end_doesnt_parse():
+    payments = _payments(lambda ym: 0.97, skip={"2025-09", "2025-12"})
+    annual = {**_declared(y_2025=3.88), "2024": {"period_end": "2024-12-xx", "dividends_per_share": 3.88}}
+    findings = check_dividend_completeness(annual, payments, [], {"2024", "2025"})
+    assert [(f.code, f.period) for f in findings] == [("dividend_payments_missing", "2025")]
+
+
+def test_dividend_check_reads_a_payment_without_a_finite_amount_as_one_without_an_amount():
+    # BUG-025 (4): a NaN amount made the year's total NaN, and no total under NaN is a shortfall: the finding went
+    # silent. Such a payment is read as one with no amount (left out), as before for None.
+    nan = float("nan")
+    for missing in (None, nan, float("inf")):
+        payments = _payments(lambda ym: missing if ym == "2025-03" else 0.97, skip={"2025-09", "2025-12"})
+        findings = check_dividend_completeness(_declared(y_2024=3.88, y_2025=3.88), payments, [], {"2024", "2025"})
+        assert [(f.code, f.period) for f in findings] == [("dividend_payments_missing", "2025")], missing
+        assert "sum to 0.97/share" in findings[0].message
+
+
+# ---- BUG-025 (1) and (2), decided 2026-11-26: a recent usual interval; the schedule ends on the collection day ----
+
+
+def _quarters(first_year, last_year, amount=0.70, day="15", skip=()):
+    return [{"date": f"{y}-{m}-{day}", "amount": amount} for y in range(first_year, last_year + 1)
+            for m in ("02", "05", "08", "11") if f"{y}-{m}" not in skip]
+
+
+def test_dividend_check_measures_the_usual_interval_over_the_recent_payments():
+    # DIS's shape: quarterly for years, twice a year since. Against the whole history's 91 days every half-year
+    # interval was a gap, so a shortfall alone (a December declaration paid in January) was flagged.
+    payments = _quarters(2005, 2019, 0.45) + [{"date": f"{y}-{m}-10", "amount": 0.45}
+                                             for y in range(2020, 2027) for m in ("01", "07")]
+    assert check_dividend_completeness(_declared(y_2025=1.20), payments, [], {"2025"}) == []
+
+
+def test_dividend_check_sees_a_missed_quarter_of_a_payer_that_turned_quarterly():
+    # CTAS's shape: once a year for decades, quarterly since 2020. A missed quarter (182 days) is no gap against the
+    # whole history's 365 days; against the recent 91 it is.
+    payments = [{"date": f"{y}-12-01", "amount": 2.8} for y in range(1975, 2020)]
+    payments += _quarters(2020, 2026, skip={"2025-08"})
+    findings = check_dividend_completeness(_declared(y_2025=2.80), payments, [], {"2025"})
+    assert [(f.code, f.period) for f in findings] == [("dividend_payments_missing", "2025")]
+    assert "2025-05-15 and 2025-11-15" in findings[0].message and "usual interval 92 days" in findings[0].message
+
+
+@pytest.mark.parametrize("collected, flagged", [
+    (date(2026, 11, 20), True),    # SWKS's shape: nothing since 2026-05-26, 178 days at a usual 91
+    (date(2026, 9, 20), False),    # 117 days: under 1.7 intervals, the next payment may still come
+    (None, False),                 # no collection day: the schedule ends at the last payment, as before
+])
+def test_dividend_check_ends_the_schedule_on_the_collection_day(collected, flagged):
+    payments = _quarters(2021, 2026, skip={"2026-08", "2026-11"})
+    payments = [p for p in payments if p["date"] != "2026-05-15"] + [{"date": "2026-05-26", "amount": 0.70}]
+    annual = {"2026": {"period_end": "2026-10-02", "dividends_per_share": 2.80}}
+    findings = check_dividend_completeness(annual, payments, [], {"2026"}, collected)
+    assert [(f.code, f.period) for f in findings] == ([("dividend_payments_missing", "2026")] if flagged else [])
+    if flagged:
+        assert "between 2026-05-26 and 2026-11-20" in findings[0].message

@@ -12,8 +12,9 @@ matches is reported, so an ambiguity shows up as a note rather than a false alar
 Level 2 ("inputs"): re-derive the inputs from the raw tables per the spec (≤10-FY CAGR windows,
 median 3-yr FCF, CAPM discount, TTM dividends, reported diluted EPS on today's split basis via
 declared split ratios, FY-end prices) and value each model with them. Where the spec is silent, the
-code's documented rule stands in: the years before a share-count seam beyond 50x are dropped
-(`unit_seam`, BUG-308). Rows whose spec inputs are undefined are listed, never skipped silently.
+code's documented rule stands in: the years before a share-count seam beyond 50x that neither a stored
+split nor the count EPS implies explains are dropped (`unit_seam`, BUG-308, Q19). Rows whose spec inputs are
+undefined are listed, never skipped silently.
 Known limitation: per-share history around reverse splits, spin-offs and stock dividends (GE, WDC,
 SCCO) is not modelled, so those need adjudication.
 
@@ -35,7 +36,8 @@ TERMINAL = 0.025
 DISCOUNT_CLAMP = (0.08, 0.14)
 SPREAD_G, SPREAD_R = 0.03, 0.01
 MAX_FY_ROWS = 10  # the fiscal years a valuation reads
-UNIT_SEAM_RATIO = 50.0  # a share-count seam beyond this is a unit break, not a split (BUG-308)
+UNIT_SEAM_RATIO = 50.0  # a share-count seam beyond this is a unit break, unless explained (BUG-308, Q19)
+SEAM_TOLERANCE = 1.25  # how near a stored split, or the count EPS implies, must come to such a seam (Q19)
 
 Triple = Tuple[Optional[float], Optional[float], Optional[float]]
 
@@ -178,20 +180,51 @@ def median(xs: List[float]) -> float:
     return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
 
 
-def unit_seam(rows: List[Tuple]) -> Optional[int]:
-    """The fiscal year before the newest share-count seam beyond UNIT_SEAM_RATIO among *rows* (financials_annual
-    rows, oldest first), or None.
+def seam_explained(ratio: float, older: Tuple, newer: Tuple, splits: List[Tuple] = (),
+                   to_common: Optional[Dict[int, float]] = None, counted: bool = True) -> bool:
+    """Whether a share-count seam of *ratio* beyond UNIT_SEAM_RATIO between two financials_annual rows is a split
+    (Q19, decided): a stored split, or a run of consecutive ones, dated after the older year's end and within
+    SEAM_TOLERANCE of the seam; else the count each year's EPS divides (net income to common where the year has it,
+    else net income, over diluted EPS; every figure known) moved with it within SEAM_TOLERANCE. A count filed in
+    thousands one year and in units the next leaves EPS alone. The implied count explains only where the seam's
+    counts aren't both net income / EPS (*counted*): it would be the seam compared with itself (BUG-377)."""
+    later = sorted((str(d)[:10], r) for d, r in splits if r and r > 0 and older[1] and str(d)[:10] > str(older[1])[:10])
+    for start in range(len(later)):
+        run = 1.0
+        for _, r in later[start:]:
+            run *= r
+            if abs(math.log(ratio / run)) <= math.log(SEAM_TOLERANCE):
+                return True
 
-    The code's documented rule (`inputs._normalize_splits`; the spec is silent): no company splits 50:1 or 1:50 in
-    one step, so such a seam is a unit or scale break and every year before it is dropped, for every model, FCF
-    totals included (BUG-308: EXE's 1:200 FY2017-18 seam, EG's thousands FY2019-20). Each year's count is the one its
-    EPS divides by: diluted weighted shares, else net income / EPS, else the period-end count. Only neighbouring rows
-    that both have one are compared, as the code compares them."""
+    def implied(row: Tuple) -> Optional[float]:
+        income = (to_common or {}).get(row[0])
+        income = row[2] if income is None else income
+        return income / row[6] if income and row[6] else None
+
+    a, b = implied(older), implied(newer)
+    return bool(counted and a and b and b / a > 0 and abs(math.log(b / a / ratio)) <= math.log(SEAM_TOLERANCE))
+
+
+def unit_seam(rows: List[Tuple], splits: List[Tuple] = (), to_common: Optional[Dict[int, float]] = None
+              ) -> Optional[int]:
+    """The fiscal year before the newest share-count seam beyond UNIT_SEAM_RATIO among *rows* (financials_annual
+    rows, oldest first) that nothing explains (`seam_explained`), or None.
+
+    The code's documented rule (`inputs._normalize_splits`; the spec is silent): such a seam is a unit or scale break
+    unless a stored split or the count EPS implies explains it (Q19: EXE's 1:200 FY2017-18 seam is its 2020 reverse
+    split, which its figures to common show), and every year before an unexplained one is dropped, for every model,
+    FCF totals included (BUG-308). Each year's count is the one its EPS divides by: diluted weighted shares, else net
+    income / EPS, else the period-end count. Only neighbouring rows that both have one are compared, as the code
+    compares them. A stored split may explain more than one seam here (the code spends each once). Where both rows'
+    counts are net income / EPS, the count EPS implies is the seam itself and explains nothing (BUG-377)."""
     counts = [r[5] or (r[2] / r[6] if r[2] is not None and r[6] else None) or r[4] for r in rows]
+    from_eps = [not r[5] and bool(r[2] / r[6] if r[2] is not None and r[6] else None) for r in rows]
     for i in range(len(rows) - 2, -1, -1):
         older, newer = counts[i], counts[i + 1]
         if older and newer and older > 0 and newer > 0 and not 1 / UNIT_SEAM_RATIO <= newer / older <= UNIT_SEAM_RATIO:
-            return rows[i][0]
+            if not seam_explained(newer / older, rows[i], rows[i + 1], splits, to_common,
+                                  not (from_eps[i] and from_eps[i + 1])):
+                return rows[i][0]
     return None
 
 
@@ -212,6 +245,81 @@ def ads_ratio(ratio: float) -> Optional[float]:
     return None
 
 
+def filed_splits(vintages: List[Tuple], splits: List[Tuple]) -> List[Tuple[str, float]]:
+    """Yahoo's split history *splits* with the share splits the filings themselves record put in (BUG-262), this
+    oracle's own reading of *vintages*: every 10-K's view of each fiscal year as (fiscal_year, filed day, diluted
+    weighted count, diluted EPS, net income).
+
+    A filing restates the years it reports for a split made before it, so one year's count (the diluted weighted
+    count, else net income / EPS) in two consecutive vintages moving by a share split's ratio (a simple ratio of 3:2
+    or more, or 2:3 or less, within 1%), with the year's EPS moving the other way by at least half of it (log terms)
+    and its net income keeping its sign and moving by less than half of it, is a split made between the two filings.
+    Unless Yahoo declares one there (a simple ratio, or run of consecutive ones, dated after the earlier filing and at
+    most 92 days after the later, within 1.25x), it is added: on the day of Yahoo's factor that isn't a simple ratio
+    between those dates and nearest it, which is then the split times a spin-off's price factor (DD's 0.4725 = 1/3 x
+    1.4175 for Corteva), else on the later filing's day (EXE's 1:200). A reverse merger restates the year's net income
+    too (KDP's FY2017), and a unit change leaves EPS alone."""
+    from datetime import date as _date
+    from datetime import timedelta as _days
+
+    def simple(x: float) -> bool:
+        return any(abs(v * d - round(v * d)) < 1e-9 * max(1.0, v * d) for v in (x, 1 / x) for d in (1, 2, 3, 4))
+
+    events = [(str(d)[:10], r) for d, r in splits]
+    views: Dict[int, List[Tuple[str, str, float, float, Optional[float]]]] = {}
+    for fy, filed, wd, eps, ni in sorted((v for v in vintages if v[0] is not None and v[1]),
+                                         key=lambda v: (v[0], str(v[1])[:10])):
+        if wd and wd > 0 and eps:
+            views.setdefault(fy, []).append((str(filed)[:10], "wd", wd, eps, ni))
+        elif ni is not None and eps and ni / eps > 0:
+            views.setdefault(fy, []).append((str(filed)[:10], "ni/eps", ni / eps, eps, ni))
+    found: List[Tuple[str, str, float]] = []
+    for seq in views.values():
+        for (d0, k0, c0, e0, n0), (d1, k1, c1, e1, n1) in zip(seq, seq[1:]):
+            if k0 != k1 or d0 == d1:
+                continue
+            r = c1 / c0
+            big = max(r, 1 / r)
+            nearest = min((round(big * den) / den for den in (1, 2, 3, 4) if round(big * den) > den),
+                          key=lambda v: abs(math.log(big / v)), default=1.0)
+            if abs(math.log(big / nearest)) > math.log(1.01) or nearest < 1.5:
+                continue
+            split = nearest if r > 1 else 1 / nearest
+            if not (e0 and e1 and e0 * e1 > 0 and -math.log(e1 / e0) * (1 if r > 1 else -1) >= 0.5 * math.log(big)):
+                continue
+            if n0 and n1 and (n0 * n1 < 0 or abs(math.log(n1 / n0)) >= 0.5 * math.log(big)):
+                continue
+            last = (_date.fromisoformat(d1) + _days(days=92)).isoformat()
+            declared = sorted((d, x) for d, x in events if x and x > 0 and simple(x) and d0 < d <= last)
+            if any(abs(math.log(r / math.prod(x for _, x in declared[a:b + 1]))) <= math.log(1.25)
+                   for a in range(len(declared)) for b in range(a, len(declared))):
+                continue
+            if not any(s == split and abs((_date.fromisoformat(d1) - _date.fromisoformat(w)).days) <= 366
+                       for _, w, s in found):
+                found.append((d0, d1, split))
+    for d0, d1, split in found:
+        last = (_date.fromisoformat(d1) + _days(days=92)).isoformat()
+        mixed = [i for i, (d, x) in enumerate(events) if x and x > 0 and not simple(x) and d0 < d <= last]
+        if mixed:
+            i = min(mixed, key=lambda j: abs(math.log(events[j][1] / split)))
+            day, factor = events.pop(i)
+            events += [(day, split)] + ([(day, factor / split)] if abs(factor / split - 1) > 1e-9 else [])
+        else:
+            events.append((d1, split))
+    return sorted(events)
+
+
+def with_filed_splits(db: sqlite3.Connection, ticker: str, splits: List[Tuple]) -> List[Tuple[str, float]]:
+    """*ticker*'s split history with the splits its filings record put in (`filed_splits`), from the vintages."""
+    try:
+        rows = db.execute("select fiscal_year, substr(filed_date,1,10), weighted_avg_shares_diluted, eps_diluted, "
+                          "net_income from financials_annual_vintages where ticker=? and fiscal_year is not null "
+                          "and filed_date is not null", (ticker,)).fetchall()
+    except sqlite3.OperationalError:  # a database from before vintages were kept
+        return [(str(d)[:10], r) for d, r in splits]
+    return filed_splits(rows, splits)
+
+
 class Inputs:
     """Raw-table lookups for one ticker."""
 
@@ -224,14 +332,21 @@ class Inputs:
         row = db.execute("select earnings_growth from analyst_snapshots where ticker=? order by collected_at desc "
                          "limit 1", (ticker,)).fetchone()
         self.analyst = row[0] if row else None
-        self.splits = db.execute("select date, ratio from split_events where ticker=? order by date",
-                                 (ticker,)).fetchall()
+        self.splits = with_filed_splits(db, ticker, db.execute(
+            "select date, ratio from split_events where ticker=? order by date", (ticker,)).fetchall())
         self.annual = db.execute("select fiscal_year, period_end, net_income, total_equity, shares_outstanding, "
                                  "weighted_avg_shares_diluted, eps_diluted from financials_annual where ticker=? "
                                  "order by fiscal_year", (ticker,)).fetchall()
         # BUG-308: the years before a share-count seam beyond 50x are dropped, as the code drops them
-        # (`inputs._normalize_splits`: a unit/scale break, its documented rule; the spec is silent).
-        self.truncated_at = unit_seam([r for r in self.annual if r[0] is not None][-MAX_FY_ROWS:])
+        # (`inputs._normalize_splits`: a unit/scale break, its documented rule; the spec is silent), unless a
+        # stored split or the count EPS implies explains it (Q19).
+        try:
+            to_common = dict(db.execute("select fiscal_year, net_income_to_common from financials_annual where "
+                                        "ticker=? and net_income_to_common is not null", (ticker,)).fetchall())
+        except sqlite3.OperationalError:  # a database from before the figure to common was kept
+            to_common = {}
+        self.truncated_at = unit_seam([r for r in self.annual if r[0] is not None][-MAX_FY_ROWS:], self.splits,
+                                      to_common)
         if self.truncated_at is not None:
             self.annual = [r for r in self.annual if r[0] is not None and r[0] > self.truncated_at]
         row = db.execute("select filed_date, form from financials_annual where ticker=? and fiscal_year is not null "
@@ -258,7 +373,8 @@ class Inputs:
                         self.filed_by_field[(fy, field)] = filed
         except sqlite3.OperationalError:  # a database from before vintages were kept
             pass
-        self.priced_on = str(collected_at)[:10] if self.price is not None and collected_at else None
+        # The price's day on the exchange's calendar, where the splits are dated (BUG-079).
+        self.priced_on = exchange_day(collected_at) if self.price is not None and collected_at else None
         # Yahoo's dividends and price bars come to the price's split basis from the day Yahoo served them, whatever
         # the SEC record holds (a company without SEC annual financials too; BUG-078): see bars_to_price_basis and
         # dividend_to_price_basis. A share split the latest filing restated after the price's day (BUG-060) is in
@@ -531,31 +647,88 @@ def regular_beside(events: List[Tuple[str, float]], extra: Dict[str, float], sta
     """BUG-311's gate, counting regular payments only (BUG-366): the larger of the counts of payments in the 365 days
     up to a fiscal year's *start* and in the 365 days after its *end*. Within each side, a payment counts unless it is
     a one-off whole (*extra*, ``one_offs``: its one-off part is the whole amount) or under half the median of that
-    side's other such payments. The 0.5 share is the fix's own heuristic (loop section 7): a small extra beside an
-    annual payment isn't a second payment a year; a semiannual interim down to a third of the final is."""
+    side's other such payments, unless it recurs into the fiscal year judged (BUG-372, BUG-376): any payment within
+    3x of it either way, ex-dated 365 days +/- 91 from it toward that year (a year later for the side before, a year
+    earlier for the side after; a quarter either way of its anniversary, as Q3's recurrence). The 0.5 share is the
+    fix's own heuristic (loop section 7): a small extra beside an annual payment isn't a second payment a year, even
+    one paid the year before too, unless the year judged holds it; a semiannual interim is, at any size, since it
+    comes back in that year (by size alone, only down to a third of the final)."""
+    before, after = sides_regular(events, extra, start, end)
+    return max(len(before), len(after))
+
+
+def regular_payments(events: List[Tuple[str, float]], extra: Dict[str, float], lo: str, hi: str,
+                     signs: Tuple[int, ...]) -> List[float]:
+    """The amounts of the regular payments ex-dated in (*lo*, *hi*] (``regular_beside``'s rule): not a one-off whole,
+    and at least half the median of the others so kept, or recurring (a payment within 3x either way, 365 days +/- 91
+    from it) a year later (sign 1) or a year earlier (-1), for any of *signs*."""
+    def recurs(d: str, a: float) -> bool:
+        return any(365 - 91 <= sign * (_day(e) - _day(d)).days <= 365 + 91 and a <= 3 * b and b <= 3 * a
+                   for e, b in events for sign in signs)
+
+    kept = [(d, a) for d, a in events if lo < d <= hi and extra.get(d[:10]) != a]
+    least = 0.5 * median([a for _, a in kept]) if kept else 0.0
+    return [a for d, a in kept if a >= least or recurs(d, a)]
+
+
+def sides_regular(events: List[Tuple[str, float]], extra: Dict[str, float], start: str,
+                  end: str) -> Tuple[List[float], List[float]]:
+    """The regular payments in the 365 days up to a fiscal year's *start* (recurring a year later, into the year) and
+    in the 365 days after its *end* (recurring a year earlier)."""
     year = datetime.timedelta(days=365)
-
-    def regular(lo: str, hi: str) -> int:
-        amounts = [a for d, a in events if lo < d <= hi and extra.get(d[:10]) != a]
-        least = 0.5 * median(amounts) if amounts else 0.0
-        return sum(1 for a in amounts if a >= least)
-    return max(regular((_day(start) - year).isoformat(), start), regular(end, (_day(end) + year).isoformat()))
+    return (regular_payments(events, extra, (_day(start) - year).isoformat(), start, (1,)),
+            regular_payments(events, extra, end, (_day(end) + year).isoformat(), (-1,)))
 
 
-def payment_gaps(db: sqlite3.Connection, ticker: str, splits: List[Tuple[str, float]]) -> List[Tuple[int, str, str]]:
+def slipped_year(events: List[Tuple[str, float]], extra: Dict[str, float], start: str, end: str,
+                 dps: float) -> bool:
+    """BUG-378 (decided 2026-11-26, option C): BUG-311's gate stays shut, SEC's figure the year's, when the fiscal year
+    holds more regular payments (the same rule, recurring a year either way) than each side counting two or more, and
+    SEC's figure is at least half that side's regular payments: an annual payer whose next payment slipped into the
+    year beside a recurring extra (3.10, 0.50, 3.26 beside 2.95 + 0.50). A quarter's rate tagged as the year (GPN's
+    0.01 beside about 0.04, J's 0.157 beside about 0.47) is under half, so Yahoo's payments still stand in. The 0.5
+    share is the decision's."""
+    sides = [side for side in sides_regular(events, extra, start, end) if len(side) >= 2]
+    own = regular_payments(events, extra, start, end, (1, -1))
+    return bool(sides) and all(len(own) > len(side) and dps >= 0.5 * sum(side) for side in sides)
+
+
+def once_each(events: List[Tuple[str, float]]) -> List[Tuple[str, float]]:
+    """BUG-154 (decided 2026-11-26): Yahoo serves some payments twice (KO's 2001-09-10 and -12, 0.18 each), and the
+    table keeps both. A payment equal in amount to an earlier one kept within 7 days before it is dropped. The week is
+    the decision's."""
+    out: List[Tuple[str, float]] = []
+    for d, a in events:
+        if any(b == a and 0 <= (_day(d) - _day(e)).days <= 7 for e, b in out):
+            continue
+        out.append((d, a))
+    return out
+
+
+def payment_gaps(db: sqlite3.Connection, ticker: str, splits: List[Tuple[str, float]],
+                 collected: Optional[str] = None) -> List[Tuple[int, str, str]]:
     """BUG-012's completeness check, re-derived for Q4 (decided 2026-11-02, option c), over the latest 5 fiscal
     years as a collection scores them: a gap in Yahoo's stored schedule over 1.7x its median interval, beginning
     no earlier than 1.7 intervals before the year and before its end and ending after its start, with the year's
     payments under 80% of SEC's dividends per share as filed; years with a split after their start skipped. Q4's
     extension: a year without SEC's figure but with a payment is measured against the year before's (ACN FY2026).
-    The 1.7 / 0.8 / 4-interval thresholds are BUG-012's heuristics, the extension the fix's own."""
-    paid = [(d[:10], a) for d, a in db.execute("select date, amount from dividend_events where ticker=? and amount is "
-                                               "not null order by date", (ticker,))]
+    The 1.7 / 0.8 / 4-interval thresholds are BUG-012's heuristics, the extension the fix's own.
+    BUG-025 (decided 2026-11-26): an interval's median is that of the 8 before it (of the first 8 where fewer than 4
+    come before it), and the schedule ends on the *collected* day: no payment since the last one for over 1.7 such
+    medians is a gap from it to that day. The 8 is the fix's own heuristic."""
+    paid = once_each([(d[:10], a) for d, a in db.execute("select date, amount from dividend_events where ticker=? and "
+                                                         "amount is not null order by date", (ticker,))])
     intervals = [(_day(b) - _day(a)).days for (a, _), (b, _) in zip(paid, paid[1:])]
     if len(intervals) < 4:
         return []
-    usual = median([float(v) for v in intervals])
-    holes = [(paid[i][0], paid[i + 1][0]) for i, v in enumerate(intervals) if v > 1.7 * usual]
+
+    def usual(i: int) -> float:  # the median of the intervals before the i-th
+        window = intervals[max(0, i - 8):i] if i >= 4 else intervals[:8]
+        return median([float(v) for v in window])
+
+    holes = [(paid[i][0], paid[i + 1][0], usual(i)) for i, v in enumerate(intervals) if v > 1.7 * usual(i)]
+    if collected and (_day(collected[:10]) - _day(paid[-1][0])).days > 1.7 * usual(len(intervals)):
+        holes.append((paid[-1][0], collected[:10], usual(len(intervals))))
     rows = db.execute("select fiscal_year, period_end, dividends_per_share from financials_annual where ticker=? "
                       "and fiscal_year is not null order by fiscal_year", (ticker,)).fetchall()
     by_fy = {fy: (pe, dps) for fy, pe, dps in rows}
@@ -572,8 +745,8 @@ def payment_gaps(db: sqlite3.Connection, ticker: str, splits: List[Tuple[str, fl
             since = (_day(by_fy[fy - 1][0]) - datetime.timedelta(days=365)).isoformat()
         if dps is None or dps <= 0 or any(str(d)[:10] > since for d, _ in splits):
             continue
-        recent = (_day(start) - datetime.timedelta(days=1.7 * usual)).isoformat()
-        hole = next(((a, b) for a, b in holes if recent <= a < end and b > start), None)
+        hole = next(((a, b) for a, b, u in holes
+                     if (_day(start) - datetime.timedelta(days=1.7 * u)).isoformat() <= a < end and b > start), None)
         if hole and total < 0.8 * dps:
             found.append((fy, hole[0], hole[1]))
     return found
@@ -612,7 +785,7 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         rows = db.execute("select substr(date,1,10), amount, " + ("served_on" if served else "null") +
                           " from dividend_events where ticker=? and amount is not null order by date",
                           (ticker,)).fetchall()
-        events = [(d, a) for d, a, _ in rows]
+        events = once_each([(d, a) for d, a, _ in rows])
         served_on = {d: s for d, _, s in rows}
         # A spin-off isn't a cash dividend. Yahoo records some twice: a price factor between 2:3 and 3:2 in its
         # split history and, that day, a "dividend" worth the spun-off shares (DHR 2016: 1.319 and $24.56, 228x
@@ -677,7 +850,8 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
             # payer's year holds two when the next ex-date slips into it, and SEC's figure is then the year's.
             beside = regular_beside(events, extra, start, end)
             one = len(amounts) >= 2 and beside >= 2 and dps is not None and (
-                dps < min(amounts) or any(abs(dps - a) <= 0.02 * a for a in amounts))
+                dps < min(amounts) or any(abs(dps - a) <= 0.02 * a for a in amounts)) \
+                and not slipped_year(events, extra, start, end, dps)
             from_sec = dps is not None and dps > 0 and not one
             value = dps if from_sec else (sum(amounts) if amounts else None)
             years.append((fy, value, restart, from_sec, sum(amounts),
@@ -700,7 +874,7 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         # Q4: no DDM where Yahoo's missing payments are ones it reads: the gap runs into the TTM, or its year is a
         # growth year taken from Yahoo's payments.
         from_yahoo = {fy for fy, _, _, sec_year, _, _ in kept if not sec_year} if len(window) >= 4 else set()
-        incomplete = [fy for fy, a, b in payment_gaps(db, ticker, list(x.splits))
+        incomplete = [fy for fy, a, b in payment_gaps(db, ticker, list(x.splits), anchor)
                       if fy in from_yahoo or (b > ttm_start and a < anchor[:10])]
         if incomplete:
             return {"na": "dividend history incomplete", "inputs": {"gap_years": incomplete}}
@@ -754,8 +928,16 @@ def level2(db: sqlite3.Connection, ticker: str, model: str, stored: Dict) -> Opt
         latest = basis_by_fy.get(x.annual[-1][0]) if x.annual else None
         if len(mults) < 3 or not latest or latest <= 0:
             return None
-        # BUG-172 (decided 2026-11-02): the band is the multiples' inclusive quartiles (p25, median, p75).
-        band = (quartile(mults, 0.25), median(mults), quartile(mults, 0.75))
+        # BUG-172 (decided 2026-11-02): the band is the multiples' inclusive quartiles (p25, median, p75). BUG-301
+        # (decided, option c): under 5 years no case interpolates toward an extreme year: four take the 2nd and 3rd
+        # values (and their midpoint), three the median alone.
+        ordered = sorted(mults)
+        if len(ordered) >= 5:
+            band = (quartile(mults, 0.25), median(mults), quartile(mults, 0.75))
+        elif len(ordered) == 4:
+            band = (ordered[1], (ordered[1] + ordered[2]) / 2, ordered[2])
+        else:
+            band = (ordered[1],) * 3
         return {"inputs": {"band_low": band[0], "band_median": band[1], "band_high": band[2], "latest_basis": latest,
                            "n_years": len(mults)}, "values": [m * latest for m in band]}
     return None
@@ -809,6 +991,29 @@ def check_level2(db: sqlite3.Connection, tickers: List[str], tol: float) -> int:
     if skipped:
         print(f"  not derivable from the spec ({len(skipped)}; the code still valued them): {' '.join(skipped)}")
     return bad + len(skipped)
+
+
+def exchange_day(stamp) -> Optional[str]:
+    """A stored time stamp's day in New York (an exchange date, as splits are dated): a naive stamp is this machine's
+    local time, as the collector writes it; a day alone is that day. U.S. daylight saving since 2007: UTC-4 from the
+    second Sunday of March 07:00 UTC to the first Sunday of November 06:00 UTC, else UTC-5 (no import of ``src``)."""
+    text = str(stamp or "").strip()
+    if len(text) <= 10:
+        return text or None
+    try:
+        moment = datetime.datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return text[:10]
+    utc = moment.astimezone(datetime.timezone.utc)
+
+    def sunday(month: int, nth: int) -> int:
+        first = datetime.date(utc.year, month, 1)
+        return 1 + (6 - first.weekday()) % 7 + 7 * (nth - 1)
+
+    edt_from = datetime.datetime(utc.year, 3, sunday(3, 2), 7, tzinfo=datetime.timezone.utc)
+    edt_to = datetime.datetime(utc.year, 11, sunday(11, 1), 6, tzinfo=datetime.timezone.utc)
+    hours = -4 if edt_from <= utc < edt_to else -5
+    return (utc + datetime.timedelta(hours=hours)).date().isoformat()
 
 
 def read_only_uri(path):

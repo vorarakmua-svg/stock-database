@@ -4,6 +4,7 @@ import copy
 import json
 import sqlite3
 import time
+from datetime import datetime
 
 import pytest
 
@@ -154,6 +155,28 @@ def test_assess_flags_dividend_payments_missing_from_yahoo(tmp_path):
     findings = [f for f in stock.data_quality["findings"] if f["code"] == "dividend_payments_missing"]
     assert [f["period"] for f in findings] == ["2025"]
     assert any("dividend" in w for w in stock.warnings)
+
+
+def test_assess_ends_the_dividend_schedule_on_the_collection_day(tmp_path):
+    # BUG-025 (2): SWKS's shape, collected 2026-11-20 with nothing since 2026-05-26 (178 days at a usual 91): FY2026
+    # holds three of its four payments, a gap with no payment after it.
+    fetcher = _make_fetcher(tmp_path, workers=1)
+    stock = StockData(ticker="SWKS", cik="000", company_name="SWKS Inc.", collected_at=datetime(2026, 11, 20, 9, 30))
+    stock.financials_annual = {
+        str(y): {"fiscal_year": y, "period_end": f"{y}-10-02", "dividends_per_share": 2.80,
+                 "revenue": 1.0e9, "net_income": 1.0e8, "operating_income": 1.5e8,
+                 "total_assets": 2.0e9, "total_liabilities": 1.0e9, "total_equity": 1.0e9,
+                 "operating_cash_flow": 2.0e8}
+        for y in (2024, 2025, 2026)
+    }
+    stock.dividend_history = {"dividend_payments": [
+        {"date": f"{y}-{m}-15", "amount": 0.70}
+        for y in range(2021, 2027) for m in ("02", "05", "08", "11") if f"{y}-{m}" < "2026-05"
+    ] + [{"date": "2026-05-26", "amount": 0.70}]}
+    fetcher._assess(stock)
+    findings = [f for f in stock.data_quality["findings"] if f["code"] == "dividend_payments_missing"]
+    assert [f["period"] for f in findings] == ["2026"]
+    assert "2026-11-20" in findings[0]["message"]
 
 
 def test_a_failed_summary_csv_still_writes_the_other_exports(tmp_path, monkeypatch):
@@ -368,8 +391,9 @@ def test_a_json_only_store_also_keeps_the_sector(tmp_path, monkeypatch):
 
 def test_a_tagging_error_put_right_is_a_warning(tmp_path, monkeypatch):
     def fy(val, year, filed):
-        return {"val": val, "start": f"{year}-01-01", "end": f"{year}-12-31", "fy": year, "fp": "FY", "form": "10-K",
-                "filed": filed, "accn": filed}
+        # STX's fiscal year, to the end of June: each 10-K is filed after its year ends (BUG-370).
+        return {"val": val, "start": f"{year - 1}-07-01", "end": f"{year}-06-30", "fy": year, "fp": "FY",
+                "form": "10-K", "filed": filed, "accn": filed}
 
     dps = [fy(2.68, 2021, "2021-08-06"), fy(2.77, 2022, "2022-08-05"), fy(2.77, 2022, "2023-08-04"),
            fy(2770000.0, 2022, "2024-08-02"), fy(2.80, 2023, "2024-08-02")]
@@ -404,6 +428,52 @@ def test_a_record_that_stops_where_ifrs_reports_begin_is_a_warning(tmp_path, mon
     assert sorted(stock.financials_annual) == ["2015", "2016", "2017", "2018", "2019"]
     assert ("SEC EDGAR: annual financials stop at FY2019 for TSM: later annual reports are in IFRS (20-F), which "
             "isn't mapped") in stock.warnings
+
+
+# ---- BUG-058: a foreign issuer's interim reports (6-K) aren't read ----
+
+def _arm_facts(annual_form="20-F", quarterly_form="6-K"):
+    """ARM's revenue as a US-GAAP foreign issuer tags it (test figures): two fiscal years from its annual reports
+    (*annual_form*), and the quarters of its interim reports (*quarterly_form*) since."""
+    def entry(val, start, end, fy, fp, form, filed):
+        return {"val": val, "start": start, "end": end, "fy": fy, "fp": fp, "form": form, "filed": filed,
+                "accn": f"0001973239-{filed}"}
+
+    years = [entry(2.68e9, "2023-04-01", "2024-03-31", 2024, "FY", annual_form, "2024-05-29"),
+             entry(4.01e9, "2024-04-01", "2025-03-31", 2025, "FY", annual_form, "2025-05-28")]
+    quarters = [entry(1.05e9, "2025-04-01", "2025-06-30", 2026, "Q1", quarterly_form, "2025-07-30"),
+                entry(1.14e9, "2025-07-01", "2025-09-30", 2026, "Q2", quarterly_form, "2025-11-05")]
+    return {"facts": {"us-gaap": {"Revenues": {"units": {"USD": years + quarters}}}}}
+
+
+def _arm(tmp_path, monkeypatch, facts):
+    return _collect_from_sec(tmp_path, monkeypatch, {
+        "cik": "0001973239", "ticker": "ARM", "source": "sec_edgar", "company_facts": facts,
+        "submissions": {"name": "ARM HOLDINGS PLC /UK", "filings": []}})
+
+
+@pytest.mark.parametrize("form", ["20-F", "40-F"])
+def test_a_foreign_issuer_without_quarters_is_told_its_interim_reports_arent_read(tmp_path, monkeypatch, form):
+    # ARM (BUG-058): six fiscal years from its 20-Fs, its 6-K quarters unread, so no quarterly or TTM rows, and its FA
+    # tab's Quarterly view said "No data available for this period." with no word on why.
+    stock = _arm(tmp_path, monkeypatch, _arm_facts(annual_form=form))
+    assert sorted(stock.financials_annual) == ["2024", "2025"] and not stock.financials_quarterly
+    assert [w for w in stock.warnings if w.startswith("SEC EDGAR: no quarterly financials")] == [
+        f"SEC EDGAR: no quarterly financials for ARM: its annual reports are {form}s, a foreign issuer's, whose "
+        "interim reports (6-K) aren't read, so there are no quarterly or TTM figures"]
+
+
+@pytest.mark.parametrize("annual_form, quarters", [
+    ("10-K", False),  # a domestic filer's record: whatever it lacks, it isn't a foreign issuer's interim reports
+    ("20-F", True),   # a foreign issuer whose record has quarters (from 10-Qs it once filed)
+])
+def test_no_interim_report_note_where_it_doesnt_apply(tmp_path, monkeypatch, annual_form, quarters):
+    if quarters:
+        quarter = {"period_end": "2025-06-30", "revenue": 1.05e9, "calendar_year": 2025, "calendar_quarter": 2}
+        monkeypatch.setattr(XBRLParser, "extract_quarterly_financials", lambda *a, **k: {"2025-06-30": dict(quarter)})
+    stock = _arm(tmp_path, monkeypatch, _arm_facts(annual_form=annual_form))
+    assert stock.financials_annual and bool(stock.financials_quarterly) is quarters
+    assert not [w for w in stock.warnings if w.startswith("SEC EDGAR: no quarterly financials")]
 
 
 def test_a_collected_quarterly_record_and_its_trailing_years_sit_on_one_split_basis(tmp_path, monkeypatch):
@@ -510,6 +580,65 @@ def test_a_snapshot_build_that_fails_keeps_the_runs_sec_record_and_the_stored_sn
             ("old",)]
     finally:
         conn.close()
+
+
+def test_a_years_back_run_carries_its_limit_without_snapshots(tmp_path, monkeypatch):
+    # The store removes a period a run no longer gives only within the years a limited run read (BUG-344): a run
+    # whose snapshot build failed is limited all the same, or it would read as one over the whole history.
+    from src.fetchers import stock_data_fetcher
+
+    fetcher = _sec_only_fetcher(tmp_path, monkeypatch, {
+        "cik": "0001018724", "ticker": "AMZN", "source": "sec_edgar", "company_facts": _split_restated_facts()})
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("snapshot boom")
+
+    monkeypatch.setattr(stock_data_fetcher, "build_snapshots", boom)
+    stock = fetcher.fetch_ticker("AMZN", include_yahoo=False, years_back=1)
+    assert stock.financials_annual and stock.financials_annual_known is None
+    assert stock.years_back == 1
+
+
+@pytest.mark.parametrize("step, unbuilt, kept", [
+    ("_clean_and_derive", "quarterly", {"financials_quarterly", "financials_ttm"}),
+    ("_compute_metrics", "metrics", {"metrics_annual"}),
+])
+def test_a_step_that_raised_keeps_the_stored_rows_of_the_tables_it_builds(tmp_path, monkeypatch, step, unbuilt, kept):
+    # A collection catches a failed cleaning of the quarters (the trailing years with it) or of the metrics as a
+    # warning and goes on: an otherwise complete run, whose part of those tables isn't its record, so the store
+    # removes none of their stored rows (BUG-344), while a year the parse no longer gives goes as before.
+    from src.parsers.calculated_metrics import CalculatedMetrics
+
+    fetcher = _sec_only_fetcher(tmp_path, monkeypatch, {
+        "cik": "0001018724", "ticker": "AMZN", "source": "sec_edgar", "company_facts": _split_restated_facts()})
+    stale = StockData(ticker="AMZN", cik="0001018724", company_name="Amazon")
+    stale.financials_annual = {"1999": {"fiscal_year": 1999, "period_end": "1999-12-31", "revenue": 1.64e9,
+                                        "net_income": -0.72e9, "total_assets": 2.47e9}}
+    stale.financials_quarterly = {"1999-09-30": {"period_end": "1999-09-30", "revenue": 0.36e9}}
+    stale.financials_ttm = {"1999-09-30": {"period_end": "1999-09-30", "revenue": 1.4e9}}
+    stale.calculated_metrics = {"historical": CalculatedMetrics().calculate_historical(stale.financials_annual)}
+    stale.add_source("sec_edgar")
+    fetcher.sqlite_store.export([stale])
+
+    def boom(*args, **kwargs):
+        raise RuntimeError(f"{step} boom")
+
+    monkeypatch.setattr(fetcher, step, boom)
+    stock = fetcher.fetch_ticker("AMZN", include_yahoo=False)
+    assert stock.financials_annual and not stock.errors
+    assert stock.unbuilt == [unbuilt]
+    fetcher.sqlite_store.export([stock])
+    conn = sqlite3.connect(fetcher.sqlite_store.db_path)
+    try:
+        held = {table: conn.execute(f"SELECT count(*) FROM {table} WHERE ticker = 'AMZN' AND {key} = ?",
+                                    (value,)).fetchone()[0]
+                for table, key, value in (("financials_annual", "fiscal_year", 1999),
+                                          ("metrics_annual", "fiscal_year", 1999),
+                                          ("financials_quarterly", "period_end", "1999-09-30"),
+                                          ("financials_ttm", "period_end", "1999-09-30"))}
+    finally:
+        conn.close()
+    assert held == {table: int(table in kept) for table in held}
 
 
 def test_a_successor_registrant_is_noted_with_its_predecessor(tmp_path, monkeypatch):
@@ -797,6 +926,19 @@ def test_the_runs_warning_says_where_its_figures_of_a_report_the_companyfacts_la
     assert [w for w in stock.warnings if w.startswith("SEC EDGAR: the companyfacts lack")] == [warning]
 
 
+def test_a_report_the_companyfacts_lack_before_one_they_carry_is_named_as_such(tmp_path, monkeypatch):
+    # BUG-280: the figures don't stop before a report the companyfacts lack when they carry a later one; they lack it.
+    q3 = {"accessionNumber": "0001104659-26-110001", "form": "10-Q", "filingDate": "2026-10-30", "isXBRL": 1}
+    q2 = {"accessionNumber": DLR_10Q["accession"], "form": "10-Q", "filingDate": "2026-07-31", "isXBRL": 1}
+    sec = _lagging_dlr(reports_read=[], reports_unread=[_UNREAD_Q2])
+    sec["submissions"] = {**sec["submissions"], "filings": [q3, q2], "reports": [q3, q2], "latest_report": q3}
+    stock = _collect_from_sec(tmp_path, monkeypatch, sec)
+    assert [w for w in stock.warnings if w.startswith("SEC EDGAR: the companyfacts lack")] == [
+        "SEC EDGAR: the companyfacts lack DLR's 10-Q filed 2026-07-31 (0001104659-26-089296), though they carry its "
+        "10-Q filed 2026-10-30, so this run lacks its figures (its own XBRL couldn't be read: HTTP 404 for "
+        "dlr-20260630x10q_htm.xml; HTTP 404 for the filing's index); the refresh collects DLR again"]
+
+
 def test_a_collection_that_read_the_report_from_its_own_xbrl_stores_its_figures_and_is_complete(tmp_path,
                                                                                                monkeypatch):
     # `stock-data`'s collection of DLR while its companyfacts lack the 10-Q of 2026-07-31: the quarter is stored from
@@ -828,3 +970,19 @@ def test_a_collection_whose_submissions_request_failed_is_stored_as_incomplete(t
         with StockDataFetcher(config=config) as fetcher:
             assert fetcher.fetch_and_export(["DLR"], formats=["sqlite"])["stored"] == 1
         assert stored_run(db, "DLR")[1] == expected
+
+
+def test_assess_reads_the_years_the_filings_report(tmp_path, monkeypatch):
+    # BUG-112: the integrity checks read the score's years: FY2021, known only from its opening equity, isn't one.
+    from src.fetchers import stock_data_fetcher
+    seen = []
+    monkeypatch.setattr(stock_data_fetcher, "check_field_outliers", lambda annual, years: seen.append(set(years)) or [])
+    fetcher = _make_fetcher(tmp_path, workers=1)
+    stock = StockData(ticker="GEV", cik="000", company_name="GEV Inc.")
+    base = {"revenue": 1.0e9, "net_income": 1.0e8, "operating_income": 1.5e8, "total_assets": 2.0e9,
+            "total_liabilities": 1.0e9, "total_equity": 1.0e9, "operating_cash_flow": 2.0e8}
+    stock.financials_annual = {str(y): {"fiscal_year": y, **base} for y in (2022, 2023, 2024, 2025)}
+    stock.financials_annual["2021"] = {"fiscal_year": 2021, "total_equity": 1.0e9}
+    fetcher._assess(stock)
+    assert seen == [{"2022", "2023", "2024", "2025"}]
+    assert stock.data_quality["score"] == 100

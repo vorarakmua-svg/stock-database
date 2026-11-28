@@ -1,5 +1,7 @@
 """Tests for XBRLParser — in particular the fiscal-year grouping regression (A1)."""
 
+from datetime import date, timedelta
+
 import pytest
 
 from src.exporters.sqlite_store import SQLiteStore
@@ -7,6 +9,7 @@ from src.models.stock_data import StockData
 from src.parsers.annual_snapshots import build_snapshots
 from src.parsers.calculated_metrics import CalculatedMetrics
 from src.parsers.derived_fields import apply_derivations
+from src.parsers.known_facts import facts_known_by
 from src.parsers.share_scale import normalize_share_scale
 from src.parsers.ttm import compute_ttm
 from src.parsers.xbrl_parser import XBRLParser, explain_no_annual_financials, explain_stale_annual_financials
@@ -113,6 +116,32 @@ def test_a_sixteen_week_fourth_quarter_is_derived():
     ]
     q = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": {"NetIncomeLoss": {"units": {"USD": ladder}}}}})
     assert (q["2024-09-01"]["net_income"], q["2024-09-01"]["fiscal_quarter"]) == (170, 4)
+
+
+@pytest.mark.parametrize("fourth_quarter_days, derived", [
+    (119, True),    # 17 weeks: PEP's and COST's longest fourth quarter
+    (120, True),    # the limit, inclusive
+    (121, False),   # a day more: the nine months' rung and the year's are two quarters apart
+])
+def test_a_seventeen_week_fourth_quarter_is_derived_and_a_longer_one_is_not(fourth_quarter_days, derived):
+    # BUG-122 (surviving mutant: _QUARTER_MAX_DAYS 120 -> 115, which lost six 17-week Q4s: COST 2012-09-02,
+    # 2017-09-03, 2023-09-03; PEP's 2011, 2016, 2022). A quarter spans 80 to 120 days; the fourth is the year's
+    # figure less the nine months', so its length is the last rung's step. 119 days (17 weeks) is a quarter.
+    from datetime import date, timedelta
+    s = "2023-01-01"
+    year_end = (date(2023, 9, 2) + timedelta(days=fourth_quarter_days)).isoformat()
+    ladder = [
+        usd(100, s, "2023-03-22", fy=2023, fp="Q1", form="10-Q", filed="2023-04-20"),
+        usd(220, s, "2023-06-12", fy=2023, fp="Q2", form="10-Q", filed="2023-07-20"),
+        usd(330, s, "2023-09-02", fy=2023, fp="Q3", form="10-Q", filed="2023-10-20"),
+        usd(500, s, year_end, fy=2023, fp="FY", form="10-K", filed="2024-02-20"),
+    ]
+    q = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": {"NetIncomeLoss": {"units": {"USD": ladder}}}}})
+    if derived:
+        assert (q[year_end]["net_income"], q[year_end]["fiscal_quarter"]) == (170, 4)
+    else:
+        assert "net_income" not in q.get(year_end, {})
+    assert q["2023-09-02"]["net_income"] == 110  # the rungs before it don't depend on the limit
 
 
 def test_a_missing_rung_derives_no_two_quarter_figure():
@@ -1317,6 +1346,43 @@ def test_borrowings_a_rounding_below_the_maturities_take_the_annual_reports_word
     assert XBRLParser().extract_quarterly_financials(facts)["2025-09-30"]["short_term_debt"] == 0.0014e9
 
 
+_BE_FY2024 = ("10-K", "2025-02-27", "2024-12-31", dict(
+    ShortTermBorrowings=0.1144e9, LongTermDebtCurrent=0.114385e9, LongTermDebtNoncurrent=1.014407e9))
+_BE_Q3_2025 = ("10-Q", "2025-10-28", "2025-09-30", dict(
+    ShortTermBorrowings=0.0014e9, LongTermDebtCurrent=0.001424e9, LongTermDebtNoncurrent=1.130892e9))
+
+
+@pytest.mark.parametrize("other_end", [
+    "2025-01-01",  # an adoption day's opening balance sheet in the same 10-K (BE's 2019-01-01 and 2020-01-01)
+    "2024-12-29",  # a column two days before the year end (CIEN's 2019-10-31 beside 2019-11-02)
+])
+def test_an_annual_balance_sheet_days_from_the_year_end_doesnt_hide_the_annual_reports_word(other_end):
+    # BUG-359: the quarter took any annual-form balance-sheet date as its latest year end, so a 10-K's adoption-day
+    # total (the day after its year end) was one, and the quarter found nothing there: BE's Q3 2025 borrowings and
+    # maturities added up, $2.824M for $1.4M. The dates within a few days of the latest year end are that year end.
+    facts = _filings(_BE_FY2024, ("10-K", "2025-02-27", other_end, {}), _BE_Q3_2025)
+    assert XBRLParser().extract_quarterly_financials(facts)["2025-09-30"]["short_term_debt"] == 0.0014e9
+
+
+def test_an_adoption_day_doesnt_hide_the_annual_reports_debt_current():
+    # BUG-359, PEP's shape: the 10-K tags DebtCurrent the line the 10-Q's year-end column tags as its borrowings; an
+    # opening balance sheet the day after the year end leaves it the quarter's word.
+    facts = _filings(_PEP_FY2010, ("10-K", "2026-02-03", "2025-12-27", dict(DebtCurrent=6.861e9)),
+                     ("10-K", "2026-02-03", "2025-12-28", {}),
+                     ("10-Q", "2026-07-09", "2025-12-27", dict(ShortTermBorrowings=6.861e9)),
+                     ("10-Q", "2026-07-09", "2026-06-13", dict(ShortTermBorrowings=10.602e9,
+                                                               LongTermDebtCurrent=1.6e9)))
+    assert XBRLParser().extract_quarterly_financials(facts)["2026-06-13"]["short_term_debt"] == 10.602e9
+
+
+def test_a_year_end_a_week_on_is_another_year():
+    # Only a few days (_SAME_PERIOD_DAYS) make one year end: an annual balance sheet 8 days after the one that held the
+    # maturities is a year end of its own, which says nothing, so the quarter's lines stay two.
+    facts = _filings(_BE_FY2024, ("10-K", "2025-02-27", "2025-01-08", {}), _BE_Q3_2025)
+    assert XBRLParser().extract_quarterly_financials(facts)["2025-09-30"]["short_term_debt"] == pytest.approx(
+        0.0014e9 + 0.001424e9)
+
+
 def test_a_10qs_year_end_column_takes_the_annual_report_on_that_date():
     # GEHC's 2025-12-31: its FY2025 10-K shows $508M of borrowings beside $502M of maturities, 1.2% apart, which
     # nothing decides; its Q1 2026 10-Q's comparative column the same. The checkpoint reads the date as the annual
@@ -1464,17 +1530,18 @@ def test_a_10q_line_the_10k_shows_without_its_current_maturities_is_read_beside_
     assert (quarter.get("long_term_debt"), _total_debt(quarter)) == (25.605e9, pytest.approx(29.681e9))
 
 
-def test_a_10q_line_that_can_hold_the_current_maturities_isnt_read_beside_short_term_debt():
+def test_a_10q_line_that_can_hold_the_current_maturities_isnt_read_whole_beside_short_term_debt():
     # Kenvue's 10-Qs tag the same concept as a total: its 2024-09-29 figure, $7.803B, holds $750M of maturities its
     # $1.648B of DebtCurrent holds too (its own total $8.701B). Its year end showed no maturities, and its 10-K's figure
-    # there is a total (LongTermDebt), so nothing tells the line apart from a total: unknown rather than $0.75B high.
+    # there is a total (LongTermDebt), so nothing tells the line apart from a total: not read whole ($0.75B high), but
+    # as the total less the maturities the 10-Q tags beside it (Q23), $7.053B.
     facts = _balance_sheets(
         ("10-K", "2024-03-01", "2023-12-31", dict(LongTermDebt=7.687e9, DebtCurrent=0.599e9, LongTermDebtCurrent=0.0,
                                                   CommercialPaper=0.600e9)),
         ("10-Q", "2024-11-07", "2023-12-31", {_INCLUDING: 7.687e9, "DebtCurrent": 0.599e9, "LongTermDebtCurrent": 0.0}),
         ("10-Q", "2024-11-07", "2024-09-29", {_INCLUDING: 7.803e9, "DebtCurrent": 1.648e9,
                                               "LongTermDebtCurrent": 0.750e9}))
-    assert _quarter_debt(facts, "2024-09-29") == (None, None)
+    assert _quarter_debt(facts, "2024-09-29") == (pytest.approx(7.053e9), _INCLUDING)
 
 
 def test_a_10q_line_beside_a_10k_total_isnt_read_beside_short_term_debt():
@@ -1588,7 +1655,6 @@ def test_a_figure_near_the_year_ends_isnt_its_line():
 @pytest.mark.parametrize("tag", [
     "SeniorNotesCurrent",  # GPC's 10-Qs: the notes due within the year, as large as the noncurrent ones
     "ShortTermBankLoansAndNotesPayable",  # short-term debt's own
-    "DebtLongtermAndShorttermCombinedAmount",  # VTR's 10-Qs: its own total, beside its commercial paper
     "DebtAndCapitalLeaseObligations",  # the filer's debt and leases
     "DebtInstrumentCarryingAmount",  # often one instrument's (BUG-125)
     "LongTermDebtFairValue",  # a note's fair value, at par at the year end
@@ -1600,6 +1666,19 @@ def test_a_figure_that_isnt_a_long_term_debt_line_isnt_read(tag):
         ("10-Q", "2026-04-28", "2025-12-31", {tag: 0.250e9}),
         ("10-Q", "2026-04-28", "2026-03-31", {tag: 0.300e9}))
     assert _quarter_debt(facts, "2026-03-31") == (None, None)
+
+
+def test_a_10qs_own_total_beside_its_commercial_paper_is_read_less_it():
+    # VTR's 10-Qs tag their own total, DebtLongtermAndShorttermCombinedAmount, beside the commercial paper it holds:
+    # no long-term debt line (BUG-171), and beside the paper the total less it (Q23; read whole it counted the paper
+    # twice, BUG-364). Alone, the total is read as the filer's debt (tests/test_fallback_tags.py).
+    facts = _balance_sheets(
+        ("10-K", "2026-02-12", "2025-12-31", dict(LongTermDebtNoncurrent=0.250e9)),
+        ("10-Q", "2026-04-28", "2025-12-31", dict(DebtLongtermAndShorttermCombinedAmount=0.250e9)),
+        ("10-Q", "2026-04-28", "2026-03-31", dict(DebtLongtermAndShorttermCombinedAmount=0.300e9,
+                                                  CommercialPaper=0.050e9)))
+    assert _quarter_debt(facts, "2026-03-31") == (pytest.approx(0.250e9), "DebtLongtermAndShorttermCombinedAmount")
+    assert _total_debt(XBRLParser().extract_quarterly_financials(facts)["2026-03-31"]) == pytest.approx(0.300e9)
 
 
 def test_lines_that_disagree_on_the_quarter_are_no_line():
@@ -1743,15 +1822,55 @@ def test_a_later_10ks_note_doesnt_replace_the_years_total():
 
 
 def test_a_cash_lines_smallest_part_gives_way_to_a_later_10ks_total():
-    # AXP's FY2017 10-K tags its balance sheet's cash line, $32.927B, as CashCashEquivalentsAndFederalFundsSold, which
-    # cash doesn't read, over three parts: cash and due from banks, interest-bearing deposits in other banks, and
-    # $0.070B of short-term investment securities it tags CashEquivalentsAtCarryingValue, which the year read; its
-    # FY2018 10-K tags FY2017 with the total, the line and $0.336B of restricted cash.
-    lines = {"CashCashEquivalentsAndFederalFundsSold": 32.927e9, "CashAndDueFromBanks": 5.148e9,
-             "InterestBearingDepositsInBanks": 27.709e9, "RestrictedCashAndCashEquivalents": 0.336e9}
+    # AXP's FY2017 10-K tags its balance sheet's cash line over three parts: cash and due from banks, interest-bearing
+    # deposits in other banks, and $0.070B of short-term investment securities it tags CashEquivalentsAtCarryingValue,
+    # which the year read; its FY2018 10-K tags FY2017 with the total and $0.336B of restricted cash. (The line itself,
+    # where tagged, comes first: BUG-261.)
+    lines = {"CashAndDueFromBanks": 5.148e9, "InterestBearingDepositsInBanks": 27.709e9,
+             "RestrictedCashAndCashEquivalents": 0.336e9}
     facts = _with_later_10k(_debt_filing(**{EQUIVALENTS: 0.070e9, **lines}), "2027-02-12",
                             **{RESTRICTED: 33.263e9, **lines})
     assert _cash(_debt_year(facts)) == (33.263e9, RESTRICTED)
+
+
+FED_FUNDS = "CashCashEquivalentsAndFederalFundsSold"
+
+
+def test_a_balance_sheets_cash_line_with_federal_funds_sold_is_the_cash():
+    # BUG-261: AXP's FY2017 10-K tags its balance sheet's cash line, $32.927B, as
+    # CashCashEquivalentsAndFederalFundsSold, which cash didn't read: the year read a note's $0.070B part, then its
+    # FY2018 10-K's total with restricted cash.
+    lines = {FED_FUNDS: 32.927e9, "CashAndDueFromBanks": 5.148e9, "InterestBearingDepositsInBanks": 27.709e9,
+             "RestrictedCashAndCashEquivalents": 0.336e9}
+    facts = _with_later_10k(_debt_filing(**{EQUIVALENTS: 0.070e9, **lines}), "2027-02-12",
+                            **{RESTRICTED: 33.263e9, **lines})
+    assert _cash_records(facts) == [(32.927e9, FED_FUNDS)] * 3
+
+
+@pytest.mark.parametrize("tagged", [
+    # AXP's 10-K of 2011 tags FY2009's line, $16.599B, beside $4.064B it tags CashAndCashEquivalentsAtCarryingValue,
+    # a part of it
+    {FED_FUNDS: 16.599e9, "CashAndCashEquivalentsAtCarryingValue": 4.064e9, "CashAndDueFromBanks": 1.525e9,
+     "InterestBearingDepositsInBanks": 11.010e9},
+    # COF's FY2025 10-K: its $57.434B line beside the cash flow statement's $62.093B with restricted cash
+    {FED_FUNDS: 57.434e9, RESTRICTED: 62.093e9, "CashAndDueFromBanks": 3.031e9,
+     "InterestBearingDepositsInBanks": 54.403e9},
+    # COF's FY2015 10-K tags nothing else: cash was empty
+    {FED_FUNDS: 8.023e9, "CashAndDueFromBanks": 3.407e9, "InterestBearingDepositsInBanks": 4.577e9},
+])
+def test_the_line_with_federal_funds_sold_outranks_its_parts_and_the_total(tagged):
+    assert _cash_records(_debt_filing(**tagged)) == [(tagged[FED_FUNDS], FED_FUNDS)] * 3
+
+
+def test_the_line_with_federal_funds_sold_isnt_read_from_a_cash_flow_statements_opening_balance():
+    # AXP's 10-K of 2019 tags FY2015's opening balance, $23.239B with restricted cash, on a date its balance sheets
+    # don't cover; COF's of 2012 a day, 2011-01-07, no balance sheet of it shows
+    facts = _debt_filing(**{FED_FUNDS: 27.445e9})
+    facts["facts"]["us-gaap"][FED_FUNDS]["units"]["USD"].append(usd(23.239e9, None, "2023-12-31", **_K10))
+    parser = XBRLParser()
+    assert "2023" not in parser.extract_annual_financials(facts)
+    assert "2023-12-31" not in parser.extract_quarterly_financials(facts)
+    assert _cash_records(facts) == [(27.445e9, FED_FUNDS)] * 3
 
 
 @pytest.mark.parametrize("tagged, line", [
@@ -2261,6 +2380,41 @@ def test_a_year_with_no_10k_yet_stays_on_the_last_10ks_line_basis():
     assert quarters["2026-03-31"]["depreciation_amortization"] == pytest.approx(16.0e6)
 
 
+#: BUG-338 (code review 29, Minor 1): FY2024's 10-K is read combined (SWK's figures); FY2025's 10-Qs tag DDA, DA and
+#: the amortization (their line shown in the same filing), and its 10-K tags DDA $370M alone.
+_NO_AMORTIZATION_10K = [
+    ("2024-01-01", "2024-12-31", "10-K", "2025-02-24", {DDA: 365.6e6, DA: 512.4e6, INTANGIBLES: 146.8e6}),
+    ("2025-01-01", "2025-03-31", "10-Q", "2025-04-30", {DDA: 91.1e6, DA: 128.4e6, INTANGIBLES: 37.3e6}),
+    ("2025-01-01", "2025-06-30", "10-Q", "2025-07-30", {DDA: 182.0e6, DA: 256.6e6, INTANGIBLES: 74.6e6}),
+    ("2025-01-01", "2025-09-30", "10-Q", "2025-10-29", {DDA: 273.1e6, DA: 385.0e6, INTANGIBLES: 111.9e6}),
+    ("2025-01-01", "2025-12-31", "10-K", "2026-02-24", {DDA: 370.0e6})]
+
+
+def test_a_year_whose_10k_tags_no_amortization_follows_its_own_10k():
+    # The year has a 10-K, read as tagged (the line), so its 10-Qs stay on the line: not FY2024's basis, which moved
+    # them to the total and left the fourth quarter at -$15.0M.
+    quarters = XBRLParser().extract_quarterly_financials(_da_filings(*_NO_AMORTIZATION_10K))
+    assert [round(quarters[end]["depreciation_amortization"] / 1e5) for end in (
+        "2025-03-31", "2025-06-30", "2025-09-30", "2025-12-31")] == [911, 909, 911, 969]
+
+
+def test_before_its_10k_a_year_follows_the_last_10k_and_after_it_its_own():
+    # Known before FY2025's 10-K, the year has none yet and follows FY2024's (the total); from the 10-K's day, its own.
+    facts = _da_filings(*_NO_AMORTIZATION_10K)
+    parser = XBRLParser()
+    before = parser.extract_quarterly_financials(facts_known_by(facts, "2026-02-23"))
+    assert before["2025-09-30"]["depreciation_amortization"] == pytest.approx(128.4e6)
+    after = parser.extract_quarterly_financials(facts_known_by(facts, "2026-02-24"))
+    assert after["2025-09-30"]["depreciation_amortization"] == pytest.approx(91.1e6)
+
+
+def test_a_year_with_no_10k_yet_follows_a_10k_that_tags_no_amortization():
+    # The last 10-K (FY2025's) tags DDA alone, read as tagged: FY2026's 10-Q stays on its line, not on FY2024's total.
+    q1 = ("2026-01-01", "2026-03-31", "10-Q", "2026-04-29", {DDA: 93.0e6, DA: 131.0e6, INTANGIBLES: 38.0e6})
+    quarters = XBRLParser().extract_quarterly_financials(_da_filings(*_NO_AMORTIZATION_10K, q1))
+    assert quarters["2026-03-31"]["depreciation_amortization"] == pytest.approx(93.0e6)
+
+
 def test_a_10k_line_the_guard_keeps_doesnt_move_its_10qs():
     # BUG-333 (code review 28, M1): the year's latest 10-K keeps its $906M line ($794M + $111M come to no more), but
     # the gate read the line before the guard, so the 10-Q's nine months moved to $893M and the fourth quarter read
@@ -2505,7 +2659,8 @@ def test_the_10qs_filed_after_a_10k_dont_judge_it():
 def _outflow_quarters(tag, field, values, start="2008-01-01", ends=("2008-03-31", "2008-06-30", "2008-09-30",
                                                                   "2008-12-31")):
     """An outflow's year-to-date ladder (three 10-Qs, then the 10-K's year), and its derived quarters."""
-    ladder = [usd(v, start, end, fy=int(ends[-1][:4]), fp=fp, form=form, filed=f"{end[:8]}28")
+    ladder = [usd(v, start, end, fy=int(ends[-1][:4]), fp=fp, form=form,
+                  filed=(date.fromisoformat(end) + timedelta(days=28)).isoformat())
               for v, end, fp, form in zip(values, ends, ("Q1", "Q2", "Q3", "FY"), ("10-Q", "10-Q", "10-Q", "10-K"))]
     q = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": {tag: {"units": {"USD": ladder}}}}})
     return [q.get(end, {}).get(field) for end in ends]
@@ -2720,9 +2875,13 @@ def test_a_filer_reporting_in_another_currency_keeps_no_share_only_quarters():
     assert XBRLParser().extract_quarterly_financials(facts) == {}
 
 
-def _filed_years(tag, unit, by_fy, instant=False):
-    """One tag's facts: {fy: [(filed, value), ...]}, each a calendar fiscal year (or its year-end instant)."""
-    return {tag: {"units": {unit: [usd(v, start=None if instant else f"{fy}-01-01", end=f"{fy}-12-31", fy=fy,
+def _filed_years(tag, unit, by_fy, instant=False, year_end="12-31"):
+    """One tag's facts: {fy: [(filed, value), ...]}, each a fiscal year ending on *year_end* (month-day) of *fy*
+    (or its year-end instant). A figure is filed after its year ends (BUG-370)."""
+    def start(fy):
+        return (date.fromisoformat(f"{fy - 1}-{year_end}") + timedelta(days=1)).isoformat()
+
+    return {tag: {"units": {unit: [usd(v, start=None if instant else start(fy), end=f"{fy}-{year_end}", fy=fy,
                                        filed=filed) for fy, filings in by_fy.items() for filed, v in filings]}}}
 
 
@@ -2736,7 +2895,7 @@ def test_a_later_filings_scale_typo_keeps_the_figure_earlier_filings_report():
     annual = _annual(_filed_years("CommonStockDividendsPerShareDeclared", "USD/shares", {
         2021: [("2021-08-06", 2.68)],
         2022: [("2022-08-05", 2.77), ("2023-08-04", 2.77), ("2024-08-02", 2770000.0)],
-        2023: [("2023-08-04", 2.80), ("2024-08-02", 2.80)]}))
+        2023: [("2023-08-04", 2.80), ("2024-08-02", 2.80)]}, year_end="06-30"))
     assert annual["2022"]["dividends_per_share"] == 2.77
     assert [(r["field"], r["kind"], r["dropped"]) for r in annual["2022"]["_repairs"]] == [
         ("dividends_per_share", "scale x10^6", 2770000.0)]
@@ -2747,7 +2906,7 @@ def test_a_restored_figure_names_the_filing_whose_figure_was_kept():
     annual = _annual(_filed_years("CommonStockDividendsPerShareDeclared", "USD/shares", {
         2021: [("2021-08-06", 2.68)],
         2022: [("2022-08-05", 2.77), ("2023-08-04", 2.77), ("2024-08-02", 2770000.0)],
-        2023: [("2023-08-04", 2.80), ("2024-08-02", 2.80)]}))
+        2023: [("2023-08-04", 2.80), ("2024-08-02", 2.80)]}, year_end="06-30"))
     assert annual["2022"]["_source_filings"]["dividends_per_share"] == {
         "accn": "2023-08-04", "filed": "2023-08-04", "form": "10-K"}
     assert annual["2023"]["_source_filings"]["dividends_per_share"]["accn"] == "2024-08-02"
@@ -2901,7 +3060,7 @@ def test_earlier_filings_that_disagree_leave_the_latest_figure():
     annual = _annual(_filed_years("OperatingIncomeLoss", "USD", {
         2011: [("2012-03-27", 1.03e7)],
         2012: [("2012-03-27", -1.66e7), ("2013-04-02", 1.66e7), ("2014-04-01", -1.66e7)],
-        2013: [("2014-04-01", 3.442e9)], 2014: [("2015-03-31", 3.68e9)]}))
+        2013: [("2014-04-01", 3.442e9)], 2014: [("2015-03-31", 3.68e9)]}, year_end="01-28"))
     assert annual["2012"]["operating_income"] == -1.66e7
 
 
@@ -2911,7 +3070,7 @@ def test_a_later_filing_that_misscales_two_years_has_both_put_back():
         2020: [("2020-08-04", 2.58)], 2021: [("2021-08-06", 2.66)],
         2022: [("2022-08-05", 2.77), ("2024-08-02", 2.77e6)],
         2023: [("2023-08-04", 2.80), ("2024-08-02", 2.80e6)],
-        2024: [("2024-08-02", 2.80)], 2025: [("2025-08-01", 2.88)]}))
+        2024: [("2024-08-02", 2.80)], 2025: [("2025-08-01", 2.88)]}, year_end="06-30"))
     assert (annual["2022"]["dividends_per_share"], annual["2023"]["dividends_per_share"]) == (2.77, 2.80)
 
 
@@ -3416,10 +3575,10 @@ def test_figures_all_below_cost_of_revenue_keep_the_tag_order():
 
 def test_a_part_far_from_the_totals_leaves_two_close_totals_to_the_tag_order():
     # DELL's FY2017 holds $48.7B of goods sales beside two totals 0.8% apart, $61.6B and $62.2B: the part gives way,
-    # and the order settles the totals (one as first filed, one restated), even where the income statement adds up to
-    # the second.
-    annual = _annual(*_one_year(2017, "2018-03-29", Revenues=61.642e9,
-                                RevenueFromContractWithCustomerExcludingAssessedTax=62.164e9,
+    # and the order settles the totals (one as first filed, one restated), even where the restating filing's income
+    # statement adds up to the second.
+    annual = _annual(*_one_year(2017, "2018-03-29", Revenues=61.642e9),
+                     *_one_year(2017, "2019-03-29", RevenueFromContractWithCustomerExcludingAssessedTax=62.164e9,
                                 SalesRevenueGoodsNet=48.706e9, CostOfRevenue=49.205e9, GrossProfit=12.959e9))
     assert annual["2017"]["revenue"] == 61.642e9
 
@@ -3456,10 +3615,30 @@ def test_revenue_stays_net_of_excise_taxes_the_filer_also_reports():
 
 def test_revenue_figures_less_than_a_quarter_apart_keep_the_tag_order():
     # Figures under 25% apart are a restatement or a presentation (GE's FY2017 in the cached filings: `Revenues`
-    # $99.3B, net sales $113.2B), which the tag order settles, even where the income statement adds up to the other.
-    annual = _annual(*_one_year(2017, "2019-02-26", Revenues=99.279e9, SalesRevenueNet=113.192e9,
+    # $99.3B, net sales $113.2B), which the tag order settles, even where a later filing's income statement adds up to
+    # the other. (One filing's own statement decides between its own figures: BUG-392.)
+    annual = _annual(*_one_year(2017, "2018-02-23", Revenues=99.279e9),
+                     *_one_year(2017, "2019-02-26", SalesRevenueNet=113.192e9,
                                 OperatingExpenses=105.0e9, OperatingIncomeLoss=8.192e9))
     assert annual["2017"]["revenue"] == 99.279e9
+
+
+@pytest.mark.parametrize("gap, revenue", [
+    (1.20, 100.0e9),   # 20% apart: a restatement or a presentation, the tag order (Revenues first) settles it
+    (1.24, 100.0e9),   # just under the 25%
+    (1.26, 126.0e9),   # just over: the income statement adds up to the other, and the first gives way
+    (1.30, 130.0e9),   # 30% apart
+])
+def test_two_revenue_figures_give_way_to_the_income_statement_only_from_25_percent_apart(gap, revenue):
+    # BUG-122 (surviving mutant: _REVENUE_GAP 1.25 -> 1.15, which moved DHR's FY2017-18 revenue to $15.52B and $17.05B
+    # from $18.33B and $19.89B). Two of a year's revenue figures must be 25% apart to be two things; closer, the tag
+    # order settles it even where the operating income and expenses add up to the second figure (in another filing:
+    # one filing's own statement decides between its own figures, BUG-392).
+    other = 100.0e9 * gap
+    annual = _annual(*_one_year(2017, "2018-02-23", Revenues=100.0e9),
+                     *_one_year(2017, "2019-02-26", SalesRevenueNet=other,
+                                OperatingExpenses=other * 0.9, OperatingIncomeLoss=other * 0.1))
+    assert annual["2017"]["revenue"] == pytest.approx(revenue)
 
 
 def test_a_fourth_quarter_is_the_years_revenue_less_nine_months():
@@ -3484,6 +3663,98 @@ def test_a_filings_vintage_takes_the_years_revenue_not_its_part():
         2024, filed, Revenues=12.794e9, RevenueFromContractWithCustomerExcludingAssessedTax=20.407e9,
         OperatingExpenses=12.833e9, OperatingIncomeLoss=7.574e9) for k, v in tag.items()}}}
     assert XBRLParser().extract_annual_vintages(facts)["2024"][filed]["revenue"] == 20.407e9
+
+
+def _ntap_fy2024(**changed):
+    """NTAP's FY2026 10-K on FY2024 (filed 2026-06-05): `Revenues` of $5.657B beside contract revenue of $6.268B,
+    which its cost of revenue and gross profit add up to (BUG-392)."""
+    figures = {"Revenues": 5.657e9, "RevenueFromContractWithCustomerExcludingAssessedTax": 6.268e9,
+               "CostOfGoodsAndServicesSold": 1.835e9, "GrossProfit": 4.433e9, **changed}
+    return {"facts": {"us-gaap": {tag: {"units": {"USD": [usd(v, "2023-04-29", "2024-04-26", fy=2026,
+                                                              filed="2026-06-05")]}}
+                                  for tag, v in figures.items() if v is not None}}}
+
+
+def test_a_part_its_own_filings_income_statement_shows_gives_way_to_the_revenue():
+    # BUG-392: NTAP's FY2026 10-K tags `Revenues` of $5.657B for FY2024, under 25% from the $6.268B of contract revenue
+    # that the same filing's cost of revenue ($1.835B) and gross profit ($4.433B) add up to: revenue read the part.
+    year = XBRLParser().extract_annual_financials(_ntap_fy2024())["2024"]
+    assert _revenue_of(year) == (6.268e9, "RevenueFromContractWithCustomerExcludingAssessedTax")
+
+
+def test_a_filings_vintage_takes_the_revenue_its_statement_shows_not_its_part():
+    # BUG-392: the as-of view reads each filing's own figures, and NTAP's FY2026 10-K holds both.
+    vintage = XBRLParser().extract_annual_vintages(_ntap_fy2024())["2024"]["2026-06-05"]
+    assert vintage["revenue"] == 6.268e9
+
+
+def test_a_quarters_part_its_own_10q_shows_gives_way_to_the_revenue():
+    # BUG-392: NTAP's 10-Q for the quarter to 2026-07-31 tags `Revenues` of $1.819B beside contract revenue of $2.025B,
+    # its cost of revenue ($0.606B) and gross profit ($1.419B) adding up to the second; the quarter read the part.
+    # (After the FY2026 10-K, which tags $6.237B and $6.925B, its statement making the second.)
+    quarter = {"Revenues": 1.819e9, "RevenueFromContractWithCustomerExcludingAssessedTax": 2.025e9,
+               "CostOfGoodsAndServicesSold": 0.606e9, "GrossProfit": 1.419e9}
+    year = {"Revenues": 6.237e9, "RevenueFromContractWithCustomerExcludingAssessedTax": 6.925e9,
+            "CostOfGoodsAndServicesSold": 2.026e9, "GrossProfit": 4.899e9}
+    us_gaap = {tag: {"units": {"USD": [usd(year[tag], "2025-04-26", "2026-04-24", fy=2026, filed="2026-06-05"),
+                                       usd(v, "2026-04-25", "2026-07-31", fy=2027, fp="Q1", form="10-Q",
+                                           filed="2026-09-02")]}}
+               for tag, v in quarter.items()}
+    us_gaap["Assets"] = {"units": {"USD": [usd(19.9e9, end="2026-07-31", fy=2027, fp="Q1", form="10-Q",
+                                               filed="2026-09-02")]}}
+    quarter = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": us_gaap}})["2026-07-31"]
+    assert _revenue_of(quarter) == (2.025e9, "RevenueFromContractWithCustomerExcludingAssessedTax")
+
+
+def test_a_part_its_own_filings_operating_lines_show_gives_way_to_the_revenue():
+    # The operating income plus operating expenses show it too: a `Revenues` part 10% under net sales they add up to.
+    annual = _annual(*_one_year(2022, "2023-02-28", Revenues=90.0e9, SalesRevenueNet=100.0e9,
+                                OperatingExpenses=88.0e9, OperatingIncomeLoss=12.0e9))
+    assert _revenue_of(annual["2022"]) == (100.0e9, "SalesRevenueNet")
+
+
+def test_a_larger_total_the_cost_and_gross_profit_dont_add_up_to_stays():
+    # SNA's 10-Ks tag `Revenues` ($2.421B for FY2009) with its financial services revenue beside net sales ($2.363B),
+    # which its cost of goods sold and gross profit add up to: the larger total is the revenue (CAT's likewise).
+    annual = _annual(*_one_year(2009, "2010-02-18", Revenues=2.4208e9, SalesRevenueNet=2.3625e9,
+                                CostOfGoodsAndServicesSold=1.3e9, GrossProfit=1.0625e9))
+    assert _revenue_of(annual["2009"]) == (2.4208e9, "Revenues")
+
+
+def test_a_figure_below_the_larger_of_two_figures_the_statement_shows_is_a_part():
+    # CAT's shape: its operating lines add up to its total revenues ($9.225B, with Financial Products' revenues), its
+    # cost of goods sold and gross profit to its sales ($8.510B). A figure between the two is below the revenue.
+    annual = _annual(*_one_year(2009, "2010-02-19", Revenues=8.9e9, SalesRevenueNet=8.51e9,
+                                RevenueFromContractWithCustomerExcludingAssessedTax=9.225e9,
+                                CostOfRevenue=6.51e9, GrossProfit=2.0e9,
+                                OperatingExpenses=8.825e9, OperatingIncomeLoss=0.4e9))
+    assert _revenue_of(annual["2009"]) == (9.225e9, "RevenueFromContractWithCustomerExcludingAssessedTax")
+
+
+@pytest.mark.parametrize("revenues, read", [
+    (6.240e9, "Revenues"),   # 0.45% under the $6.268B the statement shows: the same figure, rounded
+    (6.230e9, "RevenueFromContractWithCustomerExcludingAssessedTax"),   # 0.6% under: a part
+])
+def test_a_figure_within_rounding_of_the_revenue_its_statement_shows_keeps_the_order(revenues, read):
+    year = XBRLParser().extract_annual_financials(_ntap_fy2024(Revenues=revenues))["2024"]
+    assert _revenue_of(year)[1] == read
+
+
+@pytest.mark.parametrize("gross_profit", [None, 4.0e9])
+def test_a_statement_adding_up_to_no_figure_leaves_the_tag_order(gross_profit):
+    # Without cost and gross profit (or operating income and expenses), or with ones adding up to neither figure
+    # ($5.835B), the filing shows neither to be the revenue: the order holds.
+    year = XBRLParser().extract_annual_financials(_ntap_fy2024(GrossProfit=gross_profit))["2024"]
+    assert _revenue_of(year) == (5.657e9, "Revenues")
+
+
+def test_revenue_including_excise_taxes_shows_no_part():
+    # Contract revenue including excise taxes only fills a period with no other figure, even where the filing's
+    # operating lines add up to it (BUG-119): the figure net of the taxes beside it isn't a part.
+    annual = _annual(*_one_year(2016, "2017-02-15", Revenues=26.685e9,
+                                RevenueFromContractWithCustomerIncludingAssessedTax=29.0e9,
+                                OperatingExpenses=18.097e9, OperatingIncomeLoss=10.903e9))
+    assert _revenue_of(annual["2016"]) == (26.685e9, "Revenues")
 
 
 def test_net_revenue_is_no_noninterest_income():

@@ -359,6 +359,24 @@ def test_value_ddm_keeps_an_annual_payers_sec_figure_beside_a_slipped_ex_date(mo
     [("2024-07-15", 0.5)],     # an extra under half the median of the year's payments (code review 34's probe)
     [("2024-07-15", 10.0)],    # a special: over 3x the payments either side, not recurring (Q3's one-off)
     [("2024-07-15", 10.0), ("2024-09-15", 0.5)],   # both: the special is no regular payment to measure against
+    # BUG-372: an extra under half the median counts only when a like payment recurs a year from it, within a
+    # quarter; these don't. Within the season of 2024's 2.95, a sixth of it (no like size) ...
+    [("2024-11-20", 0.5)],
+    # ... a fifth of it a year on (no like size: it isn't the same payment) ...
+    [("2024-07-15", 0.5), ("2025-07-10", 0.1)],
+    # ... the same size 460 days before it and 270 days after it (no anniversary)
+    [("2023-04-12", 0.5), ("2024-07-15", 0.5)],
+    [("2024-07-15", 0.5), ("2025-04-11", 0.5)],
+    [("2024-02-10", 0.5), ("2025-08-20", 0.5)],   # in the year judged, but 557 days on (past its anniversary's season)
+    [("2024-02-10", 0.5), ("2026-03-01", 0.5)],   # 750 days on, past 2025 (BUG-378 leaves 2025's two payments alone)
+    # BUG-376 (code review 36): the same extra paid two years running, or three, recurs, but not into 2025, the year
+    # the gate judges: the payer's second payment a year isn't there, so 2025's two are a slip
+    [("2023-07-15", 0.5), ("2024-07-15", 0.5)],
+    [("2022-07-15", 0.5), ("2023-07-15", 0.5), ("2024-07-15", 0.5)],
+    # BUG-378 (decided 2026-11-26, option C): the extra recurs into 2025, so the year before counts two regular
+    # payments, but 2025 holds three (3.10, 0.50, 3.26: a slip) and SEC's 3.10 is over half the side's 3.45
+    [("2024-07-15", 0.5), ("2025-07-10", 0.5)],
+    [("2023-07-20", 0.5), ("2024-07-15", 0.5), ("2025-07-10", 0.5)],
 ])
 def test_value_ddm_keeps_an_annual_payers_slipped_year_beside_an_extra_payment(extra):
     # BUG-366: the year before 2025 (the slipped one) holds two payments or more only because of extra ones: the
@@ -369,6 +387,42 @@ def test_value_ddm_keeps_an_annual_payers_slipped_year_beside_an_extra_payment(e
     years = {year: (amount, source) for year, amount, source in res.assumptions["dividend_growth_years"]}
     assert years[2025] == (pytest.approx(_true_total(2025)), "sec")
     assert res.assumptions["hist_cagr"] == pytest.approx(0.05)
+
+
+@pytest.mark.parametrize("declared, source", [
+    (3.2578, "sec"),   # one payment, but at least half the regular payments of the side that opened the gate
+    (0.5, "yahoo"),    # under half (2.95 + 0.50): SEC's figure is the extra alone
+])
+def test_a_slipped_years_sec_figure_stands_only_at_half_the_sides_payments(declared, source):
+    # BUG-378: the year holds more regular payments than the side before it (a slip), and SEC's figure is the year's
+    # only when it is at least SLIPPED_YEAR_SHARE of that side's regular payments.
+    divs = _paid_in({y: 1 for y in range(2015, 2027)}, moved=[("2026-01-15", "2025-12-30")],
+                    extra=[("2024-07-15", 0.5), ("2025-07-10", 0.5)])
+    dps = {y: _true_total(y) for y in range(2016, 2026)}
+    dps[2025] = declared
+    years = _history(dps, divs)
+    assert years[2025][1] == source
+
+
+@pytest.mark.parametrize("sides, slipped", [
+    (([2.95, 0.5], []), True),
+    (([2.95, 0.5], [7.0]), True),                   # a side of one opened nothing: it needn't be outnumbered
+    (([2.95, 0.5], [0.85, 0.85, 0.85, 0.85]), False),   # every side of two or more must be
+    (([], []), False),
+])
+def test_a_slip_is_measured_against_each_side_that_opened_the_gate(sides, slipped):
+    from src.valuation.models import _slipped
+    assert _slipped(3.10, [3.10, 0.5, 3.26], sides) is slipped
+
+
+def test_a_quarterly_payers_slipped_year_tagged_with_a_quarters_rate_reads_the_payments():
+    # GPN's FY2017, J's FY2020: a year holding a fifth payment beside quarterly years, SEC tagging a quarter's rate
+    # (BUG-020), is under half the side's payments: Yahoo's payments stand in, as before BUG-378.
+    divs = _paid_in({y: 4 for y in range(2015, 2027)}, moved=[("2026-01-15", "2025-12-30")])
+    dps = {y: _true_total(y) for y in range(2016, 2026)}
+    dps[2025] = _true_total(2025) / 4
+    years = _history(dps, divs)
+    assert years[2025] == (pytest.approx(_true_total(2025) + _true_total(2026) / 4), "yahoo")
 
 
 def _history(dps, divs, anchor=date(2026, 1, 20)):
@@ -384,6 +438,53 @@ def test_a_semiannual_payers_interim_is_a_regular_payment():
     years = _history({2023: 1.4, 2024: 1.4, 2025: 1.0}, divs)
     assert years[2025] == (pytest.approx(1.4), "yahoo")
     assert years[2024] == (pytest.approx(1.4), "sec")
+
+
+@pytest.mark.parametrize("interim", [0.3, 0.1])
+def test_a_semiannual_payers_interim_under_a_third_of_its_final_is_a_regular_payment(interim):
+    # BUG-372 (code review 35): an interim under a third of the final is under half the median of the two, but it
+    # recurs each year (a like payment within a quarter of its anniversary), so it is a regular payment: FY2025,
+    # tagged with the final alone (BUG-020), reads the year's two payments, as before BUG-366. The interim's ex-date
+    # moves by weeks (352 and 384 days apart).
+    divs = [(f"{y}-{m}", amount) for y, interim_on in ((2023, "03-15"), (2024, "03-01"), (2025, "03-20"))
+            for m, amount in ((interim_on, interim), ("09-15", 1.0))]
+    years = _history({2023: 1 + interim, 2024: 1 + interim, 2025: 1.0}, divs)
+    assert years[2025] == (pytest.approx(1 + interim), "yahoo")
+    assert years[2024] == (pytest.approx(1 + interim), "sec")
+
+
+@pytest.mark.parametrize("extra, counted", [
+    (0.5, 1),   # under half the median of 2024's payments (1.725), and not recurring
+    (1.2, 2),   # half of it or more: by size, a payment of a payer of two a year, recurring or not
+])
+def test_the_regular_payments_in_a_side_are_counted_by_size_or_recurrence(extra, counted):
+    from src.valuation.models import _regular_between
+    divs = [("2023-01-15", 2.81), ("2024-01-15", 2.95), ("2024-07-15", extra), ("2025-01-15", 3.10),
+            ("2025-12-30", 3.26)]
+    assert _regular_between(divs, "2023-12-31", "2024-12-31", set(), 1) == counted
+
+
+@pytest.mark.parametrize("toward, counted", [
+    (1, 1),    # the year before 2025: the 2024 extra's like payment is a year earlier, not in 2025
+    (-1, 2),   # read as the year after 2023: its like payment is in 2023, the year judged
+])
+def test_a_small_payment_recurs_only_into_the_year_the_gate_judges(toward, counted):
+    # BUG-376: a payment under half its side's median counts when a like payment is ex-dated within a quarter of its
+    # anniversary in the year the gate judges (*toward*: 1 a year later, -1 a year earlier), not any year.
+    from src.valuation.models import _regular_between
+    divs = [("2023-01-15", 2.81), ("2023-07-15", 0.5), ("2024-01-15", 2.95), ("2024-07-15", 0.5),
+            ("2025-01-15", 3.10), ("2025-12-30", 3.26)]
+    assert _regular_between(divs, "2023-12-31", "2024-12-31", set(), toward) == counted
+
+
+def test_a_payer_turned_semiannual_shows_its_small_interim_in_the_year_after():
+    # BUG-376: an annual payer turned semiannual in 2025 (an interim under a third of its final) tags FY2025 with its
+    # final alone (BUG-020). The year before shows one payment; the year after shows two, its interim recurring
+    # into 2025 a year earlier: FY2025 reads the year's two payments.
+    divs = [("2023-09-15", 1.2), ("2024-09-15", 1.2), ("2025-03-15", 0.3), ("2025-09-15", 1.0),
+            ("2026-03-15", 0.3), ("2026-09-15", 1.0)]
+    years = _history({2023: 1.2, 2024: 1.2, 2025: 1.0, 2026: 1.3}, divs, date(2027, 1, 20))
+    assert years[2025] == (pytest.approx(1.3), "yahoo")
 
 
 def test_quarters_beside_a_year_of_specials_are_regular_payments():
@@ -682,15 +783,27 @@ def test_value_lynch_na_sector_and_history():
 
 # ---- Historical multiples band ----
 def test_value_multiples_pe_band_hand_computed():
-    # FY-end P/E multiples: 10, 12, 14. The band is their inclusive quartiles and median (BUG-172): 11, 12, 13,
-    # times the latest EPS 2.0.
+    # FY-end P/E multiples: 10, 12, 14, 16, 18. The band is their inclusive quartiles and median (BUG-172): 12, 14,
+    # 16, times the latest EPS 2.0.
+    recs = [_fy(fy, eps=2.0) for fy in (2019, 2020, 2021, 2022, 2023)]
+    prices = {2019: 20.0, 2020: 24.0, 2021: 28.0, 2022: 32.0, 2023: 36.0}
+    res = value_multiples(_inputs(fy_records=recs, fy_end_prices=prices))
+    assert res.applicable is True
+    assert res.value_bear == pytest.approx(24.0)
+    assert res.value_base == pytest.approx(28.0)
+    assert res.value_bull == pytest.approx(32.0)
+    assert res.assumptions["multiple_kind"] == "pe"
+    assert (res.assumptions["band_min"], res.assumptions["band_max"]) == (pytest.approx(10.0), pytest.approx(18.0))
+
+
+def test_a_three_year_band_is_its_median():
+    # BUG-301 (c): with three years, quartiles would interpolate halfway toward the extremes (AON's 64x set a bull of
+    # $1,648.09); the band is the median, 12 x the latest EPS 2.0.
     recs = [_fy(2021, eps=2.0), _fy(2022, eps=2.0), _fy(2023, eps=2.0)]
     prices = {2021: 20.0, 2022: 24.0, 2023: 28.0}
     res = value_multiples(_inputs(fy_records=recs, fy_end_prices=prices))
     assert res.applicable is True
-    assert res.value_bear == pytest.approx(22.0)
-    assert res.value_base == pytest.approx(24.0)
-    assert res.value_bull == pytest.approx(26.0)
+    assert (res.value_bear, res.value_base, res.value_bull) == (pytest.approx(24.0),) * 3
     assert res.assumptions["multiple_kind"] == "pe"
     assert (res.assumptions["band_min"], res.assumptions["band_max"]) == (pytest.approx(10.0), pytest.approx(14.0))
 
@@ -705,6 +818,17 @@ def test_one_tiny_earnings_year_cant_stretch_the_band():
     assert res.value_base == pytest.approx(14.0 * 2.0)
     assert res.value_bull == pytest.approx(16.0 * 2.0)
     assert res.assumptions["band_max"] == pytest.approx(1000.0)
+
+
+def test_a_four_year_band_doesnt_reach_toward_an_outlier_year():
+    # BUG-301 (GE): multiples 1000, 10, 12, 14 (one year's tiny EPS): the inclusive p75 was 12 + 0.25 x 986 = 258.5.
+    # Four years take the second and third values, 12 and 14, and their midpoint 13, the median as before.
+    recs = [_fy(fy, eps=e) for fy, e in ((2022, 0.02), (2023, 2.0), (2024, 2.0), (2025, 2.0))]
+    prices = {2022: 20.0, 2023: 20.0, 2024: 24.0, 2025: 28.0}
+    res = value_multiples(_inputs(fy_records=recs, fy_end_prices=prices))
+    assert (res.value_bear, res.value_base, res.value_bull) == (pytest.approx(24.0), pytest.approx(26.0),
+                                                                 pytest.approx(28.0))
+    assert res.assumptions["n_years"] == 4
 
 
 def test_value_multiples_reit_uses_pffo():

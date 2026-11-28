@@ -440,3 +440,19 @@ def test_a_missing_momentum_stores_its_reason(tmp_path):
     compute_and_store(db, tickers=["AAA"])
     row = _scores(db)["AAA"]
     assert row["momentum"] is not None and "momentum" not in json.loads(row["na_reasons"])
+
+
+def test_a_one_star_ratings_note_is_stored_beside_the_reasons(tmp_path):
+    # BUG-192: BBB's revenue per share falls (its count grows faster than its revenue): 1 star, and why.
+    db = _seed(tmp_path / "s.db")
+    conn = sqlite3.connect(db)
+    for fy in range(2014, 2026):
+        count = 100e6 * 1.05 ** (fy - 2014)
+        conn.execute("UPDATE financials_annual SET weighted_avg_shares_diluted = ?, shares_outstanding = ?, "
+                     "eps_diluted = net_income / ? WHERE ticker = 'BBB' AND fiscal_year = ?", (count, count, count, fy))
+    conn.commit()
+    compute_and_store(db)
+    rows = _scores(db)
+    assert rows["BBB"]["predictability_stars"] == 1.0
+    assert json.loads(rows["BBB"]["na_reasons"])["predictability_note"].startswith("1 star: a falling trend in ")
+    assert "predictability_note" not in json.loads(rows["AAA"]["na_reasons"])

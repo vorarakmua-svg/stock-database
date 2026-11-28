@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from datetime import date, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -631,6 +632,18 @@ class TestDividendEvents:
     def test_unknown_ticker_empty(self, web_db):
         with Reader(web_db) as r:
             assert r.dividend_events("ZZZNONE") == []
+
+    def test_a_payment_served_twice_is_one_row(self, web_db):
+        # BUG-154: the DVD tab's yearly sums, the dividends API and its CSV read KO's 2001-09-12 copy once.
+        conn = sqlite3.connect(web_db)
+        first = conn.execute("SELECT date, amount FROM dividend_events WHERE ticker = 'AAA' ORDER BY date").fetchone()
+        copy = (date.fromisoformat(first[0][:10]) + timedelta(days=2)).isoformat()
+        conn.execute("INSERT INTO dividend_events (ticker, date, amount) VALUES ('AAA', ?, ?)", (copy, first[1]))
+        conn.commit()
+        conn.close()
+        with Reader(web_db) as r:
+            rows = r.dividend_events("AAA")
+        assert len(rows) == 6 and copy not in [row["date"] for row in rows]
 
 
 class TestSplitEvents:

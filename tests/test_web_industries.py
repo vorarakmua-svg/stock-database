@@ -253,3 +253,43 @@ def test_the_screener_page_renders_without_codes(client, web_db):
     _drop(web_db, "companies", ("sic", "sic_description"))
     html = client.get("/screener").text
     assert 'id="industry-select"' in html and not re.search(r'<option value="\d{2,3}">', html)
+
+
+def _rank_universe(db, count, code="6021", ranked=True):
+    """*count* companies of one code in the ranked universe, so that code's group has the 10 it needs."""
+    conn = sqlite3.connect(db)
+    for n in range(count):
+        ticker = f"X{n:02d}"
+        conn.execute("INSERT INTO companies (ticker, sic) VALUES (?, ?)", (ticker, code))
+        if ranked:
+            conn.execute("INSERT INTO quality_scores (ticker, computed_at) VALUES (?, '2025-04-01')", (ticker,))
+    conn.commit()
+    conn.close()
+
+
+def test_a_company_ranked_before_its_code_was_filled_is_not_told_its_industry_is_small(client, web_db):
+    # BUG-236: the rank pass saw no group for BBB (no code then); the codes were filled since, and 10 companies now
+    # share 6021. Until the next rank pass the honest reason is that the ranks aren't computed yet.
+    _seed(web_db, ticker="BBB", ranks=NO_GROUP)  # ranked: no code stored for it then
+    _code(web_db, {"BBB": ("6021", "National Commercial Banks")})
+    _rank_universe(web_db, 9)  # BBB and 9 more: ten with 6021
+    industry = client.get("/api/stocks/BBB/scores").json()["industry"]
+    assert industry["na_reason"] == "industry ranks not computed yet"
+    assert "industry ranks not computed yet" in client.get("/ui/stocks/BBB/scores").text
+
+
+def test_a_company_in_a_small_group_still_gets_the_small_industry_reason(client, web_db):
+    _seed(web_db, ticker="BBB", ranks=NO_GROUP)
+    _code(web_db, {"BBB": ("6021", "National Commercial Banks")})
+    _rank_universe(web_db, 8)  # nine in all: one short
+    industry = client.get("/api/stocks/BBB/scores").json()["industry"]
+    assert industry["na_reason"] == "SIC 6021's industry has fewer than 10 companies here"
+
+
+def test_companies_without_scores_are_not_in_the_industry_the_rank_pass_would_group(client, web_db):
+    # The rank pass groups the companies with a quality_scores row only, so nine coded ones without it make no group.
+    _seed(web_db, ticker="BBB", ranks=NO_GROUP)
+    _code(web_db, {"BBB": ("6021", "National Commercial Banks")})
+    _rank_universe(web_db, 9, ranked=False)
+    industry = client.get("/api/stocks/BBB/scores").json()["industry"]
+    assert industry["na_reason"] == "SIC 6021's industry has fewer than 10 companies here"

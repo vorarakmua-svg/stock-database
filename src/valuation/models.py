@@ -53,18 +53,36 @@ ONE_PAYMENT_TOLERANCE = 0.02
 #: A payment in the 365 days before or after a year counts for ``_one_payment``'s gate
 #: (BUG-366) when it isn't a one-off whole (``one_off_dividends``, Q3: a special) and is
 #: at least this share of the median of those 365 days' such payments, itself among them: a small
-#: extra beside an annual payment (0.50 beside 2.95) is no second payment a year, while a
-#: semiannual payer's interim counts down to a third of its final dividend (the median
-#: of two is their mean). Measured within the 365 days, not against the year's own
-#: payments, which specials can hold (TPL's FY2020): its quarters beside them count.
+#: extra beside an annual payment (0.50 beside 2.95) is no second payment a year. Measured within
+#: the 365 days, not against the year's own payments, which specials can hold (TPL's FY2020): its
+#: quarters beside them count. A smaller payment still counts when it recurs into the year the gate
+#: judges (``_recurs``): the median of two is their mean, so by size alone a semiannual payer's interim
+#: under a third of its final wouldn't count (BUG-372), and it comes back in that year, while an annual
+#: payer's extra, even one paid each year before it, isn't among that year's payments (BUG-376).
 REGULAR_PAYMENT_SHARE = 0.5
 
 
 def _one_payment(sec: float, payments: List[float], beside: Sequence[int]) -> bool:
     """Whether SEC's figure for a year holds at most one of its *payments* (ONE_PAYMENT_TOLERANCE), where *beside*
-    counts the regular payments (REGULAR_PAYMENT_SHARE) in the year before it and in the year after it."""
+    counts the regular payments (``_regular_between``) in the year before it and in the year after it."""
     return len(payments) >= 2 and max(beside, default=0) >= 2 and (sec < min(payments) or any(
         abs(sec - paid) <= ONE_PAYMENT_TOLERANCE * paid for paid in payments))
+
+
+#: BUG-378 (decided 2026-11-26, option C): BUG-311's gate stays shut, SEC's figure the year's, where the year holds
+#: more regular payments than each side counting two or more (``_regular_paid``; the year's own small ones regular
+#: when they recur a year either way) and SEC's figure is at least this share of that side's regular payments: an
+#: annual payer's slipped year beside a recurring extra (3.10, 0.50 and 3.26 beside 2.95 + 0.50; SEC's 3.10 is the
+#: year's). A quarter's rate tagged as the year is under it (GPN's FY2017 0.01, J's FY2020 0.157 beside about 0.47),
+#: so Yahoo's payments still stand in there. The share is the decision's.
+SLIPPED_YEAR_SHARE = 0.5
+
+
+def _slipped(sec: float, own: Sequence[float], sides: Sequence[Sequence[float]]) -> bool:
+    """Whether a year whose SEC figure ``_one_payment`` reads as one payment holds a slipped one instead
+    (SLIPPED_YEAR_SHARE): *own* the year's regular payments, *sides* those of the year before it and after it."""
+    opened = [side for side in sides if len(side) >= 2]
+    return bool(opened) and all(len(own) > len(side) and sec >= SLIPPED_YEAR_SHARE * sum(side) for side in opened)
 
 
 #: Q3 (decided): a payment more than this many times the regular payments on each side of it (the median of the
@@ -298,12 +316,39 @@ def _annual_dividend_totals(dividends: List[Tuple[str, float]]) -> List[Tuple[in
 
 
 def _regular_between(dividends: List[Tuple[str, float]], start: str, end: str,
-                     whole: Set[Tuple[str, float]]) -> int:
+                     whole: Set[Tuple[str, float]], toward: int) -> int:
     """How many payments with ex-dates in (*start*, *end*] are regular (BUG-366): of those that aren't a one-off
-    whole (*whole*, by ex-date and amount), the ones at least REGULAR_PAYMENT_SHARE of their median."""
-    amounts = [amount for day, amount in dividends if start < day[:10] <= end and (day[:10], amount) not in whole]
-    least = REGULAR_PAYMENT_SHARE * statistics.median(amounts) if amounts else 0.0
-    return sum(1 for amount in amounts if amount >= least)
+    whole (*whole*, by ex-date and amount), the ones at least REGULAR_PAYMENT_SHARE of their median, or that
+    recur into the year the gate judges, a year later (*toward* 1) or a year earlier (-1) (``_recurs``, BUG-372,
+    BUG-376)."""
+    return len(_regular_paid(dividends, start, end, whole, (toward,)))
+
+
+def _regular_paid(dividends: List[Tuple[str, float]], start: str, end: str,
+                  whole: Set[Tuple[str, float]], toward: Sequence[int]) -> List[float]:
+    """The amounts of the regular payments ex-dated in (*start*, *end*] (``_regular_between``), a small one regular
+    when it recurs in any of the directions *toward*."""
+    paid = [(day[:10], amount) for day, amount in dividends
+            if start < day[:10] <= end and (day[:10], amount) not in whole]
+    least = REGULAR_PAYMENT_SHARE * statistics.median([amount for _, amount in paid]) if paid else 0.0
+    return [amount for day, amount in paid
+            if amount >= least or any(_recurs(dividends, day, amount, way) for way in toward)]
+
+
+def _recurs(dividends: List[Tuple[str, float]], day: str, amount: float, toward: int) -> bool:
+    """Whether a like payment (within ONE_OFF_MULTIPLE times *amount* either way) is ex-dated within
+    ONE_OFF_SEASON_DAYS of *day*'s anniversary a year later (*toward* 1) or a year earlier (-1): in the year
+    ``_one_payment``'s gate judges (BUG-372, BUG-376). A semiannual payer's small interim comes back in it; an annual
+    payer's extra that isn't among its payments is no second payment a year there, even when it was paid the year
+    before *day* too, and a second payment in that year is then a slip. (A one-off whole, over ONE_OFF_MULTIPLE
+    times the payments beside it, is no like payment of one under half the median of its 365 days.)"""
+    paid_on = date.fromisoformat(day)
+    for other_day, other in dividends:
+        apart = (date.fromisoformat(other_day[:10]) - paid_on).days * toward
+        if abs(apart - 365) <= ONE_OFF_SEASON_DAYS and amount <= ONE_OFF_MULTIPLE * other \
+                and other <= ONE_OFF_MULTIPLE * amount:
+            return True
+    return False
 
 
 def dividend_history(inputs: ValuationInputs, anchor: date,
@@ -321,8 +366,10 @@ def dividend_history(inputs: ValuationInputs, anchor: date,
     summed: a filer that tags only point-in-time payments leaves the year empty
     (BUG-013), and one that tags a single payment as the year is no better
     (``_one_payment``, read only where the 365 days before the year or after it
-    hold two or more regular payments, BUG-311, BUG-366). A company without fiscal years (no SEC annual record) uses
-    the complete calendar years before the anchor's, on Yahoo's payments alone. A
+    hold two or more regular payments, BUG-311, BUG-366, BUG-372, and not where the year
+    holds more of them than such a side, SEC's figure at least half that side's: a slip,
+    ``_slipped``, BUG-378). A company without fiscal years (no SEC annual
+    record) uses the complete calendar years before the anchor's, on Yahoo's payments alone. A
     year with neither source paid nothing (amount None). Each year's ``one_off`` sums
     the *one_offs* (``one_off_dividends``) ex-dated in it.
     """
@@ -351,11 +398,13 @@ def dividend_history(inputs: ValuationInputs, anchor: date,
         restart = not paid or not before or (
             date.fromisoformat(paid[0][0]) - date.fromisoformat(before[-1])).days > DIVIDEND_STALE_DAYS
         one_off = sum(amount for day, amount in one_offs if start < day[:10] <= end)
-        beside = (_regular_between(dividends, (date.fromisoformat(start) - timedelta(days=365)).isoformat(), start,
-                                   whole),
-                  _regular_between(dividends, end, (date.fromisoformat(end) + timedelta(days=365)).isoformat(),
-                                   whole))
-        if sec is not None and sec > 0 and not _one_payment(sec, payments, beside):
+        sides = (_regular_paid(dividends, (date.fromisoformat(start) - timedelta(days=365)).isoformat(), start,
+                               whole, (1,)),
+                 _regular_paid(dividends, end, (date.fromisoformat(end) + timedelta(days=365)).isoformat(),
+                               whole, (-1,)))
+        if sec is not None and sec > 0 and (
+                not _one_payment(sec, payments, [len(side) for side in sides])
+                or _slipped(sec, _regular_paid(dividends, start, end, whole, (1, -1)), sides)):
             history.append(DividendYear(year, sec, "sec", payments, restart, one_off))
         elif payments:
             history.append(DividendYear(year, sum(payments), "yahoo", payments, restart, one_off))
@@ -567,6 +616,25 @@ def _multiple_basis(sector_class: str) -> Tuple[str, Callable[[FYRecord], Option
     return "pe", lambda r: r.eps()
 
 
+#: A band of this many yearly multiples or more takes their inclusive quartiles; a shorter one doesn't interpolate.
+FULL_BAND_YEARS = 5
+
+
+def multiples_band(multiples: Sequence[float]) -> Tuple[float, float, float]:
+    """(bear, base, bull) multiples: the yearly multiples' inclusive quartiles, as the valuation history's ranges are,
+    so one year's tiny earnings can't set the bull case (BUG-172: GE's FY2022 read 1,044x and a bull of $8,498.58).
+    Under FULL_BAND_YEARS no case interpolates toward an extreme year (BUG-301: with four, GE's 1,676x still weighted
+    its bull by a quarter, $3,641.28): four years take the second and third values and their midpoint, three the
+    median alone. The base is the median either way."""
+    s = sorted(multiples)
+    if len(s) >= FULL_BAND_YEARS:
+        low, mid, high = statistics.quantiles(s, n=4, method="inclusive")
+        return low, mid, high
+    if len(s) == 4:
+        return s[1], (s[1] + s[2]) / 2, s[2]
+    return s[1], s[1], s[1]
+
+
 def value_multiples(inputs: ValuationInputs) -> ValuationResult:
     """Price vs the company's own 5-year band of its sector-appropriate multiple."""
     kind, basis_fn = _multiple_basis(inputs.sector_class)
@@ -585,9 +653,7 @@ def value_multiples(inputs: ValuationInputs) -> ValuationResult:
     if latest_basis is None or latest_basis <= 0:
         return _na("multiples", "latest per-share basis is not positive",
                    basis_fy=latest.fiscal_year)
-    # The band is the yearly multiples' inclusive quartiles, as the valuation history's ranges are, so one year's
-    # tiny earnings can't set the bull case (BUG-172: GE's FY2022 read 1,044x and a bull of $8,498.58).
-    band_low, band_mid, band_high = statistics.quantiles(multiples, n=4, method="inclusive")
+    band_low, band_mid, band_high = multiples_band(multiples)
     assumptions: Dict[str, Any] = {
         "multiple_kind": kind,
         "band_low": band_low, "band_median": band_mid, "band_high": band_high,

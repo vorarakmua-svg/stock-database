@@ -10,24 +10,31 @@ splits and spin-offs, where dividing a price by a filed EPS doesn't, since filed
 split bases. See docs/superpowers/specs/2026-10-21-valuation-history-design.md.
 """
 
+import json
 import math
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from ..dividend_payments import distinct_payments
+from ..new_york import new_york_day_of
 from ..parsers.calculated_metrics import CalculatedMetrics
+from ..scores.fundamentals import no_debt
 from .inputs import (
     DECLARED_SPLIT_TOLERANCE,
     MAX_SPLIT_RATIO,
     SPLIT_JUMP_THRESHOLD,
     _dividend_onto,
     _drop_spin_off_dividends,
+    _implied_count_moves,
+    _net_income_held,
     _split_marks,
     _yahoo_dividend_factors,
     bars_to_price_factor,
     is_share_split,
     price_factor_after,
+    split_history,
 )
 
 __all__ = ["is_share_split", "price_factor_after"]  # defined in .inputs, which the multiples band reads too
@@ -39,6 +46,11 @@ QUARTER_LAG_DAYS = 45
 #: Q4_LAG_DAYS.
 Q4_LAG_DAYS = 75
 Q4_FILING_WINDOW_DAYS = 120
+#: A quarter BUG-275 put onto its year's 10-K's D&A basis holds a share of an amortization only that 10-K tags.
+SPREAD_TAG = "derived:amortization_spread"
+#: A trailing year's quarters end within this many days of its end: three quarters back is 273-280 days, the same
+#: quarter a year back 364 or more.
+TRAILING_QUARTERS_DAYS = 350
 #: Fundamentals known for more than this many days at a date are stale there: a quarter or more was missed.
 STALE_DAYS = 200
 #: A share field must cover this share of the latest RECENT_QUARTERS quarters to be the ticker's: the
@@ -93,7 +105,8 @@ class TTMPoint:
     ebitda: Optional[float] = None
     net_debt: Optional[float] = None
     ffo: Optional[float] = None
-    #: The quarter lacks the long-term debt its company's 10-Ks report: no net debt, so no enterprise value.
+    #: The quarter lacks the long-term debt its company's 10-Ks report (by the 10-K before it, Q22): no net debt,
+    #: so no enterprise value.
     debt_missing: bool = False
 
     @property
@@ -136,16 +149,30 @@ def _day(value: Any) -> Optional[date]:
         return None
 
 
+def filed_by(collected_on: date) -> date:
+    """The last day a report a collection on *collected_on* stored can have been filed: that day, or the Friday
+    before a weekend's, since the SEC accepts no filing at weekends (BUG-250)."""
+    return collected_on - timedelta(days=max(collected_on.weekday() - 4, 0))
+
+
 def known_on(period_end: str, fiscal_quarter: Optional[int], first_annual_filed: Optional[str],
-             collected_on: Optional[date]) -> date:
+             collected_on: Optional[date], spread_filed: Optional[str] = None) -> date:
     """The day a quarter's trailing year became known.
 
     No quarter stores its filing date, so a lag rule stands in:
     - a fiscal fourth quarter is known on its 10-K's first filing day, if that is within
       Q4_FILING_WINDOW_DAYS of the year end, and otherwise after Q4_LAG_DAYS;
-    - any other quarter is known after QUARTER_LAG_DAYS.
+    - any other quarter is known after QUARTER_LAG_DAYS;
+    - a trailing year holding a quarter BUG-275 spread onto its year's 10-K's D&A basis is known no earlier than
+      *spread_filed*, the filing day of the 10-K that supplies the spread (``_spread_quarters``): the quarter holds a
+      share of an amortization only that 10-K tags, so before it the history reads the trailing years known before
+      (BUG-390, BUG-395).
 
-    The result is capped at *collected_on*: what was stored was known by the day it was collected.
+    The result is capped at *collected_on* (New York's day): what was stored was known by the day it was
+    collected, and by the last weekday on or before it, since the SEC accepts no filing at weekends (``filed_by``).
+    So a quarter a Sunday's collection stored is known at Friday's bar, the latest point (BUG-250). A period is
+    never known before it ends: a year ending on the collection's weekend isn't known on the Friday before
+    (BUG-388).
     """
     end = date.fromisoformat(str(period_end)[:10])
     known = end + timedelta(days=QUARTER_LAG_DAYS)
@@ -154,8 +181,11 @@ def known_on(period_end: str, fiscal_quarter: Optional[int], first_annual_filed:
         filed = _day(first_annual_filed)
         if filed is not None and end < filed <= end + timedelta(days=Q4_FILING_WINDOW_DAYS):
             known = filed
-    if collected_on is not None and known > collected_on:
-        known = collected_on
+    spread = _day(spread_filed)
+    if spread is not None:
+        known = max(known, spread)
+    if collected_on is not None:
+        known = max(min(known, filed_by(collected_on)), end)
     return known
 
 
@@ -189,6 +219,8 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
                            yahoo_count: Optional[float] = None,
                            revenue: Optional[Sequence[Optional[float]]] = None,
                            listed: Optional[str] = None,
+                           net_income: Optional[Sequence[Optional[float]]] = None,
+                           trailing_income: Optional[Sequence[Optional[float]]] = None,
                            ) -> Tuple[List[Optional[float]], List[Tuple[str, float]]]:
     """Every quarter's share count on the bars' split basis, today's, as Yahoo's closes are.
 
@@ -202,12 +234,18 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
       Each declared split explains one seam, and of equal runs the latest a stored quarter can reflect: one
       dated after the latest quarter only if no other fits, as its 10-Q may have been filed after it.
     - An undeclared seam of SPLIT_JUMP_THRESHOLD or more folds by its own ratio after the quarter of the
-      listing on *listed* (LISTING_QUARTER_DAYS), or on a split's marks in EPS and *revenue*
-      (SPLIT_EVIDENCE_SHARE). Otherwise it stays organic, as a merger or an exchange offer does. The
-      fiscal years also need net income to hold (``inputs._net_income_held``, BUG-247), which a
-      quarter's swings too far for: the marks fold the seam of DD's 2019 1:3 reverse split at 2017 Q1,
-      net income 52M then 888M. PCG's 2020 exit issuance quarter bears no marks (its EPS changed sign).
-    - A seam beyond MAX_SPLIT_RATIO is a change of units: the older quarters are dropped.
+      listing on *listed* (LISTING_QUARTER_DAYS), or on the fiscal years' rule (``inputs._normalize_splits``):
+      a split's marks in EPS and *revenue* (SPLIT_EVIDENCE_SHARE), the count EPS implies (the quarter's
+      *net_income* over its EPS) moved with it (``inputs._implied_count_moves``), and net income held
+      (``inputs._net_income_held``) where a year's net income is read: the trailing year's at the two
+      quarters (*trailing_income*), as one quarter's swings too far (DD's 52M then 888M across 2017 Q1, a
+      1:3 reverse split) (BUG-264). Otherwise it stays organic, as a merger, an exchange offer, a count
+      that swings alone or an issuance while a loss shrinks does. *splits* holds the share splits the
+      filings record beside Yahoo's (``inputs.split_history``): DD's 1:3, which Yahoo mixes with the
+      Corteva spin-off, folds by its own ratio, the count's drift left in the quarters (BUG-262).
+    - A seam beyond MAX_SPLIT_RATIO is a change of units: the older quarters are dropped. (The fiscal years
+      fold one a stored split or the count EPS implies explains, Q19; on the real copy every quarterly
+      seam beyond it is a glitch or a change of units.)
 
     A gap then carries the count before it. A split after the latest quarter, which no stored quarter
     reflects, applies only when it brings our latest count nearer *yahoo_count* (on the bars' basis).
@@ -250,8 +288,12 @@ def normalize_share_series(ends: Sequence[str], counts: Sequence[Optional[float]
         elif ratio >= SPLIT_JUMP_THRESHOLD or ratio <= 1.0 / SPLIT_JUMP_THRESHOLD:
             listing = (i == 0 and listed is not None and (date.fromisoformat(str(ends[0])[:10])
                        - timedelta(days=LISTING_QUARTER_DAYS)).isoformat() < listed[:10])
-            if listing or _split_marks(ratio, eps[i], eps[j], revenue[i] if revenue else None,
-                                       revenue[j] if revenue else None):
+            if listing or (_split_marks(ratio, eps[i], eps[j], revenue[i] if revenue else None,
+                                        revenue[j] if revenue else None)
+                           and _implied_count_moves(ratio, net_income[i] if net_income else None,
+                                                    net_income[j] if net_income else None, eps[i], eps[j])
+                           and _net_income_held(ratio, trailing_income[i] if trailing_income else None,
+                                                trailing_income[j] if trailing_income else None)):
                 factor *= ratio
         out[i] = older * factor
     carried: Optional[float] = None
@@ -311,6 +353,56 @@ def _near_year_end(end: str, year_ends: Sequence[date]) -> bool:
     return day is not None and any(abs((day - y).days) <= YEAR_END_DAYS for y in year_ends)
 
 
+def _debt_before(debt_by_year_end: Sequence[Tuple[str, bool]], end: str) -> bool:
+    """Whether the latest 10-K ending on or before *end* (the first, for a quarter before any) has debt a quarter
+    can lack: (year end, has it) in year-end order."""
+    before = [debt for year_end, debt in debt_by_year_end if year_end <= end]
+    return before[-1] if before else bool(debt_by_year_end) and debt_by_year_end[0][1]
+
+
+def _supplied(filings: Any) -> Optional[str]:
+    """The filing day of the 10-K that supplies a spread quarter's D&A, as its ``source_filings`` JSON names it
+    (BUG-395), else None."""
+    try:
+        filing = json.loads(filings).get("depreciation_amortization") if filings else None
+    except (ValueError, AttributeError):
+        return None
+    day = _day(filing.get("filed")) if isinstance(filing, dict) else None
+    return day.isoformat() if day else None
+
+
+def _spread_quarters(conn: sqlite3.Connection, ticker: str,
+                     year_filed: Sequence[Tuple[str, str]]) -> List[Tuple[str, Optional[str]]]:
+    """Each stored quarter whose D&A BUG-275 spread onto its year's 10-K's basis (its ``source_tags``), with the
+    filing day of the 10-K that supplies the spread: the one its ``source_filings`` names, the first of the year's
+    10-Ks to give the year every D&A figure the spread read (the parser's ``_da_bases``), so a year whose amortization
+    or line a later 10-K first tags waits for that one (AVGO's FY2024: its 10-K of 2025-12-18, not its first of
+    2024-12-20; BUG-395). A quarter stored before that column names none: its year's first 10-K, the first year in
+    *year_filed* (year end, first filing day; in year-end order) ending on or after the quarter and within
+    TRAILING_QUARTERS_DAYS of it, else None (BUG-390), until the next collection. Empty in a database from before the
+    ``source_tags`` column, whose quarters are read as before."""
+    columns = _columns(conn, "financials_quarterly")
+    if "source_tags" not in columns:
+        return []
+    filings = "source_filings" if "source_filings" in columns else "NULL AS source_filings"
+    out: List[Tuple[str, Optional[str]]] = []
+    for r in _rows(conn, f"SELECT period_end, source_tags, {filings} FROM financials_quarterly WHERE ticker = ? "
+                   "AND source_tags LIKE ? ORDER BY period_end", (ticker, f"%{SPREAD_TAG}%")):
+        try:
+            tags = json.loads(r["source_tags"])
+        except ValueError:
+            continue
+        if not isinstance(tags, dict) or tags.get("depreciation_amortization") != SPREAD_TAG:
+            continue
+        end = str(r["period_end"])[:10]
+        supplied = _supplied(r["source_filings"])
+        if supplied is None:
+            until = (date.fromisoformat(end) + timedelta(days=TRAILING_QUARTERS_DAYS)).isoformat()
+            supplied = next((filed for year_end, filed in year_filed if end <= year_end <= until), None)
+        out.append((end, supplied))
+    return out
+
+
 def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
     """Read the history's inputs for *ticker*. Its ``na_reason`` is set when the history can't run."""
     x = HistoryInputs(ticker=ticker)
@@ -324,8 +416,8 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
     if not ttm:
         x.na_reason = "no trailing-twelve-month financials"
         return x
-    splits = [(str(r["date"])[:10], float(r["ratio"])) for r in _rows(
-        conn, "SELECT date, ratio FROM split_events WHERE ticker = ? AND ratio > 0 ORDER BY date", (ticker,))]
+    # Yahoo's split history with the share splits the filings record put in, as the fiscal years read it (BUG-262).
+    splits = [(when, float(ratio)) for when, ratio in split_history(conn, ticker) if ratio and ratio > 0]
     x.price_factors = [(when, ratio) for when, ratio in splits if not is_share_split(ratio)]
 
     # Each month's last bar. A bar from yfinance's default history is dividend-adjusted (BUG-075): one
@@ -364,19 +456,25 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
                   "ORDER BY collected_at DESC LIMIT 1", (ticker,))
     snap = snaps[0] if snaps else {}
     x.current_price = snap.get("current_price")
-    x.priced_on = (str(snap["collected_at"])[:10]
+    # The price's day is New York's, on which the splits are dated (BUG-079).
+    x.priced_on = (new_york_day_of(snap["collected_at"])
                    if snap.get("current_price") is not None and snap.get("collected_at") else None)
     x.bars_to_price = bars_to_price_factor(splits, x.priced_on, x.last_bar)
+    # Yahoo's count moves onto the bars' basis by the share splits between them alone: a spin-off's factor moves the
+    # price, not the count (BUG-178).
+    to_bars_count = bars_to_price_factor([s for s in splits if is_share_split(s[1])], x.priced_on, x.last_bar)
     if snap.get("market_cap") and snap.get("current_price"):
-        x.yahoo_shares = snap["market_cap"] / snap["current_price"] * x.bars_to_price
+        x.yahoo_shares = snap["market_cap"] / snap["current_price"] * to_bars_count
     elif snap.get("shares_outstanding"):
-        x.yahoo_shares = snap["shares_outstanding"] * x.bars_to_price
+        x.yahoo_shares = snap["shares_outstanding"] * to_bars_count
     runs = _optional_rows(conn, "SELECT max(collected_at) AS c FROM collection_runs WHERE ticker = ?", (ticker,))
-    x.collected_on = _day((runs[0]["c"] if runs else None) or snap.get("collected_at") or x.last_bar)
+    x.collected_on = _day(new_york_day_of((runs[0]["c"] if runs else None) or snap.get("collected_at")) or x.last_bar)
 
     served_column = "served_on" in _columns(conn, "dividend_events")
-    payments = _rows(conn, "SELECT date, amount, " + ("served_on" if served_column else "NULL AS served_on")
-                     + " FROM dividend_events WHERE ticker = ? AND amount > 0 ORDER BY date", (ticker,))
+    payments = distinct_payments(  # a payment Yahoo served twice, once (BUG-154)
+        _rows(conn, "SELECT date, amount, " + ("served_on" if served_column else "NULL AS served_on")
+              + " FROM dividend_events WHERE ticker = ? AND amount > 0 ORDER BY date", (ticker,)),
+        lambda p: p["date"], lambda p: p["amount"])
     served_on = {str(p["date"])[:10]: p["served_on"] for p in payments}
     cash = _drop_spin_off_dividends([(str(p["date"])[:10], float(p["amount"])) for p in payments], splits)
     x.dividends = [(day, amount * _dividend_onto(splits, x.last_bar, served_on.get(day))) for day, amount in cash]
@@ -389,28 +487,52 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
         return x
     ends = [str(q["period_end"])[:10] for q in quarters]
     share_splits = [(when, ratio) for when, ratio in splits if is_share_split(ratio) and when <= x.last_bar]
+    trailing = {str(row["period_end"])[:10]: row.get("net_income") for row in ttm}
     counts, x.splits_applied = normalize_share_series(
         ends, [_share_count(q, x.share_field) for q in quarters], [q.get("eps_diluted") for q in quarters],
-        share_splits, x.yahoo_shares, revenue=[q.get("revenue") for q in quarters], listed=first_bar)
+        share_splits, x.yahoo_shares, revenue=[q.get("revenue") for q in quarters], listed=first_bar,
+        net_income=[q.get("net_income") for q in quarters], trailing_income=[trailing.get(end) for end in ends])
     shares_at = dict(zip(ends, counts))
 
     first_filed: Dict[int, str] = {}
+    year_filed: List[Tuple[str, str]] = []  # (year end, its first 10-K's filing day), as the first 10-K dates it
     for r in _optional_rows(
-            conn, "SELECT fiscal_year, MIN(filed_date) AS filed FROM financials_annual_vintages WHERE ticker = ? "
-            "AND filed_date IS NOT NULL AND (form LIKE '10-K%' OR form LIKE '20-F%' OR form LIKE '40-F%') "
-            "GROUP BY fiscal_year", (ticker,)):
+            conn, "SELECT fiscal_year, period_end, MIN(filed_date) AS filed FROM financials_annual_vintages "
+            "WHERE ticker = ? AND filed_date IS NOT NULL AND (form LIKE '10-K%' OR form LIKE '20-F%' OR "
+            "form LIKE '40-F%') GROUP BY fiscal_year", (ticker,)):
         if r["fiscal_year"] is not None:
             first_filed[int(r["fiscal_year"])] = str(r["filed"])[:10]
-    annual = _rows(conn, "SELECT period_end, long_term_debt FROM financials_annual WHERE ticker = ? "
-                   "AND period_end IS NOT NULL", (ticker,))
+            if r["period_end"]:
+                year_filed.append((str(r["period_end"])[:10], str(r["filed"])[:10]))
+    spread = _spread_quarters(conn, ticker, sorted(year_filed))
+    annual = _rows(conn, "SELECT a.period_end, a.long_term_debt, a.short_term_debt, a.commercial_paper, "
+                   "a.interest_expense, m.total_debt FROM financials_annual a LEFT JOIN metrics_annual m "
+                   "ON m.ticker = a.ticker AND m.fiscal_year = a.fiscal_year WHERE a.ticker = ? "
+                   "AND a.period_end IS NOT NULL ORDER BY a.period_end", (ticker,))
     year_ends = [d for d in (_day(r["period_end"]) for r in annual) if d is not None]
     # A company whose 10-Ks report long-term debt but whose 10-Q lacks it (TMUS's $81B in 2026's Q1 and Q2)
-    # would read a net debt short by all of it: unknown, then, rather than wrong.
+    # would read a net debt short by all of it: unknown, then, rather than wrong. Unless the latest 10-K at or
+    # before it (the first, for a quarter before any) reads as without debt, as the scores read a year (no debt
+    # tagged and no interest paid, outside banks and insurers; ``no_debt``): the company had none to tag then
+    # (AXON's FY2016-21, before its notes of December 2022; Q22, BUG-293). A 10-K with some debt tagged but no
+    # long-term debt may hold debt the mapping doesn't read (BUG-294), so its quarters stay unknown.
     files_long_term_debt = any((r["long_term_debt"] or 0) > 0 for r in annual)
+    debt_by_year_end = [(str(r["period_end"])[:10], not no_debt(r, x.sector_class)) for r in annual]
     by_end = {str(q["period_end"])[:10]: q for q in quarters}
     calc = CalculatedMetrics()
     for row in ttm:
         end = str(row["period_end"])[:10]
+        # A trailing year ending after the last day the collection's reports can have been filed was never filed by it
+        # (CCI's stray 2026-12-31 row, empty but for its treasury stock; a year ending on the collection's weekend,
+        # BUG-388): known on no day.
+        if x.collected_on is not None and end > filed_by(x.collected_on).isoformat():
+            continue
+        # A trailing year holding a quarter spread onto its year's 10-K's D&A basis is known from the filing day of the
+        # 10-K that supplies the spread, and on no day where nothing dates such a 10-K (BUG-390, BUG-395).
+        since = (date.fromisoformat(end) - timedelta(days=TRAILING_QUARTERS_DAYS)).isoformat()
+        held = [filed for q_end, filed in spread if since < q_end <= end]
+        if None in held:
+            continue
         quarter = by_end.get(end, {})
         fiscal_quarter = quarter.get("fiscal_quarter")
         if fiscal_quarter is None and _near_year_end(end, year_ends):
@@ -418,12 +540,13 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
         fiscal_year = row.get("fiscal_year") or quarter.get("fiscal_year")
         metrics = calc.calculate_all(row, sector=x.sector_class)
         equity = row.get("total_equity")
-        debt_missing = files_long_term_debt and row.get("long_term_debt") is None
+        debt_missing = (files_long_term_debt and row.get("long_term_debt") is None
+                        and _debt_before(debt_by_year_end, end))
         x.points.append(TTMPoint(
             period_end=end,
             known_on=known_on(end, fiscal_quarter,
                               first_filed.get(int(fiscal_year)) if fiscal_year is not None else None,
-                              x.collected_on),
+                              x.collected_on, max(filed for filed in held if filed) if held else None),
             shares=shares_at.get(end),
             revenue=row.get("revenue"),
             net_income=row.get("net_income"),

@@ -107,8 +107,9 @@ def fair_value_metrics(sector: str) -> Tuple[str, ...]:
 def enterprise_value(market_cap: float, point: TTMPoint) -> Optional[float]:
     """The market cap plus net debt, an unknown net debt as 0 (as ``calculated_metrics`` defines EV).
 
-    None when the quarter lacks the long-term debt its company's 10-Ks report (BUG-171). The month stores
-    the value EV/EBITDA divides, so the two agree (BUG-183).
+    None when the quarter lacks the long-term debt its company's 10-Ks report (BUG-171; by the 10-K before
+    it, Q22: ``TTMPoint.debt_missing``). The month stores the value EV/EBITDA divides, so the two agree
+    (BUG-183).
     """
     if point.debt_missing:
         return None

@@ -3601,3 +3601,479 @@ filing date (financials_annual_known; lookup-only reader; any-day oracle qa/orac
 Gates: ruff ✓ mypy ✓ pytest 3949 passed, 2 skipped | CI: PR #29
 Commit: (this commit) Merge feat/asof-snapshots: the as-of view is the record as known on the day (Q18)
 Next: merge PR #29 to main; delete merged branches.
+
+## Iteration 218: 2026-11-24: the user's decisions on Q19 and Q20; code review 35
+Picked: resume on main (aa3a49e); branch qa/loop-2. The user decided Q19 (fold a seam a stored split explains; measure
+first and show the moves), Q20 (apply on main, MarketableSecurities not for banks) and that the deploy is done (the
+reinstall and the 502 re-collection). Code review 35 (1214c95..aa3a49e and the merge's conflict resolution); an opus
+reviewer.
+Did: `qa/evidence/review35.txt`; 2 probes failing at HEAD; 15 test files pass (823, 1 skipped); review 34's probes
+pass on HEAD.
+Result: no Critical or Important. Minors -> BUG-371 (BUG-296 regression), BUG-372 (BUG-366 regression), P3. The
+merge kept every qa/full-loop fix (one conflict hunk, to_dict's pops; to_dict works on a deep copy).
+Gates: unchanged (qa/ only)
+Commit: (this commit) chore(qa): Q19 and Q20 decided; code review 35 recorded (BUG-371, BUG-372)
+Next: Q20 and Q19 (workers running), BUG-371/372, the parser P3s.
+
+## Iteration 219: 2026-11-25 01:30: fix (Q19, the user's decision)
+Picked: Q19, measured and shown to the user, who chose to apply; an opus worker.
+Did: a share-count seam beyond 50x folds when a stored split or the implied count (net income to common / diluted
+EPS) explains it; true unit breaks still truncate. The oracle's unit_seam skips an explained seam.
+- RED: 14 failed on 3750a82; GREEN. 18 of 18 mutants; 4 stale older mutants re-quoted
+  (qa/evidence/q19-requoted-mutants.json), 4 of 4.
+- DB copies: only EXE: dcf growth 0.88% -> 15%, median bear 32.57 -> 35.18, bull 59.00 -> 72.39; 0 verdicts, labels.
+Result: Q19 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3964 passed, 2 skipped
+Commit: (this commit) fix(valuation): a share-count seam a split explains folds instead of truncating (Q19)
+Next: BUG-371/372 (ready), Q20 (worker resumes after the usage limit).
+
+## Iteration 220: 2026-11-25 01:30: fix (BUG-371, BUG-372)
+Picked: code review 35's findings; an opus worker (nothing moved, so no user decision).
+Did: a rejected old-shape submissions file no longer dates the run; a recurring small interim counts as a regular
+payment beside the size test.
+- RED: 7 failed on 4482ac4; GREEN. 16 of 16 mutants; BUG-366's 5 re-quoted (5 of 5); q19's 18 of 18.
+- DB copies: all 37 tables identical; the gate census moves 8 sides (CRH, SW), 0 years.
+Result: BUG-371, BUG-372 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 3980 passed, 2 skipped
+Commit: (this commit) fix: a rejected cache file doesn't date the run; a recurring small interim is regular (BUG-371, BUG-372)
+Next: Q20 (worker resumes after the usage limit), the parser P3s.
+
+## Iteration 221: 2026-11-25 02:00: fix (Q20: BUG-364, BUG-203, BUG-221)
+Picked: Q20 per the user's decision (apply on main, MarketableSecurities not for banks); an opus worker ported the
+prepared fix onto the merged parser.
+Did: fallback tags for long-term debt, PP&E and short-term investments; a total including current debt is set
+aside on a date its current part is tagged (latest record and every as-of snapshot); banks skip MarketableSecurities.
+- RED: 43 failed on 547f960; GREEN. 46 of 46 mutants. Look-ahead 0.
+- DB copies (502 re-collected offline per parser): 0 medians, verdicts, owner-earnings verdicts, labels; 21 historical
+  values within labels; EPV 37; Magic Formula ranked 255 -> 314; no bank valuation/score row moves.
+Result: Q20, BUG-221 VERIFIED; BUG-203, BUG-364 VERIFIED in part. New: BUG-373, BUG-374, BUG-375 (P3).
+Gates: ruff ✓ mypy ✓ pytest 4068 passed, 2 skipped
+Commit: (this commit) fix(parser): fallback tags for debt, PP&E and short-term investments; banks skip MarketableSecurities (Q20)
+Next: the parser P3s (BUG-358/359, 293b, 338, 342, 348), BUG-373.
+
+## Iteration 222: 2026-11-25 02:45: fix (BUG-358, BUG-359, BUG-373)
+Picked: parser P3s held for the as-of merge, and Q20's residual; an opus worker (nothing moved).
+Did: the current-debt docs say the annual reports' word; an adoption-day balance sheet beside the year end is
+part of that year end; the stored sector decides the bank rule before the parse when submissions fail.
+- RED: 3 failed on dacc05e; GREEN. 8 of 8 mutants; q20's 46 of 46. Look-ahead 0.
+- Census over 502: 0 cells move.
+Result: BUG-358, BUG-359, BUG-373 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4075 passed, 2 skipped
+Commit: (this commit) fix(parser): the year end includes an adoption-day balance sheet; the stored sector before the parse (BUG-358, BUG-359, BUG-373)
+Next: BUG-338, BUG-342, BUG-348, BUG-293b.
+
+## Iteration 223: 2026-11-25 04:00: fix (BUG-338, BUG-342); Q21, Q22 for the user
+Picked: parser P3s BUG-338, 342, 348, 293b; an opus worker.
+Did: a 10-K tagging only a D&A total sets its year's basis; period_end is the year end the calendar already uses.
+- RED: 6 failed on 7905c59; GREEN. 5 of 5 mutants; bug332's m333 re-quoted (1 of 1); q20's 46 of 46. Look-ahead 0.
+- DB copies: period_end only (financials_annual 38 rows, as-of snapshots 48, vintages 1); everything else identical.
+Result: BUG-338, BUG-342 VERIFIED. BUG-348 -> Q21 (SEC's own frames; recommend keep and document), BUG-293b -> Q22
+(a policy; recommend the scores' interest rule for filers already unknown, measured first).
+Gates: ruff ✓ mypy ✓ pytest 4081 passed, 2 skipped
+Commit: (this commit) fix(parser): a D&A-total 10-K sets its year's basis; period_end is the calendar's year end (BUG-338, BUG-342)
+Next: the user on Q21, Q22; code review 36 (5 units since review 35).
+
+## Iteration 224: 2026-11-25 04:30: code review 36; the user's decisions on Q21, Q22
+Picked: code review 36 (3750a82..c0a507c: Q19, BUG-371/372, Q20, BUG-358/359/373, BUG-338/342); an opus reviewer.
+The user decided Q21 (keep SEC's labels, document), Q22 (the scores' interest rule for filers already unknown,
+measured first) and not to re-collect the live DB now.
+Did: `qa/evidence/review36.txt`; 1 probe failing at HEAD; touched tests pass (707 + 771); review 35's probes pass.
+Result: no Critical or Important. Minor -> BUG-376 (BUG-372 regression). Note -> BUG-377 (Q19's implied count with
+no diluted count). Checked right: Q20's sector threading and set-aside per as-of day; BUG-371, 373, 359, 338, 342.
+Gates: unchanged (qa/ only)
+Commit: (this commit) chore(qa): code review 36 recorded (BUG-376, BUG-377); Q21 and Q22 decided
+Next: BUG-376/377 + Q21's README, Q22 measured.
+
+## Iteration 225: 2026-11-25 10:30: fix (BUG-376, BUG-377); Q21 documented
+Picked: code review 36's finding and note, and Q21's README; an opus worker (nothing moved).
+Did: a recurring small payment counts only when it recurs into the judged year; an EPS-derived count can't explain
+its own seam; the README explains SEC's shared calendar years.
+- RED: 10 failed on 00fb94f; GREEN. 13 of 13 mutants; 15 older mutants re-quoted (15 of 15).
+- DB copies: all 37 tables identical; census 0 gates, 0 years; 0 seams change.
+Result: BUG-376, BUG-377, Q21 VERIFIED; BUG-348 WONTFIX. New: BUG-378 (P3, residual).
+Gates: ruff ✓ mypy ✓ pytest 4091 passed, 2 skipped
+Commit: (this commit) fix(valuation): a recurring payment counts toward the judged year; an EPS count can't explain its seam (BUG-376, BUG-377, Q21)
+Next: Q22 (measuring).
+
+## Iteration 226: 2026-11-25 14:50: fix (Q22, BUG-293's second half; the user's decision)
+Picked: Q22, measured and shown to the user, who chose to apply; an opus worker.
+Did: a quarter after a 10-K the scores read as debt-free is valued, for companies today's rule marks unknown.
+- RED: 3 failed on 418fbe8; GREEN. 16 of 16 mutants. Look-ahead 0 (parser); dated check 0.
+- DB copies (re-collected with HEAD's parser): 771 quarters at 72 tickers; 13 historical values; labels FFIV
+  near -> above, TYL far below -> below; 0 medians, verdicts.
+Result: Q22, BUG-293 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4103 passed, 2 skipped
+Commit: (this commit) fix(history): quarters after a debt-free 10-K are valued (Q22, BUG-293)
+Next: remaining P3s by area.
+
+## Iteration 227: 2026-11-25 15:30: tests (BUG-072, BUG-122, BUG-129)
+Picked: CODE test gaps; a sonnet worker.
+Did: tests pinning a split on the filing/served/price day, a truncated first-filing list, a 17-week quarter,
+revenue's 25% gap, the migration's re-check under the lock, the per-share factor rule, the explorer's dating.
+- Tests only; all pass on HEAD (no defect). 29 of 29 mutants killed.
+Result: BUG-072, BUG-122, BUG-129 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4151 passed, 2 skipped
+Commit: (this commit) test: pin the split-day, quarter-length, revenue-gap and migration boundaries (BUG-072, BUG-122, BUG-129)
+Next: STORE 344/168/165 and VAL seams (workers running).
+
+## Iteration 228: 2026-11-25 17:30: fix (BUG-264, BUG-262, BUG-024, BUG-050, BUG-270, BUG-379; the user's decision)
+Picked: the VAL seam group; an opus worker. DD's label moved, so the user decided (apply).
+Did: one split history from Yahoo plus the splits the filings record; mixed split-and-spin-off factors split in
+two; the quarterly undeclared-seam rule gets the implied-count and net-income tests; post-filing factors need a count.
+- RED: 29 failed on bc4e95c; GREEN. 35 of 35 mutants; 133 older re-run/re-quoted, all killed; bug072, bug376 specs.
+- DB copies: 0 medians, verdicts; DD label above -> near; 654 history rows at DD, HLT, LDOS, MSI, WTW.
+Result: BUG-264, 262, 024, 050, 270 VERIFIED; BUG-379 (new) VERIFIED. BUG-266 narrowed (DD's example fixed).
+Gates: ruff ✓ mypy ✓ pytest 4187 passed, 2 skipped
+Commit: (this commit) fix(valuation): one split history with the filings' own splits; mixed spin-off factors split (BUG-264, -262, -024, -050, -270, -379)
+Next: STORE 344/168/165 (ready).
+
+## Iteration 229: 2026-11-25 17:30: fix (BUG-344, BUG-168, BUG-165)
+Picked: the STORE stale-rows group; an opus worker (sent back once to keep the rows of a step that raised).
+Did: a complete run removes the ticker's stored annual/metrics/quarterly/TTM/unmapped rows it no longer gives;
+partial, fill-only, failed and record-less runs remove nothing; a table whose step raised keeps its rows.
+- RED: 12 failed on 81d5af4; GREEN. 23 of 23 mutants. Look-ahead 0.
+- Re-collection of 502: 28 quarters, 32 trailing years, 667 unmapped tags removed; 0 medians, verdicts, labels.
+Result: BUG-344, BUG-168, BUG-165 VERIFIED. New: BUG-380 (P3).
+Gates: ruff ✓ mypy ✓ pytest 4204 passed, 2 skipped
+Commit: (this commit) fix(store): a complete run replaces the periods it no longer gives (BUG-344, BUG-168, BUG-165)
+Next: code review 37 (5 units since review 36).
+
+## Iteration 230: 2026-11-25 18:30: code review 37
+Picked: code review 37 (c0a507c..c614a02: BUG-376/377, Q22, BUG-072/122/129, BUG-264 group, BUG-344 group); an
+opus reviewer.
+Did: `qa/evidence/review37.txt`; 1 probe failing at HEAD; review 36's probe passes. RAM 0.8-2.3 GB: probes only.
+Result: no Critical or Important. Minor -> BUG-381 (BUG-262 regression). Checked right: no data-loss path in
+c614a02; no double-applied or misdated split besides M1; no new look-ahead.
+Gates: unchanged (qa/ only)
+Commit: (this commit) chore(qa): code review 37 recorded (BUG-381)
+Next: BUG-381.
+
+## Iteration 231: 2026-11-25 21:40: fix (BUG-381)
+Picked: code review 37's finding; an opus worker (nothing moved).
+Did: a 10-K/A repeating its original's count doesn't make a declared split look undeclared.
+- RED: 3 failed on ddca624; GREEN. 6 of 6 mutants; bug264's re-quoted (1) and older (133) all killed.
+- split_history census over 502: identical.
+Result: BUG-381 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4209 passed, 2 skipped
+Commit: (this commit) fix(valuation): an amendment repeating its original doesn't copy a declared split (BUG-381)
+Next: BUG-380 (ready).
+
+## Iteration 232: 2026-11-25 22:00: fix (BUG-380)
+Picked: BUG-344's residual; an opus worker (nothing moved).
+Did: SQLite, the JSON export and financial_history.csv share one rule for the periods a complete run no longer gives.
+- RED: 6 failed on 4592553; GREEN. 12 of 12 mutants; 25 older mutants re-quoted onto the moved rule, all killed.
+- 6 tickers re-collected offline: the JSON matches SQLite's removals.
+Result: BUG-380 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4220 passed, 2 skipped
+Commit: (this commit) fix(exporters): the JSON and CSV drop the periods SQLite drops (BUG-380)
+Next: remaining P3s by area.
+
+## Iteration 233: 2026-11-25 23:45: fix (BUG-054, BUG-055, BUG-098, BUG-131, BUG-145, BUG-307)
+Picked: the STORE/refresh group; an opus worker. BUG-054 moves KEYS's median at its next collection: the user
+decided (carry the last beta).
+Did: a collection carries the last beta; "" is missing everywhere; adding columns re-checks under a write lock;
+a barless run's served day is New York's day before, later of Yahoo's split; a refresh carries a full collection's EV.
+- RED: 13 failed on 64c2fef; GREEN. 15 of 15 mutants; 1 re-quoted; bug380's 12 of 12.
+- DB copies (INTU/KEYS beta set as carried): KEYS median bear 95.09 -> 94.24; 0 verdicts, labels.
+Result: BUG-054, 055, 098, 131, 145, 307 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4235 passed, 2 skipped
+Commit: (this commit) fix(store): carry the last beta; empty strings are missing; locked column adds; served day in New York (BUG-054, -055, -098, -131, -145, -307)
+Next: the parser debt fixes (BUG-273, 286, 292).
+
+## Iteration 234: 2026-11-26 00:00: fix (BUG-273, BUG-286, BUG-292); BUG-272, 144, 133 re-checked
+Picked: the parser debt group (14 items); an opus worker did 3, re-checked 3, handed back a policy (Q23).
+Did: a filing tagging a balance-sheet total is dated by it; the current-liabilities bound needs the lines to fit;
+a quarter reads its 10-Q's unmapped current debt line when its year end matches the annual record.
+- RED: 13 failed on 81b2e8e; GREEN. 18 of 18 mutants; q20 46/46, bug358 8/8. Look-ahead 0.
+- DB copies re-collected: 0 medians, verdicts, labels; 3 historical values within labels.
+Result: BUG-273, 286 (a), 292 VERIFIED; BUG-272, 144 (named), 133 (in part) VERIFIED by earlier fixes. New: BUG-382,
+Q23 (NEEDS-USER). Not attempted: BUG-253, 254, 255, 259, 294, 330, 331.
+Gates: ruff ✓ mypy ✓ pytest 4259 passed, 2 skipped
+Commit: (this commit) fix(parser): balance sheets dated by their own total; current debt lines for quarters (BUG-273, BUG-286, BUG-292)
+Next: Q23 to the user; the rest of the debt group.
+
+## Iteration 235: 2026-11-26 08:50: fix (BUG-254)
+Picked: the debt group's second pass; an opus worker (nothing moved).
+Did: a DebtCurrent that is the filing's noncurrent debt plus its current part is set aside.
+- RED: 9 failed on 5b0a205; GREEN. 9 of 9 mutants; debt1's 18 of 18. Look-ahead 0.
+Result: BUG-254 VERIFIED. Handed back with options: BUG-330, 331, 253, 255; 259/294 to be split.
+Gates: ruff ✓ mypy ✓ pytest 4272 passed, 2 skipped
+Commit: (this commit) fix(parser): a DebtCurrent holding all the debt is set aside (BUG-254)
+Next: Q23 (the user approved after the measurement).
+
+## Iteration 236: 2026-11-26 18:30: fix (Q23, BUG-291; the user's decision)
+Picked: Q23, measured and shown to the user, who chose to apply.
+Did: a debt total set aside beside its current part is read less that part.
+- RED: 21 failed on 02ad0b3; GREEN. 14 of 14 mutants; q20's re-quoted 46 of 46 (one re-quoted again after BUG-254);
+  bug254's 9 of 9. Look-ahead 0.
+- DB copies: 0 medians, verdicts, labels; 4 historical values within labels; TRV composite 72 -> 66.
+Result: Q23, BUG-291 VERIFIED (BUG-133's TRV with it).
+Gates: ruff ✓ mypy ✓ pytest 4286 passed, 2 skipped
+Commit: (this commit) fix(parser): a debt total beside its current part is read less that part (Q23, BUG-291)
+Next: code review 38 (6 units since review 37).
+
+## Iteration 237: 2026-11-26 19:00: code review 38
+Picked: code review 38 (c614a02..34c87fa: BUG-381, 380, store group, debt 273/286/292, 254, Q23); an opus reviewer.
+Did: `qa/evidence/review38.txt`; 1 probe failing at HEAD; review 37's probes pass.
+Result: Important -> BUG-383 (P2; BUG-292 regression, EQIX/AMGN quarters count current notes twice). Checked right:
+JSON/CSV removal gates, _ensure_columns transactions, _served_day, the beta/EV carries, Q23/254/159 in one filing.
+Gates: unchanged (qa/ only)
+Commit: (this commit) chore(qa): code review 38 recorded (BUG-383, P2)
+Next: BUG-383.
+
+## Iteration 238: 2026-11-26 19:50: fix (BUG-383)
+Picked: code review 38's Important finding (P2); an opus worker.
+Did: a quarter's current notes that fit inside its LongTermDebt/NotesPayable total aren't read again.
+- RED: 5 failed on 73aa910; GREEN. 12 of 12 mutants; debt1 18/18, q23 14/14. Look-ahead 0.
+- DB copies: 0 medians, verdicts, labels; EQIX back to 961.99.
+Result: BUG-383 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4297 passed, 2 skipped
+Commit: (this commit) fix(parser): current notes inside a long-term debt total aren't counted twice (BUG-383)
+Next: remaining P3s.
+
+## Iteration 239: 2026-11-26 21:50: fix (BUG-370, BUG-025 parts 3-4); the user's dividend decisions
+Picked: the dividend group (020, 025, 154, 370, 378); an opus worker.
+Did: a duration fact filed before its period ends doesn't speak for it; the gap check skips unparsable payments.
+- RED: 11 failed on 3ab6321; GREEN. 10 of 10 mutants (3 re-quoted); bug383, q23 specs. Look-ahead 0.
+- DB copies (49 tickers re-collected): 0 medians, verdicts, labels; BAC/FAST FY2011 dividends right.
+Result: BUG-370 VERIFIED. User decided: BUG-020 WONTFIX (documented), BUG-025 (1-2) fix measured first, BUG-154
+merge measured first, BUG-378 option C.
+Gates: ruff ✓ mypy ✓ pytest 4308 passed, 2 skipped
+Commit: (this commit) fix(parser): a figure filed before its period ends isn't that period's (BUG-370, BUG-025)
+Next: BUG-025 (1-2), BUG-154, BUG-378; the TTM worker.
+
+## Iteration 240: 2026-11-27 00:30: fix (BUG-335, BUG-343, BUG-192, BUG-112); BUG-275 decided
+Picked: the TTM and scores group; an opus worker (nothing moved).
+Did: a derived quarter's EPS uses its own figure within rounding; TTM rows carry a frame; predictability says why
+a 1-star rating; the data-quality score starts at the first year with flows.
+- RED: 27 failed on dcaf8c3; GREEN. 29 of 29 mutants; bug193's re-quoted; div1's 10 of 10. Look-ahead 0.
+- DB copies: 0 medians, verdicts, labels; data-quality scores of 9 tickers up.
+Result: BUG-335, 343, 192, 112 VERIFIED. BUG-275 decided by the user: A (spread), measured first.
+Gates: ruff ✓ mypy ✓ pytest 4341 passed, 2 skipped
+Commit: (this commit) fix: quarterly EPS within rounding; TTM frames; predictability notes; quality from the first year with flows (BUG-335, -343, -192, -112)
+Next: BUG-378 (no moves), BUG-154 and BUG-025 (to the user), BUG-275.
+
+## Iteration 241: 2026-11-27 00:20: fix (BUG-378 option C; BUG-020 documented)
+Picked: the user's dividend decisions; an opus worker (BUG-378 moved nothing).
+Did: the oracle first (own commit), then the gate: a slipped year with more payments than its sides keeps SEC's
+figure when it is at least half the side's; the README explains dividends per share as filed.
+- RED: 7 failed on 3b185ce; GREEN. 14 of 14 mutants; 20 re-quoted (20 of 20); ttm1's 29 of 29.
+Result: BUG-378 VERIFIED; BUG-020 documented. The user approved BUG-154 and BUG-025 (1-2) after the measurements.
+Gates: ruff ✓ mypy ✓ pytest 4361 passed, 2 skipped
+Commit: (this commit) fix(valuation): a slipped year with more payments than its sides keeps SEC's figure (BUG-378); dividends as filed documented (BUG-020)
+Next: BUG-154, BUG-025 (1-2), BUG-275.
+
+## Iteration 242: 2026-11-27 01:30: fix (BUG-154; the user's decision)
+Picked: BUG-154, measured and approved by the user; an opus worker (rebased onto 7e4146f).
+Did: every dividend reader treats the same amount within 7 days as one payment.
+- RED: failed on 7e4146f (new module import + 7); GREEN. 12 of 12 mutants; b378's 14 of 14. mypy now covers the new module.
+- DB copies: 12 payments, 48 div_yield rows; 0 medians, verdicts, labels.
+Result: BUG-154 VERIFIED.
+Gates: ruff ✓ mypy ✓ (84 files) pytest 4374 passed, 2 skipped
+Commit: (this commit) fix(dividends): a payment stored twice counts once (BUG-154)
+Next: BUG-025 (1-2), then code review 39.
+
+## Iteration 243: 2026-11-27 01:45: fix (BUG-025 parts 1-2; the user's decision)
+Picked: BUG-025 (1-2), measured and approved by the user; an opus worker (stacked on BUG-154).
+Did: the dividend-gap check uses a recent median spacing and runs to the collection day.
+- RED: 10 failed on 5b3b544; GREEN. 10 of 10 mutants (1 re-quoted); b154r 12/12, div1 10/10.
+- DB copies: CRH and SW DDM N/A; medians CRH base 66.30 -> 70.35, SW 31.28 -> 30.09; 0 verdicts, labels.
+Result: BUG-025 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4384 passed, 2 skipped
+Commit: (this commit) fix(dividends): the gap check uses recent spacing and runs to the collection day (BUG-025)
+Next: code review 39 (6 units since review 38).
+
+## Iteration 244: 2026-11-27 02:30: code review 39
+Picked: code review 39 (34c87fa..bef1111: BUG-383, 370/025, ttm1 group, 378/020, 154, 025); an opus reviewer.
+Did: `qa/evidence/review39.txt`; 2 probes failing at HEAD and at base (pre-existing); review 38's probe passes.
+Result: no Critical or Important. Minors -> BUG-384, BUG-385 (P3). Checked right: no look-ahead in _filed_ahead or
+the collection-day close; BUG-154's readers; the DDM gate code vs oracle; BUG-335's EPS basis; scored_years; 3.9 syntax.
+Gates: unchanged (qa/ only)
+Commit: (this commit) chore(qa): code review 39 recorded (BUG-384, BUG-385)
+Next: BUG-384, BUG-385; BUG-275 (measuring).
+
+## Iteration 245: 2026-11-27 03:00: fix (BUG-384, BUG-385)
+Picked: code review 39's findings; a sonnet worker (nothing moved beyond ORLY's $6K-74K quarterly leases).
+Did: a figure equal to the long-term total isn't an 'other' figure; the collection's yearly dividend sums dedupe.
+- RED: 3 failed on 91c848e; GREEN. 5 of 5 + 2 of 2 mutants; bug383 (re-quoted) 11/11, debt1 18/18, b154r 12/12.
+Result: BUG-384, BUG-385 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4387 passed, 2 skipped
+Commit: (this commit) fix: a twice-tagged debt total; the run's yearly dividends count a doubled payment once (BUG-384, BUG-385)
+Next: BUG-275 (measuring), remaining P3s.
+
+## Iteration 246: 2026-11-27 05:00: fix (BUG-019, BUG-130, BUG-236)
+Picked: the web group; a sonnet worker (display only).
+Did: the DVD panel leaves spin-offs out of its sums; the small-split refusal says what a collection does; an
+unranked company is told its industry ranks aren't computed yet.
+- RED: failed on 7964c1c; GREEN. 12 of 12 mutants; store2 15/15, bug385 2/2.
+Result: BUG-019, 130 (message; the user kept the 3:2 rule), 236 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4400 passed, 2 skipped
+Commit: (this commit) fix(web): spin-offs out of the dividend sums; an honest small-split message; unranked industries (BUG-019, -130, -236)
+Next: the val3 fixes (079, 178, 250), BUG-301 (c) measured, BUG-315 pinned, BUG-275 with the open-year carry.
+
+## Iteration 247: 2026-11-27 06:30: fix (BUG-079, BUG-178, BUG-250; the user's decision for CCI's label)
+Picked: the valuation-history group; an opus worker (rebased onto 16de73e).
+Did: price days in New York's calendar; Yahoo's count moves by splits only; a quarter known by the last weekday;
+a trailing year ending after the collection isn't known.
+- RED: 32 failed on 16de73e; GREEN. 16 of 16 mutants; web2 12/12, store2 15/15.
+- DB copies: CCI label None -> below; 0 medians, verdicts.
+Result: BUG-079, 178, 250 VERIFIED; BUG-302 VERIFIED (by Q9). BUG-184 waits for HON's 10-K. New: BUG-386 (P3).
+Gates: ruff ✓ mypy ✓ pytest 4438 passed, 2 skipped
+Commit: (this commit) fix(history): New York price days; splits-only share basis; a future trailing year isn't known (BUG-079, -178, -250)
+Next: BUG-301 (c), BUG-315 pins.
+
+## Iteration 248: 2026-11-27 18:30: fix (BUG-301 option c, BUG-315 pinned; the user's decisions)
+Picked: the val3 worker's handed-back items, decided and (301) measured.
+Did: a band of 3-4 years stops interpolating toward its extremes; Q5's fallback edges pinned.
+- RED: 2 failed on fb8a6b0 (301); 315 pins pass. 6 + 3 mutants killed; v3r 16/16.
+- DB copies (301): 27 medians bear/bull, AON and KVUE fair -> expensive; 0 labels.
+Result: BUG-301, BUG-315 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4443 passed, 2 skipped
+Commit: (this commit and the one before) BUG-315 pins; fix(valuation): bands of 3-4 years don't reach for outliers (BUG-301)
+Next: code review 40 (5 units since review 39), BUG-275 (open-year carry, measuring).
+
+## Iteration 249: 2026-11-27 19:30: code review 40
+Picked: code review 40 (bef1111..6e7c2c7: BUG-384/385, web 019/130/236, history 079/178/250, 315, 301); an opus reviewer.
+Did: `qa/evidence/review40.txt`; 2 probes failing at HEAD, passing at base; review 39's probes pass.
+Result: no Critical or Important. Minors -> BUG-387 (BUG-384 regression), BUG-388 (BUG-250 regression). Checked
+right: new_york_day_of's forms on 3.9; remaining [:10] truncations decided; BUG-301's band; the DVD spin-off order.
+Gates: unchanged (qa/ only)
+Commit: (this commit) chore(qa): code review 40 recorded (BUG-387, BUG-388)
+Next: BUG-387, BUG-388; BUG-275 (measuring).
+
+## Iteration 250: 2026-11-27 21:30: fix (BUG-387; BUG-130's spin-off wording)
+Picked: code review 40's M1 and note; an opus worker (0 cells move).
+Did: a noncurrent figure that plus the line makes the total still shows the total holds the line; a spin-off factor
+isn't promised a restatement.
+- RED: 5 + 5 failed on 0bc9b9e; GREEN. bug387 5/5, bug384 (re-quoted) 5/5, bug383 11/11, bug130 4/4, web2 13/13.
+- The full suite caught a leftover mutant in the worker's quote_refresh diff (<= on the lower bound); reverted.
+Result: BUG-387 VERIFIED; BUG-130's wording done.
+Gates: ruff ✓ mypy ✓ pytest 4454 passed, 2 skipped
+Commit: (this commit) fix: a noncurrent figure beside its total; a spin-off isn't promised a restatement (BUG-387, BUG-130)
+Next: BUG-386, BUG-388 (measured: nothing moves); BUG-275 without option B.
+
+## Iteration 251: 2026-11-27 22:00: fix (BUG-386, BUG-388)
+Picked: CCI's stray row (parser) and code review 40's M2; an opus worker (measured: nothing moves).
+Did: an instant dated after its filing makes no quarter; a period is never known before it ends.
+- RED: 5 failed on c0e4465; GREEN. bug386 2/2, bug388 5/5, v3r 16/16, div1 10/10, bug387 5/5. Look-ahead 0.
+Result: BUG-386, BUG-388 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4461 passed, 2 skipped
+Commit: (this commit) fix: an instant dated after its filing makes no quarter; never known before the end (BUG-386, BUG-388)
+Next: BUG-275 without option B (worker stopped at the usage limit); review 41 after it.
+
+## Iteration 252: 2026-11-28: fix (BUG-275; the user's decisions)
+Picked: BUG-275 option A + open-year carry, without B; an opus worker (three rounds, measured each time).
+Did: a 10-K's untagged amortization is spread over the year's quarters by days and carried into the open year.
+- RED: 10 failed on 0bc4f86; GREEN. 26 of 26 mutants; bug386 2/2, bug387 5/5, ttm1 29/29. Look-ahead 0.
+- DB copies: 0 medians, verdicts, labels; 4 historical values within labels; latest TTMs unchanged.
+Result: BUG-275 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4490 passed, 2 skipped
+Commit: (this commit) fix(parser): a 10-K's untagged amortization spread over its quarters and carried into the open year (BUG-275)
+Next: code review 41.
+
+## Iteration 253: 2026-11-28: fix (BUG-280); BUG-336, BUG-058 decided
+Picked: the gather group; an opus worker (BUG-280 moved nothing offline).
+Did: an older report the companyfacts lack, before one they carry, is named, read from its XBRL, and the run is
+incomplete until it is read.
+- RED: 8 failed on b6f596f; GREEN. 16 of 16 mutants (9 older re-written); bug380, bug344-requoted.
+Result: BUG-280 VERIFIED; BUG-336 WONTFIX (user); BUG-058 decided B (explain).
+Gates: ruff ✓ mypy ✓ pytest 4501 passed, 2 skipped
+Commit: (this commit) fix(gather): an older report the companyfacts lack is read too (BUG-280)
+Next: BUG-058 B; the shares group (running); code review 41.
+
+## Iteration 254: 2026-11-28: fix (BUG-058 option B)
+Picked: BUG-058 per the user's decision; an opus worker.
+Did: a foreign issuer without quarters is told its 6-K interims aren't read.
+- RED: 3 failed on 363cf03; GREEN. 7 of 7 mutants; bug280 16/16.
+Result: BUG-058 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4506 passed, 2 skipped
+Commit: (this commit) fix(gather): a foreign issuer without quarters is told why (BUG-058)
+Next: code review 41 (5 units since review 40); the shares group (paused at the usage limit).
+
+## Iteration 255: 2026-11-28: fix (BUG-096, 105, 146, 369); code review 41; decisions on BUG-339, 086, 390
+Picked: the share-count group (an opus worker) and code review 41 (6e7c2c7..d2bead4; an opus reviewer).
+Did: an own 3-month count makes a quarter only on a quarter step; a 10-Q's TTM span isn't a year; repeated figures
+keep their first filing's split basis and restated EPS shows a split; a count no EPS checks follows its checked twin.
+- RED: 12 failed on d2bead4; GREEN. 26 of 26 mutants; bug275's m275_as_filed_off re-quoted (26/26). Look-ahead 0.
+- DB copies: 0 medians, verdicts, labels; quarterly/TTM/history rows move (GOOGL, ROL, HRL, COP, ...).
+Review 41: Minors -> BUG-389 (BUG-387 edge), BUG-390 (BUG-275 spread read early by the history). New P2: BUG-391.
+Result: BUG-096, 105, 146, 369 VERIFIED; BUG-086 WONTFIX (user); BUG-339 decided A; BUG-390 decided (known at the 10-K).
+Gates: ruff ✓ mypy ✓ pytest 4530 passed, 2 skipped
+Commit: (this commit) fix(parser): quarter counts, TTM spans, split bases, vintage share scale (BUG-096, -105, -146, -369); review 41
+Next: BUG-391 (P2), BUG-390, BUG-389, BUG-339 option A.
+
+## Iteration 256: 2026-11-28: fix (BUG-339 option A, BUG-389); BUG-390, BUG-391 prepared for the user
+Picked: the shares worker's round 2 and the BUG-390 worker.
+Did: a count no EPS checks takes the scale net income / EPS points to (vintages); a figure equal to the total leaves
+the current line read.
+- RED: 7 failed on e88639d; GREEN. b339 7/7, b389 4/4, bug387 (re-quoted) 5/5, shares1 26/26.
+- BUG-390 and BUG-391 measured, held: they move labels (see their entries).
+Result: BUG-339, BUG-389 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4539 passed, 2 skipped
+Commit: (this commit) fix(parser): an unchecked count's scale from net income / EPS; a figure equal to the total (BUG-339, BUG-389)
+Stopped after this unit at the user's request ("stop after current work finish").
+
+## Iteration 257: 2026-11-28: fix (BUG-391), the user's approval
+Picked: BUG-391 (P2), prepared in iteration 256; the user approved the measured moves on resume.
+Did: an EPS implying under 100,000 shares rescales and confirms nothing; pass 2 never rescales a count pass 1 checked.
+- RED: 3 failed / 1 passed on 87dbe22; GREEN. b391 5/5, shares1 25/25 (m369_no_floor retired), bug329 17/17 (2 stale at HEAD already).
+Result: BUG-391 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4543 passed, 2 skipped
+Commit: (this commit) fix(parser): a mis-scaled EPS rescales no count; pass 2 keeps checked counts (BUG-391)
+Next: BUG-390 (the user approved the main fix).
+
+## Iteration 258: 2026-11-28: fix (BUG-390), the user's approval
+Picked: BUG-390, prepared in iteration 256; the user chose the main fix over the variant.
+Did: spread quarters carry their source tags; the valuation history knows such a trailing year on its 10-K's first filing day.
+- RED: 15 failed on 97f5649; GREEN. bug390 14/14.
+Result: BUG-390 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4558 passed, 2 skipped
+Commit: (this commit) fix(valuation): spread quarters wait for their 10-K in the history (BUG-390)
+Since review 41: 4 units (shares e88639d, 339/389, 391, 390) -> review 42 after 1 more.
+
+## Iteration 259: 2026-11-28: fix (BUG-261); BUG-299 already fixed; BUG-276 prepared for the user
+Picked: the dna1 worker's sets (b261, b276).
+Did: AXP's and COF's balance-sheet cash line (CashCashEquivalentsAndFederalFundsSold) is the cash.
+- RED: 5 failed on 7dbc9bb; GREEN. dna1-b261 3/3, requoted bug161/bug142 3/3.
+- BUG-276 measured, held: FLEX owner-earnings verdict fair -> cheap, VEEV N/A -> expensive.
+Result: BUG-261 VERIFIED; BUG-299 VERIFIED (5efa1be).
+Gates: ruff ✓ mypy ✓ pytest 4563 passed, 2 skipped
+Commit: (this commit) fix(parser): a balance sheet's cash line with federal funds sold is the cash (BUG-261)
+Since review 41: 5 units -> review 42 next.
+
+## Iteration 260: 2026-11-28: fix (BUG-276), the user's approval
+Picked: the dna1 worker's b276; the user approved the measured moves (leave TXN).
+Did: D&A carried on OtherDepreciationAndAmortization / AmortizationOfDeferredCharges is read where the filing proves its meaning.
+- RED: 9 failing first; GREEN. dna1-b276 and bug170 specs (see verify file).
+Result: BUG-276 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4582 passed, 2 skipped
+Commit: (this commit) fix(parser): D&A on other lines where the filing proves them (BUG-276)
+
+## Iteration 261: 2026-11-28: fix (BUG-063, -114, -115, -269); code review 42
+Picked: the valid1 worker's set (rebased onto e9ef417); review 42 (d2bead4..e9ef417).
+Did: minority_interest derived where the balance sheet proves it; temporary equity and excise lines in the quality checks; short_term_debt back in the outlier check.
+- RED: 24 failing first; GREEN. valid1 28/28, requoted q20 1/1, dna1-b276 17/17.
+- Review 42: no Critical/Important; Minor 1 -> BUG-395 (BUG-390 incomplete: the spread can come from a later 10-K).
+Result: BUG-063, 114, 115, 269 VERIFIED; BUG-395 filed.
+Gates: ruff ✓ mypy ✓ pytest 4616 passed, 2 skipped
+Commit: (this commit) fix(validation): derived NCI, temporary equity and excise in the checks, short-term debt outliers (BUG-063, -114, -115, -269); review 42
+Since review 42: 0 units.
+
+## Iteration 262: 2026-11-28: fix (BUG-392)
+Picked: BUG-392 (P2), the bug392 worker's set.
+Did: a revenue figure below the one its own filing's statement adds up to is a part and isn't read.
+- RED: 6 failing first; GREEN. bug392 12/12, bug328 15/15 (2 stale: 1 at HEAD, 1 reshaped in bug392's spec), bug252 11/11.
+- 0 medians, verdicts, labels: applied without the user per the loop's rules. New BUG-396 (YUM FY2015 residual).
+Result: BUG-392 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4627 passed, 2 skipped
+Commit: (this commit) fix(parser): a revenue part its own filing's statement shows gives way to the revenue (BUG-392)
+Since review 42: 1 unit.
+
+## Iteration 263: 2026-11-28: fix (BUG-395), the user's approval
+Picked: BUG-395 (review 42, Minor 1); the user approved the measured moves (SWK label below -> above).
+Did: each spread quarter stores the 10-K that supplied its spread; the history knows its trailing years from that 10-K.
+- RED: 10 failing first; GREEN. bug395 19/19 (5 re-quoted older mutants), bug390 11/11 (3 stale, re-quoted in bug395's spec), bug392 12/12.
+Result: BUG-395 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4637 passed, 2 skipped
+Commit: (this commit) fix(valuation): a spread quarter is known from the 10-K that supplies it (BUG-395)
+Since review 42: 2 units.

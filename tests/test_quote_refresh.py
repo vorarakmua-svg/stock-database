@@ -91,6 +91,7 @@ def test_the_collected_at_is_naive_local_by_default(tmp_path):
     (1.25, "a 5-for-4 split on 2024-07-01"),
     (0.1, "a 1-for-10 split on 2024-07-01"),
     (2.0842, "a 2.0842 price adjustment (a spin-off or merger) on 2024-07-01"),
+    (0.48, "a 0.48 price adjustment (a spin-off or merger) on 2024-07-01"),  # a reverse factor, BUG-129
 ])
 def test_the_splits_are_named_as_the_web_job_names_them(ratio, named):
     splits = [{"date": "2024-07-01T00:00:00", "ratio": ratio}]
@@ -175,3 +176,54 @@ def test_the_web_job_module_no_longer_carries_its_own_copy():
     # One rule for both callers: the web job imports the shared function rather than keeping the logic itself.
     assert src.webapp.jobs.refresh_quote is quote_refresh.refresh_quote
     assert not hasattr(src.webapp.jobs, "_split_since_collection")
+
+
+def test_a_split_below_3_for_2_is_not_promised_a_full_collection_s_update():
+    # BUG-130: the valuation applies a share split after the latest filing from 3-for-2 up (inputs._apply_later_splits),
+    # so a 5-for-4 or 4-for-3 split stays on the old basis after a full collection until the next report restates it.
+    for ratio, named in ((1.25, "a 5-for-4 split"), (4.0 / 3.0, "a 4-for-3 split"), (0.8, "a 4-for-5 split")):
+        said = split_refusal("AAA", [{"date": "2024-07-01", "ratio": ratio}])
+        assert f"Yahoo shows {named} on 2024-07-01 that the stored valuations don't reflect" in said
+        assert "Collect AAA in full to update them" not in said
+        assert "A full collection doesn't update them" in said and "3-for-2" in said
+
+
+def test_a_refusal_of_a_big_and_a_small_split_promises_only_the_big_one():
+    said = split_refusal("AAA", [{"date": "2024-07-01", "ratio": 2.0}, {"date": "2024-08-01", "ratio": 1.25}])
+    assert "a 2-for-1 split on 2024-07-01, a 5-for-4 split on 2024-08-01" in said
+    assert "Collect AAA in full to update the larger" in said and "smaller than 3-for-2" in said
+
+
+def test_a_refresh_refuses_a_5_for_4_split_with_the_honest_reason(tmp_path):
+    db = rf.make_db(tmp_path / "stock.db")
+    result = refresh_quote(_Handler(rf.quote("AAA", splits=[{"date": "2026-10-22", "ratio": 1.25}])),
+                           SQLiteStore(db), "AAA")
+    assert result.outcome == "split" and "Collect AAA in full to update them" not in result.message
+    assert "3-for-2" in result.message
+
+
+@pytest.mark.parametrize("ratio", [1.5, 2.0 / 3.0, 3.0, 0.5, 2.0842])
+def test_a_split_of_3_for_2_or_more_keeps_the_collection_promise(ratio):
+    # The valuation applies 3-for-2 (and its reverse) after the latest filing, and a spin-off factor beyond it.
+    said = split_refusal("AAA", [{"date": "2024-07-01", "ratio": ratio}])
+    assert said.endswith("Collect AAA in full to update them.")
+
+
+@pytest.mark.parametrize("ratio", [1.253, 1.01, 0.9535])
+def test_a_small_factor_that_isnt_a_split_is_promised_no_restatement(ratio):
+    # BUG-130's note (review 40): a spin-off's next report doesn't restate the figures, so its refusal doesn't say so
+    said = split_refusal("AAA", [{"date": "2024-07-01", "ratio": ratio}])
+    assert "A full collection doesn't update them" in said and "3-for-2" in said
+    assert "restates" not in said and "needn't restate them for a factor that isn't a share split" in said
+
+
+def test_a_refusal_of_a_big_split_and_a_small_factor_promises_only_the_split():
+    said = split_refusal("AAA", [{"date": "2024-07-01", "ratio": 2.0}, {"date": "2024-08-01", "ratio": 1.253}])
+    assert "Collect AAA in full to update the larger" in said
+    assert "restates" not in said and "needn't restate them for a factor that isn't a share split" in said
+
+
+def test_a_small_split_beside_a_small_factor_keeps_the_splits_restatement_only():
+    said = split_refusal("AAA", [{"date": "2024-07-01", "ratio": 1.25}, {"date": "2024-08-01", "ratio": 1.253}])
+    assert "until the company's next report restates its figures for the share splits" in said
+    assert "needn't restate them for a factor that isn't a share split" in said

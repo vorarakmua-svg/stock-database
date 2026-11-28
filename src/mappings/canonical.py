@@ -95,7 +95,9 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
                     "figure filed is under 0.8 of the two (a part of it: "
                     "xbrl_parser._bank_revenue_parts). A figure "
                     "the year's other figures show isn't its revenue gives way "
-                    "(XBRLParser._revenue_set_aside).",
+                    "(XBRLParser._revenue_set_aside), and one its own filing's "
+                    "income statement shows is a part isn't read "
+                    "(xbrl_parser._revenue_parts_shown).",
     ),
     CanonicalField(
         "cost_of_revenue", "Cost of Revenue", INCOME, UNIT_USD, DURATION,
@@ -172,6 +174,8 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         "eps_diluted", "EPS Diluted", PER_SHARE, UNIT_USD_PER_SHARE, DURATION,
         ("EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"),
     ),
+    # As the filer tagged it: some tag a quarter's rate or a stray figure in a full-year context (V, CEG, BKNG,
+    # PLD's declared 0.01 beside 3.84 paid), kept as filed (BUG-020); DDM's one-payment gate reads around it.
     CanonicalField(
         "dividends_per_share", "Dividends Per Share", PER_SHARE, UNIT_USD_PER_SHARE, DURATION,
         ("CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid"),
@@ -186,7 +190,11 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "cash_and_equivalents", "Cash and Equivalents", BALANCE, UNIT_USD, INSTANT,
-        ("CashAndCashEquivalentsAtCarryingValue", "Cash",
+        # A card issuer's or bank's balance-sheet line with its federal funds sold first: AXP's FY2017 $32.927B, its
+        # cash and due from banks and interest-bearing deposits, whose CashAndCashEquivalentsAtCarryingValue is a
+        # note's part ($4.064B for FY2009), and COF's line beside its total with restricted cash (BUG-261). Read on
+        # balance-sheet dates only, as its cash flow statements tag it on their opening balances too.
+        ("CashCashEquivalentsAndFederalFundsSold", "CashAndCashEquivalentsAtCarryingValue", "Cash",
          # Then the total with restricted cash: some balance sheets tag nothing else (GE's,
          # CVX's and five more FY2025 10-Ks), and without it net debt was their whole debt
          # (BUG-139). Where a filing tags both, it runs a median 0.4% above the cash line. Read
@@ -199,7 +207,15 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "short_term_investments", "Short-Term Investments", BALANCE, UNIT_USD, INSTANT,
-        ("ShortTermInvestments", "MarketableSecuritiesCurrent", "AvailableForSaleSecuritiesCurrent"),
+        # Then the current securities other filers tag their line as (ORCL's and PFE's available-for-sale debt
+        # securities, NVDA's FY2026 debt securities, UNP's held to maturity, KO's other short-term investments),
+        # and last the marketable securities in total, which can hold noncurrent ones: read only where no current
+        # tag is filed (BUG-221), and not for a bank, whose MarketableSecurities is its whole securities book
+        # (``xbrl_parser._UNREAD_BY_SECTOR``; Q20).
+        ("ShortTermInvestments", "MarketableSecuritiesCurrent", "AvailableForSaleSecuritiesCurrent",
+         "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
+         "DebtSecuritiesAvailableForSaleExcludingAccruedInterestCurrent", "DebtSecuritiesCurrent",
+         "HeldToMaturitySecuritiesCurrent", "OtherShortTermInvestments", "MarketableSecurities"),
     ),
     CanonicalField(
         "accounts_receivable", "Accounts Receivable", BALANCE, UNIT_USD, INSTANT,
@@ -211,7 +227,9 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
     ),
     CanonicalField(
         "ppe_net", "Property, Plant & Equipment (Net)", BALANCE, UNIT_USD, INSTANT,
-        ("PropertyPlantAndEquipmentNet",),
+        # Then the line with finance-lease right-of-use assets, which UNP, HD and TSLA tag instead (BUG-203).
+        ("PropertyPlantAndEquipmentNet",
+         "PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization"),
     ),
     CanonicalField(
         "goodwill", "Goodwill", BALANCE, UNIT_USD, INSTANT, ("Goodwill",),
@@ -247,9 +265,16 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         # LongTermNotesAndLoans; ``xbrl_parser._long_term_debt_lines``, BUG-171). A figure on a day the filing's
         # balance sheet doesn't show, or under half of another of its kind under a later tag, is a note's or a
         # part, not read (``xbrl_parser._debt_on_balance_sheet_dates``, ``_debt_parts_set_aside``; BUG-319).
+        # Last the totals with current debt of filers that tag no other (GM's
+        # LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities, PGR's
+        # DebtLongtermAndShorttermCombinedAmount); on a date beside the current debt they hold, which
+        # they would count twice, less the current part the same filing tags there, and unread where it
+        # tags none (KVUE's, TRV's; ``xbrl_parser._totals_beside_current_debt_set_aside``; BUG-203,
+        # BUG-364, Q23).
         ("LongTermDebtNoncurrent", "LongTermDebt", "LongTermDebtAndCapitalLeaseObligations",
          "LongTermNotesPayable", "UnsecuredLongTermDebt", "ConvertibleLongTermNotesPayable",
-         "NotesPayable"),
+         "NotesPayable", "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities",
+         "DebtLongtermAndShorttermCombinedAmount"),
     ),
     CanonicalField(
         "short_term_debt", "Short-Term Debt", BALANCE, UNIT_USD, INSTANT,
@@ -260,7 +285,10 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         # maturities on separate lines, without a DebtCurrent, are read as one DebtCurrent unless the
         # borrowings already hold them (IBM's); the maturities a filer tags only as
         # LongTermDebtAndCapitalLeaseObligationsCurrent last (UNP's, HD's;
-        # ``xbrl_parser._current_debt_combined``, BUG-159).
+        # ``xbrl_parser._current_debt_combined``, BUG-159). A 10-Q that tags none of these reads its
+        # current line under another concept where its year-end column shows the annual record's figure
+        # (ORCL's NotesPayableCurrent; ``xbrl_parser._short_term_debt_lines``, BUG-292), unless its long-term
+        # debt reads a total the 10-Q shows holding the line (AMGN's 2014-03-31 LongTermDebt; BUG-383).
         ("DebtCurrent", "ShortTermBorrowings", "LongTermDebtCurrent", "LongTermDebtAndCapitalLeaseObligationsCurrent"),
         description="Debt due within a year: short-term borrowings and the current maturities of long-term debt.",
     ),
@@ -320,7 +348,10 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         # DepreciationAndAmortization (AbbVie's FY2025: $8.139B, not its $0.762B of depreciation), and a "total" no
         # larger than that amortization is its depreciation line (CME's, EME's), as is one the filings show to be it
         # (HUM's below its depreciation, MRSH's beside an earlier 10-K's total) (``xbrl_parser._depreciation_combined``,
-        # BUG-170, BUG-274).
+        # BUG-170, BUG-274). With no total, a line the filing shows to hold the depreciation and that amortization is
+        # read as the D&A (WDAY's OtherDepreciationAndAmortization), and one it shows to be the amortization line
+        # beside the depreciation is added to it (FLEX's; MTD's AmortizationOfDeferredCharges)
+        # (``xbrl_parser._da_other_lines``, BUG-276).
         ("DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet",
          "DepreciationAmortizationAndOther", "DepreciationAndAmortization", "Depreciation"),
         description="Depreciation and amortization: the filing's total, else its depreciation and its amortization of "

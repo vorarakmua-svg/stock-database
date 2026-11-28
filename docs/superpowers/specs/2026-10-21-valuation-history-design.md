@@ -72,7 +72,10 @@ Helpers, each unit-tested:
   - Fiscal Q4 is known on the first 10-K `filed_date` in the vintages, when that date is within 120
     days of period end; otherwise on period end + 75 days.
   - Q1-Q3 are known on period end + 45 days.
-  - The result is capped at the latest collection day.
+  - The result is capped at the latest collection day in New York, or the last weekday before it when that
+    falls at a weekend (the SEC takes no filing then; BUG-250), and is never before the period's end (BUG-388).
+  - A trailing year ending after that weekday was never filed by the collection, and is left out (BUG-388: a
+    year ending on the collection's weekend too).
   - A known row more than 200 days old at a date is stale there.
 - `pick_share_field(rows) -> Optional[str]`: one field per ticker, the first with at least 60%
   coverage, in this order: `weighted_avg_shares_basic`, `shares_outstanding`,
@@ -82,11 +85,16 @@ Helpers, each unit-tested:
   (counts_on_bar_basis, applied)`:
   - Drop a one-quarter spike: a move above 15% that comes back within 5%.
   - Walk newest to oldest. A quarter-to-quarter ratio within 1.25x of a run of declared splits dated
-    after the older quarter, and nearer that run than 1.0, folds the run in.
+    after the older quarter, and nearer that run than 1.0, folds the run in. The declared splits include the
+    ones the filings record (`inputs.split_history`, BUG-262), taken out of a Yahoo factor that mixes a reverse
+    split with a spin-off (DD's 0.4725), whose spin-off part alone is then a price factor.
   - An undeclared seam of 1.5x or more folds by its own ratio only on a split's marks (BUG-175):
     - EPS of one sign on both sides moved against the count by at least half the seam's ratio, in
       log terms. A missing or zero EPS, or one that changes sign, says nothing.
     - Revenue, where both quarters have it, didn't move with the count by as much.
+    - The count EPS implies (the quarter's net income / EPS) moved with it, and the trailing year's net income
+      kept its sign and moved by less than half the seam's ratio, as the fiscal years ask (BUG-264): a quarter's
+      own net income swings too far (DD's 52M then 888M across its 1:3 at 2017 Q1).
     - A merger stays organic, as COF's 1.56x and DUK's 1.567x (EPS 0.99 to 0.86, revenue 1.88x)
       do, and so does an exchange offer (Citigroup's 2.242x in 2009, EPS changing sign).
   - The quarter of the listing (the first ending on or after the first bar, within 98 days of it)
@@ -135,7 +143,8 @@ Constants:
 - EV/EBITDA = (mc + (net debt or 0)) / EBITDA, as `calculated_metrics.py:491-511` defines EV.
   The month's stored `enterprise_value` is that numerator, so the two agree (BUG-183): none for a
   bank (its EV family is suppressed, `sector_metrics.SUPPRESSED_BY_SECTOR`) or for a quarter whose
-  long-term debt can't be read (BUG-171).
+  long-term debt can't be read (BUG-171), unless the 10-K before it reads as without debt, as the scores
+  read a year (no debt tagged, no interest paid; `fundamentals.no_debt`, Q22).
 - A denominator of zero or less gives None.
 - Dividend yield = trailing 365-day dividends / close. It is None when no dividends were paid.
 

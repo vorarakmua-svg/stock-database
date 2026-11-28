@@ -19,7 +19,7 @@ from fractions import Fraction
 from typing import Any, Dict, List, Optional
 
 from ..exporters.sqlite_store import SQLiteStore
-from ..valuation.inputs import _simple_ratio
+from ..valuation.inputs import SPLIT_JUMP_THRESHOLD, is_share_split
 
 #: What a refresh did: "stored" (the quote saved), "rebased" (saved with a stock dividend's or a spin-off's factor
 #: since the last collection, or after a stored one the stored valuations predate, which the caller values the ticker
@@ -49,7 +49,7 @@ class QuoteRefresh:
 def _split_name(ratio: float) -> str:
     """A share split by its ratio ("a 5-for-4 split"), any other factor as the price adjustment Yahoo records for a
     spin-off or a merger (BUG-106)."""
-    if not _simple_ratio(ratio):
+    if not is_share_split(ratio):
         return f"a {ratio:g} price adjustment (a spin-off or merger)"
     fraction = Fraction(ratio if ratio >= 1 else 1.0 / ratio).limit_denominator(4)
     new, old = (fraction.numerator, fraction.denominator) if ratio >= 1 else (fraction.denominator, fraction.numerator)
@@ -61,10 +61,41 @@ def describe_splits(splits: List[Dict[str, Any]]) -> str:
     return ", ".join(f"{_split_name(float(s['ratio']))} on {str(s['date'])[:10]}" for s in splits)
 
 
+def _small_split(ratio: float) -> bool:
+    """Whether the valuation leaves a split of *ratio* alone after the latest filing: a share split of 5-for-4 or
+    4-for-3 (or its reverse) is under SPLIT_JUMP_THRESHOLD, which ``inputs._apply_later_splits`` applies from."""
+    return 1.0 / SPLIT_JUMP_THRESHOLD < ratio < SPLIT_JUMP_THRESHOLD
+
+
 def split_refusal(ticker: str, splits: List[Dict[str, Any]]) -> str:
-    """Why a quote after *splits* the stored valuations don't reflect isn't saved (BUG-093, BUG-102)."""
-    return (f"Yahoo shows {describe_splits(splits)} that the stored valuations don't reflect, so the quote wasn't "
-            f"saved. Collect {ticker} in full to update them.")
+    """Why a quote after *splits* the stored valuations don't reflect isn't saved (BUG-093, BUG-102).
+
+    A full collection brings a split over only from 3-for-2 up (the valuation's rule for a split after the latest
+    filing): a smaller one stays on the old basis until the company's next report restates its figures, so the
+    refusal doesn't promise the collection's update for it (BUG-130). A smaller factor that isn't a share split (a
+    spin-off's 1.253) isn't promised that restatement either: a spin-off's next report doesn't restate the figures.
+    """
+    said = f"Yahoo shows {describe_splits(splits)} that the stored valuations don't reflect, so the quote wasn't saved."
+    small = [s for s in splits if _small_split(float(s["ratio"]))]
+    if not small:
+        return f"{said} Collect {ticker} in full to update them."
+    if all(is_share_split(float(s["ratio"])) for s in small):
+        if len(small) == len(splits):
+            return (f"{said} A full collection doesn't update them: the valuation applies a split after the latest "
+                    f"filing from 3-for-2 up only, so they stay on the old basis until the company's next report "
+                    f"restates its figures.")
+        return (f"{said} Collect {ticker} in full to update the larger ones; a split smaller than 3-for-2 isn't "
+                f"applied to a filing that predates it: the valuations stay on the old basis until the company's next "
+                f"report restates its figures.")
+    # a factor that isn't a share split (a spin-off's) under 3-for-2: no later report need restate the figures for it
+    basis = "the old basis" + (" until the company's next report restates its figures for the share splits;" if any(
+        is_share_split(float(s["ratio"])) for s in small) else ", and") + (
+        " a later report needn't restate them for a factor that isn't a share split (a spin-off's)")
+    if len(small) == len(splits):
+        return (f"{said} A full collection doesn't update them: the valuation applies a factor after the latest filing "
+                f"from 3-for-2 up only, so they stay on {basis}.")
+    return (f"{said} Collect {ticker} in full to update the larger ones; a factor smaller than 3-for-2 isn't applied "
+            f"to a filing that predates it: the valuations stay on {basis}.")
 
 
 def valuation_failure(store: SQLiteStore, refreshed: QuoteRefresh, why: str) -> str:

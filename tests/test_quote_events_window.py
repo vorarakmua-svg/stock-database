@@ -153,7 +153,7 @@ def test_a_refresh_asks_for_yahoos_events_since_the_last_collection(tmp_path):
 def test_the_events_start_at_the_stored_prices_day_when_it_is_earlier(tmp_path):
     # A later collection whose quote failed kept the earlier price (BUG-102): a split after that price's day counts.
     db = rf.make_db(tmp_path / "stock.db")
-    _execute(db, "UPDATE market_snapshots SET collected_at = '2026-09-30T10:00:00' WHERE ticker = 'AAA'")
+    _execute(db, "UPDATE market_snapshots SET collected_at = '2026-09-30T10:00:00-04:00' WHERE ticker = 'AAA'")
     assert SQLiteStore(db).quote_events_since("AAA") == "2026-09-30"
 
 

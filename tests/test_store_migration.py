@@ -7,7 +7,7 @@ Covers:
 """
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -559,9 +559,10 @@ def test_a_split_yahoo_lists_dates_the_payments_it_adjusted(tmp_path):
 
 
 def test_a_run_without_bars_or_splits_dates_its_payments_the_day_before_its_own(tmp_path):
-    # Yahoo then lists no split, and any it hasn't applied is dated on New York's day or later: never before the
-    # collector's day less one.
-    assert _served_after_one_run(tmp_path, datetime(2026, 6, 12, 8)) == {"2026-06-11"}
+    # Yahoo then lists no split, and any it hasn't applied is dated on New York's day or later: the day before New
+    # York's (BUG-131; 08:00 at +0700 is New York's evening of the 11th).
+    at = datetime(2026, 6, 12, 8, tzinfo=timezone(timedelta(hours=7)))
+    assert _served_after_one_run(tmp_path, at) == {"2026-06-10"}
 
 
 def _pre_served_day_db(tmp_path):
@@ -593,6 +594,47 @@ def test_dividends_stored_before_the_served_day_take_their_series_latest_basis(t
     SQLiteStore(db).export([_stub_stock("ZZZ")])
     assert [_served_days(db, t) for t in ("KO", "NVDA", "XYZ")] == [
         [("2026-06-13", "2026-08-03")], [("2024-06-05", "2024-06-10")], [("2025-03-01", None)]]
+
+
+def test_the_loser_of_two_first_runs_finds_the_column_the_winner_added(tmp_path, monkeypatch):
+    # BUG-122 (surviving mutant: the migration without its re-check under the write lock): two first runs on a database
+    # from before `served_on` both see no column, one takes the write lock first and adds and dates it; the other, once
+    # it has the lock, must look again, or it fails "duplicate column name: served_on" (5 of 5 on head's two runs).
+    db = _pre_served_day_db(tmp_path)
+    real_connect = SQLiteStore._connect
+
+    class WinnerFirst:
+        """Just after the run read the dividend table's columns, and before it takes the write lock, the other run
+        adds and dates the column."""
+        def __init__(self, conn):
+            self._conn, self._last, self.raced = conn, "", False
+
+        def execute(self, sql, *args):
+            if sql == "BEGIN IMMEDIATE" and "table_info(dividend_events)" in self._last and not self.raced:
+                self.raced = True
+                other = sqlite3.connect(db)
+                other.execute("ALTER TABLE dividend_events ADD COLUMN served_on TEXT")
+                other.execute("UPDATE dividend_events SET served_on = '2026-08-03'")
+                other.commit()
+                other.close()
+            self._last = sql
+            return self._conn.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    racers = []
+
+    def connect(self):
+        racers.append(WinnerFirst(real_connect(self)))
+        return racers[-1]
+
+    monkeypatch.setattr(SQLiteStore, "_connect", connect)
+    result = SQLiteStore(db).write_batch([_stub_stock("ZZZ")])
+    assert result.stored == ["ZZZ"], result  # the batch isn't failed with "duplicate column name: served_on"
+    assert any(racer.raced for racer in racers)  # the race happened
+    monkeypatch.undo()
+    assert _served_days(db, "KO") == [("2026-06-13", "2026-08-03")]  # the winner's days stand
 
 
 def test_a_migration_interrupted_while_dating_dividends_is_undone_whole(tmp_path, monkeypatch):

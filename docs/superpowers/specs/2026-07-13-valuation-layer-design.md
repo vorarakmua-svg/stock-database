@@ -97,7 +97,7 @@ class ValuationResult:
 
 - Basis = trailing 12-month dividends per share from `dividend_events`.
 - Dividend growth = the hist dividend CAGR (≤10 yrs), clamped **[0%, 10%]** (amended 2026-11-02, Q2/Q5).
-  Its history (amended 2026-11-03, BUG-049) is SEC's annual dividends per share over the valuation's fiscal years, on the EPS's split basis and Yahoo's non-split price factors; a year SEC lacks, or whose figure holds at most one of its payments (where the 365 days before the year or after it hold two or more regular payments: not a one-off, and at least half the median of those 365 days' payments; amended BUG-311, BUG-366), takes Yahoo's payments. The TTM dividend stays Yahoo's.
+  Its history (amended 2026-11-03, BUG-049) is SEC's annual dividends per share over the valuation's fiscal years, on the EPS's split basis and Yahoo's non-split price factors; a year SEC lacks, or whose figure holds at most one of its payments (where the 365 days before the year or after it hold two or more regular payments: not a one-off, and at least half the median of those 365 days' payments or recurring into the year judged, a payment within 3x of it ex-dated within a quarter of its anniversary in that year, so an annual payer's extra paid the year before too doesn't count; and not where the year holds more such payments than each side of two or more with SEC's figure at least half that side's, a slip; amended BUG-311, BUG-366, BUG-372, BUG-376, BUG-378), takes Yahoo's payments. The TTM dividend stays Yahoo's.
 - Special dividends (amended 2026-11-03, Q3 option c): a one-off payment, over 3× the median of the other payments in the year before it and over 3× that of the year after it, leaves the TTM basis and the CAGR's first and last years (SEC's figure loses it only when it holds it); one in place of a regular payment loses only its excess over the regular level. A recurring variable dividend stays: in 2 of the 3 years before it, a payment over 3× its regular level within 91 days of its anniversary (PGR, CME). The latest payment is never a one-off (it can be a raise).
 - Stage 1: 5 years at that growth; terminal Gordon at 2.5%. Same CAPM discount.
 - **N/A when:** < 3 calendar years of dividend history, or TTM dividends = 0, or (amended 2026-11-03, Q4 option c) "dividend history incomplete": the dividend completeness check (BUG-012), rerun on the stored payments over the latest 5 fiscal years, finds Yahoo missing payments in a gap that runs into the TTM, or in a growth year taken from Yahoo's payments.
@@ -124,8 +124,9 @@ class ValuationResult:
   **P/FFO** (reit, using `metrics_annual.ffo_per_share`).
 - For each of the last ≤ 5 FYs: multiple = FY-end price (nearest `price_bars` close on or
   before fiscal year end) ÷ that FY's per-share basis. Requires ≥ 3 valid FY multiples.
-- Band = (min, median, max) of those multiples; fair value = band × latest FY per-share basis
-  → bear/base/bull.
+- Band = the inclusive quartiles (p25, median, p75) of those multiples (BUG-172); with four multiples the
+  second and third and their midpoint, with three the median alone, so no case interpolates toward an
+  extreme year (BUG-301); fair value = band × latest FY per-share basis → bear/base/bull.
 - **N/A when:** < 3 valid historical multiples (e.g. negative EPS years, missing price bars),
   or latest per-share basis ≤ 0.
 

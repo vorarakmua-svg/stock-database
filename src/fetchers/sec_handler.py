@@ -84,25 +84,20 @@ def _newest_reports(filings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def report_without_facts(submissions: Optional[Dict[str, Any]],
                          facts: Optional[Dict[str, Any]]) -> Optional[Dict[str, str]]:
-    """The latest report *submissions* (``get_submissions``') list when *facts*, the companyfacts read with them (None
-    when that request failed or the SEC has none), carry no fact of it: the SEC's lag, after which a run's figures
-    stop at the report before (BUG-251: on 2026-10-25 DLR's companyfacts had no fact of its 10-Q of 2026-07-31, though
-    they had its 424B7 of 2026-08-19). Its form, accession and filing date; None when the facts carry it, or when there
-    is none to look for.
+    """The newest report *submissions* (``get_submissions``') list that *facts*, the companyfacts read with them (None
+    when that request failed or the SEC has none), carry no fact of (``report_gap``'s first): the SEC's lag, after
+    which a run's figures stop at the report before (BUG-251: on 2026-10-25 DLR's companyfacts had no fact of its 10-Q
+    of 2026-07-31, though they had its 424B7 of 2026-08-19), or lack the report, when the facts carry a later one
+    (BUG-280: on 2026-11-20 CLX's carried its 10-Q of 2026-11-02 but nothing of its 10-K of 2026-08-07). Its form,
+    accession and filing date; None when the facts carry each of the newest XBRL_REPORTS_READ, or when there is none
+    to look for.
 
-    The report is the latest of the feed's whole "recent" block (``_latest_report``'s rule: as filed, with XBRL), kept
-    beside the newest 100 filings as ``latest_report``, which a bank's 424B2s fill in days (BUG-285: JPM's held 94
-    424B2s of two days and no report); submissions cached before that was kept give their newest 100 alone. Its facts
-    count under any taxonomy (an IFRS filer's 20-F under ifrs-full)."""
-    listed = submissions or {}
-    # The newest 100 and the latest report behind them: an empty entry where none was kept is no report.
-    latest = _latest_report([*(listed.get("filings") or []), listed.get("latest_report") or {}])
-    if latest is None:
-        return None
-    accession = latest.get("accessionNumber")
-    if not accession or any(e.get("accn") == accession for e in _entries(facts or {})):
-        return None
-    return {"form": str(latest["form"]), "accession": str(accession), "filed": str(latest.get("filingDate") or "")[:10]}
+    The latest report is the latest of the feed's whole "recent" block (``_latest_report``'s rule: as filed, with
+    XBRL), kept beside the newest 100 filings as ``latest_report``, which a bank's 424B2s fill in days (BUG-285: JPM's
+    held 94 424B2s of two days and no report); submissions cached before that was kept give their newest 100 alone.
+    Its facts count under any taxonomy (an IFRS filer's 20-F under ifrs-full)."""
+    gap = report_gap(submissions, facts)[0]
+    return _named(gap[0]) if gap else None
 
 
 def _named(filing: Dict[str, Any]) -> Dict[str, str]:
@@ -114,18 +109,20 @@ def _named(filing: Dict[str, Any]) -> Dict[str, str]:
 def reports_without_facts(submissions: Optional[Dict[str, Any]],
                           facts: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """The reports *submissions* list (``_latest_report``'s rule: as filed, with XBRL) that *facts* carry no fact of,
-    newest first, from the latest back to the first the facts carry, at most XBRL_REPORTS_READ: the gap whose figures a
-    run reads from the filings' own XBRL (Q17). Its first is ``report_without_facts``'; empty when that is None. The
-    reports are the submissions' ``reports`` (the newest of the feed's "recent" block), else, in a file cached before
-    those were kept, the newest 100 filings and the latest report."""
+    newest first, each of the newest XBRL_REPORTS_READ the facts lack: the latest and those back to the first the
+    facts carry (Q17), and one before a report they carry (BUG-280); the gap whose figures a run reads from the
+    filings' own XBRL. Its first is ``report_without_facts``'; empty when that is None. The reports are the
+    submissions' ``reports`` (the newest of the feed's "recent" block), else, in a file cached before those were kept,
+    the newest 100 filings and the latest report."""
     return report_gap(submissions, facts)[0]
 
 
 def report_gap(submissions: Optional[Dict[str, Any]],
                facts: Optional[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], bool]:
-    """``reports_without_facts``' gap, and whether it ends at a report the facts carry (the report after its last,
-    among those listed): only then is the gap known whole. False when it runs past XBRL_REPORTS_READ reports or past
-    the reports listed (a file cached before ``reports`` were kept lists the newest 100 filings alone, BUG-337)."""
+    """``reports_without_facts``' gap, and whether it ends at a report the facts carry (the report listed after its
+    last): only then is the gap known whole. False when the report after it is lacked too (a gap of more than
+    XBRL_REPORTS_READ reports, or one that goes on before them), or none is listed (a file cached before ``reports``
+    were kept lists the newest 100 filings alone, BUG-337), or a report is listed without its accession."""
     listed = submissions or {}
     candidates = [f for f in [*(listed.get("reports") or []), *(listed.get("filings") or []),
                               listed.get("latest_report") or {}]
@@ -135,14 +132,17 @@ def report_gap(submissions: Optional[Dict[str, Any]],
                                                      str(f.get("acceptanceDateTime") or "")), reverse=True):
         newest.setdefault(str(filing.get("accessionNumber") or ""), filing)
     carried = {e.get("accn") for e in _entries(facts or {})}
+    reports = list(newest.items())
     gap: List[Dict[str, Any]] = []
-    for accession, filing in newest.items():
-        if accession and accession in carried:
-            return gap, True
-        if not accession or len(gap) == XBRL_REPORTS_READ:
-            break
-        gap.append(filing)
-    return gap, False
+    last = -1
+    for at, (accession, filing) in enumerate(reports[:XBRL_REPORTS_READ]):
+        if not accession:
+            return gap, False
+        if accession not in carried:
+            gap.append(filing)
+            last = at
+    # The report listed after the gap's last (after none, the latest): the gap ends at it when the facts carry it.
+    return gap, last + 1 < len(reports) and reports[last + 1][0] in carried
 
 
 def merge_report_facts(facts: Dict[str, Any], read: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -215,7 +215,8 @@ class SECHandler:
     SEC_BASE_URL = "https://data.sec.gov"
     SEC_WWW_URL = "https://www.sec.gov"
     #: Each thread's ``fetch_all`` in progress: the times its payloads read from the payload cache were cached
-    #: (``cached``, None outside a ``fetch_all``), for the run's ``sec_read_at`` (BUG-232).
+    #: (``cached``, None outside a ``fetch_all``), for the run's ``sec_read_at`` (BUG-232); a file read but then
+    #: fetched again (``get_submissions``' old shape) leaves it (BUG-371).
     _reading = threading.local()
 
     def __init__(
@@ -350,7 +351,8 @@ class SECHandler:
 
         Returns:
             Dictionary containing all fetched SEC data, with ``missing_report`` when the companyfacts carry no fact of
-            the latest report the submissions list (``report_without_facts``); then the facts of the reports they lack
+            one of the newest reports the submissions list (``report_without_facts``: the newest such, the latest or
+            one before it, BUG-280); then the facts of the reports they lack
             are read from the filings' own XBRL into ``company_facts`` (``_read_gap``, Q17). ``sec_read_at``: when the
             SEC served the oldest companyfacts (a predecessor's too) or submissions read, naive local as
             ``fetched_at``: a payload from the cache when it was cached, else as this asked (BUG-232: a run on
@@ -421,8 +423,8 @@ class SECHandler:
             # Never empty: without the submissions the run can't look for a report its companyfacts lack (BUG-282).
             data["submissions_error"] = _why(e)
 
-        # The latest report the submissions list whose facts the companyfacts lack (BUG-251), and those reports' facts
-        # read from their own XBRL (Q17).
+        # The newest report the submissions list whose facts the companyfacts lack (BUG-251, BUG-280), and those
+        # reports' facts read from their own XBRL (Q17).
         missing = report_without_facts(data.get("submissions"), data.get("company_facts"))
         if missing:
             data["missing_report"] = missing
@@ -438,14 +440,14 @@ class SECHandler:
         return data
 
     def _read_gap(self, ticker: str, cik: str, data: Dict[str, Any]) -> None:
-        """Read the reports *data*'s companyfacts lack (``reports_without_facts``: the latest and up to three before
-        it) from their own XBRL (``get_filing_facts``: one request each, two for a filing that isn't inline) into
+        """Read the reports *data*'s companyfacts lack (``reports_without_facts``: each of the newest four they
+        lack) from their own XBRL (``get_filing_facts``: one request each, two for a filing that isn't inline) into
         ``company_facts`` (``merge_report_facts``). ``reports_read`` names those read and their instance documents,
         ``reports_unread`` those that couldn't be, and why; a failure never fails the collection. When every one was
         read and the gap ends at a report the companyfacts carry (``report_gap``) the run's figures are whole:
         ``missing_report`` gains ``recovered``, and the run isn't stored as incomplete (it is still named in the run's
-        warning). A gap whose end wasn't reached (over XBRL_REPORTS_READ reports, or past those the submissions list)
-        leaves the run incomplete, so the refresh collects it again (BUG-337)."""
+        warning). A gap whose end wasn't reached (over XBRL_REPORTS_READ reports, before them, or past those the
+        submissions list) leaves the run incomplete, so the refresh collects it again (BUG-337)."""
         read: List[Dict[str, Any]] = []
         unread: List[Dict[str, str]] = []
         pieces: List[Dict[str, Any]] = []
@@ -683,11 +685,15 @@ class SECHandler:
         cik = str(cik).zfill(10)
 
         cache_path = self._payload_cache_path("submissions", cik)
+        reading = getattr(self._reading, "cached", None)
+        read_before = len(reading) if reading is not None else 0
         cached = self._read_payload_cache(cache_path)
         # A file cached in another shape is fetched again (BUG-296: one without latest_report hid a bank's reports).
         if cached is not None and cached.get("cache_version") == SUBMISSIONS_CACHE_VERSION:
             self.logger.debug(f"submissions cache hit for CIK {cik}")
             return {key: value for key, value in cached.items() if key != "cache_version"}
+        if reading is not None:  # nothing of the rejected file is used, so it doesn't date the run (BUG-371)
+            del reading[read_before:]
 
         url = f"{self.SEC_BASE_URL}/submissions/CIK{cik}.json"
         self.logger.debug(f"Fetching submissions from {url}")

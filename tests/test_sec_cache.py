@@ -3,7 +3,7 @@
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 import requests
@@ -587,6 +587,77 @@ def test_a_gap_of_a_years_reports_that_ends_at_one_the_facts_carry_is_a_recovery
     assert data["missing_report"]["recovered"]
 
 
+# ---- BUG-280: a report the companyfacts lack before one they carry ----
+
+#: DLR's 10-Q of 2026-10-30, a test's report after the 10-Q of 2026-07-31, and its third quarter's revenue.
+_DLR_10Q3 = {**_DLR_10Q2_INLINE, "accessionNumber": "0001104659-26-110001", "filingDate": "2026-10-30",
+             "reportDate": "2026-09-30", "acceptanceDateTime": "2026-10-30T21:00:00.000Z",
+             "primaryDocument": "dlr-20260930x10q.htm"}
+_DLR_Q3_REVENUE = {"val": 1.8e9, "start": "2026-07-01", "end": "2026-09-30", "fy": 2026, "fp": "Q3", "form": "10-Q",
+                   "filed": "2026-10-30", "frame": "CY2026Q3", "accn": "0001104659-26-110001"}
+
+
+def test_a_report_the_companyfacts_lack_before_one_they_carry_is_read_from_its_own_xbrl(tmp_path, monkeypatch):
+    # On 2026-11-20 the companyfacts of six companies carried their latest report but none of the one before it: CLX's
+    # 10-K of 2026-08-07 (its FY2026 was never stored), URI's and DOW's 10-Qs of July (their June quarter was never
+    # stored). The run named nothing, and the refresh never collected them again.
+    handler, requested = _dlr_reading(tmp_path, monkeypatch,
+                                      [_DLR_10Q3, _DLR_424B7, _DLR_10Q2_INLINE, _DLR_10Q1_INLINE],
+                                      {_DLR_10Q2_FOLDER + "dlr-20260630x10q_htm.xml": _DLR_10Q2_INSTANCE},
+                                      revenue=(_DLR_Q1_REVENUE, _DLR_Q3_REVENUE))
+    data = handler.fetch_all("DLR")
+    assert data["missing_report"] == {"form": "10-Q", "accession": "0001104659-26-089296", "filed": "2026-07-31",
+                                      "recovered": True}
+    assert [r["accession"] for r in data["reports_read"]] == ["0001104659-26-089296"]
+    assert requested == ["https://www.sec.gov/" + _DLR_10Q2_FOLDER + "dlr-20260630x10q_htm.xml"]
+    assert _revenue(data) == [_DLR_Q1_REVENUE, _DLR_Q3_REVENUE, _H1_FROM_INSTANCE, _Q2_FROM_INSTANCE]
+
+
+def test_a_report_the_companyfacts_lack_before_one_they_carry_that_cant_be_read_leaves_the_run_incomplete(
+        tmp_path, monkeypatch):
+    handler, _ = _dlr_reading(tmp_path, monkeypatch, [_DLR_10Q3, _DLR_424B7, _DLR_10Q2_INLINE, _DLR_10Q1_INLINE], {},
+                              revenue=(_DLR_Q1_REVENUE, _DLR_Q3_REVENUE))
+    data = handler.fetch_all("DLR")
+    stock = StockData(ticker="DLR")
+    stock.missing_report = data["missing_report"]
+    assert json.loads(_incomplete(stock) or "{}") == {"report": {
+        "form": "10-Q", "accession": "0001104659-26-089296", "filed": "2026-07-31"}}
+
+
+def _listed(*carried):
+    """Five 10-Qs, newest first, as the submissions list them, and companyfacts carrying those at *carried*."""
+    reports = [{**_DLR_10Q2, "accessionNumber": f"0001104659-26-0{n:05d}", "filingDate": f"2026-0{n}-01"}
+               for n in range(9, 4, -1)]
+    facts = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        {**_DLR_Q1_REVENUE, "accn": reports[i]["accessionNumber"]} for i in carried]}}}}}
+    return {"reports": reports[:4], "filings": reports, "latest_report": reports[0]}, facts, reports
+
+
+@pytest.mark.parametrize("carried, lacked, whole", [
+    ((0, 2, 4), [1, 3], True),   # each of a year's reports the facts lack, the gap ending at a report they carry
+    ((0, 2), [1, 3], False),     # the last of a year's lacked, and the report before it too: the end isn't reached
+    ((0, 1, 2), [3], False),     # the same, a year back
+    ((0, 1, 2, 3), [], True),    # the facts carry a year's reports: a report before those isn't looked for
+    ((1, 2, 3, 4), [0], True),   # the latest alone (BUG-251)
+    ((4,), [0, 1, 2, 3], True),  # a year's reports, ending at one the facts carry (BUG-337)
+    ((), [0, 1, 2, 3], False),   # none carried
+])
+def test_every_report_of_a_year_the_facts_lack_is_in_the_gap(carried, lacked, whole):
+    submissions, facts, reports = _listed(*carried)
+    gap, ends = sec_handler.report_gap(submissions, facts)
+    assert gap == [reports[i] for i in lacked] and ends is whole
+    named = sec_handler.report_without_facts(submissions, facts)
+    assert named == (sec_handler._named(reports[lacked[0]]) if lacked else None)
+
+
+def test_the_gap_goes_no_further_than_a_report_listed_without_its_accession():
+    # Such a report ends the walk, as it did before BUG-280: what comes after it isn't looked through, and the gap's
+    # end isn't known.
+    submissions, facts, reports = _listed(0, 4)
+    reports[1]["accessionNumber"] = ""
+    assert sec_handler.report_gap(submissions, facts) == ([], False)
+
+
 def test_the_submissions_keep_the_newest_reports(tmp_path, monkeypatch):
     submissions = _dlr(tmp_path, monkeypatch, [*_424B2S, _DLR_10Q2, _DLR_10Q1]).get_submissions("0001297996")
     assert submissions.get("reports") == [_DLR_10Q2, _DLR_10Q1]
@@ -755,7 +826,11 @@ def test_reports_without_facts_go_back_to_the_first_the_facts_carry():
     q3 = {**_DLR_10Q2, "accessionNumber": "0001104659-26-110001", "filingDate": "2026-10-30"}
     old = {**_DLR_10Q1, "accessionNumber": "0001104659-26-000001", "filingDate": "2026-02-20", "form": "10-K"}
     listed = {"reports": [q3, _DLR_10Q2, _DLR_10Q1, old], "filings": [_DLR_424B7, q3], "latest_report": q3}
-    assert sec_handler.reports_without_facts(listed, facts) == [q3, _DLR_10Q2]
+    carried = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        _DLR_Q1_REVENUE, {**_DLR_Q1_REVENUE, "accn": old["accessionNumber"]}]}}}}}
+    assert sec_handler.reports_without_facts(listed, carried) == [q3, _DLR_10Q2]
+    # The 10-K before the 10-Q they carry, lacked too, is in the gap (BUG-280).
+    assert sec_handler.reports_without_facts(listed, facts) == [q3, _DLR_10Q2, old]
     assert sec_handler.reports_without_facts(listed, {"facts": {}}) == [q3, _DLR_10Q2, _DLR_10Q1, old]
     amended = {"filings": [_DLR_424B7, {**_DLR_10Q2, "form": "10-Q/A"}, _DLR_10Q1]}
     assert sec_handler.reports_without_facts(amended, facts) == []
@@ -862,6 +937,36 @@ def test_the_submissions_cache_keeps_its_version_beside_the_submissions(tmp_path
     cached = json.loads(handler._payload_cache_path("submissions", "0000320193").read_text(encoding="utf-8"))
     assert cached == {**submissions, "cache_version": sec_handler.SUBMISSIONS_CACHE_VERSION}
     assert "cache_version" not in submissions and "cache_version" not in handler.get_submissions("0000320193")
+
+
+@pytest.mark.parametrize("facts_age_days", [None, 2])
+def test_submissions_fetched_again_for_their_old_shape_date_the_run_by_what_it_read(tmp_path, monkeypatch,
+                                                                                    facts_age_days):
+    # BUG-371 (code review 35): a submissions file an earlier build cached 3 days ago (no cache_version) is fetched
+    # again, so it doesn't date the run's SEC read (BUG-232): the run is as old as its companyfacts, read from the
+    # cache 2 days ago or asked now (None: no cached file).
+    handler, requested = _successor_handler(tmp_path, monkeypatch, _AAPL)
+    handler.fetch_all("AAPL")
+    path = handler._payload_cache_path("submissions", "0000320193")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("cache_version", None)  # as a build before BUG-296 wrote it
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    three = int(time.time()) - 3 * 86400
+    os.utime(path, (three, three))
+    facts = handler._payload_cache_path("companyfacts", "0000320193")
+    if facts_age_days is None:
+        facts.unlink()
+    else:
+        then = int(time.time()) - facts_age_days * 86400
+        os.utime(facts, (then, then))
+    requested.clear()
+    before = datetime.now() - timedelta(seconds=1)
+    data = handler.fetch_all("AAPL")
+    assert any("submissions/CIK0000320193.json" in url for url in requested), "the old-shape file wasn't fetched again"
+    if facts_age_days is None:
+        assert datetime.fromisoformat(data["sec_read_at"]) >= before, data["sec_read_at"]
+    else:
+        assert data["sec_read_at"] == datetime.fromtimestamp(then).isoformat()
 
 
 def test_the_submissions_cache_version_names_the_submissions_shape(tmp_path, monkeypatch):

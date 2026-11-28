@@ -79,6 +79,24 @@ def test_a_trailing_year_runs_over_a_sixteen_week_quarter():
     assert (ttm["2024-09-01"]["net_income"], ttm["2024-11-24"]["net_income"]) == (500, 505)
 
 
+@pytest.mark.parametrize("step, has_trailing_year", [
+    (119, True),    # 17 weeks
+    (120, True),    # the limit, inclusive
+    (121, False),   # a day more: not one quarter apart
+])
+def test_a_trailing_year_runs_over_a_seventeen_week_quarter_and_no_longer_one(step, has_trailing_year):
+    # BUG-122 (surviving mutant: ttm._QUARTER_MAX_DAYS 120 -> 115, which lost 18 trailing years: COST's and PEP's
+    # 17-week fourth quarters). A trailing year needs four ends each 80 to 120 days from the last.
+    from datetime import date, timedelta
+    first = date(2023, 3, 25)
+    ends = [(first + timedelta(days=days)).isoformat() for days in (0, 84, 168, 168 + step)]
+    q = {e: {"period_end": e, "net_income": ni} for e, ni in zip(ends, (100, 120, 110, 170))}
+    ttm = compute_ttm(q)
+    assert (ends[3] in ttm) is has_trailing_year
+    if has_trailing_year:
+        assert ttm[ends[3]]["net_income"] == 500
+
+
 def _year_2017_to_2018():
     """Six calendar quarters, 2017 Q1 to 2018 Q2, each with net income and total assets."""
     ends = ["2017-03-31", "2017-06-30", "2017-09-30", "2017-12-31", "2018-03-31", "2018-06-30"]
@@ -136,3 +154,17 @@ def test_an_end_beside_a_gap_in_the_quarters_is_left_as_it_was():
     assert ttm["2017-12-31"]["total_assets"] == 104.0 and "net_income" not in ttm["2017-12-31"]
     assert "net_income" not in ttm["2018-03-31"] and "net_income" not in ttm["2018-06-30"]
 
+
+def test_a_trailing_year_carries_its_latest_quarters_frame():
+    # BUG-343: the rows took calendar_year / calendar_quarter from their latest quarter but not its SEC frame label.
+    q = _quarters()
+    for row in q.values():
+        row["frame"] = "CY%dQ%d" % (row["calendar_year"], row["calendar_quarter"])
+    ttm = compute_ttm(q)
+    assert (ttm["2024-12-31"]["frame"], ttm["2025-03-31"]["frame"]) == ("CY2024Q4", "CY2025Q1")
+
+
+def test_a_trailing_year_whose_latest_quarter_has_no_frame_has_none():
+    q = _quarters()
+    q["2024-12-31"]["frame"] = "CY2024Q4"
+    assert "frame" not in compute_ttm(q)["2025-03-31"]

@@ -28,9 +28,10 @@ on the list wasn't collected in that run; ``insiders`` and ``gurus`` after an it
   10-Q, 20-F, 40-F, a transition report (10-KT, 10-QT) or an amendment of one filed on or after the day the SEC served
   the SEC data of the company's last collection with the SEC (``collection_runs.sec_read_at``: a collection by hand
   reads the SEC handler's 7-day cache, BUG-232) puts it on the list. So does that collection when its SEC read was
-  incomplete (``collection_runs.incomplete``): it read no facts of the latest report its submissions listed (its
-  companyfacts lacked them, the SEC's lag, BUG-251, or their request failed), it couldn't read its predecessor's
-  filings (BUG-279), or its submissions request failed, so that it couldn't look for such a report (BUG-282). Up to
+  incomplete (``collection_runs.incomplete``): it read no facts of the latest report its submissions listed, or of
+  one of the three before it (its companyfacts lacked them, the SEC's lag, BUG-251, BUG-280, or their request
+  failed), it couldn't read its predecessor's filings (BUG-279), or its submissions request failed, so that it
+  couldn't look for such a report (BUG-282). Up to
   INCOMPLETE_RETRIES tries at one gap, each a read of the SEC a week after the last (``incomplete_tries``); then the
   company waits for its next report.
 - ``collect`` (whenever the list isn't empty): a full collection of the list as ``stock-data`` runs one (json, csv
@@ -1015,8 +1016,9 @@ class _Run:
                filings: Sequence[Dict[str, Any]]) -> None:
         """Put *ticker* on the list again when its latest collection with the SEC (*runs*, newest first: when each
         ran, what its SEC read lacked and when the SEC served it) was incomplete (BUG-251, BUG-279, BUG-282): its
-        companyfacts lacked the latest report its submissions listed (the SEC's lag), its predecessor's filings
-        couldn't be read, or its submissions couldn't, so that it couldn't look for such a report.
+        companyfacts lacked the latest report its submissions listed, or one before it (the SEC's lag, BUG-280), its
+        predecessor's filings couldn't be read, or its submissions couldn't, so that it couldn't look for such a
+        report.
         Its tries at that gap count (``incomplete_tries``: reads of the SEC a week apart, *filings* its submissions
         feed): after INCOMPLETE_RETRIES more, the gap is the source's, and the company is left to its next report
         (``incomplete_left``)."""

@@ -111,21 +111,22 @@ def _record_unchanged(day: str, parsed_days: Set[str], unended: List[str]) -> bo
     return day not in parsed_days and all(end > day for end in unended)
 
 
-def _vintages_of(parser: XBRLParser, known: Dict[str, Any], day: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
+def _vintages_of(parser: XBRLParser, known: Dict[str, Any], day: str,
+                 sector: Optional[str] = None) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """The views of the filings of *day*, from the facts *known* that day, normalised as the run does: a year's
     share counts over all its views filed by *day* (``normalize_share_scale`` without neighbours still gives a count
     no EPS checks the scale its year's corrected views agree on, so a view takes it from earlier filings' views and
     its own day's, never a later one's), then derivations. A view of a year not over on *day* is none (BUG-113).
     The views are this day's extraction's own dicts, so normalising them leaves an earlier day's views as they were."""
     views: Dict[str, Dict[str, Dict[str, Any]]] = {}
-    for fy, by_accn in parser.extract_annual_vintages(known, keep_year_end=True).items():
+    for fy, by_accn in parser.extract_annual_vintages(known, keep_year_end=True, sector=sector).items():
         ends = {accn: period.pop("_year_end", None) or period.get("period_end") for accn, period in by_accn.items()}
         kept = [accn for accn, period in by_accn.items()
                 if period.get("filed_date") == day and (not ends[accn] or ends[accn] <= day)]
         if not kept:
             continue
         # No neighbouring year's views: a vintage's view takes no scale from a later filing (the gate).
-        normalize_share_scale(by_accn, neighbours=False)
+        normalize_share_scale(by_accn, neighbours=False, loose=True)
         for accn in kept:
             apply_derivations(by_accn[accn])
         views[fy] = {accn: by_accn[accn] for accn in kept}
@@ -133,7 +134,7 @@ def _vintages_of(parser: XBRLParser, known: Dict[str, Any], day: str) -> Dict[st
 
 
 def build_snapshots(parser: XBRLParser, facts: Dict[str, Any], *, ticker: str,
-                    years_back: Optional[int]) -> SnapshotSet:
+                    years_back: Optional[int], sector: Optional[str] = None) -> SnapshotSet:
     """*ticker*'s annual record as known on each day its companyfacts *facts* hold a filing of, and each filing's
     views of its years.
 
@@ -146,6 +147,7 @@ def build_snapshots(parser: XBRLParser, facts: Dict[str, Any], *, ticker: str,
     day's record is built on all its years and trimmed after, where ``build_annual_record`` trims a *years_back*
     record before cleaning it: share scale reads a year's neighbours, so a *years_back* run's record can differ from
     its latest snapshot of a year at the window's edge (a full run's agree, and the refresh collects full runs).
+    *sector* is the run's sector class, read as the run's record reads it (``build_annual_record``).
 
     A day whose record's cleaning failed (``build_annual_record`` keeps it uncleaned and says "Data cleaning: ...")
     is stored uncleaned; the set's warnings say so once, with the count of such days and the first failure.
@@ -169,7 +171,7 @@ def build_snapshots(parser: XBRLParser, facts: Dict[str, Any], *, ticker: str,
             continue
         known = facts_known_by(facts, day)
         if build:
-            record = build_annual_record(parser, known, ticker=ticker, years_back=None)
+            record = build_annual_record(parser, known, ticker=ticker, years_back=None, sector=sector)
             unended = record.unended
             failed = [w for w in record.warnings[record.repairs:] if w.startswith(_CLEANING_FAILED)]
             if failed:
@@ -187,7 +189,7 @@ def build_snapshots(parser: XBRLParser, facts: Dict[str, Any], *, ticker: str,
                 out.rows.append({**head, "present": True, **state, **_latest_filing(state["source_filings"])})
                 last[fy], present[fy] = state, True
         if day in annual_days:
-            for fy, views in _vintages_of(parser, known, day).items():
+            for fy, views in _vintages_of(parser, known, day, sector).items():
                 vintages.setdefault(fy, {}).update(views)
     if uncleaned:
         out.warnings.append(

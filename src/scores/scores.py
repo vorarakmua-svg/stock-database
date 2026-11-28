@@ -79,6 +79,8 @@ class Scores:
     roic_minus_wacc: Optional[float] = None
     predictability_stars: Optional[float] = None
     predictability_r2: Dict[str, float] = field(default_factory=dict)
+    #: Why a rating is 1 star: a year at or below zero, a falling trend, or a weak fit (BUG-192).
+    predictability_note: Optional[str] = None
     ncav_per_share: Optional[float] = None
     earnings_yield: Optional[float] = None
     return_on_capital: Optional[float] = None
@@ -284,10 +286,21 @@ def _trend(points: List[Tuple[int, float]]) -> Tuple[float, float]:
     return slope, r2
 
 
+#: The series' names as a note gives them.
+_SERIES_LABELS = {"revenue": "revenue per share", "ebitda": "EBITDA per share", "eps": "EPS"}
+
+
 def predictability(f: Fundamentals) -> Tuple[Optional[float], Dict[str, float]]:
     """1-5 stars in half steps from the last 10 fiscal years: 1 on any loss year or a falling trend; else
     1 + 4·min(R² of the revenue/share and EBITDA/share log-trends), rounded down to the half star. Banks and
     insurers use EPS for EBITDA/share. (None, {}) without each of the fiscal years t-9 to t (BUG-198)."""
+    stars, r2, _note = rated(f)
+    return stars, r2
+
+
+def rated(f: Fundamentals) -> Tuple[Optional[float], Dict[str, float], Optional[str]]:
+    """``predictability``'s stars and R², and for 1 star why (BUG-192): the series and years at or below zero, the
+    series whose trend falls, or a fit below the 0.125 that earns 1.5 stars."""
     second = "eps" if f.sector_class in _FINANCIALS else "ebitda_ps"
     years = {r.fiscal_year for r in f.window(PREDICTABILITY_YEARS)}
     series: Dict[str, List[Tuple[int, float]]] = {}
@@ -295,24 +308,35 @@ def predictability(f: Fundamentals) -> Tuple[Optional[float], Dict[str, float]]:
         raw = [(y, v) for y, v in f.series(key) if y in years]
         points = [(y, v) for y, v in raw if v is not None]
         if len(raw) < PREDICTABILITY_YEARS or len(points) < len(raw):
-            return None, {}
+            return None, {}, None
         series[name] = points
-    if any(v <= 0 for points in series.values() for _, v in points):
-        return 1.0, {}
+    at_or_below = [f"{_SERIES_LABELS[name]} at or below zero in FY" + ", ".join(str(y) for y, v in points if v <= 0)
+                   for name, points in series.items() if any(v <= 0 for _, v in points)]
+    if at_or_below:
+        return 1.0, {}, "1 star: " + "; ".join(at_or_below)
     r2: Dict[str, float] = {}
-    falling = False
+    falling: List[str] = []
     for name, points in series.items():
         slope, r2[name] = _trend(points)
-        falling = falling or slope <= 0
+        if slope <= 0:
+            falling.append(_SERIES_LABELS[name])
     if falling:
-        return 1.0, r2
-    return stars_for(min(r2.values())), r2
+        return 1.0, r2, "1 star: a falling trend in " + " and ".join(falling)
+    stars = stars_for(min(r2.values()))
+    if stars == 1.0:
+        return stars, r2, f"1 star: a fit (R²) of {min(r2.values()):.2f}, below the 0.125 that earns 1.5"
+    return stars, r2, None
 
 
 def _predictability_reason(f: Fundamentals) -> str:
-    """Why predictability is None (BUG-193): fewer than ten fiscal years t-9 to t, or, with all ten, the per-share
-    figure some year lacks."""
-    if len(f.window(PREDICTABILITY_YEARS)) < PREDICTABILITY_YEARS:
+    """Why predictability is None (BUG-193): fewer than ten fiscal years t-9 to t (naming those not stored where the
+    record holds an earlier one: BUG-192), or, with all ten, the per-share figure some year lacks."""
+    window = f.window(PREDICTABILITY_YEARS)
+    if len(window) < PREDICTABILITY_YEARS:
+        if len(f.rows) > len(window):
+            last, stored = f.rows[-1].fiscal_year, {r.fiscal_year for r in window}
+            missing = [str(y) for y in range(last - PREDICTABILITY_YEARS + 1, last + 1) if y not in stored]
+            return f"FY{', '.join(missing)} of the last {PREDICTABILITY_YEARS} fiscal years not stored"
         return f"fewer than {PREDICTABILITY_YEARS} fiscal years of data"
     years = {r.fiscal_year for r in f.window(PREDICTABILITY_YEARS)}
     for label, key in (("revenue per share", "revenue_ps"),
@@ -383,7 +407,7 @@ def compute_scores(f: Fundamentals, market: Market) -> Scores:
                 s.na_reasons["wacc"] = "no market cap"
             elif s.roic is not None:
                 s.roic_minus_wacc = s.roic - s.wacc
-    s.predictability_stars, s.predictability_r2 = predictability(f)
+    s.predictability_stars, s.predictability_r2, s.predictability_note = rated(f)
     if s.predictability_stars is None:
         s.na_reasons["predictability"] = _predictability_reason(f)
     c = cur.figures

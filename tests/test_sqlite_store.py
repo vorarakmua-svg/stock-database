@@ -845,6 +845,179 @@ def test_a_run_that_reads_the_predecessor_again_restates_as_before(tmp_path):
     assert (fy2022["goodwill"], fy2022["total_assets"], fy2022["filed_date"]) == (None, 117.628e9, "2025-02-25")
 
 
+# BUG-344, BUG-168, BUG-165: a run that parsed the filer's annual record from a complete read of its filings speaks for
+# the ticker's whole SEC record, so a year, quarter, trailing year or unmapped tag its parse no longer gives goes, as
+# its snapshots and vintages do; a run that can't speak for all of it (no annual record, a failed or partial read)
+# removes nothing.
+
+
+def _record(years, quarters=(), ttm=(), tags=(), years_back=None):
+    """AAA's SEC record as a collection parses it: *years* (fiscal years), *quarters* and *ttm* (period ends), the
+    years' metrics computed as the collection does, *tags* its unmapped facts and *years_back* the run's limit."""
+    s = _filer(annual={str(y): {"fiscal_year": y, "period_end": f"{y}-10-31", "revenue": 1000.0 + y,
+                                "net_income": 100.0, "total_assets": 5000.0} for y in years},
+               quarterly={end: {"period_end": end, "revenue": 250.0} for end in quarters},
+               ttm={end: {"period_end": end, "revenue": 1000.0} for end in ttm})
+    s.calculated_metrics = {"historical": CalculatedMetrics().calculate_historical(s.financials_annual)}
+    s.unmapped_facts = [{"tag": tag, "label": tag, "unit": "USD", "period_end": "2025-12-31", "value": 1e9,
+                         "form": "10-K"} for tag in tags]
+    s.years_back = years_back
+    return s
+
+
+def _held(db, ticker="AAA"):
+    """*ticker*'s stored keys in each table its SEC record writes, sorted."""
+    conn = sqlite3.connect(db)
+    try:
+        return {name: sorted(r[0] for r in conn.execute(f"SELECT {column} FROM {table} WHERE ticker = ?", (ticker,)))
+                for name, table, column in (("annual", "financials_annual", "fiscal_year"),
+                                            ("metrics", "metrics_annual", "fiscal_year"),
+                                            ("quarterly", "financials_quarterly", "period_end"),
+                                            ("ttm", "financials_ttm", "period_end"),
+                                            ("unmapped", "unmapped_facts", "tag"))}
+    finally:
+        conn.close()
+
+
+def test_a_recollection_removes_the_periods_its_parse_no_longer_gives(tmp_path):
+    # ADI's trailing years to 2011-04-30 and 2011-07-30 stayed after its re-parse stopped giving them (BUG-168), and a
+    # year an older parse made stays beside today's record (BUG-344): the store upserted what a run gave.
+    db = tmp_path / "stock.db"
+    SQLiteStore(db).export([_record([2009, 2010, 2011], ["2011-01-29", "2011-04-30", "2011-07-30"],
+                                    ["2011-04-30", "2011-07-30", "2011-10-29"], ["Aaa", "Bbb"])])
+    SQLiteStore(db).export([_record([2010, 2011], ["2011-01-29", "2011-10-29"], ["2011-10-29"], ["Bbb", "Ccc"])])
+    assert _held(db) == {"annual": [2010, 2011], "metrics": [2010, 2011], "quarterly": ["2011-01-29", "2011-10-29"],
+                         "ttm": ["2011-10-29"], "unmapped": ["Bbb", "Ccc"]}
+
+
+def test_a_recollection_removes_a_tag_the_registry_now_maps(tmp_path):
+    # BUG-165: AAPL's restricted-cash total, mapped since BUG-139, stayed in unmapped_facts after its re-collection
+    # (121 tickers), and the Quality page listed it; a run that finds no unmapped tag at all clears them.
+    db = tmp_path / "stock.db"
+    restricted = "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
+    SQLiteStore(db).export([_record([2025], tags=[restricted, "OtherAssetsFairValueDisclosure"])])
+    SQLiteStore(db).export([_record([2025], tags=["OtherAssetsFairValueDisclosure"])])
+    assert _held(db)["unmapped"] == ["OtherAssetsFairValueDisclosure"]
+    SQLiteStore(db).export([_record([2025])])
+    assert _held(db)["unmapped"] == []
+
+
+def test_a_recollection_whose_lacking_report_it_read_removes_as_a_complete_one(tmp_path):
+    # A run that read the report the companyfacts lacked from the filing's own XBRL (Q17) read every filing.
+    db = tmp_path / "stock.db"
+    SQLiteStore(db).export([_record([2010, 2011], ["2011-04-30"], ["2011-04-30"], ["Aaa"])])
+    run = _record([2011])
+    run.missing_report = {**_DLR_10Q, "recovered": True}
+    SQLiteStore(db).export([run])
+    assert _held(db) == {"annual": [2011], "metrics": [2011], "quarterly": [], "ttm": [], "unmapped": []}
+
+
+def test_a_years_back_run_removes_only_within_its_years(tmp_path):
+    # A run limited to its latest years (--years) speaks for those: a period from its oldest one on that it no longer
+    # gives goes, an earlier one stays, and its unmapped facts (each tag's latest, whatever the limit) replace them.
+    db = tmp_path / "stock.db"
+    SQLiteStore(db).export([_record([2019, 2020, 2021], ["2019-12-31", "2020-06-30", "2020-09-30"],
+                                    ["2019-12-31", "2020-09-30", "2021-03-31"], ["Aaa"])])
+    SQLiteStore(db).export([_record([2020, 2022], ["2020-03-31", "2020-12-31"], ["2020-12-31"], ["Bbb"],
+                                    years_back=2)])
+    assert _held(db) == {"annual": [2019, 2020, 2022], "metrics": [2019, 2020, 2022],
+                         "quarterly": ["2019-12-31", "2020-03-31", "2020-12-31"],
+                         "ttm": ["2019-12-31", "2020-09-30", "2020-12-31"], "unmapped": ["Bbb"]}
+
+
+def test_a_years_back_run_without_quarters_keeps_the_stored_ones(tmp_path):
+    # Its quarters_back read no quarter (a filer's 10-Qs all older than its limit): it speaks for none of them.
+    db = tmp_path / "stock.db"
+    SQLiteStore(db).export([_record([2019, 2020, 2021], ["2020-06-30"], ["2020-06-30"])])
+    SQLiteStore(db).export([_record([2020], years_back=1)])
+    assert _held(db) == {"annual": [2019, 2020], "metrics": [2019, 2020], "quarterly": ["2020-06-30"],
+                         "ttm": ["2020-06-30"], "unmapped": []}
+
+
+def _predecessor_unread(run):
+    run.predecessor_error = "503 Server Error"
+
+
+def _report_unread(run):
+    run.missing_report = _DLR_10Q
+
+
+def _submissions_failed(run):
+    run.submissions_error = "503 Server Error"
+    run.add_error("SEC EDGAR submissions: 503 Server Error")
+
+
+def _sec_failed(run):
+    run.add_error("SEC EDGAR: Expecting value: line 1 column 1 (char 0)")
+
+
+def _no_annual_record(run):
+    run.financials_annual = {}
+    run.calculated_metrics = {}
+
+
+@pytest.mark.parametrize("partial", [_predecessor_unread, _report_unread, _submissions_failed, _sec_failed,
+                                     _no_annual_record])
+def test_a_run_that_cant_speak_for_the_whole_record_removes_nothing(tmp_path, partial):
+    # BUG-179 and BUG-029's guards: a successor's run without its predecessor's filings, one whose companyfacts lacked
+    # the latest report (BUG-251) or that couldn't look for it (BUG-282), one whose SEC read failed part way, and a
+    # filer's run with no annual record (XOM's holding company, Q6) read part of the record: what it doesn't give stays.
+    db = tmp_path / "stock.db"
+    stored = _record([2010, 2011], ["2011-04-30", "2011-07-30"], ["2011-04-30", "2011-07-30"], ["Aaa"])
+    SQLiteStore(db).export([stored])
+    run = _record([2011], ["2011-07-30"])
+    partial(run)
+    SQLiteStore(db).export([run])
+    assert _held(db) == {"annual": [2010, 2011], "metrics": [2010, 2011], "quarterly": ["2011-04-30", "2011-07-30"],
+                         "ttm": ["2011-04-30", "2011-07-30"], "unmapped": ["Aaa"]}
+
+
+def test_a_run_whose_quarters_werent_built_keeps_the_stored_quarters_and_trailing_years(tmp_path):
+    # The quarters' cleaning raised (a warning, "Data cleaning: ..."): the run gives its raw quarters and no trailing
+    # year, which isn't its record of them, so neither table loses a row; its years and tags are its own all the same.
+    db = tmp_path / "stock.db"
+    SQLiteStore(db).export([_record([2010, 2011], ["2011-04-30", "2011-07-30"], ["2011-04-30", "2011-07-30"], ["Aaa"])])
+    run = _record([2011], ["2011-07-30"])
+    run.unbuilt = ["quarterly"]
+    SQLiteStore(db).export([run])
+    assert _held(db) == {"annual": [2011], "metrics": [2011], "quarterly": ["2011-04-30", "2011-07-30"],
+                         "ttm": ["2011-04-30", "2011-07-30"], "unmapped": []}
+
+
+def test_a_run_whose_metrics_werent_computed_keeps_the_stored_metrics(tmp_path):
+    db = tmp_path / "stock.db"
+    SQLiteStore(db).export([_record([2010, 2011], ["2011-04-30"], ["2011-04-30"], ["Aaa"])])
+    run = _record([2011], ["2011-04-30"], ["2011-04-30"])
+    run.calculated_metrics = {}
+    run.unbuilt = ["metrics"]
+    SQLiteStore(db).export([run])
+    assert _held(db) == {"annual": [2011], "metrics": [2010, 2011], "quarterly": ["2011-04-30"], "ttm": ["2011-04-30"],
+                         "unmapped": []}
+
+
+def test_a_year_whose_metrics_failed_keeps_its_stored_metrics(tmp_path):
+    # calculate_historical gives a year an "error" when its computation fails: the stored row stays as it was.
+    db = tmp_path / "stock.db"
+    SQLiteStore(db).export([_record([2010, 2011])])
+    before = _row(db, "metrics_annual", ticker="AAA", fiscal_year=2011)
+    run = _record([2011])
+    run.calculated_metrics = {"historical": {"2011": {"error": "float division by zero"}}}
+    SQLiteStore(db).export([run])
+    assert _held(db)["metrics"] == [2011]
+    assert _row(db, "metrics_annual", ticker="AAA", fiscal_year=2011) == before
+
+
+def test_a_recollection_removes_only_its_own_tickers_rows(tmp_path):
+    db = tmp_path / "stock.db"
+    other = _record([2009, 2010], ["2010-04-30"], ["2010-04-30"], ["Aaa"])
+    other.ticker = "BBB"
+    SQLiteStore(db).export([_record([2009, 2010], ["2010-04-30"], ["2010-04-30"], ["Aaa"]), other])
+    SQLiteStore(db).export([_record([2010])])
+    assert _held(db) == {"annual": [2010], "metrics": [2010], "quarterly": [], "ttm": [], "unmapped": []}
+    assert _held(db, "BBB") == {"annual": [2009, 2010], "metrics": [2009, 2010], "quarterly": ["2010-04-30"],
+                                "ttm": ["2010-04-30"], "unmapped": ["Aaa"]}
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # The SEC's SIC code (Milestone 5): docs/superpowers/specs/2026-10-25-universe-automation-design.md, "SIC codes and
 # industries"

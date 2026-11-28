@@ -20,11 +20,11 @@ import logging
 import sqlite3
 from bisect import bisect_right
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
-if TYPE_CHECKING:  # avoid a runtime exporters -> valuation (or ownership) dependency
+if TYPE_CHECKING:  # annotations only: these modules aren't imported at runtime (valuation.inputs below is)
     from ..ownership.portfolio import Change, GuruQuarters, Position
     from ..valuation.history import HistoryResult
     from ..valuation.indicators import IndicatorResult
@@ -32,9 +32,12 @@ if TYPE_CHECKING:  # avoid a runtime exporters -> valuation (or ownership) depen
 
 from ..mappings.canonical import CANONICAL_FIELDS
 from ..models.stock_data import StockData
+from ..new_york import new_york_day, new_york_day_of
 from ..parsers.calculated_metrics import CalculatedMetrics
 from ..universe.industries import normalize_sic, normalize_sic_description
-from ..valuation.inputs import SPLIT_JUMP_THRESHOLD, _simple_ratio
+from ..valuation.inputs import SPLIT_JUMP_THRESHOLD, is_share_split
+from .record_scope import RECORD_PARTS, absent, speaks_for_record
+from .record_scope import incomplete as _incomplete
 
 # Canonical line-item columns shared by the annual/quarterly financial tables.
 _CANONICAL_COLUMNS = [f.key for f in CANONICAL_FIELDS]
@@ -112,8 +115,9 @@ def read_only_uri(path: Union[str, Path]) -> str:
 def _moves_per_share(ratio: float) -> bool:
     """A factor of Yahoo's split history that moves the stored per-share figures: a share
     split (a simple ratio, 5:4 or 1:10 too) or any factor of 3:2 or more (ABT's 2.084 for
-    AbbVie), as the valuation reads them (``inputs._apply_later_splits``)."""
-    return ratio > 0 and ratio != 1.0 and (_simple_ratio(ratio) or ratio >= SPLIT_JUMP_THRESHOLD
+    AbbVie). The valuation applies a split after the latest filing from 3:2 up (``inputs._apply_later_splits``); a
+    5:4 or 4:3 is refused all the same, the safe side, and its refusal says what a collection does (BUG-130)."""
+    return ratio > 0 and ratio != 1.0 and (is_share_split(ratio) or ratio >= SPLIT_JUMP_THRESHOLD
                                            or ratio <= 1.0 / SPLIT_JUMP_THRESHOLD)
 
 
@@ -123,31 +127,20 @@ def _served_day(stock: StockData, collected_at: str) -> str:
     ``served_on`` is dated. The collector's own date runs ahead of New York's east of it: a
     run before the open on a split's day, which Yahoo hadn't applied yet, dated its pre-split
     payments on the split's day, so they read as split, and DDM read ten times its value after
-    a later run whose dividend request failed (BUG-117). A run with neither takes the day
-    before its own: Yahoo listed no split, and one it hasn't applied is dated on New York's
-    day or later, never before the collector's day less one."""
-    days = [str(rec["date"])[:10] for rec in list(stock.price_bars or []) + list(stock.splits or [])
-            if rec.get("date")]
-    if days:
-        return max(days)
-    return (date.fromisoformat(collected_at[:10]) - timedelta(days=1)).isoformat()
-
-
-def _incomplete(stock: StockData) -> Optional[str]:
-    """What a run's SEC read lacked, as ``collection_runs.incomplete`` keeps it (JSON): ``report``, the latest report
-    its submissions listed whose facts its companyfacts lacked, the SEC's lag (BUG-251), unless the run read it and
-    every earlier report they lacked from the filings' own XBRL (``recovered``, Q17); ``predecessor``, why its
-    predecessor's filings couldn't be read (BUG-279); ``submissions``, why its submissions request failed, so that it
-    couldn't look for such a report (BUG-282). None for a complete run. ``stock-data refresh``'s SEC step collects a
-    company again whose latest collection with the SEC lacked any."""
-    lacked: Dict[str, Any] = {}
-    if stock.missing_report and not stock.missing_report.get("recovered"):
-        lacked["report"] = stock.missing_report
-    if stock.predecessor_error:
-        lacked["predecessor"] = stock.predecessor_error
-    if stock.submissions_error:
-        lacked["submissions"] = stock.submissions_error
-    return json.dumps(lacked) if lacked else None
+    a later run whose dividend request failed (BUG-117). A run without bars (a quote refresh, a
+    collection whose bar request failed) takes the latest split Yahoo lists or the day before
+    New York's at the run (``new_york_day``; a naive time is this machine's), whichever is
+    later. A split Yahoo hasn't applied is dated on New York's day or later: the collector's
+    own day less one, New York's day east of UTC+10:30 before the open, dated pre-split
+    payments on the split's day (BUG-131). And the latest listed split can be years old,
+    before a split stored since, which then divided payments already on its basis again
+    (BUG-307)."""
+    bars = [str(rec["date"])[:10] for rec in stock.price_bars or [] if rec.get("date")]
+    splits = [str(rec["date"])[:10] for rec in stock.splits or [] if rec.get("date")]
+    if bars:
+        return max(bars + splits)
+    day_before = new_york_day(datetime.fromisoformat(collected_at)) - timedelta(days=1)
+    return max(splits + [day_before.isoformat()])
 
 
 def _cols_ddl(columns: Sequence[str], col_type: str = "REAL") -> str:
@@ -283,6 +276,8 @@ class SQLiteStore:
                 calendar_quarter INTEGER,
                 filed_date TEXT,
                 form TEXT,
+                source_tags TEXT,
+                source_filings TEXT,
                 {_cols_ddl(_CANONICAL_COLUMNS)},
                 PRIMARY KEY (ticker, period_end)
             );
@@ -733,11 +728,31 @@ class SQLiteStore:
         or rewrites existing columns, so it is safe to run repeatedly (idempotent)
         and against long-lived production databases created under an older schema.
         ``table`` must be a module-level constant, never user input.
+
+        Outside a transaction, the missing columns are added under the write lock
+        (``BEGIN IMMEDIATE``), looked for again once it is held, and committed: two
+        first runs at once after an upgrade both saw a column missing, and the
+        loser's ALTER failed "duplicate column name", its whole batch with it
+        (BUG-098). Inside one, the caller's transaction holds them.
         """
-        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-        for name, col_type in columns.items():
-            if name not in existing:
+        def missing() -> Dict[str, str]:
+            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            return {name: col_type for name, col_type in columns.items() if name not in existing}
+
+        if not missing():
+            return
+        own = not conn.in_transaction
+        if own:
+            conn.execute("BEGIN IMMEDIATE")
+        try:
+            for name, col_type in missing().items():
                 conn.execute(f'ALTER TABLE {table} ADD COLUMN "{name}" {col_type}')
+            if own:
+                conn.commit()
+        except BaseException:
+            if own:
+                conn.rollback()
+            raise
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         """Add any columns missing from an existing DB (registry grows over time).
@@ -754,9 +769,11 @@ class SQLiteStore:
             },
             "financials_annual": {"calendar_year": "INTEGER",
                                    **{c: "REAL" for c in _CANONICAL_COLUMNS}},
+            # Each figure's tag (BUG-390), and the filing of a figure the parser names one for (BUG-395): NULL in a
+            # quarter stored before the column, until the next collection.
             "financials_quarterly": {"calendar_year": "INTEGER",
                                       "calendar_quarter": "INTEGER",
-                                      "fiscal_quarter": "INTEGER",
+                                      "fiscal_quarter": "INTEGER", "source_tags": "TEXT", "source_filings": "TEXT",
                                       **{c: "REAL" for c in _CANONICAL_COLUMNS}},
             "financials_ttm": {"fiscal_year": "INTEGER", "calendar_year": "INTEGER",
                                "calendar_quarter": "INTEGER",
@@ -856,10 +873,19 @@ class SQLiteStore:
     @staticmethod
     def _figure_tags(period: Dict[str, Any]) -> Optional[str]:
         """The tag each canonical figure of *period* was read from (its ``_source_tags``: a us-gaap tag, "derived",
-        "rescaled x1000"), as JSON; None without any. Stored with each vintage (BUG-271); the as-of view reads its
-        snapshots' own ``source_tags``, not this."""
+        "rescaled x1000"), as JSON; None without any. Stored with each vintage (BUG-271) and quarter (BUG-390); the
+        as-of view reads its snapshots' own ``source_tags``, not this."""
         tags = period.get("_source_tags") or {}
         kept = {c: tags[c] for c in _CANONICAL_COLUMNS if period.get(c) is not None and c in tags}
+        return json.dumps(kept, sort_keys=True) if kept else None
+
+    @staticmethod
+    def _figure_filings(period: Dict[str, Any]) -> Optional[str]:
+        """The filing (accession, filing day, form) of each canonical figure of a quarter the parser names one for (its
+        ``_source_filings``: a spread D&A's supplying 10-K, which dates it in the valuation history, BUG-395), as JSON;
+        None without any."""
+        filings = period.get("_source_filings") or {}
+        kept = {c: filings[c] for c in _CANONICAL_COLUMNS if period.get(c) is not None and c in filings}
         return json.dumps(kept, sort_keys=True) if kept else None
 
     @staticmethod
@@ -982,8 +1008,9 @@ class SQLiteStore:
         submissions = stock.sec_submissions or {}
 
         # companies: the SEC's SIC code and description from the submissions feed (Milestone 5), NULL where the feed
-        # has none; a run without the feed (a failed request) keeps the stored ones, as every field here.
-        self._upsert(conn, "companies", ["ticker"], {
+        # has none; a run without the feed (a failed request) keeps the stored ones, as every field here. An empty
+        # string is no value, as the CSV and the JSON read it (BUG-055).
+        company = {
             "ticker": stock.ticker,
             "cik": stock.cik,
             "company_name": stock.company_name,
@@ -1001,7 +1028,9 @@ class SQLiteStore:
             "updated_at": collected_at,
             "sic": normalize_sic(submissions.get("sic")),
             "sic_description": normalize_sic_description(submissions.get("sic_description")),
-        }, keep_existing=True)
+        }
+        self._upsert(conn, "companies", ["ticker"], {k: None if v == "" else v for k, v in company.items()},
+                     keep_existing=True)
 
         # A run that parsed the filer's annual record restates every period it gives: a field its
         # parse leaves empty is cleared, not kept from an earlier parse (BUG-029). A filer with no
@@ -1015,6 +1044,12 @@ class SQLiteStore:
         # filers again (BUG-179).
         restated = bool(stock.financials_annual)
         fill = bool(stock.predecessor_error)
+        # And a run that parsed it from a complete read of the filer's filings speaks for the ticker's whole SEC
+        # record, as its snapshots do: a year, quarter, trailing year or unmapped tag its parse no longer gives goes
+        # (BUG-344, BUG-168, BUG-165). A run that read part of the filings removes nothing (record_scope, the rule
+        # the JSON file and financial_history.csv follow too, BUG-380).
+        if speaks_for_record(stock):
+            self._clear_absent(conn, stock)
 
         # financials_annual + metrics_annual
         historical = (stock.calculated_metrics or {}).get("historical", {})
@@ -1058,6 +1093,8 @@ class SQLiteStore:
                 "calendar_quarter": period.get("calendar_quarter"),
                 "filed_date": period.get("filed_date"),
                 "form": period.get("form"),
+                "source_tags": self._figure_tags(period),
+                "source_filings": self._figure_filings(period),
             }
             row.update(self._canonical_values(period, restated))
             self._upsert(conn, "financials_quarterly", ["ticker", "period_end"], row, fill_only=fill)
@@ -1131,6 +1168,13 @@ class SQLiteStore:
         # price, verdict and upside come from. A Yahoo failure still gets a risk-free rate,
         # and the price history (the moving averages) can work while the quote fails.
         if snapshot.get("current_price") is not None:
+            if snapshot.get("beta") is None:
+                # Yahoo's quote without a beta: the last known one, as a quote refresh carries it (upsert_quote);
+                # stored NULL, the valuations fell back to 1.0 (BUG-054).
+                known = conn.execute("SELECT beta FROM market_snapshots WHERE ticker = ? AND collected_at < ? "
+                                     "AND beta IS NOT NULL ORDER BY collected_at DESC LIMIT 1",
+                                     (stock.ticker, collected_at)).fetchone()
+                snapshot["beta"] = known[0] if known else None
             self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)
 
         # collection_runs
@@ -1187,6 +1231,24 @@ class SQLiteStore:
         self._write_price_bars(conn, stock.ticker, stock.price_bars or [])
         self._write_earnings_history(conn, stock.ticker, stock.earnings_history or [])
         self._write_split_events(conn, stock.ticker, stock.splits or [])
+
+    @staticmethod
+    def _clear_absent(conn: sqlite3.Connection, stock: StockData) -> None:
+        """Delete *stock*'s stored periods its run no longer gives, before it writes its own: the fiscal years in
+        ``financials_annual`` and ``metrics_annual``, the quarters and trailing years, and the unmapped tags. With a
+        ``years_back``, the run read its latest years only, so a table's rows before the earliest period it gives
+        stay (none go when it gives none); the unmapped facts, each tag's latest whatever the limit, are all its own.
+        A table whose building step raised (``stock.unbuilt``: the quarters' cleaning and trailing years, the metrics)
+        loses no row: the run's part of it isn't its record. A year in the run keeps its stored metrics either way when
+        its own computation failed (``_write_stock`` writes none over them).
+        """
+        keys = {"financials_annual": "fiscal_year", "metrics_annual": "fiscal_year",
+                "financials_quarterly": "period_end", "financials_ttm": "period_end", "unmapped_facts": "tag"}
+        for table in RECORD_PARTS:
+            stored = [row[0] for row in conn.execute(f"SELECT {keys[table]} FROM {table} WHERE ticker = ?",
+                                                     (stock.ticker,))]
+            conn.executemany(f"DELETE FROM {table} WHERE ticker = ? AND {keys[table]} = ?",
+                             [(stock.ticker, k) for k in absent(stock, table, stored)])
 
     @staticmethod
     def _clear_snapshots(conn: sqlite3.Connection, stock: StockData) -> None:
@@ -1496,17 +1558,19 @@ class SQLiteStore:
     @staticmethod
     def _priced_and_collected(conn: sqlite3.Connection, ticker: str) -> Tuple[Optional[str], Optional[str]]:
         """*ticker*'s latest snapshot's day when it has a price (``priced_on``), and the day of its last collection
-        with Yahoo: its run row, else (no such row) its latest price bar, which only Yahoo gives. Either None."""
+        with Yahoo: its run row, else (no such row) its latest price bar, which only Yahoo gives. Either None. The
+        two stamps are read as New York's days, as the engine reads the price's and Yahoo dates its splits
+        (BUG-079)."""
         snap = conn.execute("SELECT collected_at, current_price FROM market_snapshots WHERE ticker = ? "
                             "ORDER BY collected_at DESC LIMIT 1", (ticker,)).fetchone()
-        priced_on = str(snap[0])[:10] if snap and snap[0] and snap[1] is not None else None
+        priced_on = new_york_day_of(snap[0]) if snap and snap[0] and snap[1] is not None else None
         since = None
         for sql in ("SELECT max(collected_at) FROM collection_runs WHERE ticker = ? "
                     "AND data_sources LIKE '%yahoo%'",
                     "SELECT max(date) FROM price_bars WHERE ticker = ?"):
             row = conn.execute(sql, (ticker,)).fetchone()
             if row and row[0]:
-                since = str(row[0])[:10]
+                since = new_york_day_of(row[0])
                 break
         return priced_on, since
 
@@ -1591,7 +1655,9 @@ class SQLiteStore:
         ``enterpriseValue`` and ``enterpriseToEbitda`` are another definition,
         more than 5% off ours for 47 of 111 companies, about 2x for the banks, and
         a refresh wrote them into the same columns (BUG-126). Without a market cap
-        or a stored year, the previous snapshot's carry forward.
+        or a stored year, the latest full collection's carry forward (none when it
+        had none): a refresh's from before that fix is Yahoo's, which carried on for
+        good (BUG-145).
 
         A failed write (a locked database, say) is logged and raised: nothing is
         stored (the transaction rolls back), and the caller reports it as the
@@ -1622,8 +1688,14 @@ class SQLiteStore:
                     carried = ["ma_50", "ma_200", "beta", "risk_free_rate", "risk_free_rate_date",
                                "risk_free_rate_source"]
                     if ours is None:
-                        snapshot.update(dict.fromkeys(_EV_FAMILY))
-                        carried += _EV_FAMILY
+                        # The latest full collection's, ours: a refresh's from before BUG-126 is Yahoo's, which
+                        # carried on every refresh of a ticker without a stored year (BUG-145).
+                        collected = conn.execute(
+                            f"SELECT {', '.join(_EV_FAMILY)} FROM market_snapshots s WHERE s.ticker = ? AND EXISTS "
+                            "(SELECT 1 FROM collection_runs r WHERE r.ticker = s.ticker "
+                            "AND r.collected_at = s.collected_at) ORDER BY s.collected_at DESC LIMIT 1",
+                            (ticker,)).fetchone()
+                        snapshot.update(zip(_EV_FAMILY, collected or (None,) * len(_EV_FAMILY)))
                     else:
                         snapshot.update(ours)
                     # Carry the rest forward from the latest prior snapshot when this
@@ -1636,8 +1708,8 @@ class SQLiteStore:
                     self._upsert(conn, "market_snapshots", ["ticker", "collected_at"], snapshot)
                     self._write_split_events(conn, ticker, splits or [])
                     # Yahoo's payments, from the same chart request, served on the refresh's day by the
-                    # collection's rule (_served_day: the latest split Yahoo lists, else the day before its own)
-                    # (BUG-160, BUG-258).
+                    # collection's rule for a run without bars (_served_day: the latest split Yahoo lists or the
+                    # day before New York's, whichever is later) (BUG-160, BUG-258, BUG-307).
                     if dividends:
                         self._write_dividend_events(conn, ticker, dividends, _served_day(
                             StockData(ticker=ticker, splits=list(quote.get("splits") or [])), collected_at))

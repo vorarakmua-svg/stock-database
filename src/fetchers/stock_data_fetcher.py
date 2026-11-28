@@ -5,7 +5,7 @@ import logging
 import os
 import sqlite3
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from datetime import datetime
+from datetime import date, datetime
 from itertools import islice
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
@@ -31,17 +31,19 @@ from ..validation.integrity import (
     check_quarterly_sums,
     check_ratio_bounds,
 )
-from ..validation.quality import assess_annual, score_for
+from ..validation.quality import assess_annual, score_for, scored_years
 from .fred_handler import FREDHandler
-from .sec_handler import SECHandler
+from .sec_handler import SECHandler, _latest_report
 from .yahoo_handler import YahooHandler
 
 #: How the run's warning for a filer whose SEC data gave no annual financials begins.
 NO_ANNUAL_FINANCIALS = "SEC EDGAR: no annual financials"
 #: How it begins for a record that stops where the filer's IFRS reports begin.
 STALE_ANNUAL_FINANCIALS = "SEC EDGAR: annual financials stop"
-#: How it begins for the latest report the SEC's submissions list, which its companyfacts lack (BUG-251): the record
-#: stops before it, or the run read it from the filing's own XBRL (Q17).
+#: How it begins for a foreign issuer's record without quarters: its interim reports (6-K) aren't read (BUG-058).
+NO_QUARTERLY_FINANCIALS = "SEC EDGAR: no quarterly financials"
+#: How it begins for a report the SEC's submissions list, which its companyfacts lack (BUG-251, BUG-280): the record
+#: stops before it (or lacks it, when they carry a later one), or the run read it from the filing's own XBRL (Q17).
 REPORT_WITHOUT_FACTS = "SEC EDGAR: the companyfacts lack"
 #: The tickers a collection's worker has submitted at most: one fetching and one waiting its turn, so the workers go
 #: on while the calling thread exports a batch, and the finished companies it hasn't taken yet stay few.
@@ -49,6 +51,16 @@ IN_FLIGHT_PER_WORKER = 2
 #: How long a collection waits for a fetch to finish before it waits again: a timed wait, so Ctrl+C is seen within
 #: this even where a thread's untimed wait doesn't wake for it (Windows).
 POLL_SECONDS = 0.5
+
+
+def _collected_day(stock: StockData) -> Optional[date]:
+    """The day the run collected *stock*: where the dividend completeness check's schedule ends (BUG-025)."""
+    if isinstance(stock.collected_at, datetime):
+        return stock.collected_at.date()
+    try:
+        return date.fromisoformat(str(stock.collected_at)[:10])
+    except ValueError:
+        return None
 
 
 class CollectionInterrupted(KeyboardInterrupt):
@@ -214,6 +226,8 @@ class StockDataFetcher:
         split_levels: Dict[str, Dict[str, float]] = {}
         # The annual record's cleaning warnings (share scale, validation), added where the cleaning's always were.
         annual_warnings: List[str] = []
+        # The companyfacts the record was parsed from, for the quality pass's identities (BUG-114); not stored.
+        facts: Optional[Dict[str, Any]] = None
 
         # Fetch Yahoo Finance data
         if include_yahoo:
@@ -237,29 +251,46 @@ class StockDataFetcher:
                         stock.sector_class = stored
                         stock.add_warning(f"SEC EDGAR: sector '{stored}' taken from the stored record "
                                           "(the companyfacts data is unavailable)")
+                # The sector comes from the submissions. When that request failed, the stored record still knows it,
+                # before the parse, which reads it (a bank's securities book, Q20; BUG-373); metrics computed as a
+                # general company's would overwrite every stored year's sector ratios (FFO, net interest margin).
+                if stock.sector_class is None and sec_data.get("company_facts"):
+                    stored = self._stored_sector(ticker)
+                    if stored:
+                        stock.sector_class = stored
+                        stock.add_warning(f"SEC EDGAR: sector '{stored}' taken from the stored record "
+                                          "(the submissions data is unavailable)")
 
                 # Parse XBRL financials if company facts available
                 annual: Dict[str, Any] = {}
                 if "company_facts" in sec_data and sec_data["company_facts"]:
                     facts = sec_data["company_facts"]
 
-                    record = build_annual_record(self.xbrl_parser, facts, ticker=ticker, years_back=years_back)
+                    # A bank's securities book isn't read as its short-term investments (Q20): the run's sector
+                    # class, the one the store and the valuation read, decides it.
+                    sector = stock.sector_class
+                    record = build_annual_record(self.xbrl_parser, facts, ticker=ticker, years_back=years_back,
+                                                 sector=sector)
                     annual = record.periods
                     # The parse's warnings here; the cleaning's where the other statements are cleaned.
                     for warning in record.warnings[:record.repairs]:
                         stock.add_warning(warning)
                     annual_warnings = record.warnings[record.repairs:]
                     quarterly = self.xbrl_parser.extract_quarterly_financials(
-                        facts, quarters_back=(years_back * 4 if years_back else None)
+                        facts, quarters_back=(years_back * 4 if years_back else None), sector=sector
                     )
                     split_levels = {end: period.pop("_split_levels") for end, period in quarterly.items()
                                     if "_split_levels" in period}
                     # The record as known on each filing day (the as-of snapshots) and each filing's views (its
                     # vintages, already normalised), replayed on the same facts with the run's years_back. A build
                     # that fails costs the snapshots alone: the run builds none (financials_annual_known None,
-                    # vintages {}), so the store leaves the stored ones as they were, and the record stands.
+                    # vintages {}), so the store leaves the stored ones as they were, and the record stands. The
+                    # run's years_back goes with its record either way: the store removes a period the run no
+                    # longer gives only within the years it read (BUG-344).
+                    stock.years_back = years_back
                     try:
-                        snapshots = build_snapshots(self.xbrl_parser, facts, ticker=ticker, years_back=years_back)
+                        snapshots = build_snapshots(self.xbrl_parser, facts, ticker=ticker, years_back=years_back,
+                                                    sector=sector)
                     except Exception as e:  # noqa: BLE001 - the run's SEC record mustn't go with the snapshots
                         self.logger.error(f"As-of snapshot error for {ticker}: {e}")
                         stock.add_warning(f"SEC EDGAR: {ticker}'s as-of snapshots couldn't be built ({e}): the "
@@ -269,7 +300,6 @@ class StockDataFetcher:
                             stock.add_warning(warning)
                         stock.financials_annual_known = snapshots.rows
                         stock.financials_annual_vintages = snapshots.vintages
-                        stock.years_back = years_back
 
                     stock.merge_parsed_financials(annual, quarterly)
 
@@ -289,7 +319,7 @@ class StockDataFetcher:
                                       f"predecessor's filings, CIK {sec_data['predecessor_cik']} "
                                       f"({sec_data.get('predecessor_name') or 'name unknown'})")
 
-                # The latest report the submissions list, which the companyfacts lack: the SEC's lag (BUG-251), and
+                # A report the submissions list, which the companyfacts lack: the SEC's lag (BUG-251, BUG-280), and
                 # whether the run read it from the filing's own XBRL (Q17). A companyfacts request that failed has its
                 # error.
                 if sec_data.get("missing_report") and "company_facts_error" not in sec_data:
@@ -305,6 +335,12 @@ class StockDataFetcher:
                                                             annual[latest].get("period_end"))
                     if stale:
                         stock.add_warning(f"{STALE_ANNUAL_FINANCIALS} at FY{latest} for {ticker}: {stale}")
+                    # And a foreign issuer's has no quarters: its interim reports (6-K) aren't read (BUG-058).
+                    form = self._foreign_annual_form(annual[latest])
+                    if form and not stock.financials_quarterly:
+                        stock.add_warning(f"{NO_QUARTERLY_FINANCIALS} for {ticker}: its annual reports are {form}s, a "
+                                          "foreign issuer's, whose interim reports (6-K) aren't read, so there are no "
+                                          "quarterly or TTM figures")
 
                 # Get insider transactions
                 if stock.cik:
@@ -337,16 +373,6 @@ class StockDataFetcher:
             self.logger.warning(f"FRED data error for {ticker}: {e}")
             stock.add_warning(f"FRED: {str(e)}")
 
-        # The sector comes from SEC's submissions data. When that request failed, the
-        # stored record still knows it; metrics computed as a general company's would
-        # overwrite every stored year's sector ratios (FFO, net interest margin).
-        if stock.sector_class is None and stock.financials_annual:
-            stored = self._stored_sector(ticker)
-            if stored:
-                stock.sector_class = stored
-                stock.add_warning(f"SEC EDGAR: sector '{stored}' taken from the stored record "
-                                  "(the submissions data is unavailable)")
-
         # Clean, derive identities, and build the TTM series.
         if stock.financials_annual or stock.financials_quarterly:
             try:
@@ -354,6 +380,7 @@ class StockDataFetcher:
             except Exception as e:
                 self.logger.warning(f"Data cleaning error for {ticker}: {e}")
                 stock.add_warning(f"Data cleaning: {str(e)}")
+                stock.unbuilt.append("quarterly")
 
         # Calculate derived metrics (generic + sector-aware).
         if stock.financials_annual:
@@ -362,11 +389,12 @@ class StockDataFetcher:
             except Exception as e:
                 self.logger.warning(f"Metrics calculation error for {ticker}: {e}")
                 stock.add_warning(f"Calculated metrics: {str(e)}")
+                stock.unbuilt.append("metrics")
 
         # Assess data quality (sector + integrity checks), now that metrics exist.
         if stock.financials_annual or stock.financials_quarterly:
             try:
-                self._assess(stock)
+                self._assess(stock, facts)
             except Exception as e:
                 self.logger.warning(f"Data-quality assessment error for {ticker}: {e}")
                 stock.add_warning(f"Data quality: {str(e)}")
@@ -455,12 +483,19 @@ class StockDataFetcher:
 
     @staticmethod
     def _report_without_facts(ticker: str, sec_data: Dict[str, Any]) -> str:
-        """The run's warning for the latest report the companyfacts lack (``missing_report``, BUG-251): read from the
+        """The run's warning for the newest report the companyfacts lack (``missing_report``, BUG-251): read from the
         filing's own XBRL with the earlier reports they lack (``reports_read``, Q17), or the run's figures stop before
-        it, with why its XBRL couldn't be read (``reports_unread``); a run that couldn't read every one, or found no
-        earlier report the companyfacts carry (BUG-337), is collected again by the refresh."""
+        it, with why its XBRL couldn't be read (``reports_unread``), or lack it when they carry the latest report, a
+        later one (BUG-280); a run that couldn't read every one, or found no earlier report the companyfacts carry
+        (BUG-337), is collected again by the refresh."""
         missing = sec_data["missing_report"]
         lag = f"{REPORT_WITHOUT_FACTS} {ticker}'s {missing['form']} filed {missing['filed']} ({missing['accession']})"
+        # The latest report the submissions list, when it isn't this one: the companyfacts carry it (BUG-280).
+        feed = sec_data.get("submissions") or {}
+        after = _latest_report([*(feed.get("filings") or []), feed.get("latest_report") or {}])
+        hole = after is not None and after.get("accessionNumber") != missing["accession"]
+        if after is not None and hole:
+            lag += f", though they carry its {after.get('form')} filed {str(after.get('filingDate') or '')[:10]}"
         read = {r["accession"]: r for r in sec_data.get("reports_read") or []}
         unread = sec_data.get("reports_unread") or []
 
@@ -476,7 +511,7 @@ class StockDataFetcher:
         else:
             why = next((f" (its own XBRL couldn't be read: {r['why']})" for r in unread
                         if r["accession"] == missing["accession"]), "")
-            text = f"{lag}, so this run's figures stop before it{why}"
+            text = f"{lag}, so " + ("this run lacks its figures" if hole else "this run's figures stop before it") + why
             if earlier:
                 text += f"; it read the earlier reports they lack from their own XBRL: {listed(earlier)}"
         others = [r for r in unread if r["accession"] != missing["accession"]]
@@ -489,6 +524,14 @@ class StockDataFetcher:
             # Every report read, but the gap's end wasn't reached (sec_handler.report_gap, BUG-337).
             text += "; it found no earlier report they carry, so reports before those may be missing too"
         return f"{text}; the refresh collects {ticker} again"
+
+    @staticmethod
+    def _foreign_annual_form(period: Dict[str, Any]) -> Optional[str]:
+        """The foreign issuer's annual report form (20-F or 40-F) a fiscal year's figures came from (the parse's
+        ``_source_filings``), None for any other filer's year."""
+        forms = sorted({str((filing or {}).get("form") or "")[:4]
+                        for filing in (period.get("_source_filings") or {}).values()} & {"20-F", "40-F"})
+        return forms[0] if forms else None
 
     @staticmethod
     def _no_annual_financials(ticker: str, sec_data: Dict[str, Any]) -> str:
@@ -506,28 +549,29 @@ class StockDataFetcher:
         name = submissions.get("name") or "name unknown"
         return f"{NO_ANNUAL_FINANCIALS} for {ticker} from CIK {sec_data['cik']} ({name}): {reason}"
 
-    def _assess(self, stock: StockData) -> None:
-        """Attach a data-quality report: sector checks + integrity checks + score.
+    def _assess(self, stock: StockData, facts: Optional[Dict[str, Any]] = None) -> None:
+        """Attach a data-quality report: sector checks + integrity checks + score. The identities read the lines no
+        canonical field holds from the run's companyfacts, *facts* (``assess_annual``).
 
         Runs after metrics are computed so the ratio-bounds check can see them.
         """
         annual = stock.financials_annual or {}
         quarterly = stock.financials_quarterly or {}
         historical = (stock.calculated_metrics or {}).get("historical", {})
-        scored_years = set(sorted(annual.keys(), reverse=True)[:5])
+        scored = set(scored_years(annual))  # the years the filings report (BUG-112)
 
-        report = assess_annual(annual, sector=stock.sector_class)
+        report = assess_annual(annual, sector=stock.sector_class, facts=facts)
         if annual:
             # Integrity checks all key off annual data; with no annual financials
             # keep assess_annual's score (0) rather than letting a lone
             # no_financials finding net out to 75.
-            report.findings.extend(check_field_outliers(annual, scored_years))
-            report.findings.extend(check_cashflow_reconciliation(annual, scored_years))
-            report.findings.extend(check_quarterly_sums(annual, quarterly, scored_years))
-            report.findings.extend(check_ratio_bounds(historical, annual, scored_years))
+            report.findings.extend(check_field_outliers(annual, scored))
+            report.findings.extend(check_cashflow_reconciliation(annual, scored))
+            report.findings.extend(check_quarterly_sums(annual, quarterly, scored))
+            report.findings.extend(check_ratio_bounds(historical, annual, scored))
             report.findings.extend(check_dividend_completeness(
                 annual, (stock.dividend_history or {}).get("dividend_payments") or [],
-                stock.splits or [], scored_years))
+                stock.splits or [], scored, _collected_day(stock)))
             report.score = score_for(report.findings)
 
         stock.data_quality = report.as_dict()

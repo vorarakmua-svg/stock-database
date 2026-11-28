@@ -238,13 +238,14 @@ K19, DEI1, Q1, K20, DEI2, SRT, ENDED, DEI3 = ("2020-02-14", "2020-03-01", "2020-
 
 
 def _unread_days() -> Dict[str, Any]:
-    # The FY2020 10-K also tags a dividend for 2021, a year not over on its day (BAC's shape, BUG-113): FY2021 opens
-    # the first filing day after 2021-12-31, here a day with only a dei share count (ENDED).
+    # The FY2020 10-K also tags a balance dated 2021-12-31, a year not over on its day (BUG-113; a flow filed so is
+    # never read, BUG-370): FY2021 opens the first filing day after 2021-12-31, here a day with only a dei share count
+    # (ENDED).
     facts = _facts(
         Revenues=[_year(100.0, 2019, K19, "a1"), _fact(30.0, "2020-03-31", Q1, "q1", start="2020-01-01", form="10-Q"),
                   _year(110.0, 2020, K20, "a2"), _year(100.0, 2019, K20, "a2")],
         NetIncomeLoss=[_year(10.0, 2019, K19, "a1"), _year(11.0, 2020, K20, "a2")],
-        CommonStockDividendsPerShareDeclared=[_year(0.5, 2021, K20, "a2")])
+        Assets=[_fact(0.5, "2021-12-31", K20, "a2")])
 
     def instant(val: float, day: str, accn: str, form: str) -> Dict[str, Any]:
         return {"val": val, "end": day, "accn": accn, "fy": int(day[:4]), "fp": "Q1", "form": form, "filed": day}
@@ -279,7 +280,7 @@ def test_the_cached_builder_gives_the_uncached_rows(monkeypatch):
     uncached = build_snapshots(XBRLParser(), facts, ticker="X", years_back=None)
     # the fixture holds the cases: FY2021 opens on a day with a dei fact alone, its year now over
     assert [(row["known_from"], row["present"]) for row in _rows(uncached, 2021)] == [(ENDED, True)]
-    assert _rows(uncached, 2021)[0]["dividends_per_share"] == 0.5
+    assert _rows(uncached, 2021)[0]["total_assets"] == 0.5
     assert sorted(uncached.vintages) == ["2019", "2020"]
     assert cached == uncached
     # with years_back, and with an undated fact (its warning)

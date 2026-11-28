@@ -217,8 +217,8 @@ def _db(tmp_path, sector="general", yahoo_cap=4.0e9, ttm=True):
     conn.executemany("INSERT INTO dividend_events (ticker, date, amount) VALUES ('AAA', ?, ?)",
                      [("2025-03-01", 0.10), ("2025-09-01", 0.10)])
     conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price, market_cap, "
-                 "shares_outstanding) VALUES ('AAA', '2026-02-25T10:00:00', 21.0, ?, 190e6)", (yahoo_cap,))
-    conn.execute("INSERT INTO collection_runs (ticker, collected_at) VALUES ('AAA', '2026-02-25T10:00:00')")
+                 "shares_outstanding) VALUES ('AAA', '2026-02-25T10:00:00-05:00', 21.0, ?, 190e6)", (yahoo_cap,))
+    conn.execute("INSERT INTO collection_runs (ticker, collected_at) VALUES ('AAA', '2026-02-25T10:00:00-05:00')")
     conn.commit()
     return conn
 
@@ -247,6 +247,15 @@ def test_load_history_inputs_puts_every_quarter_on_the_bars_basis(tmp_path):
     assert x.price_factors == [("2025-08-01", 1.1)]  # the spin-off factor only
     assert x.yahoo_shares == pytest.approx(4.0e9 / 21.0)
     assert x.collected_on == date(2026, 2, 25)
+    assert [d for d, _ in x.dividends] == ["2025-03-01", "2025-09-01"]
+
+
+def test_load_history_inputs_reads_a_payment_yahoo_served_twice_once(tmp_path):
+    # BUG-154: the same amount ex-dated within a week is one payment (the trailing year's dividend, the yield).
+    conn = _db(tmp_path)
+    conn.execute("INSERT INTO dividend_events (ticker, date, amount) VALUES ('AAA', '2025-03-04', 0.10)")
+    conn.commit()
+    x = load_history_inputs(conn, "AAA")
     assert [d for d, _ in x.dividends] == ["2025-03-01", "2025-09-01"]
 
 
@@ -328,6 +337,82 @@ def test_a_quarter_without_its_long_term_debt_has_no_net_debt(tmp_path):
     assert by_end["2025-09-30"].debt_missing
     assert by_end["2025-12-31"].net_debt == 7.0e8  # 9e8 + 1e8 - 3e8
     assert not by_end["2025-12-31"].debt_missing
+
+
+#: The quarters to 2025-09-30, which the FY2024 10-K (year end 2024-12-31) is the latest before.
+_AFTER_FY2024 = ["2024-12-31", "2025-03-31", "2025-06-30", "2025-09-30"]
+
+
+@pytest.mark.parametrize("fy2024, metrics, missing", [
+    # AXON-like (BUG-293, Q22): no debt tagged and no interest in the 10-K before them: debt-free, as scores read it.
+    ({}, {}, []),
+    # Interest paid with no debt tagged: debt the mapping doesn't read (scores' read_debt), so still unknown.
+    ({"interest_expense": 5.0e7}, {}, _AFTER_FY2024),
+    # A 10-K with long-term debt: its quarters lack it (TMUS), as before.
+    ({"long_term_debt": 9.0e8}, {}, _AFTER_FY2024),
+    # Some debt tagged (short-term debt, paper, or the stored total) but no long-term debt: it may be unread
+    # (BUG-294: DE's FY2022-25 10-Ks read $12.6-17.9B of short-term debt and no long-term), so still unknown.
+    ({"short_term_debt": 1.0e8}, {}, _AFTER_FY2024),
+    ({"commercial_paper": 1.0e8}, {}, _AFTER_FY2024),
+    ({}, {"total_debt": 1.0e8}, _AFTER_FY2024),
+])
+def test_a_quarter_lacks_its_debt_by_the_10k_before_it(tmp_path, fy2024, metrics, missing):
+    # Q22 (BUG-293b): for a company whose 10-Ks report long-term debt (here from FY2025), a quarter without any
+    # has none to lack when the latest 10-K at or before it reads as without debt, as the scores read a year.
+    conn = _db(tmp_path)
+    conn.execute("UPDATE financials_annual SET long_term_debt = 9.0e8 WHERE fiscal_year = 2025")
+    for name, value in fy2024.items():
+        conn.execute(f"UPDATE financials_annual SET {name} = ? WHERE fiscal_year = 2024", (value,))
+    for name, value in metrics.items():
+        conn.execute(f"INSERT INTO metrics_annual (ticker, fiscal_year, {name}) VALUES ('AAA', 2024, ?)", (value,))
+    conn.execute("UPDATE financials_ttm SET long_term_debt = NULL WHERE period_end < '2025-12-31'")
+    by_end = {p.period_end: p for p in load_history_inputs(conn, "AAA").points}
+    assert [end for end, p in sorted(by_end.items()) if p.debt_missing] == missing
+    for end in _AFTER_FY2024:
+        assert by_end[end].net_debt is None  # no debt field in the quarter: none to net, as before
+    assert by_end["2025-12-31"].net_debt == 6.0e8 and not by_end["2025-12-31"].debt_missing  # 9e8 - 3e8 cash
+
+
+def test_an_insurers_10k_without_debt_tags_keeps_its_quarters_unknown(tmp_path):
+    # Q22: the scores keep a bank's or insurer's debt as filed (KKR tags neither its debt nor its interest), so a
+    # 10-K of theirs with no debt tagged isn't read as without debt.
+    conn = _db(tmp_path, sector="insurance")
+    conn.execute("UPDATE financials_annual SET long_term_debt = 9.0e8 WHERE fiscal_year = 2025")
+    conn.execute("UPDATE financials_ttm SET long_term_debt = NULL WHERE period_end < '2025-12-31'")
+    by_end = {p.period_end: p for p in load_history_inputs(conn, "AAA").points}
+    assert [end for end, p in sorted(by_end.items()) if p.debt_missing] == _AFTER_FY2024
+
+
+def test_a_quarter_at_a_10ks_year_end_follows_that_10k(tmp_path):
+    # Q22: debt repaid in FY2025: its 10-K reads none, so its own fourth quarter has none to lack, though the
+    # FY2024 10-K before it reported some.
+    conn = _db(tmp_path)
+    conn.execute("UPDATE financials_annual SET long_term_debt = 9.0e8 WHERE fiscal_year = 2024")
+    conn.execute("UPDATE financials_ttm SET long_term_debt = NULL WHERE period_end >= '2025-09-30'")
+    by_end = {p.period_end: p for p in load_history_inputs(conn, "AAA").points}
+    assert by_end["2025-09-30"].debt_missing and not by_end["2025-12-31"].debt_missing
+
+
+def test_a_company_whose_10ks_never_report_long_term_debt_keeps_its_quarters_valued(tmp_path):
+    # Q22 (option E): the interest rule applies only to companies whose 10-Ks report long-term debt; one that never
+    # does (interest or not) keeps today's EV: no new N/A.
+    conn = _db(tmp_path)
+    conn.execute("UPDATE financials_annual SET interest_expense = 5.0e7")
+    conn.execute("UPDATE financials_ttm SET long_term_debt = NULL")
+    points = load_history_inputs(conn, "AAA").points
+    assert points and not any(p.debt_missing for p in points)
+
+
+@pytest.mark.parametrize("first_10k_debt, missing", [(9.0e8, True), (None, False)])
+def test_a_quarter_before_the_first_10k_follows_it(tmp_path, first_10k_debt, missing):
+    # Q22: with no 10-K at or before it, a quarter follows the first 10-K (FY2025 reports long-term debt).
+    conn = _db(tmp_path)
+    conn.execute("UPDATE financials_annual SET long_term_debt = 9.0e8 WHERE fiscal_year = 2025")
+    conn.execute("UPDATE financials_annual SET long_term_debt = ? WHERE fiscal_year = 2024", (first_10k_debt,))
+    conn.execute("INSERT INTO financials_ttm (ticker, period_end, fiscal_year, revenue) "
+                 "VALUES ('AAA', '2024-09-30', 2024, 1.0e9)")
+    by_end = {p.period_end: p for p in load_history_inputs(conn, "AAA").points}
+    assert by_end["2024-09-30"].debt_missing is missing
 
 
 def _quarter_ends(first_year, last):
@@ -529,3 +614,110 @@ def test_a_database_from_before_net_income_to_common_still_reads(tmp_path):
     for table in ("financials_annual", "financials_quarterly", "financials_ttm", "financials_annual_vintages"):
         assert "net_income_to_common" in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
     assert conn.execute("SELECT count(*), max(net_income) FROM financials_ttm").fetchone() == (5, 4.4e8)
+
+
+# --- BUG-264: the fiscal years' undeclared rule in the quarters; BUG-262: the splits the filings record -----------
+
+def test_an_issuance_while_the_trailing_years_loss_shrinks_stays_organic():
+    # PCG-like (BUG-264): the July 2020 exit issuance took the count 2.38x while the loss shrank, so EPS moved against
+    # the count as across a split; the trailing year's net income (-7,656M to -1,318M), which a split leaves alone,
+    # didn't hold. The marks alone folded it.
+    counts = [528e6, 528e6, 1257e6, 1258e6, 1260e6]
+    eps = [-3.0, -3.0, -1.0, -1.0, -1.0]
+    quarter = [-1584e6, -1584e6, -1257e6, -1258e6, -1260e6]
+    out, _ = normalize_share_series(ENDS, counts, eps, [], net_income=quarter,
+                                    trailing_income=[-7656e6, -7656e6, -1318e6, -1300e6, -1290e6])
+    assert out == pytest.approx(counts)
+    out, _ = normalize_share_series(ENDS, counts, eps, [], net_income=quarter,
+                                    trailing_income=[-1400e6, -1400e6, -1318e6, -1300e6, -1290e6])
+    assert out[:2] == pytest.approx([c * 1257 / 528 for c in counts[:2]])  # held: a split's marks, it folds
+
+
+def test_a_count_that_moves_without_the_count_eps_divides_by_stays_organic():
+    # BX-like (BUG-264): the diluted count took units in (670M to 1,195M), while EPS kept dividing by about 670M:
+    # net income halved with EPS, so the count it implies didn't move.
+    counts = [670e6, 670e6, 1195e6, 1195e6, 1195e6]
+    out, _ = normalize_share_series(ENDS, counts, [2.0, 2.0, 1.0, 1.0, 1.0], [],
+                                    net_income=[1340e6, 1340e6, 670e6, 670e6, 670e6])
+    assert out == pytest.approx(counts)
+
+
+@pytest.mark.parametrize("trailing", [[4300e6, 4300e6, 4100e6, 4200e6, 4250e6], None])
+def test_a_split_whose_quarter_swung_still_folds_on_its_trailing_year(trailing):
+    # DD-like (BUG-264): one quarter's net income went from 52M to 888M across the 1:3 at 2017 Q1, too far for the
+    # fiscal years' test; the trailing year's held. Without trailing years the test doesn't decide.
+    counts = [1106e6, 1106e6, 400e6, 401e6, 402e6]
+    out, _ = normalize_share_series(ENDS, counts, [0.04, 0.04, 2.16, 2.1, 2.2], [],
+                                    net_income=[52e6, 52e6, 888e6, 860e6, 900e6], trailing_income=trailing)
+    assert out[:2] == pytest.approx([400e6, 400e6])
+
+
+#: Quarters 2016 Q1 to 2018 Q4 of a company whose 1:3 reverse split of 2018-06-01 the stored quarters show from
+#: 2017 Q1 (restated) on, with an 8% issuance in that quarter: (period_end, basic count, diluted EPS, net income).
+_SEAM_QUARTERS = [(f"{y}-{md}", (1.2e9 if y < 2017 else 0.432e9), (0.25 if y < 2017 else 0.6944), 3.0e8)
+                  for y in (2016, 2017, 2018) for md in ("03-31", "06-30", "09-30", "12-31")]
+
+
+def _restated_seam_db(tmp_path, yahoo, trailing_income=None):
+    """The quarters above, their trailing years (net income 1.2B, or *trailing_income* by quarter end), FY2016-18
+    10-Ks whose views of FY2017 restate it for the split (the 2018 10-K's: 1.2B weighted and $1.00, then the 2019
+    10-K's 0.4B and $3.00), bars of 10.0 each month from 2015 to 2019, and *yahoo* as the split history."""
+    store = SQLiteStore(db_path=tmp_path / "seam.db")
+    conn = store._connect()
+    store._create_schema(conn)
+    conn.execute("INSERT INTO companies (ticker, sector_class) VALUES ('SEA', 'general')")
+    for k, (end, count, eps, income) in enumerate(_SEAM_QUARTERS):
+        conn.execute("INSERT INTO financials_quarterly (ticker, period_end, fiscal_year, fiscal_quarter, "
+                     "weighted_avg_shares_basic, eps_diluted, net_income, revenue) VALUES ('SEA', ?, ?, ?, ?, ?, ?, "
+                     "2.0e9)", (end, int(end[:4]), k % 4 + 1, count, eps, income))
+        conn.execute("INSERT INTO financials_ttm (ticker, period_end, fiscal_year, revenue, net_income, total_equity) "
+                     "VALUES ('SEA', ?, ?, 8.0e9, ?, 5.0e9)",
+                     (end, int(end[:4]), (trailing_income or {}).get(end, 1.2e9)))
+    for fy, filed, count, eps in ((2017, "2018-02-20", 1.2e9, 1.0), (2017, "2019-02-20", 0.4e9, 3.0),
+                                  (2018, "2019-02-20", 0.432e9, 2.78)):
+        conn.execute("INSERT INTO financials_annual_vintages (ticker, fiscal_year, accn, filed_date, period_end, form, "
+                     "weighted_avg_shares_diluted, eps_diluted, net_income) VALUES ('SEA', ?, ?, ?, ?, '10-K', ?, ?, "
+                     "1.2e9)", (fy, f"acc-{filed[:4]}", filed, f"{fy}-12-31", count, eps))
+    for fy in (2016, 2017, 2018):
+        conn.execute("INSERT INTO financials_annual (ticker, fiscal_year, period_end) VALUES ('SEA', ?, ?)",
+                     (fy, f"{fy}-12-31"))
+    conn.executemany("INSERT INTO price_bars (ticker, date, close) VALUES ('SEA', ?, 10.0)",
+                     [(f"{y}-{m:02d}-28",) for y in range(2015, 2020) for m in range(1, 13)])
+    conn.executemany("INSERT INTO split_events (ticker, date, ratio) VALUES ('SEA', ?, ?)", yahoo)
+    conn.execute("INSERT INTO market_snapshots (ticker, collected_at, current_price, market_cap, shares_outstanding) "
+                 "VALUES ('SEA', '2020-01-05T10:00:00', 10.0, 4.32e9, 4.32e8)")
+    conn.commit()
+    return conn
+
+
+@pytest.mark.parametrize("yahoo", [[], [("2018-06-01", 1.3 / 3)]])
+def test_a_quarterly_seam_folds_by_the_split_the_filings_record(tmp_path, yahoo):
+    # BUG-262 in the history: the 2016 Q4 to 2017 Q1 seam (0.36) is the 1:3 times an 8% issuance. The filings record
+    # the 1:3 (FY2017's count 1.2B, then 0.4B), so the quarters before it go onto its basis by the split, the issuance
+    # left in them, not by the seam's own ratio. Yahoo has no split there, or one factor for it and a spin-off's 1.3.
+    x = load_history_inputs(_restated_seam_db(tmp_path, yahoo), "SEA")
+    by_end = {p.period_end: p.shares for p in x.points}
+    assert by_end["2016-12-31"] == pytest.approx(0.4e9)
+    assert by_end["2017-03-31"] == pytest.approx(0.432e9)
+    assert x.price_factors == ([("2018-06-01", pytest.approx(1.3))] if yahoo else [])
+
+
+def test_the_history_reads_each_quarters_net_income_and_its_trailing_years(tmp_path):
+    # BUG-264: with Yahoo's history and the filings silent (no restated FY2017), an issuance whose trailing net income
+    # moved stays organic, as does a count whose quarter's net income moved with EPS: the seam carries a split's
+    # marks in EPS alone.
+    conn = _restated_seam_db(tmp_path, [], trailing_income={"2016-12-31": 0.3e9})
+    conn.execute("DELETE FROM financials_annual_vintages")
+    conn.commit()
+    x = load_history_inputs(conn, "SEA")
+    assert {p.period_end: p.shares for p in x.points}["2016-12-31"] == pytest.approx(1.2e9)
+    conn.execute("DELETE FROM financials_ttm")
+    conn.execute("INSERT INTO financials_ttm (ticker, period_end, fiscal_year, net_income) "
+                 "SELECT ticker, period_end, fiscal_year, 1.2e9 FROM financials_quarterly")
+    conn.commit()
+    x = load_history_inputs(conn, "SEA")
+    assert {p.period_end: p.shares for p in x.points}["2016-12-31"] == pytest.approx(0.432e9)  # held: its own ratio
+    conn.execute("UPDATE financials_quarterly SET net_income = net_income * 0.36 WHERE period_end >= '2017'")
+    conn.commit()
+    x = load_history_inputs(conn, "SEA")
+    assert {p.period_end: p.shares for p in x.points}["2016-12-31"] == pytest.approx(1.2e9)  # the count EPS implies
