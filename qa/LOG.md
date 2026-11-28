@@ -4068,3 +4068,12 @@ Result: BUG-392 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4627 passed, 2 skipped
 Commit: (this commit) fix(parser): a revenue part its own filing's statement shows gives way to the revenue (BUG-392)
 Since review 42: 1 unit.
+
+## Iteration 263: 2026-11-28: fix (BUG-395), the user's approval
+Picked: BUG-395 (review 42, Minor 1); the user approved the measured moves (SWK label below -> above).
+Did: each spread quarter stores the 10-K that supplied its spread; the history knows its trailing years from that 10-K.
+- RED: 10 failing first; GREEN. bug395 19/19 (5 re-quoted older mutants), bug390 11/11 (3 stale, re-quoted in bug395's spec), bug392 12/12.
+Result: BUG-395 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4637 passed, 2 skipped
+Commit: (this commit) fix(valuation): a spread quarter is known from the 10-K that supplies it (BUG-395)
+Since review 42: 2 units.

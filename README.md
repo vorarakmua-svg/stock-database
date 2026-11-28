@@ -490,11 +490,15 @@ How it's built:
   either by the collection that stored it: by the last weekday on or before its day in New York, as the SEC takes no
   filing at weekends, so a Sunday's collection puts its new quarter at Friday's bar (BUG-250), but never before the
   period ends: a year ending on the collection's weekend isn't read (BUG-388). A trailing year holding a quarter whose
-  D&A was spread onto its year's 10-K's basis (`derived:amortization_spread`, below) is known from that 10-K's first
-  filing day, as the quarter holds a share of an amortization only the 10-K tags; before it the month reads the
+  D&A was spread onto its year's 10-K's basis (`derived:amortization_spread`, below) is known from the filing day of
+  the 10-K that supplies the spread, as the quarter holds a share of an amortization only that 10-K tags: the first of
+  the year's 10-Ks to give the year every D&A figure the spread read, which can be a later one than the year's first
+  (Broadcom's FY2024 amortization, first tagged by its 10-K of 2025-12-18; BUG-395). Before it the month reads the
   trailing year known before, or none where that has gone stale (BUG-390). `financials_quarterly.source_tags` (JSON,
-  each figure's tag, as the vintages keep theirs) marks such a quarter; a quarter stored before the column has none
-  until the next collection.
+  each figure's tag, as the vintages keep theirs) marks such a quarter, and `financials_quarterly.source_filings`
+  (JSON, the filing of each figure the parser names one for: accession, filing day, form) names that 10-K; a quarter
+  stored before the columns has neither until the next collection, and one stored with tags but no filing is dated
+  by its year's first 10-K.
   Quarters from before the listing are left out, and windows are trailing only. The one exception is
   restatement: the quarters are the latest *restated* figures, as SEC's company facts give them, and
   revenue was restated by more than 1% in 8% of the years.
@@ -2364,8 +2368,9 @@ numbers SEC filings report:
   the last 10-K was: after a year spread so, each of its quarters takes its 10-Q's figure on that
   year's basis plus the last 10-K's difference a day (`derived:amortization_carried`), so the latest
   trailing year stays on the 10-K's basis; a 10-Q filed before that 10-K, or after a year on one
-  basis, keeps its figures as tagged. The valuation history reads a trailing year over a spread quarter only from its
-  year's 10-K's first filing day (BUG-390).
+  basis, keeps its figures as tagged. The valuation history reads a trailing year over a spread quarter only from the
+  filing day of the 10-K that supplies the spread (each spread quarter's `_source_filings`), the first of the year's
+  10-Ks to give the year every D&A figure the spread read (BUG-390, BUG-395).
 - **Outflows by size.** Capex, buybacks, debt repaid and dividends paid are stored as
   positive amounts, and filers tag them with either sign, sometimes both within one year.
   Their quarters difference the year-to-date totals' sizes, and a quarter whose total

@@ -277,6 +277,7 @@ class SQLiteStore:
                 filed_date TEXT,
                 form TEXT,
                 source_tags TEXT,
+                source_filings TEXT,
                 {_cols_ddl(_CANONICAL_COLUMNS)},
                 PRIMARY KEY (ticker, period_end)
             );
@@ -768,10 +769,11 @@ class SQLiteStore:
             },
             "financials_annual": {"calendar_year": "INTEGER",
                                    **{c: "REAL" for c in _CANONICAL_COLUMNS}},
-            # Each figure's tag (BUG-390): NULL in a quarter stored before the column, until the next collection.
+            # Each figure's tag (BUG-390), and the filing of a figure the parser names one for (BUG-395): NULL in a
+            # quarter stored before the column, until the next collection.
             "financials_quarterly": {"calendar_year": "INTEGER",
                                       "calendar_quarter": "INTEGER",
-                                      "fiscal_quarter": "INTEGER", "source_tags": "TEXT",
+                                      "fiscal_quarter": "INTEGER", "source_tags": "TEXT", "source_filings": "TEXT",
                                       **{c: "REAL" for c in _CANONICAL_COLUMNS}},
             "financials_ttm": {"fiscal_year": "INTEGER", "calendar_year": "INTEGER",
                                "calendar_quarter": "INTEGER",
@@ -875,6 +877,15 @@ class SQLiteStore:
         as-of view reads its snapshots' own ``source_tags``, not this."""
         tags = period.get("_source_tags") or {}
         kept = {c: tags[c] for c in _CANONICAL_COLUMNS if period.get(c) is not None and c in tags}
+        return json.dumps(kept, sort_keys=True) if kept else None
+
+    @staticmethod
+    def _figure_filings(period: Dict[str, Any]) -> Optional[str]:
+        """The filing (accession, filing day, form) of each canonical figure of a quarter the parser names one for (its
+        ``_source_filings``: a spread D&A's supplying 10-K, which dates it in the valuation history, BUG-395), as JSON;
+        None without any."""
+        filings = period.get("_source_filings") or {}
+        kept = {c: filings[c] for c in _CANONICAL_COLUMNS if period.get(c) is not None and c in filings}
         return json.dumps(kept, sort_keys=True) if kept else None
 
     @staticmethod
@@ -1083,6 +1094,7 @@ class SQLiteStore:
                 "filed_date": period.get("filed_date"),
                 "form": period.get("form"),
                 "source_tags": self._figure_tags(period),
+                "source_filings": self._figure_filings(period),
             }
             row.update(self._canonical_values(period, restated))
             self._upsert(conn, "financials_quarterly", ["ticker", "period_end"], row, fill_only=fill)

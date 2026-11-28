@@ -164,8 +164,9 @@ def known_on(period_end: str, fiscal_quarter: Optional[int], first_annual_filed:
       Q4_FILING_WINDOW_DAYS of the year end, and otherwise after Q4_LAG_DAYS;
     - any other quarter is known after QUARTER_LAG_DAYS;
     - a trailing year holding a quarter BUG-275 spread onto its year's 10-K's D&A basis is known no earlier than
-      *spread_filed*, that 10-K's first filing day: the quarter holds a share of an amortization only the 10-K
-      tags, so before it the history reads the trailing years known before (BUG-390).
+      *spread_filed*, the filing day of the 10-K that supplies the spread (``_spread_quarters``): the quarter holds a
+      share of an amortization only that 10-K tags, so before it the history reads the trailing years known before
+      (BUG-390, BUG-395).
 
     The result is capped at *collected_on* (New York's day): what was stored was known by the day it was
     collected, and by the last weekday on or before it, since the SEC accepts no filing at weekends (``filed_by``).
@@ -359,16 +360,33 @@ def _debt_before(debt_by_year_end: Sequence[Tuple[str, bool]], end: str) -> bool
     return before[-1] if before else bool(debt_by_year_end) and debt_by_year_end[0][1]
 
 
+def _supplied(filings: Any) -> Optional[str]:
+    """The filing day of the 10-K that supplies a spread quarter's D&A, as its ``source_filings`` JSON names it
+    (BUG-395), else None."""
+    try:
+        filing = json.loads(filings).get("depreciation_amortization") if filings else None
+    except (ValueError, AttributeError):
+        return None
+    day = _day(filing.get("filed")) if isinstance(filing, dict) else None
+    return day.isoformat() if day else None
+
+
 def _spread_quarters(conn: sqlite3.Connection, ticker: str,
                      year_filed: Sequence[Tuple[str, str]]) -> List[Tuple[str, Optional[str]]]:
-    """Each stored quarter whose D&A BUG-275 spread onto its year's 10-K's basis (its ``source_tags``), with that
-    10-K's first filing day: the first year in *year_filed* (year end, first filing day; in year-end order) ending
-    on or after the quarter and within TRAILING_QUARTERS_DAYS of it, else None (BUG-390). Empty in a database from
-    before the column, whose quarters are read as before."""
-    if "source_tags" not in _columns(conn, "financials_quarterly"):
+    """Each stored quarter whose D&A BUG-275 spread onto its year's 10-K's basis (its ``source_tags``), with the
+    filing day of the 10-K that supplies the spread: the one its ``source_filings`` names, the first of the year's
+    10-Ks to give the year every D&A figure the spread read (the parser's ``_da_bases``), so a year whose amortization
+    or line a later 10-K first tags waits for that one (AVGO's FY2024: its 10-K of 2025-12-18, not its first of
+    2024-12-20; BUG-395). A quarter stored before that column names none: its year's first 10-K, the first year in
+    *year_filed* (year end, first filing day; in year-end order) ending on or after the quarter and within
+    TRAILING_QUARTERS_DAYS of it, else None (BUG-390), until the next collection. Empty in a database from before the
+    ``source_tags`` column, whose quarters are read as before."""
+    columns = _columns(conn, "financials_quarterly")
+    if "source_tags" not in columns:
         return []
+    filings = "source_filings" if "source_filings" in columns else "NULL AS source_filings"
     out: List[Tuple[str, Optional[str]]] = []
-    for r in _rows(conn, "SELECT period_end, source_tags FROM financials_quarterly WHERE ticker = ? "
+    for r in _rows(conn, f"SELECT period_end, source_tags, {filings} FROM financials_quarterly WHERE ticker = ? "
                    "AND source_tags LIKE ? ORDER BY period_end", (ticker, f"%{SPREAD_TAG}%")):
         try:
             tags = json.loads(r["source_tags"])
@@ -377,8 +395,11 @@ def _spread_quarters(conn: sqlite3.Connection, ticker: str,
         if not isinstance(tags, dict) or tags.get("depreciation_amortization") != SPREAD_TAG:
             continue
         end = str(r["period_end"])[:10]
-        until = (date.fromisoformat(end) + timedelta(days=TRAILING_QUARTERS_DAYS)).isoformat()
-        out.append((end, next((filed for year_end, filed in year_filed if end <= year_end <= until), None)))
+        supplied = _supplied(r["source_filings"])
+        if supplied is None:
+            until = (date.fromisoformat(end) + timedelta(days=TRAILING_QUARTERS_DAYS)).isoformat()
+            supplied = next((filed for year_end, filed in year_filed if end <= year_end <= until), None)
+        out.append((end, supplied))
     return out
 
 
@@ -506,8 +527,8 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
         # BUG-388): known on no day.
         if x.collected_on is not None and end > filed_by(x.collected_on).isoformat():
             continue
-        # A trailing year holding a quarter spread onto its year's 10-K's D&A basis is known from that 10-K's first
-        # filing day, and on no day where the vintages date no such 10-K (BUG-390).
+        # A trailing year holding a quarter spread onto its year's 10-K's D&A basis is known from the filing day of the
+        # 10-K that supplies the spread, and on no day where nothing dates such a 10-K (BUG-390, BUG-395).
         since = (date.fromisoformat(end) - timedelta(days=TRAILING_QUARTERS_DAYS)).isoformat()
         held = [filed for q_end, filed in spread if since < q_end <= end]
         if None in held:

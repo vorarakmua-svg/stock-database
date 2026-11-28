@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 37 · NEEDS-USER 0 · Decided: 8 · Verified: 371
+**Open:** P0 0 · P1 0 · P2 0 · P3 36 · NEEDS-USER 0 · Decided: 8 · Verified: 372
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2672,11 +2672,12 @@ Found: the valid1 worker (iteration 260, `qa/evidence/valid1-investigation.txt` 
 Repro: SNPS FY2022 cost of revenue 898M from an earlier vintage beside a restated revenue and gross profit (implying 1,363.8M).
 Expected: one filing's figures for the year.   Actual: mixed vintages; the gross-profit check fires.
 ### BUG-395 [P3][VAL] BUG-390 dates a spread quarter by its year's first 10-K, but the spread can come from a later 10-K: AVGO's FY2023-24 are read a year early
-Status: OPEN
-Found: code review 42 (`qa/evidence/review42.txt`, Minor 1; BUG-390's fix incomplete, not a regression) | Fixed: | Regression test:
+Status: VERIFIED (iteration 263; applied at the user's decision, 2026-11-28)
+Found: code review 42 (`qa/evidence/review42.txt`, Minor 1; BUG-390's fix incomplete, not a regression) | Fixed: (this commit) | Regression tests: tests/test_valuation_spread_known.py (review 42's probe adopted); 10 failing first
 Repro: history_inputs ~477-486 date a spread quarter by the vintages' MIN(filed_date) for its year; `_da_bases` spreads from the latest 10-K's year figure. AVGO's FY2024 amortization ($9,267M) is first tagged in the 10-K of 2025-12-18 (vintages: 593M at 2024-12-20, 9,860M at 2025-12-18). Its trailing years to 2024-02-04/05-05/08-04 are read from 2024-12-20 with D&A of $5.4B/$6.9B/$8.4B where the facts known that day give $0.51B/$0.53B/$0.56B. SWK's 2020 trailing years read $608-709M for $372M from 2021-02-18, a year before its 10-K of 2022-02-22. Cache census: 171 of 464 spread quarters (37 filers) are not spread on their year's first 10-K day; 44 trailing years at 14 filers are more than 5% off what was known on the day read (AVGO, GE, SPGI, SWK, MTD, ...). Probe: %LOCALAPPDATA%\stockdb-qa\review42\head\tests\test_review42.py.
 Expected: no 10-K figure before its filing day (BUG-390's own Expected).   Actual: the amortization of a later 10-K is read from the year's first 10-K.
 Fix direction: known from the first vintage whose D&A agrees with the year's stored quarters (or store the parser's fact_y filed day), else known on no day; measure the moves first.
+Fix (iteration 263, `qa/evidence/bug395-investigation.txt`, `qa/evidence/bug395-verify-mine.txt`): direction (b) done properly ((a) measured and rejected: 20 of 123 spread years still early). `_da_bases` names the supplier, the first 10-K for the year giving every D&A figure the spread's own 10-K gives (within _AGREE); stored in the new financials_quarterly.source_filings (464 quarters, 47 KB); the history dates the quarter from it (a DB from between 7dbc9bb and this keeps BUG-390's date until its next collection). Spread look-ahead 139 -> 58 trailing years; standard look-ahead 0. User approved the moves: 0 medians, verdicts, owner-earnings verdicts; label SWK below -> above (140.65 -> 85.27); 244 months empty at 24 tickers. Residuals: KKR/BR/MRSH/TTWO 10-Q comparatives (11 trailing years), AXON FY2023 (4; needs a per-day re-parse).
 ### BUG-396 [P3][VALID] YUM FY2015 pairs the restated post-spin revenue with pre-spin cost of revenue: gross margin -45.8%
 Status: OPEN
 Found: the bug392 worker (iteration 262, residual R1; BUG-062's kind) | Fixed: | Regression test:
