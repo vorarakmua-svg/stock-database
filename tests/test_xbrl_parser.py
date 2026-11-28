@@ -3575,10 +3575,10 @@ def test_figures_all_below_cost_of_revenue_keep_the_tag_order():
 
 def test_a_part_far_from_the_totals_leaves_two_close_totals_to_the_tag_order():
     # DELL's FY2017 holds $48.7B of goods sales beside two totals 0.8% apart, $61.6B and $62.2B: the part gives way,
-    # and the order settles the totals (one as first filed, one restated), even where the income statement adds up to
-    # the second.
-    annual = _annual(*_one_year(2017, "2018-03-29", Revenues=61.642e9,
-                                RevenueFromContractWithCustomerExcludingAssessedTax=62.164e9,
+    # and the order settles the totals (one as first filed, one restated), even where the restating filing's income
+    # statement adds up to the second.
+    annual = _annual(*_one_year(2017, "2018-03-29", Revenues=61.642e9),
+                     *_one_year(2017, "2019-03-29", RevenueFromContractWithCustomerExcludingAssessedTax=62.164e9,
                                 SalesRevenueGoodsNet=48.706e9, CostOfRevenue=49.205e9, GrossProfit=12.959e9))
     assert annual["2017"]["revenue"] == 61.642e9
 
@@ -3615,8 +3615,10 @@ def test_revenue_stays_net_of_excise_taxes_the_filer_also_reports():
 
 def test_revenue_figures_less_than_a_quarter_apart_keep_the_tag_order():
     # Figures under 25% apart are a restatement or a presentation (GE's FY2017 in the cached filings: `Revenues`
-    # $99.3B, net sales $113.2B), which the tag order settles, even where the income statement adds up to the other.
-    annual = _annual(*_one_year(2017, "2019-02-26", Revenues=99.279e9, SalesRevenueNet=113.192e9,
+    # $99.3B, net sales $113.2B), which the tag order settles, even where a later filing's income statement adds up to
+    # the other. (One filing's own statement decides between its own figures: BUG-392.)
+    annual = _annual(*_one_year(2017, "2018-02-23", Revenues=99.279e9),
+                     *_one_year(2017, "2019-02-26", SalesRevenueNet=113.192e9,
                                 OperatingExpenses=105.0e9, OperatingIncomeLoss=8.192e9))
     assert annual["2017"]["revenue"] == 99.279e9
 
@@ -3630,9 +3632,11 @@ def test_revenue_figures_less_than_a_quarter_apart_keep_the_tag_order():
 def test_two_revenue_figures_give_way_to_the_income_statement_only_from_25_percent_apart(gap, revenue):
     # BUG-122 (surviving mutant: _REVENUE_GAP 1.25 -> 1.15, which moved DHR's FY2017-18 revenue to $15.52B and $17.05B
     # from $18.33B and $19.89B). Two of a year's revenue figures must be 25% apart to be two things; closer, the tag
-    # order settles it even where the operating income and expenses add up to the second figure.
+    # order settles it even where the operating income and expenses add up to the second figure (in another filing:
+    # one filing's own statement decides between its own figures, BUG-392).
     other = 100.0e9 * gap
-    annual = _annual(*_one_year(2017, "2019-02-26", Revenues=100.0e9, SalesRevenueNet=other,
+    annual = _annual(*_one_year(2017, "2018-02-23", Revenues=100.0e9),
+                     *_one_year(2017, "2019-02-26", SalesRevenueNet=other,
                                 OperatingExpenses=other * 0.9, OperatingIncomeLoss=other * 0.1))
     assert annual["2017"]["revenue"] == pytest.approx(revenue)
 
@@ -3659,6 +3663,98 @@ def test_a_filings_vintage_takes_the_years_revenue_not_its_part():
         2024, filed, Revenues=12.794e9, RevenueFromContractWithCustomerExcludingAssessedTax=20.407e9,
         OperatingExpenses=12.833e9, OperatingIncomeLoss=7.574e9) for k, v in tag.items()}}}
     assert XBRLParser().extract_annual_vintages(facts)["2024"][filed]["revenue"] == 20.407e9
+
+
+def _ntap_fy2024(**changed):
+    """NTAP's FY2026 10-K on FY2024 (filed 2026-06-05): `Revenues` of $5.657B beside contract revenue of $6.268B,
+    which its cost of revenue and gross profit add up to (BUG-392)."""
+    figures = {"Revenues": 5.657e9, "RevenueFromContractWithCustomerExcludingAssessedTax": 6.268e9,
+               "CostOfGoodsAndServicesSold": 1.835e9, "GrossProfit": 4.433e9, **changed}
+    return {"facts": {"us-gaap": {tag: {"units": {"USD": [usd(v, "2023-04-29", "2024-04-26", fy=2026,
+                                                              filed="2026-06-05")]}}
+                                  for tag, v in figures.items() if v is not None}}}
+
+
+def test_a_part_its_own_filings_income_statement_shows_gives_way_to_the_revenue():
+    # BUG-392: NTAP's FY2026 10-K tags `Revenues` of $5.657B for FY2024, under 25% from the $6.268B of contract revenue
+    # that the same filing's cost of revenue ($1.835B) and gross profit ($4.433B) add up to: revenue read the part.
+    year = XBRLParser().extract_annual_financials(_ntap_fy2024())["2024"]
+    assert _revenue_of(year) == (6.268e9, "RevenueFromContractWithCustomerExcludingAssessedTax")
+
+
+def test_a_filings_vintage_takes_the_revenue_its_statement_shows_not_its_part():
+    # BUG-392: the as-of view reads each filing's own figures, and NTAP's FY2026 10-K holds both.
+    vintage = XBRLParser().extract_annual_vintages(_ntap_fy2024())["2024"]["2026-06-05"]
+    assert vintage["revenue"] == 6.268e9
+
+
+def test_a_quarters_part_its_own_10q_shows_gives_way_to_the_revenue():
+    # BUG-392: NTAP's 10-Q for the quarter to 2026-07-31 tags `Revenues` of $1.819B beside contract revenue of $2.025B,
+    # its cost of revenue ($0.606B) and gross profit ($1.419B) adding up to the second; the quarter read the part.
+    # (After the FY2026 10-K, which tags $6.237B and $6.925B, its statement making the second.)
+    quarter = {"Revenues": 1.819e9, "RevenueFromContractWithCustomerExcludingAssessedTax": 2.025e9,
+               "CostOfGoodsAndServicesSold": 0.606e9, "GrossProfit": 1.419e9}
+    year = {"Revenues": 6.237e9, "RevenueFromContractWithCustomerExcludingAssessedTax": 6.925e9,
+            "CostOfGoodsAndServicesSold": 2.026e9, "GrossProfit": 4.899e9}
+    us_gaap = {tag: {"units": {"USD": [usd(year[tag], "2025-04-26", "2026-04-24", fy=2026, filed="2026-06-05"),
+                                       usd(v, "2026-04-25", "2026-07-31", fy=2027, fp="Q1", form="10-Q",
+                                           filed="2026-09-02")]}}
+               for tag, v in quarter.items()}
+    us_gaap["Assets"] = {"units": {"USD": [usd(19.9e9, end="2026-07-31", fy=2027, fp="Q1", form="10-Q",
+                                               filed="2026-09-02")]}}
+    quarter = XBRLParser().extract_quarterly_financials({"facts": {"us-gaap": us_gaap}})["2026-07-31"]
+    assert _revenue_of(quarter) == (2.025e9, "RevenueFromContractWithCustomerExcludingAssessedTax")
+
+
+def test_a_part_its_own_filings_operating_lines_show_gives_way_to_the_revenue():
+    # The operating income plus operating expenses show it too: a `Revenues` part 10% under net sales they add up to.
+    annual = _annual(*_one_year(2022, "2023-02-28", Revenues=90.0e9, SalesRevenueNet=100.0e9,
+                                OperatingExpenses=88.0e9, OperatingIncomeLoss=12.0e9))
+    assert _revenue_of(annual["2022"]) == (100.0e9, "SalesRevenueNet")
+
+
+def test_a_larger_total_the_cost_and_gross_profit_dont_add_up_to_stays():
+    # SNA's 10-Ks tag `Revenues` ($2.421B for FY2009) with its financial services revenue beside net sales ($2.363B),
+    # which its cost of goods sold and gross profit add up to: the larger total is the revenue (CAT's likewise).
+    annual = _annual(*_one_year(2009, "2010-02-18", Revenues=2.4208e9, SalesRevenueNet=2.3625e9,
+                                CostOfGoodsAndServicesSold=1.3e9, GrossProfit=1.0625e9))
+    assert _revenue_of(annual["2009"]) == (2.4208e9, "Revenues")
+
+
+def test_a_figure_below_the_larger_of_two_figures_the_statement_shows_is_a_part():
+    # CAT's shape: its operating lines add up to its total revenues ($9.225B, with Financial Products' revenues), its
+    # cost of goods sold and gross profit to its sales ($8.510B). A figure between the two is below the revenue.
+    annual = _annual(*_one_year(2009, "2010-02-19", Revenues=8.9e9, SalesRevenueNet=8.51e9,
+                                RevenueFromContractWithCustomerExcludingAssessedTax=9.225e9,
+                                CostOfRevenue=6.51e9, GrossProfit=2.0e9,
+                                OperatingExpenses=8.825e9, OperatingIncomeLoss=0.4e9))
+    assert _revenue_of(annual["2009"]) == (9.225e9, "RevenueFromContractWithCustomerExcludingAssessedTax")
+
+
+@pytest.mark.parametrize("revenues, read", [
+    (6.240e9, "Revenues"),   # 0.45% under the $6.268B the statement shows: the same figure, rounded
+    (6.230e9, "RevenueFromContractWithCustomerExcludingAssessedTax"),   # 0.6% under: a part
+])
+def test_a_figure_within_rounding_of_the_revenue_its_statement_shows_keeps_the_order(revenues, read):
+    year = XBRLParser().extract_annual_financials(_ntap_fy2024(Revenues=revenues))["2024"]
+    assert _revenue_of(year)[1] == read
+
+
+@pytest.mark.parametrize("gross_profit", [None, 4.0e9])
+def test_a_statement_adding_up_to_no_figure_leaves_the_tag_order(gross_profit):
+    # Without cost and gross profit (or operating income and expenses), or with ones adding up to neither figure
+    # ($5.835B), the filing shows neither to be the revenue: the order holds.
+    year = XBRLParser().extract_annual_financials(_ntap_fy2024(GrossProfit=gross_profit))["2024"]
+    assert _revenue_of(year) == (5.657e9, "Revenues")
+
+
+def test_revenue_including_excise_taxes_shows_no_part():
+    # Contract revenue including excise taxes only fills a period with no other figure, even where the filing's
+    # operating lines add up to it (BUG-119): the figure net of the taxes beside it isn't a part.
+    annual = _annual(*_one_year(2016, "2017-02-15", Revenues=26.685e9,
+                                RevenueFromContractWithCustomerIncludingAssessedTax=29.0e9,
+                                OperatingExpenses=18.097e9, OperatingIncomeLoss=10.903e9))
+    assert _revenue_of(annual["2016"]) == (26.685e9, "Revenues")
 
 
 def test_net_revenue_is_no_noninterest_income():

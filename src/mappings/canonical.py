@@ -95,7 +95,9 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
                     "figure filed is under 0.8 of the two (a part of it: "
                     "xbrl_parser._bank_revenue_parts). A figure "
                     "the year's other figures show isn't its revenue gives way "
-                    "(XBRLParser._revenue_set_aside).",
+                    "(XBRLParser._revenue_set_aside), and one its own filing's "
+                    "income statement shows is a part isn't read "
+                    "(xbrl_parser._revenue_parts_shown).",
     ),
     CanonicalField(
         "cost_of_revenue", "Cost of Revenue", INCOME, UNIT_USD, DURATION,

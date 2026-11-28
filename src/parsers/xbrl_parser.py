@@ -141,14 +141,42 @@ def _bank_revenue_parts(us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, An
     return frozenset(parts)
 
 
+def _revenue_parts_shown(us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
+    """The revenue figures, as ``("revenue", tag, (accn, start, end))``, that their own filing shows are a part of its
+    revenue for the period (BUG-392): below, by more than ``_AGREE``, another revenue figure the filing tags for the
+    period that its cost of revenue plus gross profit, or its operating income plus operating expenses, add up to.
+    Revenue doesn't read them, whatever the gap: NTAP's FY2026 10-K tags `Revenues` of $5.657B for FY2024 beside
+    contract revenue of $6.268B, its cost of revenue and gross profit making the second (and its 10-Qs likewise).
+    Only below: a larger figure can be a total with revenue outside the gross profit (SNA's and CAT's `Revenues`
+    with their financial services revenue, beside net sales). Contract revenue including excise taxes shows nothing
+    and is shown nothing, as it only fills a period with no other figure (BUG-119). One filing's figures alone, so a
+    restatement in another filing stays with the tag order (``_revenue_set_aside``), and no record reads a later
+    filing's evidence."""
+    figures = {tag: _by_fact(us_gaap, "revenue", (tag,)) for tag in _FIELDS["revenue"].tags
+               if tag != _REVENUE_WITH_TAXES}
+    cost, gross, income, expenses = (_by_fact(us_gaap, key, _FIELDS[key].tags) for key in (
+        "cost_of_revenue", "gross_profit", "operating_income", "operating_expenses"))
+    parts: Set[Tuple[str, str, Any]] = set()
+    for key in set().union(*figures.values()):
+        by_tag = {tag: by_key[key] for tag, by_key in figures.items() if key in by_key}
+        totals = [a[key] + b[key] for a, b in ((cost, gross), (income, expenses)) if key in a and key in b]
+        shown = [value for value in by_tag.values() if any(_agree(value, total) for total in totals)]
+        if not shown:
+            continue
+        revenue = max(shown)
+        parts.update(("revenue", tag, key) for tag, value in by_tag.items()
+                     if value < revenue and not _agree(value, revenue))
+    return frozenset(parts)
+
+
 #: The fields some of whose figures aren't read at all (``_unread``).
 _UNREAD_FIELDS = frozenset({_TO_COMMON_FIELD, "revenue"})
 
 
 def _unread(unread: FrozenSet[Tuple[str, str, Any]], field: Any, tag: str, entry: Dict[str, Any]) -> bool:
     """Whether *entry*, a fact under *tag*, is one *field* doesn't read (``_to_common_contradicted``,
-    ``_bank_revenue_parts``). Net income's set-aside figures (``_to_common_set_aside``) are keyed alike: they rank
-    last, and are still read; revenue's (``_revenue_set_aside``) are keyed by fiscal year."""
+    ``_bank_revenue_parts``, ``_revenue_parts_shown``). Net income's set-aside figures (``_to_common_set_aside``) are
+    keyed alike: they rank last, and are still read; revenue's (``_revenue_set_aside``) are keyed by fiscal year."""
     return field.key in _UNREAD_FIELDS and (field.key, tag, _fact_key(entry)) in unread
 
 
@@ -3093,8 +3121,9 @@ class XBRLParser:
 
     def _aside(self, us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
         """``_set_aside``'s figures and the ones not read at all (``_to_common_contradicted``,
-        ``_bank_revenue_parts``)."""
-        return self._set_aside(us_gaap) | _to_common_contradicted(us_gaap) | _bank_revenue_parts(us_gaap)
+        ``_bank_revenue_parts``, ``_revenue_parts_shown``)."""
+        return (self._set_aside(us_gaap) | _to_common_contradicted(us_gaap) | _bank_revenue_parts(us_gaap)
+                | _revenue_parts_shown(us_gaap))
 
     def _set_aside(self, us_gaap: Dict[str, Any]) -> FrozenSet[Tuple[str, str, Any]]:
         """The figures that rank after every other tag of their field: ``_revenue_set_aside``'s and

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 36 · NEEDS-USER 0 · Decided: 8 · Verified: 370
+**Open:** P0 0 · P1 0 · P2 0 · P3 37 · NEEDS-USER 0 · Decided: 8 · Verified: 371
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2654,11 +2654,12 @@ Expected: counts on their filing's scale.   Actual: some rescaled by 10^6 or 100
 Prepared (iteration 256, stockdb-qa\shares1\out\b391, NOT applied: HAL's label moves): an EPS implying under 100,000 shares rescales and confirms nothing; pass 2 never rescales a count pass 1 checked. HAL 101, HIG 17, DXCM 20, ICE 4 quarterly cells right; HAL historical value None -> 38.94, label none -> below at 31.07; HAL ranked, APA/EOG/FANG/XOM composites -2; 0 medians, verdicts. Awaiting the user.
 Fix (iteration 257, `qa/evidence/shares1-round2-investigation.txt`, `qa/evidence/b391-verify-mine.txt`): applied as prepared after the user approved the measured moves (HAL label none -> below, HAL ranked, APA/EOG/FANG/XOM composites -2, 0 medians, verdicts). BUG-369's pass-1b floor folded into pass 1; its mutant m369_no_floor retired from shares1-mutants.json (covered by m391_no_floor).
 ### BUG-392 [P2][VALID] NTAP's revenue reads `Revenues` at about 90% of its revenue for FY2024-26
-Status: OPEN
-Found: the valid1 worker (iteration 260, gross-profit sweep, `qa/evidence/valid1-investigation.txt` sec. 8); confirmed by the orchestrator on the live DB | Fixed: | Regression test:
+Status: VERIFIED (iteration 262)
+Found: the valid1 worker (iteration 260, gross-profit sweep, `qa/evidence/valid1-investigation.txt` sec. 8); confirmed by the orchestrator on the live DB | Fixed: (this commit) | Regression tests: tests/test_xbrl_parser.py (9 new, 3 reshaped to two filings); 6 failing first
 Repro: financials_annual NTAP FY2024 revenue 5.657B, gross profit 4.433B, cost of revenue 1.835B: gross profit + cost of revenue = 6.268B, which NetApp tags as RevenueFromContractWithCustomerExcludingAssessedTax. FY2025 5.907B and FY2026 6.237B likewise low. Revenue feeds P/S, growth and margins, so valuations may move.
 Expected: the total revenue (6.268B FY2024).   Actual: `Revenues` 5.657B (a part).
 
+Fix (iteration 262, `qa/evidence/bug392-investigation.txt`, `qa/evidence/bug392-verify-mine.txt`): xbrl_parser._revenue_parts_shown (in `_aside`): a revenue figure is not read where the same filing tags, for the same period, another revenue figure its own cost of revenue + gross profit (or operating income + operating expenses) add up to within _AGREE, and the figure is more than _AGREE below it (larger figures stay: SNA, CAT). Census 72 records at 7 filers (NTAP, BSX, GEN, XYL, TRGP, JCI, YUM); 8 Yahoo-covered NTAP cells now exact (0 before). On DB copies: 0 medians, verdicts, owner-earnings verdicts, labels (GEN historical value 40.67 -> 40.36, still below); NTAP P/S 4.733 -> 4.264 (Yahoo 4.273), composite 62 -> 64. Three existing single-filing tests reshaped to the two-filing cases they came from (GE, DELL, 25% gap). Residual: BUG-396 (YUM FY2015).
 ### BUG-393 [P3][VALID] CNC's cost_of_revenue holds only product cost beside its medical costs
 Status: OPEN
 Found: the valid1 worker (iteration 260, `qa/evidence/valid1-investigation.txt` sec. 8) | Fixed: | Regression test:
@@ -2676,6 +2677,11 @@ Found: code review 42 (`qa/evidence/review42.txt`, Minor 1; BUG-390's fix incomp
 Repro: history_inputs ~477-486 date a spread quarter by the vintages' MIN(filed_date) for its year; `_da_bases` spreads from the latest 10-K's year figure. AVGO's FY2024 amortization ($9,267M) is first tagged in the 10-K of 2025-12-18 (vintages: 593M at 2024-12-20, 9,860M at 2025-12-18). Its trailing years to 2024-02-04/05-05/08-04 are read from 2024-12-20 with D&A of $5.4B/$6.9B/$8.4B where the facts known that day give $0.51B/$0.53B/$0.56B. SWK's 2020 trailing years read $608-709M for $372M from 2021-02-18, a year before its 10-K of 2022-02-22. Cache census: 171 of 464 spread quarters (37 filers) are not spread on their year's first 10-K day; 44 trailing years at 14 filers are more than 5% off what was known on the day read (AVGO, GE, SPGI, SWK, MTD, ...). Probe: %LOCALAPPDATA%\stockdb-qa\review42\head\tests\test_review42.py.
 Expected: no 10-K figure before its filing day (BUG-390's own Expected).   Actual: the amortization of a later 10-K is read from the year's first 10-K.
 Fix direction: known from the first vintage whose D&A agrees with the year's stored quarters (or store the parser's fact_y filed day), else known on no day; measure the moves first.
+### BUG-396 [P3][VALID] YUM FY2015 pairs the restated post-spin revenue with pre-spin cost of revenue: gross margin -45.8%
+Status: OPEN
+Found: the bug392 worker (iteration 262, residual R1; BUG-062's kind) | Fixed: | Regression test:
+Repro: since BUG-392 YUM FY2015 revenue reads the 2017 10-K's restated 6.418B (after the Yum China spin-off; before it read company sales 11.145B, a part of 13.105B), while cost of revenue keeps the pre-spin 9.359B, so derived gross profit is -2.941B and gross margin -45.8%. No valuation moves.
+Expected: one filing's figures for the year.   Actual: per-field latest values from filings on different bases.
 ### Q23 [DATA] NEEDS-USER: read a debt total that includes current debt as the total less the current part (KVUE, TRV)?
 Status: VERIFIED (iteration 236; applied at the user's decision, 2026-11-26)
 Found: the debt1 worker (iteration 234; BUG-291, BUG-133's TRV) | Fixed: | Regression test:

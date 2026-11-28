@@ -4058,3 +4058,13 @@ Result: BUG-063, 114, 115, 269 VERIFIED; BUG-395 filed.
 Gates: ruff ✓ mypy ✓ pytest 4616 passed, 2 skipped
 Commit: (this commit) fix(validation): derived NCI, temporary equity and excise in the checks, short-term debt outliers (BUG-063, -114, -115, -269); review 42
 Since review 42: 0 units.
+
+## Iteration 262: 2026-11-28: fix (BUG-392)
+Picked: BUG-392 (P2), the bug392 worker's set.
+Did: a revenue figure below the one its own filing's statement adds up to is a part and isn't read.
+- RED: 6 failing first; GREEN. bug392 12/12, bug328 15/15 (2 stale: 1 at HEAD, 1 reshaped in bug392's spec), bug252 11/11.
+- 0 medians, verdicts, labels: applied without the user per the loop's rules. New BUG-396 (YUM FY2015 residual).
+Result: BUG-392 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4627 passed, 2 skipped
+Commit: (this commit) fix(parser): a revenue part its own filing's statement shows gives way to the revenue (BUG-392)
+Since review 42: 1 unit.

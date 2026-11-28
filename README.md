@@ -2572,7 +2572,11 @@ pipeline is designed so this never breaks ingestion or silently loses data:
   and sales tags). Of two figures for a year 25% or more apart, one the year's income
   statement doesn't add up to (operating income plus operating expenses, or cost of revenue
   plus gross profit) gives way to one it does; where it adds up to neither, a zero gives way
-  to a positive figure, and one below the year's cost of revenue to one that isn't. Revenue
+  to a positive figure, and one below the year's cost of revenue to one that isn't. Whatever
+  the gap, a figure more than 0.5% below another revenue figure its own filing tags for the
+  period, one that filing's cost of revenue plus gross profit (or operating income plus
+  operating expenses) add up to, is a part of the revenue and isn't read (NTAP's `Revenues`
+  of $5.66B for FY2024 beside its $6.27B). Revenue
   including excise taxes only fills a year with no other figure. A revenue figure under 0.8
   of the net interest income plus the noninterest income its own filing tags for the period
   is a part of a bank's revenue (the contract revenue of some of its fees) and isn't read:
