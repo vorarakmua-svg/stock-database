@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 37 · NEEDS-USER 0 · Decided: 8 · Verified: 366
+**Open:** P0 0 · P1 0 · P2 1 · P3 39 · NEEDS-USER 0 · Decided: 8 · Verified: 366
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2650,6 +2650,23 @@ Expected: counts on their filing's scale.   Actual: some rescaled by 10^6 or 100
 
 Prepared (iteration 256, stockdb-qa\shares1\out\b391, NOT applied: HAL's label moves): an EPS implying under 100,000 shares rescales and confirms nothing; pass 2 never rescales a count pass 1 checked. HAL 101, HIG 17, DXCM 20, ICE 4 quarterly cells right; HAL historical value None -> 38.94, label none -> below at 31.07; HAL ranked, APA/EOG/FANG/XOM composites -2; 0 medians, verdicts. Awaiting the user.
 Fix (iteration 257, `qa/evidence/shares1-round2-investigation.txt`, `qa/evidence/b391-verify-mine.txt`): applied as prepared after the user approved the measured moves (HAL label none -> below, HAL ranked, APA/EOG/FANG/XOM composites -2, 0 medians, verdicts). BUG-369's pass-1b floor folded into pass 1; its mutant m369_no_floor retired from shares1-mutants.json (covered by m391_no_floor).
+### BUG-392 [P2][VALID] NTAP's revenue reads `Revenues` at about 90% of its revenue for FY2024-26
+Status: OPEN
+Found: the valid1 worker (iteration 260, gross-profit sweep, `qa/evidence/valid1-investigation.txt` sec. 8); confirmed by the orchestrator on the live DB | Fixed: | Regression test:
+Repro: financials_annual NTAP FY2024 revenue 5.657B, gross profit 4.433B, cost of revenue 1.835B: gross profit + cost of revenue = 6.268B, which NetApp tags as RevenueFromContractWithCustomerExcludingAssessedTax. FY2025 5.907B and FY2026 6.237B likewise low. Revenue feeds P/S, growth and margins, so valuations may move.
+Expected: the total revenue (6.268B FY2024).   Actual: `Revenues` 5.657B (a part).
+
+### BUG-393 [P3][VALID] CNC's cost_of_revenue holds only product cost beside its medical costs
+Status: OPEN
+Found: the valid1 worker (iteration 260, `qa/evidence/valid1-investigation.txt` sec. 8) | Fixed: | Regression test:
+Repro: CNC FY2021-25 cost_of_revenue about 2.7B (product cost) beside about 146B of medical costs (managed care), so revenue less cost of revenue is far above any gross profit and the gross-profit check fires.
+Expected: managed-care cost of revenue that includes medical costs, or the check aware of it.   Actual: product cost alone.
+
+### BUG-394 [P3][VALID] SNPS FY2022 cost of revenue comes from an older filing than its revenue and gross profit
+Status: OPEN
+Found: the valid1 worker (iteration 260, `qa/evidence/valid1-investigation.txt` sec. 8; BUG-062's kind) | Fixed: | Regression test:
+Repro: SNPS FY2022 cost of revenue 898M from an earlier vintage beside a restated revenue and gross profit (implying 1,363.8M).
+Expected: one filing's figures for the year.   Actual: mixed vintages; the gross-profit check fires.
 ### Q23 [DATA] NEEDS-USER: read a debt total that includes current debt as the total less the current part (KVUE, TRV)?
 Status: VERIFIED (iteration 236; applied at the user's decision, 2026-11-26)
 Found: the debt1 worker (iteration 234; BUG-291, BUG-133's TRV) | Fixed: | Regression test:
