@@ -10,6 +10,7 @@ splits and spin-offs, where dividing a price by a filed EPS doesn't, since filed
 split bases. See docs/superpowers/specs/2026-10-21-valuation-history-design.md.
 """
 
+import json
 import math
 import sqlite3
 from dataclasses import dataclass, field
@@ -45,6 +46,11 @@ QUARTER_LAG_DAYS = 45
 #: Q4_LAG_DAYS.
 Q4_LAG_DAYS = 75
 Q4_FILING_WINDOW_DAYS = 120
+#: A quarter BUG-275 put onto its year's 10-K's D&A basis holds a share of an amortization only that 10-K tags.
+SPREAD_TAG = "derived:amortization_spread"
+#: A trailing year's quarters end within this many days of its end: three quarters back is 273-280 days, the same
+#: quarter a year back 364 or more.
+TRAILING_QUARTERS_DAYS = 350
 #: Fundamentals known for more than this many days at a date are stale there: a quarter or more was missed.
 STALE_DAYS = 200
 #: A share field must cover this share of the latest RECENT_QUARTERS quarters to be the ticker's: the
@@ -150,13 +156,16 @@ def filed_by(collected_on: date) -> date:
 
 
 def known_on(period_end: str, fiscal_quarter: Optional[int], first_annual_filed: Optional[str],
-             collected_on: Optional[date]) -> date:
+             collected_on: Optional[date], spread_filed: Optional[str] = None) -> date:
     """The day a quarter's trailing year became known.
 
     No quarter stores its filing date, so a lag rule stands in:
     - a fiscal fourth quarter is known on its 10-K's first filing day, if that is within
       Q4_FILING_WINDOW_DAYS of the year end, and otherwise after Q4_LAG_DAYS;
-    - any other quarter is known after QUARTER_LAG_DAYS.
+    - any other quarter is known after QUARTER_LAG_DAYS;
+    - a trailing year holding a quarter BUG-275 spread onto its year's 10-K's D&A basis is known no earlier than
+      *spread_filed*, that 10-K's first filing day: the quarter holds a share of an amortization only the 10-K
+      tags, so before it the history reads the trailing years known before (BUG-390).
 
     The result is capped at *collected_on* (New York's day): what was stored was known by the day it was
     collected, and by the last weekday on or before it, since the SEC accepts no filing at weekends (``filed_by``).
@@ -171,6 +180,9 @@ def known_on(period_end: str, fiscal_quarter: Optional[int], first_annual_filed:
         filed = _day(first_annual_filed)
         if filed is not None and end < filed <= end + timedelta(days=Q4_FILING_WINDOW_DAYS):
             known = filed
+    spread = _day(spread_filed)
+    if spread is not None:
+        known = max(known, spread)
     if collected_on is not None:
         known = max(min(known, filed_by(collected_on)), end)
     return known
@@ -347,6 +359,29 @@ def _debt_before(debt_by_year_end: Sequence[Tuple[str, bool]], end: str) -> bool
     return before[-1] if before else bool(debt_by_year_end) and debt_by_year_end[0][1]
 
 
+def _spread_quarters(conn: sqlite3.Connection, ticker: str,
+                     year_filed: Sequence[Tuple[str, str]]) -> List[Tuple[str, Optional[str]]]:
+    """Each stored quarter whose D&A BUG-275 spread onto its year's 10-K's basis (its ``source_tags``), with that
+    10-K's first filing day: the first year in *year_filed* (year end, first filing day; in year-end order) ending
+    on or after the quarter and within TRAILING_QUARTERS_DAYS of it, else None (BUG-390). Empty in a database from
+    before the column, whose quarters are read as before."""
+    if "source_tags" not in _columns(conn, "financials_quarterly"):
+        return []
+    out: List[Tuple[str, Optional[str]]] = []
+    for r in _rows(conn, "SELECT period_end, source_tags FROM financials_quarterly WHERE ticker = ? "
+                   "AND source_tags LIKE ? ORDER BY period_end", (ticker, f"%{SPREAD_TAG}%")):
+        try:
+            tags = json.loads(r["source_tags"])
+        except ValueError:
+            continue
+        if not isinstance(tags, dict) or tags.get("depreciation_amortization") != SPREAD_TAG:
+            continue
+        end = str(r["period_end"])[:10]
+        until = (date.fromisoformat(end) + timedelta(days=TRAILING_QUARTERS_DAYS)).isoformat()
+        out.append((end, next((filed for year_end, filed in year_filed if end <= year_end <= until), None)))
+    return out
+
+
 def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
     """Read the history's inputs for *ticker*. Its ``na_reason`` is set when the history can't run."""
     x = HistoryInputs(ticker=ticker)
@@ -439,12 +474,16 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
     shares_at = dict(zip(ends, counts))
 
     first_filed: Dict[int, str] = {}
+    year_filed: List[Tuple[str, str]] = []  # (year end, its first 10-K's filing day), as the first 10-K dates it
     for r in _optional_rows(
-            conn, "SELECT fiscal_year, MIN(filed_date) AS filed FROM financials_annual_vintages WHERE ticker = ? "
-            "AND filed_date IS NOT NULL AND (form LIKE '10-K%' OR form LIKE '20-F%' OR form LIKE '40-F%') "
-            "GROUP BY fiscal_year", (ticker,)):
+            conn, "SELECT fiscal_year, period_end, MIN(filed_date) AS filed FROM financials_annual_vintages "
+            "WHERE ticker = ? AND filed_date IS NOT NULL AND (form LIKE '10-K%' OR form LIKE '20-F%' OR "
+            "form LIKE '40-F%') GROUP BY fiscal_year", (ticker,)):
         if r["fiscal_year"] is not None:
             first_filed[int(r["fiscal_year"])] = str(r["filed"])[:10]
+            if r["period_end"]:
+                year_filed.append((str(r["period_end"])[:10], str(r["filed"])[:10]))
+    spread = _spread_quarters(conn, ticker, sorted(year_filed))
     annual = _rows(conn, "SELECT a.period_end, a.long_term_debt, a.short_term_debt, a.commercial_paper, "
                    "a.interest_expense, m.total_debt FROM financials_annual a LEFT JOIN metrics_annual m "
                    "ON m.ticker = a.ticker AND m.fiscal_year = a.fiscal_year WHERE a.ticker = ? "
@@ -467,6 +506,12 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
         # BUG-388): known on no day.
         if x.collected_on is not None and end > filed_by(x.collected_on).isoformat():
             continue
+        # A trailing year holding a quarter spread onto its year's 10-K's D&A basis is known from that 10-K's first
+        # filing day, and on no day where the vintages date no such 10-K (BUG-390).
+        since = (date.fromisoformat(end) - timedelta(days=TRAILING_QUARTERS_DAYS)).isoformat()
+        held = [filed for q_end, filed in spread if since < q_end <= end]
+        if None in held:
+            continue
         quarter = by_end.get(end, {})
         fiscal_quarter = quarter.get("fiscal_quarter")
         if fiscal_quarter is None and _near_year_end(end, year_ends):
@@ -480,7 +525,7 @@ def load_history_inputs(conn: sqlite3.Connection, ticker: str) -> HistoryInputs:
             period_end=end,
             known_on=known_on(end, fiscal_quarter,
                               first_filed.get(int(fiscal_year)) if fiscal_year is not None else None,
-                              x.collected_on),
+                              x.collected_on, max(filed for filed in held if filed) if held else None),
             shares=shares_at.get(end),
             revenue=row.get("revenue"),
             net_income=row.get("net_income"),

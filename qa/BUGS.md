@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 41 · NEEDS-USER 0 · Decided: 8 · Verified: 362
+**Open:** P0 0 · P1 0 · P2 0 · P3 40 · NEEDS-USER 0 · Decided: 8 · Verified: 363
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2633,13 +2633,14 @@ Expected: the line read.   Actual: dropped.
 
 Fix (iteration 256, `qa/evidence/shares1-round2-investigation.txt`): in `twice()`, a noncurrent figure is one the line makes up to the total only when the two miss the total by at most half the line; a figure equal to the total leaves the line read. BUG-387's shapes kept; census 0 cells.
 ### BUG-390 [P3][VAL] BUG-275's spread quarters are read by the valuation history before their 10-K is filed
-Status: OPEN (decided 2026-11-28: a trailing year holding spread quarters is known only once its 10-K is filed; measure first)
-Found: code review 41 (`qa/evidence/review41.txt`, Minor 2; regression from BUG-275, b6f596f) | Fixed: | Regression test:
+Status: VERIFIED (iteration 258; main fix applied at the user's decision, 2026-11-28)
+Found: code review 41 (`qa/evidence/review41.txt`, Minor 2; regression from BUG-275, b6f596f) | Fixed: (this commit) | Regression tests: tests/test_valuation_spread_known.py; 15 failing first
 Repro: history_inputs ~358, ~463-484, known_on ~168 read the latest stored quarters with a lag rule: AVGO's FY2024 Q3 (2024-08-04) is known on 2024-09-18 holding $2,428M (derived:amortization_spread) where the facts known that day give $149M. About three quarters of the 460 spread cells at 51 filers, EV/EBITDA and owner-earnings history points. The carry is not affected. Probe: %LOCALAPPDATA%\stockdb-qa\review41\head\tests\test_review41.py.
 Expected: no 10-K figure before its filing day.   Actual: the spread read at end + 45 days.
 Decision (USER 2026-11-28): known at the 10-K: such a trailing year is known on its 10-K's first filing day; before that the history uses the previous known figures; measure and show the moves first.
 
 Prepared (iteration 256, stockdb-qa\bug390\out, NOT applied: labels move): a new financials_quarterly.source_tags column (+100 MB) marks spread quarters; a trailing year holding them is known from their 10-K's first filing day. Look-ahead months 984 -> 0. 0 medians, verdicts; 24 historical values; labels BEN above -> near, GWW far above -> above, MET near -> above, PKG far above -> above, TPR above -> far above; 506 months empty while a year waits (variant alt_variant_over_fix.diff avoids most, changes STALE_DAYS). Awaiting the user.
+Fix (iteration 258, `qa/evidence/bug390-investigation.txt`, `qa/evidence/bug390-verify-mine.txt`): the main fix as prepared (not the STALE_DAYS variant), after the user approved the measured moves: financials_quarterly.source_tags (+100 MB); a trailing year holding a spread quarter is known from its 10-K's first filing day; look-ahead months 984 -> 0; labels BEN, GWW, MET, PKG, TPR as listed; 506 months empty while a year waits for its 10-K; 0 medians, verdicts. A DB collected before the column keeps the early reading until its next collection.
 ### BUG-391 [P2][VALID] The quarterly share-scale pass 2 rescales correct diluted counts from a mis-scaled EPS
 Status: VERIFIED (iteration 257; applied at the user's decision, 2026-11-28)
 Found: the shares1 worker (iteration 255, residual) | Fixed: (this commit) | Regression tests: tests/test_share_scale_mis_scaled_eps.py; 3 failing first

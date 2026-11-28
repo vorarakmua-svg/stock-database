@@ -276,6 +276,7 @@ class SQLiteStore:
                 calendar_quarter INTEGER,
                 filed_date TEXT,
                 form TEXT,
+                source_tags TEXT,
                 {_cols_ddl(_CANONICAL_COLUMNS)},
                 PRIMARY KEY (ticker, period_end)
             );
@@ -767,9 +768,10 @@ class SQLiteStore:
             },
             "financials_annual": {"calendar_year": "INTEGER",
                                    **{c: "REAL" for c in _CANONICAL_COLUMNS}},
+            # Each figure's tag (BUG-390): NULL in a quarter stored before the column, until the next collection.
             "financials_quarterly": {"calendar_year": "INTEGER",
                                       "calendar_quarter": "INTEGER",
-                                      "fiscal_quarter": "INTEGER",
+                                      "fiscal_quarter": "INTEGER", "source_tags": "TEXT",
                                       **{c: "REAL" for c in _CANONICAL_COLUMNS}},
             "financials_ttm": {"fiscal_year": "INTEGER", "calendar_year": "INTEGER",
                                "calendar_quarter": "INTEGER",
@@ -869,8 +871,8 @@ class SQLiteStore:
     @staticmethod
     def _figure_tags(period: Dict[str, Any]) -> Optional[str]:
         """The tag each canonical figure of *period* was read from (its ``_source_tags``: a us-gaap tag, "derived",
-        "rescaled x1000"), as JSON; None without any. Stored with each vintage (BUG-271); the as-of view reads its
-        snapshots' own ``source_tags``, not this."""
+        "rescaled x1000"), as JSON; None without any. Stored with each vintage (BUG-271) and quarter (BUG-390); the
+        as-of view reads its snapshots' own ``source_tags``, not this."""
         tags = period.get("_source_tags") or {}
         kept = {c: tags[c] for c in _CANONICAL_COLUMNS if period.get(c) is not None and c in tags}
         return json.dumps(kept, sort_keys=True) if kept else None
@@ -1080,6 +1082,7 @@ class SQLiteStore:
                 "calendar_quarter": period.get("calendar_quarter"),
                 "filed_date": period.get("filed_date"),
                 "form": period.get("form"),
+                "source_tags": self._figure_tags(period),
             }
             row.update(self._canonical_values(period, restated))
             self._upsert(conn, "financials_quarterly", ["ticker", "period_end"], row, fill_only=fill)

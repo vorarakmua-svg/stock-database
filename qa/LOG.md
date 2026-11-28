@@ -4021,3 +4021,12 @@ Result: BUG-391 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4543 passed, 2 skipped
 Commit: (this commit) fix(parser): a mis-scaled EPS rescales no count; pass 2 keeps checked counts (BUG-391)
 Next: BUG-390 (the user approved the main fix).
+
+## Iteration 258: 2026-11-28: fix (BUG-390), the user's approval
+Picked: BUG-390, prepared in iteration 256; the user chose the main fix over the variant.
+Did: spread quarters carry their source tags; the valuation history knows such a trailing year on its 10-K's first filing day.
+- RED: 15 failed on 97f5649; GREEN. bug390 14/14.
+Result: BUG-390 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4558 passed, 2 skipped
+Commit: (this commit) fix(valuation): spread quarters wait for their 10-K in the history (BUG-390)
+Since review 41: 4 units (shares e88639d, 339/389, 391, 390) -> review 42 after 1 more.
