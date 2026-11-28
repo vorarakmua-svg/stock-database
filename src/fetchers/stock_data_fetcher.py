@@ -226,6 +226,8 @@ class StockDataFetcher:
         split_levels: Dict[str, Dict[str, float]] = {}
         # The annual record's cleaning warnings (share scale, validation), added where the cleaning's always were.
         annual_warnings: List[str] = []
+        # The companyfacts the record was parsed from, for the quality pass's identities (BUG-114); not stored.
+        facts: Optional[Dict[str, Any]] = None
 
         # Fetch Yahoo Finance data
         if include_yahoo:
@@ -392,7 +394,7 @@ class StockDataFetcher:
         # Assess data quality (sector + integrity checks), now that metrics exist.
         if stock.financials_annual or stock.financials_quarterly:
             try:
-                self._assess(stock)
+                self._assess(stock, facts)
             except Exception as e:
                 self.logger.warning(f"Data-quality assessment error for {ticker}: {e}")
                 stock.add_warning(f"Data quality: {str(e)}")
@@ -547,8 +549,9 @@ class StockDataFetcher:
         name = submissions.get("name") or "name unknown"
         return f"{NO_ANNUAL_FINANCIALS} for {ticker} from CIK {sec_data['cik']} ({name}): {reason}"
 
-    def _assess(self, stock: StockData) -> None:
-        """Attach a data-quality report: sector checks + integrity checks + score.
+    def _assess(self, stock: StockData, facts: Optional[Dict[str, Any]] = None) -> None:
+        """Attach a data-quality report: sector checks + integrity checks + score. The identities read the lines no
+        canonical field holds from the run's companyfacts, *facts* (``assess_annual``).
 
         Runs after metrics are computed so the ratio-bounds check can see them.
         """
@@ -557,7 +560,7 @@ class StockDataFetcher:
         historical = (stock.calculated_metrics or {}).get("historical", {})
         scored = set(scored_years(annual))  # the years the filings report (BUG-112)
 
-        report = assess_annual(annual, sector=stock.sector_class)
+        report = assess_annual(annual, sector=stock.sector_class, facts=facts)
         if annual:
             # Integrity checks all key off annual data; with no annual financials
             # keep assess_annual's score (0) rather than letting a lone

@@ -4048,3 +4048,13 @@ Did: D&A carried on OtherDepreciationAndAmortization / AmortizationOfDeferredCha
 Result: BUG-276 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4582 passed, 2 skipped
 Commit: (this commit) fix(parser): D&A on other lines where the filing proves them (BUG-276)
+
+## Iteration 261: 2026-11-28: fix (BUG-063, -114, -115, -269); code review 42
+Picked: the valid1 worker's set (rebased onto e9ef417); review 42 (d2bead4..e9ef417).
+Did: minority_interest derived where the balance sheet proves it; temporary equity and excise lines in the quality checks; short_term_debt back in the outlier check.
+- RED: 24 failing first; GREEN. valid1 28/28, requoted q20 1/1, dna1-b276 17/17.
+- Review 42: no Critical/Important; Minor 1 -> BUG-395 (BUG-390 incomplete: the spread can come from a later 10-K).
+Result: BUG-063, 114, 115, 269 VERIFIED; BUG-395 filed.
+Gates: ruff ✓ mypy ✓ pytest 4616 passed, 2 skipped
+Commit: (this commit) fix(validation): derived NCI, temporary equity and excise in the checks, short-term debt outliers (BUG-063, -114, -115, -269); review 42
+Since review 42: 0 units.

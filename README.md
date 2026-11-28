@@ -2162,7 +2162,10 @@ came from.
 Every company is scored by a **sector-aware** data-quality pass
 (`src/validation/quality.py`) that checks required fields, accounting identities
 (Assets = Liabilities + Equity + non-controlling interest, Gross Profit = Revenue −
-COGS), sign conventions, and year-over-year continuity. The result is stored under
+COGS; where the record's figures miss, the lines no canonical field holds count too, read from the run's
+companyfacts as the year's 10-K gives them: temporary equity between liabilities and equity, redeemable
+non-controlling interests and preferred stock (S&P Global's $4.9B, BUG-114), and a cost deducted beside cost of
+revenue (Altria's excise taxes, BUG-115)), sign conventions, and year-over-year continuity. The result is stored under
 `data_quality` (score 0–100 + findings) and surfaced by `python diagnose.py TICKER`.
 
 ### Cross-sector coverage
@@ -2232,7 +2235,7 @@ never alter data):
 
 | Check | Catches | Threshold | Penalty |
 |---|---|---|---|
-| Magnitude outlier | a recurring USD field that spikes then reverts — a one-off filing/tag error (persistent M&A step-changes, and event-driven flows like debt issuance, buybacks, M&A, and impairments, are not flagged) | spike ≥ 100× both adjacent years | −25 |
+| Magnitude outlier | a recurring USD field that spikes then reverts — a one-off filing/tag error (persistent M&A step-changes, and event-driven flows like debt issuance, buybacks, M&A, and impairments, are not flagged, nor a short-term debt spike no larger than the long-term debt of the year before, the year or the year after: maturities coming due, BUG-269) | spike ≥ 100× both adjacent years | −25 |
 | Cash-flow consistency | the cash-flow statement's reported net change != its own sections + FX effect (a continuing-only statement reconciles once the separately-reported `cash_from_discontinued_operations` line is added) | residual > 1% both bases | −10 |
 | Quarterly-sum | discrete quarters that don't sum to the annual figure; event-driven flows (debt issuance/repayment, buybacks, M&A, impairments/restructuring) are excluded, as for the magnitude-outlier check | per-field > 1% | −10 |
 | Ratio bounds | a computed metric outside its plausible range (e.g. >100% gross margin); roe/roic are not flagged when the equity base is negligible or negative (a buyback-depleted denominator makes the ratio meaningless, not wrong) | impossibility bounds | −3 |
@@ -2467,6 +2470,16 @@ numbers SEC filings report:
   FY2020 10-K shows it inside its borrowings). A vintage that shows no short-term figure on the
   date reads its paper beside the latest earlier annual report's (Qualcomm's FY2016 10-K tags as
   paper the line its FY2015 10-K tags as borrowings).
+- **Non-controlling interests.** `minority_interest` is the MinorityInterest a filing tags; where an annual
+  report tags none on a balance-sheet date, it is the report's equity including the interests less its parent's
+  equity, where its balance sheet closes with them (liabilities, that equity and its temporary equity make the
+  total within 1%, nearer than with the parent's equity alone): Blackstone tags its interests in two parts ($6.2B
+  and $4.3B at 2024-12-31), Boston Properties, Extra Space and Mid-America in theirs (BUG-063). The equity
+  including the interests is often tagged for another figure (Agilent's -$226M beside its $6.7B equity), and a
+  report whose balance sheet doesn't close with it, or tags no liabilities, gets none; a 10-Q's equities make none
+  (Teledyne's 2016 10-Qs tag another figure as the parent's equity), so a quarter has the figure on a year end
+  only, where the 10-K gives it. Redeemable interests are temporary equity, in neither equity, and no field holds
+  them.
 - **Cash.** Cash is the balance sheet's cash and cash equivalents. Where a filing tags it only
   with the total that includes restricted cash, that total is read (GE's FY2025: $12.4B), on
   balance-sheet dates only, and before a note's cash equivalents, a part of the cash line (P&G's

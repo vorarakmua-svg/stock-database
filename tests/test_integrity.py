@@ -178,14 +178,49 @@ def test_outlier_excludes_event_driven_lumpy_flows():
 def test_outlier_skips_short_term_debt_whose_maturities_come_and_go():
     # BUG-159: short-term debt holds the current maturities of long-term debt, due one year and not the next: NKE's
     # FY2024 $1.006B ($6M of notes payable and $1.0B of notes due within the year) between years of $6M and $5M is
-    # no filing error (VMC's FY2024 likewise).
+    # no filing error (VMC's FY2024 likewise). Its long-term debt the year before, $8.927B, held them (BUG-269).
     annual = {
-        "2023": {"short_term_debt": 6.0e6},
-        "2024": {"short_term_debt": 1.006e9},
-        "2025": {"short_term_debt": 5.0e6},
-        "2026": {"short_term_debt": 2.0e9},
+        "2023": {"short_term_debt": 6.0e6, "long_term_debt": 8.927e9},
+        "2024": {"short_term_debt": 1.006e9, "long_term_debt": 7.903e9},
+        "2025": {"short_term_debt": 5.0e6, "long_term_debt": 7.961e9},
+        "2026": {"short_term_debt": 2.0e9, "long_term_debt": 5.942e9},
     }
     assert check_field_outliers(annual, {"2023", "2024", "2025", "2026"}) == []
+
+
+def test_outlier_flags_a_short_term_debt_spike_no_long_term_debt_could_have_come_due_from():
+    # BUG-269 (code review 21): $6M of notes payable filed in thousands as $6B is more than any long-term debt around
+    # it, so no maturities explain it: a scale error, flagged as any field's.
+    annual = {
+        "2023": {"short_term_debt": 6.0e6, "long_term_debt": 4.927e9},
+        "2024": {"short_term_debt": 6.0e9, "long_term_debt": 4.903e9},
+        "2025": {"short_term_debt": 5.0e6, "long_term_debt": 4.961e9},
+        "2026": {"short_term_debt": 5.0e6, "long_term_debt": 4.942e9},
+    }
+    findings = check_field_outliers(annual, {"2023", "2024", "2025", "2026"})
+    assert [(f.code, f.period, f.severity) for f in findings] == [("magnitude_outlier", "2024", "high")]
+    assert "'short_term_debt' = 6,000,000,000" in findings[0].message
+
+
+def test_outlier_flags_a_short_term_debt_spike_without_long_term_debt():
+    annual = {"2023": {"short_term_debt": 6.0e6}, "2024": {"short_term_debt": 6.0e9},
+              "2025": {"short_term_debt": 5.0e6}}
+    assert [f.period for f in check_field_outliers(annual, {"2023", "2024", "2025"})] == ["2024"]
+
+
+@pytest.mark.parametrize("ltd", [
+    # The year before's long-term debt held the maturities (APA's FY2021 $215M beside FY2020's $8.77B).
+    {"2023": 8.77e9, "2024": None, "2025": None},
+    # The year's own, beside it.
+    {"2023": None, "2024": 0.301e9, "2025": None},
+    # Or the year after's: a revolver drawn and refinanced long-term (RMD's FY2013 $300M, its FY2014 long-term debt
+    # $301M), or notes the filer tags as long-term debt only after (GILD's FY2010 $646M due 2011).
+    {"2023": 0.0, "2024": 0.0, "2025": 7.606e9},
+])
+def test_outlier_skips_a_short_term_debt_spike_the_long_term_debt_around_it_holds(ltd):
+    annual = {year: {"short_term_debt": std, **({"long_term_debt": ltd[year]} if ltd[year] is not None else {})}
+              for year, std in (("2023", 2.0e6), ("2024", 0.3e9), ("2025", 2.0e6))}
+    assert check_field_outliers(annual, {"2023", "2024", "2025"}) == []
 
 
 def test_cashflow_imbalance_silent_when_residual_immaterial_to_gross():

@@ -246,6 +246,96 @@ def _dollar_filings(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     return kept
 
 
+#: Temporary equity, between liabilities and equity, which no canonical field holds: redeemable non-controlling
+#: interests and redeemable preferred stock (SPGI's $4.917B of redeemable interests at 2025-12-31, WDC's $0.876B
+#: convertible preferred at 2023-06-30). Its total with the interests, else the parent's part and the interests' (their
+#: total, else their parts); ``temporary_equity``.
+_TEMPORARY_EQUITY_TOTAL = ("TemporaryEquityCarryingAmountIncludingPortionAttributableToNoncontrollingInterests",)
+_TEMPORARY_EQUITY_PARENT = ("TemporaryEquityCarryingAmountAttributableToParent", "TemporaryEquityCarryingAmount")
+_TEMPORARY_EQUITY_NCI = ("RedeemableNoncontrollingInterestEquityCarryingAmount",
+                         "TemporaryEquityCarryingAmountAttributableToNoncontrollingInterest")
+_TEMPORARY_EQUITY_NCI_PARTS = ("RedeemableNoncontrollingInterestEquityCommonCarryingAmount",
+                               "RedeemableNoncontrollingInterestEquityPreferredCarryingAmount",
+                               "RedeemableNoncontrollingInterestEquityOtherCarryingAmount")
+_TEMPORARY_EQUITY_TAGS = (_TEMPORARY_EQUITY_TOTAL + _TEMPORARY_EQUITY_PARENT + _TEMPORARY_EQUITY_NCI
+                          + _TEMPORARY_EQUITY_NCI_PARTS)
+
+
+def temporary_equity(figure: Callable[[Tuple[str, ...]], Optional[float]]) -> float:
+    """The temporary equity a balance sheet gives (0.0 for none), *figure* giving its figure under the first of some
+    tags with one: the total with the redeemable non-controlling interests, else the parent's part plus the interests'
+    (their total, else their parts). One figure tagged as both parts is one figure (KKR's 2023 10-K tags $615M under
+    each)."""
+    total = figure(_TEMPORARY_EQUITY_TOTAL)
+    if total is not None:
+        return total
+    parent = figure(_TEMPORARY_EQUITY_PARENT)
+    interests = figure(_TEMPORARY_EQUITY_NCI)
+    if interests is None:
+        parts = [part for part in (figure((tag,)) for tag in _TEMPORARY_EQUITY_NCI_PARTS) if part is not None]
+        interests = sum(parts) if parts else None
+    if parent is not None and parent == interests:
+        return parent
+    return (parent or 0.0) + (interests or 0.0)
+
+
+#: minority_interest's tag, the two equities the non-controlling interests are the difference of, and the balance
+#: sheet's figures that prove the difference (BUG-063): its total (else its total assets) and its liabilities.
+_NCI = "MinorityInterest"
+_PARENT_EQUITY = "StockholdersEquity"
+_EQUITY_WITH_NCI = "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"
+_NCI_PROOF = ("LiabilitiesAndStockholdersEquity", "Assets", "Liabilities") + _TEMPORARY_EQUITY_TAGS
+#: The share of the balance sheet's total its liabilities, equity with the interests and temporary equity may miss it
+#: by and still prove the interests (where they miss it by less than the figures without them do).
+_NCI_CLOSE = 0.01
+
+
+def _noncontrolling_interest_derived(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+    """*us_gaap* with a MinorityInterest fact, the equity including the non-controlling interests less the parent's
+    equity, for each annual report and balance-sheet date it gives both on, where they differ, it tags no
+    MinorityInterest on that date, and its balance sheet closes with them: its liabilities, that equity and its
+    temporary equity (``temporary_equity``) make its total within ``_NCI_CLOSE``, nearer than with the parent's equity
+    (BUG-063). A filer that tags its interests in parts (BX: $6.155B and $4.326B at 2024-12-31; BXP, EXR, MAA) or under
+    no tag minority_interest read left it empty, and the balance sheet missed assets = liabilities + equity + NCI by
+    them. The equity with the interests is often tagged for another figure (Agilent's -$226M at 2025-10-31 beside its
+    $6.741B equity; JPM's FY2010 10-K, its 2009 equity before a restatement beside the restated one), which the balance
+    sheet doesn't close with, or closes with less nearly than without; one that tags no liabilities proves nothing and
+    gets none. A 10-Q's parent equity can be another figure too, which its equity with the interests then closes the
+    balance sheet beside (Teledyne's 10-Qs of 2016-17: -$0.4B beside $1.3B), so a 10-Q's figures make none. Every
+    figure is the filing's, so the fact is too (its accession and filing day): each vintage and as-of record reads it
+    as filed."""
+    def facts(tag: str) -> List[Dict[str, Any]]:
+        return [entry for entry in us_gaap.get(tag, {}).get("units", {}).get("USD", []) if not entry.get("start")]
+
+    tagged = {(entry.get("accn"), entry.get("end")) for entry in facts(_NCI)}
+    filed: Dict[str, Dict[Tuple[Any, Any], Any]] = {
+        tag: {(entry.get("accn"), entry.get("end")): entry.get("val") for entry in facts(tag)}
+        for tag in (_PARENT_EQUITY,) + _NCI_PROOF}
+    derived: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
+    for entry in facts(_EQUITY_WITH_NCI):
+        key = (entry.get("accn"), entry.get("end"))
+        if not key[0] or key in tagged or entry.get("form") not in _ANNUAL_FORMS:
+            continue
+
+        def figure(tags: Tuple[str, ...]) -> Optional[float]:
+            return next((float(filed[tag][key]) for tag in tags if isinstance(filed[tag].get(key), (int, float))),
+                        None)
+
+        total, own = entry.get("val"), figure((_PARENT_EQUITY,))
+        sheet, liabilities = figure(_NCI_PROOF[:2]), figure(_NCI_PROOF[2:3])
+        if not isinstance(total, (int, float)) or own is None or total == own or not sheet or liabilities is None:
+            continue
+        missed = sheet - liabilities - total - temporary_equity(figure)  # with the interests; without: + them
+        if abs(missed) > _NCI_CLOSE * abs(sheet) or abs(missed) >= abs(missed + total - own):
+            continue
+        derived[key] = {**{k: v for k, v in entry.items() if k != "frame"}, "val": total - own}
+    if not derived:
+        return us_gaap
+    body = us_gaap.get(_NCI, {})
+    units = body.get("units", {})
+    return {**us_gaap, _NCI: {**body, "units": {**units, "USD": units.get("USD", []) + list(derived.values())}}}
+
+
 def _net_outflows_as_paid(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     """*us_gaap* with its net outflows (``SIGN_NET``: acquisitions, net of the cash acquired)
     as paid: positive a payment, negative cash brought in, as the taxonomy has them. A filing
@@ -1480,10 +1570,11 @@ def _sector_tags_set_aside(us_gaap: Dict[str, Any], sector: Optional[str]) -> Di
 
 def _filer_facts(facts: Dict[str, Any], view: str, sector: Optional[str] = None) -> Dict[str, Any]:
     """A filer's us-gaap facts as the extractions of *view* read them, in this order: its dollar filings' less the tags
-    its *sector* doesn't have read (``_sector_tags_set_aside``), the balance-sheet-only tags on their balance sheets'
-    dates, and long-term debt's on its filing's (where it tags its balance sheet, ``_debt_on_balance_sheet_dates``),
-    less the total with restricted cash where a filing's cash
-    equivalents and restricted cash make it up, less Cash where it is a part of a total without restricted cash, net
+    its *sector* doesn't have read (``_sector_tags_set_aside``), with the non-controlling interests a filing gives only
+    as the difference of its two equities (``_noncontrolling_interest_derived``), the balance-sheet-only tags on their
+    balance sheets' dates, and long-term debt's on its filing's (where it tags its balance sheet,
+    ``_debt_on_balance_sheet_dates``), less the total with restricted cash where a filing's cash equivalents and
+    restricted cash make it up, less Cash where it is a part of a total without restricted cash, net
     outflows as paid, a DebtCurrent that is the filing's total debt set aside (``_debt_current_totals_set_aside``),
     long-term debt's parts set aside where a filing tags its line beside them
     (``_debt_parts_set_aside``), LongTermDebt set aside where its noncurrent
@@ -1497,7 +1588,8 @@ def _filer_facts(facts: Dict[str, Any], view: str, sector: Optional[str] = None)
     beside the current figures they hold (``_totals_beside_current_debt_set_aside``)."""
     totals = _debt_totals_set_aside(_debt_parts_set_aside(_debt_current_totals_set_aside(_net_outflows_as_paid(
         _cash_parts_set_aside(_cash_totals_set_aside(_debt_on_balance_sheet_dates(_on_balance_sheet_dates(
-            _dollar_filings(_sector_tags_set_aside(facts.get("facts", {}).get("us-gaap", {}), sector))))))))))
+            _noncontrolling_interest_derived(_dollar_filings(_sector_tags_set_aside(
+                facts.get("facts", {}).get("us-gaap", {}), sector)))))))))))
     combined, held_by_totals = _current_debt_combinations(totals, view)
     return _totals_beside_current_debt_set_aside(_depreciation_combined(_da_other_lines(_da_totals_displaced(
         _current_debt_combined(_current_debt_set_aside(totals, view, frozenset(combined)), combined, held_by_totals)))),

@@ -36,14 +36,16 @@ _DISCONTINUED_FIELDS = frozenset({
     "discontinued_investing_cash_flow",
     "discontinued_financing_cash_flow",
 })
-# Volatile net residuals (cash-flow reconciliation inputs) plus the event-driven flows, and
-# short-term debt, which holds the current maturities of long-term debt: due one year and not
-# the next, they spike and revert for real (NKE's FY2024 $1.006B between years of $6M and $5M;
-# BUG-159).
+# Volatile net residuals (cash-flow reconciliation inputs) plus the event-driven flows.
 _OUTLIER_EXCLUDE = (
     _EVENT_DRIVEN_FLOWS | _DISCONTINUED_FIELDS
-    | frozenset({"net_change_in_cash", "fx_effect_on_cash", "short_term_debt"})
+    | frozenset({"net_change_in_cash", "fx_effect_on_cash"})
 )
+# Short-term debt holds the current maturities of long-term debt: due one year and not the next, they spike and revert
+# for real (NKE's FY2024 $1.006B between years of $6M and $5M; BUG-159). A spike no larger than the long-term debt of
+# the year before (which held the maturities), the year or the year after (a revolver drawn, then refinanced long-term:
+# RMD's FY2013) is such maturities; a larger one, a scale error among them, is flagged as any field's (BUG-269).
+_SHORT_TERM_DEBT, _LONG_TERM_DEBT = "short_term_debt", "long_term_debt"
 
 # USD "level" fields (income/balance/cash-flow amounts); excludes per-share and
 # share-count fields and the volatile residuals above. Candidates for magnitude-outlier.
@@ -75,6 +77,15 @@ _DIVIDEND_MIN_INTERVALS = 4
 _DIVIDEND_RECENT_INTERVALS = 8
 
 
+def _maturities_explain(annual: Dict[str, Dict[str, Any]], year: str, short_term_debt: float) -> bool:
+    """Whether the long-term debt of the year before, *year* or the year after could hold *short_term_debt* as its
+    current maturities (``_SHORT_TERM_DEBT``)."""
+    if not year.isdigit():
+        return False
+    around = (_num(annual.get(str(int(year) + step)) or {}, _LONG_TERM_DEBT) for step in (-1, 0, 1))
+    return any(debt is not None and abs(debt) >= short_term_debt for debt in around)
+
+
 def check_field_outliers(
     annual: Dict[str, Dict[str, Any]], scored_years: Iterable[str]
 ) -> List[Finding]:
@@ -85,7 +96,8 @@ def check_field_outliers(
     PERSISTS, staying ~1x the next year, so it is correctly not flagged. The first
     and last points of a field's series -- including the latest year -- are never
     flagged: there is no later value to confirm a reversion, and a just-happened
-    jump is indistinguishable from a real recent event.
+    jump is indistinguishable from a real recent event. A short-term debt spike the
+    long-term debt around it could hold is its maturities coming due, not flagged.
     """
     scored = set(scored_years)
     findings: List[Finding] = []
@@ -104,7 +116,8 @@ def check_field_outliers(
                 continue
             prev_mag = points[i - 1][2]
             next_mag = points[i + 1][2]
-            if mag >= _OUTLIER_FACTOR * prev_mag and mag >= _OUTLIER_FACTOR * next_mag:
+            if (mag >= _OUTLIER_FACTOR * prev_mag and mag >= _OUTLIER_FACTOR * next_mag
+                    and not (key == _SHORT_TERM_DEBT and _maturities_explain(annual, year, mag))):
                 findings.append(Finding(
                     HIGH, "magnitude_outlier",
                     f"'{key}' = {value:,.0f} spikes to {mag / prev_mag:.0f}x the prior "

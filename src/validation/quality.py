@@ -8,10 +8,12 @@ used for cross-company comparison.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from datetime import date
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..mappings.canonical import CANONICAL_FIELDS, DURATION
 from ..mappings.sectors import BANK, GENERAL, INSURANCE, REIT
+from ..parsers.xbrl_parser import _ANNUAL_FORMS, _FULL_YEAR_MAX_DAYS, _FULL_YEAR_MIN_DAYS, temporary_equity
 
 # Severities and the score penalty each carries.
 HIGH = "high"
@@ -50,6 +52,12 @@ REQUIRED_BY_SECTOR: Dict[str, tuple] = {
 # Tolerances for accounting-identity checks (fraction of the reference figure).
 _BALANCE_TOL = 0.02
 _GROSS_PROFIT_TOL = 0.01
+
+# Lines no canonical field holds, which the identities read from the run's companyfacts as the year's annual report
+# gives them, where the record's figures alone miss: temporary equity between liabilities and equity
+# (``xbrl_parser.temporary_equity``, BUG-114), and a cost a filer deducts from revenue beside its cost of revenue to
+# reach gross profit: MO's excise taxes on products (BUG-115: $3.574B for 2024 beside its $6.077B cost of sales).
+_OTHER_COST_OF_REVENUE = ("OtherCostOfOperatingRevenue",)
 
 # Cash-outflow fields the extractor normalizes to positive magnitudes.
 _NONNEGATIVE_FIELDS = ("capex", "dividends_paid", "share_repurchases", "debt_repaid")
@@ -101,6 +109,31 @@ def _num(period: Dict[str, Any], key: str) -> Optional[float]:
     return val if isinstance(val, (int, float)) else None
 
 
+def _filed(facts: Optional[Dict[str, Any]], tags: Tuple[str, ...], end: Optional[str],
+           year: bool = False) -> Optional[float]:
+    """The figure in dollars an annual report (the latest filed) gives on *end* under the first of *tags* with one: a
+    balance on that day, or with *year* a figure for the year to it."""
+    us_gaap = ((facts or {}).get("facts") or {}).get("us-gaap") or {}
+    for tag in tags:
+        best: Optional[Dict[str, Any]] = None
+        for entry in us_gaap.get(tag, {}).get("units", {}).get("USD", []):
+            if (entry.get("end") != end or entry.get("form") not in _ANNUAL_FORMS
+                    or not isinstance(entry.get("val"), (int, float)) or bool(entry.get("start")) is not year):
+                continue
+            if year:
+                try:
+                    days = (date.fromisoformat(entry["end"]) - date.fromisoformat(entry["start"])).days
+                except (TypeError, ValueError):
+                    continue
+                if not _FULL_YEAR_MIN_DAYS <= days <= _FULL_YEAR_MAX_DAYS:
+                    continue
+            if best is None or (entry.get("filed") or "") >= (best.get("filed") or ""):
+                best = entry
+        if best is not None:
+            return float(best["val"])
+    return None
+
+
 def scored_years(annual: Dict[str, Dict[str, Any]], recent_years: int = RECENT_YEARS) -> List[str]:
     """The latest *recent_years* fiscal years of *annual*, latest first, from its first year with a figure for a
     span of time on.
@@ -125,7 +158,8 @@ def score_for(findings: List[Finding]) -> int:
 
 def assess_annual(annual: Dict[str, Dict[str, Any]],
                   sector: Optional[str] = None,
-                  recent_years: int = RECENT_YEARS) -> QualityReport:
+                  recent_years: int = RECENT_YEARS,
+                  facts: Optional[Dict[str, Any]] = None) -> QualityReport:
     """Assess a company's canonical annual financials.
 
     Args:
@@ -137,6 +171,9 @@ def assess_annual(annual: Dict[str, Dict[str, Any]],
             those reporting a figure for the year). Early XBRL filings (~2009-2014)
             are sparse and shouldn't drag down a company's current data-quality
             score now that full history is retained.
+        facts: The run's SEC companyfacts, where the identities read the lines no canonical field holds
+            (temporary equity, a cost deducted beside cost of revenue) when the record's figures alone miss. Read,
+            never stored; without them the identities read the record alone.
 
     Returns:
         A :class:`QualityReport` with a 0-100 score and structured findings.
@@ -172,23 +209,35 @@ def assess_annual(annual: Dict[str, Dict[str, Any]],
         liabilities = _num(period, "total_liabilities")
         equity = _num(period, "total_equity")
         nci = _num(period, "minority_interest") or 0.0
+        # Where they miss, the temporary equity the year's 10-K gives between liabilities and equity counts too
+        # (BUG-114).
         liabilities_reported = source_tags.get("total_liabilities") != "derived"
         if (liabilities_reported and assets and liabilities is not None
                 and equity is not None and assets != 0):
             right = liabilities + equity + nci
+            temporary = 0.0
+            if abs(assets - right) / abs(assets) > _BALANCE_TOL:
+                end = period.get("period_end")
+                temporary = temporary_equity(lambda tags: _filed(facts, tags, end))
+                right += temporary
             if abs(assets - right) / abs(assets) > _BALANCE_TOL:
                 report.findings.append(
                     Finding(MEDIUM, "balance_sheet_imbalance",
-                            f"Assets ({assets:,.0f}) != Liabilities + Equity + NCI "
-                            f"({right:,.0f}).", year)
+                            f"Assets ({assets:,.0f}) != Liabilities + Equity + NCI"
+                            f"{' + temporary equity' if temporary else ''} ({right:,.0f}).", year)
                 )
 
-        # Gross profit consistency
+        # Gross profit consistency; where it misses, a cost line the year's 10-K deducts beside cost of revenue
+        # counts too (BUG-115).
         revenue = _num(period, "revenue")
         cogs = _num(period, "cost_of_revenue")
         gross = _num(period, "gross_profit")
         if revenue and cogs is not None and gross is not None and revenue != 0:
-            if abs(gross - (revenue - cogs)) / abs(revenue) > _GROSS_PROFIT_TOL:
+            missed = abs(gross - (revenue - cogs)) / abs(revenue) > _GROSS_PROFIT_TOL
+            if missed:
+                other = _filed(facts, _OTHER_COST_OF_REVENUE, period.get("period_end"), year=True)
+                missed = other is None or abs(gross - (revenue - cogs - other)) / abs(revenue) > _GROSS_PROFIT_TOL
+            if missed:
                 report.findings.append(
                     Finding(LOW, "gross_profit_mismatch",
                             "Gross profit != revenue - cost of revenue.", year)

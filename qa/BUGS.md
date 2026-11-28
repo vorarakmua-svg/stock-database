@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 39 · NEEDS-USER 0 · Decided: 8 · Verified: 366
+**Open:** P0 0 · P1 0 · P2 1 · P3 36 · NEEDS-USER 0 · Decided: 8 · Verified: 370
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -540,11 +540,12 @@ Expected: a year's figures consistent with one another (for instance each statem
 Impact: older years' identities and ratios; no valuation input in the window.
 
 ### BUG-063 [P3][VALID] `minority_interest` misses common non-controlling-interest tags (BX)
-Status: OPEN
-Found: iteration 47 via VALID-02 (`qa/evidence/iter47-{valid-sweep-real,vintage-flips,valid-triage}.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 261)
+Found: iteration 47 via VALID-02 (`qa/evidence/iter47-{valid-sweep-real,vintage-flips,valid-triage}.txt`) | Fixed: (this commit) | Regression tests: tests/test_noncontrolling_interest.py, tests/test_quality_filed_lines.py, tests/test_integrity.py; 24 failing first
 Repro: BX tags its non-controlling interests as `NonredeemableNoncontrollingInterest` ($6.15B at 2024-12-31), `MinorityInterestInOperatingPartnerships` ($4.33B) and `RedeemableNoncontrollingInterestEquityCarryingAmount` ($0.80B); `minority_interest` is stored empty, so its balance sheet misses assets = liabilities + equity + NCI by 25-30% in every year since FY2018 (SO FY2018 and UBER likewise, by less).
 Expected: those tags resolve to `minority_interest` (redeemable NCI and other temporary equity are a separate line that no canonical field covers yet, which explains most of the remaining 1-4% gaps: AMT, SPGI, TSLA, WELL, PGR, UBER).   Actual: empty. No valuation input uses it.
 
+Fix (iteration 261, `qa/evidence/valid1-investigation.txt`, `qa/evidence/valid1-verify-mine.txt`): one set for BUG-063/114/115/269. minority_interest: where an annual report tags no MinorityInterest, equity including NCI less parent equity from the same report, kept only where liabilities + it + temporary equity match the total within 1% and closer than parent equity alone (10-Qs give none); redeemable NCI is temporary equity, never minority_interest. The identity check adds temporary equity read from the run's companyfacts (nothing stored); the gross-profit check subtracts the year's OtherCostOfOperatingRevenue (MO excise); short_term_debt back in the outlier check, a spike excused when no larger than the long-term debt of the year before, same or after. Measured on all 502: 115 annual minority_interest cells empty -> value (BX FY2018-25 7.23-11.84B, MS, BXP, EXR, ...), 79 MEDIUM warnings removed, none added, 25 tickers' quality scores up (SPGI 50 -> 100, MO 85 -> 100, ...); 0 medians, verdicts, owner-earnings verdicts, labels; valuation tables identical. Residuals: AFL/GL FY2021 LDTI mix, ARES FY2021-24, BLK FY2025 non-us-gaap tag, HUBB FY2023; new BUG-392..394.
 ### BUG-064 [P1][GATHER] A failed SEC submissions request wipes a bank's, insurer's or REIT's stored sector ratios
 Status: VERIFIED (iteration 49)
 Found: iteration 48 by code review 6 (I2), re-run on 3eee7b6 (`qa/evidence/iter48-review6-rerun.txt`) | Fixed: iteration 49 (see LOG) | Regression tests: `tests/test_fetcher_concurrency.py::test_a_failed_submissions_request_keeps_the_stored_sector`, `::test_a_json_only_store_also_keeps_the_sector`
@@ -938,17 +939,19 @@ Expected: a filing's vintages are the years ended by its filing date.   Actual: 
 Narrowed (iteration 217, Q18's merge): a year not yet ended at the latest filing is dropped from the record and from vintages; still OPEN: a forward-dated figure opens its year once its own date passes (LLY FY2014 from 2014-04-28, TEL FY2025).
 
 ### BUG-114 [P3][VALID] The balance-sheet identity has no term for temporary equity: SPGI scores 50
-Status: OPEN
-Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 261)
+Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: (this commit) | Regression tests: tests/test_noncontrolling_interest.py, tests/test_quality_filed_lines.py, tests/test_integrity.py; 24 failing first
 Repro: the quality pass checks assets = liabilities + equity + non-controlling interest, but redeemable non-controlling interests and redeemable preferred stock sit between liabilities and equity (temporary equity), which no canonical field holds, so a filer with them misses the identity by that amount: SPGI FY2021-25 (FY2025 $4.917B, `RedeemableNoncontrollingInterestEquityCarryingAmount`), UBER FY2021-23 (with BUG-063's unmapped NCI), WDC FY2023 ($0.876B, its convertible preferred) and BLK FY2025 ($5.427B, tagged outside us-gaap): 10 of the sweep's 15 imbalance findings (BX's five are BUG-063's).
 Expected: temporary equity counted in the identity.   Actual: a MEDIUM finding a year (SPGI 50, UBER 70, WDC 90).
 
+Fix (iteration 261): see BUG-063's entry (one set).
 ### BUG-115 [P3][VALID] The gross-profit identity misses excise taxes filed apart from cost of sales: MO
-Status: OPEN
-Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: — | Regression test: —
+Status: VERIFIED (iteration 261)
+Found: iteration 77 via VALID-07 (`qa/evidence/iter77-quality-sweep.txt`) | Fixed: (this commit) | Regression tests: tests/test_noncontrolling_interest.py, tests/test_quality_filed_lines.py, tests/test_integrity.py; 24 failing first
 Repro: MO deducts both cost of sales and excise taxes on products (`OtherCostOfOperatingRevenue`) from net revenues to reach gross profit, and `cost_of_revenue` takes cost of sales alone, so revenue less cost of revenue overshoots MO's gross profit by the excise taxes ($3.574B FY2024, $3.140B FY2025) and the check fires for FY2021-25 (score 85).
 Expected: the identity holds where a filed cost line explains the gap (or excise taxes count in cost of revenue).   Actual: five LOW findings.
 
+Fix (iteration 261): see BUG-063's entry (one set).
 ### BUG-116 [P3][STORE] The as-of view and the annual record choose between filings by different rules: a later filing's fallback tag beats an earlier one's preferred tag
 Status: VERIFIED (iteration 217)
 Found: iteration 78 while verifying BUG-110 (`qa/evidence/iter78-bug110-realdata.txt`) | Fixed: the as-of snapshots merge (iteration 217) | Regression tests: tests/test_asof_reader.py, tests/test_annual_snapshots.py, qa/oracle/asof_oracle.py
@@ -2667,6 +2670,12 @@ Status: OPEN
 Found: the valid1 worker (iteration 260, `qa/evidence/valid1-investigation.txt` sec. 8; BUG-062's kind) | Fixed: | Regression test:
 Repro: SNPS FY2022 cost of revenue 898M from an earlier vintage beside a restated revenue and gross profit (implying 1,363.8M).
 Expected: one filing's figures for the year.   Actual: mixed vintages; the gross-profit check fires.
+### BUG-395 [P3][VAL] BUG-390 dates a spread quarter by its year's first 10-K, but the spread can come from a later 10-K: AVGO's FY2023-24 are read a year early
+Status: OPEN
+Found: code review 42 (`qa/evidence/review42.txt`, Minor 1; BUG-390's fix incomplete, not a regression) | Fixed: | Regression test:
+Repro: history_inputs ~477-486 date a spread quarter by the vintages' MIN(filed_date) for its year; `_da_bases` spreads from the latest 10-K's year figure. AVGO's FY2024 amortization ($9,267M) is first tagged in the 10-K of 2025-12-18 (vintages: 593M at 2024-12-20, 9,860M at 2025-12-18). Its trailing years to 2024-02-04/05-05/08-04 are read from 2024-12-20 with D&A of $5.4B/$6.9B/$8.4B where the facts known that day give $0.51B/$0.53B/$0.56B. SWK's 2020 trailing years read $608-709M for $372M from 2021-02-18, a year before its 10-K of 2022-02-22. Cache census: 171 of 464 spread quarters (37 filers) are not spread on their year's first 10-K day; 44 trailing years at 14 filers are more than 5% off what was known on the day read (AVGO, GE, SPGI, SWK, MTD, ...). Probe: %LOCALAPPDATA%\stockdb-qa\review42\head\tests\test_review42.py.
+Expected: no 10-K figure before its filing day (BUG-390's own Expected).   Actual: the amortization of a later 10-K is read from the year's first 10-K.
+Fix direction: known from the first vintage whose D&A agrees with the year's stored quarters (or store the parser's fact_y filed day), else known on no day; measure the moves first.
 ### Q23 [DATA] NEEDS-USER: read a debt total that includes current debt as the total less the current part (KVUE, TRV)?
 Status: VERIFIED (iteration 236; applied at the user's decision, 2026-11-26)
 Found: the debt1 worker (iteration 234; BUG-291, BUG-133's TRV) | Fixed: | Regression test:
@@ -2797,11 +2806,12 @@ Expected: provenance that says how a figure was made (a pseudo-tag or a note).  
 Note (iteration 217): unchanged by Q18's merge; still OPEN.
 
 ### BUG-269 [P3][VALID] The integrity outlier check skips short_term_debt entirely since BUG-159, so a real scale error in it passes
-Status: OPEN
-Found: code review 21 (M-4) | Fixed: | Regression test:
+Status: VERIFIED (iteration 261)
+Found: code review 21 (M-4) | Fixed: (this commit) | Regression tests: tests/test_noncontrolling_interest.py, tests/test_quality_filed_lines.py, tests/test_integrity.py; 24 failing first
 Repro: src/validation/integrity.py's _OUTLIER_EXCLUDE holds short_term_debt (BUG-159, for maturities that come and go), so a genuine 10^3-10^6 unit error in the field is no longer flagged.
 Expected: a higher threshold for the field, or skipping only the spikes the maturities explain.   Actual: no check.
 
+Fix (iteration 261): see BUG-063's entry (one set).
 ### BUG-270 [P3][VAL] `_restated_between` has no maximum split ratio, and three of BUG-173's boundaries are unpinned
 Status: VERIFIED (iteration 228)
 Found: code review 21 (M-6, M-1) | Fixed: (this commit) | Regression tests: tests/test_valuation_inputs.py, test_valuation_history_inputs.py, test_valuation_oracle_seam.py; 29 failing first
