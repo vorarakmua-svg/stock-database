@@ -2332,7 +2332,9 @@ numbers SEC filings report:
   another of the year's counts agrees; otherwise it follows the year's checked counts.
   A count at or below zero, filed or derived, is left empty.
 - **Share counts no EPS checks.** Across periods, a count goes onto the scale its net
-  income and EPS imply; the shares outstanding follow a weighted count only where an EPS
+  income and EPS imply, unless they imply fewer than 100,000 shares: then the EPS is the
+  mis-scaled figure and decides nothing (DexCom's 10-Qs tag Q1 2012's EPS as -210,000), and a
+  count its own EPS confirms as filed keeps its scale (BUG-391); the shares outstanding follow a weighted count only where an EPS
   checked it, and so does the period's other weighted count, no EPS checking it, where that
   one's own EPS checked it (ConocoPhillips' FY2018 counts, both in thousands, with a basic EPS
   alone, BUG-369). A filed count no EPS checks takes the scale of its own field's neighbouring

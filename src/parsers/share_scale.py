@@ -23,7 +23,9 @@ scale; it takes the scale its own field's neighbouring periods agree on, when tw
 or more do, within a factor of two of one another, and it is a power of 1000 from
 them, unless another count of its period is on its scale (BUG-329). A weighted count
 its own EPS doesn't check follows its period's other weighted count where that one's
-EPS checks it (BUG-369).
+EPS checks it (BUG-369). An EPS that implies fewer than 100,000 shares is the
+mis-scaled figure and no oracle, and a count its own EPS confirms is never rescaled
+(BUG-391).
 """
 
 import math
@@ -120,6 +122,10 @@ def normalize_share_scale(
             if reported is None or not eps or not net_income:
                 continue
             implied = abs(net_income / eps)
+            if implied < _MIN_ANCHOR:
+                # fewer shares than any listed company's: the EPS is the mis-scaled figure (DXCM's 10-Q tags Q1
+                # 2012's diluted EPS as -210,000 beside 67.8 million shares), no oracle (BUG-391)
+                continue
             scale = _best_scale(reported, implied)
             if scale is not None:
                 _rescale(period, share_key, scale, done)
@@ -136,16 +142,13 @@ def normalize_share_scale(
 
     # Pass 1b: a weighted count no EPS checked follows the other one where its own EPS
     # checked that one (BUG-369): COP's FY2018 10-K tags no diluted EPS, and both counts in
-    # thousands (1,175,538 and 1,166,499), the basic one put right by its EPS. Not to fewer
-    # than _MIN_ANCHOR shares, which only a mis-scaled EPS implies: DXCM's 10-Q tags Q1
-    # 2012's diluted EPS as -210,000, which makes its 67.8 million shares 67.8.
+    # thousands (1,175,538 and 1,166,499), the basic one put right by its EPS.
     weighted = ("weighted_avg_shares_diluted", "weighted_avg_shares_basic")
     followed: Set[Tuple[str, str]] = set()  # no sibling's reference in pass 2, which reads the EPS's corrections
     for period_key, period in periods.items():
         for key in weighted:
             reported = _num(period, key)
-            other = next((o for o in weighted if o != key and (period_key, o) in checked
-                          and (_num(period, o) or 0.0) >= _MIN_ANCHOR), None)
+            other = next((o for o in weighted if o != key and (period_key, o) in checked), None)
             if reported is None or (period_key, key) in checked or other is None:
                 continue
             scale = _best_scale(reported, _num(period, other) or 0.0)
@@ -165,8 +168,8 @@ def normalize_share_scale(
     if corrected:
         reference = statistics.median(corrected)
         for period_key, period in periods.items():
-            if diluted_key in rescaled.get(period_key, []):
-                continue  # already corrected against its own EPS
+            if diluted_key in rescaled.get(period_key, []) or (period_key, diluted_key) in checked:
+                continue  # already corrected against its own EPS, or confirmed by it as filed (BUG-391: HAL's)
             reported = _num(period, diluted_key)
             if reported is None:
                 continue
@@ -220,7 +223,8 @@ def normalize_share_scale(
     return rescaled
 
 
-#: The fewest shares a weighted count an EPS checked can hold and set its period's other count's scale (pass 1b).
+#: The fewest shares net income over EPS can imply and be an oracle (pass 1): fewer is a mis-scaled EPS, so no EPS
+#: puts a count below it, and no count it would put there sets another's scale (BUG-369, BUG-391).
 _MIN_ANCHOR = 100_000.0
 
 #: The share counts pass 4 checks against their neighbouring periods.

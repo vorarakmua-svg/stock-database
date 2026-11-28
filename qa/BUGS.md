@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 41 · NEEDS-USER 0 · Decided: 8 · Verified: 361
+**Open:** P0 0 · P1 0 · P2 0 · P3 41 · NEEDS-USER 0 · Decided: 8 · Verified: 362
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2641,12 +2641,13 @@ Decision (USER 2026-11-28): known at the 10-K: such a trailing year is known on 
 
 Prepared (iteration 256, stockdb-qa\bug390\out, NOT applied: labels move): a new financials_quarterly.source_tags column (+100 MB) marks spread quarters; a trailing year holding them is known from their 10-K's first filing day. Look-ahead months 984 -> 0. 0 medians, verdicts; 24 historical values; labels BEN above -> near, GWW far above -> above, MET near -> above, PKG far above -> above, TPR above -> far above; 506 months empty while a year waits (variant alt_variant_over_fix.diff avoids most, changes STALE_DAYS). Awaiting the user.
 ### BUG-391 [P2][VALID] The quarterly share-scale pass 2 rescales correct diluted counts from a mis-scaled EPS
-Status: OPEN
-Found: the shares1 worker (iteration 255, residual) | Fixed: | Regression test:
+Status: VERIFIED (iteration 257; applied at the user's decision, 2026-11-28)
+Found: the shares1 worker (iteration 255, residual) | Fixed: (this commit) | Regression tests: tests/test_share_scale_mis_scaled_eps.py; 3 failing first
 Repro: quarterly share-scale pass 2 starts from a mis-scaled EPS or overrides a count its own EPS confirms (DXCM 2012-14; HAL's ~870 for about 870M). On the fix copy, 113 quarterly diluted, 32 basic and 49 shares-outstanding cells hold under 100,000 shares, mostly HAL, HIG, DXCM, VTRS.
 Expected: counts on their filing's scale.   Actual: some rescaled by 10^6 or 1000.
 
 Prepared (iteration 256, stockdb-qa\shares1\out\b391, NOT applied: HAL's label moves): an EPS implying under 100,000 shares rescales and confirms nothing; pass 2 never rescales a count pass 1 checked. HAL 101, HIG 17, DXCM 20, ICE 4 quarterly cells right; HAL historical value None -> 38.94, label none -> below at 31.07; HAL ranked, APA/EOG/FANG/XOM composites -2; 0 medians, verdicts. Awaiting the user.
+Fix (iteration 257, `qa/evidence/shares1-round2-investigation.txt`, `qa/evidence/b391-verify-mine.txt`): applied as prepared after the user approved the measured moves (HAL label none -> below, HAL ranked, APA/EOG/FANG/XOM composites -2, 0 medians, verdicts). BUG-369's pass-1b floor folded into pass 1; its mutant m369_no_floor retired from shares1-mutants.json (covered by m391_no_floor).
 ### Q23 [DATA] NEEDS-USER: read a debt total that includes current debt as the total less the current part (KVUE, TRV)?
 Status: VERIFIED (iteration 236; applied at the user's decision, 2026-11-26)
 Found: the debt1 worker (iteration 234; BUG-291, BUG-133's TRV) | Fixed: | Regression test:

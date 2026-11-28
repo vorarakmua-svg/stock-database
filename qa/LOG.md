@@ -4012,3 +4012,12 @@ Result: BUG-339, BUG-389 VERIFIED.
 Gates: ruff ✓ mypy ✓ pytest 4539 passed, 2 skipped
 Commit: (this commit) fix(parser): an unchecked count's scale from net income / EPS; a figure equal to the total (BUG-339, BUG-389)
 Stopped after this unit at the user's request ("stop after current work finish").
+
+## Iteration 257: 2026-11-28: fix (BUG-391), the user's approval
+Picked: BUG-391 (P2), prepared in iteration 256; the user approved the measured moves on resume.
+Did: an EPS implying under 100,000 shares rescales and confirms nothing; pass 2 never rescales a count pass 1 checked.
+- RED: 3 failed / 1 passed on 87dbe22; GREEN. b391 5/5, shares1 25/25 (m369_no_floor retired), bug329 17/17 (2 stale at HEAD already).
+Result: BUG-391 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4543 passed, 2 skipped
+Commit: (this commit) fix(parser): a mis-scaled EPS rescales no count; pass 2 keeps checked counts (BUG-391)
+Next: BUG-390 (the user approved the main fix).
