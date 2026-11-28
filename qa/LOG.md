@@ -4040,3 +4040,11 @@ Result: BUG-261 VERIFIED; BUG-299 VERIFIED (5efa1be).
 Gates: ruff ✓ mypy ✓ pytest 4563 passed, 2 skipped
 Commit: (this commit) fix(parser): a balance sheet's cash line with federal funds sold is the cash (BUG-261)
 Since review 41: 5 units -> review 42 next.
+
+## Iteration 260: 2026-11-28: fix (BUG-276), the user's approval
+Picked: the dna1 worker's b276; the user approved the measured moves (leave TXN).
+Did: D&A carried on OtherDepreciationAndAmortization / AmortizationOfDeferredCharges is read where the filing proves its meaning.
+- RED: 9 failing first; GREEN. dna1-b276 and bug170 specs (see verify file).
+Result: BUG-276 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4582 passed, 2 skipped
+Commit: (this commit) fix(parser): D&A on other lines where the filing proves them (BUG-276)

@@ -346,7 +346,10 @@ CANONICAL_FIELDS: Tuple[CanonicalField, ...] = (
         # DepreciationAndAmortization (AbbVie's FY2025: $8.139B, not its $0.762B of depreciation), and a "total" no
         # larger than that amortization is its depreciation line (CME's, EME's), as is one the filings show to be it
         # (HUM's below its depreciation, MRSH's beside an earlier 10-K's total) (``xbrl_parser._depreciation_combined``,
-        # BUG-170, BUG-274).
+        # BUG-170, BUG-274). With no total, a line the filing shows to hold the depreciation and that amortization is
+        # read as the D&A (WDAY's OtherDepreciationAndAmortization), and one it shows to be the amortization line
+        # beside the depreciation is added to it (FLEX's; MTD's AmortizationOfDeferredCharges)
+        # (``xbrl_parser._da_other_lines``, BUG-276).
         ("DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet",
          "DepreciationAmortizationAndOther", "DepreciationAndAmortization", "Depreciation"),
         description="Depreciation and amortization: the filing's total, else its depreciation and its amortization of "

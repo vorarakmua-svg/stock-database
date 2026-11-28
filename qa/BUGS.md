@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 0 · P3 38 · NEEDS-USER 0 · Decided: 8 · Verified: 365
+**Open:** P0 0 · P1 0 · P2 0 · P3 37 · NEEDS-USER 0 · Decided: 8 · Verified: 366
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2853,11 +2853,12 @@ Also (iteration 174, BUG-332's residual): where a 10-K is combined (BUG-274) but
 Decision (USER 2026-11-26): A: spread a year's untagged amortization over Q1-Q3 by days, the rest in Q4, marked derived, so every TTM is on one basis and equals the annual figure at the year end; B (blank Q4's D&A) for the reverse kind (10-Qs carrying more than the 10-K). Measure over the 502 and show the moves before applying. Census at 3ab6321: 134 Q4 lumps and 143 holes at 147 filers, 1,073 TTM rows, the latest TTM of 17 filers.
 Fix (iteration 252, `qa/evidence/bug275-investigation.txt`): `XBRLParser._da_bases`/`_da_carried`: by the filings' tags (never a ratio), where the 10-Qs' D&A is their own figure (or BUG-170's combination) and the year's 10-K tags that basis below its D&A, each rung goes onto its filing's line plus the difference's share by days, Q4 the rest, tagged derived:amortization_spread (nine-months and hole guards); a year with no 10-K yet after a spread year carries the last 10-K's per-day difference (derived:amortization_carried; never a 10-K filed after the quarter). Option B (blank) dropped at the user's choice: the reverse kind stays as before. DB (502 re-collected): financials_quarterly 478 and TTM 456 rows at 51 filers, D&A only; AVGO FY2024 quarters 139/149/149/9,423M -> 2,568/2,428/2,428/2,435M; 0 medians, verdicts, owner-earnings verdicts, labels; historical values BR 264.51 -> 259.06, CME 293.25 -> 291.85, EBAY 84.38 -> 84.30, LHX 315.13 -> 318.05; every latest-TTM D&A unchanged. Q4 lumps/holes 134+143 -> 72+143. Look-ahead 0; quarterly as-of check 0 cells using an unfiled 10-K. Residual: the reverse kind (GOOGL 2025 Q4, EME FY2012).
 ### BUG-276 [P3][VALID] Some filers carry their D&A on tags BUG-170's rule leaves alone: WDAY, MET and VEEV's OtherDepreciationAndAmortization, TXN's capitalized software
-Status: OPEN
-Found: iteration 116 (BUG-170's investigation, R3) | Fixed: | Regression test:
+Status: VERIFIED (iteration 260; applied at the user's decision, 2026-11-28; TXN left as is)
+Found: iteration 116 (BUG-170's investigation, R3) | Fixed: (this commit) | Regression tests: tests/test_da_other_lines.py (19); 9 failing first
 Repro: depreciation-alone filers whose D&A sits on tags whose meaning varies by filer: WDAY, MET, VEEV (OtherDepreciationAndAmortization is their whole D&A, the depreciation a part), TXN (capitalized software amortization, a cash flow line of its own), MTD (AmortizationOfDeferredCharges is its amortization line), FLEX (OtherDepreciationAndAmortization is its amortization), ITW, TSLA, AON FY2022-25, CINF, ABNB (no us-gaap tag at all). HEAD and V3 read the depreciation alone there.
 Expected: the filing's D&A add-back.   Actual: the depreciation alone.
 
+Fix (iteration 260, `qa/evidence/dna1-investigation.txt`, `qa/evidence/b276-verify-mine.txt`): xbrl_parser._da_other_lines, rules proved by the filing (R1 OtherDepreciationAndAmortization >= depreciation + amortization is the D&A; R2 below depreciation and >= amortization is the amortization line; R3 no depreciation tagged: the D&A only after a filing where R1 held; R4 MTD's AmortizationOfDeferredCharges from the filing where it equals its parts). 8 filers (ABNB AMD FLEX MET MTD SWKS VEEV WDAY); 22/22 Yahoo-covered annual cells now exact. User approved the moves: owner-earnings verdict FLEX fair -> cheap, VEEV N/A -> expensive; 0 medians, verdicts, labels. Residuals: TXN (user: leave), ITW/TSLA/ABNB FY2025/AON/CINF on custom tags, MRVL/FISV/ELV/AMD later unprovable.
 ### BUG-277 [P3][PARSE] `XBRLParser._calendar_from_frames` takes the first frame from a set, so calendar_year follows Python's string-hash order: GPN FY2016, TEL FY2025, LHX FY2019
 Status: VERIFIED (iteration 181)
 Found: iteration 118 (BUG-179's worker; its out\hash_order_check.txt) | Fixed: (this commit) | Regression tests: tests/test_fiscal_calendar.py (5 new, one under PYTHONHASHSEED 0-7); 5 failing first

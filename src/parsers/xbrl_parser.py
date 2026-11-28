@@ -1073,6 +1073,85 @@ def _da_totals_displaced(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+#: A D&A line whose meaning varies by filer: its whole D&A (WDAY's, MET's, VEEV's), or a line beside its depreciation
+#: (FLEX's amortization) (``_da_other_lines``, BUG-276).
+_OTHER_DA = "OtherDepreciationAndAmortization"
+#: An amortization line that is the cash flow statement's where it is the intangibles' and the capitalized software's
+#: amortization together (MTD's), and those software figures.
+_DEFERRED_CHARGES = "AmortizationOfDeferredCharges"
+_SOFTWARE = ("CapitalizedComputerSoftwareAmortization1", "CapitalizedComputerSoftwareAmortization")
+
+
+def _da_other_lines(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
+    """*us_gaap* with a DepreciationAndAmortization fact on each period a filing tags no D&A total but carries its D&A
+    on a line the filing itself shows to be it, or to be the amortization beside its depreciation (BUG-276).
+
+    OtherDepreciationAndAmortization no smaller than the filing's depreciation and its amortization of intangibles
+    (``_AMORTIZATION``, where tagged) together holds them: it is the D&A (WDAY's FY2026 $347M beside $237M of
+    depreciation; MET's $753M beside $117M and $83M). Below the depreciation and no smaller than that amortization, it
+    is the amortization line beside the depreciation, and the D&A is the two (FLEX's FY2026 $457M and $106M, beside
+    $68M of intangibles' amortization). Between the two, or below the depreciation with no amortization tagged, it shows
+    nothing and stays unread. A filing that tags no depreciation has the line read as its D&A only where a filing of the
+    filer filed by then showed it so and it is no smaller than the amortization (VEEV's FY2025 $39.4M beside $19M; not
+    MTB's, never shown). AmortizationOfDeferredCharges equal to the intangibles' and the capitalized software's
+    amortization together is the amortization line too (MTD's FY2025 $74.5M, $28.5M and $45.8M, beside $51.1M of
+    depreciation). Each filing's periods are judged alone, as ``_depreciation_combined`` judges them; only filings
+    filed by then are read."""
+    other, charges = _by_period(us_gaap, _OTHER_DA), _by_period(us_gaap, _DEFERRED_CHARGES)
+    if not other and not charges:
+        return us_gaap
+    totals: Set[Tuple[str, str, str]] = set()
+    for tag in _DA_TOTALS:
+        totals.update(_by_period(us_gaap, tag))
+    depreciation = _by_period(us_gaap, _DEPRECIATION)
+    amortization: Dict[Tuple[str, str, str], float] = {}
+    for tag in _AMORTIZATION:
+        for key, e in _by_period(us_gaap, tag).items():
+            amortization.setdefault(key, e["val"])
+    software: Dict[Tuple[str, str, str], float] = {}
+    for tag in _SOFTWARE:
+        for key, e in _by_period(us_gaap, tag).items():
+            software.setdefault(key, e["val"])
+    added: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    shown: List[str] = []  # the filing days the line was shown to be the D&A
+    for key, e in other.items():
+        dep, part = depreciation.get(key), max(amortization.get(key, 0.0), 0.0)
+        if key in totals or e["val"] <= 0 or dep is None:
+            continue
+        both = dep["val"] + part
+        if e["val"] >= both or _agree(e["val"], both):
+            added[key] = dict(e)
+            shown.append(e.get("filed") or "")
+        elif part > 0 and e["val"] < dep["val"] and not _agree(e["val"], dep["val"]) and (
+                e["val"] >= part or _agree(e["val"], part)):
+            added[key] = {**e, "val": dep["val"] + e["val"]}
+    since = min(shown, default=None)
+    for key, e in other.items():
+        part = amortization.get(key, 0.0)
+        if key in totals or key in depreciation or since is None or (e.get("filed") or "") < since:
+            continue
+        if part > 0 and (e["val"] >= part or _agree(e["val"], part)):
+            added[key] = dict(e)
+    # the deferred charges' amortization shown to be the amortization line, the intangibles' and the software's
+    # together (MTD's 10-Q to March 2019: $12.222M, $3.7M and $8.5M), is that line from then on wherever it holds the
+    # intangibles' (the two are a note's, rounded: its 10-Q to June 2019 tags $24.548M, $7.4M and $17.0M; its 10-Q of
+    # 2021 to September 2020 no software)
+    since = min((e.get("filed") or "" for key, e in charges.items() if key in depreciation and key not in totals
+                 and amortization.get(key, 0.0) > 0 and software.get(key, 0.0) > 0
+                 and _agree(e["val"], amortization[key] + software[key])), default=None)
+    for key, e in charges.items():
+        dep, part = depreciation.get(key), amortization.get(key, 0.0)
+        if key in totals or key in added or dep is None or part <= 0 or since is None or (e.get("filed") or "") < since:
+            continue
+        if e["val"] >= part or _agree(e["val"], part):
+            added[key] = {**e, "val": dep["val"] + e["val"]}
+    if not added:
+        return us_gaap
+    body = us_gaap.get(_DA_COMBINED, {"units": {}})
+    units = body.get("units", {})
+    return {**us_gaap, _DA_COMBINED: {**body, "units": {**units, "USD": units.get("USD", []) + list(added.values())}}}
+
+
 def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     """*us_gaap* with one DepreciationAndAmortization fact of a filing's depreciation and its amortization of
     intangibles on each period it tags them on lines of their own, with no total that can hold them.
@@ -1085,7 +1164,8 @@ def _depreciation_combined(us_gaap: Dict[str, Any]) -> Dict[str, Any]:
     total's tag (CME's $107.5M beside $223.4M of amortization; EME's, equal to its depreciation), and is set aside, so
     another total of the filing that can hold it is read (MCK's), and with none the D&A is the depreciation, else that
     line, plus the amortization. No other amortization joins: capitalized software's is inside the depreciation at one
-    filer (EXPE's) and apart at another. Each filing's periods are judged alone, so the annual record, the quarters
+    filer (EXPE's) and apart at another (it enters only inside a line the filing shows to hold it,
+    ``_da_other_lines``). Each filing's periods are judged alone, so the annual record, the quarters
     (the 10-Qs' figures to date) and each vintage read the same figures.
 
     Where both amortizations are tagged and no total exceeds the cash flow statement's, the intangibles' is the test:
@@ -1411,15 +1491,17 @@ def _filer_facts(facts: Dict[str, Any], view: str, sector: Optional[str] = None)
     maturities that view's records read as one DebtCurrent where a filing tags none (``_current_debt_combinations``),
     DebtCurrent before a refinancing set aside, 0.0 for the CommercialPaper the short-term total that view's record
     reads on its date holds (those combinations among them), the combinations themselves, a D&A total a filing shows
-    to be another line set aside (``_da_totals_displaced``), the depreciation and the amortization of intangibles as
+    to be another line set aside (``_da_totals_displaced``), a D&A the filing carries on a line it shows to be its
+    D&A or its amortization line (``_da_other_lines``), the depreciation and the amortization of intangibles as
     one D&A figure where the filing tags no total that can hold them, and last the totals with current debt set aside
     beside the current figures they hold (``_totals_beside_current_debt_set_aside``)."""
     totals = _debt_totals_set_aside(_debt_parts_set_aside(_debt_current_totals_set_aside(_net_outflows_as_paid(
         _cash_parts_set_aside(_cash_totals_set_aside(_debt_on_balance_sheet_dates(_on_balance_sheet_dates(
             _dollar_filings(_sector_tags_set_aside(facts.get("facts", {}).get("us-gaap", {}), sector))))))))))
     combined, held_by_totals = _current_debt_combinations(totals, view)
-    return _totals_beside_current_debt_set_aside(_depreciation_combined(_da_totals_displaced(_current_debt_combined(
-        _current_debt_set_aside(totals, view, frozenset(combined)), combined, held_by_totals))), view)
+    return _totals_beside_current_debt_set_aside(_depreciation_combined(_da_other_lines(_da_totals_displaced(
+        _current_debt_combined(_current_debt_set_aside(totals, view, frozenset(combined)), combined, held_by_totals)))),
+        view)
 
 
 #: The quarterly reports, whose balance sheets are a quarter's: a 10-K's year end is the annual record's.

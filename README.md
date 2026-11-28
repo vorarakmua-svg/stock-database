@@ -2506,8 +2506,17 @@ numbers SEC filings report:
   to more than the line. The result enters under the line's tag, so a later filing's figure
   stands over an earlier one's. Only filings filed by then are read, so each vintage is as known
   then; a year's 10-Qs are read so only where its latest 10-K is, and a year with no 10-K yet
-  as the last 10-K before it was, so its quarters and the trailing year stay on one basis. No other amortization (capitalized software, finance leases) is added: it lies
-  inside the depreciation at one filer and apart at another. A total above the amortization
+  as the last 10-K before it was, so its quarters and the trailing year stay on one basis. No other amortization (capitalized software, finance leases) is added on its own: it lies
+  inside the depreciation at one filer and apart at another. With no total, a filing's
+  OtherDepreciationAndAmortization is its D&A where it is at least the depreciation and the
+  amortization of intangibles together (Workday's FY2026: $347M, not its $237M of depreciation;
+  MetLife's FY2025: $753M), and its amortization line, added to the depreciation, where it is
+  below the depreciation and at least the intangibles' amortization (Flex's FY2026: $563M, not
+  $525M); between the two it is left unread. A filing that tags no depreciation reads it as the
+  D&A only where a filing of the filer, by then, showed it so (Veeva's FY2025: $39.4M, empty
+  before). Amortization of deferred charges the filings show to be the intangibles' and the
+  capitalized software's together is the amortization line too (Mettler-Toledo's FY2025:
+  $125.6M, not $79.6M). A total above the amortization
   that nothing in the filings contradicts is read as the D&A, though it can be the depreciation
   line: GE's FY2025 total is $0.86B beside $0.36B of amortization, which Yahoo reads as $1.22B
   together. A total the filer's filings show to be a part of its D&A is set aside from then on:
