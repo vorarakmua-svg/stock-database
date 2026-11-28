@@ -2717,8 +2717,10 @@ for the year are all of another period, such as a recast after a change of fisca
 a year not over on its filing day, has none (see "Fiscal vs calendar year"). A view is read from
 the facts filed on or before its filing day, the as-of view's gate, so its set-asides read no
 later filing (BUG-120), and its share counts take a scale only from the year's views filed by
-then: a count no view filed by then checks stays as filed (Northern Trust's FY2009 counts in
-its 2011 10-K, BUG-339), and a weighted count no EPS checks follows the view's other one where
+then: a count its net income over EPS misses by preferred dividends or a rounded EPS takes the
+scale that puts it within a factor of two of that figure (Northern Trust's FY2009 counts in its
+2011 10-K, BUG-339), a count nothing checks stays as filed (Hershey's FY2009-11 in its 2012
+10-K), and a weighted count no EPS checks follows the view's other one where
 its EPS checks that one (ConocoPhillips' FY2018-20 diluted counts, tagged in thousands,
 BUG-369). A run that builds the as-of snapshots replaces the ticker's vintages with
 its own (a full run all, a `years_back` run those years), so a view an older parse made doesn't

@@ -126,7 +126,7 @@ def _vintages_of(parser: XBRLParser, known: Dict[str, Any], day: str,
         if not kept:
             continue
         # No neighbouring year's views: a vintage's view takes no scale from a later filing (the gate).
-        normalize_share_scale(by_accn, neighbours=False)
+        normalize_share_scale(by_accn, neighbours=False, loose=True)
         for accn in kept:
             apply_derivations(by_accn[accn])
         views[fy] = {accn: by_accn[accn] for accn in kept}

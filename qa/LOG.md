@@ -4001,3 +4001,14 @@ Result: BUG-096, 105, 146, 369 VERIFIED; BUG-086 WONTFIX (user); BUG-339 decided
 Gates: ruff ✓ mypy ✓ pytest 4530 passed, 2 skipped
 Commit: (this commit) fix(parser): quarter counts, TTM spans, split bases, vintage share scale (BUG-096, -105, -146, -369); review 41
 Next: BUG-391 (P2), BUG-390, BUG-389, BUG-339 option A.
+
+## Iteration 256: 2026-11-28: fix (BUG-339 option A, BUG-389); BUG-390, BUG-391 prepared for the user
+Picked: the shares worker's round 2 and the BUG-390 worker.
+Did: a count no EPS checks takes the scale net income / EPS points to (vintages); a figure equal to the total leaves
+the current line read.
+- RED: 7 failed on e88639d; GREEN. b339 7/7, b389 4/4, bug387 (re-quoted) 5/5, shares1 26/26.
+- BUG-390 and BUG-391 measured, held: they move labels (see their entries).
+Result: BUG-339, BUG-389 VERIFIED.
+Gates: ruff ✓ mypy ✓ pytest 4539 passed, 2 skipped
+Commit: (this commit) fix(parser): an unchecked count's scale from net income / EPS; a figure equal to the total (BUG-339, BUG-389)
+Stopped after this unit at the user's request ("stop after current work finish").

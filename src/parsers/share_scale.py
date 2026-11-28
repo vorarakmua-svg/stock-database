@@ -81,7 +81,7 @@ def _rescale(period: Dict[str, Any], key: str, scale: float,
 
 
 def normalize_share_scale(
-    periods: Dict[str, Dict[str, Any]], neighbours: bool = True
+    periods: Dict[str, Dict[str, Any]], neighbours: bool = True, loose: bool = False
 ) -> Dict[str, List[str]]:
     """Fix mis-scaled share counts across every period of one statement.
 
@@ -98,6 +98,11 @@ def normalize_share_scale(
     Without *neighbours*, a count no EPS checks keeps its scale (pass 4 is off):
     the filings' vintages of one year are other filings' views, later ones among
     them, which a filing's own view mustn't read.
+
+    With *loose* (the annual record and the vintages, not the quarters, whose
+    derived counts and rounded EPS mislead it: BE's, HAL's, ICE's), a count its
+    net income over EPS misses by more than 10% takes the scale that puts it
+    within a factor of two of that figure (BUG-339).
     """
     rescaled: Dict[str, List[str]] = {}
     # (period, count) that an EPS checked or corrected siblings put right: only such a
@@ -120,6 +125,12 @@ def normalize_share_scale(
                 _rescale(period, share_key, scale, done)
             if scale is not None or abs(reported / implied - 1.0) <= _TOLERANCE:
                 checked.add((period_key, share_key))
+            elif loose:
+                # NI over EPS, off by preferred dividends or a rounded EPS, still tells a count's scale (BUG-339):
+                # NTRS's FY2011 10-K tags FY2009's counts at 235.5 trillion beside $864.2M / 3.16 = 273M
+                fitted = _neighbours_scale(reported, [implied, implied])
+                if fitted is not None:
+                    _rescale(period, share_key, fitted, done)
         if done:
             rescaled[period_key] = done
 
@@ -170,15 +181,14 @@ def normalize_share_scale(
     # nothing checked is no evidence of another's scale (HSY's FY2009 count of
     # 227,998,276 shares read 227,998 beside weighted counts tagged in thousands).
     for period_key, period in periods.items():
-        anchor = next((_num(period, key) for key in weighted
-                       if (period_key, key) in checked and _num(period, key) is not None), None)
-        if anchor is None:
-            continue
+        # either checked count can anchor it (BUG-339): TER's FY2022 10-K tags FY2021's shares outstanding in
+        # thousands, 162,251, 1.6% from the basic count, 11.6% from the diluted one
+        anchors = [v for key in weighted if (period_key, key) in checked and (v := _num(period, key)) is not None]
         for key in _REFERENCE_FIELDS:
             reported = _num(period, key)
             if reported is None:
                 continue
-            scale = _best_scale(reported, anchor)
+            scale = next((s for anchor in anchors if (s := _best_scale(reported, anchor)) is not None), None)
             if scale is not None:
                 done = rescaled.setdefault(period_key, [])
                 _rescale(period, key, scale, done)

@@ -4,7 +4,7 @@ Severity: **P0** wrong numbers shown as fact, data loss/corruption, crash on a m
 **P1** feature broken or misleading for some tickers/sectors, wrong data matching · **P2** degraded UX, missing
 validation, inconsistent formatting, misleading docs, slowness · **P3** cosmetic or wording.
 
-**Open:** P0 0 · P1 0 · P2 1 · P3 43 · NEEDS-USER 0 · Decided: 8 · Verified: 359
+**Open:** P0 0 · P1 0 · P2 1 · P3 41 · NEEDS-USER 0 · Decided: 8 · Verified: 361
 
 Valuation severity calibration (iteration 4): P0 = systematic error beyond tolerance across many tickers; P1 = large errors for some tickers; P2 = small systematic or scenario-only errors.
 
@@ -2254,13 +2254,14 @@ Expected: "has a 10-K" decided from the year's annual D&A facts on a 10-K.   Act
 Fix (iteration 223, `qa/evidence/bug338-investigation.txt`): in `_depreciation_combined` any year-long D&A fact (a total or Depreciation) means the year has a 10-K; with no amortization it is read as tagged (setdefault, so a 10-K with amortization still decides), and a following year with no 10-K yet follows it. The SWK-shaped case reads 91.1/90.9/91.1/96.9 (was 128.4/128.2/128.4/-15.0). As-of: quarters follow the year before until the 10-K is filed. 0 cells move over 504 cached filers (no real case, as review 29 found).
 
 ### BUG-339 [P3][VALID] After BUG-329 a vintage's shares outstanding and weighted counts sit on different scales in one filing's view: NTRS FY2009 241.7M beside 235.5 trillion
-Status: OPEN (decided 2026-11-28: option A)
-Found: code review 29 (Minor 2; values improve, not a regression) | Fixed: | Regression test:
+Status: VERIFIED (iteration 256; option A, the user's decision)
+Found: code review 29 (Minor 2; values improve, not a regression) | Fixed: (this commit) | Regression tests: tests/test_vintage_share_scale.py; 5 failing first
 Repro: share_scale pass 3 (shares outstanding follow only an EPS-checked count) with pass 4 off for vintages (stock_data_fetcher.py ~439): 10 vintage cells move shares outstanding to units while the weighted counts stay mis-scaled: HST FY2021 714.1M beside 710.3, NTRS FY2009 241.7M beside 235.5T, AMT FY2015 423.9M beside 419,000, DLR FY2022 291.1M beside 286,334, FITB FY2010-11 beside 791/906, HSY FY2009-11. Wider than BUG-329's stated residual (HSY only). Nothing found that reads a vintage's two counts together.
 Expected: one scale per vintage view.   Actual: a 10^3 or 10^6 seam.
 Note (iteration 217): unchanged by Q18's merge; still OPEN.
 
 Decision (USER 2026-11-28): option A, prepared and measured (`opt339_*.diff` in stockdb-qa\shares1\out): when net income / EPS misses a count by more than 10%, the count takes the power of 1000 that brings it within x2 of that figure; A2: shares outstanding may follow either EPS-checked weighted count; record and vintages only (not quarters: BE, HAL, ICE broke). 20 vintage cells (NTRS, HST, DLR, FITB, AMT, CPAY, TER) and 4 as-of cells; nothing downstream.
+Fix (iteration 256, `qa/evidence/shares1-round2-investigation.txt`): when net income / EPS misses a count by more than 10%, the count takes the power of 1000 that brings it within x2 of that figure (`loose`); shares outstanding may follow either EPS-checked weighted count; record and vintages only. (The first opt339 diff overwrote its own flag and missed 8 cells; fixed before applying.) Vintages 20 cells (AMT, CPAY, DLR, FITB, HST, NTRS, TER), as-of 4; vintage seams 13 -> 5. Everything downstream identical.
 ### BUG-340 [P3][GATHER] Q17's per-filing XBRL cache never expires and its version isn't tied to the reader's rules
 Status: VERIFIED (iteration 209)
 Found: code review 29 (Minor 3; robustness, suspected) | Fixed: (this commit) | Regression tests: 8 test files (fetcher, refresh, sec cache, xbrl instance, yahoo); 21 failing first
@@ -2625,11 +2626,12 @@ Repro: src/valuation/history_inputs.py ~166-169 (`known_on`'s filed_by), ~461 (`
 Expected: a period is never known before it ends.   Actual: the weekday cap can precede the end.
 Fix (iteration 251, `qa/evidence/bug387-investigation.txt`): `filed_by(collected_on)` (last weekday on or before the collection); `known_on` = max(min(known, filed_by), end), never before the period ends; the history skips a trailing year ending after filed_by. DB (a Friday collection): all tables identical.
 ### BUG-389 [P3][VALID] BUG-387's rule reads a noncurrent figure equal to the total as outside it
-Status: OPEN
-Found: code review 41 (`qa/evidence/review41.txt`, Minor 1; regression from BUG-387, c0e4465) | Fixed: | Regression test:
+Status: VERIFIED (iteration 256)
+Found: code review 41 (`qa/evidence/review41.txt`, Minor 1; regression from BUG-387, c0e4465) | Fixed: (this commit) | Regression tests: tests/test_debt_balance_sheet_lines.py (3 new); 2 failing first
 Repro: src/parsers/xbrl_parser.py ~1556-1572 (`twice`): |total - value - line| = line is not > line, so LongTermNotesPayable equal to LongTermDebt $91.315B is kept as another figure and NotesPayableCurrent $0.400B is dropped (base reads it). No cached filer has the shape (census 0 cells). Probe: %LOCALAPPDATA%\stockdb-qa\review41\head\tests\test_review41.py.
 Expected: the line read.   Actual: dropped.
 
+Fix (iteration 256, `qa/evidence/shares1-round2-investigation.txt`): in `twice()`, a noncurrent figure is one the line makes up to the total only when the two miss the total by at most half the line; a figure equal to the total leaves the line read. BUG-387's shapes kept; census 0 cells.
 ### BUG-390 [P3][VAL] BUG-275's spread quarters are read by the valuation history before their 10-K is filed
 Status: OPEN (decided 2026-11-28: a trailing year holding spread quarters is known only once its 10-K is filed; measure first)
 Found: code review 41 (`qa/evidence/review41.txt`, Minor 2; regression from BUG-275, b6f596f) | Fixed: | Regression test:
@@ -2637,12 +2639,14 @@ Repro: history_inputs ~358, ~463-484, known_on ~168 read the latest stored quart
 Expected: no 10-K figure before its filing day.   Actual: the spread read at end + 45 days.
 Decision (USER 2026-11-28): known at the 10-K: such a trailing year is known on its 10-K's first filing day; before that the history uses the previous known figures; measure and show the moves first.
 
+Prepared (iteration 256, stockdb-qa\bug390\out, NOT applied: labels move): a new financials_quarterly.source_tags column (+100 MB) marks spread quarters; a trailing year holding them is known from their 10-K's first filing day. Look-ahead months 984 -> 0. 0 medians, verdicts; 24 historical values; labels BEN above -> near, GWW far above -> above, MET near -> above, PKG far above -> above, TPR above -> far above; 506 months empty while a year waits (variant alt_variant_over_fix.diff avoids most, changes STALE_DAYS). Awaiting the user.
 ### BUG-391 [P2][VALID] The quarterly share-scale pass 2 rescales correct diluted counts from a mis-scaled EPS
 Status: OPEN
 Found: the shares1 worker (iteration 255, residual) | Fixed: | Regression test:
 Repro: quarterly share-scale pass 2 starts from a mis-scaled EPS or overrides a count its own EPS confirms (DXCM 2012-14; HAL's ~870 for about 870M). On the fix copy, 113 quarterly diluted, 32 basic and 49 shares-outstanding cells hold under 100,000 shares, mostly HAL, HIG, DXCM, VTRS.
 Expected: counts on their filing's scale.   Actual: some rescaled by 10^6 or 1000.
 
+Prepared (iteration 256, stockdb-qa\shares1\out\b391, NOT applied: HAL's label moves): an EPS implying under 100,000 shares rescales and confirms nothing; pass 2 never rescales a count pass 1 checked. HAL 101, HIG 17, DXCM 20, ICE 4 quarterly cells right; HAL historical value None -> 38.94, label none -> below at 31.07; HAL ranked, APA/EOG/FANG/XOM composites -2; 0 medians, verdicts. Awaiting the user.
 ### Q23 [DATA] NEEDS-USER: read a debt total that includes current debt as the total less the current part (KVUE, TRV)?
 Status: VERIFIED (iteration 236; applied at the user's decision, 2026-11-26)
 Found: the debt1 worker (iteration 234; BUG-291, BUG-133's TRV) | Fixed: | Regression test:

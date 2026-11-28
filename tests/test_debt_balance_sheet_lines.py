@@ -348,6 +348,44 @@ def test_the_total_tagged_twice_beside_a_noncurrent_figure_within_rounding_still
     assert quarter.get("short_term_debt") is None
 
 
+def _orcl_quarter(noncurrent_value):
+    # the ORCL shape: LongTermDebt $91.315B, LongTermNotesPayable *noncurrent_value* and NotesPayableCurrent $0.400B
+    facts = _filings(
+        ("10-K", "2025-06-18", "2025-05-31", {**_BS, "DebtCurrent": 7.271e9, "NotesPayableCurrent": 7.271e9,
+                                              "LongTermNotesPayable": 85.297e9}),
+        ("10-Q", "2025-09-10", "2025-05-31", {**_BS, "NotesPayableCurrent": 7.271e9}),
+        ("10-Q", "2025-09-10", "2025-08-31", {**_BS, "NotesPayableCurrent": 0.400e9,
+                                              "LongTermNotesPayable": noncurrent_value, "LongTermDebt": 91.315e9}))
+    return XBRLParser().extract_quarterly_financials(facts)["2025-08-31"]
+
+
+def test_a_noncurrent_figure_equal_to_the_total_shows_the_line_is_outside_it():
+    # BUG-389 (code review 41, M1): all $91.315B of the total is noncurrent, so it holds no current debt and the
+    # $0.400B of current notes beside it is the quarter's short-term debt; |total - figure - line| was the line itself,
+    # not more, so the figure counted as one the line makes up to the total, and the line was dropped as held
+    quarter = _orcl_quarter(91.315e9)
+    assert _read(quarter, "long_term_debt") == (91.315e9, "LongTermDebt")
+    assert _read(quarter, "short_term_debt") == (0.400e9, "NotesPayableCurrent")
+
+
+def test_a_line_makes_a_figure_up_to_the_total_only_within_half_of_itself():
+    # within _AGREE of the total, $91.065B and the line overshoot $91.315B by $0.15B, under half the line: made up, the
+    # total holds it; $91.165B overshoots by $0.25B, over half: the total tagged twice, so the line is read
+    assert _orcl_quarter(91.065e9).get("short_term_debt") is None
+    assert _read(_orcl_quarter(91.165e9), "short_term_debt") == (0.400e9, "NotesPayableCurrent")
+
+def test_another_total_the_line_would_make_up_is_still_the_total_tagged_twice():
+    # a NotesPayable total within rounding of LongTermDebt is the total tagged twice (BUG-384) even where the line would
+    # make it up to the total: beside it the 10-Q tags no other figure, so nothing shows the total holds the line
+    facts = _filings(
+        ("10-K", "2025-06-18", "2025-05-31", {**_BS, "DebtCurrent": 7.271e9, "NotesPayableCurrent": 7.271e9,
+                                              "LongTermNotesPayable": 85.297e9}),
+        ("10-Q", "2025-09-10", "2025-05-31", {**_BS, "NotesPayableCurrent": 7.271e9}),
+        ("10-Q", "2025-09-10", "2025-08-31", {**_BS, "NotesPayableCurrent": 0.400e9, "NotesPayable": 90.915e9,
+                                              "LongTermDebt": 91.315e9}))
+    quarter = XBRLParser().extract_quarterly_financials(facts)["2025-08-31"]
+    assert _read(quarter, "short_term_debt") == (0.400e9, "NotesPayableCurrent")
+
 def test_a_noncurrent_figure_near_the_total_the_line_doesnt_make_up_shows_nothing():
     # ORLY's 10-Q for 2014-03-31: LongTermDebt $1.4B (the notes' principal), LongTermDebtAndCapitalLeaseObligations
     # $1.396242B and $74K of current capital leases, $3.7M short of the total: the line doesn't make the noncurrent

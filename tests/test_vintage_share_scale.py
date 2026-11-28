@@ -93,3 +93,56 @@ def test_each_filings_view_holds_the_diluted_count_in_units():
     views = snapshots.vintages["2018"]
     assert [views[accn]["weighted_avg_shares_diluted"] for _, accn in filings] == [1_175_538_000.0] * 2
     assert {row["weighted_avg_shares_diluted"] for row in snapshots.rows} == {1_175_538_000.0}
+
+
+def test_a_count_net_income_over_eps_misses_takes_the_scale_that_brings_it_near():
+    # BUG-339 (option A): NTRS's FY2011 10-K tags FY2009's counts at 235.5 trillion; preferred dividends put
+    # $864.2M / 3.16 = 273M 16% from its counts, beyond the 10% that checks one, but within a factor of two.
+    view = {"net_income": 864_200_000.0, "eps_basic": 3.18, "eps_diluted": 3.16,
+            "weighted_avg_shares_basic": 235_511_879_000_000.0, "weighted_avg_shares_diluted": 236_416_029_000_000.0,
+            "shares_outstanding": 241_679_942.0}
+    normalize_share_scale({"2009": view}, neighbours=False, loose=True)
+    assert (view["weighted_avg_shares_basic"], view["weighted_avg_shares_diluted"]) == (235_511_879.0, 236_416_029.0)
+
+
+def test_a_count_within_a_factor_of_ten_of_net_income_over_eps_keeps_its_scale():
+    view = {"net_income": 864_200_000.0, "eps_diluted": 3.16, "weighted_avg_shares_diluted": 150_000_000.0}
+    normalize_share_scale({"2009": view}, neighbours=False, loose=True)
+    assert view["weighted_avg_shares_diluted"] == 150_000_000.0
+
+
+def test_the_shares_outstanding_follow_whichever_checked_count_they_land_near():
+    # BUG-339 (option A): TER's FY2022 10-K tags FY2021's shares outstanding in thousands, 162,251: 1.6% from the
+    # basic count its EPS checks, 11.6% from the diluted one.
+    view = {"net_income": 1_014_589_000.0, "eps_basic": 6.15, "eps_diluted": 5.53,
+            "weighted_avg_shares_basic": 164_960_000.0, "weighted_avg_shares_diluted": 183_625_000.0,
+            "shares_outstanding": 162_251.0}
+    normalize_share_scale({"2021": view}, neighbours=False)
+    assert view["shares_outstanding"] == 162_251_000.0
+
+
+def test_the_quarters_take_no_loose_scale():
+    # BUG-339 (option A): the quarters' derived counts and rounded EPS mislead it (BE's 2023 diluted counts read
+    # 206,724 for 206.7 million), so the fetcher's call, without *loose*, leaves them.
+    view = {"net_income": 864_200_000.0, "eps_diluted": 3.16, "weighted_avg_shares_diluted": 236_416_029_000_000.0}
+    normalize_share_scale({"2009-12-31": view})
+    assert view["weighted_avg_shares_diluted"] == 236_416_029_000_000.0
+
+
+def test_the_record_and_each_view_take_the_loose_scale():
+    facts = {"facts": {"us-gaap": {
+        "NetIncomeLoss": {"units": {"USD": [_fact(864_200_000.0, "2019-02-25", "a1")]}},
+        "EarningsPerShareDiluted": {"units": {"USD/shares": [_fact(3.16, "2019-02-25", "a1")]}},
+        "WeightedAverageNumberOfDilutedSharesOutstanding": {"units": {"shares": [
+            _fact(236_416_029_000_000.0, "2019-02-25", "a1")]}}}}}
+    snapshots = build_snapshots(XBRLParser(), facts, ticker="NTRS", years_back=None)
+    assert snapshots.vintages["2018"]["a1"]["weighted_avg_shares_diluted"] == 236_416_029.0
+    assert {row["weighted_avg_shares_diluted"] for row in snapshots.rows} == {236_416_029.0}
+
+
+def test_every_view_of_a_year_takes_the_loose_scale():
+    # AMT FY2015: its 2016 view is in units, 13% from $685.1M / 1.42; its 2017 view tags the counts in thousands
+    views = {"2016": {"net_income": 685_074_000.0, "eps_basic": 1.42, "weighted_avg_shares_basic": 418_907_000.0},
+             "2017": {"net_income": 685_074_000.0, "eps_basic": 1.42, "weighted_avg_shares_basic": 419_000.0}}
+    normalize_share_scale(views, neighbours=False, loose=True)
+    assert [views[a]["weighted_avg_shares_basic"] for a in ("2016", "2017")] == [418_907_000.0, 419_000_000.0]

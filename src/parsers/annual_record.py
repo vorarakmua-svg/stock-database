@@ -51,7 +51,7 @@ def clean_annual(annual: Dict[str, Dict[str, Any]], warnings: List[str]) -> Dict
     # them — derivations, validation and every per-share metric downstream
     # all assume units. Cross-period, so a year with no EPS to anchor on
     # still inherits the scale its siblings agree on.
-    for period_key, fields in normalize_share_scale(annual).items():
+    for period_key, fields in normalize_share_scale(annual, loose=True).items():
         warnings.append(
             f"share scale {ANNUAL} {period_key}: rescaled {', '.join(fields)} "
             "(filed in thousands/millions)"
